@@ -283,7 +283,11 @@ fn ext_users(
         .map(|used| {
             let user = function.instruction(used.user);
             match &user.opcode {
-                Opcode::Binary(BinaryOp::Shl) if used.index == 0 && matches!(user.operands[1], Operand::Constant(_)) => ExtUser::ConstShl,
+                Opcode::Binary(BinaryOp::Shl)
+                    if used.index == 0 && matches!(user.operands[1], Operand::Constant(_)) =>
+                {
+                    ExtUser::ConstShl
+                }
                 Opcode::Cast(CastOp::Trunc) if function.operand_type(env.context, one.operands[0]) == Some(user.ty) => {
                     ExtUser::SameTypeTrunc
                 }
@@ -296,9 +300,7 @@ fn ext_users(
                             | llrm_mir::types::Type::Vector { element, .. } => *element,
                             _ => match index {
                                 Operand::Constant(c) => match env.context.get(c).kind {
-                                    ConstantKind::Int(at) => {
-                                        types.member(current, at as u64).unwrap_or(current)
-                                    }
+                                    ConstantKind::Int(at) => types.member(current, at as u64).unwrap_or(current),
                                     _ => return ExtUser::Other,
                                 },
                                 _ => return ExtUser::Other,

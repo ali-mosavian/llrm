@@ -3,22 +3,23 @@
 //! `AArch64InstrFormats.td` and `TargetSelectionDAG.td`. llrm-dagisel's shared
 //! ones are re-exported.
 //!
-//! DEVIATE SD500: the predicates below that answer false by name ([`atomic_store_hint`],
-//! [`exclusive_load_intrinsic`], [`f16_immediate`], [`sve_increment`], [`sme_streaming_mode`]) guard
-//! patterns of a feature or a node the scalar subset never builds (FEAT_PCDPHINT, an AArch64
-//! intrinsic, `f16`, SVE, SME): false is the pin's answer for them on apple-m1 too. Exit: with that
-//! feature.
+//! DEVIATE SD520: the predicates below that answer false by name
+//! ([`atomic_store_hint`], [`exclusive_load_intrinsic`], [`f16_immediate`],
+//! [`sve_increment`], [`sme_streaming_mode`]) guard patterns of a feature or a
+//! node the scalar subset never builds (FEAT_PCDPHINT, an AArch64 intrinsic,
+//! `f16`, SVE, SME): false is the pin's answer for them on apple-m1 too. Exit:
+//! with that feature.
 //!
-//! DEVIATE SD501: [`negated_immediate_cheaper`] (`isWorthNegatingImm`) and [`aligned_global_literal`]
-//! (`alignedglobal`) are untranslated and answer false: `add x, imm` keeps the add, and a global is
-//! addressed by `adrp` + `add`, not `ldr` literal. Exit: `isWorthNegatingImm` over the immediate
+//! DEVIATE SD521: [`negated_immediate_cheaper`] (`isWorthNegatingImm`) and
+//! [`aligned_global_literal`] (`alignedglobal`) are untranslated and answer
+//! false: `add x, imm` keeps the add, and a global is addressed by `adrp` +
+//! `add`, not `ldr` literal. Exit: `isWorthNegatingImm` over the immediate
 //! expansion; the global's alignment as a `Dag` query.
-
-pub use crate::predicates::*;
 
 use crate::dag::{Dag, Hooks, SDValue};
 use crate::generated::aarch64::ids::reg;
 use crate::generated::ids::{isd, mvt};
+pub use crate::predicates::*;
 
 type Args<'a, D, H> = (&'a D, &'a H, SDValue);
 
@@ -56,7 +57,8 @@ pub fn smull_with_sign_bits<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> boo
     (0..2).all(|at| dag.compute_num_sign_bits(dag.operand(v.node, at)) > 32)
 }
 
-/// `AtomicOrdering` numbers (LLVM's enum), as [`Dag::atomic_ordering`] returns them.
+/// `AtomicOrdering` numbers (LLVM's enum), as [`Dag::atomic_ordering`] returns
+/// them.
 const MONOTONIC: u8 = 2;
 const ACQUIRE: u8 = 4;
 const RELEASE: u8 = 5;

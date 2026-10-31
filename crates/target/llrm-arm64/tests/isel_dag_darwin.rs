@@ -1,7 +1,8 @@
-//! Every `tests/darwin` fixture through `--isel=shadow`, linked and run natively: it must
-//! print and exit as recorded wherever the hand selector can compile it. Shadow mode falls
-//! back per function, so this is the check that what the DAG path does take is right: it
-//! once passed 9 of 27 (variadic arguments in registers, `sret` as a pointer in `x0`).
+//! Every `tests/darwin` fixture through `--isel=shadow`, linked and run
+//! natively: it must print and exit as recorded wherever the hand selector can
+//! compile it. Shadow mode falls back per function, so this is the check that
+//! what the DAG path does take is right: it once passed 9 of 27 (variadic
+//! arguments in registers, `sret` as a pointer in `x0`).
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #[test]
@@ -20,7 +21,12 @@ fn the_darwin_fixtures_run_as_recorded_under_shadow() {
         for level in ["--no-opt", "-O2"] {
             let object = |mode: &str| scratch.path().join(format!("{name}{level}{mode}.o"));
             let compile = |mode: &str| {
-                Command::new(llc).args([level, &format!("--isel={mode}"), "-o"]).arg(object(mode)).arg(ir).output().unwrap()
+                Command::new(llc)
+                    .args([level, &format!("--isel={mode}"), "-o"])
+                    .arg(object(mode))
+                    .arg(ir)
+                    .output()
+                    .unwrap()
             };
             // What the hand selector cannot compile is no test of the DAG path.
             if !compile("hand").status.success() {
@@ -36,8 +42,10 @@ fn the_darwin_fixtures_run_as_recorded_under_shadow() {
             assert!(linked.status.success(), "{name}: {}", String::from_utf8_lossy(&linked.stderr));
             let ran = Command::new(&exe).output().unwrap();
             let want_out = std::fs::read(here.join(format!("{name}.out"))).unwrap_or_default();
-            let want_status: i32 =
-                std::fs::read_to_string(here.join(format!("{name}.status"))).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let want_status: i32 = std::fs::read_to_string(here.join(format!("{name}.status")))
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0);
             checked += 1;
             if ran.stdout != want_out || ran.status.code() != Some(want_status) {
                 failures.push(format!("{name} {level}: output or status differs (status {:?})", ran.status.code()));

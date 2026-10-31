@@ -176,9 +176,11 @@ pub enum ISD {
     /// `ATOMIC_CMP_SWAP`: `(chain, ptr, expected, new)` to the old value and a
     /// chain.
     AtomicCmpSwap,
-    /// `ATOMIC_CMP_SWAP_WITH_SUCCESS`: `(chain, ptr, expected, new)` to the old value, a success flag and a chain.
+    /// `ATOMIC_CMP_SWAP_WITH_SUCCESS`: `(chain, ptr, expected, new)` to the old
+    /// value, a success flag and a chain.
     AtomicCmpSwapWithSuccess,
-    /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old value and a chain.
+    /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old
+    /// value and a chain.
     AtomicLoadAdd,
     AtomicLoadSub,
     AtomicLoadAnd,
@@ -189,7 +191,8 @@ pub enum ISD {
     /// `ATOMIC_LOAD` and `ATOMIC_STORE`.
     AtomicLoad,
     AtomicStore,
-    /// `ATOMIC_FENCE`: `(chain, ordering, scope)` as target constants, to a chain.
+    /// `ATOMIC_FENCE`: `(chain, ordering, scope)` as target constants, to a
+    /// chain.
     AtomicFence,
     CallSeqStart,
     CallSeqEnd,

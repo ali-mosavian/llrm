@@ -195,9 +195,10 @@ pub struct Options {
     /// by default, `-fllrm-spares`. DEVIATE (no number), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
     /// A CFG simplification ahead of loop strength reduction, to tidy the
-    /// compare-and-branch that follows a `cmpxchg`: the pin's `AArch64PassConfig`
-    /// adds it (`EnableAtomicTidy`, AArch64TargetMachine.cpp#L666, d1106deb71cc),
-    /// X86's does not. Set by the target's driver.
+    /// compare-and-branch that follows a `cmpxchg`: the pin's
+    /// `AArch64PassConfig` adds it (`EnableAtomicTidy`,
+    /// AArch64TargetMachine.cpp#L666, d1106deb71cc), X86's does not. Set by
+    /// the target's driver.
     pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
@@ -209,9 +210,9 @@ pub struct Options {
     pub stable_loads: bool,
     pub promote: bool,
     pub strength: bool,
-    /// `cgpaddr`, the address-mode half of CodeGenPrepare. Off lets a pin `llc`,
-    /// whose own CodeGenPrepare runs inside it, take the module before this one
-    /// (`-fllrm-cgpaddr`).
+    /// `cgpaddr`, the address-mode half of CodeGenPrepare. Off lets a pin
+    /// `llc`, whose own CodeGenPrepare runs inside it, take the module
+    /// before this one (`-fllrm-cgpaddr`).
     pub cgpaddr: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
     /// off); `strength` turns it off with the other address passes.

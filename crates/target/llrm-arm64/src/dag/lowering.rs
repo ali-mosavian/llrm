@@ -9,11 +9,12 @@
 //! second result of the flag-setting node. The users read them as the last
 //! operand of `CSEL`.
 //!
-//! DEVIATE SD503: no `computeKnownBits` `x == 1` to `CBZ` normalization, no `CSET` + `BR_CC` fold,
-//! `BRCOND` expands to `BR_CC` here (the shared legalizer has no `ExpandNode` arm for it), no
-//! floating-point `emitConjunction` (see `ccmp`), no zero-extending-load `CMN` trick, no
-//! `lookThroughSignExtension` `TST` form, and for floats no vector-compare mask and no `nsz` zero rewrite.
-//! Exit: each fold its own translation, B4..B6.
+//! DEVIATE SD523: no `computeKnownBits` `x == 1` to `CBZ` normalization, no
+//! `CSET` + `BR_CC` fold, `BRCOND` expands to `BR_CC` here (the shared
+//! legalizer has no `ExpandNode` arm for it), no floating-point
+//! `emitConjunction` (see `ccmp`), no zero-extending-load `CMN` trick, no
+//! `lookThroughSignExtension` `TST` form, and for floats no vector-compare mask
+//! and no `nsz` zero rewrite. Exit: each fold its own translation, B4..B6.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp` at pin d1106deb7:
@@ -186,7 +187,10 @@ pub(super) fn is_equality(code: CondCode) -> bool {
 }
 
 fn is_unsigned(code: CondCode) -> bool {
-    matches!(code, CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe)
+    matches!(
+        code,
+        CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe
+    )
 }
 
 /// `AArch64_AM::isLegalArithImmed`.
@@ -195,9 +199,7 @@ fn legal_arith_immed(immed: u64) -> bool {
 }
 
 /// `AArch64_AM::isLegalCmpImmed`: also as the `ADDS` of its negation.
-fn legal_cmp_immed(
-    value: i128,
-) -> bool {
+fn legal_cmp_immed(value: i128) -> bool {
     legal_arith_immed(value.unsigned_abs().try_into().unwrap_or(u64::MAX))
 }
 
@@ -293,20 +295,24 @@ fn adjusted_to_zero(
     false
 }
 
-/// `isSupportedExtend`: a sign-extension in register or an `and` with a byte, halfword or word mask.
+/// `isSupportedExtend`: a sign-extension in register or an `and` with a byte,
+/// halfword or word mask.
 fn is_supported_extend(
     dag: &SelectionDAG,
     op: SDValue,
 ) -> bool {
     match dag.opcode(op) {
         ISD::SignExtendInReg => true,
-        ISD::And => matches!(dag.constant(dag.operand(op, 1)), Some(0xFF | 0xFFFF | 0xFFFF_FFFF)),
+        ISD::And => matches!(
+            dag.constant(dag.operand(op, 1)),
+            Some(0xFF | 0xFFFF | 0xFFFF_FFFF)
+        ),
         _ => false,
     }
 }
 
-/// `getCmpOperandFoldingProfit`: 2 for a shifted extend, 1 for an extend or a shift the compare
-/// folds, 0 for anything else.
+/// `getCmpOperandFoldingProfit`: 2 for a shifted extend, 1 for an extend or a
+/// shift the compare folds, 0 for anything else.
 fn cmp_operand_folding_profit(
     dag: &SelectionDAG,
     op: SDValue,
@@ -344,7 +350,8 @@ fn cmp_or_cmn_operand_folding_profit(
     cmp_operand_folding_profit(dag, op, true)
 }
 
-/// `getAArch64Cmp`: the flags of the comparison and the AArch64 condition code to test.
+/// `getAArch64Cmp`: the flags of the comparison and the AArch64 condition code
+/// to test.
 fn get_cmp(
     dag: &mut SelectionDAG,
     lhs: SDValue,
@@ -386,8 +393,8 @@ fn get_cmp(
             code = code.swapped_operands();
         }
     }
-    // Comparisons put the simpler operand on the right, and the right can fold a shift or an
-    // extend: swap when that is the more profitable side.
+    // Comparisons put the simpler operand on the right, and the right can fold
+    // a shift or an extend: swap when that is the more profitable side.
     if signed_constant(dag, rhs).map_or(true, |c| !legal_cmp_immed(c))
         && cmp_or_cmn_operand_folding_profit(dag, lhs, code) > cmp_or_cmn_operand_folding_profit(dag, rhs, code)
     {
@@ -447,13 +454,18 @@ pub fn lower_setcc(
     if !dag.value_type(lhs).is_integer() {
         return None;
     }
-    // `visitBRCOND` has made a `BR_CC` of a compare only a branch reads, before this runs; here
-    // `lower_brcond` reads the `SETCC` itself, and a flags-setting `and` would not be undone.
+    // `visitBRCOND` has made a `BR_CC` of a compare only a branch reads, before
+    // this runs; here `lower_brcond` reads the `SETCC` itself, and a
+    // flags-setting `and` would not be undone.
     let users: Vec<u32> = dag.users(node).collect();
-    let only_branched_on = users.iter().all(|&user| {
-        let user = SDValue { node: user, res: 0 };
-        dag.opcode(user) == ISD::BrCond && dag.operand(user, 1) == node
-    });
+    let only_branched_on = users
+        .iter()
+        .all(
+            |&user| {
+                let user = SDValue { node: user, res: 0 };
+                dag.opcode(user) == ISD::BrCond && dag.operand(user, 1) == node
+            },
+        );
     if !users.is_empty() && only_branched_on {
         return Some(node);
     }
@@ -466,7 +478,8 @@ pub fn lower_setcc(
     Some(dag.get_node(ISD::Target(a64::CSEL), vt, &[zero, one, ccode, flags]))
 }
 
-/// `LowerSELECT`: a `SETCC` condition is a `SELECT_CC`; any other is tested `!= 0`.
+/// `LowerSELECT`: a `SETCC` condition is a `SELECT_CC`; any other is tested `!=
+/// 0`.
 pub fn lower_select(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -520,7 +533,8 @@ fn lower_select_cc(
     let (mut ctval, mut cfval) = (constant(dag, tval), constant(dag, fval));
     let rhsc = constant(dag, rhs);
 
-    // `smax(x, 0)` and `smin(x, 0)`: a shift and a mask, not a compare and a select.
+    // `smax(x, 0)` and `smin(x, 0)`: a shift and a mask, not a compare and a
+    // select.
     if matches!(code, CondCode::SetGt | CondCode::SetLt) && lhs == tval && rhsc == Some(0) && cfval == Some(0) {
         let bits = vt.size_in_bits();
         let by = dag.get_constant(u128::from(bits - 1), vt);
@@ -531,11 +545,11 @@ fn lower_select_cc(
         return Some(dag.get_node(ISD::And, vt, &[lhs, shift]));
     }
 
-    // Absolute difference: `select_cc l, r, l-r, r-l` is `l-r` and its negation (`subs` + `cneg`).
+    // Absolute difference: `select_cc l, r, l-r, r-l` is `l-r` and its negation
+    // (`subs` + `cneg`).
     let is_sub = |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::Sub;
     if is_sub(dag, tval) && is_sub(dag, fval) {
-        let (t0, t1, f0, f1) =
-            (dag.operand(tval, 0), dag.operand(tval, 1), dag.operand(fval, 0), dag.operand(fval, 1));
+        let (t0, t1, f0, f1) = (dag.operand(tval, 0), dag.operand(tval, 1), dag.operand(fval, 0), dag.operand(fval, 1));
         if t0 == lhs && t1 == rhs && f0 == rhs && f1 == lhs {
             fval = dag.get_negative(tval, dag.value_type(tval));
         } else if t0 == rhs && t1 == lhs && f0 == lhs && f1 == rhs {
@@ -590,7 +604,9 @@ fn lower_select_cc(
                 fval = tval;
             }
         }
-    } else if dag.opcode(tval) == ISD::Xor && dag.constant(dag.operand(tval, 1)).is_some_and(|c| c == super_mask(tvt.size_in_bits())) {
+    } else if dag.opcode(tval) == ISD::Xor
+        && dag.constant(dag.operand(tval, 1)).is_some_and(|c| c == super_mask(tvt.size_in_bits()))
+    {
         // A NOT matches CSINV rather than CSEL.
         swap(dag, &mut code, &mut tval, &mut fval, &mut ctval, &mut cfval);
     } else if dag.opcode(tval) == ISD::Sub && dag.is_null_constant(dag.operand(tval, 0)) {
@@ -693,18 +709,20 @@ pub fn lower_brcond(
     // We test only the i1 bit; the `and` is skipped when it is there already.
     let vt = dag.value_type(cond);
     let one = dag.get_constant(1, vt);
-    // The builder inverts a branch to the next block with `xor c, 1`; the pin inverts the
-    // condition code instead, so the bit is tested for zero.
+    // The builder inverts a branch to the next block with `xor c, 1`; the pin
+    // inverts the condition code instead, so the bit is tested for zero.
     let bit = |dag: &SelectionDAG, value: SDValue| {
         (dag.opcode(value) == ISD::And && dag.constant(dag.operand(value, 1)) == Some(1)).then(|| dag.operand(value, 0))
     };
     let inner = bit(dag, cond).unwrap_or(cond);
-    let (tested, code) = if dag.opcode(inner) == ISD::Xor && matches!(signed_constant(dag, dag.operand(inner, 1)), Some(1 | -1)) {
-        (dag.operand(inner, 0), CondCode::SetEq)
-    } else {
-        (cond, CondCode::SetNe)
-    };
-    // `br_cc setne (and|or of compares), 1` (the pin's inversion by `setne -1`): a `CCMP` chain.
+    let (tested, code) =
+        if dag.opcode(inner) == ISD::Xor && matches!(signed_constant(dag, dag.operand(inner, 1)), Some(1 | -1)) {
+            (dag.operand(inner, 0), CondCode::SetEq)
+        } else {
+            (cond, CondCode::SetNe)
+        };
+    // `br_cc setne (and|or of compares), 1` (the pin's inversion by `setne
+    // -1`): a `CCMP` chain.
     let tree = bit(dag, tested).unwrap_or(tested);
     if matches!(dag.opcode(tree), ISD::And | ISD::Or) {
         let mut out = 0;
@@ -731,7 +749,8 @@ pub fn lower_br_cc_node(
     lower_br_cc(dag, ops[0], code, ops[2], ops[3], ops[4])
 }
 
-/// `LowerBR_CC` for integers: `CBZ`/`CBNZ`, `TBZ`/`TBNZ`, else flags and `BRCOND`.
+/// `LowerBR_CC` for integers: `CBZ`/`CBNZ`, `TBZ`/`TBNZ`, else flags and
+/// `BRCOND`.
 fn lower_br_cc(
     dag: &mut SelectionDAG,
     chain: SDValue,
@@ -747,9 +766,8 @@ fn lower_br_cc(
         return None;
     }
     let rhsc = signed_constant(dag, rhs);
-    let branch = |dag: &mut SelectionDAG, opcode: u16, ops: &[SDValue]| {
-        Some(dag.get_node(ISD::Target(opcode), EVT::OTHER, ops))
-    };
+    let branch =
+        |dag: &mut SelectionDAG, opcode: u16, ops: &[SDValue]| Some(dag.get_node(ISD::Target(opcode), EVT::OTHER, ops));
     if rhsc == Some(0) {
         if code == CondCode::SetEq {
             return optimize_bit_test(dag, lhs, chain, dest, a64::TBZ)
@@ -773,7 +791,8 @@ fn lower_br_cc(
     branch(dag, a64::BRCOND, &[chain, dest, ccode, flags])
 }
 
-/// `LowerXOR`: the node itself, but `xor x, (select_cc a, b, cc, 0, -1)` is a `CSINV`.
+/// `LowerXOR`: the node itself, but `xor x, (select_cc a, b, cc, 0, -1)` is a
+/// `CSINV`.
 pub fn lower_xor(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -820,7 +839,8 @@ fn is_double_or_single(vt: EVT) -> bool {
     vt.is_floating_point() && matches!(vt.size_in_bits(), 32 | 64)
 }
 
-/// `LowerINT_TO_FP`: a scalar `f32`/`f64` from an `i32`/`i64` is legal as it is.
+/// `LowerINT_TO_FP`: a scalar `f32`/`f64` from an `i32`/`i64` is legal as it
+/// is.
 pub fn lower_int_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -856,8 +876,8 @@ pub fn lower_fp_round(
     (to.size_in_bits() == 32 && from.size_in_bits() == 64 && to.is_floating_point()).then_some(node)
 }
 
-/// `isFPImmLegal`: a constant an `fmov` immediate holds, positive zero, or one that
-/// at most two `mov`s make (the pin's limit when not optimizing for size).
+/// `isFPImmLegal`: a constant an `fmov` immediate holds, positive zero, or one
+/// that at most two `mov`s make (the pin's limit when not optimizing for size).
 pub fn fp_imm_legal(
     vt: llrm_codegen::backend::selectiondag::mvt::MVT,
     bits: u128,
@@ -871,10 +891,11 @@ pub fn fp_imm_legal(
     bits == 0 || crate::mc::immediate::fp_immediate(value).is_some() || mov_imm(bits as u64, width, Gpr(0)).len() <= 2
 }
 
-/// `LowerATOMIC_LOAD_AND`: LSE has an atomic load-clear but no load-and, so the operand is
-/// complemented and the node is `ATOMIC_LOAD_CLR` ([pin][pin]).
+/// `LowerATOMIC_LOAD_AND`: LSE has an atomic load-clear but no load-and, so the
+/// operand is complemented and the node is `ATOMIC_LOAD_CLR` ([pin][pin]).
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18512
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18512
 pub fn lower_atomic_load_and(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -887,8 +908,9 @@ pub fn lower_atomic_load_and(
     Some(dag.get_atomic_rmw(ISD::AtomicLoadClr, chain, ptr, complement, info))
 }
 
-/// `getAArch64XALUOOp` for the add and subtract forms: the value and flags of `ADDS`/`SUBS`, and the
-/// condition that says overflow. `None` for any other node, or a type that is not a register type.
+/// `getAArch64XALUOOp` for the add and subtract forms: the value and flags of
+/// `ADDS`/`SUBS`, and the condition that says overflow. `None` for any other
+/// node, or a type that is not a register type.
 fn xalu_flags(
     dag: &mut SelectionDAG,
     node: u32,
@@ -910,8 +932,8 @@ fn xalu_flags(
     Some((SDValue { node: value.node, res: 0 }, SDValue { node: value.node, res: 1 }, code))
 }
 
-/// `LowerXALUO` for the add and subtract forms: the value of `ADDS`/`SUBS` and the overflow as a `CSINC`
-/// of the inverted condition.
+/// `LowerXALUO` for the add and subtract forms: the value of `ADDS`/`SUBS` and
+/// the overflow as a `CSINC` of the inverted condition.
 pub fn lower_xalu(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -930,7 +952,10 @@ fn is_xalu_overflow(
 ) -> bool {
     let op = SDValue { node: value.node, res: 0 };
     value.res == 1
-        && matches!(dag.opcode(op), ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO)
+        && matches!(
+            dag.opcode(op),
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO
+        )
         && matches!(dag.value_type(op), EVT::I32 | EVT::I64)
 }
 
@@ -949,8 +974,9 @@ pub fn lower_jump_table(
 /// `TargetOpcode::JUMP_TABLE_DEBUG_INFO`, in `MACHINE_OPCODES`.
 const JUMP_TABLE_DEBUG_INFO: u32 = 46;
 
-/// `LowerBR_JT`: `JumpTableDest32` of the table address and the entry index, then `BRIND` through the
-/// debug-info node. Entries are 4-byte offsets from the table.
+/// `LowerBR_JT`: `JumpTableDest32` of the table address and the entry index,
+/// then `BRIND` through the debug-info node. Entries are 4-byte offsets from
+/// the table.
 pub fn lower_br_jt(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -968,8 +994,8 @@ pub fn lower_br_jt(
     Some(dag.get_node(ISD::BrInd, EVT::OTHER, &[info, SDValue { node: destination.node, res: 0 }]))
 }
 
-/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) is left as it is; the other forms
-/// (`indirectbr`, pointer authentication) are not ported.
+/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) is left as it is;
+/// the other forms (`indirectbr`, pointer authentication) are not ported.
 pub fn lower_br_ind(
     dag: &mut SelectionDAG,
     node: SDValue,

@@ -7,7 +7,10 @@ fn llc(isel: &str) -> (bool, String, String) {
     llc_of(isel, "dag_memory.ll")
 }
 
-fn llc_of(isel: &str, file: &str) -> (bool, String, String) {
+fn llc_of(
+    isel: &str,
+    file: &str,
+) -> (bool, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("t.s");
     let input = format!("{}/tests/data/{file}", env!("CARGO_MANIFEST_DIR"));
@@ -25,7 +28,8 @@ fn llc_of(isel: &str, file: &str) -> (bool, String, String) {
 }
 
 /// Every function came out of the table (`dag` refuses, `shadow` would fall
-/// back): before the load/store rows a `ldr` was "has no arm64 instruction yet".
+/// back): before the load/store rows a `ldr` was "has no arm64 instruction
+/// yet".
 #[test]
 fn every_function_is_selected_by_the_table_and_is_the_hand_selectors() {
     let (ok, dag, why) = llc("--isel=dag");

@@ -173,8 +173,10 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         AtomicStore => pin::ATOMIC_STORE,
         AtomicFence => pin::ATOMIC_STORE - 2,
         AtomicLoadAdd => pin::ATOMIC_LOAD_ADD,
-        // No x86 table names these, so the generated ids lack them: `ISD::NodeType`'s order after
-        // `ATOMIC_SWAP` ([ISDOpcodes.h L1425](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/ISDOpcodes.h#L1425)).
+        // No x86 table names these, so the generated ids lack
+        // them: `ISD::NodeType`'s order after
+        // `ATOMIC_SWAP` ([ISDOpcodes.h
+        // L1425](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/ISDOpcodes.h#L1425)).
         AtomicCmpSwap => pin::ATOMIC_STORE + 1,
         AtomicCmpSwapWithSuccess => pin::ATOMIC_STORE + 2,
         AtomicLoadSub => pin::ATOMIC_LOAD_ADD + 1,
@@ -732,7 +734,10 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<LoadExt> {
         let node = &self.dag.nodes()[node as usize];
-        matches!(node.opcode, ISD::Load | ISD::LoadPre | ISD::LoadPost | ISD::AtomicLoad).then(|| match node.data {
+        matches!(
+            node.opcode,
+            ISD::Load | ISD::LoadPre | ISD::LoadPost | ISD::AtomicLoad
+        ).then(|| match node.data {
             NodeData::Mem(info) => match info.ext {
                 None => LoadExt::NonExt,
                 Some(super::actions::LoadExt::ExtLoad) => LoadExt::Ext,

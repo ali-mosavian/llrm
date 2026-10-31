@@ -784,7 +784,8 @@ impl Selector<'_> {
     }
 }
 
-/// [`Selector::needs_got`] for any module: the one rule, shared with the DAG path.
+/// [`Selector::needs_got`] for any module: the one rule, shared with the DAG
+/// path.
 pub(crate) fn global_needs_got(
     module: &Module,
     platform: Platform,

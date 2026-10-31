@@ -5,8 +5,8 @@
 //! the pin does, so the selector sees `ADDXrs` and not a `MOVi32imm` and a
 //! `MADD`.
 //!
-//! DEVIATE SD504: the `hasALULSLFast` decompositions are omitted (apple-m1 does not
-//! have the feature); the vector, SVE and `rdsvl` parts do not apply to the
+//! DEVIATE SD524: the `hasALULSLFast` decompositions are omitted (apple-m1 does
+//! not have the feature); the vector, SVE and `rdsvl` parts do not apply to the
 //! scalar table; `isOnlyUsedAsMemoryAddress` does not look at indexed
 //! accesses. Exit: vectors; indexed addressing.
 //!
@@ -19,7 +19,8 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::generated::aarch64::ids::isd as a64;
 
-/// `isOnlyUsedAsMemoryAddress`: every use of the add/sub is the address of a load or store.
+/// `isOnlyUsedAsMemoryAddress`: every use of the add/sub is the address of a
+/// load or store.
 fn only_used_as_memory_address(
     dag: &SelectionDAG,
     node: SDValue,
@@ -71,7 +72,8 @@ pub fn combine_mul(
     let width = vt.size_in_bits();
     let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
 
-    // `X*(Y+1)` is `X*Y+X`, `X*(1-Y)` is `X-X*Y`: the MachineCombiner forms a madd.
+    // `X*(Y+1)` is `X*Y+X`, `X*(1-Y)` is `X-X*Y`: the MachineCombiner forms a
+    // madd.
     let add_sub_with_one = |dag: &SelectionDAG, v: SDValue| -> Option<(ISD, SDValue)> {
         let op = dag.opcode(v);
         if !matches!(op, ISD::Add | ISD::Sub) || !dag.has_one_use(v.node) {
@@ -100,8 +102,12 @@ pub fn combine_mul(
     }
     let trailing = c.trailing_zeros();
     if trailing > 0 {
-        // The multiply may fold into smull/umull, or an add/sub user into madd/msub.
-        if dag.has_one_use(n0.node) && matches!(dag.opcode(n0), ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend) {
+        // The multiply may fold into smull/umull, or an add/sub user into
+        // madd/msub.
+        if dag.has_one_use(n0.node) && matches!(
+            dag.opcode(n0),
+            ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
+        ) {
             return None;
         }
         if dag.has_one_use(node.node) {
@@ -163,12 +169,13 @@ fn shl_or_same(
     if amount == 0 { Some(value) } else { shl(dag, value, amount) }
 }
 
-/// `AArch64DAGToDAGISel::tryShiftAmountMod`, for the forms that need no new machine node: a
-/// shift by `x +/- N` with `N` a multiple of the width, or by `x & mask` whose low bits are all
-/// ones through `log2(width)`, shifts by `x`. The register shift takes the amount modulo the
-/// width.
+/// `AArch64DAGToDAGISel::tryShiftAmountMod`, for the forms that need no new
+/// machine node: a shift by `x +/- N` with `N` a multiple of the width, or by
+/// `x & mask` whose low bits are all ones through `log2(width)`, shifts by `x`.
+/// The register shift takes the amount modulo the width.
 ///
-/// DEVIATE SD504: `N - x` (a `NEG`, a `NOT`) is not done. Exit: a pre-selection hook.
+/// See SD524: `N - x` (a `NEG`, a `NOT`) is not done. Exit: a pre-selection
+/// hook.
 pub fn shift_amount_mod(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -180,8 +187,11 @@ pub fn shift_amount_mod(
         _ => return None,
     };
     let amount = dag.operand(node, 1);
-    let peeled = if matches!(dag.opcode(amount), ISD::ZeroExtend | ISD::AnyExtend) { dag.operand(amount, 0) } else { amount };
-    let constant = |dag: &SelectionDAG, value: SDValue| dag.constant(value).map(|c| c & ((1u128 << dag.value_type(value).size_in_bits()) - 1));
+    let peeled =
+        if matches!(dag.opcode(amount), ISD::ZeroExtend | ISD::AnyExtend) { dag.operand(amount, 0) } else { amount };
+    let constant = |dag: &SelectionDAG, value: SDValue| {
+        dag.constant(value).map(|c| c & ((1u128 << dag.value_type(value).size_in_bits()) - 1))
+    };
     let inner = match dag.opcode(peeled) {
         ISD::Add | ISD::Sub => {
             let (first, second) = (dag.operand(peeled, 0), dag.operand(peeled, 1));
@@ -207,8 +217,9 @@ pub fn shift_amount_mod(
     Some(dag.get_node(dag.opcode(node), vt, &[first, new_amount]))
 }
 
-/// `performConditionalSubCombine`: `x - csel(0, q, cc, flags)` where the flags are the `SUBS x, q`
-/// is a `csel` between `x` and the difference the `SUBS` already computed.
+/// `performConditionalSubCombine`: `x - csel(0, q, cc, flags)` where the flags
+/// are the `SUBS x, q` is a `csel` between `x` and the difference the `SUBS`
+/// already computed.
 pub fn conditional_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -245,9 +256,10 @@ fn is_shifted_mask(x: u64) -> bool {
     }
 }
 
-/// `AArch64TargetLowering::targetShrinkDemandedConstant` and `optimizeLogicalImm`: the undemanded
-/// bits of an `and`/`or`/`xor` mask are set so it is a bitmask immediate, and the node becomes the
-/// `ANDWri`-family machine node, so no `MOVi32imm` is needed. `None` is "not handled".
+/// `AArch64TargetLowering::targetShrinkDemandedConstant` and
+/// `optimizeLogicalImm`: the undemanded bits of an `and`/`or`/`xor` mask are
+/// set so it is a bitmask immediate, and the node becomes the `ANDWri`-family
+/// machine node, so no `MOVi32imm` is needed. `None` is "not handled".
 pub fn shrink_demanded_constant(
     dag: &mut SelectionDAG,
     op: SDValue,
@@ -289,8 +301,9 @@ pub fn shrink_demanded_constant(
     imm &= demanded;
     let mut new;
     loop {
-        // The non-demanded bits take the value of the preceding demanded bits, so the immediate
-        // switches between 0 and 1 as little as possible.
+        // The non-demanded bits take the value of the preceding demanded bits,
+        // so the immediate switches between 0 and 1 as little as
+        // possible.
         let non_demanded = !demanded;
         let inverted = !imm & demanded;
         let rotated = ((inverted << 1) | ((inverted >> (elt - 1)) & 1)) & non_demanded;
@@ -323,8 +336,8 @@ pub fn shrink_demanded_constant(
         return None;
     }
     let x = dag.operand(op, 0);
-    // All zeros or all ones is left to the target-independent combines; otherwise a machine node
-    // keeps them from undoing this.
+    // All zeros or all ones is left to the target-independent combines;
+    // otherwise a machine node keeps them from undoing this.
     if new == 0 || new == orig_mask {
         let constant = dag.get_constant(u128::from(new), vt);
         return Some(Some(dag.get_node(dag.opcode(op), vt, &[x, constant])));

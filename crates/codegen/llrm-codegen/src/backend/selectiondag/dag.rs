@@ -540,7 +540,10 @@ impl SelectionDAG {
         if node == self.root.node
             || node == self.entry.node
             || self.is_deleted(node)
-            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store | ISD::BrCond)
+            || !matches!(
+                self.nodes[node as usize].opcode,
+                ISD::Load | ISD::Store | ISD::BrCond
+            )
         {
             return;
         }
@@ -1296,13 +1299,15 @@ impl SelectionDAG {
                 | ISD::AtomicLoadXor
         ));
         let vt = self.value_type(value);
-        let node = self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        let node =
+            self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
         self.volatile_accesses.insert(node.node);
         node
     }
 
-    /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP` when `flag` is none:
-    /// the old value at `ptr`, the success flag of type `flag` if asked for, and a chain.
+    /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP`
+    /// when `flag` is none: the old value at `ptr`, the success flag of
+    /// type `flag` if asked for, and a chain.
     pub fn get_atomic_cmp_swap(
         &mut self,
         flag: Option<EVT>,
@@ -1322,8 +1327,9 @@ impl SelectionDAG {
         node
     }
 
-    /// `ATOMIC_FENCE`: only a chain. The ordering (LLVM's numbering) and the scope are target
-    /// constants, as `SelectionDAGBuilder::visitFence` builds them.
+    /// `ATOMIC_FENCE`: only a chain. The ordering (LLVM's numbering) and the
+    /// scope are target constants, as `SelectionDAGBuilder::visitFence`
+    /// builds them.
     pub fn get_atomic_fence(
         &mut self,
         chain: SDValue,
@@ -1343,13 +1349,15 @@ impl SelectionDAG {
         ptr: SDValue,
         info: MemInfo,
     ) -> SDValue {
-        let node = self.intern(ISD::AtomicLoad, &[vt, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+        let node =
+            self.intern(ISD::AtomicLoad, &[vt, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
         self.volatile_accesses.insert(node.node);
         node
     }
 
-    /// `getAtomic` of `ATOMIC_STORE`: only a chain. The operands are `(chain, value, ptr)`, as
-    /// `SelectionDAGBuilder::visitAtomicStore` builds them.
+    /// `getAtomic` of `ATOMIC_STORE`: only a chain. The operands are `(chain,
+    /// value, ptr)`, as `SelectionDAGBuilder::visitAtomicStore` builds
+    /// them.
     pub fn get_atomic_store(
         &mut self,
         chain: SDValue,
@@ -1357,7 +1365,13 @@ impl SelectionDAG {
         value: SDValue,
         info: MemInfo,
     ) -> SDValue {
-        let node = self.intern(ISD::AtomicStore, &[EVT::OTHER], &[chain, value, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+        let node = self.intern(
+            ISD::AtomicStore,
+            &[EVT::OTHER],
+            &[chain, value, ptr],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
         self.volatile_accesses.insert(node.node);
         node
     }

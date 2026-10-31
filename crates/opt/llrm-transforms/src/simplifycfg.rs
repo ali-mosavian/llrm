@@ -289,11 +289,8 @@ impl Options {
 
     /// [`AArch64PassConfig::addIRPasses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp#L666):
     /// the pass the target adds after AtomicExpand.
-    pub const ATOMIC_TIDY: Options = Options {
-        convert_switch_to_arithmetic: false,
-        no_jump_tables: false,
-        ..Options::L1438
-    };
+    pub const ATOMIC_TIDY: Options =
+        Options { convert_switch_to_arithmetic: false, no_jump_tables: false, ..Options::L1438 };
 
     /// The slot at
     /// [L1682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1682),

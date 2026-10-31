@@ -4,25 +4,25 @@
 use std::sync::LazyLock;
 
 use llrm_codegen::backend::isel::Convention;
-use llrm_codegen::backend::selectiondag::{NodeData, SelectionDAG};
+use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
-use llrm_codegen::backend::selectiondag::schedule::Unit;
-use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::Module;
-use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig};
 use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::SDValue;
 use llrm_codegen::backend::selectiondag::known_bits::KnownBits;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::schedule::Unit;
+use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig};
+use llrm_codegen::backend::selectiondag::{NodeData, SelectionDAG};
 use llrm_lir::registers::{Info, RegId};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::Module;
 use llrm_target::BuilderArch;
 
 use super::call::{Aarch64Calling, RET_GLUE};
 use super::globals::Globals;
 use super::pipeline::select_block;
-use crate::machine::Platform;
 use crate::REGISTER_INFO;
+use crate::machine::Platform;
 
 static CALLING: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
 
@@ -30,7 +30,8 @@ pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         dag: DagConfig {
             pointer: EVT::I64,
-            // `isOffsetFoldingLegal` is false: `performGlobalAddressCombine` picks the offset.
+            // `isOffsetFoldingLegal` is false: `performGlobalAddressCombine`
+            // picks the offset.
             dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             known_bits_for_target_node: Some(known_bits_for_target_node),
@@ -107,8 +108,8 @@ pub struct Selected {
     pub phis: Vec<PhiCopy>,
 }
 
-/// `PHI result, [incoming, from this block]` of the successor `to`: registers by the
-/// builder's number.
+/// `PHI result, [incoming, from this block]` of the successor `to`: registers
+/// by the builder's number.
 #[derive(Clone, Copy, Debug)]
 pub struct PhiCopy {
     pub to: u32,
@@ -141,7 +142,8 @@ pub fn select_function_in(
         .function()
         .filter(|one| !one.is_declaration())
         .ok_or_else(|| format!("@{name} has no body"))?;
-    // The target's `TargetCalling` places every value; the builder reads none of this.
+    // The target's `TargetCalling` places every value; the builder reads none
+    // of this.
     let convention = Convention {
         parameters: Vec::new(),
         returns: Vec::new(),
@@ -151,13 +153,18 @@ pub fn select_function_in(
         stack_arguments: 0,
         first: 0,
     };
-    let tti = crate::tti::AArch64::of_cpu(platform.cpu()).map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
-    let target = builder_target().with_tti(tti).with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0")).with_zext_free(is_zext_free);
+    let tti = crate::tti::AArch64::of_cpu(platform.cpu())
+        .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
+    let target = builder_target()
+        .with_tti(tti)
+        .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
+        .with_zext_free(is_zext_free);
     let mut info = FunctionLoweringInfo::new(function);
     let mut frame = static_frame(module, function, layout, &info)?;
     let mut selected = Vec::new();
-    // Each block is built and selected in turn, as the pin does, so a block reads what the blocks before it
-    // knew of a register. The blocks a lowering makes (the case blocks of a split `br (or a, b)`) follow the
+    // Each block is built and selected in turn, as the pin does, so a block
+    // reads what the blocks before it knew of a register. The blocks a
+    // lowering makes (the case blocks of a split `br (or a, b)`) follow the
     // block that made them in the layout.
     let mut work = Vec::new();
     for &block in function.layout() {
@@ -192,7 +199,10 @@ pub fn select_function_in(
                 };
                 let to = function.parent(def).ok_or("a phi outside a block")?.0;
                 let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
-                let float = matches!(module.context.types.get(function.value(phi).ty), llrm_mir::types::Type::Float(_));
+                let float = matches!(
+                    module.context.types.get(function.value(phi).ty),
+                    llrm_mir::types::Type::Float(_)
+                );
                 Ok(PhiCopy { to, dst, src, float })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -233,7 +243,8 @@ fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
     targets
 }
 
-/// Whether the last thing a built block does is an unconditional branch (else it falls through).
+/// Whether the last thing a built block does is an unconditional branch (else
+/// it falls through).
 fn ends_in_jump(dag: &SelectionDAG) -> bool {
     dag.opcode(dag.get_root()) == ISD::Br
 }
@@ -252,9 +263,13 @@ fn static_frame(
 
     let mut objects = vec![(0, 1); info.static_allocas.iter().map(|(_, &index)| index as usize + 1).max().unwrap_or(0)];
     for (value, &index) in info.static_allocas.iter() {
-        let ValueDef::Instruction(def) = function.value(value).def else { return Err("an alloca that is no instruction".into()) };
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return Err("an alloca that is no instruction".into());
+        };
         let instruction = function.instruction(def);
-        let Opcode::Alloca { allocated, align, .. } = instruction.opcode else { return Err("an alloca that is none".into()) };
+        let Opcode::Alloca { allocated, align, .. } = instruction.opcode else {
+            return Err("an alloca that is none".into());
+        };
         let count = match instruction.operands.first() {
             None => 1,
             Some(Operand::Constant(id)) => match module.context.get(*id).kind {
@@ -271,8 +286,8 @@ fn static_frame(
     Ok(objects)
 }
 
-/// `AArch64TargetLowering::isZExtFree(SDValue, EVT)`: a 32 to 64 bit extension, or a load of at most 32 bits, which
-/// the load instructions zero extend.
+/// `AArch64TargetLowering::isZExtFree(SDValue, EVT)`: a 32 to 64 bit extension,
+/// or a load of at most 32 bits, which the load instructions zero extend.
 fn is_zext_free(
     dag: &SelectionDAG,
     value: SDValue,
@@ -286,7 +301,8 @@ fn is_zext_free(
         || (dag.opcode(value) == ISD::Load && from.size_in_bits() <= 32)
 }
 
-/// `AArch64TargetLowering::computeKnownBitsForTargetNode`, `AArch64ISD::CSEL`: what both arms share.
+/// `AArch64TargetLowering::computeKnownBitsForTargetNode`, `AArch64ISD::CSEL`:
+/// what both arms share.
 fn known_bits_for_target_node(
     dag: &SelectionDAG,
     value: SDValue,

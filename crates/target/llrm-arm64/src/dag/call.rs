@@ -1,24 +1,26 @@
-//! AAPCS64 (Darwin) as the DAG builder's `TargetCalling`: `LowerFormalArguments`,
-//! `LowerCall` and `LowerReturn` for integers and pointers.
+//! AAPCS64 (Darwin) as the DAG builder's `TargetCalling`:
+//! `LowerFormalArguments`, `LowerCall` and `LowerReturn` for integers and
+//! pointers.
 //!
 //! # How it works
 //! `CC_AArch64_DarwinPCS` promotes `i1`/`i8`/`i16` to `i32` and gives the first
-//! eight integer parts `x0`..`x7` (`w0`..`w7` for an `i32`); the half of a split
-//! `i128` never takes `x7`. What is left goes on the stack at the part's natural
-//! size and alignment (a split `i64` at 8 bytes aligned to 16), and the area is
-//! rounded up to 16. `RetCC_AArch64_AAPCS` gives a result `x0`/`w0`, with an
-//! `i128` in `x0`, `x1`. The builder has split every value into legal
+//! eight integer parts `x0`..`x7` (`w0`..`w7` for an `i32`); the half of a
+//! split `i128` never takes `x7`. What is left goes on the stack at the part's
+//! natural size and alignment (a split `i64` at 8 bytes aligned to 16), and the
+//! area is rounded up to 16. `RetCC_AArch64_AAPCS` gives a result `x0`/`w0`,
+//! with an `i128` in `x0`, `x1`. The builder has split every value into legal
 //! `i32`/`i64` parts. A call is `CALLSEQ_START`, the stack stores and the
-//! `CopyToReg`s of the register parts (glued), `CALL chain, callee, registers..,
-//! mask, glue`, `CALLSEQ_END` and a `CopyFromReg` of each result. A return is
-//! `RET_GLUE chain, registers.., glue`.
+//! `CopyToReg`s of the register parts (glued), `CALL chain, callee,
+//! registers.., mask, glue`, `CALLSEQ_END` and a `CopyFromReg` of each result.
+//! A return is `RET_GLUE chain, registers.., glue`.
 //!
-//! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers, or 4/8 bytes of stack.
+//! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers,
+//! or 4/8 bytes of stack.
 //!
-//! DEVIATE SD506: not translated are `f16`/`fp128` and vectors, `sret` (`x8`), HFAs,
-//! `byval`, varargs, a tail call that needs stack arguments or an argument area
-//! of a different size, and a callee reached through the GOT; `accepts`
-//! refuses what it can see. Exit: B3.
+//! DEVIATE SD526: not translated are `f16`/`fp128` and vectors, `sret` (`x8`),
+//! HFAs, `byval`, varargs, a tail call that needs stack arguments or an
+//! argument area of a different size, and a callee reached through the GOT;
+//! `accepts` refuses what it can see. Exit: B3.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp` at the pin: `LowerCall`, `LowerCallResult`,
@@ -28,8 +30,8 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::target_calling::{FixedObject, In, LiveIn, Out, Site, TargetCalling};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
-use llrm_sdag::actions::LoadExt;
 use llrm_lir::registers::RegId;
+use llrm_sdag::actions::LoadExt;
 
 use crate::reg;
 
@@ -66,12 +68,15 @@ fn register(
 enum Location {
     Register(RegId),
     /// Bytes at an offset into the stack arguments.
-    Stack { offset: i64, bytes: u32 },
+    Stack {
+        offset: i64,
+        bytes: u32,
+    },
 }
 
 /// A part to place: its register type, the type of the whole value, whether the
-/// value was split, and whether it is a variadic argument (`CC_AArch64_DarwinPCS_VarArg`:
-/// everything on the stack, in 8-byte slots).
+/// value was split, and whether it is a variadic argument
+/// (`CC_AArch64_DarwinPCS_VarArg`: everything on the stack, in 8-byte slots).
 type Part = (EVT, EVT, bool, bool);
 
 /// The location of each part, and the bytes of stack they take.
@@ -96,8 +101,8 @@ fn place(parts: &[Part]) -> (Vec<Location>, u64) {
                 stack = offset + u64::from(bytes);
                 return Location::Stack { offset: offset as i64, bytes };
             }
-            // The half of a split `i128` leaves `x7` alone; on the stack it is 8 bytes aligned to 16 and
-            // shadows `x7`.
+            // The half of a split `i128` leaves `x7` alone; on the stack it is
+            // 8 bytes aligned to 16 and shadows `x7`.
             let registers = if split && vt == EVT::I64 { 7 } else { 8 };
             if next < registers {
                 next += 1;
@@ -148,7 +153,11 @@ impl TargetCalling for Aarch64Calling {
     ) -> Result<(), &'static str> {
         let integer = |vt: EVT| matches!(vt, EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64));
         let known = |arg_vt: EVT, split: bool| {
-            if split { arg_vt == EVT::integer(128) } else { arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point()) }
+            if split {
+                arg_vt == EVT::integer(128)
+            } else {
+                arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point())
+            }
         };
         let outs: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic)).collect();
         let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false)).collect();
@@ -156,7 +165,8 @@ impl TargetCalling for Aarch64Calling {
             return Err("an arm64 argument or result that is no integer or float");
         }
         // A result is in registers.
-        let (outs_in_registers, ins_in_registers) = (place(&outs).0.iter().all(is_register), place(&ins).0.iter().all(is_register));
+        let (outs_in_registers, ins_in_registers) =
+            (place(&outs).0.iter().all(is_register), place(&ins).0.iter().all(is_register));
         match site {
             Site::Arguments => Ok(()),
             Site::Call if ins_in_registers => Ok(()),
@@ -166,7 +176,8 @@ impl TargetCalling for Aarch64Calling {
     }
 
     /// `LowerCall`'s tail-call arm: no call sequence, the arguments in their
-    /// registers, and `TC_RETURN chain, callee, fpdiff, registers.., mask, glue`.
+    /// registers, and `TC_RETURN chain, callee, fpdiff, registers.., mask,
+    /// glue`.
     fn lower_tail_call(
         &self,
         dag: &mut SelectionDAG,
@@ -175,7 +186,8 @@ impl TargetCalling for Aarch64Calling {
         outs: &[Out],
     ) -> Option<SDValue> {
         let values: Vec<SDValue> = outs.iter().map(|out| out.value).collect();
-        let parts: Vec<Part> = outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
+        let parts: Vec<Part> =
+            outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
         let (locations, _) = place(&parts);
         let mut chain = chain;
         let mut glue = None;
@@ -188,7 +200,9 @@ impl TargetCalling for Aarch64Calling {
             registers.push((register, value));
         }
         let callee = match (dag.opcode(callee), dag.node(callee).data) {
-            (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => dag.get_target_global_address(EVT::I64, symbol, offset),
+            (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+                dag.get_target_global_address(EVT::I64, symbol, offset)
+            }
             _ => callee,
         };
         // The arguments are where the callee reads them: no stack adjustment.
@@ -219,7 +233,8 @@ impl TargetCalling for Aarch64Calling {
                 _ => out.value,
             })
             .collect();
-        let parts: Vec<Part> = outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
+        let parts: Vec<Part> =
+            outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
         let (locations, stack) = place(&parts);
         let bytes = stack.next_multiple_of(16);
         let mut chain = dag.get_callseq_start(chain, bytes);
@@ -229,17 +244,22 @@ impl TargetCalling for Aarch64Calling {
                 Location::Register(register) => registers.push((register, value)),
                 Location::Stack { offset, bytes } => {
                     // `LowerCall`: a store of the part at SP + offset
-                    let sp = *stack_pointer.get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, reg::SP, EVT::I64));
+                    let sp = *stack_pointer
+                        .get_or_insert_with(|| dag.get_copy_from_phys_reg_plain(chain, reg::SP, EVT::I64));
                     let at = dag.get_constant(offset as u128, EVT::I64);
                     let address = dag.get_node(ISD::Add, EVT::I64, &[sp, at]);
                     let info = MemInfo {
-                        mem_vt: if dag.value_type(value).is_floating_point() { dag.value_type(value) } else { memory_type(bytes) },
+                        mem_vt: if dag.value_type(value).is_floating_point() {
+                            dag.value_type(value)
+                        } else {
+                            memory_type(bytes)
+                        },
                         align: bytes,
                         volatile: false,
                         base: MemBase::CallArgument(offset as i32),
                         ext: None,
                         space: 0,
-                    
+
                         ordering: None,
                     };
                     stores.push(dag.get_store(chain, value, address, info));
@@ -255,9 +275,12 @@ impl TargetCalling for Aarch64Calling {
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
         }
-        // A direct callee is the symbol itself; a register is called through `BLR`.
+        // A direct callee is the symbol itself; a register is called through
+        // `BLR`.
         let callee = match (dag.opcode(callee), dag.node(callee).data) {
-            (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => dag.get_target_global_address(EVT::I64, symbol, offset),
+            (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+                dag.get_target_global_address(EVT::I64, symbol, offset)
+            }
             _ => callee,
         };
         let mut operands = vec![chain, callee];
@@ -267,7 +290,8 @@ impl TargetCalling for Aarch64Calling {
         operands.push(dag.get_register_mask());
         operands.extend(glue);
         let call = dag.get_node_multi(ISD::Target(CALL), &[EVT::OTHER, EVT::GLUE], &operands);
-        let end = dag.get_callseq_end(SDValue { node: call.node, res: 0 }, bytes, 0, SDValue { node: call.node, res: 1 });
+        let end =
+            dag.get_callseq_end(SDValue { node: call.node, res: 0 }, bytes, 0, SDValue { node: call.node, res: 1 });
         let mut chain = SDValue { node: end.node, res: 0 };
         let mut glue = SDValue { node: end.node, res: 1 };
         // `LowerCallResult`
@@ -302,7 +326,8 @@ impl TargetCalling for Aarch64Calling {
                     dag.get_copy_from_reg(chain, vreg, part.vt)
                 }
                 Location::Stack { offset, bytes } => {
-                    // `LowerFormalArguments`: a load from the fixed object, extended to the part
+                    // `LowerFormalArguments`: a load from the fixed object,
+                    // extended to the part
                     let index = fixed(bytes, offset, true);
                     let address = dag.get_frame_index(EVT::I64, index);
                     let mem_vt = if part.vt.is_floating_point() { part.vt } else { memory_type(bytes) };
@@ -313,7 +338,7 @@ impl TargetCalling for Aarch64Calling {
                         base: MemBase::Stack(index),
                         ext: (mem_vt != part.vt).then_some(LoadExt::ExtLoad),
                         space: 0,
-                    
+
                         ordering: None,
                     };
                     dag.get_load(part.vt, chain, address, info)

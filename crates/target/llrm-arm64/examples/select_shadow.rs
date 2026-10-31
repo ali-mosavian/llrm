@@ -1,7 +1,8 @@
-//! `cargo run -p llrm-arm64 --example select_shadow -- FILE.ll [-fno-PASS ...]`: per function, the
-//! machine opcodes the DAG path selects, one `@name bb: OP OP ...` line per
-//! block, or `@name REFUSED: why`. `tools/dagisel/arm64_shadow.py` compares them
-//! with the pin's `llc -stop-after=finalize-isel`.
+//! `cargo run -p llrm-arm64 --example select_shadow -- FILE.ll [-fno-PASS
+//! ...]`: per function, the machine opcodes the DAG path selects, one `@name
+//! bb: OP OP ...` line per block, or `@name REFUSED: why`.
+//! `tools/dagisel/arm64_shadow.py` compares them with the pin's `llc
+//! -stop-after=finalize-isel`.
 use llrm_arm64::dag::function::select_function_in;
 use llrm_arm64::driver;
 use llrm_codegen::backend::selectiondag::isd::ISD;
@@ -19,11 +20,13 @@ fn main() {
     let mut program = driver::program(&text, platform).expect("reads");
     driver::optimized(&mut program).expect("optimizes");
     let module = &program.modules[0];
-    // The pin reads the module with its atomics as instructions, not the calls the pipeline saw.
+    // The pin reads the module with its atomics as instructions, not the calls
+    // the pipeline saw.
     let mut shown = module.clone();
     llrm_mir::atomic::restored(&mut shown).expect("restores");
     println!("MODULE\n{}ENDMODULE", llrm_mir::print::module(&shown));
-    let names: Vec<String> = module.functions().filter(|(_, _, f)| !f.is_declaration()).filter_map(|(_, g, _)| g.name.owned()).collect();
+    let names: Vec<String> =
+        module.functions().filter(|(_, _, f)| !f.is_declaration()).filter_map(|(_, g, _)| g.name.owned()).collect();
     for name in names {
         match select_function_in(module, &name, &program.layout, platform) {
             Err(why) => println!("@{name} REFUSED: {}", why.lines().next().unwrap_or("")),

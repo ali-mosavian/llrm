@@ -7,7 +7,7 @@
 //! translation in [`super::addr`]. The node and pattern predicates are the
 //! generated ones.
 //!
-//! DEVIATE SD502: the complex patterns `addr` lists as not translated answer false.
+//! See SD522: the complex patterns `addr` lists as not translated answer false.
 
 use llrm_dagisel::aarch64_predicates::encode_logical_immediate;
 use llrm_dagisel::dag::{Hooks, PatternContext, SDValue};
@@ -131,7 +131,9 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             Complex::NegArithImmed => addr::neg_arith_immed(dag, value).map(|v| push(&v)).is_some(),
             Complex::ArithShiftedRegister => addr::shifted_register(dag, value, false).map(|v| push(&v)).is_some(),
             Complex::LogicalShiftedRegister => addr::shifted_register(dag, value, true).map(|v| push(&v)).is_some(),
-            Complex::Indexed(size) => addr::addr_mode_indexed(dag, &self.globals, value, size).map(|v| push(&v)).is_some(),
+            Complex::Indexed(size) => {
+                addr::addr_mode_indexed(dag, &self.globals, value, size).map(|v| push(&v)).is_some()
+            }
             Complex::Unscaled => addr::addr_mode_unscaled(dag, value).map(|v| push(&v)).is_some(),
             Complex::Xro(size) => addr::addr_mode_xro(dag, value, size).map(|v| push(&v)).is_some(),
             Complex::Wro(size) => addr::addr_mode_wro(dag, value, size).map(|v| push(&v)).is_some(),
@@ -166,10 +168,16 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
     ) -> SDValue {
         let n = || addr::zext(dag, value).expect("an xform of a constant");
         let signed = || dag.constant(value).expect("an xform of a constant");
-        // `fpimm32XForm`, `fpimm64XForm`: the 8-bit code; `bitcast_fpimm_to_i32`/`i64`: the bits.
+        // `fpimm32XForm`, `fpimm64XForm`: the 8-bit code;
+        // `bitcast_fpimm_to_i32`/`i64`: the bits.
         if matches!(xform, 34 | 35 | 38 | 39) {
             let bits = dag.fp_bits(value).expect("an xform of a float constant");
-            let code = || i64::from(<Self as Hooks<D>>::fp_imm_code(self, bits, xform == 35).expect("a float immediate the predicate accepted"));
+            let code = || {
+                i64::from(
+                    <Self as Hooks<D>>::fp_imm_code(self, bits, xform == 35)
+                        .expect("a float immediate the predicate accepted"),
+                )
+            };
             let (constant, vt) = match xform {
                 34 | 35 => (code(), mvt::i32),
                 38 => (bits as u32 as i64, mvt::i32),
@@ -196,7 +204,8 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
             25 => ((63 - n() as i64).min(31), mvt::i64),
             26 => (31 - n() as i64, mvt::i64),
             27 => (63 - n() as i64, mvt::i64),
-            // `getInvertedCondCode`: the condition codes pair up on the low bit.
+            // `getInvertedCondCode`: the condition codes pair up on the low
+            // bit.
             28 => (n() as i64 ^ 1, mvt::i32),
             30 => ((n() | (u64::from(b'U') << 8)) as i64, mvt::i32),
             41 => (8 + n() as i64, mvt::i32),
@@ -234,7 +243,8 @@ impl<D: AddrDag> Hooks<D> for Aarch64Hooks {
         !find_non_imm_use(dag, root, value.node, user, ignore_chains)
     }
 
-    /// `AArch64DAGToDAGISel::CheckAndMask`: the table names no pattern that asks.
+    /// `AArch64DAGToDAGISel::CheckAndMask`: the table names no pattern that
+    /// asks.
     fn check_and_mask(
         &self,
         _: &D,

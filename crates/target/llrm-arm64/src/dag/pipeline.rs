@@ -1,32 +1,30 @@
 //! The shared DAG stages run for arm64: combine, legalize, select with the
 //! AArch64 table, schedule.
 //!
-//! DEVIATE SD505: no target combines (`PerformDAGCombine` of AArch64 is not
+//! DEVIATE SD525: no target combines (`PerformDAGCombine` of AArch64 is not
 //! translated) and no `PreprocessISelDAG`. A Custom operation is refused (the
 //! legalizer would otherwise expand it). Exit: B3.
 
+use llrm_codegen::backend::selectiondag::NodeData;
 use llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks;
 use llrm_codegen::backend::selectiondag::dag_combiner::CombineLevel;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::dag_select::{legalized_with, do_instruction_selection_with, Refusal};
+use llrm_codegen::backend::selectiondag::dag_select::{Refusal, do_instruction_selection_with, legalized_with};
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks as LegalizeHooks;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
-use llrm_dagisel::generated::aarch64::aarch64_apple_m1 as table;
-use llrm_dagisel::generated::aarch64::instrinfo::{self, flag};
-use llrm_dagisel::interp::Selector;
-use llrm_lir::registers::RegId;
-use llrm_sdag::actions::{Aarch64Features, TargetLowering};
-
 use llrm_dagisel::dag::SDValue as PinValue;
+use llrm_dagisel::generated::aarch64::aarch64_apple_m1 as table;
+use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
 use llrm_dagisel::generated::aarch64::ids::opcode as aarch64_ids;
+use llrm_dagisel::generated::aarch64::instrinfo::{self, flag};
 use llrm_dagisel::generated::ids::{isd, mvt};
 use llrm_dagisel::interp::Outcome;
+use llrm_dagisel::interp::Selector;
 use llrm_dagisel::x86_addr::AddrDag;
-
-use llrm_dagisel::generated::aarch64::ids::isd as aarch64_isd;
-use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::NodeData;
+use llrm_lir::registers::RegId;
+use llrm_sdag::actions::{Aarch64Features, TargetLowering};
 
 use super::globals::Globals;
 use super::ids::Aarch64Ids;
@@ -45,10 +43,14 @@ impl CombineHooks for Aarch64Lowering {
         vt: EVT,
         _post: bool,
     ) -> bool {
-        // `setIndexedLoadAction`/`setIndexedStoreAction` of `PRE_INC` and `POST_INC` (the other modes are
-        // never made) for i8 to i64 and f32/f64.
+        // `setIndexedLoadAction`/`setIndexedStoreAction` of `PRE_INC` and
+        // `POST_INC` (the other modes are never made) for i8 to i64 and
+        // f32/f64.
         use llrm_codegen::backend::selectiondag::mvt::MVT;
-        matches!(vt, EVT::Simple(MVT::I8 | MVT::I16 | MVT::I32 | MVT::I64 | MVT::F32 | MVT::F64))
+        matches!(
+            vt,
+            EVT::Simple(MVT::I8 | MVT::I16 | MVT::I32 | MVT::I64 | MVT::F32 | MVT::F64)
+        )
     }
 
     fn indexed_address_parts(
@@ -58,7 +60,8 @@ impl CombineHooks for Aarch64Lowering {
         address: SDValue,
         post: bool,
     ) -> Option<(SDValue, i64)> {
-        // `getPreIndexedAddressParts`/`getPostIndexedAddressParts` over `getIndexedAddressParts`.
+        // `getPreIndexedAddressParts`/`getPostIndexedAddressParts` over
+        // `getIndexedAddressParts`.
         let NodeData::Mem(info) = dag.node(access).data else { return None };
         if info.volatile || !matches!(dag.opcode(address), ISD::Add | ISD::Sub) {
             return None;
@@ -73,13 +76,14 @@ impl CombineHooks for Aarch64Lowering {
         if dag.opcode(address) == ISD::Sub {
             offset = offset.wrapping_neg();
         }
-        // "All of the indexed addressing mode instructions take a signed 9 bit immediate offset."
+        // "All of the indexed addressing mode instructions take a signed 9 bit
+        // immediate offset."
         if !(-256..256).contains(&offset) {
             return None;
         }
         if post {
-            // "Post-indexing updates the base, so it's not a valid transform if that's not the same as the
-            // load's pointer."
+            // "Post-indexing updates the base, so it's not a valid transform if
+            // that's not the same as the load's pointer."
             let ptr = dag.operand(access, if dag.opcode(access) == ISD::Load { 1 } else { 2 });
             if ptr != base {
                 return None;
@@ -97,7 +101,8 @@ impl CombineHooks for Aarch64Lowering {
         // `AArch64TargetLowering::isLegalAddressingMode`, no global.
         let size = i64::from(vt.size_in_bits().div_ceil(8));
         if scale == 0 {
-            // [reg + imm]: the unscaled signed 9 bits, or the scaled unsigned 12.
+            // [reg + imm]: the unscaled signed 9 bits, or the scaled
+            // unsigned 12.
             return (-256..256).contains(&base_offs)
                 || (size > 0 && base_offs % size == 0 && (0..4096).contains(&(base_offs / size)));
         }
@@ -172,7 +177,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
-    fn select_to_select_cc(&self, vt: EVT) -> bool {
+    fn select_to_select_cc(
+        &self,
+        vt: EVT,
+    ) -> bool {
         vt == EVT::I32 || vt == EVT::I64 || (vt.is_floating_point() && vt.size_in_bits() >= 32)
     }
 
@@ -180,8 +188,9 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
-    /// `AArch64TargetLowering::isMulAddWithConstProfitable`: not when `c1` is an add immediate
-    /// and `c1*c2` is not but takes more than one instruction to build.
+    /// `AArch64TargetLowering::isMulAddWithConstProfitable`: not when `c1` is
+    /// an add immediate and `c1*c2` is not but takes more than one
+    /// instruction to build.
     fn is_mul_add_with_const_profitable(
         &self,
         vt: EVT,
@@ -216,7 +225,10 @@ impl CombineHooks for Aarch64Lowering {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr)
+        matches!(
+            op,
+            ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+        )
     }
 
     fn target_shrink_demanded_constant(
@@ -242,7 +254,9 @@ impl CombineHooks for Aarch64Lowering {
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
             }
-            ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => super::ccmp::combine_and_or_csel(dag, node),
+            ISD::And | ISD::Or if level == CombineLevel::AfterLegalizeDag => {
+                super::ccmp::combine_and_or_csel(dag, node)
+            }
             _ => None,
         }
     }
@@ -282,8 +296,8 @@ impl LegalizeHooks for Aarch64Lowering {
 }
 
 impl Aarch64Lowering {
-    /// `performGlobalAddressCombine`: when every user adds a constant, fold the smallest into
-    /// the symbol's offset, within the object and below 2^20.
+    /// `performGlobalAddressCombine`: when every user adds a constant, fold the
+    /// smallest into the symbol's offset, within the object and below 2^20.
     fn global_address_combine(
         &self,
         dag: &mut SelectionDAG,
@@ -305,7 +319,8 @@ impl Aarch64Lowering {
             min_offset = min_offset.min(constant as u64);
         }
         let new_offset = min_offset.wrapping_add(offset as u64);
-        // Larger than the current offset, or the two forms trade places for ever.
+        // Larger than the current offset, or the two forms trade places for
+        // ever.
         if new_offset <= offset as u64 || new_offset >= 1 << 20 || new_offset > global.size? {
             return None;
         }
@@ -386,7 +401,8 @@ impl SchedInfo for Aarch64Sched {
     }
 }
 
-/// The subtarget features of `apple-m1` that the action table reads (`dagisel.toml` `cpus`).
+/// The subtarget features of `apple-m1` that the action table reads
+/// (`dagisel.toml` `cpus`).
 const APPLE_M1: Aarch64Features = Aarch64Features { cssc: false, lse: true, outline_atomics: false, lse2: true };
 
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
@@ -400,7 +416,8 @@ pub fn select_block(
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };
     let legal = legalized_with(dag, &tli, &mut lowering, None);
-    // The reason the legalizer stopped is the Custom operation it could not lower.
+    // The reason the legalizer stopped is the Custom operation it could not
+    // lower.
     if let Some(why) = lowering.custom {
         return Err(Refusal::Legalize(why));
     }
@@ -422,8 +439,8 @@ pub fn select_block(
     Ok(schedule(dag, root, &Aarch64Sched))
 }
 
-/// `AArch64DAGToDAGISel::Select`, `case ISD::Constant`: zero is `WZR`/`XZR`, which the
-/// coalescer propagates into the user. `None` for any other node.
+/// `AArch64DAGToDAGISel::Select`, `case ISD::Constant`: zero is `WZR`/`XZR`,
+/// which the coalescer propagates into the user. `None` for any other node.
 fn select_zero(
     dag: &mut impl AddrDag,
     node: u32,
@@ -463,8 +480,9 @@ fn select_frame_index(
     Some(Outcome::Selected)
 }
 
-/// `AArch64DAGToDAGISel::tryIndexedLoad`: a pre- or post-indexed scalar load is `LDR*pre`/`LDR*post`
-/// (base, offset, chain; results: the new base, the value, the chain). `None` for any other node.
+/// `AArch64DAGToDAGISel::tryIndexedLoad`: a pre- or post-indexed scalar load is
+/// `LDR*pre`/`LDR*post` (base, offset, chain; results: the new base, the value,
+/// the chain). `None` for any other node.
 fn select_indexed_load(
     dag: &mut impl AddrDag,
     node: u32,
@@ -532,7 +550,11 @@ fn select_indexed_load(
     if insert_to_64 {
         let zero = dag.target_constant(0, mvt::i64);
         let sub = dag.target_constant(i64::from(llrm_dagisel::generated::aarch64::ids::reg::sub_32), mvt::i32);
-        let wide = dag.machine_node(llrm_dagisel::generated::ids::target_opcode::SUBREG_TO_REG, &[mvt::i64], &[zero, value, sub]);
+        let wide = dag.machine_node(
+            llrm_dagisel::generated::ids::target_opcode::SUBREG_TO_REG,
+            &[mvt::i64],
+            &[zero, value, sub],
+        );
         value = PinValue::new(wide, 0);
     }
     dag.replace_uses(PinValue::new(node, 0), value);

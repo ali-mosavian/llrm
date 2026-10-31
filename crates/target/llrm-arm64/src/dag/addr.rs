@@ -7,9 +7,10 @@
 //! shape, returns the operands the table expects, in the order of the pin's
 //! signature (`SelectAddrModeIndexed`: base, scaled offset).
 //!
-//! DEVIATE SD502: not translated, and answering false (the pattern after it, or a
-//! refusal, follows): `SelectExtractHigh`, `SelectDupZero`; `SelectCVTFixedPos*` reads only a
-//! `ConstantFP`, not one loaded from the constant pool. Exit: vectors; the constant pool.
+//! DEVIATE SD522: not translated, and answering false (the pattern after it, or
+//! a refusal, follows): `SelectExtractHigh`, `SelectDupZero`;
+//! `SelectCVTFixedPos*` reads only a `ConstantFP`, not one loaded from the
+//! constant pool. Exit: vectors; the constant pool.
 //!
 //! # See also
 //! `llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
@@ -53,9 +54,10 @@ fn legal_arith_immed(immed: u64) -> bool {
     immed >> 12 == 0 || (immed & 0xfff == 0 && immed >> 24 == 0)
 }
 
-/// `SelectCVTFixedPosOperand` and `...RecipOperand`: `n` is a float constant that is
-/// `2^fbits` (its reciprocal, for `reciprocal`), `1 <= fbits <= reg_width`; the operand is
-/// `fbits`. `CheckFixedPointOperandConstant` in `AArch64BaseInfo.h`.
+/// `SelectCVTFixedPosOperand` and `...RecipOperand`: `n` is a float constant
+/// that is `2^fbits` (its reciprocal, for `reciprocal`), `1 <= fbits <=
+/// reg_width`; the operand is `fbits`. `CheckFixedPointOperandConstant` in
+/// `AArch64BaseInfo.h`.
 pub fn cvt_fixed_pos<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
@@ -89,7 +91,8 @@ pub fn arith_immed<D: AddrDag>(
     if !legal_arith_immed(immed) {
         return None;
     }
-    // `getArithImmedShift`: 12 when the low 12 bits are clear and it is not already small.
+    // `getArithImmedShift`: 12 when the low 12 bits are clear and it is not
+    // already small.
     let shift = if immed >> 12 != 0 && immed & 0xfff == 0 { 12 } else { 0 };
     let value = dag.target_constant((immed >> shift) as i64, mvt::i32);
     let shifter = dag.target_constant(shift as i64, mvt::i32);
@@ -105,7 +108,8 @@ pub fn neg_arith_immed<D: AddrDag>(
     if immed == 0 {
         return None;
     }
-    let negated = if dag.value_type(n) == mvt::i32 { u64::from((immed as u32).wrapping_neg()) } else { immed.wrapping_neg() };
+    let negated =
+        if dag.value_type(n) == mvt::i32 { u64::from((immed as u32).wrapping_neg()) } else { immed.wrapping_neg() };
     if negated & 0xffff_ffff_ff00_0000 != 0 {
         return None;
     }
@@ -267,7 +271,8 @@ pub fn addr_mode_indexed<D: AddrDag>(
     }
     if dag.opcode(n.node) == a64_isd::ADDlow && worth_folding_addlow(dag, n) {
         let (base, low) = (dag.operand(n.node, 0), dag.operand(n.node, 1));
-        // A symbol the access is aligned to, at an offset it divides, folds as a page offset.
+        // A symbol the access is aligned to, at an offset it divides, folds as
+        // a page offset.
         let aligned = dag.wrapped_symbol(low).map(|w| {
             w.offset % i64::from(size) == 0 && globals.get(w.symbol.id).is_some_and(|g| g.align >= u64::from(size))
         });
@@ -323,13 +328,16 @@ fn worth_folding_shl<D: AddrDag>(
         Some(amount) if (0..=3).contains(&amount) => {}
         _ => return false,
     }
-    dag.users(v).into_iter().all(|(user, _)| {
-        is_mem_op_or_prefetch(dag, user)
-            || dag.users(SDValue::new(user, 0)).into_iter().all(|(inner, _)| is_mem_op_or_prefetch(dag, inner))
-    })
+    dag.users(v)
+        .into_iter()
+        .all(
+            |(user, _)| is_mem_op_or_prefetch(dag, user)
+                || dag.users(SDValue::new(user, 0)).into_iter().all(|(inner, _)| is_mem_op_or_prefetch(dag, inner)),
+        )
 }
 
-/// `isWorthFoldingAddr(V, Size)` for a CPU with no `AddrLSLSlow14` and no size goal.
+/// `isWorthFoldingAddr(V, Size)` for a CPU with no `AddrLSLSlow14` and no size
+/// goal.
 fn worth_folding_addr<D: AddrDag>(
     dag: &D,
     v: SDValue,
@@ -347,7 +355,8 @@ fn worth_folding_addr<D: AddrDag>(
     false
 }
 
-/// `SelectExtendedSHL` with `WantExtend` false: `(shl x, c)` for the `XRO` mode.
+/// `SelectExtendedSHL` with `WantExtend` false: `(shl x, c)` for the `XRO`
+/// mode.
 fn extended_shl<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
@@ -360,7 +369,8 @@ fn extended_shl<D: AddrDag>(
     worth_folding_addr(dag, n).then(|| dag.operand(n.node, 0))
 }
 
-/// `SelectAddrModeXRO`: base, index register, sign-extend flag (0) and shift flag.
+/// `SelectAddrModeXRO`: base, index register, sign-extend flag (0) and shift
+/// flag.
 pub fn addr_mode_xro<D: AddrDag>(
     dag: &mut D,
     n: SDValue,
@@ -373,7 +383,8 @@ pub fn addr_mode_xro<D: AddrDag>(
     if dag.users(n).into_iter().any(|(user, _)| !is_mem_op_or_prefetch(dag, user)) {
         return None;
     }
-    // A wide constant offset takes the register form after a `MOVi64imm`: not translated.
+    // A wide constant offset takes the register form after a `MOVi64imm`: not
+    // translated.
     if dag.constant(rhs).is_some() {
         return None;
     }
@@ -516,7 +527,7 @@ pub fn addr_mode_wro<D: AddrDag>(
 /// four, as an `add`/`sub`/`cmp` operand: the register and the encoded
 /// extend.
 ///
-/// DEVIATE SD502: the extend of a vector lane answers false (the pin refuses only a
+/// See SD522: the extend of a vector lane answers false (the pin refuses only a
 /// fixed-length vector). Exit: vectors.
 pub fn arith_extended_register<D: AddrDag>(
     dag: &mut D,
@@ -540,9 +551,10 @@ pub fn arith_extended_register<D: AddrDag>(
         let reg = dag.operand(n.node, 0);
         // A 32-bit definition is already zero-extended for free.
         let opcode = dag.opcode(reg.node);
-        let is_def32 = ![isd::TRUNCATE, isd::CopyFromReg, isd::AssertSext, isd::AssertZext, isd::AssertAlign, isd::FREEZE]
-            .contains(&opcode)
-            && !(dag.is_machine(reg.node) && opcode == target_opcode::EXTRACT_SUBREG);
+        let is_def32 =
+            ![isd::TRUNCATE, isd::CopyFromReg, isd::AssertSext, isd::AssertZext, isd::AssertAlign, isd::FREEZE]
+                .contains(&opcode)
+                && !(dag.is_machine(reg.node) && opcode == target_opcode::EXTRACT_SUBREG);
         if ext == UXTW && dag.value_type(reg) == mvt::i32 && is_def32 {
             return None;
         }

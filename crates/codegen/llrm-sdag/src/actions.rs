@@ -8,10 +8,11 @@
 //! type), (type, memory type) for truncating stores, and (condition code,
 //! type). Everything starts `Legal`; `init_actions` makes the pin's
 //! `initActions` defaults and `x86_32` (or `aarch64`, the scalar integer arms
-//! of `AArch64TargetLowering`, with the scalar float and atomic ones) the constructor's calls, in the pin's order, because a later call overwrites an earlier one. `operation_action`
-//! is `getOperationAction`: an integer with no simple type is `Expand`.
-//! `type_to_promote_to` is `getTypeToPromoteTo`: the recorded type, else the
-//! next wider legal type that handles the operation.
+//! of `AArch64TargetLowering`, with the scalar float and atomic ones) the
+//! constructor's calls, in the pin's order, because a later call overwrites an
+//! earlier one. `operation_action` is `getOperationAction`: an integer with no
+//! simple type is `Expand`. `type_to_promote_to` is `getTypeToPromoteTo`: the
+//! recorded type, else the next wider legal type that handles the operation.
 //!
 //! # Runs
 //! Built once per target; read by LegalizeDAG (B1) and the type legalizer.
@@ -68,7 +69,8 @@ pub struct Features {
 /// The CPU features the AArch64 constructor's scalar arms test.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Aarch64Features {
-    /// `hasCSSC()`: scalar `ctpop`, `cttz`, `abs`, `smax` and the like are instructions.
+    /// `hasCSSC()`: scalar `ctpop`, `cttz`, `abs`, `smax` and the like are
+    /// instructions.
     pub cssc: bool,
     /// `hasLSE()`: the atomic read-modify-writes are instructions.
     pub lse: bool,
@@ -100,7 +102,8 @@ pub struct TargetLowering {
     cond_code: HashMap<(CondCode, MVT), Action>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
-    /// `isFPImmLegal` as a function of the value, for a target whose answer is not a short list.
+    /// `isFPImmLegal` as a function of the value, for a target whose answer is
+    /// not a short list.
     fp_imm_predicate: Option<fn(MVT, u128) -> bool>,
     /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
     /// more than a straight `movsd`.
@@ -461,9 +464,11 @@ impl TargetLowering {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Expand);
         }
 
-        // Scalar floats (`hasFPARMv8()`; `f16`, `bf16` and `f128` are not types here).
+        // Scalar floats (`hasFPARMv8()`; `f16`, `bf16` and `f128` are not types
+        // here).
         let floats = [MVT::F32, MVT::F64];
-        // `setOperationAction({SETCC, BR_CC, SELECT, SELECT_CC}, {f32, f64}, Custom)`
+        // `setOperationAction({SETCC, BR_CC, SELECT, SELECT_CC}, {f32, f64},
+        // Custom)`
         t.set_ops(&[SetCC, BrCC, Select, SelectCC], &floats, Custom);
         t.set_ops(&[FRem], &floats, LibCall);
         t.set_ops(&[FSin, FCos], &floats, Expand);

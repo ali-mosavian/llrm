@@ -38,13 +38,13 @@
 //! ([L5432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L5432)).
 
 use llrm_mir::hash::HashSet;
+use llrm_sdag::lowering::ShiftAmount;
 
 use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
-use llrm_sdag::lowering::ShiftAmount;
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -116,7 +116,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 any = true;
                 self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
-                // `ReplaceAllUsesWith` deletes the node it replaced, and what only it read.
+                // `ReplaceAllUsesWith` deletes the node it replaced, and what
+                // only it read.
                 self.dag.delete_replaced(n);
             }
             // A sweep that built no node leaves nothing new to legalize.
@@ -218,8 +219,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
-    /// `LegalizeLoadOps`, extending loads: one the target does not have is an any-extending
-    /// load and an extension in the register. The value and the chain it replaces.
+    /// `LegalizeLoadOps`, extending loads: one the target does not have is an
+    /// any-extending load and an extension in the register. The value and
+    /// the chain it replaces.
     fn expand_ext_load(
         &mut self,
         node: SDValue,
@@ -556,12 +558,17 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.dag.get_node(ISD::Sra, vt, &[up, by])])
             }
             ISD::AtomicLoadSub => {
-                // `ExpandNode`: a subtract is an add of the negation (a sign-extension of the
-                // operand from the memory type is dropped first).
+                // `ExpandNode`: a subtract is an add of the negation (a
+                // sign-extension of the operand from the memory
+                // type is dropped first).
                 let NodeData::Mem(info) = self.dag.node(node).data else { return None };
-                let (chain, ptr, mut rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let (chain, ptr, mut rhs) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
                 if self.dag.opcode(rhs) == ISD::SignExtendInReg
-                    && matches!(self.dag.node(self.dag.operand(rhs, 1)).data, NodeData::ValueType(inner) if inner == info.mem_vt)
+                    && matches!(
+                        self.dag.node(self.dag.operand(rhs, 1)).data,
+                        NodeData::ValueType(inner) if inner == info.mem_vt
+                    )
                 {
                     rhs = self.dag.operand(rhs, 0);
                 }
@@ -571,7 +578,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![added, SDValue { node: added.node, res: 1 }])
             }
             ISD::AtomicCmpSwapWithSuccess => {
-                // `ExpandNode`: the swap, and the success flag as the old value equal to the expected one.
+                // `ExpandNode`: the swap, and the success flag as the old value
+                // equal to the expected one.
                 let NodeData::Mem(info) = self.dag.node(node).data else { return None };
                 let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
                 let (expected, new) = (self.dag.operand(node, 2), self.dag.operand(node, 3));

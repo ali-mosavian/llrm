@@ -2215,7 +2215,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(done) = self.truncating_store_demanded_bits(node, chain, value, ptr, info) {
             return Some(done);
         }
-        // `replaceStoreOfFPConstant` takes a volatile store too (`isNormalStore`); the hook asks for that.
+        // `replaceStoreOfFPConstant` takes a volatile store too
+        // (`isNormalStore`); the hook asks for that.
         let volatile_blocks = info.volatile && !self.hooks.store_fp_constant_as_i64();
         if self.dag.opcode(value) != ISD::ConstantFP || volatile_blocks || info.mem_vt != self.dag.value_type(value) {
             return None;
@@ -2258,8 +2259,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
     }
 
-    /// `visitSTORE` of a truncating store of an integer: only the low bits of the value are read, so
-    /// `SimplifyDemandedBits` (and `SimplifyMultipleUseDemandedBits`) may rewrite the value.
+    /// `visitSTORE` of a truncating store of an integer: only the low bits of
+    /// the value are read, so `SimplifyDemandedBits` (and
+    /// `SimplifyMultipleUseDemandedBits`) may rewrite the value.
     fn truncating_store_demanded_bits(
         &mut self,
         node: SDValue,
@@ -2269,7 +2271,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         info: MemInfo,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(value);
-        if !vt.is_integer() || !info.mem_vt.is_integer() || info.mem_vt.size_in_bits() >= vt.size_in_bits() || vt.size_in_bits() > 64 {
+        if !vt.is_integer()
+            || !info.mem_vt.is_integer()
+            || info.mem_vt.size_in_bits() >= vt.size_in_bits()
+            || vt.size_in_bits() > 64
+        {
             return None;
         }
         if self.dag.is_opaque(value) {

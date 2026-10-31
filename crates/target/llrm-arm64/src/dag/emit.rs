@@ -8,12 +8,14 @@
 //! its operands. `RET_ReallyLR` becomes `Op::Return` over the physical
 //! registers it names.
 //!
-//! DEVIATE SD508: the float arithmetic, compare, select, conversion, move and `LDR`/`STR` `ui` rows, and the integer
-//! `ADD`/`SUB`/logic, variable shift, `SBFM`/`UBFM`, `MADD`, divide and
-//! one-source forms, `MOVi32imm`/`MOVi64imm`, a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`, `roW`)
-//! forms and the sub-register pseudos only (no `BFM`, no insert into a defined register), with no
-//! memory operand kept (`MemOperand::default`); a machine opcode with no row is a named error
-//! (`machine opcode X has no arm64 instruction yet`), which `--isel=shadow` falls back on. Rows added
+//! DEVIATE SD528: the float arithmetic, compare, select, conversion, move and
+//! `LDR`/`STR` `ui` rows, and the integer `ADD`/`SUB`/logic, variable shift,
+//! `SBFM`/`UBFM`, `MADD`, divide and one-source forms, `MOVi32imm`/`MOVi64imm`,
+//! a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`, `roW`)
+//! forms and the sub-register pseudos only (no `BFM`, no insert into a defined
+//! register), with no memory operand kept (`MemOperand::default`); a machine
+//! opcode with no row is a named error (`machine opcode X has no arm64
+//! instruction yet`), which `--isel=shadow` falls back on. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
 use std::collections::HashMap;
@@ -29,8 +31,8 @@ use super::globals::Globals;
 use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
 use crate::mc::inst::{
-    FpBinary, FpConvert, FpFused, FpSize, FpUnary, Rounding, Vreg, Addr, AddSub, Bitfield, Cond, Div, Extend, Gpr, Inst, Logic, Memory, MemOperand, Mul3, Select, Shift, Target, Unary,
-    Width,
+    AddSub, Addr, Bitfield, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst, Logic,
+    MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, block_label};
@@ -116,8 +118,8 @@ fn add_sub(name: &str) -> Option<(AddSub, Width, bool)> {
     Some((op, width, form))
 }
 
-/// `ANDWri`, `ORNXrs`, `BICSWrs` and the rest of the logic family: (operation, inverted
-/// operand, width, form).
+/// `ANDWri`, `ORNXrs`, `BICSWrs` and the rest of the logic family: (operation,
+/// inverted operand, width, form).
 fn logic(name: &str) -> Option<(Logic, bool, Width, &str)> {
     let (op, invert, rest) = [
         ("ANDS", Logic::Ands, false),
@@ -173,7 +175,8 @@ enum AddressForm {
     RegisterWord,
 }
 
-/// `LDRWui`, `STURXi`, `LDRSBWroX` and the rest of the integer load/store family.
+/// `LDRWui`, `STURXi`, `LDRSBWroX` and the rest of the integer load/store
+/// family.
 fn memory_form(name: &str) -> Option<MemoryForm> {
     let (store, rest) = if let Some(rest) = name.strip_prefix("LDUR") {
         (false, ("UR", rest))
@@ -248,7 +251,8 @@ fn build(
             (false, [Operand::Reg(rn), Operand::Reg(rm)]) => {
                 Ok(Inst::AddSubShifted { op, width, rd, rn: *rn, rm: *rm, shift: Shift::Lsl, amount: 0 })
             }
-            // `ADDWrs rn, rm, shifter`: the shift type in bits 6.., the amount below
+            // `ADDWrs rn, rm, shifter`: the shift type in bits 6.., the amount
+            // below
             (false, [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(shifter)]) => {
                 let (shift, amount) = self::shifter(*shifter);
                 if shift == Shift::Ror {
@@ -286,7 +290,9 @@ fn build(
     }
     let width = |suffix: &str| if suffix.starts_with('W') { Width::W } else { Width::X };
     // `SMADDLrrr`, `UMULHrr`: a 64-bit result, no width letter.
-    let long = ["SMADDL", "SMSUBL", "UMADDL", "UMSUBL"].iter().find_map(|stem| name.strip_prefix(stem).map(|rest| (*stem, rest)));
+    let long = ["SMADDL", "SMSUBL", "UMADDL", "UMSUBL"]
+        .iter()
+        .find_map(|stem| name.strip_prefix(stem).map(|rest| (*stem, rest)));
     let (stem, suffix) = match long {
         Some((stem, "rrr")) => (stem, "Xrrr"),
         _ => name.split_at(name.find(['W', 'X']).unwrap_or(name.len())),
@@ -355,9 +361,10 @@ fn gpr_width(letter: &str) -> Option<Width> {
     }
 }
 
-/// A float machine node as an instruction: the float arithmetic, compare, select,
-/// conversion and move rows. `None` for any other opcode. The destination is a float
-/// register, or a general one for a conversion to an integer.
+/// A float machine node as an instruction: the float arithmetic, compare,
+/// select, conversion and move rows. `None` for any other opcode. The
+/// destination is a float register, or a general one for a conversion to an
+/// integer.
 fn float_inst(
     name: &str,
     rd: Vreg,
@@ -406,7 +413,8 @@ fn float_inst(
             });
         }
     }
-    let fused = [("FMADD", FpFused::Madd), ("FMSUB", FpFused::Msub), ("FNMADD", FpFused::Nmadd), ("FNMSUB", FpFused::Nmsub)];
+    let fused =
+        [("FMADD", FpFused::Madd), ("FMSUB", FpFused::Msub), ("FNMADD", FpFused::Nmadd), ("FNMSUB", FpFused::Nmsub)];
     for (stem, op) in fused {
         if let Some(size) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("rrr")).and_then(fp_size) {
             return Some(match operands {
@@ -431,7 +439,9 @@ fn float_inst(
         if let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("ri")) {
             let (width, size) = (gpr_width(&rest[..1])?, fp_size(rest.get(1..)?)?);
             return Some(match operands {
-                [Operand::Reg(gpr)] => Ok(Inst::FpInt { op: FpConvert::ToFp { signed }, width, size, gpr: *gpr, fpr: rd }),
+                [Operand::Reg(gpr)] => {
+                    Ok(Inst::FpInt { op: FpConvert::ToFp { signed }, width, size, gpr: *gpr, fpr: rd })
+                }
                 _ => wrong(),
             });
         }
@@ -553,7 +563,10 @@ impl Emitter<'_> {
             return Ok(Operand::Flags);
         }
         // `FCMP` has no result but the flags.
-        if matches!(node.opcode, ISD::Machine(code) if opcode_name(code).is_some_and(|name| name.starts_with("FCMP"))) {
+        if matches!(
+            node.opcode,
+            ISD::Machine(code) if opcode_name(code).is_some_and(|name| name.starts_with("FCMP"))
+        ) {
             return Ok(Operand::Flags);
         }
         match node.data {
@@ -566,9 +579,12 @@ impl Emitter<'_> {
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
                 Ok(Operand::Symbol(symbol, offset))
             }
-            NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex && index < 0 => {
-                self.dag.fixed_offsets.get(&index).map(|&offset| Operand::Fixed(offset)).ok_or_else(|| format!("fixed object {index} has no offset"))
-            }
+            NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex && index < 0 => self
+                .dag
+                .fixed_offsets
+                .get(&index)
+                .map(|&offset| Operand::Fixed(offset))
+                .ok_or_else(|| format!("fixed object {index} has no offset")),
             NodeData::FrameIndex(index) if node.opcode == ISD::TargetFrameIndex => Ok(Operand::Slot(index as u32)),
             _ => self
                 .values
@@ -579,9 +595,9 @@ impl Emitter<'_> {
         }
     }
 
-    /// `BL symbol` or `BLR reg`: the registers it reads are the `Register` operands
-    /// (the arguments), those it writes the physical registers a glued `CopyFromReg`
-    /// after its `CALLSEQ_END` reads (the results).
+    /// `BL symbol` or `BLR reg`: the registers it reads are the `Register`
+    /// operands (the arguments), those it writes the physical registers a
+    /// glued `CopyFromReg` after its `CALLSEQ_END` reads (the results).
     fn call(
         &mut self,
         id: u32,
@@ -603,7 +619,8 @@ impl Emitter<'_> {
                 _ => None,
             })
             .collect::<Result<Vec<_>, _>>()?;
-        // The glue out of the call goes to `CALLSEQ_END`, and from it to the result copies.
+        // The glue out of the call goes to `CALLSEQ_END`, and from it to the
+        // result copies.
         let mut defs = Vec::new();
         let mut glue = SDValue { node: id, res: self.dag.node(SDValue { node: id, res: 0 }).values.len() as u8 - 1 };
         while let Some(user) = self.dag.users(glue).next() {
@@ -625,7 +642,7 @@ impl Emitter<'_> {
     /// `TCRETURNdi` and `TCRETURNri`: the epilogue and a jump to the callee.
     /// The arguments are the `Register` operands. An indirect callee is moved
     /// to `x9` first: the epilogue restores the callee-saved registers and uses
-    /// `x16`/`x17` itself. DEVIATE SD511: the pin lets the allocator pick any
+    /// `x16`/`x17` itself. DEVIATE SD531: the pin lets the allocator pick any
     /// `tcGPR64`; here the register is fixed.
     fn tail_call(
         &mut self,
@@ -657,7 +674,8 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// `COPY_TO_REGCLASS`: a copy, across the general and float classes by `fmov`.
+    /// `COPY_TO_REGCLASS`: a copy, across the general and float classes by
+    /// `fmov`.
     fn copy_to_class(
         &mut self,
         id: u32,
@@ -696,13 +714,16 @@ impl Emitter<'_> {
         &self,
         register: SDValue,
     ) -> bool {
-        matches!(self.dag.node(register).data, NodeData::PhysReg(id) if id == llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID)
+        matches!(
+            self.dag.node(register).data,
+            NodeData::PhysReg(id) if id == llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID
+        )
     }
 
-    /// The copies a phi takes from the edges of `block` (the block at `at`), placed
-    /// as phi elimination does: at the end of the block when one successor has
-    /// phis, else in a block of its own on each edge that has them
-    /// (a critical edge). Returns the edge blocks.
+    /// The copies a phi takes from the edges of `block` (the block at `at`),
+    /// placed as phi elimination does: at the end of the block when one
+    /// successor has phis, else in a block of its own on each edge that has
+    /// them (a critical edge). Returns the edge blocks.
     fn phi_edges(
         &mut self,
         block: &Selected,
@@ -714,7 +735,15 @@ impl Emitter<'_> {
             return Ok(Vec::new());
         }
         let is_branch = |op: &Op| {
-            matches!(op, Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. }))
+            matches!(
+                op,
+                Op::I(
+                    Inst::Branch { .. }
+                        | Inst::BranchCond { .. }
+                        | Inst::CompareBranch { .. }
+                        | Inst::TestBranch { .. }
+                )
+            )
         };
         let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
         let sequence = |this: &mut Self, to: u32| {
@@ -754,7 +783,13 @@ impl Emitter<'_> {
             // Retarget the branches to `to`; a fall-through becomes a branch.
             let mut retargeted = false;
             for op in ops.iter_mut() {
-                if let Op::I(Inst::Branch { target, .. } | Inst::BranchCond { target, .. } | Inst::CompareBranch { target, .. } | Inst::TestBranch { target, .. }) = op {
+                if let Op::I(
+                    Inst::Branch { target, .. }
+                    | Inst::BranchCond { target, .. }
+                    | Inst::CompareBranch { target, .. }
+                    | Inst::TestBranch { target, .. },
+                ) = op
+                {
                     if *target == Target::Label(label.clone()) {
                         *target = Target::Label(edge.clone());
                         retargeted = true;
@@ -777,7 +812,8 @@ impl Emitter<'_> {
         Ok(Target::Label(block_label(self.function, at)))
     }
 
-    /// `B`, `Bcc`, `CBZW`..`CBNZX` and `TBZW`..`TBNZX`; `None` for any other opcode.
+    /// `B`, `Bcc`, `CBZW`..`CBNZX` and `TBZW`..`TBNZX`; `None` for any other
+    /// opcode.
     fn branch(
         &self,
         name: &str,
@@ -793,7 +829,9 @@ impl Emitter<'_> {
                 let (nonzero, suffix) = (name.starts_with("CBNZ"), &name[name.len() - 1..]);
                 Inst::CompareBranch { nonzero, width: width(suffix), rt: *rt, target: self.label(*to)? }
             }
-            (_, [Operand::Reg(rt), Operand::Imm(bit), Operand::Block(to)]) if matches!(name, "TBZW" | "TBZX" | "TBNZW" | "TBNZX") => {
+            (_, [Operand::Reg(rt), Operand::Imm(bit), Operand::Block(to)])
+                if matches!(name, "TBZW" | "TBZX" | "TBNZW" | "TBNZX") =>
+            {
                 let nonzero = name.starts_with("TBNZ");
                 Inst::TestBranch { nonzero, rt: *rt, bit: *bit as u8, target: self.label(*to)? }
             }
@@ -801,7 +839,8 @@ impl Emitter<'_> {
         }))
     }
 
-    /// The relocation target of global `id` at `addend`, and whether it is a GOT slot.
+    /// The relocation target of global `id` at `addend`, and whether it is a
+    /// GOT slot.
     fn target(
         &self,
         id: u32,
@@ -827,14 +866,20 @@ impl Emitter<'_> {
         };
         let size = i64::from(access.bytes);
         let addr = match (access.form, address) {
-            (AddressForm::Register, [Operand::Reg(base), Operand::Reg(index), Operand::Imm(_), Operand::Imm(shifted)]) => {
-                Addr::Register { base: *base, index: *index, extend: Extend::Uxtx, shifted: *shifted != 0 }
-            }
-            (AddressForm::RegisterWord, [Operand::Reg(base), Operand::Reg(index), Operand::Imm(signed), Operand::Imm(shifted)]) => {
+            (
+                AddressForm::Register,
+                [Operand::Reg(base), Operand::Reg(index), Operand::Imm(_), Operand::Imm(shifted)],
+            ) => Addr::Register { base: *base, index: *index, extend: Extend::Uxtx, shifted: *shifted != 0 },
+            (
+                AddressForm::RegisterWord,
+                [Operand::Reg(base), Operand::Reg(index), Operand::Imm(signed), Operand::Imm(shifted)],
+            ) => {
                 let extend = if *signed != 0 { Extend::Sxtw } else { Extend::Uxtw };
                 Addr::Register { base: *base, index: *index, extend, shifted: *shifted != 0 }
             }
-            (AddressForm::Register | AddressForm::RegisterWord, _) => return Err(format!("{name}: a register offset that is not base and index")),
+            (AddressForm::Register | AddressForm::RegisterWord, _) => {
+                return Err(format!("{name}: a register offset that is not base and index"));
+            }
             (AddressForm::Scaled, [Operand::Reg(base), Operand::Symbol(id, offset)]) => {
                 Addr::PageOffset { base: *base, target: self.target(*id, *offset)?.0, got: false }
             }
@@ -856,14 +901,23 @@ impl Emitter<'_> {
                 None => self.mf.fpr(),
             };
             let mem = Memory::Fp { bytes: access.bytes, reg };
-            self.ops.push(Op::I(if access.store { Inst::Store { mem, addr, mmo } } else { Inst::Load { mem, addr, mmo } }));
+            self.ops.push(Op::I(if access.store {
+                Inst::Store { mem, addr, mmo }
+            } else {
+                Inst::Load { mem, addr, mmo }
+            }));
             if !access.store {
                 self.fvalues.insert((id, 0), reg);
             }
             return Ok(());
         }
         let rd = if access.store { None } else { Some(self.mf.gpr()) };
-        let mem = Memory::Int { width: access.width, bytes: access.bytes, sign: access.sign, reg: value.or(rd).expect("a value") };
+        let mem = Memory::Int {
+            width: access.width,
+            bytes: access.bytes,
+            sign: access.sign,
+            reg: value.or(rd).expect("a value"),
+        };
         self.ops.push(Op::I(if access.store { Inst::Store { mem, addr, mmo } } else { Inst::Load { mem, addr, mmo } }));
         if let Some(rd) = rd {
             self.values.insert((id, 0), rd);
@@ -914,7 +968,9 @@ impl Emitter<'_> {
                     NodeData::Register(number) => self.fvreg(number),
                     other => return Err(format!("a register operand that is {other:?}")),
                 };
-                let Operand::Fpr(src) = self.operand(node.ops[2])? else { return Err("a float copy of a constant".into()) };
+                let Operand::Fpr(src) = self.operand(node.ops[2])? else {
+                    return Err("a float copy of a constant".into());
+                };
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
                 Ok(())
             }
@@ -939,7 +995,8 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 match name {
-                    // The outgoing area is laid out by the frame; the pseudos only size it.
+                    // The outgoing area is laid out by the frame; the pseudos
+                    // only size it.
                     "ADJCALLSTACKDOWN" => {
                         let Some(bytes) = node.ops.first().and_then(|op| self.dag.constant(*op)) else {
                             return Err("a call sequence of no size".into());
@@ -957,16 +1014,26 @@ impl Emitter<'_> {
                     .iter()
                     .filter(|op| {
                         let vt = self.dag.value_type(**op);
-                        // A block is an operand of type `Other`, a chain is not.
+                        // A block is an operand of type `Other`, a chain is
+                        // not.
                         (vt != EVT::OTHER || self.dag.opcode(**op) == ISD::BasicBlock) && vt != EVT::GLUE
                     })
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|why| format!("{name}: {why}"))?;
-                if let Some(size) = name.strip_prefix("FCMPE").or_else(|| name.strip_prefix("FCMP")).and_then(|rest| rest.get(..1)).and_then(fp_size) {
+                if let Some(size) = name
+                    .strip_prefix("FCMPE")
+                    .or_else(|| name.strip_prefix("FCMP"))
+                    .and_then(|rest| rest.get(..1))
+                    .and_then(fp_size)
+                {
                     let compare = match operands.as_slice() {
-                        [Operand::Fpr(rn), Operand::Fpr(rm)] => Inst::FpCompare { signalling: name.starts_with("FCMPE"), size, rn: *rn, rm: Some(*rm) },
-                        [Operand::Fpr(rn), ..] => Inst::FpCompare { signalling: name.starts_with("FCMPE"), size, rn: *rn, rm: None },
+                        [Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                            Inst::FpCompare { signalling: name.starts_with("FCMPE"), size, rn: *rn, rm: Some(*rm) }
+                        }
+                        [Operand::Fpr(rn), ..] => {
+                            Inst::FpCompare { signalling: name.starts_with("FCMPE"), size, rn: *rn, rm: None }
+                        }
                         _ => return Err(format!("{name}: operands are not those of its form")),
                     };
                     self.ops.push(Op::I(compare));
@@ -994,7 +1061,8 @@ impl Emitter<'_> {
                     self.ops.push(Op::I(branch));
                     return Ok(());
                 }
-                // A 32-bit write clears the upper half, so a sub-register is its register.
+                // A 32-bit write clears the upper half, so a sub-register is
+                // its register.
                 match (name, operands.as_slice()) {
                     ("EXTRACT_SUBREG", [Operand::Reg(rn), _]) => {
                         self.values.insert((id, 0), *rn);
@@ -1006,9 +1074,13 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), dst);
                         return Ok(());
                     }
-                    // Into an undefined register there is no upper half to keep.
+                    // Into an undefined register there is no upper half to
+                    // keep.
                     ("INSERT_SUBREG", [_, Operand::Reg(rn), _])
-                        if matches!(self.dag.opcode(node.ops[0]), ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")) =>
+                        if matches!(
+                            self.dag.opcode(node.ops[0]),
+                            ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                        ) =>
                     {
                         self.values.insert((id, 0), *rn);
                         return Ok(());
@@ -1020,9 +1092,11 @@ impl Emitter<'_> {
                     }
                     _ => {}
                 }
-                // A flag-setting instruction defines a register even where nothing reads it, as the
-                // pin's selection has it (`$wzr` and the plain opcode come later, in `prepass`:
-                // `AArch64DeadRegisterDefinitions`, `optimizeCompareInstr`), so that equal ones merge.
+                // A flag-setting instruction defines a register even where
+                // nothing reads it, as the pin's selection has
+                // it (`$wzr` and the plain opcode come later, in `prepass`:
+                // `AArch64DeadRegisterDefinitions`, `optimizeCompareInstr`), so
+                // that equal ones merge.
                 let rd = self.mf.gpr();
                 if let Some((op, width)) = cond_select(name) {
                     // The flags arrive as a glued copy to NZCV, or as a value.
@@ -1040,7 +1114,8 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 // `ADDXri` of a frame index is the object's address.
-                if let (Some(object), "ADDXri", Some(Operand::Imm(offset))) = (operands.first(), name, operands.get(1)) {
+                if let (Some(object), "ADDXri", Some(Operand::Imm(offset))) = (operands.first(), name, operands.get(1))
+                {
                     let (slot, base) = match object {
                         Operand::Slot(slot) => (Some(*slot), 0),
                         Operand::Fixed(at) => (Some(INCOMING_ARGUMENTS), *at),

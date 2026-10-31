@@ -417,8 +417,9 @@ pub fn successors_of(
     out
 }
 
-/// The copies `moves` (`dst, src`) as a parallel copy: no copy reads a register an earlier one
-/// wrote, and a cycle is broken through a register made by `temporary`.
+/// The copies `moves` (`dst, src`) as a parallel copy: no copy reads a register
+/// an earlier one wrote, and a cycle is broken through a register made by
+/// `temporary`.
 pub fn sequence_copies(
     mut moves: Vec<(Reg, Reg)>,
     mut temporary: impl FnMut(Reg) -> Reg,

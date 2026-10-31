@@ -1,8 +1,8 @@
-//! `AArch64DAGToDAGISel::tryBitfieldInsertInZeroOp`: `(and (shl x, n), mask)` of one contiguous run
-//! of bits is `UBFM` (`UBFIZ`).
+//! `AArch64DAGToDAGISel::tryBitfieldInsertInZeroOp`: `(and (shl x, n), mask)`
+//! of one contiguous run of bits is `UBFM` (`UBFIZ`).
 //!
-//! DEVIATE SD509: the `and (any_extend (shl ..))` form of an `i64` is not matched. Exit: the `Widen`
-//! helper.
+//! DEVIATE SD529: the `and (any_extend (shl ..))` form of an `i64` is not
+//! matched. Exit: the `Widen` helper.
 //!
 //! # See also
 //! `isBitfieldPositioningOp`, `AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
@@ -64,16 +64,18 @@ pub fn select_bitfield_insert_in_zero(
     Some(Outcome::Selected)
 }
 
-// ---- `tryBitfieldInsertOp` -------------------------------------------------------------------
+// ---- `tryBitfieldInsertOp`
+// -------------------------------------------------------------------
 //
-// DEVIATE SD509: an `OR` none of whose bits are useful is not selected to `IMPLICIT_DEF`, and the
-// `any_extend`/`truncate` forms of `isBitfieldExtractOpFromAnd` are not matched. Exit: the `Widen`
-// helper.
+// See SD529: an `OR` none of whose bits are useful is not selected to
+// `IMPLICIT_DEF`, and the `any_extend`/`truncate` forms of
+// `isBitfieldExtractOpFromAnd` are not matched. Exit: the `Widen` helper.
+
+use llrm_dagisel::dag::{Dag, SDValue as Value};
+use llrm_dagisel::generated::aarch64::ids::opcode as op;
+use llrm_dagisel::matcher::Vt;
 
 use crate::mc::immediate::{decode_logical, logical};
-use llrm_dagisel::dag::{Dag, SDValue as Value};
-use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::generated::aarch64::ids::opcode as op;
 
 /// `SelectionDAG::MaxRecursionDepth`.
 const MAX_DEPTH: u32 = 6;
@@ -116,8 +118,8 @@ fn target_imm<D: Dag>(
     dag.constant(dag.operand(node, index)).unwrap_or(0) as u64
 }
 
-/// `getUsefulBits`: of the `bits` wide `value`, those a user reads. `useful` is the set asked about
-/// (every bit at depth 0).
+/// `getUsefulBits`: of the `bits` wide `value`, those a user reads. `useful` is
+/// the set asked about (every bit at depth 0).
 fn useful_bits<D: Dag>(
     dag: &D,
     value: Value,
@@ -165,10 +167,18 @@ fn useful_bits_for_use<D: Dag>(
         }
         op::BFMWri | op::BFMXri => useful_from_bfm(dag, me, orig, useful, bits, depth),
         op::STRBBui | op::STURBBi => {
-            if dag.operand(user, 0) != orig { useful } else { useful & 0xff }
+            if dag.operand(user, 0) != orig {
+                useful
+            } else {
+                useful & 0xff
+            }
         }
         op::STRHHui | op::STURHHi => {
-            if dag.operand(user, 0) != orig { useful } else { useful & 0xffff }
+            if dag.operand(user, 0) != orig {
+                useful
+            } else {
+                useful & 0xffff
+            }
         }
         _ => useful,
     }
@@ -248,7 +258,8 @@ fn useful_from_bfm<D: Dag>(
     useful & mask
 }
 
-/// `getLeftShift`: `value` shifted left by `amount` (right when negative) as a `UBFM`.
+/// `getLeftShift`: `value` shifted left by `amount` (right when negative) as a
+/// `UBFM`.
 fn left_shift<D: AddrDag>(
     dag: &mut D,
     value: Value,
@@ -265,8 +276,9 @@ fn left_shift<D: AddrDag>(
     Value::new(dag.machine_node(opcode, &[vt], &[value, immr, imms]), 0)
 }
 
-/// `isBitfieldPositioningOp` with `BiggerPattern` false: `(and (shl VAL, N), ShiftedMask)` or
-/// `(shl VAL, N)`: the source, the destination bit and the width.
+/// `isBitfieldPositioningOp` with `BiggerPattern` false: `(and (shl VAL, N),
+/// ShiftedMask)` or `(shl VAL, N)`: the source, the destination bit and the
+/// width.
 fn bitfield_positioning<D: AddrDag>(
     dag: &mut D,
     value: Value,
@@ -329,8 +341,8 @@ fn bitfield_dst_mask(
     dst & insert == 0 && (dst | insert) == significant
 }
 
-/// `isWorthFoldingIntoOrrWithShift`: the operand and the encoded shift of an `ORR` that takes `dst`
-/// as a shifted register.
+/// `isWorthFoldingIntoOrrWithShift`: the operand and the encoded shift of an
+/// `ORR` that takes `dst` as a shifted register.
 fn worth_folding_into_orr<D: AddrDag>(
     dag: &mut D,
     dst: Value,
@@ -388,7 +400,8 @@ fn orr_with_shift<D: AddrDag>(
     let vt = dag.value_type(Value::new(node, 0));
     let orr = if width_of(vt)? == 32 { op::ORRWrs } else { op::ORRXrs };
     if bigger {
-        // `opd0 = and Src, #Mask` leaves `Src` for the `ORR`, which also folds `dst`'s shift.
+        // `opd0 = and Src, #Mask` leaves `Src` for the `ORR`, which also folds
+        // `dst`'s shift.
         let mask = imm_operand(dag, opd0.node, isd::AND)?;
         if !is_mask(mask) || dag.operand(opd0.node, 0) != src {
             return None;
@@ -420,9 +433,9 @@ fn orr_with_shift<D: AddrDag>(
     None
 }
 
-/// `isBitfieldExtractOpFromAnd` for an `and` of a right shift (or, in the bigger pattern, of the
-/// value itself): the source and the `UBFM` bit range (DEVIATE SD509 for the `any_extend`/`truncate`
-/// forms).
+/// `isBitfieldExtractOpFromAnd` for an `and` of a right shift (or, in the
+/// bigger pattern, of the value itself): the source and the `UBFM` bit range
+/// (See SD529 for the `any_extend`/`truncate` forms).
 fn bitfield_extract_from_and<D: AddrDag>(
     dag: &D,
     node: u32,
@@ -473,7 +486,8 @@ fn bitfield_insert_from_or<D: AddrDag>(
         if dag.opcode(opd0.node) == isd::AND
             && let Some((extract_src, lsb, msb)) = bitfield_extract_from_and(dag, opd0.node, ignored_low, bigger)
         {
-            // The range is a `UBFM` of the right type; `BFXIL` shares its `immr` and `imms`.
+            // The range is a `UBFM` of the right type; `BFXIL` shares its
+            // `immr` and `imms`.
             if msb < lsb {
                 continue;
             }
@@ -538,8 +552,8 @@ fn bitfield_insert_from_or<D: AddrDag>(
     Some(Outcome::Selected)
 }
 
-/// `tryBitfieldInsertOpFromOrAndImm`: `or (and X, MaskImm), OrImm` that only sets bits the `and`
-/// clears is a `BFI`/`BFXIL` of the constant.
+/// `tryBitfieldInsertOpFromOrAndImm`: `or (and X, MaskImm), OrImm` that only
+/// sets bits the `and` clears is a `BFI`/`BFXIL` of the constant.
 fn bitfield_insert_from_or_and_imm<D: AddrDag>(
     dag: &mut D,
     node: u32,
@@ -548,7 +562,8 @@ fn bitfield_insert_from_or_and_imm<D: AddrDag>(
     let bits = width_of(vt)?;
     let full = all(bits);
     let or_imm = imm_operand(dag, node, isd::OR)? & full;
-    // The `ORR` immediate encodes: a BFI would only trade an `AND`+`ORR` for it.
+    // The `ORR` immediate encodes: a BFI would only trade an `AND`+`ORR` for
+    // it.
     if logical(or_imm, bits).is_some() {
         return None;
     }

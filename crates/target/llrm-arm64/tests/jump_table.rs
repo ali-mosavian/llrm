@@ -1,5 +1,6 @@
-//! A switch of ten cases to distinct blocks is a jump table: `MOVaddrJT`, `JumpTableDest32` and a
-//! `BR` (`LowerJumpTable`, `LowerBR_JT`). The expected opcodes are the pin's `llc -stop-after=finalize-isel`.
+//! A switch of ten cases to distinct blocks is a jump table: `MOVaddrJT`,
+//! `JumpTableDest32` and a `BR` (`LowerJumpTable`, `LowerBR_JT`). The expected
+//! opcodes are the pin's `llc -stop-after=finalize-isel`.
 
 use llrm_arm64::dag::function::{Selected, select_function};
 use llrm_codegen::backend::selectiondag::isd::ISD;
@@ -26,7 +27,6 @@ fn selected(body: &str) -> Result<Vec<Vec<&'static str>>, String> {
     Ok(select_function(&module, "f")?.iter().map(names).collect())
 }
 
-
 fn switch_ir() -> String {
     let mut ir = String::new();
     for i in 0..10 {
@@ -43,13 +43,10 @@ fn switch_ir() -> String {
     ir + "d:\n  ret void\n}\n"
 }
 
-/// The legalizer refused the switch ("custom lowering of BrJT"); the pin's block of the dispatch is
-/// the table address, the entry and the jump.
+/// The legalizer refused the switch ("custom lowering of BrJT"); the pin's
+/// block of the dispatch is the table address, the entry and the jump.
 #[test]
 fn a_ten_case_switch_dispatches_through_a_jump_table() {
     let blocks = selected(&switch_ir()).unwrap();
-    assert!(
-        blocks.contains(&vec!["MOVaddrJT", "JumpTableDest32", "JUMP_TABLE_DEBUG_INFO", "BR"]),
-        "{blocks:?}"
-    );
+    assert!(blocks.contains(&vec!["MOVaddrJT", "JumpTableDest32", "JUMP_TABLE_DEBUG_INFO", "BR"]), "{blocks:?}");
 }

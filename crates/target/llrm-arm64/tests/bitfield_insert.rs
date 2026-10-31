@@ -1,5 +1,6 @@
-//! `tryBitfieldInsertOp`: an `or` of a masked destination and a positioned or extracted field is one
-//! `BFM` (`BFI`, `BFXIL`). The expected opcodes are the pin's `llc -stop-after=finalize-isel`.
+//! `tryBitfieldInsertOp`: an `or` of a masked destination and a positioned or
+//! extracted field is one `BFM` (`BFI`, `BFXIL`). The expected opcodes are the
+//! pin's `llc -stop-after=finalize-isel`.
 
 use llrm_arm64::dag::function::{Selected, select_function};
 use llrm_codegen::backend::selectiondag::isd::ISD;
@@ -26,13 +27,12 @@ fn selected(body: &str) -> Result<Vec<Vec<&'static str>>, String> {
     Ok(select_function(&module, "f")?.iter().map(names).collect())
 }
 
-
 fn one(ir: &str) -> Vec<&'static str> {
     selected(ir).unwrap().concat()
 }
 
-/// The field `s << 4 & 0xf0` inserted into `d`: an `and`, a `ubfiz`, an `and` and an `orr`; the pin
-/// has one `BFMWri`.
+/// The field `s << 4 & 0xf0` inserted into `d`: an `and`, a `ubfiz`, an `and`
+/// and an `orr`; the pin has one `BFMWri`.
 #[test]
 fn a_shifted_field_inserted_into_a_masked_word_is_one_bfi() {
     let ir = "define i32 @f(i32 %d, i32 %s) {\n %m = and i32 %d, -241\n %t = shl i32 %s, 4\n %u = and i32 %t, 240\n %r = or i32 %m, %u\n ret i32 %r\n}";

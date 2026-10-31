@@ -879,7 +879,8 @@ impl AArch64Lowering {
 }
 
 impl Lowering for AArch64Lowering {
-    // The register classes: GPR32 and GPR64 (AArch64ISelLowering.cpp, addRegisterClass).
+    // The register classes: GPR32 and GPR64 (AArch64ISelLowering.cpp,
+    // addRegisterClass).
     fn is_type_legal(
         &self,
         bits: u32,
@@ -910,15 +911,20 @@ impl Lowering for AArch64Lowering {
         &self,
         users: &[ExtUser],
     ) -> bool {
-        users.iter().all(|user| match *user {
-            ExtUser::ConstShl | ExtUser::SameTypeTrunc => true,
-            // A shift of 1..=4 folds into the addressing mode.
-            ExtUser::Gep { store_bits } => (4..=7).contains(&store_bits.trailing_zeros()),
-            ExtUser::Other => false,
-        })
+        users
+            .iter()
+            .all(
+                |user| match *user {
+                    ExtUser::ConstShl | ExtUser::SameTypeTrunc => true,
+                    // A shift of 1..=4 folds into the addressing mode.
+                    ExtUser::Gep { store_bits } => (4..=7).contains(&store_bits.trailing_zeros()),
+                    ExtUser::Other => false,
+                },
+            )
     }
 
-    // The base class (TargetLoweringBase.cpp#L1813): the register type, i32 for a narrower integer.
+    // The base class (TargetLoweringBase.cpp#L1813): the register type, i32 for
+    // a narrower integer.
     fn preferred_switch_condition_bits(
         &self,
         bits: u32,

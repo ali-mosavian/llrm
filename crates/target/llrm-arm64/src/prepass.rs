@@ -27,9 +27,9 @@
 //! paths that skip it. The pin pays the same extra jump where that edge block
 //! does not fall through to its target.
 //!
-//! DEVIATE SD510: LLVM runs these on the shared machine IR; this is a small version
-//! over the arm64 selector's operations, standing in until the core machine
-//! passes run on arm64 (docs/architecture/arm64-spike.md).
+//! DEVIATE SD530: LLVM runs these on the shared machine IR; this is a small
+//! version over the arm64 selector's operations, standing in until the core
+//! machine passes run on arm64 (docs/architecture/arm64-spike.md).
 
 use std::collections::{HashMap, HashSet};
 
@@ -277,7 +277,8 @@ fn dead_definitions(function: &mut MFunc) {
         function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
     for block in &mut function.blocks {
         for op in &mut block.ops {
-            if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. }) = op
+            if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. }) =
+                op
                 && rd.is_virtual()
                 && !read.contains(&Reg::Gpr(*rd))
             {
@@ -293,8 +294,9 @@ fn non_flag_setting(function: &mut MFunc) {
     for block in &mut function.blocks {
         for at in 0..block.ops.len() {
             if flag_setting(&block.ops[at]) && flags_dead(&block.ops, at) {
-                if let Op::I(Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. }) =
-                    block.ops.op_mut(at)
+                if let Op::I(
+                    Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. },
+                ) = block.ops.op_mut(at)
                 {
                     op.set_flags = false;
                 }
@@ -341,7 +343,10 @@ fn sink(function: &mut MFunc) {
         for &from in &cfg.order {
             for (index, op) in function.blocks[from].ops.iter().enumerate() {
                 // The zero register is the same value everywhere.
-                let zero = matches!(op, Op::Copy { dst, src } if dst.is_virtual() && *src == Reg::Gpr(Gpr::R31));
+                let zero = matches!(
+                    op,
+                    Op::Copy { dst, src } if dst.is_virtual() && *src == Reg::Gpr(Gpr::R31)
+                );
                 if !(pure(op) || zero) {
                     continue;
                 }
@@ -388,7 +393,10 @@ fn sink(function: &mut MFunc) {
 
 /// The virtual registers that are plain copies of another, each defined once:
 /// reading the copy is reading its source (`PerformTrivialCopyPropagation`).
-fn single_copies(function: &MFunc, definitions: &HashMap<Reg, usize>) -> HashMap<Reg, Reg> {
+fn single_copies(
+    function: &MFunc,
+    definitions: &HashMap<Reg, usize>,
+) -> HashMap<Reg, Reg> {
     function
         .blocks
         .iter()
@@ -402,7 +410,11 @@ fn single_copies(function: &MFunc, definitions: &HashMap<Reg, usize>) -> HashMap
 }
 
 /// `op` with the uses that earlier removals renamed, and copies read through.
-fn renamed(op: &Op, rename: &HashMap<Reg, Reg>, copies: &HashMap<Reg, Reg>) -> Op {
+fn renamed(
+    op: &Op,
+    rename: &HashMap<Reg, Reg>,
+    copies: &HashMap<Reg, Reg>,
+) -> Op {
     let mut copy = op.clone();
     copy.visit(&mut |slot, role| {
         if role == Role::Use {
@@ -438,7 +450,10 @@ fn flags_dead(
     at: usize,
 ) -> bool {
     for op in &ops[at + 1..] {
-        if matches!(op, Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })) {
+        if matches!(
+            op,
+            Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })
+        ) {
             return false;
         }
         if crate::flagcse::writes_flags(op) {
@@ -480,8 +495,9 @@ fn cse(function: &mut MFunc) {
                 }
                 let key = keyed(&renamed(op, &rename, &copies));
                 match table.get(&key) {
-                    // A flag-setting instruction is shared where its own flags are dead:
-                    // the earlier one still sets them (`MachineCSE`, `PhysRegDefsReach`).
+                    // A flag-setting instruction is shared where its own flags
+                    // are dead: the earlier one still sets them
+                    // (`MachineCSE`, `PhysRegDefsReach`).
                     Some(&earlier) if !setter || flags_dead(&function.blocks[*block].ops, index) => {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));

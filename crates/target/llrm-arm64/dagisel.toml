@@ -54,8 +54,8 @@ ids_includes = [
   '#include "AArch64SelectionDAGInfo.h"',
 ]
 
-# AArch64 pattern-predicate atoms for the scalar subset (NEON, SVE and SME off): the dry run of
-# docs/working/arm64-selectiondag-plan.md. `[atom]` rows are what the pin's Subtarget says; an atom nothing states is an error.
+# AArch64 pattern-predicate atoms for the scalar subset (NEON, SVE and SME off): the dry run of the DAG path
+# (docs/working/selectiondag-plan.md, SD520-SD531). `[atom]` rows are what the pin's Subtarget says; an atom nothing states is an error.
 # apple-m1: the pin's `Processor` list, the scalar subset.
 [cpu.apple-m1]
 features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", "RDM"]

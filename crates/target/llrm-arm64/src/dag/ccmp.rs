@@ -9,7 +9,7 @@
 //! if it fails, sets the flags so the final condition reads false. The caller
 //! branches or selects on the returned condition.
 //!
-//! DEVIATE SD507: a floating-point compare is not a leaf (`FCCMP`, and the
+//! DEVIATE SD527: a floating-point compare is not a leaf (`FCCMP`, and the
 //! two-condition compares, are not translated) so the tree is refused.
 //! Exit: floating-point conditional compares.
 //!
@@ -43,7 +43,8 @@ fn invert(code: u128) -> u128 {
     code ^ 1
 }
 
-/// `AArch64CC::getNZCVToSatisfyCondCode`: flags (`NZCV`, as `ccmp` takes them) that satisfy `code`.
+/// `AArch64CC::getNZCVToSatisfyCondCode`: flags (`NZCV`, as `ccmp` takes them)
+/// that satisfy `code`.
 fn nzcv_to_satisfy(code: u128) -> u128 {
     const N: u128 = 8;
     const Z: u128 = 4;
@@ -110,7 +111,8 @@ fn can_emit_conjunction(
     Some(Shape { can_negate, must_be_first, prefer_first: left.prefer_first || right.prefer_first })
 }
 
-/// `emitConditionalComparison`, integers: `CCMP`, or `CCMN` where the operand is a small negative constant or a negation.
+/// `emitConditionalComparison`, integers: `CCMP`, or `CCMN` where the operand
+/// is a small negative constant or a negation.
 fn emit_conditional_comparison(
     dag: &mut SelectionDAG,
     mut lhs: SDValue,
@@ -140,7 +142,8 @@ fn emit_conditional_comparison(
     dag.get_node(ISD::Target(opcode), EVT::I32, &[lhs, rhs, nzcv_op, condition, cc_op])
 }
 
-/// `emitConjunctionRec`: the flags of `val`, and in `out_cc` the condition to test.
+/// `emitConjunctionRec`: the flags of `val`, and in `out_cc` the condition to
+/// test.
 fn emit_conjunction_rec(
     dag: &mut SelectionDAG,
     val: SDValue,
@@ -219,8 +222,8 @@ pub fn emit_conjunction(
     Some(emit_conjunction_rec(dag, val, out_cc, false, None, cc::AL))
 }
 
-/// `performANDORCSELCombine`: `and`/`or` of two `cset`s, the flags of a `SUBS` each, is one
-/// `CCMP` after the first compare and a `cset` of its flags.
+/// `performANDORCSELCombine`: `and`/`or` of two `cset`s, the flags of a `SUBS`
+/// each, is one `CCMP` after the first compare and a `cset` of its flags.
 pub fn combine_and_or_csel(
     dag: &mut SelectionDAG,
     node: SDValue,

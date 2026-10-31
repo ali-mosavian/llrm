@@ -17,7 +17,8 @@ pub struct Global {
     /// `GlobalValue::getPointerAlignment`: the declared alignment, else the
     /// type's preferred one; 1 for a function.
     pub align: u64,
-    /// The allocation size of the variable's type; `None` for a function (not sized).
+    /// The allocation size of the variable's type; `None` for a function (not
+    /// sized).
     pub size: Option<u64>,
 }
 

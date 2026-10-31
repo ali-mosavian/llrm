@@ -2,6 +2,7 @@
 
 pub mod cc;
 pub mod cfi;
+pub mod dag;
 pub mod data;
 pub mod debug;
 pub mod divconst;
@@ -14,7 +15,6 @@ pub mod isel;
 pub mod layout;
 pub mod machine;
 pub mod mc;
-pub mod dag;
 pub mod mfunc;
 pub mod pairs;
 pub mod prepass;

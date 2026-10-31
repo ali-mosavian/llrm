@@ -137,7 +137,8 @@ pub struct Wrapped {
 /// [`Dag`].
 pub trait AddrDag: Dag {
     /// `computeKnownBits(value).Zero`, within the value's width. A DAG with no
-    /// known-bits analysis answers [`known_zero`], the structural subset (SD40).
+    /// known-bits analysis answers [`known_zero`], the structural subset
+    /// (SD40).
     fn known_zero_bits(
         &self,
         value: SDValue,

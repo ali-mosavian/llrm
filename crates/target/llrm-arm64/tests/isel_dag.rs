@@ -1,4 +1,5 @@
-//! `--isel=dag`: the first function through the pin's AArch64 table to assembly.
+//! `--isel=dag`: the first function through the pin's AArch64 table to
+//! assembly.
 
 use std::process::Command;
 
@@ -40,13 +41,15 @@ fn f_is_the_pins_add_and_ret_and_g_falls_back_in_shadow() {
     let f = &asm[asm.find("_f:").unwrap()..asm.find("_g:").unwrap()];
     let lines: Vec<&str> = f.lines().skip(1).map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('.')).collect();
     assert_eq!(lines, ["add w0, w0, w1, lsl #0", "ret x30"], "{f}");
-    // The printer spells an `ADDWrs` with a zero shift this way; it encodes as `add w0, w0, w1`.
+    // The printer spells an `ADDWrs` with a zero shift this way; it encodes as
+    // `add w0, w0, w1`.
     let (_, hand, _) = llc("--isel=hand");
     assert_eq!(&hand[hand.find("_f:").unwrap()..hand.find("_g:").unwrap()], f, "the hand selector's f is the same");
 }
 
-/// The pin selects `sub` as `SUBSWrr` with a dead `$nzcv` and `optimizeCompareInstr` turns it into
-/// `SUBWrr`. The DAG path printed `subs w0, w0, w1` for a plain `sub`: a flag write nothing reads.
+/// The pin selects `sub` as `SUBSWrr` with a dead `$nzcv` and
+/// `optimizeCompareInstr` turns it into `SUBWrr`. The DAG path printed `subs
+/// w0, w0, w1` for a plain `sub`: a flag write nothing reads.
 #[test]
 fn a_sub_whose_flags_nothing_reads_is_not_flag_setting() {
     let ir = "target triple = \"arm64-apple-macosx\"\n\
@@ -72,8 +75,9 @@ define i64 @u(i64 %a, i64 %b) {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}\n";
     }
 }
 
-/// The pin's MachineSink moves the zero a phi takes from the entry onto that edge. The DAG path
-/// built it in the entry block, so it ran on both paths: `orr x0, xzr, xzr` before the branch.
+/// The pin's MachineSink moves the zero a phi takes from the entry onto that
+/// edge. The DAG path built it in the entry block, so it ran on both paths:
+/// `orr x0, xzr, xzr` before the branch.
 #[test]
 fn a_constant_only_one_edge_reads_is_made_on_that_edge() {
     let ir = "target triple = \"arm64-apple-macosx\"\n\
@@ -97,9 +101,10 @@ e:\n  %r = phi i32 [ 0, %0 ], [ %m, %t ]\n  ret i32 %r\n}\n";
     assert!(!entry.contains("xzr, xzr"), "the zero is made before the branch that skips its use:\n{asm}");
 }
 
-/// The pin's MachineCSE merges the dominated `SUBSWri a, 1` with the compare's, so the compare
-/// defines the value (`subs w8, w0, #1`). The DAG path kept `subs wzr, w0, #1` in the entry block
-/// and a second `sub w9, w0, #1` after the branch: 2 instructions for the pin's 1.
+/// The pin's MachineCSE merges the dominated `SUBSWri a, 1` with the compare's,
+/// so the compare defines the value (`subs w8, w0, #1`). The DAG path kept
+/// `subs wzr, w0, #1` in the entry block and a second `sub w9, w0, #1` after
+/// the branch: 2 instructions for the pin's 1.
 #[test]
 fn a_subtract_after_a_compare_of_the_same_operands_shares_it() {
     let ir = "target triple = \"arm64-apple-macosx\"\n\

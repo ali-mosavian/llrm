@@ -20,7 +20,8 @@ fn body(name: &str) -> String {
     rest[..rest[1..].find("\n_").map_or(rest.len(), |end| end + 1)].to_owned()
 }
 
-/// The legalizer refused `sadd.with.overflow` ("custom lowering of SAddO"): `text_write`.
+/// The legalizer refused `sadd.with.overflow` ("custom lowering of SAddO"):
+/// `text_write`.
 #[test]
 fn a_signed_add_overflow_bit_is_adds_and_a_csinc_on_vc() {
     let text = body("ao");
@@ -28,7 +29,8 @@ fn a_signed_add_overflow_bit_is_adds_and_a_csinc_on_vc() {
     assert!(text.contains("vc"), "{text}");
 }
 
-/// `xor (uadd.with.overflow).1, true` is one `csinc` on `hs`; it was an `adds`, a `csinc` on `lo` and an `eor`.
+/// `xor (uadd.with.overflow).1, true` is one `csinc` on `hs`; it was an `adds`,
+/// a `csinc` on `lo` and an `eor`.
 #[test]
 fn an_inverted_unsigned_add_overflow_bit_is_one_csinc_on_the_inverted_condition() {
     let text = body("no");

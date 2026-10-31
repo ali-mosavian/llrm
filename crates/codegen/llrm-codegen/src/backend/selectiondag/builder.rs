@@ -130,8 +130,9 @@ pub struct BuilderTarget {
     /// The target has x86's `rep movs` and `rep stos`; without them a copy or
     /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
     pub string_instructions: bool,
-    /// The target selects `ATOMIC_LOAD`, `ATOMIC_STORE` and the read-modify-write
-    /// nodes itself; x86 gets only the exchange its lock prefix covers.
+    /// The target selects `ATOMIC_LOAD`, `ATOMIC_STORE` and the
+    /// read-modify-write nodes itself; x86 gets only the exchange its lock
+    /// prefix covers.
     pub native_atomics: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call

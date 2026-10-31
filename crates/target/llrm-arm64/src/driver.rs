@@ -138,7 +138,8 @@ impl Level {
     }
 
     fn options(self) -> Options {
-        // The pin's AArch64 pass config adds the atomic tidy at every level but -O0.
+        // The pin's AArch64 pass config adds the atomic tidy at every level but
+        // -O0.
         Options { atomic_cfg_tidy: true, lower_switches: false, ..self.generic_options() }
     }
 
@@ -167,8 +168,8 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
-/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`), applied
-/// to every mid-end run of the process.
+/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`),
+/// applied to every mid-end run of the process.
 static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 /// Records `flag` if it names a mid-end pass; false when it does not.
@@ -273,7 +274,8 @@ pub fn functions_with(
         let mut machine = match isel_mode() {
             IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
             IselMode::Dag => dag_select(module, &name, &program.layout, platform),
-            // A refusal of the DAG path falls back to the hand selector, counted.
+            // A refusal of the DAG path falls back to the hand selector,
+            // counted.
             IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
                 eprintln!("isel-shadow: @{name}: {why}");
                 crate::isel::selected(module, id, &program.layout, platform, lines)
