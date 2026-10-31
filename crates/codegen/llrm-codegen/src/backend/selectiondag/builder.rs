@@ -867,7 +867,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = llrm_support::hash::HashSet::default();
+        let mut outside = llrm_mir::dense::IdSet::<ValueId>::new();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);
@@ -1024,7 +1024,7 @@ impl Builder<'_> {
     fn lower_arguments_with(
         &mut self,
         calling: &'static dyn TargetCalling,
-        outside: &llrm_support::hash::HashSet<ValueId>,
+        outside: &llrm_mir::dense::IdSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
         if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
