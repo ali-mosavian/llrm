@@ -9,7 +9,7 @@ For maintainers running llrm's `m32` output against gcc and clang. Method, comma
 
 | File | Does |
 |---|---|
-| `run.sh` | builds llrm-c and every program with every compiler, runs all, prints `table.py`, writes `loops.PROG.txt` and `ctime.json` |
+| `run.sh` | builds llrm-cc and every program with every compiler, runs all, prints `table.py`, writes `loops.PROG.txt` and `ctime.json` |
 | `build.sh PROG` | one program at -O1, -O2, -O3, -Os in llrm (OMF; ELF for `loops.py`), gcc and clang |
 | `wrap.py` | the copy every compiler builds: `main` calls the kernel through a volatile pointer |
 | `harness.py` | links, runs `main` in unicorn, counts the kernel's instructions, memory operands, 486 clocks |
@@ -34,7 +34,7 @@ flowchart LR
   run["<b>run.sh</b>"]:::src
   build["<b>build.sh</b>"]:::mid
   wrap["<b>wrap.py</b>"]:::mid
-  comp["<b>llrm-c, gcc, clang</b>"]:::opt
+  comp["<b>llrm-cc, gcc, clang</b>"]:::opt
   har["<b>harness.py</b><br/><small>unicorn</small>"]:::mid
   res["<b>results.jsonl</b>"]:::mid
   tab["<b>table.py</b>"]:::out

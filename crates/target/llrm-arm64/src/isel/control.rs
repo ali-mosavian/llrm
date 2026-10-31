@@ -187,7 +187,7 @@ impl Selector<'_> {
         // branch.
         let saved = self.current;
         let edge_label = format!(".L{}.e{}", self.mf.name, self.mf.blocks.len());
-        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Vec::new() });
+        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Default::default() });
         self.current = self.mf.blocks.len() - 1;
         let result = self.emit_copies(copies);
         self.emit(branch_to(&label));
@@ -351,8 +351,8 @@ impl Selector<'_> {
         self.emit(jump(Cond::Lo, &below));
         let saved = self.current;
         let right = format!(".L{}.s{}", self.mf.name, self.mf.blocks.len() + 1);
-        self.mf.blocks.push(MBlock { label: below.clone(), ops: Vec::new() });
-        self.mf.blocks.push(MBlock { label: right.clone(), ops: Vec::new() });
+        self.mf.blocks.push(MBlock { label: below.clone(), ops: Default::default() });
+        self.mf.blocks.push(MBlock { label: right.clone(), ops: Default::default() });
         let (left_index, right_index) = (self.mf.blocks.len() - 2, self.mf.blocks.len() - 1);
         self.emit(branch_to(&right));
         self.current = left_index;

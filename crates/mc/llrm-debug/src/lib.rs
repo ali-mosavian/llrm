@@ -6,6 +6,84 @@
 //! Symbols are indices into `Object::symbols`, code is a section index and
 //! an offset, registers are the target's register-file names.
 
+use llrm_object::{Object, ObjectTarget, Unsupported};
+
+/// An object and the debug information that describes it: what the backend
+/// builds and a [`DebugObjectTarget`] writes. The information is the
+/// object's, not a field of it, so `llrm-object` names no debug model.
+#[derive(Clone, Debug)]
+pub struct Described {
+    pub object: Object,
+    pub debug: Option<Info>,
+}
+
+impl From<Object> for Described {
+    fn from(object: Object) -> Self {
+        Described { object, debug: None }
+    }
+}
+
+impl std::ops::Deref for Described {
+    type Target = Object;
+
+    fn deref(&self) -> &Object {
+        &self.object
+    }
+}
+
+impl std::ops::DerefMut for Described {
+    fn deref_mut(&mut self) -> &mut Object {
+        &mut self.object
+    }
+}
+
+/// A debug format's writer: DWARF, CodeView 13 (LLVM's `MCDwarf` and
+/// `CodeViewContext`, which a target's object writer calls in turn). It makes
+/// the sections of the object's debug information; OMF's CodeView 4 and Turbo
+/// Debugger records are the container's own and are not sections.
+pub trait DebugWriter {
+    /// `object` with the sections that say `info`, which the format's
+    /// container then writes like any other.
+    fn expanded(
+        &self,
+        object: &Object,
+        info: &Info,
+    ) -> Result<Object, Unsupported>;
+}
+
+/// `object` with `debug` expanded by `writer`, untouched where it has none.
+pub fn expanded<'a>(
+    object: &'a Object,
+    debug: Option<&Info>,
+    writer: &dyn DebugWriter,
+) -> Result<std::borrow::Cow<'a, Object>, Unsupported> {
+    match debug {
+        Some(info) => writer.expanded(object, info).map(std::borrow::Cow::Owned),
+        None => Ok(std::borrow::Cow::Borrowed(object)),
+    }
+}
+
+/// A target's object writers when they also write debug information (LLVM's
+/// `MCObjectWriter` with the debug sections its `MCStreamer` emitted).
+pub trait DebugObjectTarget: ObjectTarget {
+    /// `object` as a file of `format`, with `debug` expanded into the debug
+    /// sections the format's writer makes.
+    fn write_described(
+        &self,
+        format: &str,
+        object: &Object,
+        debug: Option<&Info>,
+    ) -> Result<Vec<u8>, Unsupported>;
+
+    /// What the debug writer `asked` for in object `format` can say; the
+    /// format's own pick where `asked` is the default.
+    fn debug_caps(
+        &self,
+        format: &str,
+        asked: Format,
+    ) -> DebugCaps;
+}
+
 /// A type, by its index in [`Info::types`].
 pub type TypeId = usize;
 /// A file, by its index in [`Info::files`].
@@ -46,30 +124,18 @@ pub enum Format {
     TurboDebugger,
 }
 
-impl Format {
-    /// Whether the writer says where a value is over a range of code. `None`
-    /// for a format that is the container's pick. CodeView 4, its older
+/// What a debug writer can say, which decides what the compiler keeps for it
+/// (LLVM's one `DbgValueHistory` feeds writers that differ here).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DebugCaps {
+    /// It says where a value is over a range of code. CodeView 4, its older
     /// BASIC dialect and Turbo Debugger's records name one place for a whole
     /// scope.
-    pub fn location_ranges(self) -> Option<bool> {
-        match self {
-            Format::TurboDebugger => Some(false),
-            Format::Dwarf { .. } => Some(true),
-            _ => None,
-        }
-    }
-
-    /// Whether the writer places a frame cell from the canonical frame address,
-    /// which DWARF's call frame information gives at every address, so `-g`
-    /// keeps no frame register for it. `None` as for
-    /// [`Format::location_ranges`].
-    pub fn cfa_locations(self) -> Option<bool> {
-        match self {
-            Format::TurboDebugger => Some(false),
-            Format::Dwarf { .. } => Some(true),
-            _ => None,
-        }
-    }
+    pub location_ranges: bool,
+    /// It places a frame cell from the canonical frame address, which DWARF's
+    /// call frame information gives at every address, so `-g` keeps no frame
+    /// register for it.
+    pub cfa_locations: bool,
 }
 
 /// The source language, which a debugger reads values by.
@@ -108,9 +174,9 @@ pub enum FrameBase {
 }
 
 /// What a debug writer needs to know of the machine, so it reads no
-/// [`crate::Arch`]. The target says it (`Info::target`); a made-up one needs no
-/// variant of `Arch`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// [`llrm_object::Arch`]. The target says it (`Info::target`); a made-up one
+/// needs no variant of `Arch`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugTarget {
     /// The width of a near address: a DWARF address, and the size of a
     /// reference.
@@ -121,13 +187,75 @@ pub struct DebugTarget {
     pub codeview_machine: Option<u16>,
     /// The fixup kind for a segment's selector, where addresses are segmented
     /// (`Info::target`'s to say: the object crate names no target's kind).
-    pub segment_base: Option<crate::FixupKind>,
+    pub segment_base: Option<llrm_object::FixupKind>,
     /// The fixup kind for a 16:16 pointer, whose offset is the field's first
     /// two bytes.
-    pub far_pointer: Option<crate::FixupKind>,
+    pub far_pointer: Option<llrm_object::FixupKind>,
+    /// The register file with its DWARF and CodeView numbers
+    /// (`MCRegisterInfo`'s `mapLLVMRegToDWARFReg`), the frame register and the
+    /// return address's column.
+    pub registers: std::sync::Arc<RegisterFile>,
+    /// A parameter whose register was reused is told by what the register held
+    /// at entry (`DW_OP_entry_value`), as the pin does for this target.
+    pub entry_values: bool,
+    /// The registers a call passes its arguments in, in order; empty where the
+    /// target does not describe call sites.
+    pub call_arguments: Vec<String>,
+    /// The registers a call leaves as they were.
+    pub call_preserved: Vec<String>,
+}
+
+/// The target's registers as a debug writer numbers them: three flavours of
+/// number in LLVM (`X86RegisterInfo.td`), two here.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RegisterFile {
+    pub registers: Vec<Register>,
+    /// The register a [`Location::Frame`] is relative to.
+    pub frame: String,
+    /// The register that stands for the return address in call frame
+    /// information (the target's `pc` class); empty where the target numbers
+    /// none.
+    pub return_register: String,
+}
+
+impl RegisterFile {
+    pub fn named(
+        &self,
+        name: &str,
+    ) -> Option<&Register> {
+        self.registers.iter().find(|one| one.name == name)
+    }
+
+    /// The DWARF number of `name`.
+    pub fn dwarf(
+        &self,
+        name: &str,
+    ) -> Option<u16> {
+        self.named(name).and_then(|one| one.dwarf)
+    }
+
+    /// The CodeView number of `name`.
+    pub fn codeview(
+        &self,
+        name: &str,
+    ) -> Option<u16> {
+        self.named(name).and_then(|one| one.codeview)
+    }
 }
 
 impl DebugTarget {
+    /// This machine with the register file `frame`, `return_register` and
+    /// `registers` make.
+    pub fn with_registers(
+        self,
+        frame: &str,
+        return_register: &str,
+        registers: Vec<Register>,
+    ) -> Self {
+        let file = RegisterFile { registers, frame: frame.to_owned(), return_register: return_register.to_owned() };
+        Self { registers: std::sync::Arc::new(file), ..self }
+    }
+
     /// What the width of a near offset says; the target adds what it knows
     /// (`Info::target`).
     pub fn of(bits: u8) -> Self {
@@ -137,6 +265,10 @@ impl DebugTarget {
             codeview_machine: None,
             segment_base: None,
             far_pointer: None,
+            registers: std::sync::Arc::default(),
+            entry_values: false,
+            call_arguments: Vec::new(),
+            call_preserved: Vec::new(),
         }
     }
 }
@@ -158,35 +290,58 @@ pub struct Info {
     pub target: Option<DebugTarget>,
     pub options: DebugOptions,
     pub language: Language,
-    /// The register a [`Location::Frame`] is relative to.
-    pub frame_register: String,
     /// What a [`Location::Frame`] is measured from: that register, or the
     /// canonical frame address.
     pub frame_base: FrameBase,
-    /// The register that stands for the return address in call frame
-    /// information (the target's `pc` class); empty where the target
-    /// numbers none.
-    pub return_register: String,
-    /// The target's register file, so a writer needs no target.
-    pub registers: Vec<Register>,
     pub files: Vec<File>,
     /// The module's code, from its first function to its last byte.
     pub code: Vec<Range>,
     pub types: Vec<Type>,
     /// In the order the code is laid out.
     pub functions: Vec<Function>,
+    /// Functions the code calls and the unit does not define.
+    pub declarations: Vec<Declaration>,
     /// Variables of the module, in data.
     pub globals: Vec<Variable>,
     pub lines: Vec<Line>,
+    /// Rows of `lines` that are not the start of a statement, by (section,
+    /// offset): the rest are (`is_stmt`).
+    pub not_stmt: std::collections::BTreeSet<(usize, usize)>,
 }
 
 impl Info {
+    /// The target's registers; none where the target is unset.
+    pub fn registers(&self) -> &RegisterFile {
+        static NONE: std::sync::OnceLock<RegisterFile> = std::sync::OnceLock::new();
+        self.target.as_ref().map_or_else(|| NONE.get_or_init(RegisterFile::default), |one| &*one.registers)
+    }
+
+    /// `file` as the target's registers, on the target as it stands or, where
+    /// there is none, on a machine of `bits`.
+    pub fn set_registers(
+        &mut self,
+        bits: u8,
+        file: RegisterFile,
+    ) {
+        *self.registers_mut(bits) = file;
+    }
+
+    /// The target's registers to edit, on a machine of `bits` where there is
+    /// no target yet.
+    pub fn registers_mut(
+        &mut self,
+        bits: u8,
+    ) -> &mut RegisterFile {
+        let target = self.target.get_or_insert_with(|| DebugTarget::of(bits));
+        std::sync::Arc::make_mut(&mut target.registers)
+    }
+
     /// The machine this information is written for.
     pub fn target_of(
         &self,
         bits: u8,
     ) -> DebugTarget {
-        self.target.unwrap_or_else(|| DebugTarget::of(bits))
+        self.target.clone().unwrap_or_else(|| DebugTarget::of(bits))
     }
 }
 
@@ -336,9 +491,42 @@ pub enum Location {
     Relative { register: String, disp: i64 },
     /// The value itself, which is in no place.
     Constant(i64),
+    /// The value of the place plus a constant (`DW_OP_plus_uconst, n,
+    /// DW_OP_stack_value`), which is in no place.
+    Offset(Box<Location>, i64),
+    /// What the register held when the function was entered
+    /// (`DW_OP_entry_value`), which is in no place now.
+    EntryValue(String),
+    /// What the operations make of the arguments, which are in no place of
+    /// their own: a register, a frame cell or a constant each, with the bytes
+    /// of the value a cell holds, pushed by [`ExprOp::Arg`]. The value itself
+    /// where `value`, else the place it addresses.
+    Expression { args: Vec<(Location, u32)>, ops: Vec<ExprOp>, value: bool },
     /// Its bytes in pieces, from the first: each piece's size in bytes and
     /// where it is; none for a piece that is nowhere.
     Pieces(Vec<(u32, Option<Location>)>),
+}
+
+/// One operation of a [`Location::Expression`], on a stack.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ExprOp {
+    /// Push the expression's `n`th argument (`DW_OP_LLVM_arg`).
+    Arg(u32),
+    Constu(u64),
+    Consts(i64),
+    PlusUconst(u64),
+    Plus,
+    Minus,
+    Mul,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Shra,
+    Not,
+    Neg,
+    Deref,
 }
 
 impl Location {
@@ -432,19 +620,66 @@ pub struct Function {
     /// the code could not be followed (a writer then says nothing, rather
     /// than something wrong).
     pub frame: Vec<FrameRow>,
+    /// Every call of the body is in [`Function::calls`]
+    /// (`DW_AT_call_all_calls`).
+    pub all_calls: bool,
+    /// The calls, in the order of the code (`DW_TAG_call_site`).
+    pub calls: Vec<CallSite>,
 }
 
-/// From `offset` bytes into a function's first range, until the next row: the
-/// canonical frame address is `cfa_offset` past register `cfa_register`, and
-/// each register in `saved` is in memory at that address plus its offset
-/// (negative: below it).
+/// A function the unit calls and does not define (a `DISubprogram`
+/// declaration).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FrameRow {
-    pub offset: usize,
-    pub cfa_register: String,
-    pub cfa_offset: i64,
-    pub saved: Vec<(String, i64)>,
+pub struct Declaration {
+    pub name: String,
+    /// Its [`Type::Procedure`].
+    pub r#type: TypeId,
+    pub external: bool,
 }
+
+/// The function a call reaches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallOrigin {
+    /// A function of [`Info::declarations`].
+    Declaration(usize),
+    /// A function of [`Info::functions`].
+    Function(usize),
+}
+
+/// What an argument register holds at a call, in the caller's terms
+/// (`DW_AT_call_value`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CallValue {
+    Constant(i64),
+    /// The value the register had when the caller was entered
+    /// (`DW_OP_entry_value`).
+    Entry(String),
+    /// The value of a register the call preserves, plus `offset`.
+    Register {
+        name: String,
+        offset: i64,
+    },
+}
+
+/// An argument register of a call and what it holds
+/// (`DW_TAG_call_site_parameter`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallParameter {
+    pub register: String,
+    pub value: CallValue,
+}
+
+/// A call: where it returns to, what it calls, and what its arguments hold.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallSite {
+    /// The return address: the first byte after the call.
+    pub section: usize,
+    pub offset: usize,
+    pub origin: Option<CallOrigin>,
+    pub parameters: Vec<CallParameter>,
+}
+
+pub use llrm_object::FrameRow;
 
 /// The first instruction at `offset` of section `section` is source line `line`
 /// of `file`.
@@ -590,23 +825,48 @@ mod settled_tests {
 }
 
 #[cfg(test)]
-mod format_tests {
-    use super::Format;
+mod writer_tests {
+    use llrm_object::{Role, Section};
 
-    /// The writers' two capability constants lived in the dwarf and omf crates,
-    /// so codegen named both to ask; the format says it now: DWARF has
-    /// ranges and CFA, Turbo Debugger neither, the rest is the container's
-    /// pick.
+    use super::*;
+
+    struct Marks;
+
+    impl DebugWriter for Marks {
+        fn expanded(
+            &self,
+            object: &Object,
+            _: &Info,
+        ) -> Result<Object, Unsupported> {
+            let mut made = object.clone();
+            made.sections.push(Section {
+                name: ".marked".into(),
+                role: Role::Data,
+                near: true,
+                align: 1,
+                image: vec![1],
+                spans: vec![[0, 1]],
+                relocs: Vec::new(),
+            });
+            Ok(made)
+        }
+    }
+
+    /// A format reaches the container through its writer alone: the writer runs
+    /// where the object has debug information and never where it has none.
     #[test]
-    fn the_format_says_what_its_writer_can() {
-        assert_eq!(
-            (Format::Dwarf { version: 4 }.location_ranges(), Format::Dwarf { version: 4 }.cfa_locations()),
-            (Some(true), Some(true))
-        );
-        assert_eq!(
-            (Format::TurboDebugger.location_ranges(), Format::TurboDebugger.cfa_locations()),
-            (Some(false), Some(false))
-        );
-        assert_eq!((Format::CodeView.location_ranges(), Format::Default.cfa_locations()), (None, None));
+    fn a_writer_expands_an_object_with_information_and_leaves_one_without() {
+        let object = Object {
+            name: "t".into(),
+            bits: 32,
+            sections: Vec::new(),
+            symbols: Vec::new(),
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        };
+        let with = expanded(&object, Some(&Info::default()), &Marks).unwrap();
+        let without = expanded(&object, None, &Marks).unwrap();
+        assert_eq!((with.sections.len(), without.sections.len()), (1, 0));
     }
 }

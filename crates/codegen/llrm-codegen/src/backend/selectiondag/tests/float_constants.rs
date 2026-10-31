@@ -13,7 +13,7 @@ fn legalized(
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .unwrap();
@@ -69,9 +69,33 @@ fn equal_constants_share_a_pool_entry() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .unwrap();
     assert_eq!(dag.constant_pool.len(), 2, "0.1 once, 3.0f once");
+}
+
+/// A target that sets `ConstantFP` to `Legal` (wasm's `f64.const` takes any
+/// bits) had 2.5 sent to the constant pool like x86's, and its matcher never
+/// saw a constant.
+#[test]
+fn a_target_that_takes_every_float_constant_keeps_it() {
+    let root_after = |action: Action| {
+        let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        tli.set_operation_action(ISD::ConstantFP, MVT::F64, action);
+        let mut graph = dag();
+        let constant = graph.get_constant_fp(2.5f64.to_bits().into(), EVT::Simple(MVT::F64));
+        graph.set_root(constant);
+        DagLegalizer::new(
+            &mut graph,
+            &tli,
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        )
+        .run()
+        .unwrap();
+        graph.opcode(graph.get_root())
+    };
+    assert_eq!(root_after(Action::Expand), ISD::Load, "Expand: the pool");
+    assert_eq!(root_after(Action::Legal), ISD::ConstantFP, "Legal: kept");
 }

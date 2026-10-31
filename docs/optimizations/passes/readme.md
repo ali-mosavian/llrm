@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 228 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 229 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -166,6 +166,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | lsr_prepare | What LLVM's loop strength reduction does to a loop before it collects (`OptimizeMax`, `OptimizeLoopTermCond` and `FindIVUserForCond`; LoopStrengthReduce.cpp at `d1106deb71cc`, l.2485-2815). | Before the collection, from [`crate::lsr_pass`](lsr_pass.md). | [lsr_prepare](lsr_prepare.md) |
 | lsr_solve | The solver of LLVM's loop strength reduction: one formula per use, by a depth-first search pruned by the best cost found (`SolveRecurse` and `Solve`; LoopStrengthReduce.cpp at `d1106deb71cc`, l.5573-5710). | Nothing runs it yet: stage 5 of the translation of LSR. | [lsr_solve](lsr_solve.md) |
 | lsr_use | The uses and the price of LLVM's loop strength reduction: `LSRFixup`, `LSRUse`, `Cost` and the addressing-mode checks they rate by (LoopStrengthReduce.cpp at `d1106deb71cc`, l.1070-2130). | Nothing runs it yet: stage 2 of the translation of LSR (the old pass in | [lsr_use](lsr_use.md) |
+| maskscale | A masked counter read as `a[i & M]` is pre-scaled to the byte offset. | After `lsr` and `differences`, in the strength slot | [maskscale](maskscale.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |

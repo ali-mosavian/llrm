@@ -57,6 +57,50 @@ impl KnownBits {
     ) -> KnownBits {
         KnownBits { zero: self.zero & other.zero, one: self.one & other.one, width: self.width }
     }
+
+    /// `KnownBits::getMaxValue`.
+    fn max_value(&self) -> u128 {
+        !self.zero & mask(self.width)
+    }
+
+    /// `KnownBits::makeGE`: the bits `self` has when it is known to be at least
+    /// `value`.
+    fn make_ge(
+        &self,
+        value: u128,
+    ) -> KnownBits {
+        let all = mask(self.width);
+        // The leading bit positions where the value is known to be less than or
+        // equal to `value`.
+        let leading = (self.zero | value) & all;
+        let n = (leading << (128 - self.width)).leading_ones().min(self.width);
+        let low = self.width - n;
+        let masked = value & !mask(low) & all;
+        KnownBits { zero: self.zero, one: self.one | masked, width: self.width }
+    }
+
+    /// `KnownBits::umax`.
+    pub fn umax(
+        self,
+        other: KnownBits,
+    ) -> KnownBits {
+        if self.one >= other.max_value() {
+            return self;
+        }
+        if other.one >= self.max_value() {
+            return other;
+        }
+        self.make_ge(other.one).intersect(other.make_ge(self.one))
+    }
+
+    /// `KnownBits::umin`: `umax` of the flipped ranges.
+    pub fn umin(
+        self,
+        other: KnownBits,
+    ) -> KnownBits {
+        let flip = |k: KnownBits| KnownBits { zero: k.one, one: k.zero, width: k.width };
+        flip(flip(self).umax(flip(other)))
+    }
 }
 
 /// `computeKnownBits`.
@@ -112,6 +156,8 @@ fn walk(
             }
         }
         ISD::Select => operand(1).intersect(operand(2)),
+        ISD::UMax => operand(0).umax(operand(1)),
+        ISD::UMin => operand(0).umin(operand(1)),
         // `AssertZext`: the bits at and above the asserted type are zero.
         ISD::AssertZext => {
             let inner = operand(0);

@@ -85,7 +85,7 @@ pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, Glo
 pub use edit::Position;
 pub use lexer::ParseError;
 pub use module::{
-    Block, BlockId, Change, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
+    Block, BlockId, Change, DebugRecord, DebugWhat, DwOp, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
     Instruction, Linkage, Metadata, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use,
     ValueData, ValueDef, ValueId,
 };

@@ -1,6 +1,8 @@
-//! The register-pressure list scheduler X86 asks for at 32 bits: `SUnit`
-//! graph (`ScheduleDAGSDNodes`), `ScheduleDAGTopologicalSort`, and
-//! `ScheduleDAGRRList` with `BURegReductionPriorityQueue`.
+//! The list schedulers of `ScheduleDAGRRList.cpp`: the `SUnit` graph
+//! (`ScheduleDAGSDNodes`), `ScheduleDAGTopologicalSort`, and
+//! `ScheduleDAGRRList` with the queue the target's [`Preference`] names:
+//! `BURegReductionPriorityQueue`, the source-order queue (X86, AArch64) or the
+//! ILP queue (M68k).
 //!
 //! # How it works
 //! [`schedule`] groups the selected DAG's nodes into units (a node and
@@ -28,11 +30,24 @@
 //! Nothing runs it yet: the emitter (D1b) takes [`schedule`]'s units. The
 //! old selector stays the default; the DAG path is `--isel=dag` (shadow).
 //!
+//! The ILP queue (`ilp_ls_rr_sort`) tracks which definitions a scheduled
+//! unit has used (`NumRegDefsLeft`) and puts the unit that adds the least
+//! register pressure first, then the critical path, then `BURRSort`. A
+//! target gives the call-frame opcodes ([`SchedInfo::call_frame_setup`]) so
+//! that the units of one call sequence stay together: without them two calls'
+//! stack arguments interleave.
+//!
+//! DEVIATE SD406: the register pressure per class is not kept. Reason: the
+//! pressure functions compare it with `getRegPressureLimit`, 0 for M68k, the
+//! only target on the ILP queue. Exit: a target with a limit asks for
+//! [`Preference::Ilp`]. Owner: m68k-spike.
+//!
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
-//! `Interferences`, `releaseInterferences`) is in; not translated:
+//! `Interferences`, `releaseInterferences`) and the call-frame resource are
+//! in; not translated:
 //! `InsertCopiesAndMoveSuccs` (when no clone is possible the first held
-//! unit goes anyway), the call-frame resource, `ClusterNodes`, and the
+//! unit goes anyway), `ClusterNodes`, and the
 //! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
 //! to themselves). Reason: they need register classes of the matcher's output
 //! for copies. Exit: before the switch gate. Owner: sdag-d. Review
@@ -93,6 +108,13 @@ pub trait SchedInfo {
     fn source_order(&self) -> bool {
         false
     }
+    /// Which of the pin's DAG schedulers the target gets:
+    /// `createDefaultScheduler` picks `ILP` for a target that does not
+    /// enable the machine scheduler (M68k), `Source` for one that does
+    /// (X86, AArch64).
+    fn preference(&self) -> Preference {
+        if self.source_order() { Preference::Source } else { Preference::Burr }
+    }
     /// `TRI->getCrossCopyRegClass(RC) != RC` for the register's class: the
     /// value cannot be copied within its class (x86's EFLAGS).
     fn has_cross_copy_class(
@@ -100,6 +122,26 @@ pub trait SchedInfo {
         _reg: u16,
     ) -> bool {
         false
+    }
+    /// `TII->getCallFrameSetupOpcode`: where a call sequence begins. None for
+    /// a target whose sequences the scheduler may interleave.
+    fn call_frame_setup(&self) -> Option<u32> {
+        None
+    }
+    /// `TII->getCallFrameDestroyOpcode`.
+    fn call_frame_destroy(&self) -> Option<u32> {
+        None
+    }
+    /// DEVIATE: the register a copy of a virtual register may clobber, as the
+    /// move it can become after allocation does (M68k's `MOVE` sets CCR). A
+    /// copy is then held back from between a flag-setter and its reader, where
+    /// the pin leaves it and the flags are saved around it: `llc` on
+    /// `llrm-m68k/bench/library/hex.ll` emits `move.w %sr,-(%sp)` /
+    /// `move.w (%sp)+,%ccr` in the loop under the default scheduler (44
+    /// instructions) and under `-pre-RA-sched=source` (42); with this, 31.
+    /// None: copies clobber nothing.
+    fn copy_clobbers(&self) -> Option<u16> {
+        None
     }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
@@ -109,6 +151,18 @@ pub trait SchedInfo {
     ) -> bool {
         a == b
     }
+}
+
+/// The list scheduler a target asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preference {
+    /// `createBURRListDAGScheduler`: `bu_ls_rr_sort`.
+    Burr,
+    /// `createSourceListDAGScheduler`: `src_ls_rr_sort`, IR order first.
+    Source,
+    /// `createILPListDAGScheduler`: `ilp_ls_rr_sort`, with register pressure
+    /// and latencies tracked.
+    Ilp,
 }
 
 /// One scheduled unit: its nodes, the bottom-most (`getNode()`) first, then
@@ -166,6 +220,10 @@ struct SUnit {
     num_succs: u32,
     num_preds_left: u32,
     num_succs_left: u32,
+    /// The register definitions of the unit's nodes (`RegDefIter`).
+    reg_defs: u32,
+    /// `NumRegDefsLeft`: those no scheduled unit has used.
+    num_reg_defs_left: u32,
     latency: u32,
     depth: u32,
     height: u32,
@@ -191,6 +249,8 @@ impl SUnit {
             num_succs: 0,
             num_preds_left: 0,
             num_succs_left: 0,
+            reg_defs: 0,
+            num_reg_defs_left: 0,
             latency: 1,
             depth: 0,
             height: 0,
@@ -270,6 +330,8 @@ struct Graph<'a> {
     live_reg_defs: HashMap<u16, usize>,
     /// `LiveRegGens`: the first scheduled unit that wants it.
     live_reg_gens: HashMap<u16, usize>,
+    /// `CallSeqEndForStart`: the end of the call sequence a unit begins.
+    call_seq_end_for_start: HashMap<usize, usize>,
     /// `Interferences`: available units held back for a live register, with
     /// the registers (`LRegsMap`).
     interferences: Vec<(usize, Vec<u16>)>,
@@ -392,6 +454,7 @@ impl<'a> Graph<'a> {
             cur_cycle: 0,
             live_reg_defs: HashMap::default(),
             live_reg_gens: HashMap::default(),
+            call_seq_end_for_start: HashMap::default(),
             interferences: Vec::new(),
             sequence: Vec::new(),
             walk: Vec::new(),
@@ -454,6 +517,9 @@ impl<'a> Graph<'a> {
             }
             self.node_id[n as usize] = num as i32;
             su.latency = if self.opcode(n) == ISD::TokenFactor { 0 } else { 1 };
+            // before `add_sched_edges`
+            su.reg_defs = self.count_reg_defs(&su.nodes) as u32;
+            su.num_reg_defs_left = su.reg_defs;
             self.sus.push(su);
         }
         // Find all call operands.
@@ -470,6 +536,25 @@ impl<'a> Graph<'a> {
                 self.sus[id].is_call_op = true;
             }
         }
+    }
+
+    /// `InitNumRegDefsLeft`: the values `RegDefIter` visits in a unit's nodes,
+    /// the bottom node first: the results a machine node defines (the first
+    /// `getNumDefs`) and a `CopyFromReg`'s, that have a user.
+    fn count_reg_defs(
+        &self,
+        nodes: &[u32],
+    ) -> usize {
+        let mut count = 0;
+        for &n in nodes {
+            let defs = match self.machine(n) {
+                Some(op) => self.values(n).len().min(self.info.num_defs(op)),
+                None if self.opcode(n) == ISD::CopyFromReg => 1,
+                None => 0,
+            };
+            count += (0..defs).filter(|&i| self.has_any_use_of_value(n, i)).count();
+        }
+        count
     }
 
     /// `InstrEmitter::CountResults`.
@@ -531,7 +616,11 @@ impl<'a> Graph<'a> {
                     }
                     let reg = if is_chain { None } else { self.phys_reg_dependency(operand, n, at) };
                     let dep = Dep { su: op_su, kind: if is_chain { Kind::Barrier } else { Kind::Data }, latency, reg };
-                    self.add_pred(su, dep);
+                    // Several register uses in one unit count as one: the
+                    // definitions left are reduced to match.
+                    if !self.add_pred(su, dep) && !is_chain && self.sus[op_su].num_reg_defs_left > 1 {
+                        self.sus[op_su].num_reg_defs_left -= 1;
+                    }
                 }
             }
         }
@@ -876,6 +965,8 @@ impl<'a> Graph<'a> {
         clone.num_succs = 0;
         clone.num_preds_left = 0;
         clone.num_succs_left = 0;
+        // `Clone` does not copy it
+        clone.num_reg_defs_left = 0;
         clone.depth_current = false;
         clone.height_current = false;
         clone.is_available = false;
@@ -971,6 +1062,20 @@ impl<'a> Graph<'a> {
                 self.release_interferences(Some(reg), queue);
             }
         }
+        // The beginning of a sequence takes its resource back; its end gives
+        // it up.
+        if self.sus[su].nodes.iter().any(|&n| self.is_call_frame(n, false)) {
+            let end = self.call_seq_end_for_start[&su];
+            self.live_reg_defs.insert(CALL_RESOURCE, su);
+            self.live_reg_gens.insert(CALL_RESOURCE, end);
+        }
+        if self.live_reg_gens.get(&CALL_RESOURCE) == Some(&su)
+            && self.sus[su].nodes.iter().any(|&n| self.is_call_frame(n, true))
+        {
+            self.live_reg_defs.remove(&CALL_RESOURCE);
+            self.live_reg_gens.remove(&CALL_RESOURCE);
+            self.release_interferences(Some(CALL_RESOURCE), queue);
+        }
         for succ in self.sus[su].succs.clone() {
             if let Some(reg) = succ.reg.filter(|_| succ.is_assigned_reg()) {
                 self.live_reg_defs.entry(reg).or_insert(su);
@@ -1027,12 +1132,37 @@ impl<'a> Graph<'a> {
             }
         }
         for &node in &self.sus[su].nodes {
+            if let Some(reg) = self.info.copy_clobbers()
+                && self.is_virtual_copy(node)
+            {
+                self.check_for_live_reg_def(su, reg, &mut live);
+            }
             let Some(op) = self.machine(node) else { continue };
+            // In the middle of a call sequence, another one does not begin.
+            if self.is_call_frame(node, true)
+                && let Some(&generator) = self.live_reg_gens.get(&CALL_RESOURCE)
+            {
+                let mut top = self.sus[generator].node();
+                while let Some(above) = self.glued_node(top) {
+                    top = above;
+                }
+                if !self.is_chain_dependent(top, node, 0) && !live.contains(&CALL_RESOURCE) {
+                    live.push(CALL_RESOURCE);
+                }
+            }
             for &reg in self.info.implicit_defs(op) {
                 self.check_for_live_reg_def(su, reg, &mut live);
             }
         }
         live
+    }
+
+    /// A `CopyToReg` into, or `CopyFromReg` out of, a virtual register.
+    fn is_virtual_copy(
+        &self,
+        node: u32,
+    ) -> bool {
+        matches!(self.opcode(node), ISD::CopyToReg | ISD::CopyFromReg) && virtual_register(self, self.ops(node)[1])
     }
 
     /// `CheckForLiveRegDef`.
@@ -1043,7 +1173,7 @@ impl<'a> Graph<'a> {
         live: &mut Vec<u16>,
     ) {
         for (&other, &def) in &self.live_reg_defs {
-            if def != su && self.info.regs_overlap(reg, other) && !live.contains(&other) {
+            if other != CALL_RESOURCE && def != su && self.info.regs_overlap(reg, other) && !live.contains(&other) {
                 live.push(other);
             }
         }
@@ -1057,16 +1187,32 @@ impl<'a> Graph<'a> {
     ) {
         let cycle = self.cur_cycle;
         self.set_height_to_at_least(su, cycle);
+        if preference(self.info) == Preference::Ilp {
+            self.scheduled_node(su);
+        }
         // `AdvanceToCycle(CurCycle + 1)`: no hazard recognizer, one per cycle.
         self.cur_cycle += 1;
         for pred in self.sus[su].preds.clone() {
-            self.release_pred(pred.su, queue);
+            self.release_pred(su, pred, queue);
             if let Some(reg) = pred.reg.filter(|_| pred.is_assigned_reg()) {
                 // A physical register dependence: nothing that can clobber the
                 // register may go between the definition and this unit.
                 self.live_reg_defs.insert(reg, pred.su);
                 self.live_reg_gens.entry(reg).or_insert(su);
             }
+        }
+        // A call sequence's end: nothing else may be scheduled into the
+        // sequence, which runs to its beginning (the stack arguments of two
+        // calls would share the same slots).
+        if !self.live_reg_defs.contains_key(&CALL_RESOURCE)
+            && let Some(end) = self.sus[su].nodes.iter().copied().find(|&n| self.is_call_frame(n, true))
+        {
+            let (mut nest, mut max_nest) = (0, 0);
+            let start = self.find_call_seq_start(end, &mut nest, &mut max_nest).expect("a call sequence has a start");
+            let def = self.node_id[start as usize] as usize;
+            self.call_seq_end_for_start.insert(def, su);
+            self.live_reg_defs.insert(CALL_RESOURCE, def);
+            self.live_reg_gens.insert(CALL_RESOURCE, su);
         }
         // The definitions that were live for this unit are done.
         for succ in self.sus[su].succs.clone() {
@@ -1077,6 +1223,14 @@ impl<'a> Graph<'a> {
                 self.live_reg_gens.remove(&reg);
                 self.release_interferences(Some(reg), queue);
             }
+        }
+        // The beginning of the sequence in progress.
+        if self.live_reg_defs.get(&CALL_RESOURCE) == Some(&su)
+            && self.sus[su].nodes.iter().any(|&n| self.is_call_frame(n, false))
+        {
+            self.live_reg_defs.remove(&CALL_RESOURCE);
+            self.live_reg_gens.remove(&CALL_RESOURCE);
+            self.release_interferences(Some(CALL_RESOURCE), queue);
         }
         self.sus[su].is_scheduled = true;
     }
@@ -1101,14 +1255,160 @@ impl<'a> Graph<'a> {
     /// `ReleasePred`.
     fn release_pred(
         &mut self,
-        pred: usize,
+        su: usize,
+        edge: Dep,
         queue: &mut Queue,
     ) {
+        let pred = edge.su;
         assert!(self.sus[pred].num_succs_left != 0, "a unit was released too many times");
         self.sus[pred].num_succs_left -= 1;
+        // `!forceUnitLatencies()`: when the predecessor can go without a stall
+        if preference(self.info) == Preference::Ilp {
+            let ready = self.height(su) + edge.latency;
+            self.set_height_to_at_least(pred, ready);
+        }
         if self.sus[pred].num_succs_left == 0 {
             self.sus[pred].is_available = true;
             queue.push(&mut self.sus, pred);
+        }
+    }
+
+    /// Whether `n` is the target's `CALLSEQ_BEGIN` (`destroy` false) or
+    /// `CALLSEQ_END` machine node.
+    fn is_call_frame(
+        &self,
+        n: u32,
+        destroy: bool,
+    ) -> bool {
+        let wanted = if destroy { self.info.call_frame_destroy() } else { self.info.call_frame_setup() };
+        wanted.is_some() && self.machine(n) == wanted
+    }
+
+    /// The first chain operand of `n`, unless it is the entry token. (A
+    /// `RegisterMask` has the type `OTHER` here; the pin's is untyped.)
+    fn chain_above(
+        &self,
+        n: u32,
+    ) -> Option<u32> {
+        let op = self
+            .ops(n)
+            .iter()
+            .find(|op| self.dag.value_type(**op) == EVT::OTHER && self.opcode(op.node) != ISD::RegisterMask)?;
+        (self.opcode(op.node) != ISD::EntryToken).then_some(op.node)
+    }
+
+    /// `FindCallSeqStart`: from a call sequence's end, its beginning.
+    fn find_call_seq_start(
+        &self,
+        mut n: u32,
+        nest: &mut u32,
+        max_nest: &mut u32,
+    ) -> Option<u32> {
+        loop {
+            // the path with the most nesting finds the matching start
+            if self.opcode(n) == ISD::TokenFactor {
+                let mut best = None;
+                let mut best_max = *max_nest;
+                for op in self.ops(n) {
+                    let (mut my_nest, mut my_max) = (*nest, *max_nest);
+                    if let Some(new) = self.find_call_seq_start(op.node, &mut my_nest, &mut my_max)
+                        && (best.is_none() || my_max > best_max)
+                    {
+                        best = Some(new);
+                        best_max = my_max;
+                    }
+                }
+                *max_nest = best_max;
+                return best;
+            }
+            if self.is_call_frame(n, true) {
+                *nest += 1;
+                *max_nest = (*max_nest).max(*nest);
+            } else if self.is_call_frame(n, false) {
+                debug_assert!(*nest != 0, "a call sequence starts before it ends");
+                *nest -= 1;
+                if *nest == 0 {
+                    return Some(n);
+                }
+            }
+            n = self.chain_above(n)?;
+        }
+    }
+
+    /// `IsChainDependent`: whether `outer` reaches `inner` through chain
+    /// operands.
+    fn is_chain_dependent(
+        &self,
+        outer: u32,
+        inner: u32,
+        mut nest: u32,
+    ) -> bool {
+        let mut n = outer;
+        loop {
+            if n == inner {
+                return true;
+            }
+            if self.opcode(n) == ISD::TokenFactor {
+                return self.ops(n).iter().any(|op| self.is_chain_dependent(op.node, inner, nest));
+            }
+            if self.is_call_frame(n, true) {
+                nest += 1;
+            } else if self.is_call_frame(n, false) {
+                if nest == 0 {
+                    return false;
+                }
+                nest -= 1;
+            }
+            match self.chain_above(n) {
+                Some(above) => n = above,
+                None => return false,
+            }
+        }
+    }
+
+    /// `RegPressureDiff` without the live-use count (that priority is off):
+    /// the definitions of the predecessors that are not all used yet, less
+    /// this unit's own, in the register classes at their limit.
+    ///
+    /// DEVIATE SD32: the pressure per register class is not tracked. Reason:
+    /// the one target on the ILP scheduler, M68k, keeps the default
+    /// `getRegPressureLimit` of 0, so every class is always at its limit and
+    /// only the counts of definitions matter. Exit: a target that sets a
+    /// limit and asks for `Preference::Ilp`. Owner: m68k-spike.
+    fn reg_pressure_diff(
+        &self,
+        su: usize,
+    ) -> i32 {
+        let mut diff = 0;
+        for pred in self.sus[su].preds.iter().filter(|p| !p.is_ctrl()) {
+            // zero when enough uses of the node are scheduled to cover its
+            // definitions: they are all live
+            let left = self.sus[pred.su].num_reg_defs_left;
+            if left != 0 {
+                diff += self.sus[pred.su].reg_defs as i32;
+            }
+        }
+        let unit = &self.sus[su];
+        let node = unit.node();
+        if let Some(op) = self.machine(node)
+            && unit.num_succs != 0
+        {
+            let defs = self.values(node).len().min(self.info.num_defs(op));
+            diff -= (0..defs).filter(|&i| self.has_any_use_of_value(node, i)).count() as i32;
+        }
+        diff
+    }
+
+    /// `scheduledNode` of the register-pressure queue: the uses of the
+    /// predecessors' definitions one fewer. (The pressure per class is not
+    /// kept: see [`Graph::reg_pressure_diff`].)
+    fn scheduled_node(
+        &mut self,
+        su: usize,
+    ) {
+        for pred in self.sus[su].preds.clone().iter().filter(|p| !p.is_ctrl()) {
+            let left = &mut self.sus[pred.su].num_reg_defs_left;
+            *left = left.saturating_sub(1);
         }
     }
 
@@ -1131,6 +1431,10 @@ impl<'a> Graph<'a> {
         max
     }
 }
+
+/// The slot `LiveRegDefs` keeps for the call sequence in progress
+/// (`TRI->getNumRegs()`): no register has this number.
+const CALL_RESOURCE: u16 = u16::MAX;
 
 /// Whether a held unit may go back to the queue: it is not in it.
 fn queue_free(
@@ -1325,14 +1629,13 @@ thread_local! {
     pub(super) static SRC_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// `createDefaultScheduler`: X86 enables the machine scheduler and its default
-/// scheduler role (`enableMachineScheduler() &&
-/// enableMachineSchedDefaultSched()`), so the pin's DAG scheduler is
-/// `createSourceListDAGScheduler`: a `SrcRegReductionPriorityQueue`
-/// (`srcorder`), IR order first. On at every width, as the pin has it: off at
-/// m16 a select could fall inside a call frame and `jumps` grew 28 B.
-fn src_order(info: &dyn SchedInfo) -> bool {
-    info.source_order() || SRC_ORDER.get() || llrm_support::env_flag!("LLRM_SRC_ORDER")
+/// The scheduler this run builds: the target's, or source order where the
+/// thread or the environment forces it.
+fn preference(info: &dyn SchedInfo) -> Preference {
+    if SRC_ORDER.get() || llrm_support::env_flag!("LLRM_SRC_ORDER") {
+        return Preference::Source;
+    }
+    info.preference()
 }
 
 /// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman
@@ -1356,8 +1659,9 @@ impl Queue {
         topo: &mut Topo,
     ) {
         // `!TracksRegPressure && !SrcOrder`: the source-order queue X86 uses
-        // leaves the edges alone.
-        if !src_order(graph.info) {
+        // and the register-pressure one of the ILP scheduler leave the edges
+        // alone.
+        if preference(graph.info) == Preference::Burr {
             self.preschedule_nodes_with_multiple_uses(graph, topo);
         }
         self.sethi_ullman = vec![0; graph.sus.len()];
@@ -1524,14 +1828,15 @@ impl Queue {
         graph: &Graph<'_>,
         su: usize,
     ) -> u32 {
-        if !src_order(graph.info) {
+        if preference(graph.info) == Preference::Burr {
             return 0;
         }
         graph.dag.node(SDValue { node: graph.sus[su].node(), res: 0 }).order
     }
 
-    /// `src_ls_rr_sort`: whether `right` goes before `left`. The lower
-    /// non-zero IR order goes first; `BURRSort` breaks ties.
+    /// `bu_ls_rr_sort`, `src_ls_rr_sort` or `ilp_ls_rr_sort`: whether `right`
+    /// goes before `left`. Source order puts the lower non-zero IR order
+    /// first; `BURRSort` breaks ties.
     fn bu_ls_rr_sort(
         &self,
         graph: &mut Graph<'_>,
@@ -1543,13 +1848,69 @@ impl Queue {
         if l_low != r_low {
             return l_low < r_low;
         }
-        if src_order(graph.info) {
-            let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
-            if (l_order != 0 || r_order != 0) && l_order != r_order {
-                return l_order != 0 && (l_order < r_order || r_order == 0);
+        match preference(graph.info) {
+            Preference::Burr => {}
+            Preference::Source => {
+                let (l_order, r_order) = (Self::node_ordering(graph, left), Self::node_ordering(graph, right));
+                if (l_order != 0 || r_order != 0) && l_order != r_order {
+                    return l_order != 0 && (l_order < r_order || r_order == 0);
+                }
+            }
+            Preference::Ilp => {
+                if let Some(first) = self.ilp_ls_rr_sort(graph, left, right) {
+                    return first;
+                }
             }
         }
-        // BURRSort
+        self.burr_sort(graph, left, right)
+    }
+
+    /// `ilp_ls_rr_sort` less `checkSpecialNodes` and the closing `BURRSort`,
+    /// which the caller runs: `Some` where a rule before it decides.
+    ///
+    /// The pin's defaults are in: register-pressure difference, critical
+    /// path and height on; live uses and stalls off.
+    fn ilp_ls_rr_sort(
+        &self,
+        graph: &mut Graph<'_>,
+        left: usize,
+        right: usize,
+    ) -> Option<bool> {
+        // No way to compute latency of calls.
+        if graph.sus[left].is_call || graph.sus[right].is_call {
+            return None;
+        }
+        let (l_diff, r_diff) = (graph.reg_pressure_diff(left), graph.reg_pressure_diff(right));
+        if l_diff != r_diff {
+            return Some(l_diff > r_diff);
+        }
+        if l_diff > 0 || r_diff > 0 {
+            let (l_reduce, r_reduce) = (can_enable_coalescing(graph, left), can_enable_coalescing(graph, right));
+            if l_reduce && !r_reduce {
+                return Some(false);
+            }
+            if r_reduce && !l_reduce {
+                return Some(true);
+            }
+        }
+        let (l_depth, r_depth) = (graph.depth(left), graph.depth(right));
+        if l_depth.abs_diff(r_depth) > MAX_REORDER_WINDOW {
+            return Some(l_depth < r_depth);
+        }
+        let (l_height, r_height) = (graph.height(left), graph.height(right));
+        if l_height != r_height && l_height.abs_diff(r_height) > MAX_REORDER_WINDOW {
+            return Some(l_height > r_height);
+        }
+        None
+    }
+
+    /// `BURRSort`.
+    fn burr_sort(
+        &self,
+        graph: &mut Graph<'_>,
+        left: usize,
+        right: usize,
+    ) -> bool {
         let (l_phys, r_phys) = (graph.sus[left].has_phys_reg_defs, graph.sus[right].has_phys_reg_defs);
         if l_phys != r_phys {
             return l_phys < r_phys;
@@ -1624,6 +1985,23 @@ impl Queue {
         }
         graph.sus[left].queue_id > graph.sus[right].queue_id
     }
+}
+
+/// `-max-sched-reorder`: the instructions the ILP scheduler allows ahead of
+/// the critical path.
+const MAX_REORDER_WINDOW: u32 = 6;
+
+/// `canEnableCoalescing`: a unit best kept close to its uses.
+fn can_enable_coalescing(
+    graph: &Graph<'_>,
+    su: usize,
+) -> bool {
+    let unit = &graph.sus[su];
+    // `EXTRACT_SUBREG`, `INSERT_SUBREG` and `SUBREG_TO_REG` are machine nodes
+    // here: their opcodes never equal the generic ones (SD30).
+    matches!(graph.opcode(unit.node()), ISD::TokenFactor | ISD::CopyToReg)
+        // no register def: it lengthens no live range
+        || (unit.num_preds == 0 && unit.num_succs != 0)
 }
 
 /// `cast<RegisterSDNode>(reg)->getReg().isVirtual()`: a `Register` node
