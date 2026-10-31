@@ -1,4 +1,6 @@
 //! Shared by the PRG tests: the C64 program built by ca65 and ld65.
+// Each test binary compiles this module and uses some of its helpers.
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -10,7 +12,6 @@ use llrm_6502::platform::{C64, C64_LD65, Platform, SIM65, c64_startup};
 
 /// A PRG whose `_main` returns 7, and its ld65 label file.
 pub fn build() -> (Vec<u8>, String, PathBuf) {
-    let platform = Platform::parse(C64).expect("c64 row");
     let body = [
         MInst::new(op::LDI8, vec![Operand::reg("rc2"), Operand::Imm(7)]),
         MInst::new(op::COPY8, vec![Operand::reg("a"), Operand::reg("rc2")]),

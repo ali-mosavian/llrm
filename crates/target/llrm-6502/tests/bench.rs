@@ -156,16 +156,6 @@ fn work(name: &str) -> PathBuf {
     dir
 }
 
-/// What one build reports.
-struct Built {
-    /// The linked binary with the function, and with a one-byte stub.
-    with: PathBuf,
-    stub: PathBuf,
-    /// RAM cells the function uses (ours: BSS cells; cc65: none, it uses the C
-    /// stack).
-    bss: usize,
-}
-
 /// Which compiler's convention the driver uses.
 #[derive(Clone, Copy, PartialEq)]
 enum Abi {
@@ -305,7 +295,6 @@ struct Row {
     /// `bytes` when it calls none.
     body: i64,
     cycles: i64,
-    bss: usize,
 }
 
 /// The CODE segment of ca65 text `file` in `dir`, assembled alone (`od65
@@ -338,7 +327,6 @@ fn measure(
     kernel: &Kernel,
     abi: Abi,
     tag: &str,
-    bss: usize,
 ) -> Result<Row, String> {
     // correctness: one call, A (and X) against the hand-derived value
     let expect = match &kernel.hand {
@@ -368,7 +356,7 @@ fn measure(
     std::fs::write(dir.join(format!("f-{tag}stub.s")), format!(".export {stub_name}\n{stub_name}:\n  rts\n")).unwrap();
     let stub = link(dir, kernel, abi, kernel.name, 1, false, &format!("{tag}stub-lo"))?;
     let bytes = std::fs::metadata(&low).unwrap().len() as i64 - std::fs::metadata(&stub).unwrap().len() as i64 + 1;
-    Ok(Row { bytes, body: bytes, cycles, bss })
+    Ok(Row { bytes, body: bytes, cycles })
 }
 
 /// The `-D` flag and the C file of a kernel: its `#ifdef` in `kernels.c`, or
@@ -394,7 +382,7 @@ fn cc65_row(
     let output = format!("f-{tag}.s");
     args.extend_from_slice(&[&define, "-o", &output, source]);
     tool(&dir, "cc65", &args)?;
-    let mut row = measure(&dir, kernel, Abi::Cc65, tag, 0)?;
+    let mut row = measure(&dir, kernel, Abi::Cc65, tag)?;
     row.body = code_bytes(&dir, &output)?;
     Ok(row)
 }
@@ -422,15 +410,10 @@ fn ours_row(
     // the equates are the platform's, not the function's
     let function: String =
         text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
-    let bss = function
-        .lines()
-        .filter(|l| l.contains(": .res "))
-        .map(|l| l.rsplit(' ').next().unwrap().parse::<usize>().unwrap())
-        .sum();
     let runtime = reachable_runtime(&function);
     let file = format!(".import buf\n{text}{runtime}");
     std::fs::write(dir.join(format!("f-{tag}.s")), file).unwrap();
-    let row = measure(&dir, kernel, Abi::Ours, tag, bss)?;
+    let row = measure(&dir, kernel, Abi::Ours, tag)?;
     // the table's bytes are the linked binary's, to the byte
     let priced = llrm_6502::timing::estimate(cpu, &format!("{function}{runtime}"))?;
     assert_eq!(i64::from(priced.bytes), row.bytes, "{name} {tag}: timing.rs against the linked size");
@@ -459,7 +442,7 @@ fn hand_row(kernel: &Kernel) -> Result<Row, String> {
         ),
     };
     std::fs::write(dir.join("f-h.s"), without_own_imports(&format!("{wrapper}{hand}"))).unwrap();
-    let mut row = measure(&dir, kernel, Abi::Cc65, "h", 0)?;
+    let mut row = measure(&dir, kernel, Abi::Cc65, "h")?;
     row.body = code_bytes(&dir, "f-h.s")?;
     Ok(row)
 }
