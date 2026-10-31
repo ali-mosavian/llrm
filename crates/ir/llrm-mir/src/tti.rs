@@ -411,6 +411,15 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-1: the bounds of the recursion the target takes by default
+    /// when optimizing for speed: (depth of a function's copies of itself,
+    /// the largest recursive body in `gcc_insns` that is copied); none: the
+    /// pin's inliner, which copies no recursive callee (`-finline-recursive`
+    /// asks for gcc's).
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
