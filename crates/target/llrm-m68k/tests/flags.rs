@@ -52,7 +52,7 @@ fn a_copy_that_does_not_depend_on_the_compare_moves_above_it() {
 }
 
 /// `add d0; move d2,d0; bne` branched on the copy's codes; the result is
-/// tested again right before the branch.
+/// compared with zero again right before the branch (the pin has no `tst`).
 #[test]
 fn a_copy_of_the_setters_result_is_followed_by_a_test_of_it() {
     let mut f = function(vec![
@@ -61,7 +61,7 @@ fn a_copy_of_the_setters_result_is_followed_by_a_test_of_it() {
         op("Bne8", vec![], false, true),
     ]);
     preserve_flags(&mut f, &assignment()).unwrap();
-    assert_eq!(kinds(&f), [Kind::Op("ADD32dr"), Kind::Copy, Kind::Op("TST32d"), Kind::Op("Bne8")]);
+    assert_eq!(kinds(&f), [Kind::Op("ADD32dr"), Kind::Copy, Kind::Op("CMP32di"), Kind::Op("Bne8")]);
 }
 
 /// A copy that overwrites an operand of the compare leaves nothing to compare

@@ -140,7 +140,7 @@ fn operand_value(
 
 /// `encodeInstruction`.
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
-    let (width, pieces) = match crate::overlay::encoding(inst.opcode) {
+    let (width, pieces) = match crate::divide::encoding(inst.opcode) {
         Some(row) => row,
         None => {
             let &(_, width, pieces) =

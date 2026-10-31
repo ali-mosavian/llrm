@@ -6,6 +6,7 @@ pub mod amiga;
 pub mod atari;
 pub mod compile;
 pub mod dagisel;
+pub mod divide;
 pub mod driver;
 pub mod encode;
 pub mod expand;
@@ -17,7 +18,6 @@ pub mod machine;
 pub mod mc;
 pub mod mfunc;
 pub mod object;
-pub mod overlay;
 pub mod regalloc;
 pub mod target;
 

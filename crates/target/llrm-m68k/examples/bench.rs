@@ -175,8 +175,8 @@ fn main() {
         let mut verdicts = Vec::new();
         let mut counts = Vec::new();
         let variants: Vec<Result<(Vec<Item>, usize), String>> = vec![
-            // the raw IR, as the overlay compiles it without the LSR pass `llc`
-            // runs
+            // the raw IR, as the default pipeline compiles it without the LSR
+            // pass `llc` runs
             items_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).and_then(|code| {
                 let size = measure(&code, &runtime)?;
                 Ok((code, size))

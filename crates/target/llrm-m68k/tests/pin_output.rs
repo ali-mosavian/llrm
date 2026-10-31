@@ -1,4 +1,4 @@
-//! The overlay's encodings against binutils `m68k-linux-gnu-as` (unpacked
+//! Encodings against binutils `m68k-linux-gnu-as` (unpacked
 //! without root under `$GCC_M68K`), and its
 //! effect on size.
 
@@ -35,18 +35,12 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Each overlay instruction's bytes, from binutils on the same text:
-/// `addq.l #1,%d1` 5281, `addq.l #8,%d1` 5081 (8 is the field 0), `subq.l
-/// #4,%sp` 598f, `addq.w #3,%d2` 5642, `addq.b #2,%d3` 5403, `subq.w #1,%d0`
-/// 5340, `tst.b %d0` 4a00, `tst.w %d5` 4a45, `tst.l %d1` 4a81, `addq.l #2,%a1`
-/// 5489, `subq.l #7,%a3` 5f8b.
+/// The bytes of the two pin instructions the encoder owns, from binutils on
+/// the same text: `not.w %d5` 4645, `swap %d3` 4843.
 #[test]
-fn overlay_instructions_encode_as_binutils_does() {
+fn not_and_swap_encode_as_binutils_does() {
     let t = |opcode, of: &str| Inst { opcode, operands: vec![register(of)] };
     let cases = [
-        (t("TST8d", "d0"), "4a00"),
-        (t("TST16d", "d5"), "4a45"),
-        (t("TST32d", "d1"), "4a81"),
         (t("NOT16d", "d5"), "4645"),
         (Inst { opcode: "SWAP", operands: vec![register("d3"), register("d3")] }, "4843"),
     ];
