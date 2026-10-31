@@ -57,9 +57,9 @@ pub enum Refusal {
 }
 
 /// x86 as a [`DagTarget`]: its lowering tables, hooks and selector tables.
-pub struct X86Target<'a> {
+pub struct X86Target<'a, 'p> {
     pub tli: &'a TargetLowering,
-    pub lowering: &'a mut X86Lowering,
+    pub lowering: &'a mut X86Lowering<'p>,
     pub chooser: X86Chooser<'a>,
     pub arch: &'a dyn llrm_target::Target,
 }
@@ -80,10 +80,10 @@ impl Select for X86Chooser<'_> {
     }
 }
 
-impl DagTarget for X86Target<'_> {
-    type Lowering = X86Lowering;
+impl<'p> DagTarget for X86Target<'_, 'p> {
+    type Lowering = X86Lowering<'p>;
 
-    fn phases(&mut self) -> Phases<'_, X86Lowering> {
+    fn phases(&mut self) -> Phases<'_, X86Lowering<'p>> {
         Phases { tli: self.tli, lowering: &mut *self.lowering, arch: Some(self.arch) }
     }
 
@@ -104,7 +104,7 @@ impl DagTarget for X86Target<'_> {
 pub fn select_block(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
-    lowering: &mut X86Lowering,
+    lowering: &mut X86Lowering<'_>,
     selector: &Selector,
     hooks: &mut X86Hooks,
     info: &dyn SchedInfo,
@@ -141,7 +141,7 @@ pub fn remove_assertions(dag: &mut SelectionDAG) {
 pub fn legalized(
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
-    lowering: &mut X86Lowering,
+    lowering: &mut X86Lowering<'_>,
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
     legalized_with(dag, tli, lowering, Some(arch))

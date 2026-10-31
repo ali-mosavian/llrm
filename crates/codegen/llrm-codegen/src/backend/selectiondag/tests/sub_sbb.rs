@@ -39,7 +39,7 @@ fn a_negated_shifted_bit_is_a_bit_test_and_sbb() {
     dag.set_root(root);
     let before: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    let mut hooks = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false };
+    let mut hooks = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     let root = dag.get_root();
     let after: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();

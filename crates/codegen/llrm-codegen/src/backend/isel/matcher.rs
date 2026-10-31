@@ -1060,19 +1060,7 @@ impl Selector<'_, '_, '_> {
         chain: &[(&str, i64)],
         width: i64,
     ) -> i64 {
-        let register_bytes = |width| self.arch.register_op_bytes(width);
-        let shift_bytes = |count, width| self.arch.shift_op_bytes(count, width);
-        let operand = self.arch.operand_bytes();
-        // A `lea r,[a+cur*s]` is the opcode, the ModRM and the SIB.
-        chain
-            .iter()
-            .map(|&(name, count)| match name {
-                "shl" => shift_bytes(count, width),
-                "lea" | "flea" => 3 + i64::from(width != operand),
-                "fadd" | "fsub" => shift_bytes(count, width) + register_bytes(width) + register_bytes(width),
-                _ => register_bytes(width),
-            })
-            .sum()
+        arithmetic::chain_bytes(chain, width, self.arch)
     }
 
     /// Bytes first, clocks to break a tie: both are under 100.
