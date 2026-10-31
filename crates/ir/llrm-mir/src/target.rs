@@ -34,6 +34,11 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// The first use of a callee-saved register costs its `push` and `pop`
+    /// at this target's prices, against a spill's accesses at the same
+    /// prices (`csr_price_milli`); false: the pin's two instructions at
+    /// 30%.
+    pub csr_priced: bool,
 }
 
 impl Tuning {
@@ -50,6 +55,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
         split_merged_conditions: false,
+        csr_priced: false,
     };
 }
 

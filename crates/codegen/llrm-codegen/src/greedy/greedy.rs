@@ -29,6 +29,15 @@
 //! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
 //! wrapping pass's.
 //!
+//! DEVIATE CSR3
+//! ([`tryAssignCSRFirstTime`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/RegAllocGreedy.cpp)):
+//! where a target sets `Tuning::csr_priced` (m16), a range live across a call
+//! takes a callee-saved register only if its push and pop cost less than the
+//! spill pair (fib, hanoi at -O2: clocks back at main). Not under -Os, not in a
+//! frameless function. Known cost: jpeg_fixed/jpeg_single c -O2 +20 B (a
+//! function already spilling heavily). Exit: the pin's rule if the user rules
+//! the jpeg rows out, else when the spill cost counts the pressure it adds.
+//!
 //! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
 //! allocator's size (QCport, 65 modules, 2026-10-19: 78518 against 77618
 //! instructions, +1.2%). The fact: LLVM's greedy on the same final IR is at
@@ -362,6 +371,13 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
+    /// DEVIATE CSR3: the first use of a callee-saved register as the target
+    /// prices it, in thousandths of a spill access, counted in full (no
+    /// `CSR_COST_SCALE`), and a range whose spill is cheaper than it is
+    /// spilled instead of waiting for `RS_Spill`. None: the pin's rule.
+    fn csr_price_milli(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
@@ -512,6 +528,9 @@ pub struct RAGreedy<'a> {
     /// `CSRCost`: what the first use of a callee-saved register costs,
     /// relative to the entry block's frequency (`initializeCSRCost`).
     csr_cost: BlockFrequency,
+    /// DEVIATE CSR3: what it costs for a range live across a call, where the
+    /// target prices it.
+    csr_cost_priced: Option<BlockFrequency>,
     /// `SetOfBrokenHints`, in the order they were recorded.
     broken: Vec<u32>,
 }
@@ -537,6 +556,7 @@ impl<'a> RAGreedy<'a> {
             stats: Stats::default(),
             split: None,
             csr_cost: BlockFrequency(0),
+            csr_cost_priced: None,
             broken: Vec::new(),
         }
     }
@@ -1260,9 +1280,11 @@ impl<'a> RAGreedy<'a> {
     /// pre-splits.
     fn initialize_csr_cost(&mut self) {
         self.csr_cost = BlockFrequency(0);
+        self.csr_cost_priced = None;
         let Some(split) = &self.split else { return };
         let entry = split.mbfi.get_entry_freq().get_frequency();
         self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), entry);
+        self.csr_cost_priced = self.env.csr_price_milli().map(|milli| BlockFrequency(entry / 1000 * u64::from(milli)));
     }
 
     /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
@@ -1280,7 +1302,12 @@ impl<'a> RAGreedy<'a> {
         new_vregs: &mut Vec<u32>,
     ) -> Option<RegId> {
         let stage = self.extra.get_stage(virt.reg());
-        let csr_cost = self.csr_cost;
+        // CSR3 applies to a range live across a call
+        // (`checkRegMaskInterference`): the register is then the
+        // alternative to a spill pair around the call.
+        let priced = self.csr_cost_priced.filter(|_| self.matrix.crosses_reg_mask(virt));
+        let csr_cost = priced.unwrap_or(self.csr_cost);
+        let priced = priced.is_some();
         let ss = self.split.as_mut()?;
         let mut splitter = Splitter {
             lis: &mut self.lis,
@@ -1305,7 +1332,14 @@ impl<'a> RAGreedy<'a> {
         if stage < LiveRangeStage::Split {
             // We choose pre-splitting over using the CSR for the first time if
             // the cost of splitting is lower than CSRCost.
-            return splitter.csr_pre_split(virt, order, csr_cost, new_vregs).then_some(phys);
+            if !splitter.csr_pre_split(virt, order, csr_cost, new_vregs) {
+                return None;
+            }
+        }
+        // CSR3: no split is cheaper than the register; so is a spill?
+        if priced && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost) {
+            *cost_per_use_limit = 1;
+            return None;
         }
         Some(phys)
     }
