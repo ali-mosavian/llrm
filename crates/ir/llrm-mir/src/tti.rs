@@ -405,6 +405,12 @@ pub trait Tti {
         None
     }
 
+    /// What a byte of code is worth in thousandths of a clock, where the
+    /// target weighs bytes over clocks at every level; 0: it does not.
+    fn size_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// The target's `DefaultThreshold` for the inliner (its tuning table);
     /// none: the pass's own.
     fn inline_threshold_override(&self) -> Option<i64> {
