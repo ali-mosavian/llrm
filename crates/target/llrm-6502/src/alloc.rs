@@ -791,6 +791,20 @@ impl Builder {
             self.push(bump);
             return Ok(());
         }
+        // a pointer plus a page: the high byte steps, in place
+        if mnemonic == "ADC"
+            && self.in_pair(d)
+            && self.in_pair(a)
+            && let Some([0, 1]) = self.word_constant(b)
+        {
+            let source = self.pointer(a)?;
+            self.define(d);
+            let dest = self.pointer(d)?;
+            let mut bump = Inst::new(Kind::Op("PINCH"), vec![Operand::Def(dest), Operand::Use(source)]);
+            bump.ties = vec![(0, 1)];
+            self.push(bump);
+            return Ok(());
+        }
         // a commutative op reads the operand with the known identity half as
         // its second
         let (a, b) = if matches!(mnemonic, "EOR" | "ORA" | "AND")
@@ -824,13 +838,32 @@ impl Builder {
         };
         let (dl, dh) = self.write_word(d)?;
         let acc = Reg::Phys(reg::A);
-        if let Some(carry) = carry {
-            self.push(Inst::new(Kind::Op(carry), vec![]));
-        }
-        for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
-            if is_identity(mnemonic, &b) {
+        let mut carried = false;
+        // the low byte is left as it is, with the carry clear (set) for the
+        // high
+        let mut low_kept = false;
+        for (half, ((d, a), b)) in [(dl, al), (dh, ah)].into_iter().zip(second).enumerate() {
+            // the carry is clear (set) going in: adding (subtracting) 0 to the
+            // low byte leaves it, and the high byte steps by the constant
+            let spent = matches!((mnemonic, carry), ("ADC", Some("CLC")) | ("SBC", Some("SEC")));
+            if half == 0 && spent && b == Operand::Imm(0) {
+                low_kept = true;
+            }
+            if is_identity(mnemonic, &b) || low_kept && half == 0 {
                 self.copy(d, a);
                 continue;
+            }
+            if half == 1 && low_kept && b == Operand::Imm(1) {
+                self.copy(d, a);
+                self.push(Inst::new(
+                    Kind::Op(if mnemonic == "ADC" { "INC" } else { "DEC" }),
+                    vec![Operand::Def(d), Operand::Use(d)],
+                ));
+                continue;
+            }
+            if let Some(carry) = carry.filter(|_| !carried) {
+                carried = true;
+                self.push(Inst::new(Kind::Op(carry), vec![]));
             }
             self.copy(acc, a);
             self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
@@ -880,7 +913,7 @@ fn pointer_cells(
     let constant = |cell: &String| {
         let low = constants.get(cell).copied();
         let high = constants.get(&format!("{cell}+1")).copied();
-        matches!((low, high), (Some(1..=255), Some(0)))
+        matches!((low, high), (Some(1..=255), Some(0)) | (Some(0), Some(1)))
     };
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::new();
@@ -2421,6 +2454,11 @@ fn emit_with<const STACK: bool>(
                         .unwrap();
                     }
                 }
+                (Kind::Op("PINCH"), _) => {
+                    let (d, s) = (regs[0], regs[1]);
+                    parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live);
+                    writeln!(out, "  inc {}", register_name(lane(d, 1))).unwrap();
+                }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
@@ -2622,7 +2660,17 @@ fn emit_with<const STACK: bool>(
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
                     if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
-                        && out.lines().last().is_some_and(sets_nz_of_a) => {}
+                        && out.lines().last().is_some_and(sets_nz_of_a) =>
+                {
+                    // `iny; tya; bne`: the step set the flags of y itself
+                    let mut tail = out.lines().rev();
+                    let (last, before) = (tail.next().unwrap_or(""), tail.next().unwrap_or(""));
+                    let step = |register: &str| ["in", "de"].iter().any(|op| before == format!("  {op}{register}"));
+                    let next_reads_a = block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("CMOV"));
+                    if !a_live && !next_reads_a && ((last == "  tya" && step("y")) || (last == "  txa" && step("x"))) {
+                        out.truncate(out.len() - last.len() - 1);
+                    }
+                }
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),

@@ -752,6 +752,19 @@ fn a_store_between_a_load_and_its_add_keeps_the_load() {
 #[test]
 fn a_loop_with_its_test_at_the_top_is_laid_out_with_it_at_the_bottom() {
     let text = assembly(&module(COPY_UNTIL_ZERO), &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("cp_b0:\n  jmp cp_b1\n"), "entered by falling into the test:\n{text}");
+    assert!(text.contains("  jmp cp_b1\ncp_b3:"), "entered by falling into the test:\n{text}");
     assert!(text.contains("  bne cp_b3\n"), "the loop is not closed by its branch:\n{text}");
+}
+
+/// A copy up to the terminator stepped both pointers with `inc lo; bne; inc hi`
+/// each trip, 8 clocks a pointer on top of the 11 of the load and the store
+/// (`strcpy`, 420 clocks for 11 bytes, hand-written 341). Walked by a byte
+/// index in `y`, with the pointers' high bytes stepped where it wraps, the
+/// trip is `lda (s),y; sta (d),y; iny; bne`: 277.
+#[test]
+fn a_pointer_walk_is_a_byte_index_and_a_page_bump() {
+    let strcpy = COPY_UNTIL_ZERO.replace("ret ptr %d1", "ret ptr %d");
+    let text = assembly(&module(&strcpy), &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("  iny\n"), "no byte index:\n{text}");
+    assert!(!text.contains("_pa1"), "a pointer still steps by its low byte:\n{text}");
 }

@@ -208,6 +208,18 @@ pub fn assembly(
         })
     });
     let looped = looped.transpose()?;
+    // The loops that walk a pointer by page, for the functions that have one:
+    // priced against the loops as they are, below.
+    let paged = (request.level != Level::O0)
+        .then(|| {
+            let mut paged = program.modules[0].clone();
+            llrm_transforms::pageindex::indexed(&mut paged).map(|names| {
+                crate::prepare::split_phi_edges(&mut paged);
+                (names, paged)
+            })
+        })
+        .transpose()?
+        .filter(|(names, _)| !names.is_empty());
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
     let names: Vec<String> = module
@@ -220,6 +232,7 @@ pub fn assembly(
     let mut selections = Vec::new();
     for name in &names {
         let mut selection = select_function(module, name, request.cpu)?;
+        let mut as_called = true;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
         if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
@@ -227,6 +240,15 @@ pub fn assembly(
             other.zero_page = request.platform.zero_page;
             other.tuning = request.level.tuning();
             if cheaper(module, name, &other, looped, &selection, request)? {
+                selection = other;
+                as_called = false;
+            }
+        }
+        if let Some((_, paged)) = paged.as_ref().filter(|(names, _)| as_called && names.contains(name)) {
+            let mut other = select_function(paged, name, request.cpu)?;
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+            if cheaper(module, name, &other, paged, &selection, request)? {
                 selection = other;
             }
         }
