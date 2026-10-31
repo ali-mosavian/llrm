@@ -6,7 +6,6 @@ use std::rc::Rc;
 use llrm_mir::memory::has;
 use llrm_mir::module::Module;
 
-use crate::address::address_arithmetic;
 use crate::dagisel::function::select_function_ordered;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
@@ -103,9 +102,6 @@ pub fn items_with(
     }
     eliminate_phis_with(&mut function, options.overlay);
     fold_reserved_copies(&mut function);
-    if options.overlay {
-        address_arithmetic(&mut function);
-    }
     commute_tied(&mut function);
     two_address(&mut function);
     // spill slots are numbered after the static allocas

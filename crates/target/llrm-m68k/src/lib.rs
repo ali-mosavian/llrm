@@ -2,7 +2,6 @@
 //! LLVM's M68k backend.
 
 pub mod abi;
-pub mod address;
 pub mod amiga;
 pub mod atari;
 pub mod compile;
