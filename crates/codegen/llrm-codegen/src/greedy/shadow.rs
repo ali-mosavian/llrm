@@ -38,8 +38,7 @@ use super::inlinespiller::{InlineSpiller, Tables};
 use super::matrix::{LiveRegMatrix, PhysInterference};
 use super::spill::SimpleSpiller;
 use super::virtregmap::RegisterInfo;
-use crate::backend::classes::RegisterClasses;
-use crate::backend::frame::Frame;
+use crate::backend::frame::FrameInfo;
 use crate::liveness::calcspillweights::SpillWeightEnv;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
@@ -67,6 +66,9 @@ pub struct ShadowInputs<'a> {
     /// The callee-saved registers, whole (`getLastCalleeSavedAlias`): none
     /// turns the first-use cost of one off.
     pub saved: &'a [RegId],
+    /// The target's instruction forms: copies, spills, folds,
+    /// rematerialization.
+    pub tii: &'a dyn super::tii::TargetInstrInfo,
 }
 
 /// What the shadow allocator decided.
@@ -81,8 +83,9 @@ pub struct ShadowReport {
 }
 
 /// The body's analyses the allocator asks of.
-struct BodyEnv {
+struct BodyEnv<'a> {
     orders: Rc<Tables>,
+    tii: &'a dyn super::tii::TargetInstrInfo,
     /// The register each pinned value is fixed to, as a root: the physical
     /// hint of a copy from it (`copyHint`).
     pins: IndexMap<u32, RegId>,
@@ -91,7 +94,7 @@ struct BodyEnv {
     saved: Vec<RegId>,
 }
 
-impl SpillWeightEnv for BodyEnv {
+impl SpillWeightEnv for BodyEnv<'_> {
     fn block_freq_relative_to_entry(
         &self,
         block: usize,
@@ -124,7 +127,7 @@ impl SpillWeightEnv for BodyEnv {
         &self,
         instr: &Insn,
     ) -> bool {
-        super::inlinespiller::remat_shape(instr) && self.orders.remat.borrow().contains(&instr.defines[0])
+        self.tii.remat_shape(instr) && self.orders.remat.borrow().contains(&instr.defines[0])
     }
 
     fn reg_mask_slots(&self) -> Vec<SlotIndex> {
@@ -146,7 +149,7 @@ impl SpillWeightEnv for BodyEnv {
     }
 }
 
-impl GreedyEnv for BodyEnv {
+impl GreedyEnv for BodyEnv<'_> {
     fn has_class(
         &self,
         virt: u32,
@@ -206,8 +209,9 @@ impl GreedyEnv for BodyEnv {
 
 /// What `SplitKit` asks of the function: its loops, its terminators and the
 /// copies it inserts.
-struct BodySplitEnv {
+struct BodySplitEnv<'a> {
     tables: Rc<Tables>,
+    tii: &'a dyn super::tii::TargetInstrInfo,
     forest: Rc<llrm_mir::forest::Forest>,
     /// The address of each block, by number.
     ats: Vec<i64>,
@@ -220,7 +224,7 @@ struct BodySplitEnv {
     pinned: std::cell::RefCell<crate::support::hash::HashSet<u32>>,
 }
 
-impl BodySplitEnv {
+impl<'a> BodySplitEnv<'a> {
     /// How wide `from` is named by the instructions that read it: for a value
     /// no table holds (one a spill made).
     fn named_width(
@@ -238,6 +242,7 @@ impl BodySplitEnv {
     fn new(
         body: &LirBody,
         tables: Rc<Tables>,
+        tii: &'a dyn super::tii::TargetInstrInfo,
         registers: Regs,
         sets: Option<Rc<crate::backend::regclass::Sets>>,
         pinned: crate::support::hash::HashSet<u32>,
@@ -246,6 +251,7 @@ impl BodySplitEnv {
         let number = ats.iter().enumerate().map(|(n, &at)| (at, n)).collect();
         Self {
             tables,
+            tii,
             forest: crate::analysis::loops::forest_of(&body.blocks, Some(body.entry)),
             ats,
             number,
@@ -297,7 +303,7 @@ fn reclass_orders(
     }
 }
 
-impl super::splitkit::SplitEnv for BodySplitEnv {
+impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
     fn is_terminator(
         &self,
         insn: &Insn,
@@ -399,7 +405,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         &self,
         insn: &Insn,
     ) -> bool {
-        super::inlinespiller::remat_shape(insn) && insn.uses.is_empty()
+        self.tii.remat_shape(insn) && insn.uses.is_empty()
     }
 
     /// `def` (a literal, address or load that reads no
@@ -412,7 +418,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         beside: Option<&Insn>,
     ) -> Option<Arc<Insn>> {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
-        if !super::inlinespiller::remat_shape(def) || !def.uses.is_empty() {
+        if !self.tii.remat_shape(def) || !def.uses.is_empty() {
             return None;
         }
         let what = def.what.clone()?;
@@ -454,7 +460,6 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         from: u32,
         beside: Option<&Insn>,
     ) -> Arc<Insn> {
-        use crate::model::ir::{Held, Loc, Operation, Semantics};
         let known = self.tables.widths.borrow().get(&from).copied();
         let width = known.or_else(|| Self::named_width(lis, from)).unwrap_or(4);
         self.tables.widths.borrow_mut().insert(to, width);
@@ -463,12 +468,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         if let Some(bytes) = bytes {
             self.tables.float_bytes.borrow_mut().insert(to, bytes);
         }
-        let what = Semantics {
-            name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: to, width })],
-            sources: vec![Loc::Held(Held { value: from, width })],
-            ..Semantics::new(Operation::Move)
-        };
+        let what = self.tii.copy_semantics(to, from, width);
         // Beside another instruction, claiming none of its bytes.
         let (at, covers) = beside.map_or((0, None), |b| {
             let start = b.covers.map_or(b.at, |c| c.0);
@@ -1001,7 +1001,7 @@ pub enum Mode<'a> {
     /// Placeholder reloads and stores, to count them.
     Simple,
     /// Written into the function being allocated (`InlineSpiller`).
-    Inline { frame: &'a mut Frame, classes: &'a RegisterClasses },
+    Inline { frame: &'a mut dyn FrameInfo },
 }
 
 /// Runs the translated greedy allocator over `inputs`; None when the body has
@@ -1176,7 +1176,7 @@ pub fn decide_with_split(
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
     let invariant = if !inputs.stable_loads {
-        super::remat::argument_loads(body)
+        inputs.tii.argument_loads(body)
     } else {
         crate::backend::postings::following(body, |postings| {
             let defined: std::collections::BTreeSet<u32> = body
@@ -1194,7 +1194,7 @@ pub fn decide_with_split(
     // A load the instruction calls invariant needs no proof (D-I exit).
     let invariant: std::collections::BTreeSet<u32> =
         invariant.into_iter().chain(super::remat::flagged_loads(body)).collect();
-    tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
+    tables.remat.borrow_mut().extend(super::remat::values(body, &invariant, inputs.tii));
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let [value] = one.defines.as_slice()
             && tables.remat.borrow().contains(value)
@@ -1210,6 +1210,7 @@ pub fn decide_with_split(
         .collect();
     let env = BodyEnv {
         orders: Rc::clone(&tables),
+        tii: inputs.tii,
         pins,
         freq,
         exiting,
@@ -1233,7 +1234,7 @@ pub fn decide_with_split(
             let at_edge = (n == 0 && float_in[at]) || (n == last && float_out[at]);
             let read: RegSet = inputs
                 .data
-                .filter(|_| at_edge || crate::backend::target::needs_data_group(one))
+                .filter(|_| at_edge || inputs.tii.needs_data_group(one))
                 .map(crate::model::ir::root)
                 .into_iter()
                 .collect();
@@ -1278,14 +1279,14 @@ pub fn decide_with_split(
     let spiller: Box<dyn super::greedy::Spiller + '_> = match mode {
         Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
         Mode::Simple => Box::new(SimpleSpiller::default()),
-        Mode::Inline { frame, classes } => {
+        Mode::Inline { frame } => {
             let (made, sets, pins, registers) = (
                 Rc::clone(&tables),
                 inputs.sets.map(|sets| Rc::new(sets.clone())),
                 inputs.pins.keys().copied().collect::<crate::support::hash::HashSet<u32>>(),
                 inputs.registers,
             );
-            Box::new(InlineSpiller::new(body, frame, classes, inputs.order, Rc::clone(&tables)).with_reclass(Box::new(
+            Box::new(InlineSpiller::new(frame, inputs.tii, inputs.order, Rc::clone(&tables)).with_reclass(Box::new(
                 move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), registers, lis, regs),
             )))
         }
@@ -1295,6 +1296,7 @@ pub fn decide_with_split(
         let split_env = Box::new(BodySplitEnv::new(
             body,
             Rc::clone(&tables),
+            inputs.tii,
             inputs.registers,
             inputs.sets.map(|sets| Rc::new(sets.clone())),
             inputs.pins.keys().copied().collect(),
@@ -1305,12 +1307,12 @@ pub fn decide_with_split(
     let fixed_regs: Vec<(u32, RegId)> = if fixed_pins {
         let mut copies = crate::support::hash::HashMap::default();
         for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-            if let Some((d, s)) =
-                one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
-                    (Some("mov"), [llrm_lir::Loc::Held(d)], [llrm_lir::Loc::Held(s)]) => Some((d.value, s.value)),
-                    _ => None,
-                })
-            {
+            if let Some((d, s)) = one.what.as_ref().and_then(|w| match (&w.dests[..], &w.sources[..]) {
+                ([llrm_lir::Loc::Held(d)], [llrm_lir::Loc::Held(s)]) if inputs.tii.is_plain_move(w) => {
+                    Some((d.value, s.value))
+                }
+                _ => None,
+            }) {
                 copies.insert(greedy.lis.indexes.get_instruction_index(one.id()).get_reg_slot(false), (d, s));
             }
         }
@@ -1469,6 +1471,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::backend::classes::RegisterClasses;
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
@@ -1532,6 +1535,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1598,6 +1602,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1767,6 +1772,7 @@ mod tests {
                 sets: None,
                 stable_loads: true,
                 saved: &[],
+                tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1821,6 +1827,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1952,6 +1959,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -1998,6 +2006,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2032,8 +2041,16 @@ mod tests {
         let lis = LiveIntervals::new(&body);
         // The parent (value 1) is in no table: a spill made it.
         let tables = Rc::new(Tables::default());
-        let env =
-            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let classes = RegisterClasses::m16();
+        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let env = BodySplitEnv::new(
+            &body,
+            Rc::clone(&tables),
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            None,
+            Default::default(),
+        );
         env.note_split_from(&lis, 7, 1);
         assert_eq!(tables.widths.borrow().get(&7), Some(&4), "the clone is as wide as its parent");
     }
@@ -2063,8 +2080,16 @@ mod tests {
         let lis = LiveIntervals::new(&body);
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 4);
-        let env =
-            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let classes = RegisterClasses::m16();
+        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let env = BodySplitEnv::new(
+            &body,
+            Rc::clone(&tables),
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            None,
+            Default::default(),
+        );
         let copy = env.build_copy(&lis, 7, 1, None);
         let width = copy.what.as_ref().map(|what| what.dests.clone());
         assert_eq!(width, Some(vec![Loc::Held(Held { value: 7, width: 4 })]), "the table says 4, the operands say 2");
@@ -2101,8 +2126,16 @@ mod tests {
             IndexMap::default(),
         );
         let tables = Rc::new(Tables::default());
-        let env =
-            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let classes = RegisterClasses::m16();
+        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let env = BodySplitEnv::new(
+            &body,
+            Rc::clone(&tables),
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            None,
+            Default::default(),
+        );
         let made = env.rematerialize(&zero, 7, 1, None).expect("the literal is made again");
         assert_eq!(made.defines, [7]);
         assert!(matches!(made.what.as_ref().unwrap().sources[..], [Loc::Imm(Imm { value: 0, .. })]));

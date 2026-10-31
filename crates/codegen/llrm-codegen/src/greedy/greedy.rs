@@ -508,7 +508,7 @@ pub struct RAGreedy<'a> {
     pub stats: Stats,
     /// What `trySplit` works with; none until the caller gives it the
     /// function's blocks (then a range that does not fit is spilled).
-    pub split: Option<SplitSupport>,
+    pub split: Option<SplitSupport<'a>>,
     /// `CSRCost`: what the first use of a callee-saved register costs,
     /// relative to the entry block's frequency (`initializeCSRCost`).
     csr_cost: BlockFrequency,
