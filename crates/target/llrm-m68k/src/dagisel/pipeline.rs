@@ -170,20 +170,19 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, &mut Temporaries::new(0))
 }
 
-/// [`select_block`], with a compare's load put where a pattern folds it where
-/// `load_as_source` (see `lowering::lower_setcc`).
+/// [`select_block`], with the pin's source-order scheduler where
+/// `source_order`.
 pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
-    load_as_source: bool,
     source_order: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering { load_as_source };
+    let mut lowering = M68kLowering;
     let selector = Selector::new(match cpu {
         Cpu::M68000 => m68k_m68000::TABLE,
         Cpu::M68020 => m68k_m68020::TABLE,

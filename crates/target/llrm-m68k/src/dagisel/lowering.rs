@@ -137,11 +137,7 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct M68kLowering {
-    /// Put a compare's single-use load on the side a pattern folds
-    /// (`lower_setcc`).
-    pub load_as_source: bool,
-}
+pub struct M68kLowering;
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
     /// The pin canonicalizes `x >= c` to `x > c - 1`; `slt 0` then folds to
@@ -158,9 +154,9 @@ impl Hooks for M68kLowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::SetCC => lower_setcc(dag, node, self.load_as_source),
-            ISD::Select => Some(lower_select(dag, node, self.load_as_source)),
-            ISD::BrCond => Some(lower_brcond(dag, node, self.load_as_source)),
+            ISD::SetCC => lower_setcc(dag, node),
+            ISD::Select => Some(lower_select(dag, node)),
+            ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
@@ -448,35 +444,16 @@ fn lower_and_to_btst(
 
 /// `LowerSETCC`, integer part.
 ///
-/// DEVIATE from the pin: with `load_as_source`, a compare whose left side is a
-/// load nothing else reads and whose right side is no load is swapped (and its
-/// condition with it), so the load is the source of the `cmp` and a pattern
-/// folds it: `cmp.l (%a0)+, %d0` where the pin loads into a register first.
-/// Reason: a register and an instruction fewer. Exit: never; a target choice.
+/// `LowerSETCC`.
 fn lower_setcc(
     dag: &mut SelectionDAG,
     node: SDValue,
-    load_as_source: bool,
 ) -> Option<SDValue> {
-    let (mut op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (op0, mut op1) = (dag.operand(node, 0), dag.operand(node, 1));
     if !dag.value_type(op0).is_integer() {
         return None;
     }
-    let mut cc = cond_of(dag, dag.operand(node, 2));
-    let plain_load = |dag: &SelectionDAG, value: SDValue| {
-        dag.opcode(value) == ISD::Load
-            && value.res == 0
-            && matches!(&dag.node(value).data, NodeData::Mem(info) if !info.volatile)
-    };
-    if load_as_source
-        && plain_load(dag, op0)
-        && !plain_load(dag, op1)
-        && dag.constant(op1).is_none()
-        && dag.users(op0).count() == 1
-    {
-        (op0, op1) = (op1, op0);
-        cc = cc.swapped_operands();
-    }
+    let cc = cond_of(dag, dag.operand(node, 2));
     // `(1 << n) & x == 0`, `((x >> n) & 1) != 0`: a bit test
     if matches!(cc, CondCode::SetEq | CondCode::SetNe)
         && dag.is_null_constant(op1)
@@ -516,11 +493,10 @@ fn opposite(code: u128) -> u128 {
 fn lower_select(
     dag: &mut SelectionDAG,
     node: SDValue,
-    load_as_source: bool,
 ) -> SDValue {
     let (mut cond_value, op1, op2) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond_value) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond_value, load_as_source) {
+        if let Some(lowered) = lower_setcc(dag, cond_value) {
             cond_value = lowered;
         }
     }
@@ -543,11 +519,10 @@ fn lower_select(
 fn lower_brcond(
     dag: &mut SelectionDAG,
     node: SDValue,
-    load_as_source: bool,
 ) -> SDValue {
     let (chain, mut cond_value, dest) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     if dag.opcode(cond_value) == ISD::SetCC {
-        if let Some(lowered) = lower_setcc(dag, cond_value, load_as_source) {
+        if let Some(lowered) = lower_setcc(dag, cond_value) {
             cond_value = lowered;
         }
     }

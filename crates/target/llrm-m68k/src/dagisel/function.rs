@@ -89,27 +89,12 @@ pub fn select_function(
     select_function_with(module, name, cpu, false)
 }
 
-/// [`select_function`], with `load_as_source` (see
-/// [`super::pipeline::select_block_with`]).
+/// [`select_function`], with `source_order`: the pin's source-order scheduler
+/// in place of the ILP list scheduler.
 pub fn select_function_with(
     module: &Module,
     name: &str,
     cpu: Cpu,
-    load_as_source: bool,
-) -> Result<Vec<Selected>, String> {
-    select_function_ordered(module, name, cpu, load_as_source, false, false)
-}
-
-/// [`select_function_with`], with `ordered_copies`: the pairs of an inline
-/// copy in address order, which the overlay's `(An)+` chains need, and
-/// `source_order`: the pin's source-order scheduler in place of the ILP list
-/// scheduler.
-pub fn select_function_ordered(
-    module: &Module,
-    name: &str,
-    cpu: Cpu,
-    load_as_source: bool,
-    ordered_copies: bool,
     source_order: bool,
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -122,8 +107,7 @@ pub fn select_function_ordered(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let mut target = builder_target();
-    target.ordered_copies = ordered_copies;
+    let target = builder_target();
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
@@ -135,12 +119,12 @@ pub fn select_function_ordered(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, load_as_source, source_order, &mut temporaries)
-            .map_err(|why| format!("{why:?}"))?;
+        let units =
+            select_block_with(&mut built.dag, cpu, source_order, &mut temporaries).map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, load_as_source, source_order, &mut temporaries)
+            let units = select_block_with(&mut extra.dag, cpu, source_order, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
