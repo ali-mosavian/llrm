@@ -506,12 +506,14 @@ dependencies = [
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
+ "llrm-elf",
  "llrm-lir",
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
  "llrm-target",
  "llrm-transforms",
+ "tempfile",
 ]
 
 [[package]]
