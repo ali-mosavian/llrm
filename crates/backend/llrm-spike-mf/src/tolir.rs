@@ -102,7 +102,7 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
-    aliases::<T>(function)?;
+    aliases::<T>(function, registers)?;
     let widths: Vec<u32> = function.classes.iter().map(|class| class_width::<T>(registers, *class)).collect();
     let successors = successors(function);
     let mut made = Made {
@@ -581,13 +581,17 @@ fn physical<T: Target>(inst: &Inst) -> (impl Iterator<Item = RegId> + '_, impl I
     (inst.operands.iter().filter_map(move |o| of(o, false)), inst.operands.iter().filter_map(move |o| of(o, true)))
 }
 
-/// Two registers of one root in a function are refused (DEVIATE 1).
-fn aliases<T: Target>(function: &MFunction<T::Class>) -> Result<(), String> {
+/// Two registers of one root in a function are refused (DEVIATE 1): the root
+/// is the description's, which greedy reads, not the target's own.
+fn aliases<T: Target>(
+    function: &MFunction<T::Class>,
+    registers: Regs,
+) -> Result<(), String> {
     let mut seen: IndexMap<RegId, RegId> = IndexMap::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         let (reads, writes) = physical::<T>(inst);
         for register in reads.chain(writes) {
-            let first = *seen.entry(T::root(register)).or_insert(register);
+            let first = *seen.entry(registers.root(register)).or_insert(register);
             if first != register {
                 return Err(format!("{}: registers {first:?} and {register:?} share a root", function.name));
             }

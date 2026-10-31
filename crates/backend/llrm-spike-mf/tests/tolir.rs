@@ -444,5 +444,5 @@ fn test_only_a_register_read_before_any_set_is_an_input() {
 fn test_a_register_and_a_part_of_it_in_one_function_is_refused() {
     let mut f = set_here_read_there();
     f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]));
-    assert!(to_lir::<Bytes>(&lowered(f), regs()).is_err());
+    assert!(to_lir::<Flat>(&lowered(f), regs()).is_err());
 }
