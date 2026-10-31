@@ -409,6 +409,18 @@ pub fn _basic_listing(
     if !runtime_frame && !module_body {
         return Ok(listing);
     }
+    // The shell is compared and stripped as instructions: the unwind
+    // directives the listing declares for it describe a frame the runtime
+    // builds, and an OMF object has no place for them.
+    let listing: Vec<masm::Item> = listing
+        .into_iter()
+        .filter(|item| {
+            !matches!(
+                item,
+                masm::Item::Cfi(_) | masm::Item::Seh(_) | masm::Item::Mark(masm::Mark::Declared)
+            )
+        })
+        .collect();
     // The procedure's first line stands before its prologue.
     let (mut stripped, listing): (Vec<masm::Item>, &[masm::Item]) = match listing.split_first() {
         Some((line @ masm::Item::Mark(_), rest)) => (vec![line.clone()], rest),
