@@ -2154,4 +2154,21 @@ def test_a_pr_that_changes_pass_code_without_a_complexity_line_warns_and_one_wit
     for n, body in enumerate(("x", "Complexity: O(n)")):
         line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
         assert line == f"{n}: PASS", "a warning never blocks"
-        assert (f"{n}: WARN: pass code changed" in capsys.readouterr().err) == (n == 0)
+        assert (f"{n}: WARN: pass code changed and the description has no `Complexity:`" in capsys.readouterr().err) == (n == 0)
+
+
+def test_a_pass_pr_without_a_class_and_two_programs_warns_and_one_with_both_does_not(tmp_path, monkeypatch, capsys):
+    """The 10-31 rule: no row-shaped patch. A pass PR names the class it covers and at least two programs it helps; warn only."""
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH, "files": [{"path": "crates/opt/llrm-transforms/src/licm.rs"}]}
+    both = "Class: loop-invariant float loads\nPrograms: nbody, mandel"
+    assert ps.generality_warning("7", {**info, "body": "Complexity: O(n)"}) == "7: WARN: pass code changed and the description lacks a `Class:` line (the class it covers) and a `Programs:` line naming at least two programs it helps"
+    assert "`Programs:`" in ps.generality_warning("7", {**info, "body": "Class: x\nPrograms: sieve"}), "one program is a one-row patch"
+    assert "`Class:`" in ps.generality_warning("7", {**info, "body": "Programs: a, b"})
+    assert ps.generality_warning("7", {**info, "body": both}) is None
+    assert ps.generality_warning("7", {**info, "body": "x", "files": [{"path": "docs/x.md"}]}) is None
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    tree = Tree(set(), set())
+    for n, body in enumerate(("x", both)):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS"
+        assert (f"{n}: WARN: pass code changed and the description lacks a `Class:`" in capsys.readouterr().err) == (n == 0)
