@@ -80,7 +80,8 @@ fn a_pointer_result_is_in_a0_and_an_integer_by_its_width() {
         let mut dag = SelectionDAG::new(DagConfig::default());
         let entry = dag.entry_node();
         let callee = dag.get_global_address(EVT::I32, 7, 0);
-        let (chain, _) = calling.lower_call(&mut dag, entry, callee, &[], &[In { vt, pointer, arg_vt: vt, split: false }]);
+        let (chain, _) =
+            calling.lower_call(&mut dag, entry, callee, &[], &[In { vt, pointer, arg_vt: vt, split: false }]);
         assert_eq!(register_of(&dag, dag.operand(chain, 1)), expected, "{vt:?} pointer={pointer}");
     }
 }
@@ -101,7 +102,10 @@ fn formal_arguments_are_loaded_from_their_slots() {
     let values = M68kCalling::default().lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false }, In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false }],
+        &[
+            In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false },
+            In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false },
+        ],
         &mut fixed,
     );
 

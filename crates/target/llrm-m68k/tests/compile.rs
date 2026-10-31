@@ -177,7 +177,8 @@ fn gcd_subtractions_sink_into_their_arms() {
     let text =
         text_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).expect("compiles");
     assert!(!text.contains("movem"), "{text}");
-    // block placement may lay an arm above the compare, so the sinking shows in the count and the frame
+    // block placement may lay an arm above the compare, so the sinking shows in
+    // the count and the frame
     assert_eq!(text.matches("sub.l").count(), 2, "{text}");
 }
 
@@ -287,9 +288,10 @@ fn a_copy_is_not_scheduled_between_a_compare_and_its_branch() {
     assert!(!text.contains("%sr") && !text.contains("%ccr"), "{text}");
 }
 
-/// A stored `zext i8 to i32` of a load matched the store-load fragment, which checks no extension
-/// (the pin's too: `llc` gives `move.l (buf,%pc), (%a0)`), and copied four bytes where one was
-/// meant. Seed 68 of the differential driver.
+/// A stored `zext i8 to i32` of a load matched the store-load fragment, which
+/// checks no extension (the pin's too: `llc` gives `move.l (buf,%pc), (%a0)`),
+/// and copied four bytes where one was meant. Seed 68 of the differential
+/// driver.
 #[test]
 fn a_stored_zero_extended_byte_is_not_a_long_move() {
     let ir = "@buf = external constant [16 x i8], align 1\ndefine void @f(ptr %p) {\n  %v = load i8, ptr @buf, align 1\n  %e = zext i8 %v to i32\n  store i32 %e, ptr %p, align 2\n  ret void\n}";

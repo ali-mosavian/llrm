@@ -64,8 +64,10 @@ fn overlay_instructions_encode_as_binutils_does() {
     }
 }
 
-/// The pin's source-order scheduler. Two tests pin the code-saving fallback of `flags.rs`, which only a schedule that
-/// separates a compare from its uses reaches; the ILP list scheduler (the default) keeps them together and retests.
+/// The pin's source-order scheduler. Two tests pin the code-saving fallback of
+/// `flags.rs`, which only a schedule that separates a compare from its uses
+/// reaches; the ILP list scheduler (the default) keeps them together and
+/// retests.
 const SOURCE_ORDER: Options = Options { overlay: true, mid_end: true, size: false, source_order: true };
 
 fn compiled(
@@ -194,9 +196,10 @@ fn a_test_after_a_copy_of_the_tested_register_is_dropped() {
     assert_eq!(opcodes(&drop_redundant_tests(other)), ["MOV32rr", "TST32d", "Bpl8"]);
 }
 
-/// An add of a constant to a zero-extended byte went to an address register, because a copy of the
-/// sum reached one (`adda`), and gave the extension a destination with no byte view: "MOVZXd32d8:
-/// no 8-bit view" (differential seeds 495 and 532). The extension's result stays in a data register.
+/// An add of a constant to a zero-extended byte went to an address register,
+/// because a copy of the sum reached one (`adda`), and gave the extension a
+/// destination with no byte view: "MOVZXd32d8: no 8-bit view" (differential
+/// seeds 495 and 532). The extension's result stays in a data register.
 #[test]
 fn the_result_of_an_extension_is_not_made_an_address_register() {
     let ir = "@zero = external global i8\n\
@@ -233,9 +236,10 @@ v25:\n\
     compiled(ir, Options { mid_end: false, ..Options::default() });
 }
 
-/// A second select on the codes of a compare, after the first one's join set them again (and a call
-/// between), stayed a `CMOV` pseudo: "CMOV16d is a pseudo-instruction: it has no encoding"
-/// (differential seeds 719 and 847). The join of the first restores the codes the head kept.
+/// A second select on the codes of a compare, after the first one's join set
+/// them again (and a call between), stayed a `CMOV` pseudo: "CMOV16d is a
+/// pseudo-instruction: it has no encoding" (differential seeds 719 and 847).
+/// The join of the first restores the codes the head kept.
 #[test]
 fn a_second_select_on_the_codes_of_one_compare_is_expanded() {
     let ir = "@zero = external global i8\n\
@@ -294,13 +298,17 @@ fn post_increment_forms_encode_as_binutils_does() {
     }
 }
 
-/// `divu.l %d2,%d1` and `divs.l %d2,%d1`, from binutils. The pin's rows encoded the remainder
-/// register as `%d0` (`divul.l %d2,%d0:%d1`), which overwrote the dividend in `%d0`: 68020
-/// differential seeds 608, 636 (about one in five programs) gave wrong results.
+/// `divu.l %d2,%d1` and `divs.l %d2,%d1`, from binutils. The pin's rows encoded
+/// the remainder register as `%d0` (`divul.l %d2,%d0:%d1`), which overwrote the
+/// dividend in `%d0`: 68020 differential seeds 608, 636 (about one in five
+/// programs) gave wrong results.
 #[test]
 fn a_long_divide_stores_no_remainder() {
-    let divide = |opcode, dq: &str, src: &str| Inst { opcode, operands: vec![register(dq), register(dq), register(src)] };
-    for (inst, golden) in [(divide("UDIVd32d32", "d1", "d2"), "4c421001"), (divide("SDIVd32d32", "d3", "d0"), "4c403803")] {
+    let divide =
+        |opcode, dq: &str, src: &str| Inst { opcode, operands: vec![register(dq), register(dq), register(src)] };
+    for (inst, golden) in
+        [(divide("UDIVd32d32", "d1", "d2"), "4c421001"), (divide("SDIVd32d32", "d3", "d0"), "4c403803")]
+    {
         assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
     }
 }
@@ -1444,8 +1452,9 @@ fn a_reload_of_the_chained_register_ends_the_chain() {
     assert_eq!(last.operands, vec![Reg(D3), Imm(4), Reg(A3)], "{out:?}");
 }
 
-/// `ir` (a function `f()` that reads the volatile byte `@zero`) built for the 68000 and run under
-/// qemu with `zero` at offset 14 of the data block, as the status byte it returns.
+/// `ir` (a function `f()` that reads the volatile byte `@zero`) built for the
+/// 68000 and run under qemu with `zero` at offset 14 of the data block, as the
+/// status byte it returns.
 fn run_reading_zero(ir: &str) -> Option<i32> {
     use llrm_m68k::kernels::{Arg, program};
     use llrm_m68k::object::{executable, write_executable};
@@ -1453,7 +1462,11 @@ fn run_reading_zero(ir: &str) -> Option<i32> {
         return None;
     }
     let ir = ir.replace("ptr @zero", "ptr %z").replace("define i16 @f()", "define i16 @k(ptr %z)");
-    let ir: String = ir.lines().filter(|line| !line.starts_with("@zero =") && !line.starts_with("@buf =")).collect::<Vec<_>>().join("\n");
+    let ir: String = ir
+        .lines()
+        .filter(|line| !line.starts_with("@zero =") && !line.starts_with("@buf ="))
+        .collect::<Vec<_>>()
+        .join("\n");
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let code = llrm_m68k::compile::items(&module, "k", Cpu::M68000).expect("compiles");
     let exe = support::unique_path("zero");

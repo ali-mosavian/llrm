@@ -96,7 +96,8 @@ impl PinRegisters for M68kPins {
         REGISTERS.iter().find(|(_, one)| *one == id).map(|(number, _)| *number)
     }
 
-    /// `PC` has no register id here: the addressing-mode matchers still ask whether a base is it.
+    /// `PC` has no register id here: the addressing-mode matchers still ask
+    /// whether a base is it.
     fn is_fixed(
         &self,
         register: u16,
@@ -107,7 +108,8 @@ impl PinRegisters for M68kPins {
 
 /// What the scheduler reads of the instruction descriptions.
 pub struct M68kSched {
-    /// Keep the source order of the pin's `-pre-RA-sched=source` instead of the ILP list scheduler.
+    /// Keep the source order of the pin's `-pre-RA-sched=source` instead of the
+    /// ILP list scheduler.
     pub source_order: bool,
 }
 
@@ -188,12 +190,15 @@ pub fn select_block_with(
         Cpu::M68000 => m68k_m68000::TABLE,
         Cpu::M68020 => m68k_m68020::TABLE,
     });
-    let mut target = M68kTarget { tli: &tli, lowering: &mut lowering, chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) } };
-    select_units(dag, &mut target, &M68kSched { source_order }, &mut NoFrame)
-        .map_err(|why| match why {
-            llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
-            other => Refusal::CannotSelect(format!("{other:?}")),
-        })
+    let mut target = M68kTarget {
+        tli: &tli,
+        lowering: &mut lowering,
+        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
+    };
+    select_units(dag, &mut target, &M68kSched { source_order }, &mut NoFrame).map_err(|why| match why {
+        llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
+        other => Refusal::CannotSelect(format!("{other:?}")),
+    })
 }
 
 struct M68kTarget<'a> {

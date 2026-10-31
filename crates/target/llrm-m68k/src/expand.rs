@@ -179,7 +179,8 @@ pub fn finish(
     let opening = if pushes { layout.push_prologue() } else { layout.prologue() };
     opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
-    // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack pointer is that much further
+    // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
+    // pointer is that much further
     let mut pushed = 0i64;
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
@@ -234,8 +235,9 @@ pub fn finish(
                     });
                 }
             }
-            // `copyPhysReg` of `CCR`: the 68000 reads the codes with `move from SR`, which is
-            // privileged from the 68010 on, where `move from CCR` takes its place
+            // `copyPhysReg` of `CCR`: the 68000 reads the codes with `move from
+            // SR`, which is privileged from the 68010 on, where `move from CCR`
+            // takes its place
             Kind::Op("CCR_SAVE") => {
                 let [mc::Operand::Reg(dst), _] = operands[..] else { return Err("CCR_SAVE operands".to_owned()) };
                 let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
@@ -263,7 +265,10 @@ pub fn finish(
             Kind::Op("CCR_RESTORE") => {
                 let [_, mc::Operand::Reg(src)] = operands[..] else { return Err("CCR_RESTORE operands".to_owned()) };
                 let word = REGISTER_INFO.view(REGISTER_INFO.root(src), 16).ok_or("no word view")?;
-                out.push(mc::Inst { opcode: "MOV16cd", operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(word)] });
+                out.push(mc::Inst {
+                    opcode: "MOV16cd",
+                    operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(word)],
+                });
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("RET") => {
@@ -451,8 +456,8 @@ fn inst(
 /// `ExpandMOVSZX_RR` and `ExpandMOVSZX_RM`: clear the destination and move
 /// into its low part, or move and then extend (`AddSExt`, `AddZExt`).
 ///
-/// DEVIATE: 16-bit destinations are not translated. Reason: nothing selected them yet. Exit: when a
-/// kernel needs them.
+/// DEVIATE: 16-bit destinations are not translated. Reason: nothing selected
+/// them yet. Exit: when a kernel needs them.
 fn expand_extension(
     name: &str,
     operands: &[mc::Operand],

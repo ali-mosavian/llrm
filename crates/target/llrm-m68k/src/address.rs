@@ -66,7 +66,8 @@ fn definable_in_address_register(
     let Some((at, i)) = defs[v as usize] else { return true };
     let inst = &function.blocks[at].insts[i];
     let Kind::Op(name) = inst.kind else { return true };
-    let slot = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).position(|o| *o == Operand::Def(Reg::Virt(v)));
+    let slot =
+        inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).position(|o| *o == Operand::Def(Reg::Virt(v)));
     slot.and_then(|slot| crate::mfunc::operand_class(name, slot)).is_none_or(|class| class.meet(Class::Ar32).is_some())
 }
 
@@ -205,7 +206,12 @@ fn base_plus_index(
             function.classes[base as usize] = Class::Ar32;
             let inst = &mut function.blocks[at].insts[i];
             inst.kind = Kind::Op("LEA32f");
-            inst.operands = vec![Operand::Def(Reg::Virt(dst)), Operand::Imm(0), Operand::Use(Reg::Virt(base)), Operand::Use(Reg::Virt(index))];
+            inst.operands = vec![
+                Operand::Def(Reg::Virt(dst)),
+                Operand::Imm(0),
+                Operand::Use(Reg::Virt(base)),
+                Operand::Use(Reg::Virt(index)),
+            ];
             inst.ties.clear();
             inst.sets_flags = false;
             inst.commutable = false;
@@ -336,9 +342,9 @@ fn sink_step(
     let reads = |inst: &llrm_spike_mf::Inst, reg: u32| {
         inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Virt(u)) if *u == reg))
     };
-    let Some(at) = insts.iter().position(|inst| {
-        defines(inst, dst) && matches!(inst.kind, Kind::Op("ADD32ai" | "SUB32ai"))
-    }) else {
+    let Some(at) =
+        insts.iter().position(|inst| defines(inst, dst) && matches!(inst.kind, Kind::Op("ADD32ai" | "SUB32ai")))
+    else {
         return;
     };
     let Operand::Use(Reg::Virt(src)) = insts[at].operands[1] else { return };

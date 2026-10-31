@@ -2,7 +2,8 @@ use llrm_m68k::compile::{Options, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::kernels::{library_table, source_in, table};
 
-/// `schedcmp OUTDIR`: every bench function's assembly at speed, size and pinned.
+/// `schedcmp OUTDIR`: every bench function's assembly at speed, size and
+/// pinned.
 fn main() {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).unwrap());
     std::fs::create_dir_all(&dir).unwrap();
@@ -20,7 +21,10 @@ fn main() {
         } else {
             format!("target datalayout = \"{}\"\n{text}", llrm_m68k::kernels::DATALAYOUT)
         };
-        let Ok(module) = llrm_mir::parse::module(&text) else { eprintln!("{name}: does not parse"); continue };
+        let Ok(module) = llrm_mir::parse::module(&text) else {
+            eprintln!("{name}: does not parse");
+            continue;
+        };
         let funcs: Vec<String> = module
             .functions()
             .filter(|(_, _, f)| !f.is_declaration())

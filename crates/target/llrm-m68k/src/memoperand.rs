@@ -1,8 +1,8 @@
 //! A value loaded from an incoming argument slot and read once or twice (a copy
-//! chain to each reader), by instructions that have a memory form, is read from the
-//! slot by those instructions: `move.l (12,%sp), %a1 ... cmp.l %a1, %d1` is `cmp.l (12,%sp),
-//! %d1`. The slot is never written, so the read may happen where the value is
-//! used, and the register and the load go.
+//! chain to each reader), by instructions that have a memory form, is read from
+//! the slot by those instructions: `move.l (12,%sp), %a1 ... cmp.l %a1, %d1` is
+//! `cmp.l (12,%sp), %d1`. The slot is never written, so the read may happen
+//! where the value is used, and the register and the load go.
 //!
 //! Outside a loop that is smaller and no slower (a memory `cmp` costs less than
 //! a load and a register `cmp`). In a loop it costs clocks on every trip, so it
@@ -59,13 +59,15 @@ struct Fold {
     source: usize,
     /// Where the displacement and base go in the memory form.
     at: usize,
-    /// The displacement from the slot's start: the bytes before the part the instruction reads.
+    /// The displacement from the slot's start: the bytes before the part the
+    /// instruction reads.
     offset: i64,
 }
 
 fn fold_of(name: &str) -> Option<Fold> {
-    // `OPWWxy`: the operation, its width, the destination's mode and the source's. A source in
-    // a register (`r`, or `d` for a data register) has its memory form with `p` there.
+    // `OPWWxy`: the operation, its width, the destination's mode and the
+    // source's. A source in a register (`r`, or `d` for a data register)
+    // has its memory form with `p` there.
     let stem = name.strip_suffix('r').or_else(|| name.strip_suffix('d'))?;
     let digits: String = stem.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
     let bits: i64 = digits.parse().ok()?;
@@ -80,8 +82,14 @@ fn fold_of(name: &str) -> Option<Fold> {
     let first = reg_text.find('$')? + 1;
     let word: String = reg_text[first..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
     let source = reg_operands.iter().find(|one| one.name == word)?;
-    // the slot holds the whole 32-bit argument, big-endian: a narrower read is its last bytes
-    Some(Fold { memory: memory_name, source: usize::from(source.at), at: usize::from(slot.at), offset: (32 - bits) / 8 })
+    // the slot holds the whole 32-bit argument, big-endian: a narrower read is
+    // its last bytes
+    Some(Fold {
+        memory: memory_name,
+        source: usize::from(source.at),
+        at: usize::from(slot.at),
+        offset: (32 - bits) / 8,
+    })
 }
 
 /// A load of an incoming argument: `MOV32rp dst, 0, Frame(-n)`.
@@ -112,7 +120,8 @@ pub fn fold_argument_loads(
             }
         }
     }
-    // a copy's destination with a second definition (a select's or a phi's) is not the loaded value
+    // a copy's destination with a second definition (a select's or a phi's) is
+    // not the loaded value
     let mut defined: HashMap<u32, usize> = HashMap::new();
     for block in &function.blocks {
         for inst in &block.insts {
@@ -128,9 +137,10 @@ pub fn fold_argument_loads(
     for (b, block) in function.blocks.iter().enumerate() {
         for (i, inst) in block.insts.iter().enumerate() {
             let Some((dst, slot)) = argument_load(inst) else { continue };
-            // Each reader of the value is the instruction that has the memory form or a
-            // chain of single-reader copies to one. The load goes only when every reader
-            // folds: a reader left behind would keep the register.
+            // Each reader of the value is the instruction that has the memory
+            // form or a chain of single-reader copies to one. The
+            // load goes only when every reader folds: a reader left
+            // behind would keep the register.
             let mut chain = vec![(b, i)];
             let mut users: Vec<(usize, usize)> = Vec::new();
             let mut folded: Vec<((usize, usize), Inst)> = Vec::new();
@@ -143,7 +153,8 @@ pub fn fold_argument_loads(
                 continue;
             }
             for (mut value, mut at) in starts {
-                // follow single-reader copies to the one instruction that reads the value
+                // follow single-reader copies to the one instruction that reads
+                // the value
                 let user = loop {
                     let reader = &function.blocks[at.0].insts[at.1];
                     if let (Kind::Copy, [Operand::Def(Reg::Virt(next)), Operand::Use(_)]) =
@@ -173,8 +184,8 @@ pub fn fold_argument_loads(
                     all = false;
                     break;
                 };
-                // the replaced operand is the loaded value, and not one the result
-                // is tied to
+                // the replaced operand is the loaded value, and not one the
+                // result is tied to
                 let position =
                     reader.operands.iter().position(|o| matches!(o, Operand::Use(Reg::Virt(v)) if *v == value));
                 let Some(position) = position else {
@@ -200,8 +211,9 @@ pub fn fold_argument_loads(
                 users.push((ub, ui));
                 folded.push(((ub, ui), memory));
             }
-            // The load is 4 bytes and each reader grows 2 in memory form (a `cmp`, or a `move`
-            // to the outgoing area): two readers tie in bytes and free the register, three lose.
+            // The load is 4 bytes and each reader grows 2 in memory form (a
+            // `cmp`, or a `move` to the outgoing area): two readers
+            // tie in bytes and free the register, three lose.
             if !all || users.len() as i64 * FOLD_BYTES > LOAD_BYTES {
                 continue;
             }

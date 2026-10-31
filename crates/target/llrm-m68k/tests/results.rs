@@ -319,7 +319,8 @@ fn a_byte_copy_through_two_post_incremented_pointers_copies_every_byte() {
     }
 }
 
-/// Exit status of `f(args)` with the runtime of `bench/library/rt.ll` behind it.
+/// Exit status of `f(args)` with the runtime of `bench/library/rt.ll` behind
+/// it.
 fn status_with_runtime(
     ir: &str,
     args: &[i64],
@@ -413,7 +414,8 @@ fn a_flag_reader_past_a_select_reads_the_codes_of_the_compare() {
 }}"
         );
         for (n, d, m) in triples {
-            let want = ((m << 1) | i32::from(model(n, d))).wrapping_add(if model(n, d) { n.wrapping_add(d) } else { n });
+            let want =
+                ((m << 1) | i32::from(model(n, d))).wrapping_add(if model(n, d) { n.wrapping_add(d) } else { n });
             for options in [Options::default(), Options::PINNED] {
                 if let Some(code) = status(&ir, &[i64::from(n), i64::from(d), i64::from(m)], options) {
                     if code != want & 255 {
@@ -538,8 +540,22 @@ done:
 }}"
         );
         for (a, n) in [(9, 3), (2, 3), (200, 2)] {
-            let t = (a as u32) & if ty == "i8" { 255 } else if ty == "i16" { 65535 } else { u32::MAX };
-            let want = if a > 5 { t.wrapping_add(1) } else { t } & if ty == "i8" { 255 } else if ty == "i16" { 65535 } else { u32::MAX };
+            let t = (a as u32)
+                & if ty == "i8" {
+                    255
+                } else if ty == "i16" {
+                    65535
+                } else {
+                    u32::MAX
+                };
+            let want = if a > 5 { t.wrapping_add(1) } else { t }
+                & if ty == "i8" {
+                    255
+                } else if ty == "i16" {
+                    65535
+                } else {
+                    u32::MAX
+                };
             for options in [Options::default(), Options::PINNED] {
                 if let Some(code) = status(&ir, &[a, n], options) {
                     assert_eq!(code, (want & 255) as i32, "{ty} {a} {n} {options:?}");
@@ -578,8 +594,8 @@ fn a_compare_widened_to_each_width_is_zero_or_one() {
     }
 }
 
-/// `or disjoint x, c` on a data value was `move.l d, a; lea (c,a), a; move.l a, d`
-/// (the pin has `ADD32di` patterns for `add` only, so the `add_like` or is a
+/// `or disjoint x, c` on a data value was `move.l d, a; lea (c,a), a; move.l a,
+/// d` (the pin has `ADD32di` patterns for `add` only, so the `add_like` or is a
 /// `lea`): 8 bytes and 16 clocks where `addq.l #c, d` is 2 and 8, for a `c` up
 /// to 8. The value is the same, and a real pointer step stays an address add.
 #[test]
@@ -610,9 +626,9 @@ fn an_or_of_disjoint_bits_on_a_data_value_is_a_data_add() {
     assert!(asm.contains("(1,") || asm.contains("addq"), "{asm}");
 }
 
-/// The data add sets the condition codes the `lea` did not. A compare read again
-/// after the join of the diamond that holds the `or disjoint` must still be the
-/// compare's, whether read by a select or a `zext`.
+/// The data add sets the condition codes the `lea` did not. A compare read
+/// again after the join of the diamond that holds the `or disjoint` must still
+/// be the compare's, whether read by a select or a `zext`.
 #[test]
 fn a_compare_read_after_the_join_of_an_or_disjoint_arm_keeps_its_value() {
     for second in ["select i1 %c, i32 %m, i32 %a", "zext i1 %c to i32"] {
@@ -639,10 +655,10 @@ fn a_compare_read_after_the_join_of_an_or_disjoint_arm_keeps_its_value() {
     }
 }
 
-/// Kept by choice (not an open defect): a constant over 8 stays a `lea`, 8 bytes
-/// and 16 clocks against `add.l #c`'s 6 and 16 plus a move, and the indexed form
-/// `(48,%a0,%d0)` for `(m | 48) + a` is 8 and 20 against 8 and 24. The values
-/// are right either way.
+/// Kept by choice (not an open defect): a constant over 8 stays a `lea`, 8
+/// bytes and 16 clocks against `add.l #c`'s 6 and 16 plus a move, and the
+/// indexed form `(48,%a0,%d0)` for `(m | 48) + a` is 8 and 20 against 8 and 24.
+/// The values are right either way.
 #[test]
 fn a_disjoint_or_with_a_wide_constant_keeps_its_value() {
     let ir = "define i32 @f(i32 %a) {
@@ -657,9 +673,9 @@ fn a_disjoint_or_with_a_wide_constant_keeps_its_value() {
     }
 }
 
-/// The shared builder refuses `llvm.mem*` for a target with no `full()` description (arm64's
-/// adapter). m68k has one, so its inline expansions must keep compiling and running: a
-/// 24-byte copy, a fill and an overlapping move.
+/// The shared builder refuses `llvm.mem*` for a target with no `full()`
+/// description (arm64's adapter). m68k has one, so its inline expansions must
+/// keep compiling and running: a 24-byte copy, a fill and an overlapping move.
 #[test]
 fn memory_intrinsics_compile_and_run_on_m68k() {
     let ir = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
@@ -704,7 +720,8 @@ define i32 @f(ptr %d, ptr %s) {{
 
 /// An inline struct copy walks both pointers with `(An)+`: 2 bytes a move where
 /// the later ones were 6 (`move.l (4,%a0), (4,%a1)`), and what is read from the
-/// destination afterwards is the same bytes, at the displacement less the chain.
+/// destination afterwards is the same bytes, at the displacement less the
+/// chain.
 #[test]
 fn an_inline_copy_steps_both_pointers_and_later_reads_see_the_copy() {
     for bytes in [8, 24, 32] {
@@ -784,9 +801,9 @@ define i32 @f(i32 %x) {
     }
 }
 
-/// A copy or fill past the inline limit (eight moves; four at size) panicked with
-/// "calling.toml names no register ecx": the builder took x86's `rep movs` and
-/// `rep stos` for any target. A target with no string instructions calls
+/// A copy or fill past the inline limit (eight moves; four at size) panicked
+/// with "calling.toml names no register ecx": the builder took x86's `rep movs`
+/// and `rep stos` for any target. A target with no string instructions calls
 /// `memcpy`, `memmove`, `memset`, as the pin does.
 #[test]
 fn a_copy_or_fill_past_the_inline_limit_is_a_call() {
@@ -811,9 +828,9 @@ define void @f(ptr %d, ptr %s) {{
     }
 }
 
-/// The `(An)+` chain moves no access and sets the flags as `(An)` does, so a store
-/// between the copy and a read of the same bytes, and a branch on the flags of the
-/// last moved word, give what the unstepped code gives.
+/// The `(An)+` chain moves no access and sets the flags as `(An)` does, so a
+/// store between the copy and a read of the same bytes, and a branch on the
+/// flags of the last moved word, give what the unstepped code gives.
 #[test]
 fn a_stepped_copy_keeps_a_later_store_and_a_flag_reader() {
     let ir = "declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
@@ -852,15 +869,18 @@ fn a_shifted_one_against_zero_is_a_btst() {
     let options = Options { mid_end: false, ..Options::default() };
     let asm = text_with(&module(ir), "k", Cpu::M68000, options).unwrap();
     assert!(asm.contains("btst\t%d") && !asm.contains("and.l") && !asm.contains("lsl"), "{asm}");
-    for (x, n, want) in [(0x8000, 15, 9), (0x7FFF, 15, 7), (1, 0, 9), (0x80000000u32 as i64, 31, 9), (0x7FFFFFFF, 31, 7)] {
+    for (x, n, want) in
+        [(0x8000, 15, 9), (0x7FFF, 15, 7), (1, 0, 9), (0x80000000u32 as i64, 31, 9), (0x7FFFFFFF, 31, 7)]
+    {
         if let Some(code) = status_with_data(ir, &[Imm(x), Imm(n)], options) {
             assert_eq!(code, want, "x = {x:#x}, n = {n}\n{asm}");
         }
     }
 }
 
-/// Programs of one length run in parallel each ran another's executable (the path was the pid and the IR's length): a
-/// test got the exit status of a different program.
+/// Programs of one length run in parallel each ran another's executable (the
+/// path was the pid and the IR's length): a test got the exit status of a
+/// different program.
 #[test]
 fn programs_of_one_length_run_in_parallel_without_sharing_an_executable() {
     if qemu().is_none() {
@@ -868,16 +888,16 @@ fn programs_of_one_length_run_in_parallel_without_sharing_an_executable() {
     }
     let ir = |value: i32| format!("define i32 @f() {{\n  ret i32 {value}\n}}");
     assert_eq!(ir(1).len(), ir(2).len());
-    let runs: Vec<_> = (0..8)
-        .map(|i| std::thread::spawn(move || (i, status(&ir(1 + i % 2), &[], Options::default()))))
-        .collect();
+    let runs: Vec<_> =
+        (0..8).map(|i| std::thread::spawn(move || (i, status(&ir(1 + i % 2), &[], Options::default())))).collect();
     for run in runs {
         let (i, code) = run.join().unwrap();
         assert_eq!(code, Some(1 + i % 2), "thread {i}");
     }
 }
 
-/// `timeout` ends a run with status 124, which the tests read as the program's answer.
+/// `timeout` ends a run with status 124, which the tests read as the program's
+/// answer.
 #[test]
 #[should_panic(expected = "did not finish")]
 fn a_run_cut_off_by_the_timeout_is_not_a_status() {

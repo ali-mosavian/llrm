@@ -89,10 +89,11 @@ fn call_seq_chain<D: Dag>(
 /// `Mxstoreloadi*_safe`: `isSafeStoreLoad(N)`: a load stored at once is one
 /// move unless either chain depends on a different call sequence.
 ///
-/// DEVIATE from the pin, whose `Mxstoreloadi*_safe` fragments are an `unindexedload` that checks
-/// no extension: a stored `zext i8 to i32` of a load matches `MOV32jq` and copies four bytes
-/// (`llc` makes `move.l (buf,%pc), (%a0)` of it). Only a load that does not extend is a move.
-/// Exit: the pin's fragments check the extension type.
+/// DEVIATE from the pin, whose `Mxstoreloadi*_safe` fragments are an
+/// `unindexedload` that checks no extension: a stored `zext i8 to i32` of a
+/// load matches `MOV32jq` and copies four bytes (`llc` makes `move.l (buf,%pc),
+/// (%a0)` of it). Only a load that does not extend is a move. Exit: the pin's
+/// fragments check the extension type.
 pub fn mx_store_load_safe<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
     use llrm_dagisel::generated::ids::isd;
     if dag.opcode(v.node) != isd::STORE {

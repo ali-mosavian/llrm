@@ -6,8 +6,9 @@ use llrm_mir::target::Machine;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
 
-/// clang's decorations (`target triple`, `dso_local`, `noundef`) before the mid-end: the unoptimized
-/// load/store form of `a + b` must come out as the two-instruction function.
+/// clang's decorations (`target triple`, `dso_local`, `noundef`) before the
+/// mid-end: the unoptimized load/store form of `a + b` must come out as the
+/// two-instruction function.
 #[test]
 fn unoptimized_clang_ir_compiles_to_the_optimized_function() {
     let ir = format!(
@@ -33,7 +34,8 @@ fn another_targets_datalayout_is_refused() {
     assert!(why.contains("datalayout"), "{why}");
 }
 
-/// With no cost model the passes that price by it (the CRC recognizer) silently did not run.
+/// With no cost model the passes that price by it (the CRC recognizer) silently
+/// did not run.
 #[test]
 fn the_machine_handed_to_the_mid_end_has_a_tti() {
     assert!(llrm_m68k::driver::machine().tti().is_some());

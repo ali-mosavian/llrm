@@ -125,7 +125,8 @@ fn run_ir(
     code
 }
 
-/// [`run_ir`] with the runtime the libcalls of a 68000 name (`__mulsi3` and the others) linked in.
+/// [`run_ir`] with the runtime the libcalls of a 68000 name (`__mulsi3` and the
+/// others) linked in.
 fn run_ir_with_runtime(
     ir: &str,
     args: &[Arg],
@@ -151,8 +152,9 @@ fn run_ir_with_runtime(
     code
 }
 
-/// A `switch` made blocks of its own that the function builder refused ("a switch lowering made
-/// blocks"): every generated program has one. Each case, the shared one and the default.
+/// A `switch` made blocks of its own that the function builder refused ("a
+/// switch lowering made blocks"): every generated program has one. Each case,
+/// the shared one and the default.
 #[test]
 fn a_switch_takes_the_case_it_names() {
     let ir = "define i32 @k(i32 %x) {\nentry:\n  switch i32 %x, label %d [ i32 0, label %a\n i32 1, label %b\n i32 2, label %c\n i32 5, label %a ]\n\
@@ -165,7 +167,8 @@ fn a_switch_takes_the_case_it_names() {
     }
 }
 
-/// The low word moved up: 0x00AB1234 << 16 is 0x12340000, whose top byte is 0x12.
+/// The low word moved up: 0x00AB1234 << 16 is 0x12340000, whose top byte is
+/// 0x12.
 #[test]
 fn a_shift_left_by_16_moves_the_low_word_up_and_clears_the_rest() {
     let ir = "define i32 @k(i32 %x) {\n  %s = shl i32 %x, 16\n  %r = lshr i32 %s, 24\n  ret i32 %r\n}";
@@ -174,9 +177,10 @@ fn a_shift_left_by_16_moves_the_low_word_up_and_clears_the_rest() {
     }
 }
 
-/// A value shifted left by 16 and fed back round a loop kept the old low word: the clear of the
-/// low word (`and.l #-65536`) ended up after the loop, so the next trip multiplied the swapped
-/// word with garbage in its low half. Seed 96 of the differential driver gave 169 for 139.
+/// A value shifted left by 16 and fed back round a loop kept the old low word:
+/// the clear of the low word (`and.l #-65536`) ended up after the loop, so the
+/// next trip multiplied the swapped word with garbage in its low half. Seed 96
+/// of the differential driver gave 169 for 139.
 #[test]
 fn a_value_shifted_up_16_round_a_loop_has_its_low_word_cleared_each_trip() {
     let ir = "define i32 @k(i32 %x, i32 %y) {\nentry:\n  br label %l\n\
@@ -194,10 +198,11 @@ fn a_value_shifted_up_16_round_a_loop_has_its_low_word_cleared_each_trip() {
     }
 }
 
-/// A word loaded into an address register (`move.w (..), %a0` sign-extends) and zero-extended
-/// read it back with `move.w %a0, %d2`, which the pin's `MOV16dd` encodes as `%d0`: the quotient
-/// came from the wrong register (differential seed 437 gave 0 for 6). Data registers hold the
-/// argument bytes, so the load is given an address register; the word at offset 2 of "hello" is
+/// A word loaded into an address register (`move.w (..), %a0` sign-extends) and
+/// zero-extended read it back with `move.w %a0, %d2`, which the pin's `MOV16dd`
+/// encodes as `%d0`: the quotient came from the wrong register (differential
+/// seed 437 gave 0 for 6). Data registers hold the argument bytes, so the load
+/// is given an address register; the word at offset 2 of "hello" is
 /// 0x6c6c, over 3 is 0x2424.
 #[test]
 fn a_word_zero_extended_is_read_from_a_data_register() {
@@ -214,10 +219,12 @@ fn a_word_zero_extended_is_read_from_a_data_register() {
     }
 }
 
-/// `llvm.{u,s}{add,sub}.with.overflow` was refused in every width ("convert node to libcall",
-/// differential seed 452). The value plus the overflow bit, per case, as `LowerXALUO` gives them.
-/// The multiplies of 8 and 16 bits were refused (differential seed 2039, "Unsupported UMulO i8"); the pin
-/// answers them with a constant zero overflow, which is wrong: `200 * 2` in a byte overflows.
+/// `llvm.{u,s}{add,sub}.with.overflow` was refused in every width ("convert
+/// node to libcall", differential seed 452). The value plus the overflow bit,
+/// per case, as `LowerXALUO` gives them. The multiplies of 8 and 16 bits were
+/// refused (differential seed 2039, "Unsupported UMulO i8"); the pin
+/// answers them with a constant zero overflow, which is wrong: `200 * 2` in a
+/// byte overflows.
 #[test]
 fn arithmetic_with_overflow_gives_the_wrapped_value_and_the_carry_or_overflow() {
     // (intrinsic, width, a, b, value + overflow bit, modulo the status byte)
@@ -258,10 +265,12 @@ fn arithmetic_with_overflow_gives_the_wrapped_value_and_the_carry_or_overflow() 
     }
 }
 
-/// Three division libcalls whose results feed each other, with work for the next one in between.
-/// The ILP scheduler began the arguments of the last call inside the one before it, and the stack
-/// slots they share were overwritten (differential seeds 1203 and 36 more gave wrong values): the
-/// call-frame resource keeps one call sequence at a time, as `DelayForLiveRegsBottomUp` does.
+/// Three division libcalls whose results feed each other, with work for the
+/// next one in between. The ILP scheduler began the arguments of the last call
+/// inside the one before it, and the stack slots they share were overwritten
+/// (differential seeds 1203 and 36 more gave wrong values): the call-frame
+/// resource keeps one call sequence at a time, as `DelayForLiveRegsBottomUp`
+/// does.
 #[test]
 fn the_arguments_of_two_libcalls_are_not_interleaved() {
     let ir = "define i32 @k(i32 %a, i32 %b) {\n\

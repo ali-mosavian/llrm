@@ -106,8 +106,9 @@ static ADDQ: [[Piece; 6]; 3] = [quick(0, 0), quick(0, 1), quick(0, 2)];
 static SUBQ: [[Piece; 6]; 3] = [quick(1, 0), quick(1, 1), quick(1, 2)];
 static TST: [[Piece; 4]; 3] = [test(0), test(1), test(2)];
 
-// `divu.l`/`divs.l %src, %dq` (32 / 32 -> 32): the pin's rows leave the extension word's remainder
-// register at 0, which makes the form that stores the remainder in `%d0`. Dr = Dq stores none.
+// `divu.l`/`divs.l %src, %dq` (32 / 32 -> 32): the pin's rows leave the
+// extension word's remainder register at 0, which makes the form that stores
+// the remainder in `%d0`. Dr = Dq stores none.
 const fn divide_long(signed: u64) -> [Piece; 9] {
     [
         field(0, 3, 2, 0),

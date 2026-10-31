@@ -173,10 +173,8 @@ fn main() {
             runtime_names = vec!["__mulsi3", "__udivsi3", "__umodsi3", "__divsi3", "__modsi3"];
         }
         let module = llrm_mir::parse::module(&text).unwrap();
-        let runtime: Vec<Item> = runtime_names
-            .iter()
-            .flat_map(|runtime_name| items(&module, runtime_name, Cpu::M68000).unwrap())
-            .collect();
+        let runtime: Vec<Item> =
+            runtime_names.iter().flat_map(|runtime_name| items(&module, runtime_name, Cpu::M68000).unwrap()).collect();
         let mut cells = Vec::new();
         let mut verdicts = Vec::new();
         let mut counts = Vec::new();

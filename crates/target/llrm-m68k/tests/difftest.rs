@@ -1,7 +1,7 @@
-//! The reduced programs of `tests/difftest/`: each once failed in the differential driver
-//! (`examples/difftest`) and must now agree with m68k gcc. Needs the pin's clang, the m68k gcc
-//! toolchain and qemu-m68k, so it is not part of the default run: `cargo test --test difftest --
-//! --ignored`.
+//! The reduced programs of `tests/difftest/`: each once failed in the
+//! differential driver (`examples/difftest`) and must now agree with m68k gcc.
+//! Needs the pin's clang, the m68k gcc toolchain and qemu-m68k, so it is not
+//! part of the default run: `cargo test --test difftest -- --ignored`.
 
 use std::process::Command;
 

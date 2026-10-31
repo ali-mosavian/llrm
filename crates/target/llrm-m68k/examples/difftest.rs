@@ -1,18 +1,22 @@
-//! `difftest FIRST COUNT [JOBS]` (or `DIFF_SEEDS=first:count`, `DIFF_JOBS`, `DIFF_FILE`), or `difftest DIR` for
-//! the reduced programs of `tests/difftest/`: random C programs (`llrm-cgen`, 32-bit `int`) compiled by the pin's
-//! clang to IR, by this compiler to a static m68k executable run under `qemu-m68k`, against the same
-//! program built by m68k gcc -O2 for the 68020 under qemu (the toolchain has no libgcc, so no 68000 divide)
+//! `difftest FIRST COUNT [JOBS]` (or `DIFF_SEEDS=first:count`, `DIFF_JOBS`,
+//! `DIFF_FILE`), or `difftest DIR` for the reduced programs of
+//! `tests/difftest/`: random C programs (`llrm-cgen`, 32-bit `int`) compiled by
+//! the pin's clang to IR, by this compiler to a static m68k executable run
+//! under `qemu-m68k`, against the same program built by m68k gcc -O2 for the
+//! 68020 under qemu (the toolchain has no libgcc, so no 68000 divide)
 //! and by the host's gcc at -m32 -O0 (ILP32, so `long` is as wide). The 8-bit
 //! fold of the 16-bit checksum must agree.
 //!
-//! Each seed ends `ok`, `differs`, `hang` (ours ran past the time limit), `reject` (clang, the
-//! compiler or the assembler said no: the reason is printed) or `reference` (the host could not build
-//! it). A program that does not agree is kept in `$DIFF_KEEP` (default `$TMPDIR/llrm-m68k-difftest`).
+//! Each seed ends `ok`, `differs`, `hang` (ours ran past the time limit),
+//! `reject` (clang, the compiler or the assembler said no: the reason is
+//! printed) or `reference` (the host could not build it). A program that does
+//! not agree is kept in `$DIFF_KEEP` (default `$TMPDIR/llrm-m68k-difftest`).
 //!
-//! `$DIFF_CPU=m68020` compiles for the 68020. `$DIFF_UBSAN=1` builds the host program with
-//! `-fsanitize=undefined`: one that trips it has no reference.
+//! `$DIFF_CPU=m68020` compiles for the 68020. `$DIFF_UBSAN=1` builds the host
+//! program with `-fsanitize=undefined`: one that trips it has no reference.
 //!
-//! `$LLRM_PIN_CLANG` is the pin's clang; `$GCC_M68K` the unpacked cross toolchain.
+//! `$LLRM_PIN_CLANG` is the pin's clang; `$GCC_M68K` the unpacked cross
+//! toolchain.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,26 +29,37 @@ use llrm_m68k::mc::{Inst, Operand};
 use llrm_m68k::object::{executable, write_executable};
 use llrm_m68k::reg;
 
-/// The data the generated programs declare: `buf` (16 bytes), `tab` (8) and the volatile `zero`.
+/// The data the generated programs declare: `buf` (16 bytes), `tab` (8) and the
+/// volatile `zero`.
 const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
 const TAB: [u8; 8] = [2, 5, 8, 11, 14, 17, 20, 23];
 
-/// What the harness adds to a program: the function the image calls, folding `test` to a byte.
+/// What the harness adds to a program: the function the image calls, folding
+/// `test` to a byte.
 const FOLD: &str = "\nunsigned char k(void) { unsigned short r = test(); return (unsigned char)(r ^ (r >> 8)); }\n";
 const HOST_MAIN: &str = "#include <stdio.h>\nconst unsigned char buf[16] = {3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3};\nconst unsigned char tab[8] = {2,5,8,11,14,17,20,23};\nconst volatile unsigned char zero = 0;\nunsigned short test(void);\nint main(void) { unsigned r = test(); printf(\"%u\\n\", (r ^ (r >> 8)) & 255); return 0; }\n";
 
 #[derive(Debug)]
 enum Outcome {
     Ok,
-    Differs { ours: i32, reference: i32, host: i32 },
-    /// Right once and different on a stack that starts elsewhere: a read of what was never written.
-    Unstable { first: i32, second: i32 },
+    Differs {
+        ours: i32,
+        reference: i32,
+        host: i32,
+    },
+    /// Right once and different on a stack that starts elsewhere: a read of
+    /// what was never written.
+    Unstable {
+        first: i32,
+        second: i32,
+    },
     Hang,
     Reject(String),
     Reference(String),
 }
 
-/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (neither), `mid-end-only` or `os-raw`; which layer a failure is in.
+/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (neither),
+/// `mid-end-only` or `os-raw`; which layer a failure is in.
 fn options() -> Options {
     match std::env::var("DIFF_OPTIONS").as_deref() {
         Ok("raw") => Options { mid_end: false, ..Options::default() },
@@ -55,7 +70,8 @@ fn options() -> Options {
     }
 }
 
-/// `$DIFF_CPU`: `m68020` selects 68020 code (the instructions the 68000 table hides: `mulu.l`, `divs.l`).
+/// `$DIFF_CPU`: `m68020` selects 68020 code (the instructions the 68000 table
+/// hides: `mulu.l`, `divs.l`).
 fn cpu() -> Cpu {
     match std::env::var("DIFF_CPU").as_deref() {
         Ok("m68020") => Cpu::M68020,
@@ -72,9 +88,9 @@ fn qemu_cpu() -> &'static str {
 }
 
 fn clang() -> PathBuf {
-    std::env::var_os("LLRM_PIN_CLANG").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(std::env::var("HOME").unwrap()).join("scratch/llvm-build/bin/clang")
-    })
+    std::env::var_os("LLRM_PIN_CLANG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap()).join("scratch/llvm-build/bin/clang"))
 }
 
 /// A guarded child ended: its exit code and stdout, or the deadline passed.
@@ -83,10 +99,11 @@ enum Guarded {
     TimedOut,
 }
 
-/// Runs `program` in its own process group under a CPU limit (`ulimit -t`, which holds even if
-/// this driver is gone) and a wall deadline, and kills the group on every way out. Plain
-/// `Command::output` left looping programs at 97% CPU for an hour, and uutils `timeout -s KILL`
-/// never fired on this box. Ported from the 6502 harness (ce5f75ba59).
+/// Runs `program` in its own process group under a CPU limit (`ulimit -t`,
+/// which holds even if this driver is gone) and a wall deadline, and kills the
+/// group on every way out. Plain `Command::output` left looping programs at 97%
+/// CPU for an hour, and uutils `timeout -s KILL` never fired on this box.
+/// Ported from the 6502 harness (ce5f75ba59).
 fn guarded(
     program: &Path,
     args: &[&str],
@@ -211,7 +228,8 @@ fn inst(
     Item::Inst(Inst { opcode, operands })
 }
 
-/// `_start`, the compiled functions, padding to a long and the data with its labels.
+/// `_start`, the compiled functions, padding to a long and the data with its
+/// labels.
 fn image(functions: Vec<Item>) -> Vec<Item> {
     let mut all = vec![
         Item::Label("_start".to_owned()),
@@ -230,7 +248,8 @@ fn image(functions: Vec<Item>) -> Vec<Item> {
     all
 }
 
-/// `exe` under qemu, with `pad` bytes more of environment: the stack it starts with is different.
+/// `exe` under qemu, with `pad` bytes more of environment: the stack it starts
+/// with is different.
 fn qemu(
     exe: &Path,
     limit: &str,
@@ -280,7 +299,8 @@ fn check(
     seed: u64,
     work: &Path,
 ) -> Outcome {
-    // `$DIFF_FILE` runs a hand-written program (with a `test`), the way `llrm-cgen/reduce.py` cuts one down
+    // `$DIFF_FILE` runs a hand-written program (with a `test`), the way
+    // `llrm-cgen/reduce.py` cuts one down
     let source = match std::env::var("DIFF_FILE") {
         Ok(path) => std::fs::read_to_string(path).unwrap(),
         Err(_) => program(seed, &Gen { opaque: true, ..Gen::new(DataModel::INT32) }),
@@ -298,18 +318,23 @@ fn check_text(
     let full = format!("{source}{FOLD}");
     std::fs::write(dir.join("p.c"), &full).unwrap();
 
-    // a reduced program must stay defined: no missing return, no read of a local before it is set
+    // a reduced program must stay defined: no missing return, no read of a
+    // local before it is set
     if std::env::var_os("DIFF_STRICT").is_some() {
         let strict = run(
-            Command::new(clang()).current_dir(&dir).args([
-                "--target=m68k-linux-gnu",
-                "-fsyntax-only",
-                "-Werror=return-type",
-                "-Werror=uninitialized",
-                "-Werror=sometimes-uninitialized",
-                "-Werror=conditional-uninitialized",
-                "p.c",
-            ]),
+            Command::new(clang())
+                .current_dir(&dir)
+                .args(
+                    [
+                        "--target=m68k-linux-gnu",
+                        "-fsyntax-only",
+                        "-Werror=return-type",
+                        "-Werror=uninitialized",
+                        "-Werror=sometimes-uninitialized",
+                        "-Werror=conditional-uninitialized",
+                        "p.c",
+                    ],
+                ),
             "not a defined program",
         );
         if let Err(why) = strict {
@@ -317,9 +342,9 @@ fn check_text(
         }
     }
 
-    // the second opinion: the host's gcc at -O0, as ILP32 like the m68k data model, so `long` is
-    // as wide on both; `$DIFF_UBSAN` adds the undefined-behaviour check (a program that trips it
-    // has no reference)
+    // the second opinion: the host's gcc at -O0, as ILP32 like the m68k data
+    // model, so `long` is as wide on both; `$DIFF_UBSAN` adds the
+    // undefined-behaviour check (a program that trips it has no reference)
     std::fs::write(dir.join("main.c"), HOST_MAIN).unwrap();
     let mut host_args = vec!["-m32", "-O0", "-w"];
     if std::env::var_os("DIFF_UBSAN").is_some() {
@@ -341,17 +366,21 @@ fn check_text(
 
     // ours
     let ir = match run(
-        Command::new(clang()).current_dir(&dir).args([
-            "--target=m68k-linux-gnu",
-            "-mcpu=68000",
-            "-O1",
-            "-fno-unroll-loops",
-            "-S",
-            "-emit-llvm",
-            "p.c",
-            "-o",
-            "p.ll",
-        ]),
+        Command::new(clang())
+            .current_dir(&dir)
+            .args(
+                [
+                    "--target=m68k-linux-gnu",
+                    "-mcpu=68000",
+                    "-O1",
+                    "-fno-unroll-loops",
+                    "-S",
+                    "-emit-llvm",
+                    "p.c",
+                    "-o",
+                    "p.ll",
+                ],
+            ),
         "clang",
     ) {
         Ok(_) => std::fs::read_to_string(dir.join("p.ll")).unwrap(),
@@ -378,7 +407,8 @@ fn check_text(
     let exe = dir.join("ours");
     write_executable(&exe, &bytes).unwrap();
     match qemu(&exe, "10", qemu_cpu(), 0) {
-        // the same program on a stack that starts elsewhere: an answer that moves read garbage
+        // the same program on a stack that starts elsewhere: an answer that
+        // moves read garbage
         Ok(code) if code == reference => match qemu(&exe, "10", qemu_cpu(), 4001) {
             Ok(other) if other != code => Outcome::Unstable { first: code, second: other },
             _ => Outcome::Ok,
@@ -389,7 +419,8 @@ fn check_text(
     }
 }
 
-/// `difftest DIR`: every `DIR/*.c` (a reduced program that once failed, with a `test`) must agree.
+/// `difftest DIR`: every `DIR/*.c` (a reduced program that once failed, with a
+/// `test`) must agree.
 fn corpus(dir: &Path) -> bool {
     let work = std::env::temp_dir().join(format!("llrm-m68k-corpus-{}", std::process::id()));
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -423,7 +454,10 @@ fn main() {
         .ok()
         .and_then(|spec| spec.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))))
         .unwrap_or_else(|| {
-            (args.get(1).and_then(|a| a.parse().ok()).unwrap_or(0), args.get(2).and_then(|a| a.parse().ok()).unwrap_or(100))
+            (
+                args.get(1).and_then(|a| a.parse().ok()).unwrap_or(0),
+                args.get(2).and_then(|a| a.parse().ok()).unwrap_or(100),
+            )
         });
     let jobs: usize = std::env::var("DIFF_JOBS")
         .ok()
@@ -481,18 +515,22 @@ fn main() {
             }
         }
     }
-    println!("{count} programs from seed {first}: {ok} ok, {differs} differ, {hang} hang, {reject} reject, {reference} no reference");
+    println!(
+        "{count} programs from seed {first}: {ok} ok, {differs} differ, {hang} hang, {reject} reject, {reference} no reference"
+    );
 }
 
-/// A looping program is killed at the limit and leaves nothing behind. The driver ran host
-/// programs and qemu under `timeout`, which did not kill them: loops piled up at 97% CPU.
+/// A looping program is killed at the limit and leaves nothing behind. The
+/// driver ran host programs and qemu under `timeout`, which did not kill them:
+/// loops piled up at 97% CPU.
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The environment pads the stack, so a program that reads its stack address shows it: the
-    /// second run of `check` relies on it. A read of an unwritten slot gave a plausible answer
-    /// that moved with the stack (seed 86), and the driver took it for right.
+    /// The environment pads the stack, so a program that reads its stack
+    /// address shows it: the second run of `check` relies on it. A read of
+    /// an unwritten slot gave a plausible answer that moved with the stack
+    /// (seed 86), and the driver took it for right.
     #[test]
     fn an_environment_pad_moves_the_stack() {
         let dir = std::env::temp_dir().join(format!("llrm-m68k-pad-{}", std::process::id()));
@@ -513,7 +551,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("llrm-m68k-guard-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("spin.c"), "int main(void) { for (;;) ; }\n").unwrap();
-        assert!(Command::new("gcc").current_dir(&dir).args(["-O0", "-o", "spin", "spin.c"]).status().unwrap().success());
+        assert!(
+            Command::new("gcc").current_dir(&dir).args(["-O0", "-o", "spin", "spin.c"]).status().unwrap().success()
+        );
         let bin = dir.join("spin").canonicalize().unwrap();
         let start = std::time::Instant::now();
         assert!(matches!(guarded(&bin, &[], 1, &[]), Some(Guarded::TimedOut)));

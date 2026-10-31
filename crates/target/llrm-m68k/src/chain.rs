@@ -12,12 +12,12 @@
 //! the chain's size; any other mention of it, or a register that may be live
 //! past the end, keeps the chain as it was.
 //!
-//! DEVIATE from the pin's output, and beyond LLVM: its `CombineToPostIndexedLoadStore`
-//! refuses a base whose other users are `add base, c` that fold into
-//! displacements (`shouldCombineToPostInc`), which is every inline copy, and the
-//! M68k target sets no indexed addressing at all. gcc's `auto_inc_dec` forms
-//! these. Reason: bytes and clocks on every struct copy. Exit: never; a target
-//! choice, off with `Options::overlay`.
+//! DEVIATE from the pin's output, and beyond LLVM: its
+//! `CombineToPostIndexedLoadStore` refuses a base whose other users are `add
+//! base, c` that fold into displacements (`shouldCombineToPostInc`), which is
+//! every inline copy, and the M68k target sets no indexed addressing at all.
+//! gcc's `auto_inc_dec` forms these. Reason: bytes and clocks on every struct
+//! copy. Exit: never; a target choice, off with `Options::overlay`.
 
 use llrm_lir::registers::RegId;
 
@@ -34,7 +34,8 @@ enum Mode {
 }
 
 /// A memory operand of an instruction: where its operands start, how many
-/// bytes it accesses, and which letter of the instruction's name tells its mode.
+/// bytes it accesses, and which letter of the instruction's name tells its
+/// mode.
 #[derive(Clone, Copy, Debug)]
 struct Slot {
     mode: Mode,
@@ -75,7 +76,8 @@ fn slots(opcode: &str) -> Vec<Slot> {
         .collect()
 }
 
-/// `opcode` with the mode letter of `slot` made `to`, if the pin has that instruction.
+/// `opcode` with the mode letter of `slot` made `to`, if the pin has that
+/// instruction.
 fn with_mode(
     opcode: &str,
     slot: Slot,
@@ -86,7 +88,10 @@ fn with_mode(
     let mut letters: Vec<char> = letters.chars().collect();
     *letters.get_mut(slot.letter?)? = to;
     let name = format!("{head}{}", letters.into_iter().collect::<String>());
-    crate::dagisel::asm::ASM.binary_search_by_key(&name.as_str(), |row| row.0).ok().map(|at| crate::dagisel::asm::ASM[at].0)
+    crate::dagisel::asm::ASM
+        .binary_search_by_key(&name.as_str(), |row| row.0)
+        .ok()
+        .map(|at| crate::dagisel::asm::ASM[at].0)
 }
 
 fn base_register(
@@ -116,7 +121,8 @@ fn mention_count(
     inst: &Inst,
     root: RegId,
 ) -> usize {
-    // a spill or a reload (`movem.l`) names its register in a mask, not as an operand
+    // a spill or a reload (`movem.l`) names its register in a mask, not as an
+    // operand
     let mask = match (inst.opcode, &inst.operands[..]) {
         ("MOVM32mp", [Operand::Imm(mask), ..]) | ("MOVM32pm", [_, _, Operand::Imm(mask)]) => Some(*mask),
         ("PUSHM32" | "POPM32", [Operand::Imm(mask)]) => Some(*mask),
@@ -155,7 +161,10 @@ fn overwrites(
     root: RegId,
 ) -> bool {
     (inst.opcode.starts_with("MOV32a") || inst.opcode.starts_with("LEA32"))
-        && matches!(inst.operands.first(), Some(Operand::Reg(r)) if REGISTER_INFO.root(*r) == root)
+        && matches!(
+            inst.operands.first(),
+            Some(Operand::Reg(r)) if REGISTER_INFO.root(*r) == root
+        )
         && mention_count(inst, root) == 1
 }
 
@@ -205,7 +214,9 @@ fn plan(
         if mention_count(inst, root) != 1 {
             return None;
         }
-        let slot = slots(inst.opcode).into_iter().find(|slot| base_register(inst, *slot).is_some_and(|r| REGISTER_INFO.root(r) == root))?;
+        let slot = slots(inst.opcode)
+            .into_iter()
+            .find(|slot| base_register(inst, *slot).is_some_and(|r| REGISTER_INFO.root(r) == root))?;
         let disp = displacement(inst, slot)?;
         if chaining && disp == expected && slot.mode != Mode::Arii && post_increment(inst.opcode, slot).is_some() {
             edits.push(Edit::Step(at, slot));
@@ -294,7 +305,8 @@ pub fn chain_post_increment(
 struct BlockLines {
     start: usize,
     end: usize,
-    /// `None`: it leaves the function or goes somewhere the parse does not follow.
+    /// `None`: it leaves the function or goes somewhere the parse does not
+    /// follow.
     succs: Option<Vec<usize>>,
 }
 
@@ -311,26 +323,33 @@ fn parse_blocks(lines: &[Line]) -> Vec<BlockLines> {
     starts.sort_unstable();
     starts.dedup();
     starts.retain(|&at| at < lines.len());
-    let label_block = |label: usize| {
-        starts.iter().position(|&at| matches!(lines[at], Line::Label(one) if one == label))
-    };
+    let label_block =
+        |label: usize| starts.iter().position(|&at| matches!(lines[at], Line::Label(one) if one == label));
     let mut blocks: Vec<BlockLines> = Vec::new();
     for (n, &start) in starts.iter().enumerate() {
         let end = starts.get(n + 1).copied().unwrap_or(lines.len());
-        let last = lines[start..end].iter().rev().find_map(|line| match line {
-            Line::Inst(inst) => Some(inst),
-            Line::Label(_) => None,
-        });
+        let last = lines[start..end]
+            .iter()
+            .rev()
+            .find_map(
+                |line| match line {
+                    Line::Inst(inst) => Some(inst),
+                    Line::Label(_) => None,
+                },
+            );
         let next = (n + 1 < starts.len()).then_some(n + 1);
         let succs = match last {
             None => Some(next.into_iter().collect()),
-            Some(inst) if crate::overlay::is_branch_on_flags(inst.opcode) => {
-                crate::overlay::branch_target(inst).and_then(label_block).map(|to| next.into_iter().chain([to]).collect())
-            }
+            Some(inst) if crate::overlay::is_branch_on_flags(inst.opcode) => crate::overlay::branch_target(inst)
+                .and_then(label_block)
+                .map(|to| next.into_iter().chain([to]).collect()),
             Some(inst) if inst.opcode.starts_with("BRA") => {
                 crate::overlay::branch_target(inst).and_then(label_block).map(|to| vec![to])
             }
-            Some(inst) if leaves_straight_line(inst.opcode) && !["JSR", "BSR", "CALL"].iter().any(|p| inst.opcode.starts_with(p)) => {
+            Some(inst)
+                if leaves_straight_line(inst.opcode)
+                    && !["JSR", "BSR", "CALL"].iter().any(|p| inst.opcode.starts_with(p)) =>
+            {
                 None
             }
             Some(inst) if inst.opcode == "RTS" => None,
@@ -347,7 +366,10 @@ fn is_step(
     bytes: i64,
 ) -> bool {
     matches!(inst.opcode, "ADDQ32a" | "ADD32ai")
-        && matches!(inst.operands.first(), Some(Operand::Reg(r)) if REGISTER_INFO.root(*r) == root)
+        && matches!(
+            inst.operands.first(),
+            Some(Operand::Reg(r)) if REGISTER_INFO.root(*r) == root
+        )
         && matches!(inst.operands.last(), Some(Operand::Imm(n)) if *n == bytes)
 }
 
@@ -368,7 +390,9 @@ fn adjustments(
         if mention_count(inst, root) != 1 {
             return false;
         }
-        let Some(slot) = slots(inst.opcode).into_iter().find(|slot| base_register(inst, *slot).is_some_and(|r| REGISTER_INFO.root(r) == root))
+        let Some(slot) = slots(inst.opcode)
+            .into_iter()
+            .find(|slot| base_register(inst, *slot).is_some_and(|r| REGISTER_INFO.root(r) == root))
         else {
             return false;
         };

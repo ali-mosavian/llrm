@@ -9,10 +9,11 @@ use llrm_mir::target::Machine;
 use llrm_transforms::pipeline::{Applied, Options as MidEnd};
 
 use crate::compile::{Options, text_with};
-use crate::machine::M68kMachine;
 use crate::dagisel::hooks::Cpu;
+use crate::machine::M68kMachine;
 
-/// How far the mid-end goes: gcc's and clang's `-O` levels, as `llc` takes them.
+/// How far the mid-end goes: gcc's and clang's `-O` levels, as `llc` takes
+/// them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Level {
     O0,
@@ -58,8 +59,8 @@ pub fn cpu_of(name: &str) -> Result<Cpu, String> {
     }
 }
 
-/// The machine the mid-end is handed: its cost model prices the passes that need one (loop strength reduction,
-/// the CRC recognizer).
+/// The machine the mid-end is handed: its cost model prices the passes that
+/// need one (loop strength reduction, the CRC recognizer).
 pub fn machine() -> Rc<dyn Machine> {
     Rc::new(M68kMachine)
 }

@@ -16,7 +16,9 @@ use std::rc::Rc;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
-use llrm_mir::tti::{AddressingMode, ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
+use llrm_mir::tti::{
+    AddressingMode, ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty,
+};
 
 /// The m68k cost model the passes of the mid-end read.
 #[derive(Clone, Debug, Default)]

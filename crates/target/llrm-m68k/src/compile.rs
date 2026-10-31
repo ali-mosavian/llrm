@@ -40,7 +40,8 @@ pub struct Options {
     /// Size is wanted over clocks in every function (`-Os`; the x86 path's
     /// `Cpu::size`). A function marked `optsize` or `minsize` wants it too.
     pub size: bool,
-    /// Schedule in source order (`-pre-RA-sched=source`) rather than with the ILP list scheduler `llc` defaults to.
+    /// Schedule in source order (`-pre-RA-sched=source`) rather than with the
+    /// ILP list scheduler `llc` defaults to.
     pub source_order: bool,
 }
 
@@ -96,7 +97,14 @@ pub fn items_with(
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // at the size level a compare's argument is read from its slot, which the
     // load put on the foldable side would make a register's
-    let blocks = select_function_ordered(module, name, cpu, options.overlay && !wants_size, options.overlay, options.source_order)?;
+    let blocks = select_function_ordered(
+        module,
+        name,
+        cpu,
+        options.overlay && !wants_size,
+        options.overlay,
+        options.source_order,
+    )?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);

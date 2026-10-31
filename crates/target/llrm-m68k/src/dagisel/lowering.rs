@@ -8,10 +8,11 @@
 //! register. `setcc`, `select` and `brcond` on a value that is not a compare
 //! test it against zero.
 //!
-//! DEVIATE: not translated yet are the `trunc` forms of `LowerToBTST`, the `SETCC_CARRY` folds of `LowerSELECT`, the
-//! and/or-of-setcc and xor-1 folds of `LowerBRCOND`, `EmitTest`'s narrowing of
-//! a truncated arithmetic result, and floating-point conditions. Reason: each
-//! needs DAG queries or nodes the slice does not reach. Exit: M3b.
+//! DEVIATE: not translated yet are the `trunc` forms of `LowerToBTST`, the
+//! `SETCC_CARRY` folds of `LowerSELECT`, the and/or-of-setcc and xor-1 folds of
+//! `LowerBRCOND`, `EmitTest`'s narrowing of a truncated arithmetic result, and
+//! floating-point conditions. Reason: each needs DAG queries or nodes the slice
+//! does not reach. Exit: M3b.
 //!
 //! # See also
 //! `llvm/lib/Target/M68k/M68kISelLowering.cpp`, pin d1106deb71cc: the
@@ -127,13 +128,9 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     set(&[DynamicStackAlloc], &[MVT::I32], Action::Custom);
     // `RTLIB::MUL_I32` and the others: libgcc's names, the pin's defaults
     // (`RuntimeLibcalls.def`)
-    for (op, name) in [
-        (Mul, "__mulsi3"),
-        (SDiv, "__divsi3"),
-        (UDiv, "__udivsi3"),
-        (SRem, "__modsi3"),
-        (URem, "__umodsi3"),
-    ] {
+    for (op, name) in
+        [(Mul, "__mulsi3"), (SDiv, "__divsi3"), (UDiv, "__udivsi3"), (SRem, "__modsi3"), (URem, "__umodsi3")]
+    {
         tl.set_libcall_name(op, MVT::I32, name);
     }
     tl
@@ -147,7 +144,8 @@ pub struct M68kLowering {
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
-    /// The pin canonicalizes `x >= c` to `x > c - 1`; `slt 0` then folds to `bmi`.
+    /// The pin canonicalizes `x >= c` to `x > c - 1`; `slt 0` then folds to
+    /// `bmi`.
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
@@ -195,8 +193,13 @@ impl Hooks for M68kLowering {
             .collect();
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let (_chain, values) =
-            super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false, arg_vt: ret, split: false }]);
+        let (_chain, values) = super::call::M68kCalling::default().lower_call(
+            dag,
+            root,
+            callee,
+            &outs,
+            &[In { vt: ret, pointer: false, arg_vt: ret, split: false }],
+        );
         values.first().copied()
     }
 }
@@ -212,7 +215,9 @@ fn lower_xalu(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    if matches!(dag.opcode(node), ISD::SMulO | ISD::UMulO) && dag.value_type(SDValue { node: node.node, res: 0 }) != EVT::I32 {
+    if matches!(dag.opcode(node), ISD::SMulO | ISD::UMulO)
+        && dag.value_type(SDValue { node: node.node, res: 0 }) != EVT::I32
+    {
         return Some(expand_narrow_mulo(dag, node));
     }
     let result_vt = dag.value_type(SDValue { node: node.node, res: 0 });
@@ -230,7 +235,11 @@ fn lower_xalu(
     let arith = dag.get_node_multi(base, &[result_vt, EVT::I8], &[lhs, rhs]);
     let code = cc_operand(dag, code);
     let overflow = dag.get_node(m68kisd::SETCC, overflow_vt, &[code, SDValue { node: arith.node, res: 1 }]);
-    Some(dag.get_node_multi(ISD::MergeValues, &[result_vt, overflow_vt], &[SDValue { node: arith.node, res: 0 }, overflow]))
+    Some(dag.get_node_multi(
+        ISD::MergeValues,
+        &[result_vt, overflow_vt],
+        &[SDValue { node: arith.node, res: 0 }, overflow],
+    ))
 }
 
 /// `TargetLowering::expandMULO` through the type twice as wide: the product

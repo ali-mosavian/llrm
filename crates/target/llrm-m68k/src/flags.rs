@@ -140,8 +140,7 @@ pub fn preserve_flags(
             // everything the instructions between the setter and the reader
             // define, not only the copies: the setter's operands must still
             // hold what it read
-            let clobbered: Vec<RegId> =
-                block.insts[s + 1..r].iter().flat_map(|inst| defs(inst, assignment)).collect();
+            let clobbered: Vec<RegId> = block.insts[s + 1..r].iter().flat_map(|inst| defs(inst, assignment)).collect();
             let again = if base.starts_with("cmp") {
                 let reads_clobbered = uses(&setter, assignment).any(|u| clobbered.contains(&u));
                 (!reads_clobbered).then(|| setter.clone())
@@ -160,7 +159,8 @@ pub fn preserve_flags(
                 None
             };
             let Some(again) = again else {
-                // `copyPhysReg`'s last resort, a push and a pop of the codes round the copies
+                // `copyPhysReg`'s last resort, a push and a pop of the codes
+                // round the copies
                 let (first, last) = (stay[0], r);
                 let mut pop = Inst::new(Kind::Op("CCR_POP"), vec![]);
                 pop.sets_flags = true;

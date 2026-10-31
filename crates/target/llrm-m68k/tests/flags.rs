@@ -81,10 +81,11 @@ fn a_copy_over_the_compares_operand_pushes_and_pops_the_codes() {
     );
 }
 
-/// A load into the compare's operand register between the compare and the branch, then a copy
-/// that cannot move above it: the compare was issued again with the new value in its operand
-/// (differential seed 1260 compared an address register that held another value and crashed).
-/// The codes are saved instead.
+/// A load into the compare's operand register between the compare and the
+/// branch, then a copy that cannot move above it: the compare was issued again
+/// with the new value in its operand (differential seed 1260 compared an
+/// address register that held another value and crashed). The codes are saved
+/// instead.
 #[test]
 fn an_instruction_that_overwrites_the_compares_operand_prevents_issuing_it_again() {
     let mut f = function(vec![
@@ -107,8 +108,8 @@ fn an_instruction_that_overwrites_the_compares_operand_prevents_issuing_it_again
     );
 }
 
-/// The displacement of the spill store the function holds, with or without a push of the codes
-/// round it.
+/// The displacement of the spill store the function holds, with or without a
+/// push of the codes round it.
 fn spill_displacement(pushed: bool) -> i64 {
     use llrm_m68k::dagisel::hooks::Cpu;
     use llrm_m68k::expand::{Line, finish};
@@ -135,9 +136,10 @@ fn spill_displacement(pushed: bool) -> i64 {
         .expect("the spill store")
 }
 
-/// A slot named from the stack pointer between `move %sr, -(%sp)` and `move (%sp)+, %ccr` is two
-/// bytes further: the store of a spilled copy landed on the saved codes, and the pop restored
-/// garbage (differential seed 673 gave 242 for 247).
+/// A slot named from the stack pointer between `move %sr, -(%sp)` and `move
+/// (%sp)+, %ccr` is two bytes further: the store of a spilled copy landed on
+/// the saved codes, and the pop restored garbage (differential seed 673 gave
+/// 242 for 247).
 #[test]
 fn a_frame_slot_between_a_push_and_a_pop_of_the_codes_is_two_bytes_further() {
     assert_eq!(spill_displacement(true), spill_displacement(false) + 2);

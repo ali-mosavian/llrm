@@ -1,5 +1,5 @@
-//! `llrm-m68k-llc -S [-mcpu=68000|68020] [-O<n>] [-o OUT] FILE.ll`: LLVM IR from
-//! clang's front end alone through the mid-end and the m68k backend to
+//! `llrm-m68k-llc -S [-mcpu=68000|68020] [-O<n>] [-o OUT] FILE.ll`: LLVM IR
+//! from clang's front end alone through the mid-end and the m68k backend to
 //! assembly text. Stops at `-S`: there is no object writer behind this driver.
 
 use llrm_m68k::driver::{self, Level};
@@ -50,9 +50,8 @@ fn run() -> i32 {
     let result = driver::cpu_of(&cpu).and_then(|cpu| driver::assembly(&text, cpu, level));
     match result {
         Ok(text) => {
-            let path = output.unwrap_or_else(|| {
-                std::path::Path::new(&input).with_extension("s").to_string_lossy().into_owned()
-            });
+            let path = output
+                .unwrap_or_else(|| std::path::Path::new(&input).with_extension("s").to_string_lossy().into_owned());
             if let Err(error) = std::fs::write(&path, text) {
                 eprintln!("llrm-m68k-llc: {path}: {error}");
                 return 1;
