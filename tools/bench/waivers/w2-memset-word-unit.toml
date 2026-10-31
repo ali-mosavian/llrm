@@ -24,3 +24,9 @@ label = "matmul bq16 -O2"
 counter = "code_bytes"
 tip = 551
 to = 555
+
+[[row]]
+label = "queens bas -O2"
+counter = "memory_operands"
+tip = 70048
+to = 80438
