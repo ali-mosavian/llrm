@@ -151,6 +151,7 @@ impl FunctionPass for LoopIdiom {
             .for_size
             .then(|| (outer.target().costs(), outer.target().size_milliclocks_per_byte()))
             .filter(|(_, rate)| *rate > 0);
+        let speed_costs = (!self.for_size).then(|| outer.target().costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -165,6 +166,7 @@ impl FunctionPass for LoopIdiom {
                 cur_loop,
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
+                speed: speed_costs.as_ref(),
                 tti: tti.as_deref(),
             };
             let mut options = self.options;
