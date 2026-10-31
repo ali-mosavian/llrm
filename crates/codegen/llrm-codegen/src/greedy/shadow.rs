@@ -70,6 +70,10 @@ pub struct ShadowInputs<'a> {
     /// rematerialization.
     pub tii: &'a dyn super::tii::TargetInstrInfo,
     pub tri: &'a dyn super::targetinfo::TargetRegisterInfo,
+    /// A value pinned to a byte lane holds that lane only, as the pin's
+    /// register units say. x86 holds the whole root (`_whole`): its pins are
+    /// roots, and its output depends on it.
+    pub lane_pins: bool,
 }
 
 /// What the shadow allocator decided.
@@ -1206,12 +1210,9 @@ pub fn decide_with_split(
             tables.remat_roots.borrow_mut().entry(*value).or_insert_with(|| Arc::clone(one));
         }
     }
-    let pins = inputs
-        .pins
-        .iter()
-        .filter(|(reg, _)| !floats.contains(reg))
-        .map(|(&reg, &phys)| (reg, inputs.registers.root(phys)))
-        .collect();
+    let pin_of = |phys: RegId| if inputs.lane_pins { phys } else { inputs.registers.root(phys) };
+    let pins =
+        inputs.pins.iter().filter(|(reg, _)| !floats.contains(reg)).map(|(&reg, &phys)| (reg, pin_of(phys))).collect();
     let env = BodyEnv {
         orders: Rc::clone(&tables),
         tii: inputs.tii,
@@ -1333,7 +1334,7 @@ pub fn decide_with_split(
             .into_iter()
             .map(|(reg, phys)| FixedPin {
                 reg,
-                root: inputs.registers.root(phys),
+                root: pin_of(phys),
                 segments: greedy
                     .lis
                     .interval_rc(reg)
@@ -1403,7 +1404,7 @@ pub fn decide_with_split(
     // evicted or spilled.
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
-            tables.orders.borrow_mut().insert(reg, vec![inputs.registers.root(phys)]);
+            tables.orders.borrow_mut().insert(reg, vec![pin_of(phys)]);
             if !fixed_regs.iter().any(|(fixed, _)| *fixed == reg) {
                 greedy.pinned.insert(reg);
             }
@@ -1544,6 +1545,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1612,6 +1614,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1786,6 +1789,7 @@ mod tests {
                 saved: &[],
                 tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
+                lane_pins: false,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1842,6 +1846,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1975,6 +1980,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2023,6 +2029,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");

@@ -222,3 +222,115 @@ fn test_record_mode_never_splits() {
     assert_eq!(plain.spilled, asked.spilled);
     assert_eq!(plain.report.signature, asked.report.signature);
 }
+
+/// One pair root with two byte lanes (`rs1` = `rc2` + `rc3`, as `ebx` = `bl` +
+/// `bh`): a byte class names the root, and each byte value takes a lane of it.
+struct Bytes;
+
+impl Target for Bytes {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        vec![RegId::EBX]
+    }
+
+    fn view(
+        _: RegId,
+        _: (),
+    ) -> RegId {
+        RegId::BL
+    }
+
+    fn root(register: RegId) -> RegId {
+        regs().root(register)
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+}
+
+/// Two byte values live together fit the two lanes of one pair root. If a
+/// value held its whole root (`_whole`), the second would find none.
+#[test]
+fn test_two_byte_values_take_the_two_lanes_of_one_root() {
+    let mut f = MFunction::<()>::new("lanes");
+    f.classes = vec![(); 3];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("load", vec![Operand::Def(v(1))]));
+    block.insts.push(op("add", vec![Operand::Def(v(2)), Operand::Use(v(0)), Operand::Use(v(1))]));
+    block.insts.push(op("store", vec![Operand::Use(v(2))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<Bytes>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    let place = |value| decided.placed.iter().find(|(v, _)| *v == value).map(|(_, r)| *r);
+    assert_eq!(decided.report.stats.failed, 0, "{:?}", decided.placed);
+    assert_ne!(place(1), place(2), "the two bytes are live together: {:?}", decided.placed);
+    assert!(decided.spilled.is_empty(), "{:?}", decided.spilled);
+}
+
+/// The control of the test above: a third byte live with two others finds no
+/// lane, so the two lanes are the whole capacity and not an artefact of the
+/// toy file.
+#[test]
+fn test_a_third_byte_value_live_with_two_finds_no_lane() {
+    let mut f = MFunction::<()>::new("crowd");
+    f.classes = vec![(); 4];
+    let mut block = Block { id: 0, ..Block::default() };
+    for n in 0..3 {
+        block.insts.push(op("load", vec![Operand::Def(v(n))]));
+    }
+    block.insts.push(op("add", vec![Operand::Def(v(3)), Operand::Use(v(0)), Operand::Use(v(1))]));
+    block.insts.push(op("add", vec![Operand::Def(v(3)), Operand::Use(v(3)), Operand::Use(v(2))]));
+    block.insts.push(op("store", vec![Operand::Use(v(3))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<Bytes>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    assert!(
+        decided.report.stats.failed > 0 || !decided.spilled.is_empty() || decided.report.reloads > 0,
+        "three live bytes fit two lanes: {:?}",
+        decided.placed
+    );
+}
+
+/// A byte pinned to one lane leaves the other to a value live over it. The
+/// pin was the whole root, so `bl` held in `bh`'s way too.
+#[test]
+fn test_a_pin_to_one_lane_leaves_the_other_lane() {
+    let mut f = MFunction::<()>::new("pinned");
+    f.classes = vec![(); 2];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::BL))]));
+    block.insts.push(op("add", vec![Operand::Def(v(1)), Operand::Use(v(0)), Operand::Use(Reg::Phys(RegId::BL))]));
+    block.insts.push(op("store", vec![Operand::Use(v(1))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<Bytes>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
+    assert_eq!(held, Some(RegId::BH), "{:?}", decided.placed);
+    assert_eq!(decided.report.reloads, 0);
+}

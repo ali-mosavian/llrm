@@ -85,6 +85,7 @@ impl<T: Target> Converted<T> {
             saved: &self.saved,
             tii: &self.tii,
             tri: &self.tri,
+            lane_pins: true,
         }
     }
 }
