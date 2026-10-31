@@ -104,9 +104,10 @@ fn and_of_an_extended_value_with_another_mask_stays() {
     }
 }
 
-/// `umax`/`umin` of two zero-extended bytes is a byte: the `and x, 0xff` of a promoted `umax i8` stayed,
-/// so `umax(a, b) - b` was not seen after type legalization (`w8`: `subs`, `csel`, `subs` where the pin
-/// has `subs`, `csel`).
+/// `umax`/`umin` of two zero-extended bytes is a byte: the `and x, 0xff` of a
+/// promoted `umax i8` stayed, so `umax(a, b) - b` was not seen after type
+/// legalization (`w8`: `subs`, `csel`, `subs` where the pin has `subs`,
+/// `csel`).
 #[test]
 fn the_mask_of_a_umax_of_bytes_is_dropped_and_the_subtract_becomes_a_usubsat() {
     let mut dag = dag();
@@ -124,7 +125,8 @@ fn the_mask_of_a_umax_of_bytes_is_dropped_and_the_subtract_becomes_a_usubsat() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::USubSat);
 }
 
-/// An unknown operand makes the `umax` unknown above what the other operand bounds.
+/// An unknown operand makes the `umax` unknown above what the other operand
+/// bounds.
 #[test]
 fn a_umax_with_an_unknown_operand_keeps_nothing_it_cannot_prove() {
     let mut dag = dag();
@@ -132,7 +134,15 @@ fn a_umax_with_an_unknown_operand_keeps_nothing_it_cannot_prove() {
     let wa = dag.get_node(ISD::ZeroExtend, EVT::I32, &[a]);
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(9), ext: None, space: 0, ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(9),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let wide = dag.get_load(EVT::I32, chain, ptr, info);
     let max = dag.get_node(ISD::UMax, EVT::I32, &[wa, wide]);
     assert_eq!(known_bits(&dag, max).zero, 0);

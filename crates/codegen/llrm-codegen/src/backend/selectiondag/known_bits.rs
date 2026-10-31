@@ -63,13 +63,15 @@ impl KnownBits {
         !self.zero & mask(self.width)
     }
 
-    /// `KnownBits::makeGE`: the bits `self` has when it is known to be at least `value`.
+    /// `KnownBits::makeGE`: the bits `self` has when it is known to be at least
+    /// `value`.
     fn make_ge(
         &self,
         value: u128,
     ) -> KnownBits {
         let all = mask(self.width);
-        // The leading bit positions where the value is known to be less than or equal to `value`.
+        // The leading bit positions where the value is known to be less than or
+        // equal to `value`.
         let leading = (self.zero | value) & all;
         let n = (leading << (128 - self.width)).leading_ones().min(self.width);
         let low = self.width - n;
