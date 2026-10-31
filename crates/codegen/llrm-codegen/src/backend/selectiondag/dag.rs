@@ -1236,6 +1236,21 @@ impl SelectionDAG {
         }
     }
 
+    pub fn get_any_ext_or_trunc(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::AnyExtend, vt, &[value])
+        }
+    }
+
     pub fn get_sext_or_trunc(
         &mut self,
         value: SDValue,

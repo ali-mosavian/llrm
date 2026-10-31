@@ -1013,7 +1013,7 @@ impl Builder<'_> {
         outside: &llrm_support::hash::HashSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
-        if self.function.parameter_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()) {
+        if self.function.parameter_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)) {
             return Err(Refused("a parameter attribute that moves it, with a target's calling hook"));
         }
         let mut ins = Vec::new();
@@ -1057,6 +1057,13 @@ impl Builder<'_> {
             }
         }
         if self.module.signature(self.function.ty).2 {
+            if let Some(buffer) = calling.variadic_buffer(&mut self.dag, ins.len()) {
+                let reg = self.info.new_reg();
+                let root = self.root();
+                let copy = self.dag.get_copy_to_reg(root, reg, buffer);
+                self.dag.set_root(copy);
+                self.info.variadic_buffer = Some(reg);
+            }
             self.dag.var_args_frame_index = Some(-(offsets.len() as i32 + 1));
         }
         Ok(())
@@ -1403,7 +1410,10 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         self.fixed_args = named;
-        self.call_attrs_move_arguments = info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some());
+        self.call_attrs_move_arguments = match self.calling() {
+            Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
+            None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
+        };
         let result =
             self.lower_call(callee_node, values, &extends, &byvals, &plan, first, result_type, flags_answer)?;
         if let (true, Some(answer)) = (flags_answer, result) {
@@ -1496,6 +1506,16 @@ impl Builder<'_> {
         self.arch.register_named(name)
     }
 
+    /// Whether an attribute of `attrs` moves its argument out of the ordinary place, for a target
+    /// whose hook leaves some (`sret` on wasm: a pointer like any other) where they are.
+    fn moves_argument(
+        &self,
+        calling: &dyn TargetCalling,
+        attrs: &[llrm_mir::opcode::Attribute],
+    ) -> bool {
+        relocating_attribute(attrs).is_some_and(|name| !calling.passes_in_place(name))
+    }
+
     fn calling(&self) -> Option<&'static dyn TargetCalling> {
         self.target.target_nodes.and_then(|t| t.calling)
     }
@@ -1585,7 +1605,8 @@ impl Builder<'_> {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
         let mut outs = Vec::new();
-        let variadic_from = if std::mem::take(&mut self.variadic_call) { self.fixed_args } else { usize::MAX };
+        let variadic = std::mem::take(&mut self.variadic_call);
+        let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
                 Some(ISD::SignExtend) => Ext::Sign,
@@ -1614,7 +1635,16 @@ impl Builder<'_> {
         };
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
-        let (chain, parts) = calling.lower_call(&mut self.dag, root, callee_node, &outs, &ins);
+        let info = &mut *self.info;
+        let (chain, parts) = calling.lower_call_with_frame(
+            &mut self.dag,
+            root,
+            callee_node,
+            &outs,
+            &ins,
+            variadic,
+            &mut |size, align| info.new_stack_object(size, align),
+        );
         self.dag.set_root(chain);
         Ok((!void).then(|| self.join_from_calling(&parts, vt)))
     }
