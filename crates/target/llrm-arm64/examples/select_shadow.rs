@@ -1,4 +1,4 @@
-//! `cargo run -p llrm-arm64 --example select_shadow -- FILE.ll`: per function, the
+//! `cargo run -p llrm-arm64 --example select_shadow -- FILE.ll [-fno-PASS ...]`: per function, the
 //! machine opcodes the DAG path selects, one `@name bb: OP OP ...` line per
 //! block, or `@name REFUSED: why`. `tools/dagisel/arm64_shadow.py` compares them
 //! with the pin's `llc -stop-after=finalize-isel`.
@@ -8,7 +8,11 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 
 fn main() {
-    let path = std::env::args().nth(1).expect("FILE.ll");
+    let mut arguments = std::env::args().skip(1);
+    let path = arguments.next().expect("FILE.ll");
+    for flag in arguments {
+        assert!(driver::pass_flag(&flag), "not a pass flag: {flag}");
+    }
     let text = std::fs::read_to_string(&path).expect("readable");
     let (triple, _) = driver::without_triple(&text);
     let platform = triple.as_deref().and_then(driver::platform_of).unwrap_or(llrm_arm64::machine::Platform::Darwin);

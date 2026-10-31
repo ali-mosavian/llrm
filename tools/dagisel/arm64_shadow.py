@@ -18,7 +18,6 @@ import tempfile
 
 BOOKKEEPING = {"COPY", "EXTRACT_SUBREG", "INSERT_SUBREG", "SUBREG_TO_REG", "IMPLICIT_DEF", "PHI", "KILL",
                "COPY_TO_REGCLASS", "REG_SEQUENCE", "ADJCALLSTACKDOWN", "ADJCALLSTACKUP", "LIFETIME_START", "LIFETIME_END"}
-DEFAULT_LLC = os.path.expanduser("~/scratch/llvm-build-aarch64/bin/llc")
 
 
 def ours(path):
@@ -34,8 +33,8 @@ def ours(path):
         elif m := re.match(r"@(\S+) bb(\d+): ?(.*)", line):
             blocks.setdefault(m[1], []).append([o for o in m[3].split() if o not in BOOKKEEPING])
     # The pin's llc runs its own CodeGenPrepare: it gets the module before our cgpaddr, not after.
-    pre = subprocess.run(["cargo", "run", "-q", "-p", "llrm-arm64", "--example", "select_shadow", "--", path],
-                         capture_output=True, text=True, env={**os.environ, "LLRM_NO_CGPADDR": "1"})
+    pre = subprocess.run(["cargo", "run", "-q", "-p", "llrm-arm64", "--example", "select_shadow", "--", path, "-fno-llrm-cgpaddr"],
+                         capture_output=True, text=True)
     pre_module = re.search(r"^MODULE\n(.*?)^ENDMODULE", pre.stdout, re.S | re.M)
     return (pre_module or module)[1], blocks, refused
 
@@ -74,8 +73,10 @@ def pin(llc, module):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
-    ap.add_argument("--llc", default=DEFAULT_LLC)
+    ap.add_argument("--llc", default=os.path.join(os.environ.get("LLVM_BUILD", ""), "bin", "llc"), help="the pin's llc (default: $LLVM_BUILD/bin/llc)")
     args = ap.parse_args()
+    if not os.path.exists(args.llc):
+        sys.exit(f"no llc at {args.llc!r}: pass --llc or set LLVM_BUILD to the pin's build")
     for path in args.files:
         module, blocks, refused = ours(path)
         theirs = pin(args.llc, module)

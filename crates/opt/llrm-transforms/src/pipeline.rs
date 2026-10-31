@@ -209,6 +209,10 @@ pub struct Options {
     pub stable_loads: bool,
     pub promote: bool,
     pub strength: bool,
+    /// `cgpaddr`, the address-mode half of CodeGenPrepare. Off lets a pin `llc`,
+    /// whose own CodeGenPrepare runs inside it, take the module before this one
+    /// (`-fllrm-cgpaddr`).
+    pub cgpaddr: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
@@ -297,6 +301,7 @@ impl Default for Options {
             stable_loads: false,
             promote: true,
             strength: true,
+            cgpaddr: true,
             lsr: true,
             unroll: true,
             loop_unrolling: true,
@@ -462,7 +467,8 @@ impl Options {
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" | "cgpaddr" => self.strength,
+            "indvars" | "window" | "gepoffset" => self.strength,
+            "cgpaddr" => self.strength && self.cgpaddr,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
@@ -1207,9 +1213,7 @@ pub fn recorded(
     // sinks.
     // CodeGenPrepare's sinking: compares, masks, address phis and the address
     // arithmetic of a block's accesses, made in the block that uses them.
-    // `LLRM_NO_CGPADDR` leaves it out, so a shadow run can hand the pin's `llc` (whose own CodeGenPrepare
-    // runs inside it) the module before this one.
-    if applied.options.wanted("cgpaddr") && !llrm_support::env_flag!("LLRM_NO_CGPADDR") {
+    if applied.options.wanted("cgpaddr") {
         manager.add(cgpaddr::CgpAddr);
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
