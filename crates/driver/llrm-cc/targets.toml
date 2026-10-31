@@ -12,7 +12,7 @@
 description = "x86-m64"
 triple = "x86_64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-clang = ["-ffp-contract=off", "-target", "x86_64-unknown-linux-gnu"]
+clang = ["-target", "x86_64-unknown-linux-gnu"]
 llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
@@ -27,7 +27,7 @@ description = "x86-m32"
 clang_env = "LLRM_CLANG_M16"
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
-clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
+clang = ["-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
   "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-include", "{root}/toolchain/clang/flat.h"]
 llc = ["-fobject-format=omf", "-mabi=sysv"]
 object = "omf"
@@ -40,7 +40,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 description = "arm64"
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
-clang = ["-ffp-contract=off", "-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
+clang = ["-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
 llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = false
@@ -56,7 +56,7 @@ description = "x86-m16"
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
-clang = ["-ffp-contract=off", 
+clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
@@ -75,7 +75,7 @@ description = "x86-m16"
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
-clang = ["-ffp-contract=off", 
+clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
@@ -91,7 +91,7 @@ description = "x86-m16"
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
-clang = ["-ffp-contract=off",
+clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
   "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
@@ -110,7 +110,7 @@ long_double_bytes = 8
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
-clang = ["-ffp-contract=off",
+clang = [
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-fno-pic",
   "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
   "-fborland-extensions", "-fshort-wchar", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
@@ -129,7 +129,7 @@ long_double_bytes = 8
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
 clang_env = "LLRM_CLANG_M16"
-clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fhosted", "-fshort-wchar", "-mlong-double-64", "-fno-pic", "-fno-stack-protector",
+clang = ["-target", "i486-unknown-linux-gnu", "-fhosted", "-fshort-wchar", "-mlong-double-64", "-fno-pic", "-fno-stack-protector",
   "-fno-asynchronous-unwind-tables", "-D__386__=1", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall", "-fdeclspec", "-Wno-error=incompatible-function-pointer-types", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/flat.h", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m32", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h"]
 llc = ["-fobject-format=omf", "-mabi=watcom", "-mregcall-default"]
 object = "omf"
@@ -141,7 +141,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 description = "arm64"
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
-clang = ["-ffp-contract=off", "-target", "aarch64-unknown-linux-gnu", "-nostdinc", "-isystem", "{env:LLRM_ARM64_SYSROOT}/usr/aarch64-linux-gnu/include"]
+clang = ["-target", "aarch64-unknown-linux-gnu", "-nostdinc", "-isystem", "{env:LLRM_ARM64_SYSROOT}/usr/aarch64-linux-gnu/include"]
 llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = false
@@ -155,7 +155,7 @@ description = "arm64"
 long_double_bytes = 8
 triple = "arm64-apple-macosx"
 datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
-clang = ["-ffp-contract=off", "-target", "arm64-apple-macos"]
+clang = ["-target", "arm64-apple-macos"]
 llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = true
@@ -168,7 +168,7 @@ run = []
 description = "x86-m32"
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
-clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
+clang = ["-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
 llc = ["-fobject-format=elf", "-mabi=sysv"]
 object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
@@ -181,7 +181,7 @@ description = "6502"
 triple = "msp430"
 datalayout = "{datalayout:6502}"
 clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
-clang = ["-ffp-contract=off", "-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
 llc = ["--platform=sim65", "--cpu=6502"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
@@ -193,7 +193,7 @@ description = "6502"
 triple = "msp430"
 datalayout = "{datalayout:6502}"
 clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
-clang = ["-ffp-contract=off", "-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
 llc = ["--platform=sim65", "--cpu=65c02"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
@@ -205,7 +205,7 @@ link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
 description = "m68k"
 triple = "m68k-unknown-linux-gnu"
 datalayout = "{datalayout:m68k}"
-clang = ["-ffp-contract=off", "-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
 object = "asm"
@@ -215,7 +215,7 @@ link = []
 description = "m68k"
 triple = "m68k-unknown-linux-gnu"
 datalayout = "{datalayout:m68k}"
-clang = ["-ffp-contract=off", "-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
 object = "asm"

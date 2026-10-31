@@ -152,6 +152,16 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// Whether the description's machine has a fused multiply-add: the one reason to turn off clang's default
+/// contraction (`-ffp-contract=on`), which changes results only where an instruction rounds once for two operations.
+fn has_fused_multiply_add(target: &Target) -> Result<bool, String> {
+    let Some(name) = &target.description else { return Ok(false) };
+    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+    let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+    let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
+    Ok(table.get("fused_multiply_add").and_then(toml::Value::as_bool).unwrap_or(false))
+}
+
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
     let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
@@ -187,6 +197,9 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     for target in table.values_mut() {
         target.datalayout = expanded(&target.datalayout)?;
         target.c_abi = c_abi_of(target)?;
+        if has_fused_multiply_add(target)? {
+            target.clang.insert(0, "-ffp-contract=off".to_owned());
+        }
         target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
