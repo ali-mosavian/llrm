@@ -807,7 +807,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             unreachable!("a float constant has its bits")
         };
         let EVT::Simple(mvt) = vt else { unreachable!("floats are simple types") };
-        if self.tli.is_fp_imm_legal(mvt, bits) {
+        // A target that sets `ConstantFP` to `Legal` takes every constant
+        // (wasm: `f32.const`).
+        if self.tli.operation_action(ISD::ConstantFP, vt) == Action::Legal || self.tli.is_fp_imm_legal(mvt, bits) {
             return Ok(());
         }
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float

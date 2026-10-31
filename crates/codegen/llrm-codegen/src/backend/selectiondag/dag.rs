@@ -1034,6 +1034,15 @@ impl SelectionDAG {
         self.intern(ISD::ConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
+    /// `getTargetConstantFP`: a float constant a pattern takes as an immediate.
+    pub fn get_target_constant_fp(
+        &mut self,
+        bits: u128,
+        vt: EVT,
+    ) -> SDValue {
+        self.intern(ISD::TargetConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
+    }
+
     pub fn get_all_ones_constant(
         &mut self,
         vt: EVT,

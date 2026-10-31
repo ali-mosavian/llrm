@@ -163,7 +163,7 @@ fn a_target_code_is_named_or_already_the_pins_number() {
 /// EFLAGS (28) read as the builder's 28th virtual register in the emitter.
 #[test]
 fn the_pins_physical_registers_are_physical_register_nodes() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
 
@@ -186,7 +186,7 @@ fn the_pins_physical_registers_are_physical_register_nodes() {
 /// virtual.
 #[test]
 fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     use llrm_dagisel::generated::ids::mvt;
     use llrm_lir::registers::RegId;
 
@@ -233,7 +233,7 @@ fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
 /// never could).
 #[test]
 fn a_store_narrower_than_its_value_is_truncating() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let (value, ptr) = (input(&mut dag, 1), input(&mut dag, 2));
@@ -302,6 +302,21 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
     }
     assert_eq!(machine_name(&dag, zero.node), "LD_Fp080");
     assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
+}
+
+/// A pattern that takes a float as an immediate (`fpimm`, wasm's `f64.const`)
+/// asks for the constant as a target constant; a `ConstantFP` stayed a
+/// `ConstantFP`, which no machine instruction's pattern accepts.
+#[test]
+fn a_float_constant_converts_to_a_target_constant() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let value = dag.get_constant_fp(2.5f64.to_bits().into(), EVT::Simple(super::mvt::MVT::F64));
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let target = adapter.convert_to_target(PinValue::new(value.node, value.res));
+    let target = SDValue { node: target.node, res: target.res };
+    assert_eq!(dag.opcode(target), ISD::TargetConstantFP);
+    assert_eq!(dag.value_type(target), EVT::Simple(super::mvt::MVT::F64));
 }
 
 /// Every node of ours that the matcher passes through has an id in
@@ -492,7 +507,7 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
 /// "only user" answer are the same as a scan of every live node gives.
 #[test]
 fn use_queries_agree_with_a_scan_of_the_live_nodes() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
 
     let mut dag = SelectionDAG::new(DagConfig::default());
     let a = input(&mut dag, 40);
@@ -515,7 +530,7 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
 /// an allocation.
 #[test]
 fn pin_opcode_and_the_use_queries_allocate_nothing() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     use llrm_dagisel::x86_addr::AddrDag;
 
     let (_, made) = llrm_support::alloc_count::counted(|| {
