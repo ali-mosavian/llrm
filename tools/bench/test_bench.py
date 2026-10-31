@@ -1053,3 +1053,14 @@ def test_compare_baselines_refuses_two_runs_that_differ_and_names_the_cells(tmp_
     assert bench.compare_baselines(one, two) == 1
     assert "UNSTABLE q c -Os: code_bytes 154 vs 63, instructions 78 vs 2" in capsys.readouterr().out
     assert bench.compare_baselines(one, one) == 0
+
+
+def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_it():
+    """With a size-guard candidate parity/control bas and bq16 read 0 instructions (the kernel inlined into the harness) and passed the gate as
+    -100%. A kernel that executes nothing measures nothing; a base that also folded it is not accused."""
+    import bench
+
+    out = bench.against("control bas -Os", {"instructions": 0, "code_bytes": 100}, {"instructions": 156, "code_bytes": 246})
+    assert len(out) == 1 and "INVALID" in out[0], out
+    assert bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0}) == []
+    assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
