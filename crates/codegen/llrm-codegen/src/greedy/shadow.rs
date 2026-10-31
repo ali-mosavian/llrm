@@ -1376,11 +1376,12 @@ pub fn decide_with_split(
                 for (start, end) in list {
                     match merged.last_mut() {
                         Some(last) if start <= last.1 => {
-                            // Two registers written, and not read, by one
-                            // instruction (a call that clobbers a pair and
-                            // its bytes) do not meet: neither holds a value.
-                            let both_dead =
-                                start == last.0 && end == start.get_dead_slot() && last.1 == start.get_dead_slot();
+                            // A register written and not read by an instruction
+                            // (a call that clobbers a pair and its bytes) holds
+                            // nothing past it: it meets a range that ends at
+                            // that instruction, or another such write, without
+                            // conflict.
+                            let both_dead = end == start.get_dead_slot() && last.1 == start.get_dead_slot();
                             conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead;
                             last.1 = std::cmp::max(last.1.clone(), end)
                         }

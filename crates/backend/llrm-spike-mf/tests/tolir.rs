@@ -735,3 +735,25 @@ fn test_a_call_that_clobbers_a_pair_and_its_byte_is_no_conflict() {
     let inputs = converted.inputs(regs(), &order);
     assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
 }
+
+/// A call that reads a pair as an argument and clobbers its bytes meets the
+/// pair's range at the call itself, not before it (`put`'s memcpy call).
+#[test]
+fn test_a_call_that_reads_a_pair_and_clobbers_its_byte_is_no_conflict() {
+    let mut f = MFunction::<()>::new("reads");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    let mut with_argument = call();
+    with_argument.operands.push(Operand::Use(Reg::Phys(RegId::EBX)));
+    only.insts.push(with_argument);
+    only.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("get", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
+}
