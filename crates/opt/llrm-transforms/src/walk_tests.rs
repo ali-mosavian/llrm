@@ -1455,9 +1455,9 @@ b0:
 
 /// qmove c at m16 -O2: `pl_ground_accel` writes `.x` and `.y` of a vector whose
 /// `.z` the caller set and reads back through `(long)`. Inlined (the pin does,
-/// cost 5 of 225) the read folds to a constant and the call goes: the code grows
-/// 30 -> 42 but 43 clocks go (`fld`+`fistp`), worth it at 1 clock = 2 bytes.
-/// Held to bytes alone it stayed a call: +41 clk against 854.
+/// cost 5 of 225) the read folds to a constant and the call goes: the code
+/// grows 30 -> 42 but 43 clocks go (`fld`+`fistp`), worth it at 1 clock = 2
+/// bytes. Held to bytes alone it stayed a call: +41 clk against 854.
 #[test]
 fn test_an_o2_call_that_grows_the_code_but_saves_clocks_is_inlined_at_m16() {
     let text = "@g = global float 3.0
@@ -1521,6 +1521,7 @@ b0:
 ";
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
     assert!(!m16.contains("call void @callee"), "the call stayed:\n{m16}");
+}
 
 /// A call that folds once inlined stays a call with inlining off
 /// (`-fno-inline-functions`): the trial of a blocked site at a speed caller
