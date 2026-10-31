@@ -1177,6 +1177,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let folded = self.dag.get_node(ISD::Truncate, vt, &[n0]);
             return (folded != node).then_some(folded);
         }
+        if self.dag.opcode(n0) == ISD::Sub && vt.is_integer() {
+            if let Some(saturated) = self.fold_sub_to_usub_sat(vt, n0) {
+                return Some(saturated);
+            }
+        }
         match self.dag.opcode(n0) {
             // `reduceLoadWidth`: the low bytes of a loaded value are a narrower
             // load of the same address (little-endian), which then folds into
@@ -2069,9 +2074,90 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if n0 == n1 {
             return Some(self.dag.get_constant(0, vt));
         }
+        if let Some(saturated) = self.fold_sub_to_usub_sat(vt, node) {
+            return Some(saturated);
+        }
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// `getTruncatedUSUBSAT` ([L4070](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4070)): a `usubsat` of `lhs` and
+    /// `rhs` in `dst`, the operands clamped and truncated from `src`.
+    fn truncated_usub_sat(
+        &mut self,
+        dst: EVT,
+        src: EVT,
+        lhs: SDValue,
+        rhs: SDValue,
+    ) -> Option<SDValue> {
+        if dst == src {
+            return Some(self.dag.get_node(ISD::USubSat, dst, &[lhs, rhs]));
+        }
+        // "If the LHS is zero-extended then we can perform the USUBSAT as
+        // DstVT by clamping RHS."
+        let (src_bits, dst_bits) = (src.size_in_bits(), dst.size_in_bits());
+        let upper = super::fold::mask(src_bits) & !super::fold::mask(dst_bits);
+        if !super::known_bits::masked_value_is_zero(self.dag, lhs, upper) {
+            return None;
+        }
+        let limit = self.dag.get_constant(super::fold::mask(dst_bits), src);
+        let clamped = self.dag.get_node(ISD::UMin, src, &[rhs, limit]);
+        let rhs = self.dag.get_node(ISD::Truncate, dst, &[clamped]);
+        let lhs = self.dag.get_node(ISD::Truncate, dst, &[lhs]);
+        Some(self.dag.get_node(ISD::USubSat, dst, &[lhs, rhs]))
+    }
+
+    /// `foldSubToUSubSat` ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100), called from `visitSUB`
+    /// [L4501](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4501) and `visitTRUNCATE` [L17910](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17910)): `umax(a, b) - b` and `a - umin(a, b)` are
+    /// `usubsat(a, b)`, optionally as a truncated type. `sub` is a `SUB` node
+    /// and `dst` the type the result is wanted in. O(1) per node.
+    fn fold_sub_to_usub_sat(
+        &mut self,
+        dst: EVT,
+        sub: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(sub) != ISD::Sub {
+            return None;
+        }
+        // `!LegalOperations || hasOperation(USUBSAT, DstVT)`
+        if self.legal_operations() && !self.tli?.is_operation_legal_or_custom(ISD::USubSat, dst) {
+            return None;
+        }
+        let sub_vt = self.dag.value_type(sub);
+        let (op0, op1) = (self.dag.operand(sub, 0), self.dag.operand(sub, 1));
+        // "Try to find umax(a,b) - b or a - umin(a,b) patterns."
+        if self.dag.opcode(op0) == ISD::UMax && self.dag.has_one_use(op0.node) {
+            let (max_lhs, max_rhs) = (self.dag.operand(op0, 0), self.dag.operand(op0, 1));
+            if max_lhs == op1 {
+                return self.truncated_usub_sat(dst, sub_vt, max_rhs, op1);
+            }
+            if max_rhs == op1 {
+                return self.truncated_usub_sat(dst, sub_vt, max_lhs, op1);
+            }
+        }
+        if self.dag.opcode(op1) == ISD::UMin && self.dag.has_one_use(op1.node) {
+            let (min_lhs, min_rhs) = (self.dag.operand(op1, 0), self.dag.operand(op1, 1));
+            if min_lhs == op0 {
+                return self.truncated_usub_sat(dst, sub_vt, op0, min_rhs);
+            }
+            if min_rhs == op0 {
+                return self.truncated_usub_sat(dst, sub_vt, op0, min_lhs);
+            }
+        }
+        // `sub(a, trunc(umin(zext(a), b)))` is `usubsat(a, trunc(umin(b, SatLimit)))`.
+        if self.dag.opcode(op1) == ISD::Truncate {
+            let min = self.dag.operand(op1, 0);
+            if self.dag.opcode(min) == ISD::UMin && self.dag.has_one_use(min.node) {
+                let (min_lhs, min_rhs) = (self.dag.operand(min, 0), self.dag.operand(min, 1));
+                for (zext, other) in [(min_lhs, min_rhs), (min_rhs, min_lhs)] {
+                    if self.dag.opcode(zext) == ISD::ZeroExtend && self.dag.operand(zext, 0) == op0 {
+                        return self.truncated_usub_sat(dst, self.dag.value_type(zext), zext, other);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// `visitSTORE`, `replaceStoreOfFPConstant`: `store float 1.5, p` is
