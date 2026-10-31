@@ -35,6 +35,9 @@ pub struct FunctionLoweringInfo {
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
+    /// The register a variadic function keeps the pointer to its variadic
+    /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
+    pub variadic_buffer: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
     pub bpi: Option<llrm_analysis::bpi::BranchProbabilityInfo>,
     /// The probability of each machine edge a block's lowering made
@@ -106,6 +109,7 @@ impl FunctionLoweringInfo {
             variadic_save: None,
             prezeroed: Default::default(),
             sret_reg: None,
+            variadic_buffer: None,
             bpi: None,
             edge_probs: Vec::new(),
             next_reg: FIRST_VIRTUAL,

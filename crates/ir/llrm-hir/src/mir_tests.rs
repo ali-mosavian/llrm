@@ -318,11 +318,11 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
-        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"),
+        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !10\n"),
         "{text}"
     );
     assert!(
-        text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"),
+        text.contains("!1 = !{!\"place\", !5, i64 0}\n") && text.contains("!9 = !{!\"allocation.0\", !3, i64 0}\n"),
         "{text}"
     );
 }
@@ -1015,9 +1015,9 @@ fn a_languages_promises_reach_mir() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !11\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
     assert!(text.contains(body), "{text}");
-    assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
+    assert!(text.contains("!10 = !{!\"int2\", !9, i64 0}\n!11 = !{!10, !10, i64 0}"), "{text}");
 }
 
 /// An exported object is defined, a literal private, and another module's

@@ -301,6 +301,9 @@ struct Function {
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
+    // The POKE pointers among them whose segment is a literal: memory no
+    // variable of the program lives in (`Region::Absolute`).
+    unowned: BTreeSet<u32>,
 }
 
 struct Compiler {
@@ -1957,6 +1960,7 @@ impl Compiler {
             no_alias: BTreeSet::new(),
             quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
+            unowned: BTreeSet::new(),
         });
     }
 
@@ -11535,6 +11539,18 @@ fn region(
     }
     if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
         return Some(Region::Descriptor);
+    }
+    // A literal segment is memory the program owns nothing in; a reference
+    // parameter points at a variable (a near pointer into DS) or an element of
+    // an array of the program, so a routine that writes such memory states the
+    // two apart.
+    if let [Operand::Indirect { base, .. }, ..] = instruction.operands.as_slice() {
+        if function.unowned.contains(base) {
+            return Some(Region::Absolute);
+        }
+        if !function.unowned.is_empty() && function.promises.iter().any(|&(value, _)| value == *base) {
+            return Some(Region::Referent);
+        }
     }
     instruction
         .operands

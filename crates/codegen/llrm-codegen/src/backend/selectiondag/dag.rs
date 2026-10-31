@@ -168,6 +168,9 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
+    /// `sdiv` by a power of two stays an `sdiv`.
+    pub sdiv_pow2_stays: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
@@ -195,6 +198,7 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            sdiv_pow2_stays: false,
             fp_extended: false,
             known_bits_for_target_node: None,
             big_endian: false,
@@ -1291,6 +1295,21 @@ impl SelectionDAG {
             self.get_node(ISD::Truncate, vt, &[value])
         } else {
             self.get_node(ISD::ZeroExtend, vt, &[value])
+        }
+    }
+
+    pub fn get_any_ext_or_trunc(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::AnyExtend, vt, &[value])
         }
     }
 
