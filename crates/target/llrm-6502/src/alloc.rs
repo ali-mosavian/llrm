@@ -2263,6 +2263,10 @@ fn save_preserved<const STACK: bool>(
 /// `COPY a, x; CMP a, m` where nothing reads `a` afterwards compares the index
 /// register itself: `CPX m` (likewise `y`). A select after the compare reads
 /// `a` as the compare left it, so it keeps the copy.
+///
+/// DEVIATE (6502-1): a rewrite after allocation, where the pin selects `CMP`
+/// on the index class. Exit: `CMP` patterns on the X and Y classes once the
+/// allocator can constrain a compare's class (the greedy PR #6259).
 fn compare_index_registers(
     function: &mut MFunction<Class>,
     at: &dyn Fn(Reg) -> RegId,
@@ -2418,9 +2422,13 @@ fn emit_with<const STACK: bool>(
     let mut out = String::new();
     let mut made = 0;
     let mut pending: Option<i64> = None;
-    // a call that returns at once is a jump: the callee's `rts` returns from
+    // A call that returns at once is a jump: the callee's `rts` returns from
     // here. `__csave` keeps the return address, and a frame to release stands
     // between the call and the return.
+    //
+    // DEVIATE (6502-2): decided at emission, where the pin's `isTailCall` is
+    // decided in call lowering (as llvm-mos does). Exit: tail calls in the
+    // 6502's call lowering.
     let tail_call = |block: &Block, i: usize, pending: Option<i64>| {
         let named = |inst: &Inst| {
             matches!(
@@ -2708,6 +2716,9 @@ fn emit_with<const STACK: bool>(
                         && out.lines().last().is_some_and(crate::peephole::sets_nz_of_a) =>
                 {
                     // `iny; tya; bne`: the step set the flags of y itself
+                    // DEVIATE (6502-3): looks back in the printed text. Exit:
+                    // the peephole on allocated MIR (D-6502
+                    // of #6259, see peephole.rs).
                     let mut tail = out.lines().rev();
                     let (last, before) = (tail.next().unwrap_or(""), tail.next().unwrap_or(""));
                     let step = |register: &str| ["in", "de"].iter().any(|op| before == format!("  {op}{register}"));
@@ -2950,7 +2961,7 @@ fn own_labels(
 ///
 /// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
 /// branch relaxation.
-fn relax(text: &str) -> String {
+pub fn relax(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
     let mut out = String::new();

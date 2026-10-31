@@ -13,11 +13,11 @@
 //! - [`drop_zero_compares`]: `cmp #0` before a branch on zero or sign, after a
 //!   line that set those flags from `a`.
 //!
-//! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on machine
-//! instructions with register liveness; these work on the printed lines of one
-//! function, because the 6502 emitter prints as it allocates. Exit: the 6502
-//! on the shared greedy allocator, which leaves allocated machine instructions
-//! to run these on.
+//! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
+//! machine instructions; these work on the printed lines of one function,
+//! because the 6502 emitter prints as it allocates. Exit: D-6502 of the greedy
+//! PR #6259 replaces these textual passes with the shared
+//! `PeepholeOptimizer`/`MachineCSE` on allocated MIR; delete this file then.
 //!
 //! # Example
 //! ```text

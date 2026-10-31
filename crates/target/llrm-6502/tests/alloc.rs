@@ -2266,6 +2266,17 @@ fn a_zero_compare_after_an_op_that_set_the_flags_goes() {
     assert_eq!(drop_zero_compares(carry), carry, "bcs reads the carry the compare set");
 }
 
+/// A conditional branch more than 40 instructions away became a long
+/// `bcc` over a `jmp`; one within reach stays.
+#[test]
+fn a_far_branch_is_inverted_over_a_jump_and_a_near_one_stays() {
+    use llrm_6502::alloc::relax;
+    let near = "  bne l\n  nop\nl:\n";
+    assert_eq!(relax(near), near);
+    let far = format!("  bne l\n{}l:\n", "  nop\n".repeat(41));
+    assert!(relax(&far).starts_with("  beq _far1\n  jmp l\n_far1:\n"), "{}", relax(&far));
+}
+
 /// A spilled byte used as the second operand of an ALU op is read from its cell
 /// (`eor s_f_3`). Slot sharing took that read plus the store of its result for
 /// a copy of one slot into the other and gave them one cell: 184 of 240
