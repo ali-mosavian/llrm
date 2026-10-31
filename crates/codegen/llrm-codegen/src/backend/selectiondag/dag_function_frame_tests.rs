@@ -1411,3 +1411,162 @@ define i16 @f() {
     let zero = zero.expect("a zero");
     assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
 }
+
+/// The width in bytes of the register of the `rep stos` a `memset` of the size
+/// `%s` (defined by `size`, from the argument `%n`) bytes of `value` becomes at
+/// m16 on `cpu` (`None`: no fill).
+fn dynamic_fill_unit_of(
+    size: &str,
+    value: u8,
+    cpu: &str,
+) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p, i16 %n) {{
+entry:
+  {size}
+  call void @llvm.memset.p0.i16(ptr %p, i8 {value}, i16 %s, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile(cpu).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(
+            |w| w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                ),
+        )
+}
+
+fn dynamic_fill_unit(shift: u32) -> Option<String> {
+    dynamic_fill_unit_of(&format!("%s = shl nuw i16 %n, {shift}"), 0, "486")
+}
+
+/// sieve bq16: `memset(p, 0, n << 1)` of a 2-byte array was `rep stosb` of
+/// 2048 bytes where `rep stosw` of 1024 stores half the operands: 1,024 of the
+/// 2,706 over main.
+#[test]
+fn a_fill_of_whole_words_is_rep_stosw() {
+    let unit = dynamic_fill_unit(1).expect("a fill");
+    assert_eq!(unit, "2");
+}
+
+/// A size that is no multiple of 2 stays bytes.
+#[test]
+fn a_fill_of_unknown_size_stays_rep_stosb() {
+    assert_eq!(dynamic_fill_unit(0).as_deref(), Some("1"));
+}
+
+/// The unit is only as wide as the known bits of the size allow: `n` and `n |
+/// 1` are bytes, `n & -2` and `n << 1` words, `n << 2` dwords on the lowest
+/// profile m16 has (the 386; there is no 8086 or 286 profile, llrm-cc rejects
+/// `-march=i286`), so no profile gets a unit its registers lack.
+#[test]
+fn the_unit_of_a_dynamic_fill_follows_the_known_bits_of_its_size() {
+    let of = |size: &str, cpu: &str| dynamic_fill_unit_of(size, 0, cpu).expect("a fill");
+    assert_eq!(of("%s = add i16 %n, 0", "486"), "1");
+    assert_eq!(of("%s = or i16 %n, 1", "486"), "1");
+    assert_eq!(of("%s = and i16 %n, -2", "486"), "2");
+    assert_eq!(of("%s = shl nuw i16 %n, 2", "386"), "4");
+    assert_eq!(of("%s = shl nuw i16 %n, 3", "486"), "4");
+}
+
+/// A non-zero fill byte is splatted across the unit (`0x0101`, `0x01010101`):
+/// the same `rep stos` for any constant byte, and a byte fill for a byte we
+/// cannot splat at compile time.
+#[test]
+fn a_constant_fill_byte_is_splatted_into_the_unit() {
+    assert_eq!(dynamic_fill_unit_of("%s = shl nuw i16 %n, 1", 7, "486").as_deref(), Some("2"));
+}
+
+/// sieve m32 -O2 grew 14 bytes when a `memset` of `n << 1` became `rep stosw`
+/// (an operand-size prefix in 32-bit code, and a shift pair): a word is no unit
+/// there. Returns the register width of the fill, and the names of the shifts
+/// that make its count.
+fn fill_at_m32(shift: u32) -> (Option<String>, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f(ptr %p, i32 %n) {{
+entry:
+  %s = shl nuw i32 %n, {shift}
+  call void @llvm.memset.p0.i32(ptr %p, i8 0, i32 %s, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let unit = whats()
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(
+            |w| w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                ),
+        );
+    (unit, whats().filter(|w| matches!(w.name.as_deref(), Some("shr" | "shl" | "sar"))).count())
+}
+
+#[test]
+fn at_m32_a_fill_of_whole_words_stays_bytes() {
+    assert_eq!(fill_at_m32(1).0.as_deref(), Some("1"));
+}
+
+#[test]
+fn at_m32_a_fill_of_whole_dwords_is_rep_stosd_with_no_shift() {
+    assert_eq!(fill_at_m32(2), (Some("4".to_owned()), 0));
+}
+
+/// `n << 1` bytes of zero at m16 is `cx = n`: the shift that built the size and
+/// the one that halves it cancel (`add cx, cx ; shr cx, 1` was 2 bytes + 2).
+#[test]
+fn a_fill_of_n_shl_1_counts_n_words_with_no_shift_pair() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p, i16 %n) {
+entry:
+  %s = shl nuw i16 %n, 1
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %s, i1 false)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let shifts = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.name.as_deref(), Some("shr" | "shl" | "sar" | "add")))
+        .count();
+    assert_eq!(shifts, 0);
+}
+
+/// matmul bas/bq16 -O2 grew 4 bytes when a 66-byte constant `memset` took
+/// `rep stosw`: only a size that is not a constant widens.
+#[test]
+fn a_fill_of_a_constant_size_that_is_not_a_dword_multiple_stays_bytes() {
+    assert_eq!(dynamic_fill_unit_of("%s = add i16 66, 0", 0, "486").as_deref(), Some("1"));
+}

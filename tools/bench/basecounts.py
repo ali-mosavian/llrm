@@ -139,6 +139,20 @@ def base_counts(
     return have, hashes
 
 
+def unstable_cells(first: dict, second: dict) -> list[str]:
+    """The cells of ours that two runs of one compiler disagree on, one line each. A baseline is trusted only when a second run of the same
+    tree reproduces it: code and data bytes do not move with timing, so a difference is another build, a stale cache or another program."""
+    problems = []
+    for key in sorted(first.keys() & second.keys()):
+        if key[1] not in OURS:
+            continue
+        a, b = first[key], second[key]
+        moved = [f"{counter} {a.get(counter)} vs {b.get(counter)}" for counter in sorted(a.keys() | b.keys()) if a.get(counter) != b.get(counter)]
+        if moved:
+            problems.append(f"UNSTABLE {label(key)}: {', '.join(moved)}")
+    return problems
+
+
 def waivers(root: Path = ROOT) -> list[dict]:
     """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
     a failure once a row is no longer worse than the base."""
