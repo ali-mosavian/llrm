@@ -34,24 +34,27 @@ impl Mos {
     }
 }
 
-/// The 6502 writes assembly for ca65, not objects: every format is
-/// unsupported.
+/// The 6502's object writers: ELF32 (`crate::elf`) from an `Object`; the
+/// compiler's own output is still ca65 text, which `elf::relocatable` reads.
 struct MosObjects;
 
 impl llrm_object::ObjectTarget for MosObjects {
     fn write_object(
         &self,
         format: &str,
-        _object: &llrm_object::Object,
+        object: &llrm_object::Object,
     ) -> Result<Vec<u8>, llrm_object::Unsupported> {
-        Err(llrm_object::Unsupported(format!("the 6502 writes assembly, not a {format} object")))
+        match format {
+            "elf" => crate::elf::write(object),
+            _ => Err(llrm_object::Unsupported(format!("the 6502 has no {format} object writer"))),
+        }
     }
 
     fn asm_info(
         &self,
-        _format: &str,
+        format: &str,
     ) -> Option<llrm_object::AsmInfo> {
-        None
+        (format == "elf").then(|| llrm_object::AsmInfo { hosted: true, ..llrm_object::AsmInfo::default() })
     }
 }
 
@@ -59,10 +62,10 @@ impl llrm_debug::DebugObjectTarget for MosObjects {
     fn write_described(
         &self,
         format: &str,
-        _object: &llrm_object::Object,
+        object: &llrm_object::Object,
         _debug: Option<&llrm_debug::Info>,
     ) -> Result<Vec<u8>, llrm_object::Unsupported> {
-        Err(llrm_object::Unsupported(format!("the 6502 writes assembly, not a {format} object")))
+        llrm_object::ObjectTarget::write_object(self, format, object)
     }
 
     fn debug_caps(
