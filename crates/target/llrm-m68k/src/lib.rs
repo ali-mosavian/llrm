@@ -11,6 +11,7 @@ pub mod driver;
 pub mod encode;
 pub mod expand;
 pub mod flags;
+pub mod isa;
 pub mod frame;
 pub mod kernels;
 pub mod mac;
