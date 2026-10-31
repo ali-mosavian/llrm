@@ -350,6 +350,21 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
     assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
 }
 
+/// A pattern that takes a float as an immediate (`fpimm`, wasm's `f64.const`)
+/// asks for the constant as a target constant; a `ConstantFP` stayed a
+/// `ConstantFP`, which no machine instruction's pattern accepts.
+#[test]
+fn a_float_constant_converts_to_a_target_constant() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let value = dag.get_constant_fp(2.5f64.to_bits().into(), EVT::Simple(super::mvt::MVT::F64));
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let target = adapter.convert_to_target(PinValue::new(value.node, value.res));
+    let target = SDValue { node: target.node, res: target.res };
+    assert_eq!(dag.opcode(target), ISD::TargetConstantFP);
+    assert_eq!(dag.value_type(target), EVT::Simple(super::mvt::MVT::F64));
+}
+
 /// Every node of ours that the matcher passes through has an id in
 /// `own_ids.txt`: `LLRM_FARCALL` had none, mapped to no opcode, and a call
 /// through a function pointer was `CannotSelect(Target(24584))` (7 m16

@@ -200,6 +200,7 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
 pub fn values(
     body: &LirBody,
     invariant: &BTreeSet<u32>,
+    tii: &dyn super::tii::TargetInstrInfo,
 ) -> BTreeSet<u32> {
     let mut definitions: IndexMap<u32, Vec<&Arc<Insn>>> = IndexMap::default();
     let mut widest: IndexMap<u32, u32> = IndexMap::default();
@@ -239,7 +240,7 @@ pub fn values(
                 );
             let literal = first.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)]));
             let narrow = !literal || widest.get(value).copied().unwrap_or(0) <= first_width(first);
-            (alike && narrow && is_trivially_re_materializable(first, invariant.contains(value))).then_some(*value)
+            (alike && narrow && tii.is_trivially_re_materializable(first, invariant.contains(value))).then_some(*value)
         })
         .collect()
 }
@@ -280,6 +281,7 @@ pub(crate) fn group_source(one: &Insn) -> Option<Held> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::classes::RegisterClasses;
     use crate::model::ir::{Held, Imm, Mem, Semantics};
 
     fn def(
@@ -352,7 +354,14 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        assert_eq!(values(&body, &BTreeSet::new()), BTreeSet::from([1]));
+        assert_eq!(
+            values(
+                &body,
+                &BTreeSet::new(),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() }
+            ),
+            BTreeSet::from([1])
+        );
     }
 
     fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -434,7 +443,22 @@ mod tests {
         };
         let body = one_block(vec![flagged(0, 1), move_of(1, word(2), cell(), vec![2])]);
         assert_eq!(flagged_loads(&body), BTreeSet::from([1]));
-        assert_eq!(values(&body, &flagged_loads(&body)), BTreeSet::from([1]));
-        assert!(values(&body, &BTreeSet::new()).is_empty(), "the flag is what takes the load");
+        assert_eq!(
+            values(
+                &body,
+                &flagged_loads(&body),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() }
+            ),
+            BTreeSet::from([1])
+        );
+        assert!(
+            values(
+                &body,
+                &BTreeSet::new(),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() }
+            )
+            .is_empty(),
+            "the flag is what takes the load"
+        );
     }
 }

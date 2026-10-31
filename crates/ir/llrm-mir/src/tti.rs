@@ -348,6 +348,11 @@ pub trait Tti {
         false
     }
 
+    /// The same bound for a caller optimized for speed (its tuning table).
+    fn speed_inline_by_code_size(&self) -> bool {
+        false
+    }
+
     /// How many percent of its `CodeSize` units a call and the pushes of its
     /// arguments take in code, where they are bigger than the average
     /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
