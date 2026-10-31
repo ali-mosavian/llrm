@@ -560,7 +560,17 @@ fn assert_allocated(
 }
 
 fn rewritten(f: &MFunction<()>) -> llrm_spike_mf::tolir::Rewritten<()> {
-    let converted = to_lir::<Flat>(f, regs()).expect("converts");
+    rewritten_with(f, false)
+}
+
+fn rewritten_with(
+    f: &MFunction<()>,
+    join: bool,
+) -> llrm_spike_mf::tolir::Rewritten<()> {
+    let mut converted = to_lir::<Flat>(f, regs()).expect("converts");
+    if join {
+        converted.coalesce(false);
+    }
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs(), &order);
     let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(f);
@@ -621,4 +631,31 @@ fn test_a_block_no_path_reaches_is_kept_as_it_was() {
     let back = rewritten(&f);
     assert_eq!(format!("{:?}", back.function.blocks[2]), format!("{:?}", f.blocks[2]));
     assert_allocated(&back.function, &back.assignment);
+}
+
+/// A value copied into a register the next instruction reads, and read again
+/// after it: without the coalescer it overlaps the register's pinned range and
+/// lives elsewhere, copying in on every pass. Joined into the pinned value it
+/// is the register, and the copy goes (the 6502's `COPY x, i` before an
+/// indexed load: sum4 spent `txa; tay` and `clc; adc #1` where `inx` fits).
+#[test]
+fn test_a_copy_into_a_pinned_register_joins_into_it() {
+    let mut f = MFunction::<()>::new("join");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("load", vec![Operand::Def(v(0))]));
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Use(v(0))]));
+    only.insts.push(op("get", vec![Operand::Def(Reg::Phys(RegId::ECX)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let copies = |back: &llrm_spike_mf::tolir::Rewritten<()>| {
+        back.function.blocks[0].insts.iter().filter(|inst| inst.kind == Kind::Copy).count()
+    };
+    assert_eq!(copies(&rewritten_with(&f, false)), 1, "premise: the copy stays without the coalescer");
+    let joined = rewritten_with(&f, true);
+    assert_eq!(copies(&joined), 0, "{:?}", joined.function.blocks[0].insts);
+    let store = joined.function.blocks[0].insts.iter().find(|inst| inst.kind == Kind::Op("store")).unwrap();
+    assert_eq!(store.operands, vec![Operand::Use(Reg::Phys(RegId::EBX))], "the value is the register now");
 }

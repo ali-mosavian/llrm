@@ -105,6 +105,22 @@ pub fn joined(
     after
 }
 
+/// `body` with its copies joined, for a caller that states the palettes and
+/// pins itself (a target whose registers are not x86 classes). The palettes
+/// come back narrowed to what each surviving value may take.
+pub fn coalesce(
+    body: &LirBody,
+    palettes: IndexMap<u32, BTreeSet<RegId>>,
+    pins: IndexMap<u32, RegId>,
+    size: bool,
+) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
+    let env = TargetEnv { palettes: palettes.into(), pins, size };
+    let depths = crate::analysis::intervals::depths_shared(body);
+    let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
+    let after = joined(body, &env, &depth);
+    (after, env.palettes.into_inner())
+}
+
 /// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A
 /// full copy is probed by running `join_copy` on the final state; a probe that
 /// joins changes the state the next sees, so the reasons are a count, not a
