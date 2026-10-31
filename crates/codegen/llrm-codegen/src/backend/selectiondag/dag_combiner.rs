@@ -2082,8 +2082,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
     }
 
-    /// `getTruncatedUSUBSAT`: a `usubsat` of `lhs` and `rhs` in `dst`, the
-    /// operands clamped and truncated from `src`.
+    /// `getTruncatedUSUBSAT` ([L4070](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4070)): a `usubsat` of `lhs` and
+    /// `rhs` in `dst`, the operands clamped and truncated from `src`.
     fn truncated_usub_sat(
         &mut self,
         dst: EVT,
@@ -2108,9 +2108,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_node(ISD::USubSat, dst, &[lhs, rhs]))
     }
 
-    /// `foldSubToUSubSat`: `umax(a, b) - b` and `a - umin(a, b)` are
+    /// `foldSubToUSubSat` ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100), called from `visitSUB`
+    /// [L4501](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4501) and `visitTRUNCATE` [L17910](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17910)): `umax(a, b) - b` and `a - umin(a, b)` are
     /// `usubsat(a, b)`, optionally as a truncated type. `sub` is a `SUB` node
-    /// and `dst` the type the result is wanted in.
+    /// and `dst` the type the result is wanted in. O(1) per node.
     fn fold_sub_to_usub_sat(
         &mut self,
         dst: EVT,
