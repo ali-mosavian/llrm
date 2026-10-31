@@ -386,3 +386,33 @@ b0:
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
     assert!(after.contains("add i32 %a, 1"), "{after}");
 }
+
+/// An alloca with assignment tracking is promoted: the `#dbg_assign` linked to
+/// its store becomes a `#dbg_value` where it stood, and the ones linked to the
+/// alloca go with it. They stayed (naming a store and an alloca that were gone)
+/// and a debugger was told nothing of the variable.
+#[test]
+fn test_a_tracked_alloca_is_promoted_and_its_assigns_become_values() {
+    let after = promoted(
+        "define i32 @f(i32 %a) {
+b0:
+  %x = alloca i32, !DIAssignID !1
+  #dbg_assign(i1 poison, !0, !3, !1, ptr %x, !3, !4)
+  store i32 %a, ptr %x, !DIAssignID !2
+  #dbg_assign(i32 %a, !0, !3, !2, ptr %x, !3, !4)
+  %v = load i32, ptr %x
+  ret i32 %v
+}
+
+!0 = !{!\"f\", !\"x\", !5, i64 0}
+!1 = distinct !{}
+!2 = distinct !{}
+!3 = !{}
+!4 = !{}
+!5 = !{!\"int\"}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store"), "{after}");
+    assert!(!after.contains("#dbg_assign"), "{after}");
+    assert!(after.contains("#dbg_value(i32 %a, !0"), "{after}");
+}

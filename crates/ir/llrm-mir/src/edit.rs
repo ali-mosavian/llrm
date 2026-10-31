@@ -833,6 +833,52 @@ impl Function {
         self.debug_records.push(DebugRecord { before, variable, what, expression: None, location: None });
     }
 
+    /// As [`add_debug_record`](Self::add_debug_record), with the expression and
+    /// location a `#dbg_value` was written with.
+    pub fn add_debug_record_with(
+        &mut self,
+        before: InstId,
+        variable: MetadataId,
+        what: DebugWhat,
+        expression: Option<MetadataId>,
+        location: Option<MetadataId>,
+    ) {
+        self.debug_records.push(DebugRecord { before, variable, what, expression, location });
+    }
+
+    /// The `#dbg_assign` records linked to `inst`: those whose assignment id is
+    /// the `!DIAssignID` it carries (`at::getDVRAssignmentMarkers`), by their
+    /// index in [`debug_records`](Self::debug_records).
+    pub fn assignment_markers(
+        &self,
+        inst: InstId,
+    ) -> Vec<usize> {
+        let Some(&(_, id)) = self.instruction(inst).metadata.iter().find(|(kind, _)| kind == "DIAssignID") else {
+            return Vec::new();
+        };
+        (0..self.debug_records.len())
+            .filter(|&at| {
+                matches!(
+                    self.debug_records[at].what,
+                    DebugWhat::Assign { id: one, .. } if one == id
+                )
+            })
+            .collect()
+    }
+
+    /// Takes away the records at `indices`
+    /// (`DbgVariableRecord::eraseFromParent`).
+    pub fn remove_debug_records(
+        &mut self,
+        indices: &[usize],
+    ) {
+        let mut at = 0;
+        self.debug_records.retain(|_| {
+            at += 1;
+            !indices.contains(&(at - 1))
+        });
+    }
+
     /// The records of what `value` was now say `with`.
     fn retarget_debug_records(
         &mut self,
