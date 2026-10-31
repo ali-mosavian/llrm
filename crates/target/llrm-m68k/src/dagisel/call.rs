@@ -123,6 +123,7 @@ impl M68kCalling {
                 base: MemBase::CallArgument(offset as i32),
                 ext: None,
                 space: 0,
+                ordering: None,
             };
             stores.push(dag.get_store(chain, arg, address, info));
         }
@@ -191,6 +192,7 @@ impl M68kCalling {
                     base: MemBase::Stack(index),
                     ext: None,
                     space: 0,
+                    ordering: None,
                 };
                 dag.get_load(arg.vt, chain, address, info)
             })
