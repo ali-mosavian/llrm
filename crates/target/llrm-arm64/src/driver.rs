@@ -206,22 +206,38 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
         .collect()
 }
 
-/// Which instruction selector makes the machine function.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum IselMode {
+/// Which instruction selector makes the machine function (`--isel=`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IselMode {
+    #[default]
     Hand,
     Dag,
+    /// The DAG path, the hand selector where it refuses (counted on stderr).
     Shadow,
 }
 
-fn isel_mode() -> IselMode {
-    if llrm_support::env_flag!("LLRM_ISEL_DAG") {
-        IselMode::Dag
-    } else if llrm_support::env_flag!("LLRM_ISEL_SHADOW") {
-        IselMode::Shadow
-    } else {
-        IselMode::Hand
+impl IselMode {
+    /// The mode `--isel=NAME` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "hand" => Some(Self::Hand),
+            "dag" => Some(Self::Dag),
+            "shadow" => Some(Self::Shadow),
+            _ => None,
+        }
     }
+}
+
+static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Hand);
+
+/// Chooses the selector for the compiles that follow (the process's, as the
+/// pass flags are).
+pub fn set_isel_mode(mode: IselMode) {
+    *ISEL_MODE.lock().unwrap() = mode;
+}
+
+fn isel_mode() -> IselMode {
+    *ISEL_MODE.lock().unwrap()
 }
 
 /// `name` through the DAG path: the pin's table and the shared stages.

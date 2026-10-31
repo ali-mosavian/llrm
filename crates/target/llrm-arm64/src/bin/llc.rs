@@ -36,9 +36,13 @@ fn run() -> i32 {
                 llrm_env::preset("LLRM_EXP_INLINETRACE");
             }
             "--no-opt" => level = driver::Level::O0,
-            "--isel=dag" => llrm_env::preset("LLRM_ISEL_DAG"),
-            "--isel=shadow" => llrm_env::preset("LLRM_ISEL_SHADOW"),
-            "--isel=hand" => {}
+            other if other.starts_with("--isel=") => match driver::IselMode::parse(&other["--isel=".len()..]) {
+                Some(mode) => driver::set_isel_mode(mode),
+                None => {
+                    eprintln!("llrm-arm64-llc: {other}: choose hand, dag or shadow");
+                    return 2;
+                }
+            },
             other if other.starts_with("-f") && driver::pass_flag(other) => {}
             other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
