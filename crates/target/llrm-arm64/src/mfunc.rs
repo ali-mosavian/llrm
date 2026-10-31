@@ -236,6 +236,14 @@ impl OpList {
         self.locs.insert(at, loc);
     }
 
+    /// The operation at `at`, to change in place: its place stays.
+    pub fn op_mut(
+        &mut self,
+        at: usize,
+    ) -> &mut Op {
+        &mut self.ops[at]
+    }
+
     pub fn remove(
         &mut self,
         at: usize,

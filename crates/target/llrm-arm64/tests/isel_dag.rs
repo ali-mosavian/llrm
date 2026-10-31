@@ -71,3 +71,54 @@ define i64 @u(i64 %a, i64 %b) {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}\n";
         assert!(asm.contains(want), "{want}:\n{asm}");
     }
 }
+
+/// The pin's MachineSink moves the zero a phi takes from the entry onto that edge. The DAG path
+/// built it in the entry block, so it ran on both paths: `orr x0, xzr, xzr` before the branch.
+#[test]
+fn a_constant_only_one_edge_reads_is_made_on_that_edge() {
+    let ir = "target triple = \"arm64-apple-macosx\"\n\
+target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+define i32 @f(i32 %a, i32 %b) {\n  %c = icmp sgt i32 %a, 0\n  br i1 %c, label %t, label %e\n\
+t:\n  %m = mul i32 %b, %a\n  br label %e\n\
+e:\n  %r = phi i32 [ 0, %0 ], [ %m, %t ]\n  ret i32 %r\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, ir).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let asm = std::fs::read_to_string(&output).unwrap();
+    let entry = asm.split(".Lf.1:").next().unwrap();
+    assert!(!entry.contains("xzr, xzr"), "the zero is made before the branch that skips its use:\n{asm}");
+}
+
+/// The pin's MachineCSE merges the dominated `SUBSWri a, 1` with the compare's, so the compare
+/// defines the value (`subs w8, w0, #1`). The DAG path kept `subs wzr, w0, #1` in the entry block
+/// and a second `sub w9, w0, #1` after the branch: 2 instructions for the pin's 1.
+#[test]
+fn a_subtract_after_a_compare_of_the_same_operands_shares_it() {
+    let ir = "target triple = \"arm64-apple-macosx\"\n\
+target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+define i32 @f(i32 %a, i32 %b) {\n  %c = icmp sgt i32 %a, 0\n  br i1 %c, label %t, label %e\n\
+t:\n  %d = add nsw i32 %a, -1\n  %m = mul i32 %b, %d\n  ret i32 %m\n\
+e:\n  ret i32 0\n}\n";
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, ir).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let asm = std::fs::read_to_string(&output).unwrap();
+    assert!(!asm.contains("subs wzr"), "the compare should define the difference:\n{asm}");
+    assert_eq!(asm.matches("sub").count(), 1, "one subtract, not a compare and a subtract:\n{asm}");
+}
