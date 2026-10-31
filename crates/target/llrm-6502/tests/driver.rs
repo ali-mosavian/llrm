@@ -547,3 +547,80 @@ define i8 @borrow() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert_eq!(exit_code_of(&text, "borrow"), 1, "{text}");
 }
+
+/// A hot loop that copies a record of unknown length each trip and keeps six
+/// words live across the copy; the records are 2, 1 and 3 bytes.
+const COPY_LOOP: &str = r#"declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)
+@src = internal global [9 x i8] c"\02\0A\0B\01\0C\03\0D\0E\0F"
+@dst = internal global [6 x i8] zeroinitializer
+define i16 @records() {
+entry:
+  %end = getelementptr i8, ptr @dst, i16 6
+  br label %head
+head:
+  %p = phi ptr [ @src, %entry ], [ %p2, %head ]
+  %q = phi ptr [ @dst, %entry ], [ %q2, %head ]
+  %a = phi i16 [ 0, %entry ], [ %a2, %head ]
+  %b = phi i16 [ 1, %entry ], [ %b2, %head ]
+  %c = phi i16 [ 2, %entry ], [ %c2, %head ]
+  %d = phi i16 [ 3, %entry ], [ %d2, %head ]
+  %t = load i8, ptr %p
+  %len = zext i8 %t to i16
+  %from = getelementptr i8, ptr %p, i16 1
+  call void @llvm.memcpy.p0.p0.i16(ptr %q, ptr %from, i16 %len, i1 false)
+  %p2 = getelementptr i8, ptr %from, i16 %len
+  %q2 = getelementptr i8, ptr %q, i16 %len
+  %a2 = add i16 %a, %len
+  %b2 = xor i16 %b, %a
+  %c2 = add i16 %c, %b
+  %d2 = sub i16 %d, %c
+  %more = icmp ult ptr %q2, %end
+  br i1 %more, label %head, label %done
+done:
+  %last = getelementptr i8, ptr @dst, i16 5
+  %byte = load i8, ptr %last
+  %wide = zext i8 %byte to i16
+  %s0 = add i16 %a2, %b2
+  %s1 = add i16 %s0, %c2
+  %s2 = add i16 %s1, %d2
+  %r = add i16 %s2, %wide
+  ret i16 %r
+}"#;
+
+/// A call of `memcpy` in a loop with six words live across it left the values
+/// that do not fit the preserved pairs in slots for the whole loop: 454 bytes
+/// against 294 as a loop, and on lz4 1128 B and 85347 clocks against 580 B and
+/// 64957 (sim65). The copy is a loop here.
+#[test]
+fn a_copy_in_a_loop_with_six_words_live_is_a_loop() {
+    let ir = module(COPY_LOOP);
+    assert!(ir.contains("@llvm.memcpy"), "the premise: the copy reaches the backend as a call");
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("jsr memcpy"), "{text}");
+    let bytes = llrm_6502::timing::estimate(Request::new(Level::O2).cpu, &text).unwrap().bytes;
+    assert!(bytes < 350, "{bytes} B\n{text}");
+}
+
+/// The loop made from a copy runs: the records' payloads land in `dst`, the
+/// last of them (15) is added to the sums of the four words (7).
+#[test]
+fn the_copy_loop_made_from_a_call_runs() {
+    let text = assembly(&module(COPY_LOOP), &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("jsr memcpy"), "the premise: the loop ran, not the routine\n{text}");
+    assert_eq!(exit_code_of(&text, "records"), 22, "{text}");
+}
+
+/// A copy with nothing live across it is the call: 20 bytes against 78 as a
+/// loop.
+#[test]
+fn a_copy_with_nothing_live_across_it_stays_a_call() {
+    let ir = module(
+        r#"declare void @llvm.memcpy.p0.p0.i16(ptr noalias, ptr noalias, i16, i1)
+define void @copy(ptr noalias %d, ptr noalias %s, i16 %n) {
+  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)
+  ret void
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("jsr memcpy"), "{text}");
+}

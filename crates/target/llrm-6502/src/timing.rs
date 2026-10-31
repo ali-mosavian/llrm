@@ -299,6 +299,19 @@ pub fn estimate(
     cpu: Cpu,
     text: &str,
 ) -> Result<Estimate, String> {
+    estimate_calling(cpu, text, &[], None)
+}
+
+/// [`estimate`], a `jsr` of one of `routines` also costing the clocks given,
+/// and the lines of a block `n` (label `<function>_b<n>`) weighed by the loops
+/// `depth_of(n)` says it is in, where the text's own jumps back would say more:
+/// a function laid out with far branches has them nested into one another.
+pub fn estimate_calling(
+    cpu: Cpu,
+    text: &str,
+    routines: &[(&str, u64)],
+    depth_of: Option<&dyn Fn(u32) -> u32>,
+) -> Result<Estimate, String> {
     let expanded = expand_macros(text);
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
     let label_at =
@@ -323,6 +336,7 @@ pub fn estimate(
         }
     }
     let mut out = Estimate::default();
+    let mut block = None;
     let mut in_data = false;
     let mut segment = "CODE";
     // a macro's body is text for ca65, not code until it is used
@@ -337,7 +351,13 @@ pub fn estimate(
             in_macro = true;
             continue;
         }
-        if trimmed.is_empty() || trimmed.ends_with(':') {
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if let Some((_, number)) = label.rsplit_once("_b") {
+                block = number.parse().ok().or(block);
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
             continue;
         }
         if let Some(directive) = trimmed.strip_prefix('.') {
@@ -365,7 +385,9 @@ pub fn estimate(
         let cost = instruction(cpu, mnemonic, operand).ok_or_else(|| format!("cannot price `{trimmed}`"))?;
         let taken = u32::from(backward[at] && mnemonic != "jmp" && mnemonic != "bra");
         out.bytes += cost.bytes;
-        out.cycles += u64::from(cost.cycles + taken) * 10u64.pow(depth[at].min(3));
+        let called = routines.iter().find(|(name, _)| mnemonic == "jsr" && operand.trim() == *name).map_or(0, |r| r.1);
+        out.cycles += (u64::from(cost.cycles + taken) + called)
+            * 10u64.pow(block.zip(depth_of).map_or(depth[at], |(block, depth_of)| depth_of(block)).min(3));
     }
     Ok(out)
 }
