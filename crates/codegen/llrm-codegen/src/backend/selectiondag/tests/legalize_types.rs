@@ -193,7 +193,15 @@ fn a_store_of_a_value_below_the_register_size_is_a_truncating_store() {
     let value = load(&mut dag, EVT::Simple(MVT::I16), 1);
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::Simple(MVT::I16), align: 2, volatile: false, base: MemBase::Stack(2), ext: None, space: 0, ordering: None };
+    let info = MemInfo {
+        mem_vt: EVT::Simple(MVT::I16),
+        align: 2,
+        volatile: false,
+        base: MemBase::Stack(2),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let store = dag.get_store(chain, value, ptr, info);
     dag.set_root(store);
     assert_eq!(legalize(&mut dag, &tli), Ok(true));
@@ -208,8 +216,8 @@ fn a_store_of_a_value_below_the_register_size_is_a_truncating_store() {
 /// the target's shift-amount type; AArch64 shifts by an `i64`.
 #[test]
 fn a_promotion_shifts_by_the_targets_shift_amount_type() {
-    let info = llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false)
-        .with_shift_amount_type(MVT::I64);
+    let info =
+        llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_shift_amount_type(MVT::I64);
     let tli = TargetLowering::empty(info);
     let mut dag = dag();
     let i16 = EVT::Simple(MVT::I16);

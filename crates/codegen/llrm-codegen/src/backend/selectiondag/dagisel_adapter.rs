@@ -169,7 +169,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Load | LoadPre | LoadPost => pin::LOAD,
         Store | StorePre | StorePost => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
-        // No x86 table names these; a target whose table does gets its own id map (B2).
+        // No x86 table names these; a target whose table does gets its own id
+        // map (B2).
         AtomicCmpSwap | AtomicLoadAdd | AtomicLoadSub | AtomicLoadAnd | AtomicLoadOr | AtomicLoadXor
         | AtomicLoadClr | AtomicLoad | AtomicStore => u16::MAX,
         CallSeqStart => pin::CALLSEQ_START,

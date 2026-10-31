@@ -173,9 +173,11 @@ pub enum ISD {
     StorePost,
     /// `ATOMIC_SWAP`: `(chain, ptr, value)` to the old value and a chain.
     AtomicSwap,
-    /// `ATOMIC_CMP_SWAP`: `(chain, ptr, expected, new)` to the old value and a chain.
+    /// `ATOMIC_CMP_SWAP`: `(chain, ptr, expected, new)` to the old value and a
+    /// chain.
     AtomicCmpSwap,
-    /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old value and a chain.
+    /// `ATOMIC_LOAD_ADD` and its siblings: `(chain, ptr, value)` to the old
+    /// value and a chain.
     AtomicLoadAdd,
     AtomicLoadSub,
     AtomicLoadAnd,

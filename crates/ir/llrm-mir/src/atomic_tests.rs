@@ -120,7 +120,11 @@ fn a_restored_module_prints_as_it_was() {
     restored(&mut module).unwrap();
     assert!(opcodes(&module).iter().filter(|opcode| matches!(opcode, Opcode::Atomic(_))).count() == 2);
     let after = crate::print::module(&module);
-    assert!(after.contains("load atomic i32, ptr @flag acquire") && after.contains("store atomic i32 %v, ptr @flag release"), "{after}");
+    assert!(
+        after.contains("load atomic i32, ptr @flag acquire")
+            && after.contains("store atomic i32 %v, ptr @flag release"),
+        "{after}"
+    );
     assert!(!after.contains("call ") && before.contains("load atomic"), "{after}");
 }
 
