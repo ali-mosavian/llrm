@@ -296,3 +296,29 @@ fn a_promotion_shifts_by_the_targets_shift_amount_type() {
         assert_eq!(dag.value_type(dag.operand(shift, 1)), EVT::I64, "the shift amount of {:?}", dag.opcode(shift));
     }
 }
+
+/// A divide in a promoted type was refused ("promote result"; wasm's `sdiv
+/// i8`). `PromoteIntRes_SDIV/UDIV` extends both operands in the register, sign
+/// for the signed forms and zero for the unsigned.
+#[test]
+fn a_promoted_divide_extends_both_operands_in_the_register() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (op, extend) in [
+        (ISD::SDiv, ISD::SignExtendInReg),
+        (ISD::SRem, ISD::SignExtendInReg),
+        (ISD::UDiv, ISD::And),
+        (ISD::URem, ISD::And),
+    ] {
+        let mut dag = super::dag();
+        let (a, b) = (load(&mut dag, EVT::Int(12), 1), load(&mut dag, EVT::Int(12), 2));
+        let quotient = dag.get_node(op, EVT::Int(12), &[a, b]);
+        let byte = dag.get_node(ISD::Truncate, EVT::I8, &[quotient]);
+        dag.set_root(byte);
+        assert_eq!(legalize(&mut dag, &tli), Ok(true), "{op:?}");
+        let wide = dag.operand(dag.get_root(), 0);
+        assert_eq!((dag.opcode(wide), dag.value_type(wide)), (op, EVT::I16), "{op:?}");
+        for at in 0..2 {
+            assert_eq!(dag.opcode(dag.operand(wide, at)), extend, "{op:?} operand {at}");
+        }
+    }
+}
