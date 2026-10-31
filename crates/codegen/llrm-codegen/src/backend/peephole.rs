@@ -2226,6 +2226,12 @@ fn _affine_address(
         widths,
         requires: deduped(replaced.iter().flat_map(|one| one.requires.iter().copied())),
         delivers: deduped(replaced.iter().flat_map(|one| one.delivers.iter().copied())),
+        // What `-g` says: the values the last part made (an intermediate
+        // value is gone), and every note that stood before a part.
+        debug: lir::DebugTags {
+            defines: result.debug.defines.clone(),
+            before: deduped(replaced.iter().flat_map(|one| one.debug.before.iter().copied())),
+        },
         ..(**owner).clone()
     });
     let others: Vec<Arc<Insn>> =

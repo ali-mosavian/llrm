@@ -6,7 +6,7 @@
 //! its PatFrag body in `X86InstrFragments.td`, `X86InstrCompiler.td` and
 //! `TargetSelectionDAG.td`.
 
-use crate::dag::{Dag, FpClass, Hooks, LoadExt, SDValue};
+use crate::dag::{Dag, FpClass, Hooks, LoadExt, SDValue, X86Predicates};
 use crate::generated::ids::{isd, mvt};
 use crate::matcher::Vt;
 
@@ -87,7 +87,7 @@ pub fn extload_i64_i32<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
         && (dag.memory_vt(v.node) == mvt::i32 || (dag.alignment(v.node) >= 4 && dag.is_simple(v.node)))
 }
 
-pub fn memop<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn memop<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.has_sse_unaligned_mem() || dag.alignment(v.node) >= dag.memory_store_size(v.node)
 }
 
@@ -220,31 +220,31 @@ pub fn btr_mask_64<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     imm(args, |i| u32::try_from(i).is_err() && i32::try_from(i).is_err() && (!(i as u64)).is_power_of_two())
 }
 
-pub fn not_avoid_immediate_forms<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn not_avoid_immediate_forms<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     !hooks.should_avoid_immediate_inst_forms_for_size(dag, v.node)
 }
 
-pub fn shift_mask_8<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn shift_mask_8<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_unneeded_shift_mask(dag, v.node, 3)
 }
 
-pub fn shift_mask_16<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn shift_mask_16<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_unneeded_shift_mask(dag, v.node, 4)
 }
 
-pub fn shift_mask_32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn shift_mask_32<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_unneeded_shift_mask(dag, v.node, 5)
 }
 
-pub fn shift_mask_64<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn shift_mask_64<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_unneeded_shift_mask(dag, v.node, 6)
 }
 
-pub fn reloc_imm_sext_32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn reloc_imm_sext_32<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_sext_absolute_symbol_ref(dag, 32, v.node)
 }
 
-pub fn reloc_imm_sext_8<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn reloc_imm_sext_8<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_sext_absolute_symbol_ref(dag, 8, v.node)
 }
 
@@ -255,22 +255,22 @@ pub fn xor_flag_dead_result<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> boo
 }
 
 /// `X86add_flag_nocf` and its kin: no use of the flags result reads the carry.
-pub fn no_carry_flag_uses_of_flags<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn no_carry_flag_uses_of_flags<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
 }
 
 /// `X86sub_flag_nocf`: only when the result is used too, so `dec` is not a pure
 /// compare.
-pub fn sub_no_carry_flag_uses<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn sub_no_carry_flag_uses<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     !dag.has_n_uses_of_value(SDValue::new(v.node, 0), 0) && hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
 }
 
 /// `X86lock_add_nocf`: the flags are the node's first result.
-pub fn no_carry_flag_uses_of_result<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn no_carry_flag_uses_of_result<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 0))
 }
 
-pub fn def32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn def32<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.is_def32(dag, v.node)
 }
 
@@ -278,7 +278,7 @@ pub fn or_disjoint<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
     dag.has_disjoint_flag(v.node) || dag.have_no_common_bits_set(dag.operand(v.node, 0), dag.operand(v.node, 1))
 }
 
-pub fn tcret_enough_regs<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
+pub fn tcret_enough_regs<D: Dag, H: X86Predicates<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.check_tc_ret_enough_regs(dag, v.node)
 }
 
