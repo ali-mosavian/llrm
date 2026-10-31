@@ -8,8 +8,8 @@ entry_clocks = 60
 clocks_per_byte = 16
 # The length a copy of unknown length is priced at (`profit::UNKNOWN_TRIPS`).
 typical_bytes = 10
-# Fitted, not derived. A block's lines weigh ten-fold for each loop it is in, which rates a byte of code at
-# nothing against them. Checked on sim65 (cycles T101-T1) on lz4 and 8 hot loops of 0 to 6 live words: the
-# choice is the same for 100 to 2000 here, and 0 would always keep the call.
+# Policy: the exchange rate of a byte of code against the estimate's loop-weighted clocks, at speed and at
+# size (like the -O2/-Os split). Any value from 100 to 2000 gives the same choices on lz4 and 8 hot loops of
+# 0 to 6 live words (sim65 cycles checked); 0 always keeps the call.
 byte_clocks_speed = 500
 byte_clocks_size = 5000
