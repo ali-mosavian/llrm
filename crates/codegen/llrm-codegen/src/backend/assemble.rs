@@ -87,7 +87,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
+use crate::backend::{addressvalues, constrain, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
@@ -672,7 +672,20 @@ pub fn machined(
     target: &Target<'_>,
 ) -> Result<Machined, String> {
     let first = staged(module, name, abi, pool, target, 0)?;
+    let _ = constrain::narrowed();
     let mut kept = machined_once(module, name, abi, pool, target, first.clone())?;
+    // A cold read of a narrowly confined value given a copy is kept only where
+    // the function costs less for it: the copy is a move executed where the
+    // read is, and pays only if the value's other references then find
+    // registers (sieve -O2: one move a trip, nothing gained).
+    if constrain::narrowed() {
+        let plain = constrain::narrowing(false, || machined_once(module, name, abi, pool, target, first.clone()))?;
+        if let Some((with, without)) = route_cost_if_priced(&kept, target).zip(route_cost_if_priced(&plain, target)) {
+            if without <= with {
+                kept = plain;
+            }
+        }
+    }
     // With -Omax, a function that calls one whose registers are known is made
     // without that too, and the cheaper kept: what the allocator costs is
     // an estimate, and a freer choice of registers is not always the better
@@ -855,7 +868,16 @@ fn route_cost(
     made: &Machined,
     target: &Target<'_>,
 ) -> Option<f64> {
-    cost(made, target).map(|one| one + saves(made) as f64 * 2.0)
+    cost(made, target, true).map(|one| one + saves(made) as f64 * 2.0)
+}
+
+/// `route_cost` for a function with an instruction the encoder cannot price:
+/// None, as the routes cannot be compared, where the checked build stops.
+fn route_cost_if_priced(
+    made: &Machined,
+    target: &Target<'_>,
+) -> Option<f64> {
+    cost(made, target, false).map(|one| one + saves(made) as f64 * 2.0)
 }
 
 /// `what` with the stack and frame tokens of its register-addressed cells
@@ -892,6 +914,7 @@ fn stack_as_addressed(
 fn cost(
     made: &Machined,
     target: &Target<'_>,
+    checked: bool,
 ) -> Option<f64> {
     if target.cpu.size {
         made.body
@@ -906,7 +929,7 @@ fn cost(
                 // priced as nothing: its routes compare as
                 // unpriced and the first kept (nbody_fixed -Os: `lea esi,
                 // [ebx+ebx*2]` had no price).
-                if priced.is_none() && llrm_support::debug::verifying() {
+                if checked && priced.is_none() && llrm_support::debug::verifying() {
                     panic!("@{}: no byte price for {what:?}", made.body.name);
                 }
                 priced
