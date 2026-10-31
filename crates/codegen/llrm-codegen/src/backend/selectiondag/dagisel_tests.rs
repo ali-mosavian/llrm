@@ -227,6 +227,52 @@ fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
     assert!(adapter.refusal().is_some_and(|why| why.contains("pin register 7")));
 }
 
+/// m68k's `PC` is a register of the pin's that no instruction names: it has no
+/// id of ours, so a matcher read it as a virtual register and the pc-relative
+/// load of a global addressed from an unset `An`. A target says which numbers
+/// are fixed and `register_of` answers them; others stay virtual.
+#[test]
+fn a_fixed_register_with_no_id_is_a_register_of_the_pin_not_a_virtual_one() {
+    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::generated::ids::mvt;
+    use llrm_lir::registers::RegId;
+
+    use super::dagisel_adapter::PinRegisters;
+
+    struct WithPc;
+    impl PinRegisters for WithPc {
+        fn phys_reg(
+            &self,
+            _pin: u16,
+        ) -> Option<RegId> {
+            None
+        }
+        fn pin_register(
+            &self,
+            _id: RegId,
+        ) -> Option<u16> {
+            None
+        }
+        fn is_fixed(
+            &self,
+            register: u16,
+        ) -> bool {
+            register == 9
+        }
+    }
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut adapter = DagisAdapter::with_registers(&mut dag, &WithPc);
+    let (pc, other) = (adapter.register(9, mvt::i32), adapter.register(10, mvt::i32));
+    assert_eq!(adapter.register_of(pc.node), Some(9));
+    assert_eq!(adapter.register_of(other.node), None, "any other number is virtual");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut x86 = DagisAdapter::new(&mut dag);
+    let nine = x86.register(9, mvt::i32);
+    assert_eq!(x86.register_of(nine.node), None, "a target that says nothing has no fixed register");
+}
+
 /// The adapter said no store truncates, so a narrow store of a wide value
 /// matched the plain store patterns (and `ST_Fp64m32`'s truncating pattern
 /// never could).
