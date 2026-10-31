@@ -1296,15 +1296,7 @@ impl<'a> RAGreedy<'a> {
         // CSR3 applies to a range live across a call
         // (`checkRegMaskInterference`): the register is then the
         // alternative to a spill pair around the call.
-        // Not a rematerializable one: its "spill" recomputes at every use (a
-        // `lea` is 3 or 4 bytes where the register's `push` is 1),
-        // which a spill's accesses understate.
-        let priced = self
-            .csr_cost_priced
-            .filter(
-                |_| self.matrix.crosses_reg_mask(virt)
-                    && !VirtRegAuxInfo::new(self.env, &self.original).is_rematerializable(virt, &mut self.lis),
-            );
+        let priced = self.csr_cost_priced.filter(|_| self.matrix.crosses_reg_mask(virt));
         let csr_cost = priced.unwrap_or(self.csr_cost);
         let priced = priced.is_some();
         let ss = self.split.as_mut()?;
