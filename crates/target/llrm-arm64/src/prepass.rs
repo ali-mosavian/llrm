@@ -12,11 +12,14 @@
 //! and equal values made in several blocks count once and are one value in the
 //! preheader (a second `MachineCSE` after the hoist).
 //!
-//! A comparison into the zero register (`subs wzr, w0, #1`) and a dominated
-//! plain subtract of the same operands (`sub w9, w0, #1`) are one `subs w9,
-//! w0, #1`, as the pin's `SUBSWri` pair is merged before its dead flag result
-//! becomes the zero register. A copy of a single-definition register is read
-//! through when expressions are compared (`PerformTrivialCopyPropagation`).
+//! A flag-setting add or subtract defines a register as the pin's `SUBSWri`
+//! does, so equal ones merge: one whose flags are dead is shared with an
+//! earlier equal one (`MachineCSE`). Afterwards one whose register nothing
+//! reads defines the zero register (`AArch64DeadRegisterDefinitions`, a
+//! compare) and one whose flags nothing reads is the plain instruction
+//! (`optimizeCompareInstr`, `convertToNonFlagSettingOpc`). A copy of a
+//! single-definition register is read through when expressions are compared
+//! (`PerformTrivialCopyPropagation`).
 //!
 //! A pure value, or a copy of the zero register, that is read only below its
 //! block is moved to the start of the nearest block dominating its readers
