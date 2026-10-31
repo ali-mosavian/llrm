@@ -438,25 +438,29 @@ fn test_only_a_register_read_before_any_set_is_an_input() {
     assert!(!converted.body.inputs.contains(&pinned(RegId::EBX)));
 }
 
-/// A pair and one of its bytes in one function would be two pinned values
-/// meeting in one register: refused, not handed to greedy to fail.
+/// An incoming pair that is read first and a byte of the same cell written
+/// later (`take`: `x` arrives in `rs1`, then `rc2` carries a call argument)
+/// are never live together: the 6502's kernels do this, and it must allocate.
 #[test]
-fn test_a_register_and_a_part_of_it_in_one_function_is_refused() {
+fn test_a_pair_read_then_one_of_its_bytes_set_allocates() {
     let mut f = set_here_read_there();
+    f.blocks[0].insts[0] = op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::EBX))]);
+    f.blocks[1].insts[0] = op("set", vec![Operand::Def(Reg::Phys(RegId::BL))]);
     f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]));
-    assert!(to_lir::<Flat>(&lowered(f), regs()).is_err());
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "the pair is dead before its byte is set");
 }
 
-/// The two bytes of one pair are two registers, not one: a function that reads
-/// both converts. The check refused every 6502 function that took two byte
-/// arguments (`rc2` and `rc3`, lanes of `rs1`): 22 of 38 kernels.
+/// A pair set and then read as a byte is one cell seen two ways, live
+/// together: greedy refuses the function rather than place a value in it.
 #[test]
-fn test_two_lanes_of_one_root_are_not_an_overlap() {
+fn test_a_pair_set_then_read_as_a_byte_is_refused() {
     let mut f = set_here_read_there();
-    f.blocks[0].insts[0] = op("set", vec![Operand::Def(Reg::Phys(RegId::BL))]);
     f.blocks[1].insts[0] = op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]);
-    f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BH))]));
-    if let Err(why) = to_lir::<Flat>(&lowered(f), regs()) {
-        panic!("{why}");
-    }
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_none());
 }
