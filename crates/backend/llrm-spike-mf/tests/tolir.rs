@@ -604,3 +604,21 @@ fn test_what_greedy_spills_across_a_call_comes_back_as_stores_and_loads() {
         .collect();
     assert_eq!(slot_operands, back.slots.iter().map(|(slot, _)| *slot).collect());
 }
+
+/// A block no path reaches may read what nothing defines. Greedy asserts that
+/// every use has a reaching def, so the converter keeps such a block out of its
+/// way and the way back returns it as it was (`spt`, a differential seed with
+/// two such blocks, panicked "Use not jointly dominated by defs").
+#[test]
+fn test_a_block_no_path_reaches_is_kept_as_it_was() {
+    let mut f = set_here_read_there();
+    let mut stray = Block { id: 2, ..Block::default() };
+    stray.insts.push(op("store", vec![Operand::Use(v(2))]));
+    stray.insts.push(ret());
+    f.classes.push(());
+    f.blocks.push(stray);
+    let f = lowered(f);
+    let back = rewritten(&f);
+    assert_eq!(format!("{:?}", back.function.blocks[2]), format!("{:?}", f.blocks[2]));
+    assert_allocated(&back.function, &back.assignment);
+}
