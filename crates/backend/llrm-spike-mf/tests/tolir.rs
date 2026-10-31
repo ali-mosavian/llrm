@@ -569,7 +569,7 @@ fn rewritten_with(
 ) -> llrm_spike_mf::tolir::Rewritten<()> {
     let mut converted = to_lir::<Flat>(f, regs()).expect("converts");
     if join {
-        converted.coalesce(false);
+        converted.coalesce(regs(), false);
     }
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs(), &order);
@@ -677,7 +677,7 @@ fn test_a_value_copied_from_an_argument_register_stays_the_register() {
     f.blocks = vec![only];
     let f = lowered(f);
     let mut converted = to_lir::<Flat>(&f, regs()).expect("converts");
-    converted.coalesce(false);
+    converted.coalesce(regs(), false);
     let pinned: Vec<u32> = converted.body.pins.keys().copied().collect();
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs(), &order);
@@ -756,4 +756,25 @@ fn test_a_call_that_reads_a_pair_and_clobbers_its_byte_is_no_conflict() {
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs(), &order);
     assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
+}
+
+/// A value copied out of a pair is not joined into the pair when one of its
+/// bytes is written while the value lives: the join would make the value hold
+/// the byte's cell. crc16's pointer, joined into `rs1` while `rc3` carried a
+/// loop counter, spilled with 26 cells free (and the byte's range was the
+/// coalescer's blind spot: it sees two unrelated pinned values).
+#[test]
+fn test_a_value_is_not_joined_into_a_pair_whose_byte_is_written_while_it_lives() {
+    let mut f = MFunction::<()>::new("lanes");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    only.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("use", vec![Operand::Use(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let back = rewritten_with(&lowered(f), true);
+    let store = back.function.blocks[0].insts.iter().find(|inst| inst.kind == Kind::Op("store")).unwrap();
+    assert!(matches!(store.operands[0], Operand::Use(Reg::Virt(_))), "{:?}", back.function.blocks[0].insts);
 }

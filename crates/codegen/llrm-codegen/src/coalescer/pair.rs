@@ -49,6 +49,16 @@ pub trait CoalescerEnv {
         false
     }
 
+    /// The pinned values on registers that overlap `value`'s (a pair and its
+    /// bytes): `value` holds the units they hold, so a join that makes it
+    /// longer must keep clear of their ranges (`checkRegUnitInterference`).
+    fn aliases(
+        &self,
+        _value: u32,
+    ) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// A build for size: a copy of a constant is made again only where that
     /// leaves no second copy of the constant (DEVIATE C10).
     fn tuned_for_size(&self) -> bool {

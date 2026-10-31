@@ -191,6 +191,14 @@ pub fn join_copy(
     } else if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
         cp.flip();
     }
+    // A value joined into a pinned one takes the units of its register: no
+    // range on an overlapping register may meet it.
+    if env.keeps(cp.dst_reg()) {
+        let joining = lis.interval(cp.src_reg()).clone();
+        if env.aliases(cp.dst_reg()).into_iter().any(|other| lis.interval(other).overlaps(&joining)) {
+            return JoinResult::Rejected;
+        }
+    }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
         // Coalescing failed. Try rematerializing the definition of the source
