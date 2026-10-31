@@ -145,9 +145,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// parts are counted from the same magic numbers the build uses, each
     /// priced as the sheet prices it, with the operand-size prefix where the
     /// width is not the target's own. O(1) per node: the magic numbers take
-    /// O(bits). DEVIATE SD445: the pin's hook is `minsize` alone, and a margin
-    /// of a quarter keeps the sequence where the sheet's prices differ by
-    /// less than the multiply's own spread (13 to 42 clocks).
+    /// O(bits). DEVIATE SD445: the pin's hook is `minsize` alone. The target's
+    /// `divide_margin` keeps the sequence where the prices differ by less.
     fn hardware_divide_wins(
         &self,
         vt: EVT,
@@ -193,7 +192,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // or a few shifts and adds.
         let back = sized(if width == 4 { p.multiply_long } else { p.multiply }).min(2 * shift + 2 * add) + add;
         let total = magic + if rem { back } else { 0 };
-        hardware + hardware / 4 < total
+        hardware + hardware * p.margin / 100 < total
     }
 
     /// `visitSDIVLike`.

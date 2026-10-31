@@ -69,6 +69,7 @@ const I486_REAL_MODE: DivPrices = DivPrices {
     multiply_long: 26,
     divide: 24,
     divide_long: 43,
+    margin: 25,
 };
 
 fn priced(
@@ -121,4 +122,14 @@ fn a_flat_target_keeps_the_magic_sequence() {
     for d in [10, 97, 1000] {
         assert_ne!(priced(ISD::URem, EVT::I32, d, Some(flat)), ISD::URem, "{d}");
     }
+}
+
+/// The margin is the target's (`divide_margin`), not shared code's: a 32-bit
+/// remainder the sheet prices two clocks under the sequence stays a divide at
+/// margin 0 and the sequence at the sheet's 25.
+#[test]
+fn the_margin_is_read_from_the_prices() {
+    let none = DivPrices { margin: 0, ..I486_REAL_MODE };
+    assert_eq!(priced(ISD::SRem, EVT::I32, 14, Some(none)), ISD::SRem);
+    assert_ne!(priced(ISD::SRem, EVT::I32, 14, Some(I486_REAL_MODE)), ISD::SRem);
 }
