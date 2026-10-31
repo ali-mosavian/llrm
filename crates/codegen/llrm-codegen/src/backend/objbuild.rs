@@ -627,13 +627,14 @@ pub fn built_in(
 
 /// A Windows 64-bit function probes the frames past a page through `__chkstk`
 /// (`X86FrameLowering::emitStackProbe`): the format decides it, as the triple
-/// does for LLVM.
+/// does for LLVM. Only a target whose description names the probe's scratch
+/// register has the probe.
 fn stack_probed(
     mut module: masm::Module,
     format: Format,
 ) -> masm::Module {
     if format == Format::Coff {
-        for procedure in module.procedures.iter_mut().filter(|one| one.body.bits == 64) {
+        for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
             procedure.probe_stack = Some("__chkstk".to_owned());
         }
     }

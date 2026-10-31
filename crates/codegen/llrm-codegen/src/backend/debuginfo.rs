@@ -88,9 +88,10 @@ use std::collections::BTreeSet;
 use llrm_debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
+use llrm_x86::callsites;
 
 use crate::backend::objbuild::Segment;
-use crate::backend::{callsites, globals, masm};
+use crate::backend::{globals, masm};
 use crate::model::ir::Space;
 use crate::model::lir::DebugPlace;
 use crate::support::hash::IndexMap;
