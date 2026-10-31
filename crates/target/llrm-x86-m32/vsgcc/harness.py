@@ -294,6 +294,8 @@ def _form_clocks(ins, taken, first_rep, multiplier):
         if dst_mem:
             return clocks.UNTABLED["shift_imm_mem"]
         return clocks.clocks("shift_r1" if ins.code in ONE_SHIFTS else "shift_ri")
+    if m in (Mnemonic.SHLD, Mnemonic.SHRD):  # r/m,r,imm8: 2 / 3; r/m,r,CL: 3 / 4 (it fell through to 1)
+        return clocks.UNTABLED["shd_cl" if ins.op_kind(2) == OpKind.REGISTER else "shd_imm"] + dst_mem
     if m in (Mnemonic.IMUL, Mnemonic.MUL):
         # Data dependent: 13 to 42 by the multiplier; 13 was the least, which made every product cheap.
         return multiply_clocks(multiplier if multiplier is not None else 0, m == Mnemonic.IMUL)

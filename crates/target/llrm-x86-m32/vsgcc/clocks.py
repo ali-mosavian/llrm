@@ -64,6 +64,7 @@ def audited(key: str) -> int:
 # favoured by a price it lacks), by the instruction's operands.
 UNTABLED = {
     "shift_cl": 3, "shift_cl_mem": 5, "shift_imm_mem": 4,       # SHL/SHR/SAR/ROL/ROR r,CL; m,CL; m,imm
+    "shd_imm": 2, "shd_cl": 3,                                    # SHLD/SHRD r,r,imm8; r,r,CL (+1 for a memory destination)
     "div_b": 16, "idiv_b": 19,                                    # DIV/IDIV r/m8
     "enter": 14, "loads": 2, "scas": 6, "cmps": 7,   # ENTER; SAHF; LODS; SCAS and CMPS per iteration
     "scas_first": 5, "cmps_first": 5,                             # ... and once more for the first

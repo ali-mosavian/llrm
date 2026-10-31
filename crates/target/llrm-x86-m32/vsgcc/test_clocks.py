@@ -39,3 +39,12 @@ def test_a_price_kept_beside_the_table_is_one_the_table_lacks():
     """The emulator keeps a figure of its own only where `timings.times` has no row for the form."""
     tabled = set(clocks._FLAT[1]) | set(clocks._REAL[1])
     assert not tabled & set(clocks.UNTABLED), sorted(tabled & set(clocks.UNTABLED))
+
+
+def test_a_double_shift_costs_the_sheets_clocks_not_one():
+    """SHLD/SHRD fell through to 1 clock, so main's `shrd` (parity/scalar, a 64-bit shift) read cheaper than the 486's 2 to 4."""
+    assert harness.cost(one(32, 0x0F, 0xAC, 0xD0, 0x05), False, True, 0) == 2   # shrd eax, edx, 5
+    assert harness.cost(one(32, 0x0F, 0xAD, 0xD0), False, True, 0) == 3         # shrd eax, edx, cl
+    assert harness.cost(one(32, 0x0F, 0xA4, 0xD0, 0x05), False, True, 0) == 2   # shld eax, edx, 5
+    assert harness.cost(one(32, 0x0F, 0xAC, 0x10, 0x05), False, True, 0) == 3   # shrd [eax], edx, 5
+    assert harness.cost(one(32, 0x0F, 0xAD, 0x10), False, True, 0) == 4         # shrd [eax], edx, cl
