@@ -1570,3 +1570,54 @@ entry:
 fn a_fill_of_a_constant_size_that_is_not_a_dword_multiple_stays_bytes() {
     assert_eq!(dynamic_fill_unit_of("%s = add i16 66, 0", 0, "486").as_deref(), Some("1"));
 }
+
+/// The `rep stos` unit of a constant `memset` of `size` bytes at `align`, in a
+/// function with no size attribute, at m16 on the 486.
+fn constant_fill_unit(
+    size: u32,
+    align: u32,
+) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p) {{
+entry:
+  call void @llvm.memset.p0.i16(ptr align {align} %p, i8 0, i16 {size}, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| {
+            w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                )
+        })
+}
+
+/// particle nib: five 202-byte clears at `align 2` were `rep stosb` of 202
+/// (~3.6k of its +12.9k clocks); the pin calls `memset` there and m16 has none,
+/// so the fill is words where the size and alignment allow.
+#[test]
+fn a_constant_fill_of_whole_words_at_word_alignment_is_rep_stosw() {
+    assert_eq!(constant_fill_unit(202, 2).as_deref(), Some("2"));
+}
+
+/// An odd size, or a byte-aligned buffer, stays bytes.
+#[test]
+fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
+    assert_eq!(constant_fill_unit(203, 2).as_deref(), Some("1"));
+    assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
+}
