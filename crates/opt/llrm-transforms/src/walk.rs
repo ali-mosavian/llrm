@@ -378,6 +378,8 @@ impl ProgramPass for Walk {
                             // it stays if the body is smaller. The callee stays
                             // either way.
                             let mut best = body_size(module, &program.layout, tti, id);
+                            let site_frequencies =
+                                crate::inlinecost::call_frequencies(module, &program.layout, &before);
                             // The sites of a private callee that goes with its
                             // last call are tried
                             // together, for its body is saved too;
@@ -462,8 +464,16 @@ impl ProgramPass for Walk {
                                     } else {
                                         0
                                     };
+                                    // A site run per trip of a loop saves its
+                                    // clocks that often; a cold one saves them once.
+                                    let trips = calls
+                                        .iter()
+                                        .map(|one| site_frequencies.get(one).copied().unwrap_or(1.0).max(1.0))
+                                        .sum::<f64>()
+                                        / calls.len() as f64;
+                                    let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
                                     (
-                                        kept_clocks + run - function_clocks(module, &program.layout, tti, now),
+                                        if once > 0 { (once as f64 * trips) as i64 } else { once },
                                         function_bytes(module, &program.layout, &costs, now)
                                             - function_bytes(module, &program.layout, &costs, &kept)
                                             - gone,

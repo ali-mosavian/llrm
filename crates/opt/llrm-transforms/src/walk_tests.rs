@@ -1580,6 +1580,51 @@ b0:
     assert_eq!(m16.matches("call i16 @scale").count(), 4, "a copy was made:\n{m16}");
 }
 
+/// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
+/// grows the code a few bytes was refused (+126 B for -298 clk against 854),
+/// for its saving was counted once where the site runs per trip. The same
+/// callee as the qlight test, called from a loop, is inlined.
+#[test]
+fn test_an_o2_call_in_a_loop_saves_its_clocks_per_trip_at_m16() {
+    let text = "@raw = global i16 200
+@s1 = global i16 120
+
+define i16 @scale(i16 %raw, i16 %s) {
+b0:
+  %a = sext i16 %raw to i32
+  %b = sext i16 %s to i32
+  %m = mul i32 %a, %b
+  %d = sdiv i32 %m, 255
+  %hi = icmp sgt i32 %d, 255
+  %c1 = select i1 %hi, i32 255, i32 %d
+  %lo = icmp slt i32 %c1, 0
+  %c2 = select i1 %lo, i32 0, i32 %c1
+  %r = trunc i32 %c2 to i16
+  ret i16 %r
+}
+
+define i32 @top(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc1, %h ]
+  %x = load volatile i16, ptr @raw
+  %y = load volatile i16, ptr @s1
+  %p = call i16 @scale(i16 %x, i16 %y)
+  %e = sext i16 %p to i32
+  %acc1 = add i32 %acc, %e
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %out
+out:
+  ret i32 %acc1
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i16 @scale"), "the call stayed:\n{m16}");
+}
+
 /// A call that folds once inlined stays a call with inlining off
 /// (`-fno-inline-functions`): the trial of a blocked site at a speed caller
 /// ignored the switch, and 6 llrm-nib tests lost their out-of-line callees
