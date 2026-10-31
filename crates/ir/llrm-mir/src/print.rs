@@ -47,12 +47,16 @@ pub fn module(module: &Module) -> String {
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(
-                at,
-                one,
-                module.global_metadata.get(&(at as u32)),
-                one.name.owned().and_then(|name| module.sections.get(&name)),
-            )),
+            .map(
+                |(at, one)| {
+                    printer.variable(
+                        at,
+                        one,
+                        module.global_metadata.get(&(at as u32)),
+                        one.name.owned().and_then(|name| module.sections.get(&name)),
+                    )
+                },
+            ),
     );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
