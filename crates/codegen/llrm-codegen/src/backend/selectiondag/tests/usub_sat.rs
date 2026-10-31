@@ -1,5 +1,6 @@
 //! `foldSubToUSubSat`
-//! ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100)): `umax(a, b) - b`, `a - umin(a, b)` and the truncated
+//! ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100)):
+//! `umax(a, b) - b`, `a - umin(a, b)` and the truncated
 //! `sub(a, trunc(umin(zext(a), b)))` stayed a max (or min) and a subtract: on
 //! arm64 `text_write`'s clamped difference was a compare, a select and a
 //! subtract twice over (`SUBS CSEL SUBS SUBS CSEL SUBS`) where the pin has

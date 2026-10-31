@@ -748,7 +748,7 @@ impl Emitter<'_> {
             self.edges_made += 1;
             let mut body: Vec<Op> = sequence(self, to);
             body.push(crate::mfunc::branch_to(&label));
-            edges.push(MBlock { label: edge.clone(), ops: body });
+            edges.push(MBlock { label: edge.clone(), ops: body.into() });
             // Retarget the branches to `to`; a fall-through becomes a branch.
             let mut retargeted = false;
             for op in ops.iter_mut() {
@@ -1139,7 +1139,7 @@ pub fn emit(
         }
         let mut ops = std::mem::take(&mut emitter.ops);
         edges.extend(emitter.phi_edges(block, &mut ops)?);
-        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
+        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops: ops.into() });
     }
     // The blocks made for critical edges lie after the function's own.
     emitter.mf.blocks.extend(edges);

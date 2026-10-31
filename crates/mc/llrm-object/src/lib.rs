@@ -2,7 +2,6 @@
 //! `docs/formats/object-model.md`.
 
 pub mod assembler;
-pub mod debug;
 
 /// Which debug format a [`Role::Debug`] section belongs to, so a writer needs
 /// no name to tell them apart.
@@ -209,13 +208,12 @@ pub struct Reloc {
     pub kind: FixupKind,
     /// The value is relative to the place (`MCFixup::PCRel`).
     pub pc_rel: bool,
-    /// See [`Fix::pc_bias`].
-    pub pc_bias: usize,
     /// See [`Fix::spec`].
     pub spec: u8,
     pub target: Target,
-    /// What is added to the target's address; sign-extended from the field's
-    /// width.
+    /// What is added to the target's address, less the distance from the
+    /// field's start to the place a pc-relative value is relative to
+    /// (`S + A - P`); sign-extended from the field's width.
     pub addend: i64,
 }
 
@@ -226,11 +224,11 @@ impl Reloc {
         target: Target,
         addend: i64,
     ) -> Self {
-        Reloc { at, kind: fix.kind, pc_rel: fix.pc_rel, pc_bias: fix.pc_bias, spec: fix.spec, target, addend }
-    }
-
-    pub fn fix(&self) -> Fix {
-        Fix { kind: self.kind, pc_rel: self.pc_rel, pc_bias: self.pc_bias, spec: self.spec }
+        // As LLVM: the bias of a pc-relative value is part of the addend
+        // (`S + A - P`, `A = addend - pc_bias`); a writer adds back the part
+        // its format keeps in the field.
+        let addend = if fix.pc_rel { addend - fix.pc_bias as i64 } else { addend };
+        Reloc { at, kind: fix.kind, pc_rel: fix.pc_rel, spec: fix.spec, target, addend }
     }
 
     /// Field bytes this relocation patches.
@@ -282,6 +280,14 @@ pub struct Symbol {
     pub group: Option<usize>,
 }
 
+impl Symbol {
+    /// A name the compiler gave what the source did not name (`G$n`, an unnamed
+    /// global): the pin's `.L` names, which an ELF symbol table leaves out.
+    pub fn is_private(&self) -> bool {
+        self.name.starts_with("G$")
+    }
+}
+
 /// An OMF group: segments addressed by one selector.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OmfGroup {
@@ -306,10 +312,21 @@ pub struct Object {
     /// nothing refers to them. Each has one public symbol at offset 0
     /// that names it. Indices into `sections`.
     pub omf_comdat: Vec<usize>,
-    pub debug: Option<debug::Info>,
     /// How to find each function's caller (`.eh_frame`'s source), whether or
     /// not `-g` is on. Empty where the format has none or nothing declared it.
     pub frames: Vec<Frame>,
+}
+
+/// From `offset` bytes into a function's first range, until the next row: the
+/// canonical frame address is `cfa_offset` past register `cfa_register`, and
+/// each register in `saved` is in memory at that address plus its offset
+/// (negative: below it).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameRow {
+    pub offset: usize,
+    pub cfa_register: String,
+    pub cfa_offset: i64,
+    pub saved: Vec<(String, i64)>,
 }
 
 /// A function's unwind rows: its code's place and how the canonical frame
@@ -319,7 +336,10 @@ pub struct Frame {
     pub section: usize,
     pub offset: usize,
     pub length: usize,
-    pub rows: Vec<debug::FrameRow>,
+    pub rows: Vec<FrameRow>,
+    /// The directives that declared the rows, in order (`.cfi_*`), for the
+    /// formats that encode them instead of the rows (Mach-O's compact unwind).
+    pub cfi: Vec<assembler::Cfi>,
     /// The prologue as `.seh_*` directives state it (Win64), each with the
     /// offset after its instruction, for the formats that encode them.
     pub seh: Vec<(usize, Seh)>,
@@ -368,15 +388,13 @@ pub struct AsmInfo {
     /// A host's linker and C name the runtime's `B$X` as `B_X`: the object is
     /// not DOS's.
     pub hosted: bool,
-    /// Whether the format's own debug writer says where a value is over a range
-    /// of code.
-    pub location_ranges: bool,
-    /// Whether that writer places a frame cell from the canonical frame
-    /// address.
-    pub cfa_locations: bool,
     /// How the format says where a function's caller is
     /// (`MCAsmInfo::ExceptionsType`, `getExceptionHandlingType`).
     pub unwind: UnwindKind,
+    /// One debug section's offset into another is relocated (ELF, COFF, OMF);
+    /// Mach-O's is the offset itself, which dsymutil reads in the object's own
+    /// sections (`MCAsmInfo::doesDwarfUseRelocationsAcrossSections`).
+    pub dwarf_relocs_across_sections: bool,
 }
 
 /// The unwind information a format carries for a function.
@@ -440,7 +458,8 @@ mod tests {
         ];
         for (fix, width) in widths {
             assert_eq!(fix.kind.width(), width, "{fix:?}");
-            assert_eq!(Reloc::new(0, fix, Target::Symbol(0), 0).fix(), fix);
+            let reloc = Reloc::new(0, fix, Target::Symbol(0), 0);
+            assert_eq!((reloc.kind, reloc.pc_rel, reloc.spec), (fix.kind, fix.pc_rel, fix.spec));
         }
     }
 
@@ -449,5 +468,18 @@ mod tests {
     fn an_unsupported_width_is_none() {
         assert_eq!(Fix::abs(3).kind, FixupKind::NONE);
         assert_eq!(FixupKind::NONE.width(), 0);
+    }
+
+    /// The bias of a pc-relative value is part of the addend, as LLVM's `S + A
+    /// - P` has it; each writer adds back what its format keeps in the
+    /// field. The five writers each read the bias their own way before
+    /// (COFF baked 4 into the field, Mach-O picked `SIGNED_n` from it, ELF
+    /// subtracted it).
+    #[test]
+    fn the_bias_of_a_pc_relative_reloc_is_in_its_addend() {
+        let addend = |fix: Fix| Reloc::new(0, fix, Target::Symbol(0), 10).addend;
+        assert_eq!(addend(Fix::relative(FixupKind::DATA_4, 4)), 6);
+        assert_eq!(addend(Fix::relative(FixupKind::DATA_4, 5)), 5);
+        assert_eq!(addend(Fix::plain(FixupKind::DATA_4)), 10);
     }
 }

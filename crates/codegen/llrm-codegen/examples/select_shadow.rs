@@ -88,6 +88,7 @@ fn main() {
         opt_for_size: std::env::var_os("OPTSIZE").is_some(),
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode,
     });
 

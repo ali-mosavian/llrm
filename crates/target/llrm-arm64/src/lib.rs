@@ -3,6 +3,7 @@
 pub mod cc;
 pub mod cfi;
 pub mod data;
+pub mod debug;
 pub mod divconst;
 pub mod driver;
 pub mod emit;

@@ -910,6 +910,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (c1, c2) = (self.dag.constant(then)?, self.dag.constant(other)?);
         let mask = super::fold::mask(vt.size_in_bits());
         let (c1, c2) = (c1 & mask, c2 & mask);
+        let amount_vt = self.hooks.shift_amount_type(vt);
         let dag = &mut *self.dag;
         if c1 == 1 && c2 == 0 {
             return Some(dag.get_zext_or_trunc(cond, vt));
@@ -931,7 +932,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if c1.is_power_of_two() && c2 == 0 {
             let cond = dag.get_zext_or_trunc(cond, vt);
-            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), EVT::I8);
+            let amount = dag.get_constant(u128::from(c1.trailing_zeros()), amount_vt);
             return Some(dag.get_node(ISD::Shl, vt, &[cond, amount]));
         }
         if c1 == mask {
@@ -974,7 +975,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             CondCode::SetLt if bound == 0 => true,
             _ => return None,
         };
-        let shift = self.dag.get_constant(u128::from(x_vt.size_in_bits() - 1), EVT::I8);
+        let shift = self.shift_amount(x_vt, x_vt.size_in_bits() - 1);
         let sra = self.dag.get_node(ISD::Sra, x_vt, &[x, shift]);
         let mask = self.dag.get_sext_or_trunc(sra, vt);
         if c2 == !c3 & arm_mask {
@@ -1011,9 +1012,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let width = vt.size_in_bits();
-        let up = self.dag.get_constant(u128::from(width - 1 - mask.trailing_zeros()), EVT::I8);
+        let up = self.shift_amount(vt, width - 1 - mask.trailing_zeros());
         let shl = self.dag.get_node(ISD::Shl, vt, &[x, up]);
-        let down = self.dag.get_constant(u128::from(width - 1), EVT::I8);
+        let down = self.shift_amount(vt, width - 1);
         let sra = self.dag.get_node(ISD::Sra, vt, &[shl, down]);
         Some(self.dag.get_node(ISD::And, vt, &[sra, other]))
     }
@@ -1120,11 +1121,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // A far pointer is an integer to the pin (`i32`), not a float.
         let is_float = self.dag.value_type(lhs).is_floating_point();
         let not_cc = if is_float { cc.inverse_float() } else { cc.inverse_integer() };
-        // `isCondCodeLegal`: x86 expands `oeq` and `une` (two flags), so once
-        // operations are legal the fold must not make one.
+        // `isCondCodeLegal` once operations are legal: x86 expands `oeq` and
+        // `une` (two flags), wasm the unordered ones, so the fold must
+        // not make one the target expands.
         if self.level >= CombineLevel::AfterLegalizeVectorOps
-            && is_float
-            && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe)
+            && let (Some(tli), EVT::Simple(operand)) = (self.tli, self.dag.value_type(lhs))
+            && tli.cond_code_action(not_cc, operand) != Action::Legal
         {
             return None;
         }
@@ -2081,7 +2083,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
     }
 
-    /// `getTruncatedUSUBSAT` ([L4070](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4070)): a `usubsat` of `lhs` and
+    /// `getTruncatedUSUBSAT`
+    /// ([L4070](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4070)):
+    /// a `usubsat` of `lhs` and
     /// `rhs` in `dst`, the operands clamped and truncated from `src`.
     fn truncated_usub_sat(
         &mut self,
@@ -2107,8 +2111,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_node(ISD::USubSat, dst, &[lhs, rhs]))
     }
 
-    /// `foldSubToUSubSat` ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100), called from `visitSUB`
-    /// [L4501](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4501) and `visitTRUNCATE` [L17910](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17910)): `umax(a, b) - b` and `a - umin(a, b)` are
+    /// `foldSubToUSubSat`
+    /// ([L4100](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4100),
+    /// called from `visitSUB`
+    /// [L4501](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4501)
+    /// and `visitTRUNCATE`
+    /// [L17910](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17910)):
+    /// `umax(a, b) - b` and `a - umin(a, b)` are
     /// `usubsat(a, b)`, optionally as a truncated type. `sub` is a `SUB` node
     /// and `dst` the type the result is wanted in. O(1) per node.
     fn fold_sub_to_usub_sat(
@@ -2144,7 +2153,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return self.truncated_usub_sat(dst, sub_vt, op0, min_lhs);
             }
         }
-        // `sub(a, trunc(umin(zext(a), b)))` is `usubsat(a, trunc(umin(b, SatLimit)))`.
+        // `sub(a, trunc(umin(zext(a), b)))` is `usubsat(a, trunc(umin(b,
+        // SatLimit)))`.
         if self.dag.opcode(op1) == ISD::Truncate {
             let min = self.dag.operand(op1, 0);
             if self.dag.opcode(min) == ISD::UMin && self.dag.has_one_use(min.node) {

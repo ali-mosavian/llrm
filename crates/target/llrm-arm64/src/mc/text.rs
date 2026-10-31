@@ -297,6 +297,7 @@ impl fmt::Display for Inst {
             Inst::BranchReg { link, rn } => {
                 write!(out, "{} {}", if *link { "blr" } else { "br" }, gpr(*rn, Width::X, false))
             }
+            Inst::Mark(mark) => write!(out, "# {mark:?}"),
             Inst::Cfi(cfi) => {
                 use llrm_object::assembler::Cfi;
                 let name = |register: &u16| super::unwind::register_label(*register).replace('x', "w");

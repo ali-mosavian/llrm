@@ -238,6 +238,14 @@ fn dag_select(
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
+    functions_with(program, false)
+}
+
+/// [`functions`], each carrying its source places where `lines`.
+pub fn functions_with(
+    program: &Program,
+    lines: bool,
+) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
     let mut out = Vec::new();
@@ -247,12 +255,12 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         let mut machine = match isel_mode() {
-            IselMode::Hand => crate::isel::select(module, id, &program.layout, platform),
+            IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
             IselMode::Dag => dag_select(module, &name, &program.layout, platform),
             // A refusal of the DAG path falls back to the hand selector, counted.
             IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
                 eprintln!("isel-shadow: @{name}: {why}");
-                crate::isel::select(module, id, &program.layout, platform)
+                crate::isel::selected(module, id, &program.layout, platform, lines)
             }),
         }
         .map_err(|why| format!("@{name}: {why}"))?;
@@ -269,6 +277,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         dump("OrderCopies", &machine);
         let allocation = crate::regalloc::allocate(&mut machine);
         dump("RegAlloc", &machine);
+        let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
         let blocks = crate::pairs::fold(blocks);
@@ -276,6 +285,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),
             blocks,
+            variables,
         });
     }
     Ok(out)
@@ -316,13 +326,29 @@ pub fn object(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<llrm_object::Object, String> {
+    object_with(text, platform, name, level, false).map(|described| described.object)
+}
+
+/// [`object`], with the debug information (`-g`) where `debug`.
+pub fn object_with(
+    text: &str,
+    platform: Platform,
+    name: &str,
+    level: impl Into<Level>,
+    debug: bool,
+) -> Result<llrm_debug::Described, String> {
     let mut program = program(text, platform)?;
     let level = level.into();
+    if debug {
+        llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
+    }
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
     }
-    let lowered = functions(&program)?;
-    crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
+    let lowered = functions_with(&program, debug)?;
+    let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
+    let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
+    Ok(llrm_debug::Described { object, debug })
 }
 
 /// The assembly of the lowered functions, one instruction a line.
@@ -341,7 +367,8 @@ pub fn assembly(
         out.push_str(&format!("{}:\n", function.symbol));
         for block in &function.blocks {
             out.push_str(&format!("{}:\n", block.label));
-            for inst in &block.insts {
+            // A frame mark is for the line table, not the assembler.
+            for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
             }
         }
@@ -356,12 +383,25 @@ pub fn object_file(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<Vec<u8>, String> {
+    object_file_with(text, platform, name, level, false)
+}
+
+/// [`object_file`], with the debug information (`-g`) where `debug`.
+pub fn object_file_with(
+    text: &str,
+    platform: Platform,
+    name: &str,
+    level: impl Into<Level>,
+    debug: bool,
+) -> Result<Vec<u8>, String> {
     use llrm_target::object::Format;
-    let object = object(text, platform, name, level)?;
-    use llrm_object::ObjectTarget;
+    let object = object_with(text, platform, name, level, debug)?;
+    use llrm_debug::DebugObjectTarget;
     let objects = crate::mc::Arm64Objects;
-    let macho = || objects.write_object("macho", &object).map_err(|error| error.to_string());
-    let elf = || objects.write_object("elf", &object).map_err(|error| error.to_string());
+    let macho =
+        || objects.write_described("macho", &object.object, object.debug.as_ref()).map_err(|error| error.to_string());
+    let elf =
+        || objects.write_described("elf", &object.object, object.debug.as_ref()).map_err(|error| error.to_string());
     if let Some(dir) = llrm_target::object::all_writers_dir() {
         for (format, written) in [(Format::MachO, macho()), (Format::Elf, elf())] {
             if let Ok(written) = written {

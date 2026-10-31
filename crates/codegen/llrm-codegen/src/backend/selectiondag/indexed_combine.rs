@@ -15,6 +15,7 @@
 use super::dag::{NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
+use crate::support::hash::HashSet;
 
 /// `SelectionDAG::getHasPredecessorMaxSteps`.
 const MAX_STEPS: usize = 8192;
@@ -47,7 +48,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &self,
         target: u32,
         starts: &[u32],
-        mut visited: std::collections::HashSet<u32>,
+        mut visited: HashSet<u32>,
     ) -> bool {
         if visited.contains(&target) {
             return true;
@@ -322,7 +323,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             // Check for #1.
             let Some((base, signed_offset)) = self.should_combine_to_post_inc(n, ptr, op) else { continue };
             // Check for #2: "Op must be independent of N".
-            let seeded: std::collections::HashSet<u32> = [ptr.node].into_iter().collect();
+            let seeded: HashSet<u32> = [ptr.node].into_iter().collect();
             if !self.reaches_operand(n.node, &[n.node, op], seeded.clone())
                 && !self.reaches_operand(op, &[n.node, op], seeded)
             {

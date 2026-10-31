@@ -440,6 +440,9 @@ pub enum CondCode {
 }
 
 impl CondCode {
+    /// The codes by their number, as `ISD::CondCode` numbers them.
+    pub const ALL_CODES: [CondCode; 24] = Self::ALL;
+
     const ALL: [CondCode; 24] = {
         use CondCode::*;
         [

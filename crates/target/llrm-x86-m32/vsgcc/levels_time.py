@@ -19,6 +19,7 @@ sys.path.insert(0, str(R / "tools"))
 import llrmbin
 import pin_clang
 import benchlist
+import programs
 
 O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 SKIP = {"readme.md", "parity", "huge", "textfill", "grep"}
@@ -106,14 +107,25 @@ def geomean(values: list[float]) -> float:
     return math.exp(sum(math.log(v) for v in values) / len(values))
 
 
-def main() -> None:
-    # What a user's compile does: no check of each pass and phase (the cargo environment of a test run would turn it on).
+def setup() -> None:
+    """What a user's compile does: no check of each pass and phase (the cargo environment of a test run would turn it on), and llrm-cc
+    given its Open Watcom tree and pinned clang (without them the -O0 bench/bintree compile exited 1)."""
     os.environ["LLRM_VERIFY"] = "0"
+    os.environ.update(llrmbin.cc_environment())
+
+
+def bench_sources() -> dict[str, Path]:
+    """The bench programs gcc and clang also build: not the ones that include bench_io.h (`programs.sources`' own filter)."""
+    return {name: path for name, path in programs.sources().items() if path.is_relative_to(R / "bench")}
+
+
+def main() -> None:
+    setup()
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--extra", nargs="*", default=[])
     args = parser.parse_args()
-    sources = {p.name: p / f"{p.name}.c" for p in benchlist.directories(R / "bench", parity=False) if p.name not in SKIP}
+    sources = bench_sources()
     kernels = Path(__file__).resolve().parent / "kernels"
     for directory in ([kernels] if kernels.is_dir() else []) + [Path(d) for d in args.extra]:
         for source in sorted(Path(directory).glob("**/*.c")):
