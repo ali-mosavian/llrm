@@ -1136,13 +1136,23 @@ pub fn decide_with_split(
     let widest = crate::backend::widths::_widest(body);
     let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
-        let mut order: Vec<RegId> = if floats.contains(&reg) {
+        // A caller that orders byte registers itself (a target whose classes
+        // name them) keeps its order: the GR8 order below is x86's.
+        let named = (inputs.order)(reg);
+        let by_caller = widest.get(&reg) == Some(&1)
+            && !inputs.pins.contains_key(&reg)
+            && !floats.contains(&reg)
+            && !named.is_empty()
+            && named.iter().all(|one| bytes.contains(one));
+        let mut order: Vec<RegId> = if by_caller {
+            named
+        } else if floats.contains(&reg) {
             inputs.registers.rfp_registers().to_vec()
         } else {
-            (inputs.order)(reg).into_iter().map(|one| inputs.registers.root(one)).collect()
+            named.into_iter().map(|one| inputs.registers.root(one)).collect()
         };
         order.dedup();
-        if widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
+        if !by_caller && widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
             let roots = order.clone();
             let lanes: Vec<RegId> =
                 bytes.iter().copied().filter(|byte| roots.contains(&inputs.registers.root(*byte))).collect();

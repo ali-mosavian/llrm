@@ -334,3 +334,61 @@ fn test_a_pin_to_one_lane_leaves_the_other_lane() {
     assert_eq!(held, Some(RegId::BH), "{:?}", decided.placed);
     assert_eq!(decided.report.reloads, 0);
 }
+
+/// A byte class that names its registers, high lane first.
+struct HighFirst;
+
+impl Target for HighFirst {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        vec![RegId::BH, RegId::BL]
+    }
+
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        regs().root(register)
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+}
+
+/// A target orders its byte registers (the 6502: index registers, scratch
+/// cells, kept cells, then `a`); the order of the file's `@bytes` replaced it,
+/// so a value took the file's first lane and not the class's.
+#[test]
+fn test_a_byte_value_takes_its_classs_first_register() {
+    let mut f = MFunction::<()>::new("order");
+    f.classes = vec![(); 2];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<HighFirst>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    assert_eq!(decided.placed.iter().find(|(v, _)| *v == 1).map(|(_, r)| *r), Some(RegId::BH), "{:?}", decided.placed);
+}
