@@ -778,3 +778,45 @@ fn test_a_value_is_not_joined_into_a_pair_whose_byte_is_written_while_it_lives()
     let store = back.function.blocks[0].insts.iter().find(|inst| inst.kind == Kind::Op("store")).unwrap();
     assert!(matches!(store.operands[0], Operand::Use(Reg::Virt(_))), "{:?}", back.function.blocks[0].insts);
 }
+
+/// Spill code that overwrites a register (the 6502's stack-mode spill is
+/// `ldy #n; sta (rc0),y`) is written after greedy has chosen registers: a value
+/// held in `y` across a spill would be lost. No virtual value is offered a
+/// register the spill overwrites.
+#[test]
+fn test_no_value_is_offered_a_register_the_spill_code_overwrites() {
+    struct Clobbering;
+    impl Target for Clobbering {
+        type Class = ();
+        fn meet(
+            _: (),
+            _: (),
+        ) -> Option<()> {
+            Some(())
+        }
+        fn any() {}
+        fn candidates(_: ()) -> Vec<RegId> {
+            vec![RegId::EBX, RegId::ECX]
+        }
+        fn view(
+            root: RegId,
+            _: (),
+        ) -> RegId {
+            root
+        }
+        fn root(register: RegId) -> RegId {
+            register
+        }
+        fn reserved(root: RegId) -> bool {
+            root == RegId::ESP
+        }
+        fn caller_saved() -> Vec<RegId> {
+            Vec::new()
+        }
+        fn spill_clobbers() -> Vec<RegId> {
+            vec![RegId::EBX]
+        }
+    }
+    let converted = to_lir::<Clobbering>(&lowered(set_here_read_there()), regs()).expect("converts");
+    assert_eq!(converted.order(1), vec![RegId::ECX]);
+}

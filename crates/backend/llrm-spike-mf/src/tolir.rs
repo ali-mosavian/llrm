@@ -171,8 +171,11 @@ pub fn to_lir<T: Target>(
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
+    let clobbered_by_spills = T::spill_clobbers();
     for (v, class) in function.classes.iter().enumerate() {
-        orders.insert(v as u32 + 1, T::candidates(*class));
+        let mut order = T::candidates(*class);
+        order.retain(|register| !clobbered_by_spills.contains(register));
+        orders.insert(v as u32 + 1, order);
     }
     for (value, register) in &made.pins {
         orders.insert(*value, vec![*register]);
