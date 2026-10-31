@@ -392,3 +392,57 @@ fn test_a_byte_value_takes_its_classs_first_register() {
     let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
     assert_eq!(decided.placed.iter().find(|(v, _)| *v == 1).map(|(_, r)| *r), Some(RegId::BH), "{:?}", decided.placed);
 }
+
+/// A register set in one block and read in the next, with a value that lives
+/// only between them. The converter began every block with no memory of the
+/// registers, so the read became a fresh input and the set a dead def: the
+/// register looked free in between and the value took `ebx` (first in its
+/// order), clobbering what the next block reads.
+fn set_here_read_there() -> MFunction<()> {
+    let mut f = MFunction::<()>::new("flow");
+    f.classes = vec![(); 2];
+    let mut first = Block { id: 0, ..Block::default() };
+    first.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    first.insts.push(op("load", vec![Operand::Def(v(0))]));
+    first.insts.push(op("store", vec![Operand::Use(v(0))]));
+    first.insts.push(branch(1));
+    let mut second = Block { id: 1, ..Block::default() };
+    second.insts.push(op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    second.insts.push(op("store", vec![Operand::Use(v(1))]));
+    second.insts.push(ret());
+    f.blocks = vec![first, second];
+    f
+}
+
+#[test]
+fn test_a_register_set_in_one_block_is_held_to_its_read_in_the_next() {
+    let converted = to_lir::<Flat>(&lowered(set_here_read_there()), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true)
+        .expect("greedy refused: the set and the read are two pinned values meeting in ebx");
+    let place = |value| decided.placed.iter().find(|(v, _)| *v == value).map(|(_, r)| *r);
+    assert_eq!(decided.report.stats.failed, 0, "{:?}", decided.placed);
+    assert!(place(1).is_some_and(|r| r != RegId::EBX), "the value between the set and the read: {:?}", decided.placed);
+}
+
+/// A register read in a later block and set on no path to it is live on entry;
+/// one set on every path is not.
+#[test]
+fn test_only_a_register_read_before_any_set_is_an_input() {
+    let mut f = set_here_read_there();
+    f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let pinned = |register| converted.body.pins.iter().find(|(_, r)| **r == register).map(|(v, _)| *v).unwrap();
+    assert!(converted.body.inputs.contains(&pinned(RegId::ECX)));
+    assert!(!converted.body.inputs.contains(&pinned(RegId::EBX)));
+}
+
+/// A pair and one of its bytes in one function would be two pinned values
+/// meeting in one register: refused, not handed to greedy to fail.
+#[test]
+fn test_a_register_and_a_part_of_it_in_one_function_is_refused() {
+    let mut f = set_here_read_there();
+    f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]));
+    assert!(to_lir::<Bytes>(&lowered(f), regs()).is_err());
+}
