@@ -16,10 +16,12 @@
 //! liveness carries it across blocks; a register read before any definition
 //! reaches it is an input (`LirBody::inputs`), found by backward liveness.
 //!
-//! DEVIATE 1: two overlapping physical registers (a pair and one of its
-//! bytes) in one function are refused, as greedy would see two pinned values
-//! meeting in one register. Reason: a value has no sub-register index to
-//! say one is part of the other. Exit: D-6502, if a 6502 function needs both.
+//! DEVIATE 1: a physical register and one it overlaps (a pair and one of its
+//! bytes) are two values, with no sub-register index to say one is part of
+//! the other. Greedy refuses a function in which their live ranges meet
+//! (`decide` returns None); a pair that arrives and a byte pair that leaves
+//! at another time are fine. Exit: D-6502, if a 6502 function needs both live
+//! together.
 //!
 //! DEVIATE 2: no block odds. The `MFunction` states none, so greedy's block
 //! frequencies come from its loop estimate. Exit: D-6502, with the odds the
@@ -102,7 +104,6 @@ pub fn to_lir<T: Target>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return Err(format!("{}: a phi reached the converter", function.name));
     }
-    aliases::<T>(function, registers)?;
     let widths: Vec<u32> = function.classes.iter().map(|class| class_width::<T>(registers, *class)).collect();
     let successors = successors(function);
     let mut made = Made {
@@ -579,33 +580,6 @@ fn physical<T: Target>(inst: &Inst) -> (impl Iterator<Item = RegId> + '_, impl I
         _ => None,
     };
     (inst.operands.iter().filter_map(move |o| of(o, false)), inst.operands.iter().filter_map(move |o| of(o, true)))
-}
-
-/// Two registers of a function that overlap (a pair and one of its bytes) are
-/// refused (DEVIATE 1): the roots and lanes are the description's, which
-/// greedy reads, not the target's own. Two lanes of one root do not overlap.
-fn aliases<T: Target>(
-    function: &MFunction<T::Class>,
-    registers: Regs,
-) -> Result<(), String> {
-    let mut seen: Vec<RegId> = Vec::new();
-    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        let (reads, writes) = physical::<T>(inst);
-        for register in reads.chain(writes) {
-            if seen.contains(&register) {
-                continue;
-            }
-            let overlap = |one: RegId| {
-                registers.root(one) == registers.root(register) && registers.lanes(one) & registers.lanes(register) != 0
-            };
-            if let Some(first) = seen.iter().copied().find(|one| overlap(*one)) {
-                let name = |one| registers.name(one).unwrap_or_default();
-                return Err(format!("{}: registers {} and {} overlap", function.name, name(first), name(register)));
-            }
-            seen.push(register);
-        }
-    }
-    Ok(())
 }
 
 /// The physical registers read on some path from the entry before any
