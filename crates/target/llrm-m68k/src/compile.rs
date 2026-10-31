@@ -6,18 +6,16 @@ use std::rc::Rc;
 use llrm_mir::memory::has;
 use llrm_mir::module::Module;
 
-use crate::address::{address_arithmetic, lea_on_data};
-use crate::dagisel::function::select_function_ordered;
+use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
 use crate::expand::{Line, finish};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
-use crate::memoperand::fold_argument_loads;
 use crate::mfunc::{emit, expand_cmov};
 use crate::regalloc::{
-    allocate_spilling, branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink,
-    remove_identity_copies, remove_redundant_copies, two_address,
+    branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink, remove_identity_copies,
+    remove_redundant_copies, two_address,
 };
 
 /// A line of the function: a label or an instruction.
@@ -32,8 +30,6 @@ pub enum Item {
 /// What the compiler may do beyond the pin's output.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    /// Use the instructions of [`crate::overlay`] (`addq`, `subq`, `tst`).
-    pub overlay: bool,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
@@ -48,12 +44,12 @@ pub struct Options {
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options = Options { overlay: false, mid_end: false, size: false, source_order: false };
+    pub const PINNED: Options = Options { mid_end: false, size: false, source_order: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { overlay: true, mid_end: true, size: false, source_order: false }
+        Options { mid_end: true, size: false, source_order: false }
     }
 }
 
@@ -76,16 +72,7 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(
-            module,
-            &M68k {
-                indexed_displacement: options.overlay,
-                post_indexed: options.overlay && !options.size,
-                exit_ne: options.overlay,
-                ..M68k::default()
-            },
-            Some(Rc::new(M68kMachine)),
-        )?;
+        optimized = mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))?;
         &optimized
     } else {
         module
@@ -95,55 +82,26 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    // at the size level a compare's argument is read from its slot, which the
-    // load put on the foldable side would make a register's
-    let blocks = select_function_ordered(
-        module,
-        name,
-        cpu,
-        options.overlay && !wants_size,
-        options.overlay,
-        options.source_order,
-    )?;
+    let blocks = select_function_with(module, name, cpu, options.source_order)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
-    if options.overlay {
-        crate::regalloc::split_flag_edges(&mut function);
-    }
-    eliminate_phis_with(&mut function, options.overlay);
+    crate::regalloc::split_flag_edges(&mut function);
+    eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
-    if options.overlay {
-        address_arithmetic(&mut function);
-        lea_on_data(&mut function);
-    }
-    if options.overlay {
-        crate::overlay::mark_commutable(&mut function);
-    }
     commute_tied(&mut function);
-    if options.overlay {
-        fold_argument_loads(&mut function, wants_size, crate::memoperand::M68K);
-        crate::overlay::widen_compare_operands(&mut function);
-        crate::address::reassociate_indexed_displacement(&mut function);
-    }
     two_address(&mut function);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
-    let (assignment, slots) = if options.overlay {
-        crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
-    } else {
-        allocate_spilling(&mut function, first_slot)?
-    };
+    let (assignment, slots) = crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?;
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
-    if options.overlay {
-        crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
-    }
+    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number, &slots, options.overlay, cpu)? {
+    for line in finish(&function, &assignment, number, &slots, cpu)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),

@@ -58,14 +58,13 @@ enum Outcome {
     Reference(String),
 }
 
-/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (neither),
-/// `mid-end-only` or `os-raw`; which layer a failure is in.
+/// `$DIFF_OPTIONS`: `raw` (no mid-end), `size`, `pinned` (neither);
+/// which layer a failure is in.
 fn options() -> Options {
     match std::env::var("DIFF_OPTIONS").as_deref() {
         Ok("raw") => Options { mid_end: false, ..Options::default() },
         Ok("size") => Options { size: true, ..Options::default() },
         Ok("pinned") => Options::PINNED,
-        Ok("mid-end-only") => Options { overlay: false, ..Options::default() },
         _ => Options::default(),
     }
 }
@@ -88,9 +87,7 @@ fn qemu_cpu() -> &'static str {
 }
 
 fn clang() -> PathBuf {
-    std::env::var_os("LLRM_PIN_CLANG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap()).join("scratch/llvm-build/bin/clang"))
+    std::env::var_os("LLRM_PIN_CLANG").map(PathBuf::from).expect("LLRM_PIN_CLANG: the pin's clang")
 }
 
 /// A guarded child ended: its exit code and stdout, or the deadline passed.
@@ -270,9 +267,7 @@ fn gcc_m68k(
     dir: &Path,
     source: &str,
 ) -> Option<i32> {
-    let root = PathBuf::from(
-        std::env::var("GCC_M68K").unwrap_or(format!("{}/scratch/gcc-m68k/root", std::env::var("HOME").ok()?)),
-    );
+    let root = PathBuf::from(std::env::var("GCC_M68K").ok()?);
     let driver = root.join("usr/bin/m68k-linux-gnu-gcc");
     let start = "void _start(void) { extern unsigned char k(void); register int s asm(\"d1\") = k(); register int n asm(\"d0\") = 1; asm volatile(\"trap #0\" :: \"r\"(s), \"r\"(n)); for (;;); }\nconst unsigned char buf[16] = {3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3};\nconst unsigned char tab[8] = {2,5,8,11,14,17,20,23};\nconst volatile unsigned char zero = 0;\n";
     std::fs::write(dir.join("m.c"), format!("{start}{source}")).ok()?;
@@ -444,8 +439,54 @@ fn corpus(dir: &Path) -> bool {
     bad == 0
 }
 
+/// What a program's answer is compared with besides the host's gcc.
+#[derive(Debug, Eq, PartialEq)]
+enum Reference {
+    /// m68k gcc under qemu: the driver in the unpacked toolchain.
+    M68k(PathBuf),
+    /// The host's gcc alone, asked for with `$DIFF_HOST_ONLY`.
+    HostOnly,
+}
+
+/// The reference to use: the m68k gcc under `root` (`$GCC_M68K`), or, only when
+/// `host_only` is asked for, none. A root with no driver is an error: the
+/// host-only fallback was once taken silently from a wrong path.
+fn reference(
+    root: Option<&std::ffi::OsStr>,
+    host_only: bool,
+) -> Result<Reference, String> {
+    if host_only {
+        return Ok(Reference::HostOnly);
+    }
+    let root = root.ok_or("GCC_M68K is not set (DIFF_HOST_ONLY=1 compares with the host's gcc alone)")?;
+    let driver = Path::new(root).join("usr/bin/m68k-linux-gnu-gcc");
+    if driver.exists() {
+        Ok(Reference::M68k(driver))
+    } else {
+        Err(format!("no m68k gcc at {} (DIFF_HOST_ONLY=1 compares with the host's gcc alone)", driver.display()))
+    }
+}
+
+/// The first line of `gcc --version`.
+fn version(driver: &Path) -> String {
+    Command::new(driver)
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8_lossy(&out.stdout).lines().next().map(str::to_owned))
+        .unwrap_or_else(|| "version unknown".to_owned())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    match reference(std::env::var_os("GCC_M68K").as_deref(), std::env::var_os("DIFF_HOST_ONLY").is_some()) {
+        Ok(Reference::M68k(driver)) => eprintln!("difftest: reference {} ({})", driver.display(), version(&driver)),
+        Ok(Reference::HostOnly) => eprintln!("difftest: DIFF_HOST_ONLY: the reference is the host's gcc -m32 alone"),
+        Err(why) => {
+            eprintln!("difftest: {why}");
+            std::process::exit(2);
+        }
+    }
     if let Some(dir) = args.get(1).map(Path::new).filter(|path| path.is_dir()) {
         std::process::exit(i32::from(!corpus(dir)));
     }
@@ -525,6 +566,20 @@ fn main() {
 /// loops piled up at 97% CPU.
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A wrong `$GCC_M68K` ran 300 programs against the host's gcc alone and
+    /// reported `300 ok`; no root, or one without a driver, is an error unless
+    /// the host-only run is asked for.
+    #[test]
+    fn a_missing_m68k_gcc_is_an_error_unless_host_only_is_asked_for() {
+        use std::ffi::OsStr;
+        assert!(reference(None, false).is_err());
+        assert!(reference(Some(OsStr::new("/no/such/root")), false).is_err());
+        assert_eq!(reference(Some(OsStr::new("/no/such/root")), true), Ok(Reference::HostOnly));
+        assert_eq!(reference(None, true), Ok(Reference::HostOnly));
+    }
+
     use super::*;
 
     /// The environment pads the stack, so a program that reads its stack

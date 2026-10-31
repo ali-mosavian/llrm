@@ -38,42 +38,30 @@ fn status(
     code
 }
 
-/// `(a & c) + a`: `move.l a, d; and.l #c, d` becomes `moveq #c, d; and.l a, d`
-/// only where `c` fits `moveq`'s signed byte. 127 and -128 do, 128 and -129 do
-/// not (`moveq #128` would load -128), and the value is the same either way.
+/// `(a & c) + a` is the pin's `move.l a, d; and.l #c, d` for every `c`; the
+/// `moveq #c, d; and.l a, d` form, for a `c` within a signed byte, was a
+/// rewrite of it. The value must be the same at the edges of that range.
 #[test]
-fn a_mask_is_a_moveq_only_within_its_signed_byte() {
-    for (mask, quick) in [(127, true), (128, false), (-128, true), (-129, false)] {
+fn a_mask_keeps_its_immediate_form_and_its_value() {
+    for mask in [127, 128, -128, -129] {
         let ir =
             format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert_eq!(asm.contains(&format!("moveq\t#{mask},")), quick, "mask {mask}: {asm}");
+        assert!(asm.contains(&format!("and.l\t#{mask},")), "mask {mask}: {asm}");
         if let Some(code) = status(&ir, &[0x85], Options::default()) {
             assert_eq!(code, ((0x85 & mask) + 0x85) & 0xFF, "mask {mask}: {asm}");
         }
     }
 }
 
-fn code_size(
-    ir: &str,
-    options: Options,
-) -> usize {
-    let items = items_with(&module(ir), "f", Cpu::M68000, options).unwrap();
-    llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
-}
-
-/// `s + (a > b) + a` was `slt %d2; and.l #1, %d2; add.l %d2, %d0`: 6 bytes and
-/// 16 clocks for the mask. `moveq #0, %d2` before the compare and `neg.b %d2`
-/// after the `slt` are 4 bytes and 8 clocks, and the value is the same for
-/// either outcome.
+/// `s + (a > b) + a` is `sgt; and.l #1; add`, the pin's patterns. `moveq #0`
+/// before the compare and `neg.b` after the `sgt` were a rewrite of it, 2 bytes
+/// shorter, that the pin does not make.
 #[test]
-fn a_boolean_added_is_negated_not_masked() {
+fn a_boolean_added_is_masked_as_the_pin_does() {
     let ir = "define i32 @f(i32 %a, i32 %b, i32 %s) {\n  %c = icmp sgt i32 %a, %b\n  %z = zext i1 %c to i32\n  %t = add i32 %s, %z\n  %r = add i32 %t, %a\n  ret i32 %r\n}";
-    let pinned = text_with(&module(ir), "f", Cpu::M68000, Options::PINNED).unwrap();
-    assert!(pinned.contains("and.l\t#1,") && !pinned.contains("neg.b"), "{pinned}");
     let ours = text_with(&module(ir), "f", Cpu::M68000, Options::default()).unwrap();
-    assert!(ours.contains("neg.b") && !ours.contains("and.l\t#1,"), "{ours}");
-    assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
+    assert!(ours.contains("and.l\t#1,") && !ours.contains("neg.b"), "{ours}");
     for (a, b, s) in [(5, 3, 10), (3, 5, 10), (4, 4, 10), (-1, -2, 7), (-2, -1, 7)] {
         if let Some(code) = status(ir, &[a, b, s], Options::default()) {
             assert_eq!(code, (s as i32 + i32::from(a > b) + a as i32) & 0xFF, "f({a}, {b}, {s}): {ours}");
@@ -265,46 +253,6 @@ s:
     }
 }
 
-/// A pointer stepped in another block than the load through it (copies in
-/// between, the phi's) went `move.l %a0, %d2; addq.l #1, %d2; move.l %d2, %a0`
-/// for want of seeing the copies as one value: now `addq.l #1, %a0`.
-#[test]
-fn a_pointer_stepped_in_another_block_is_stepped_in_its_address_register() {
-    use llrm_m68k::kernels::Arg::{Data, Imm};
-    let ir = "define i32 @k(ptr %p, i32 %n) {
-entry:
-  br label %o
-o:
-  %q = phi ptr [%p, %entry], [%q1, %c]
-  %m = phi i32 [%n, %entry], [%m1, %c]
-  %s = phi i32 [0, %entry], [%a1, %c]
-  %v = load i8, ptr %q
-  %z = zext i8 %v to i32
-  br label %in
-in:
-  %j = phi i32 [0, %o], [%j1, %in]
-  %a = phi i32 [%s, %o], [%a1, %in]
-  %a1 = add i32 %a, %z
-  %j1 = add i32 %j, 1
-  %d = icmp eq i32 %j1, 3
-  br i1 %d, label %c, label %in
-c:
-  %q1 = getelementptr i8, ptr %q, i32 1
-  %m1 = add i32 %m, -1
-  %e = icmp eq i32 %m1, 0
-  br i1 %e, label %x, label %o
-x:
-  ret i32 %a1
-}";
-    let options = Options { mid_end: false, ..Options::default() };
-    let asm = text_with(&module(ir), "k", Cpu::M68000, options).unwrap();
-    // the step may be folded into the load across the inner loop (`(%a0)+`)
-    assert!((asm.contains("addq.l\t#1, %a") || asm.contains("(%a0)+")) && !asm.contains("move.l\t%a0, %d"), "{asm}");
-    if let Some(code) = status_with_data(ir, &[Data(0), Imm(3)], options) {
-        assert_eq!(code, (313 * 3) & 0xFF, "{asm}");
-    }
-}
-
 /// A byte copy that steps both pointers inside its `move` ran, once its text
 /// said `(%a2)+` for the destination, with a second step on the destination
 /// the text did not show; the copy must land byte for byte.
@@ -489,12 +437,10 @@ done:
   ret i32 %z
 }";
 
-/// A loop over three byte pointers and a count: LSR kept one shared index
-/// register for the pointers, `move.b (%a0,%d1), ...`; with post-indexed
-/// addressing each pointer steps in its own access. Runs, and no pointer is
-/// stepped apart from its access.
+/// A loop over three byte pointers and a count: the pin's addressing mode is
+/// none, so no pointer is post-incremented. Runs.
 #[test]
-fn a_loop_over_three_pointers_steps_each_in_its_access() {
+fn a_loop_over_three_pointers_runs_without_post_increment() {
     use llrm_m68k::kernels::Arg::{Data, Imm};
     let args = [Data(128), Data(0), Data(0), Imm(5)];
     for options in [Options::default(), Options::PINNED] {
@@ -503,7 +449,7 @@ fn a_loop_over_three_pointers_steps_each_in_its_access() {
         }
     }
     let text = text_with(&module(THREE_POINTERS), "k", Cpu::M68000, Options::default()).unwrap();
-    assert!(text.matches(")+").count() >= 3, "{text}");
+    assert!(!text.contains("%a0)+") && !text.contains("%a1)+") && !text.contains("%a2)+"), "{text}");
 }
 
 /// A phi only other phis read had no register and its inputs were dropped
@@ -594,12 +540,11 @@ fn a_compare_widened_to_each_width_is_zero_or_one() {
     }
 }
 
-/// `or disjoint x, c` on a data value was `move.l d, a; lea (c,a), a; move.l a,
-/// d` (the pin has `ADD32di` patterns for `add` only, so the `add_like` or is a
-/// `lea`): 8 bytes and 16 clocks where `addq.l #c, d` is 2 and 8, for a `c` up
-/// to 8. The value is the same, and a real pointer step stays an address add.
+/// `or disjoint x, c` on a data value is the pin's `lea` through an address
+/// register (its `ADD32di` patterns take `add` only): the value must be the
+/// or's. An `addq` in place of it was a rewrite the pin does not make.
 #[test]
-fn an_or_of_disjoint_bits_on_a_data_value_is_a_data_add() {
+fn an_or_of_disjoint_bits_on_a_data_value_is_the_pins_lea_and_right() {
     for (mask, bits) in [(3, 8), (1, 2), (3, 4), (7, 8)] {
         let ir = format!(
             "define i32 @f(i32 %a) {{
@@ -610,7 +555,7 @@ fn an_or_of_disjoint_bits_on_a_data_value_is_a_data_add() {
 }}"
         );
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert!(!asm.contains("lea"), "mask {mask} bits {bits}: {asm}");
+        assert!(asm.contains("lea"), "mask {mask} bits {bits}: {asm}");
         if let Some(code) = status(&ir, &[0x95], Options::default()) {
             assert_eq!(code, (((0x95 & mask) | bits) ^ 0x95) & 0xFF, "mask {mask} bits {bits}: {asm}");
         }
@@ -718,12 +663,11 @@ define i32 @f(ptr %d, ptr %s) {{
     )
 }
 
-/// An inline struct copy walks both pointers with `(An)+`: 2 bytes a move where
-/// the later ones were 6 (`move.l (4,%a0), (4,%a1)`), and what is read from the
-/// destination afterwards is the same bytes, at the displacement less the
-/// chain.
+/// An inline struct copy is the pin's moves with displacements, `(4,%a0)`;
+/// `(An)+` chains were a rewrite of them, and what is read from the destination
+/// afterwards is read at its own displacement.
 #[test]
-fn an_inline_copy_steps_both_pointers_and_later_reads_see_the_copy() {
+fn an_inline_copy_keeps_the_pins_displacements() {
     for bytes in [8, 24, 32] {
         let after = format!(
             "  %p = getelementptr i8, ptr %d, i32 {}
@@ -736,9 +680,7 @@ fn an_inline_copy_steps_both_pointers_and_later_reads_see_the_copy() {
         );
         let ir = copy_of(bytes, &after);
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert_eq!(asm.matches("(%a0)+").count(), bytes as usize / 4, "{bytes}: {asm}");
-        assert_eq!(asm.matches("(%a1)+").count(), bytes as usize / 4, "{bytes}: {asm}");
-        assert!(!asm.contains("(4,%a0)") && !asm.contains("(8,%a0)"), "{bytes}: {asm}");
+        assert!(!asm.contains("%a0)+") && !asm.contains("%a1)+"), "{bytes}: {asm}");
         let pinned = text_with(&module(&ir), "f", Cpu::M68000, Options::PINNED).unwrap();
         assert!(!pinned.contains(")+"), "{pinned}");
     }
@@ -910,4 +852,41 @@ fn a_run_cut_off_by_the_timeout_is_not_a_status() {
     let code = support::run_for(1, &qemu, &[], &path);
     std::fs::remove_file(&path).ok();
     panic!("returned {code:?}");
+}
+
+/// A pointer stepped in another block than the load through it (copies in
+/// between, the phi's) must still be stepped once: the sum is right.
+#[test]
+fn a_pointer_stepped_in_another_block_is_stepped_once() {
+    use llrm_m68k::kernels::Arg::{Data, Imm};
+    let ir = "define i32 @k(ptr %p, i32 %n) {
+entry:
+  br label %o
+o:
+  %q = phi ptr [%p, %entry], [%q1, %c]
+  %m = phi i32 [%n, %entry], [%m1, %c]
+  %s = phi i32 [0, %entry], [%a1, %c]
+  %v = load i8, ptr %q
+  %z = zext i8 %v to i32
+  br label %in
+in:
+  %j = phi i32 [0, %o], [%j1, %in]
+  %a = phi i32 [%s, %o], [%a1, %in]
+  %a1 = add i32 %a, %z
+  %j1 = add i32 %j, 1
+  %d = icmp eq i32 %j1, 3
+  br i1 %d, label %c, label %in
+c:
+  %q1 = getelementptr i8, ptr %q, i32 1
+  %m1 = add i32 %m, -1
+  %e = icmp eq i32 %m1, 0
+  br i1 %e, label %x, label %o
+x:
+  ret i32 %a1
+}";
+    let options = Options { mid_end: false, ..Options::default() };
+    let asm = text_with(&module(ir), "k", Cpu::M68000, options).unwrap();
+    if let Some(code) = status_with_data(ir, &[Data(0), Imm(3)], options) {
+        assert_eq!(code, (313 * 3) & 0xFF, "{asm}");
+    }
 }

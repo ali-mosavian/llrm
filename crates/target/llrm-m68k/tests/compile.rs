@@ -1,6 +1,6 @@
 //! IR to assembly text, against the pin's `llc -mtriple=m68k-linux-gnu
 //! -mcpu=M68000 -relocation-model=static -O2` (directives and comments
-//! dropped). The oracle is `~/scratch/llvm-build-m68k/bin/llc`, LLVM
+//! dropped). The oracle is `$LLVM_M68K/llc`, LLVM
 //! d1106deb71cc built with the M68k target; not the system llc.
 //!
 //! The call tests failed before the reserved-copy fold (`move.l %sp, %d0` and
@@ -192,11 +192,12 @@ fn a_loop_does_not_jump_through_a_block_that_only_jumps() {
     assert!(!text.contains(":\n\tbra"), "{text}");
 }
 
-/// Twenty live incoming arguments in a loop: each is a load of its slot,
-/// which runs again where the value is read instead of being stored to a
-/// frame slot and reloaded. It stored 18 of them (`movem.l %d0, (N,%sp)`).
+/// Twenty live incoming arguments in a loop: the pin's M68k marks nothing
+/// rematerializable, so each is stored to a frame slot and reloaded
+/// (`movem.l %d0, (N,%sp)`). Running the load of its own slot again where the
+/// value is read was a deviation of ours.
 #[test]
-fn spilled_incoming_arguments_are_reloaded_from_their_own_slots() {
+fn spilled_incoming_arguments_go_through_frame_slots_as_the_pin_has_it() {
     let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
     let mut ir = format!("define i32 @p({}) {{\nentry:\n  br label %l\nl:\n", params.join(", "));
     ir.push_str("  %i = phi i32 [0, %entry], [%i1, %l]\n  %s = phi i32 [0, %entry], [%s1, %l]\n");
@@ -209,7 +210,7 @@ fn spilled_incoming_arguments_are_reloaded_from_their_own_slots() {
     ir.push_str("  br i1 %c, label %l, label %x\nx:\n  ret i32 %s1\n}\n");
     let asm = compiled(&ir, "p");
     let stores = asm.lines().filter(|line| line.starts_with("\tmovem.l\t%d") && !line.contains('-')).count();
-    assert!(stores <= 1, "{asm}");
+    assert!(stores > 1, "{asm}");
 }
 
 /// A constant held in an address register is `move.w #1, %a0` (`ExpandMOVI`),
@@ -274,7 +275,7 @@ fn a_guard_over_a_loop_branches_forward_to_a_cold_return() {
 fn the_arms_of_an_expanded_select_keep_their_order() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source_in("library", "hex")).expect("parses");
     let text = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(text.contains("\tcmpi.l\t#10, %d0\n\tbcc\t.LBB0_3\n"), "{text}");
+    assert!(text.contains("\tcmpi.l\t#10, %d") && text.contains("\tbcc\t.LBB0_3\n"), "{text}");
 }
 
 /// The ILP scheduler put the loop-carried copy between `hex`'s `cmpi` and

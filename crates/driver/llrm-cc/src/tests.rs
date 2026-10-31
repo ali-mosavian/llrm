@@ -244,3 +244,19 @@ fn os_layer_answers_without_llrm_c_or_clang() {
     assert!(os_layer(&words("-O2 x.c")).is_none());
     assert!(os_layer(&words("--os-layer start")).unwrap().is_err());
 }
+
+/// The 6502 rows name their own backend and platform, and the level reaches it.
+/// A row with the default `llrm-llc` handed the msp430 IR to the x86 backend.
+#[test]
+fn the_6502_rows_select_their_own_backend_and_cpu() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-Os -S x.c");
+    for (row, cpu) in [("6502-sim65", "--cpu=6502"), ("65c02-sim65", "--cpu=65c02")] {
+        assert_eq!(table[row].llc_program, "llrm-6502-llc", "{row}");
+        let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.s"));
+        assert_eq!(args[..3], ["-Os", "--platform=sim65", cpu], "{row}: {args:?}");
+        assert!(args.contains(&"-S".to_owned()), "{row}: {args:?}");
+        assert_eq!(table[row].c_abi.as_ref().map(|c| (c.int, c.pointer)), Some((2, 2)), "{row}");
+    }
+    assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
+}

@@ -2,7 +2,7 @@
 //! compiled by this compiler and by the pin's `llc` (-O2 and -O2 with
 //! `optsize`), run under `qemu-m68k` with the same `_start` and data, and its
 //! size and executed instruction count printed as a Markdown table. Needs the
-//! pin's m68k build (`$LLVM_M68K`, default `~/scratch/llvm-build-m68k/bin`) and
+//! pin's m68k build (`$LLVM_M68K`, required) and
 //! `qemu-m68k`.
 
 use std::path::{Path, PathBuf};
@@ -103,8 +103,7 @@ fn llc(
 }
 
 /// The `.text` of the C kernel compiled by m68k gcc, unpacked without root into
-/// `$GCC_M68K` (default `~/scratch/gcc-m68k/root`); `None` when it is not
-/// there.
+/// `$GCC_M68K`; `None` when it is unset or not there.
 fn gcc(
     llvm: &Path,
     source: &Path,
@@ -112,9 +111,7 @@ fn gcc(
     opt: &str,
     leaf: bool,
 ) -> Option<Vec<u8>> {
-    let root = PathBuf::from(
-        std::env::var("GCC_M68K").unwrap_or(format!("{}/scratch/gcc-m68k/root", std::env::var("HOME").ok()?)),
-    );
+    let root = PathBuf::from(std::env::var("GCC_M68K").ok()?);
     let driver = root.join("usr/bin/m68k-linux-gnu-gcc");
     if !driver.exists() {
         return None;
@@ -134,8 +131,7 @@ fn gcc(
 }
 
 fn main() {
-    let home = std::env::var("HOME").unwrap();
-    let llvm = PathBuf::from(std::env::var("LLVM_M68K").unwrap_or(format!("{home}/scratch/llvm-build-m68k/bin")));
+    let llvm = PathBuf::from(std::env::var("LLVM_M68K").expect("LLVM_M68K: the pin's m68k build, its bin directory"));
     let dir = std::env::temp_dir().join(format!("llrm-m68k-bench-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
@@ -179,8 +175,8 @@ fn main() {
         let mut verdicts = Vec::new();
         let mut counts = Vec::new();
         let variants: Vec<Result<(Vec<Item>, usize), String>> = vec![
-            // the raw IR, as the overlay compiles it without the LSR pass `llc`
-            // runs
+            // the raw IR, as the default pipeline compiles it without the LSR
+            // pass `llc` runs
             items_with(&module, "k", Cpu::M68000, Options { mid_end: false, ..Options::default() }).and_then(|code| {
                 let size = measure(&code, &runtime)?;
                 Ok((code, size))

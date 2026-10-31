@@ -11,9 +11,10 @@ the same arguments and data. `cargo run -p llrm-m68k --example bench` prints the
 - **Results first.** A row counts only if every variant exits with the value worked out by hand
   (`kernels::table`). `tests/kernels.rs` checks the same for ours, bounded by `timeout 10`.
 - **Instructions** are executed instructions inside `k`, counted from qemu's trace through a
-  pipe (never a file), killed at 2M lines. Cycles are not modelled.
-- **gcc.** `kernels/*.c` mirror the IR; compiled with `m68k-linux-gnu-gcc -Os` and `-O2` from `$GCC_M68K` (default
-  `~/scratch/gcc-m68k/root`, the apt debs unpacked without root); the columns read `-` when it is missing.
+  pipe (never a file), killed at 2M lines. Clocks are priced by `examples/cycles.rs` from
+  `src/timing.rs` (Motorola's published tables).
+- **gcc.** `kernels/*.c` mirror the IR; compiled with `m68k-linux-gnu-gcc -Os` and `-O2` from `$GCC_M68K` (the apt debs unpacked without
+  root); the columns read `-` when it is not set.
 - **Not compared.** vbcc.
 - The 68000 model matters: `llc` saves and restores `sr` around copies (`move.w %sr,-(%sp)`),
   which faults on a 68010 or later model.

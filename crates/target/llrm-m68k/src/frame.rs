@@ -74,11 +74,6 @@ pub enum FrameOp {
     Save { registers: Vec<RegId>, base: Base, offset: i64 },
     /// `movem.l (offset, base), regs`
     Restore { registers: Vec<RegId>, base: Base, offset: i64 },
-    /// `move.l reg, -(%sp)` or `movem.l regs, -(%sp)`: the overlay's
-    /// prologue, when the frame is only the saved registers.
-    Push(Vec<RegId>),
-    /// `move.l (%sp)+, reg` or `movem.l (%sp)+, regs`.
-    Pop(Vec<RegId>),
 }
 
 /// The laid-out frame.
@@ -172,39 +167,6 @@ impl Layout {
         if let Some((base, offset)) = self.save_base() {
             ops.push(FrameOp::Save { registers: self.saved.clone(), base, offset });
         }
-        ops
-    }
-
-    /// Whether the saved registers are the top of the frame, so pushing and
-    /// popping them opens and closes that part with no offsets (the same
-    /// addresses result: they are the highest words, whose total is the bytes
-    /// pushed), and `suba`/`adda` take only the rest.
-    pub fn pushes(&self) -> bool {
-        let pushed = SLOT * self.saved.len() as i64;
-        !self.has_fp && !self.saved.is_empty() && self.save_base() == Some((Base::Sp, self.stack_size - pushed))
-    }
-
-    /// The bytes below the pushed registers.
-    fn rest(&self) -> i64 {
-        self.stack_size - SLOT * self.saved.len() as i64
-    }
-
-    /// The prologue of a frame that [`pushes`](Layout::pushes).
-    pub fn push_prologue(&self) -> Vec<FrameOp> {
-        let mut ops = vec![FrameOp::Push(self.saved.clone())];
-        if self.rest() != 0 {
-            ops.push(FrameOp::SubSp(self.rest()));
-        }
-        ops
-    }
-
-    /// The epilogue of a frame that [`pushes`](Layout::pushes).
-    pub fn pop_epilogue(&self) -> Vec<FrameOp> {
-        let mut ops = Vec::new();
-        if self.rest() != 0 {
-            ops.push(FrameOp::AddSp(self.rest()));
-        }
-        ops.push(FrameOp::Pop(self.saved.clone()));
         ops
     }
 

@@ -16,13 +16,10 @@
 //! `dag_select.rs` in the codegen crate for the x86 run of the same stages.
 
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::dag_target::{DagTarget, Phases, Select, select_units};
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
-use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
-use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
-use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
-use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit};
 use llrm_dagisel::interp::Selector;
 
 use super::generated::ids::reg as pin;
@@ -173,19 +170,19 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false)
+    select_block_with(dag, cpu, false, &mut Temporaries::new(0))
 }
 
-/// [`select_block`], with a compare's load put where a pattern folds it where
-/// `load_as_source` (see `lowering::lower_setcc`).
+/// [`select_block`], with the pin's source-order scheduler where
+/// `source_order`.
 pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
-    load_as_source: bool,
     source_order: bool,
+    frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering { load_as_source };
+    let mut lowering = M68kLowering;
     let selector = Selector::new(match cpu {
         Cpu::M68000 => m68k_m68000::TABLE,
         Cpu::M68020 => m68k_m68020::TABLE,
@@ -195,7 +192,7 @@ pub fn select_block_with(
         lowering: &mut lowering,
         chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
     };
-    select_units(dag, &mut target, &M68kSched { source_order }, &mut NoFrame).map_err(|why| match why {
+    select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
         llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
         other => Refusal::CannotSelect(format!("{other:?}")),
     })
@@ -234,19 +231,35 @@ impl DagTarget for M68kTarget<'_> {
     }
 }
 
-/// m68k makes no scratch frame object yet.
-struct NoFrame;
+/// `CreateStackTemporary`: the scratch frame objects a block's legalization
+/// asks for, numbered after the function's static allocas.
+pub struct Temporaries {
+    next: i32,
+    /// `(frame index, size, alignment)` of each one made, as
+    /// `Selected::locals`.
+    pub made: Vec<(i32, i64, i64)>,
+}
 
-impl llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects for NoFrame {
+impl Temporaries {
+    /// Frame indices from `first` on: the number of frame objects there are.
+    pub fn new(first: i32) -> Temporaries {
+        Temporaries { next: first, made: Vec::new() }
+    }
+}
+
+impl llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects for Temporaries {
     fn objects(&self) -> i32 {
-        0
+        self.next
     }
 
     fn create_stack_temporary(
         &mut self,
-        _size: u32,
-        _align: u32,
+        size: u32,
+        align: u32,
     ) -> i32 {
-        panic!("m68k makes no scratch frame object yet")
+        let index = self.next;
+        self.next += 1;
+        self.made.push((index, i64::from(size), i64::from(align.max(1))));
+        index
     }
 }

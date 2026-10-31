@@ -54,3 +54,16 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
     let names = machine_names(&dag, units.iter().flat_map(|unit| unit.nodes.iter().copied()));
     assert_eq!(names, ["MOV32rp", "ADD32dp", "RET"]);
 }
+
+/// `create_stack_temporary` panicked ("m68k makes no scratch frame object
+/// yet"), so any legalization that asked for a slot aborted the compile.
+#[test]
+fn a_scratch_frame_object_is_numbered_after_the_existing_ones() {
+    use llrm_codegen::backend::selectiondag::x86_preprocess::FrameObjects;
+    use llrm_m68k::dagisel::pipeline::Temporaries;
+    let mut frame = Temporaries::new(2);
+    assert_eq!(frame.create_stack_temporary(8, 4), 2);
+    assert_eq!(frame.create_stack_temporary(4, 0), 3);
+    assert_eq!(frame.objects(), 4);
+    assert_eq!(frame.made, [(2, 8, 4), (3, 4, 1)]);
+}

@@ -1,10 +1,10 @@
 //! A function from IR to scheduled machine nodes: the shared builder, then
 //! [`super::pipeline`]'s stages, block by block.
 //!
-//! DEVIATE: no static allocas, jump tables, switches or live-in registers: the
-//! builder makes the frame objects and the C convention passes everything on
-//! the stack, so the slice (arithmetic, branches, calls) needs none. Reason:
-//! frame objects wait for the m68k machine function. Exit: M4.
+//! DEVIATE: no jump tables and no live-in registers: a `switch` is a chain of
+//! compares and the C convention passes everything on the stack, so the slice
+//! (arithmetic, branches, calls) needs neither. Reason: the pin's jump tables
+//! wait for the m68k machine function's table support. Exit: M4.
 
 use std::sync::LazyLock;
 
@@ -21,7 +21,7 @@ use llrm_mir::module::{BlockId, Module, ValueDef};
 use super::call::M68kCalling;
 use super::hooks::Cpu;
 use super::lowering::m68kisd;
-use super::pipeline::select_block_with;
+use super::pipeline::{Temporaries, select_block_with};
 use crate::target::M68k;
 
 static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
@@ -89,27 +89,12 @@ pub fn select_function(
     select_function_with(module, name, cpu, false)
 }
 
-/// [`select_function`], with `load_as_source` (see
-/// [`super::pipeline::select_block_with`]).
+/// [`select_function`], with `source_order`: the pin's source-order scheduler
+/// in place of the ILP list scheduler.
 pub fn select_function_with(
     module: &Module,
     name: &str,
     cpu: Cpu,
-    load_as_source: bool,
-) -> Result<Vec<Selected>, String> {
-    select_function_ordered(module, name, cpu, load_as_source, false, false)
-}
-
-/// [`select_function_with`], with `ordered_copies`: the pairs of an inline
-/// copy in address order, which the overlay's `(An)+` chains need, and
-/// `source_order`: the pin's source-order scheduler in place of the ILP list
-/// scheduler.
-pub fn select_function_ordered(
-    module: &Module,
-    name: &str,
-    cpu: Cpu,
-    load_as_source: bool,
-    ordered_copies: bool,
     source_order: bool,
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -122,9 +107,9 @@ pub fn select_function_ordered(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let mut target = builder_target();
-    target.ordered_copies = ordered_copies;
+    let target = builder_target();
     let mut info = FunctionLoweringInfo::new(function);
+    let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
     let mut updates = Vec::new();
     for &block in function.layout() {
@@ -135,11 +120,11 @@ pub fn select_function_ordered(
         // out
         let extras = std::mem::take(&mut built.extra);
         let units =
-            select_block_with(&mut built.dag, cpu, load_as_source, source_order).map_err(|why| format!("{why:?}"))?;
+            select_block_with(&mut built.dag, cpu, source_order, &mut temporaries).map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, load_as_source, source_order)
+            let units = select_block_with(&mut extra.dag, cpu, source_order, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
@@ -171,6 +156,7 @@ pub fn select_function_ordered(
             i64::try_from(layout.pref_align(types, allocated)).unwrap_or(1).max(wanted.map_or(1, |one| one as i64));
         locals.push((index, size, align));
     }
+    locals.extend(temporaries.made);
     locals.sort();
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;

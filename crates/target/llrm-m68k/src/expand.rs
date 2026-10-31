@@ -56,17 +56,6 @@ fn frame_op(
         FrameOp::Save { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32pm", operands: vec![Imm(*offset), base(at), Imm(mask(registers))] }
         }
-        FrameOp::Push(registers) | FrameOp::Pop(registers) => {
-            let pushing = matches!(op, FrameOp::Push(_));
-            let mut sorted: Vec<RegId> = registers.clone();
-            sorted.sort_by_key(|one| mask_bit(REGISTER_INFO.root(*one)));
-            match (&sorted[..], pushing) {
-                ([one], true) => mc::Inst { opcode: "PUSH32", operands: vec![R(*one)] },
-                ([one], false) => mc::Inst { opcode: "POP32", operands: vec![R(*one)] },
-                (_, true) => mc::Inst { opcode: "PUSHM32", operands: vec![Imm(mask(registers))] },
-                (_, false) => mc::Inst { opcode: "POPM32", operands: vec![Imm(mask(registers))] },
-            }
-        }
         FrameOp::Restore { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32mp", operands: vec![Imm(mask(registers)), Imm(*offset), base(at)] }
         }
@@ -102,7 +91,6 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[i32],
-    overlay: bool,
     cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
@@ -175,9 +163,7 @@ pub fn finish(
         ..Function::default()
     });
     let mut out = Vec::new();
-    let pushes = overlay && layout.pushes();
-    let opening = if pushes { layout.push_prologue() } else { layout.prologue() };
-    opening.iter().for_each(|op| frame_op(op, &mut out));
+    layout.prologue().iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
@@ -272,7 +258,7 @@ pub fn finish(
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("RET") => {
-                let closing = if pushes { layout.pop_epilogue() } else { layout.epilogue() };
+                let closing = layout.epilogue();
                 closing.iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
@@ -321,34 +307,6 @@ pub fn finish(
         }
     }
     lines.extend(out.into_iter().map(Line::Inst));
-    // the registers a `ret` reads: the result, live at the `rts`
-    let returned: Vec<RegId> = insts
-        .iter()
-        .filter(|inst| inst.kind == Kind::Op("RET"))
-        .flat_map(|inst| &inst.operands)
-        .filter_map(|operand| match operand {
-            Operand::Use(Reg::Phys(register)) => Some(*register),
-            _ => None,
-        })
-        .collect();
-    if overlay {
-        lines = lines
-            .into_iter()
-            .map(|line| match line {
-                Line::Inst(inst) => Line::Inst(crate::overlay::rewrite(inst)),
-                label => label,
-            })
-            .collect();
-        lines = crate::overlay::merge_masks(lines);
-        lines = crate::overlay::constant_into_destination(lines);
-        lines = crate::overlay::boolean_by_negation(lines);
-        lines = crate::overlay::narrow_immediates(lines);
-        lines = crate::overlay::drop_redundant_tests(lines);
-        lines = crate::overlay::drop_repeated_compares(lines);
-        lines = crate::overlay::fold_post_increment(lines);
-        lines = crate::chain::chain_post_increment(lines, &returned);
-        lines = crate::chain::loop_post_increment(lines);
-    }
     Ok(lines)
 }
 
@@ -358,9 +316,6 @@ pub fn finish(
 /// DEVIATE from the pin, whose test is `isUInt<16>`: `movea.w` sign-extends, so
 /// 32768 to 65535 came out as 0xFFFF8000 to 0xFFFFFFFF. Exit: the pin tests
 /// `isInt<16>` (as a signed value).
-/// DEVIATE: in a data register `moveq` and `not.w` for 0xFF80 to 0xFFFF and
-/// `moveq` and `swap` for a `moveq` value shifted up 16, 4 bytes and 8 clocks
-/// where `move.l #imm` is 6 and 12.
 pub fn expand_movi(
     dst: RegId,
     value: i64,
@@ -378,11 +333,6 @@ pub fn expand_movi(
     } else if !address && (0..=255).contains(&value) {
         let low = REGISTER_INFO.view(REGISTER_INFO.root(dst), 8).ok_or("no byte view")?;
         vec![inst("MOVQ", vec![R(dst), Imm(!value & 0xFF)]), inst("NOT8d", vec![R(low), R(low)])]
-    } else if !address && (0xFF80..=0xFFFF).contains(&value) {
-        let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
-        vec![inst("MOVQ", vec![R(dst), Imm(!value & 0xFFFF)]), inst("NOT16d", vec![R(word), R(word)])]
-    } else if !address && value % 65536 == 0 && (1..=127).contains(&(value / 65536)) {
-        vec![inst("MOVQ", vec![R(dst), Imm(value / 65536)]), inst("SWAP", vec![R(dst), R(dst)])]
     } else if address && (0..=32767).contains(&value) {
         let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
         vec![inst("MOV16ai", vec![R(word), Imm(value)])]

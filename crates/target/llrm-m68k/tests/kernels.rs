@@ -141,7 +141,7 @@ fn run_ir_with_runtime(
     );
     let module = llrm_mir::parse::module(&text).expect("parses");
     let mut code = Vec::new();
-    for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+    for (_, global, _function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
         let name = global.name.as_deref().expect("a named function");
         code.extend(items(&module, name, Cpu::M68000).expect("compiles"));
     }

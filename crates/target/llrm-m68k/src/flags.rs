@@ -150,7 +150,7 @@ pub fn preserve_flags(
                     .filter(|d| !clobbered.contains(&root(*d, assignment)))
                     .map(
                         |d| {
-                            let mut test = Inst::new(Kind::Op("TST32d"), vec![Operand::Use(d)]);
+                            let mut test = Inst::new(Kind::Op("CMP32di"), vec![Operand::Imm(0), Operand::Use(d)]);
                             test.sets_flags = true;
                             test
                         },

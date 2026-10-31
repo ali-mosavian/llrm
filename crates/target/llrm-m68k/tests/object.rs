@@ -1,5 +1,5 @@
 //! Encodings and the static executable, against the pin's `llvm-mc`
-//! (`~/scratch/llvm-build-m68k/bin`, LLVM d1106deb71cc with M68k): the golden
+//! (`$LLVM_M68K`, LLVM d1106deb71cc with M68k): the golden
 //! bytes are its `-filetype=obj` `.text` of the compiler's own asm, and the
 //! executables run under `qemu-m68k`.
 //!

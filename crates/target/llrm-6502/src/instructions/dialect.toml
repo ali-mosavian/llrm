@@ -1,0 +1,21 @@
+# What the reader of mos.instr must know: see llrm_target::instr::Dialect. No forms are described yet.
+file = "mos.instr"
+registers = ["a", "x", "y", "sp", "flags"]
+widths = [8, 16]
+assembler_column = false
+arithmetic = ["N", "Z", "C"]
+
+[flags]
+C = 1
+Z = 2
+N = 4
+
+# `{cc}`: the condition codes of lowering.rs `cond`, with the flags each tests.
+conditions = [
+    { name = "eq", flags = ["Z"] },
+    { name = "ne", flags = ["Z"] },
+    { name = "cc", flags = ["C"] },
+    { name = "cs", flags = ["C"] },
+    { name = "mi", flags = ["N"] },
+    { name = "pl", flags = ["N"] },
+]

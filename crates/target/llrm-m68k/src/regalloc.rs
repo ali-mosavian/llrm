@@ -133,7 +133,9 @@ pub fn allocate_spilling(
 }
 
 /// [`allocate_spilling`], with the copies a loop runs on every trip joined
-/// first.
+/// first. The pin does the same: `RegisterCoalescer` visits blocks by loop
+/// depth and `CalcSpillWeights` weighs uses by `MachineBlockFrequencyInfo`
+/// (pin d1106deb71cc).
 pub fn allocate_spilling_by_frequency(
     function: &mut MFunction,
     first_slot: i32,
@@ -166,7 +168,8 @@ pub fn branch_fold(
     llrm_spike_mf::branch_fold_hoisting::<M68kRegisters>(function, assignment)
 }
 
-/// `MachineBlockPlacement` over the m68k function.
+/// `MachineBlockPlacement` over the m68k function. M68kPassConfig does not
+/// override `addBlockPlacement`, so the pin runs it at every `-O` above 0.
 pub fn place_blocks(
     function: &mut MFunction,
     odds: &llrm_spike_mf::placement::Odds,
@@ -182,7 +185,9 @@ pub fn remove_identity_copies(
     llrm_spike_mf::remove_identity_copies::<M68kRegisters>(function, assignment)
 }
 
-/// An edge the phi's copy would cross a compare on gets a block of its own.
+/// An edge the phi's copy would cross a compare on gets a block of its own: a
+/// DEVIATE from `SplitPHIEdges` (see the shared function) priced by
+/// `tests/pin_output.rs::a_max_loop_carries_its_maximum_in_two_register_moves`.
 pub fn split_flag_edges(function: &mut MFunction) {
     llrm_spike_mf::regalloc::split_flag_edges::<M68kRegisters, _>(function)
 }
