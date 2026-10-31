@@ -327,6 +327,9 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         llrm_mir::target::Neutral.spaces()
     }
 
+    /// One unit is a byte-wide ALU operation (`clc; lda; adc; sta`, 11 clocks;
+    /// `tti.rs`); a pass prices a word as its bytes. `Neutral`'s one for every
+    /// operation is the table's row for add, compare, load and branch.
     fn costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::Neutral.costs()
     }

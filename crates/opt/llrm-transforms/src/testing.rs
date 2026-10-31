@@ -151,6 +151,8 @@ pub struct Tuned {
     pub multiplies: std::collections::BTreeMap<i64, i64>,
     /// `Machine::huge_window`.
     pub window: Option<(u32, i64)>,
+    /// `Machine::index_register_bits`.
+    pub index_bits: Option<u32>,
     /// The address spaces, where not real mode's.
     pub spaces: Option<llrm_mir::spaces::Spaces>,
     /// `Lowering::is_mask_and_cmp0_folding_beneficial`.
@@ -335,6 +337,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn huge_window(&self) -> Option<(u32, i64)> {
         self.window
+    }
+
+    fn index_register_bits(&self) -> Option<u32> {
+        self.index_bits
     }
 }
 

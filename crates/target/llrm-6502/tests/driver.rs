@@ -789,3 +789,87 @@ fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
 }
+
+/// Fills `@src` with its own index, copies `%n` bytes of it plus one to `@dst`
+/// by two pointers (not a `memcpy`), and folds all of `@dst` (`t * 3 + byte`)
+/// into a byte.
+const COUNTED_COPY: &str = "@src = global [600 x i8] zeroinitializer
+@dst = global [600 x i8] zeroinitializer
+define i8 @f(i16 %n) {
+entry:
+  br label %fill
+fill:
+  %i = phi i16 [ 0, %entry ], [ %i2, %fill ]
+  %p = getelementptr inbounds i8, ptr @src, i16 %i
+  %v = trunc i16 %i to i8
+  store i8 %v, ptr %p
+  %i2 = add i16 %i, 1
+  %c = icmp ult i16 %i2, 600
+  br i1 %c, label %fill, label %guard
+guard:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %sum, label %pre
+pre:
+  br label %copy
+copy:
+  %sp = phi ptr [ @src, %pre ], [ %sp2, %copy ]
+  %dp = phi ptr [ @dst, %pre ], [ %dp2, %copy ]
+  %k = phi i16 [ %n, %pre ], [ %k2, %copy ]
+  %x = load i8, ptr %sp
+  %x1 = add i8 %x, 1
+  store i8 %x1, ptr %dp
+  %sp2 = getelementptr inbounds i8, ptr %sp, i16 1
+  %dp2 = getelementptr inbounds i8, ptr %dp, i16 1
+  %k2 = sub nuw i16 %k, 1
+  %d = icmp ne i16 %k2, 0
+  br i1 %d, label %copy, label %sum
+sum:
+  %j = phi i16 [ 0, %guard ], [ 0, %copy ], [ %j2, %sum ]
+  %t = phi i8 [ 0, %guard ], [ 0, %copy ], [ %t2, %sum ]
+  %q = getelementptr inbounds i8, ptr @dst, i16 %j
+  %y = load i8, ptr %q
+  %t3 = mul i8 %t, 3
+  %t2 = add i8 %t3, %y
+  %j2 = add i16 %j, 1
+  %m = icmp ult i16 %j2, 600
+  br i1 %m, label %sum, label %end
+end:
+  ret i8 %t2
+}";
+
+/// A counted copy was `lda (s),y; sta (d),y; iny; bne` only inside the page
+/// bumps `pageindex` makes after selection, with a 16-bit count stepped every
+/// trip beside it (`memcpy`, 40 clocks a byte). Split into windows of a page
+/// by the mid-end, one index counts the window and the trip is the four
+/// instructions alone (lz4, 37126 clocks against the hand-written 12870).
+#[test]
+fn a_counted_copy_runs_a_page_at_a_time_on_one_index() {
+    let text = assembly(&module(COUNTED_COPY), &Request::new(Level::O2)).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let step = lines.windows(2).position(|pair| pair[0] == "  iny" && pair[1].starts_with("  bne __r_f_b"));
+    let start = step.and_then(|at| lines[..at].iter().rposition(|line| !line.starts_with("  ")));
+    let trip = start.zip(step).map(|(start, at)| &lines[start + 1..at + 2]);
+    // `lda (s),y; clc; adc #1; sta (d),y; iny; bne`: no count in the trip.
+    assert!(
+        trip.is_some_and(|trip| trip.len() == 6
+            && trip[0].starts_with("  lda (rc")
+            && trip[3].starts_with("  sta (rc")),
+        "the trip is not a load, an add, a store and the index:\n{text}"
+    );
+}
+
+/// The windows' edges: the copy and the fold after it agree with the host's at
+/// lengths around one and two pages. With the page loop's index started at
+/// the wrong place the bytes landed a window off, and the fold said so.
+#[test]
+fn a_counted_copy_is_exact_around_the_page_edges() {
+    let text = assembly(&module(COUNTED_COPY), &Request::new(Level::O2)).unwrap();
+    let functions: String =
+        text.lines().filter(|line| !line.starts_with("rc")).map(|line| format!("{line}\n")).collect();
+    for n in [0u16, 1, 2, 255, 256, 257, 300, 511, 512, 513, 599] {
+        let fold = (0..600u16)
+            .fold(0u8, |t, j| t.wrapping_mul(3).wrapping_add(if j < n { (j as u8).wrapping_add(1) } else { 0 }));
+        let main = format!("  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  jsr __r_f\n", n & 0xFF, n >> 8);
+        assert_eq!(common::run_with(&format!("copy-{n}"), &main, &functions), i32::from(fold), "length {n}");
+    }
+}

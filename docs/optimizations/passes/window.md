@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/window.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/window.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:b9e0f309bbbac4c14b6036b36c9c631801cea03298a4d20d1c580c038655c1d1 -->
+<!-- src: crates/opt/llrm-transforms/src/window.rs sha256:b9ae8e2782090ea67ef6453a5d518d94f47e7814c01c3d5d88fcd835507708f6 -->
 
 # window
 
-A counted loop's huge pointers are split into windows, inside each of which
-the loop runs on far pointers that never carry into the segment selector.
+A counted loop's pointers are split into windows, inside each of which the
+loop runs on far pointers that never carry into the segment selector, or on
+one narrow index.
 
 ## How it works
 A huge pointer's step carries into the selector, so each step costs the
@@ -65,9 +66,27 @@ where an unknown count is taken as its bound or `profit::UNKNOWN_TRIPS`.
 For size (-Os), the saving must exceed one setup. A loop that fails is
 left alone. The new branches carry `branch_weights`.
 
+## The index form
+A target with no huge window but an index narrower than its pointers
+(`Machine::index_register_bits`; the 6502's `lda (base),y`) gets the same
+windows with another inner loop: the walks step by one constant, upward, and
+one `n`-bit index counts every walk and the window's trips alike, from
+`-bytes` up to the wrap at zero. Each walk's base is fixed for the window,
+`start + bytes - 2^n`, and the next window starts at `start + bytes`. A
+window holds `2^n / step` trips. A pointer read after the loop is the last
+window's end. The count and the sums a window makes are folded by `combine`
+at the end, where no later pass would. Priced in the index's words: a
+pointer step costs its words, the shared index step one.
+
 DEVIATE LP-4 (no pin pass: huge-pointer windows are the DOS exception, LLVM
 has no huge pointer; exit: none planned, kept; to migrate off the old
 analyses it reads; owner w-6; review 2026-11-27).
+
+DEVIATE LP-5 (the index form: LLVM's LSR keeps one pointer per access and
+leaves the carry of an 8-bit index to the target; exit: when the greedy
+allocator (#6259) can hold a pointer pair and an index across the loop, a
+translation of LSR's `LSRUse` formulae for a narrow index replaces this;
+owner 6502 session; review 2026-11-27).
 
 ## Example
 Before:

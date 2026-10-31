@@ -170,3 +170,166 @@ fn test_a_walk_counted_by_a_truncation_of_its_counter_is_split_into_windows() {
     let got = same(TRUNC_EXIT, &[&[]]);
     assert!(got.contains("windows:") && got.contains("phi ptr addrspace(1)"), "{got}");
 }
+
+/// A 16-bit pointer of a target whose indexed mode adds `bits`.
+const SMALL: &str = "target datalayout = \"e-p:16:16-i32:16-n8:16\"\n\n";
+
+/// Bytes copied from a buffer of 600 filled with its own index to a second,
+/// by two pointers stepped by one, as many as `%n`; the answer folds the
+/// copy. The lengths below cross the 256 and 512 byte windows.
+const COPY: &str = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  %b = alloca [600 x i8]
+  br label %fill
+fill:
+  %i = phi i16 [ 0, %entry ], [ %i2, %fill ]
+  %p = getelementptr inbounds i8, ptr %a, i16 %i
+  %v = trunc i16 %i to i8
+  store i8 %v, ptr %p
+  %i2 = add i16 %i, 1
+  %c = icmp ult i16 %i2, 600
+  br i1 %c, label %fill, label %pre
+pre:
+  br label %copy
+copy:
+  %sp = phi ptr [ %a, %pre ], [ %sp2, %body ]
+  %dp = phi ptr [ %b, %pre ], [ %dp2, %body ]
+  %k = phi i16 [ %n, %pre ], [ %k2, %body ]
+  %more = icmp ne i16 %k, 0
+  br i1 %more, label %body, label %sum
+body:
+  %x = load i8, ptr %sp
+  store i8 %x, ptr %dp
+  %sp2 = getelementptr inbounds i8, ptr %sp, i16 1
+  %dp2 = getelementptr inbounds i8, ptr %dp, i16 1
+  %k2 = sub nuw i16 %k, 1
+  br label %copy
+sum:
+  %j = phi i16 [ 0, %copy ], [ %j2, %sum ]
+  %t = phi i16 [ 0, %copy ], [ %t2, %sum ]
+  %q = getelementptr inbounds i8, ptr %b, i16 %j
+  %y = load i8, ptr %q
+  %w = zext i8 %y to i16
+  %t3 = mul i16 %t, 3
+  %t2 = add i16 %t3, %w
+  %j2 = add i16 %j, 1
+  %d = icmp ult i16 %j2, 600
+  br i1 %d, label %sum, label %done
+done:
+  ret i16 %t
+}
+";
+
+fn paged(
+    text: &str,
+    bits: Option<u32>,
+) -> String {
+    let mut module = parsed(&format!("{SMALL}{text}"));
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Window { size: false });
+    manager.run_module(&mut module, Rc::new(Tuned { index_bits: bits, ..Tuned::default() })).unwrap();
+    printed(&module)
+}
+
+const LENGTHS: &[&[i128]] = &[&[0], &[1], &[2], &[255], &[256], &[257], &[300], &[511], &[512], &[513], &[599]];
+
+/// Where the target indexes by a byte, a pointer walk of unknown length is
+/// split into windows of 256 trips: one index counts a window, the pointers
+/// stay fixed inside it. The copy is the same at every length around the
+/// windows' edges.
+#[test]
+fn test_a_pointer_walk_runs_on_one_page_index() {
+    let before = parsed(&format!("{SMALL}{COPY}"));
+    let got = paged(COPY, Some(8));
+    assert_eq!(results(&parsed(&got), LENGTHS), results(&before, LENGTHS), "{got}");
+    assert!(got.contains("windows:") && got.contains("phi i8"), "{got}");
+    assert!(!got.contains("%sp2") && !got.contains("%dp2"), "a pointer still steps:\n{got}");
+}
+
+/// The window is as wide as the index the target states: a 4-bit index
+/// wraps every 16 bytes. With a byte hard-coded the index stayed `i8`.
+#[test]
+fn test_the_window_is_as_wide_as_the_targets_index() {
+    let before = parsed(&format!("{SMALL}{COPY}"));
+    let got = paged(COPY, Some(4));
+    assert_eq!(results(&parsed(&got), LENGTHS), results(&before, LENGTHS), "{got}");
+    assert!(got.contains("phi i4") && !got.contains("phi i8"), "{got}");
+}
+
+/// A target with no narrow index is left alone: the same text, unsplit.
+#[test]
+fn test_a_target_with_no_index_register_keeps_its_pointers() {
+    let got = paged(COPY, None);
+    assert!(!got.contains("windows:") && got.contains("%sp2"), "{got}");
+}
+
+/// The same copy as a loop tested after each trip, behind its guard, with the
+/// pointer past the last byte read after it (lz4's literal and match copies,
+/// which hand the next token its source). The answer adds that pointer's
+/// offset to the fold of the copy.
+const COPY_ON: &str = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  %b = alloca [600 x i8]
+  br label %fill
+fill:
+  %i = phi i16 [ 0, %entry ], [ %i2, %fill ]
+  %p = getelementptr inbounds i8, ptr %a, i16 %i
+  %v = trunc i16 %i to i8
+  store i8 %v, ptr %p
+  %i2 = add i16 %i, 1
+  %c = icmp ult i16 %i2, 600
+  br i1 %c, label %fill, label %guard
+guard:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %pre
+pre:
+  br label %copy
+copy:
+  %sp = phi ptr [ %a, %pre ], [ %sp2, %copy ]
+  %dp = phi ptr [ %b, %pre ], [ %dp2, %copy ]
+  %k = phi i16 [ %n, %pre ], [ %k2, %copy ]
+  %x = load i8, ptr %sp
+  store i8 %x, ptr %dp
+  %sp2 = getelementptr inbounds i8, ptr %sp, i16 1
+  %dp2 = getelementptr inbounds i8, ptr %dp, i16 1
+  %k2 = sub nuw i16 %k, 1
+  %d = icmp ne i16 %k2, 0
+  br i1 %d, label %copy, label %out
+out:
+  br label %done
+done:
+  %e = phi ptr [ %b, %guard ], [ %dp2, %out ]
+  %ei = ptrtoint ptr %e to i16
+  %bi = ptrtoint ptr %b to i16
+  %off = sub i16 %ei, %bi
+  br label %sum
+sum:
+  %j = phi i16 [ 0, %done ], [ %j2, %sum ]
+  %t = phi i16 [ %off, %done ], [ %t2, %sum ]
+  %q = getelementptr inbounds i8, ptr %b, i16 %j
+  %y = load i8, ptr %q
+  %w = zext i8 %y to i16
+  %t3 = mul i16 %t, 3
+  %t2 = add i16 %t3, %w
+  %j2 = add i16 %j, 1
+  %m = icmp ult i16 %j2, 600
+  br i1 %m, label %sum, label %end
+end:
+  ret i16 %t
+}
+";
+
+/// A pointer read after the loop (the one past the last byte) is no reason to
+/// keep the pointer stepping: the exit takes the window's end. With the
+/// reader refused, lz4's copies kept their 16-bit counters and pointer steps.
+#[test]
+fn test_a_pointer_read_after_the_walk_is_the_windows_end() {
+    let before = parsed(&format!("{SMALL}{COPY_ON}"));
+    let got = paged(COPY_ON, Some(8));
+    assert_eq!(results(&parsed(&got), LENGTHS), results(&before, LENGTHS), "{got}");
+    assert!(got.contains("windows:"), "{got}");
+    assert!(!got.contains("%sp2") && !got.contains("%dp2"), "a pointer still steps:\n{got}");
+}

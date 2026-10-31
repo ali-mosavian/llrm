@@ -1,5 +1,6 @@
-//! A counted loop's huge pointers are split into windows, inside each of which
-//! the loop runs on far pointers that never carry into the segment selector.
+//! A counted loop's pointers are split into windows, inside each of which the
+//! loop runs on far pointers that never carry into the segment selector, or on
+//! one narrow index.
 //!
 //! # How it works
 //! A huge pointer's step carries into the selector, so each step costs the
@@ -60,9 +61,27 @@
 //! For size (-Os), the saving must exceed one setup. A loop that fails is
 //! left alone. The new branches carry `branch_weights`.
 //!
+//! # The index form
+//! A target with no huge window but an index narrower than its pointers
+//! (`Machine::index_register_bits`; the 6502's `lda (base),y`) gets the same
+//! windows with another inner loop: the walks step by one constant, upward, and
+//! one `n`-bit index counts every walk and the window's trips alike, from
+//! `-bytes` up to the wrap at zero. Each walk's base is fixed for the window,
+//! `start + bytes - 2^n`, and the next window starts at `start + bytes`. A
+//! window holds `2^n / step` trips. A pointer read after the loop is the last
+//! window's end. The count and the sums a window makes are folded by `combine`
+//! at the end, where no later pass would. Priced in the index's words: a
+//! pointer step costs its words, the shared index step one.
+//!
 //! DEVIATE LP-4 (no pin pass: huge-pointer windows are the DOS exception, LLVM
 //! has no huge pointer; exit: none planned, kept; to migrate off the old
 //! analyses it reads; owner w-6; review 2026-11-27).
+//!
+//! DEVIATE LP-5 (the index form: LLVM's LSR keeps one pointer per access and
+//! leaves the carry of an 8-bit index to the target; exit: when the greedy
+//! allocator (#6259) can hold a pointer pair and an index across the loop, a
+//! translation of LSR's `LSRUse` formulae for a narrow index replaces this;
+//! owner 6502 session; review 2026-11-27).
 //!
 //! # Example
 //! Before:
@@ -194,6 +213,9 @@ struct Walk {
     reads: Vec<(InstId, usize, i64)>,
     low: i64,
     high: i64,
+    /// Where the stepped value is read after the loop: it is the pointer past
+    /// the last trip (`Form::Index` only).
+    last: Vec<(InstId, usize)>,
 }
 
 impl Walk {
@@ -225,6 +247,28 @@ struct Found {
     most: i64,
     /// The trips provably fit one window.
     one: bool,
+    /// The index-wide words of a walked pointer (`Form::Index`).
+    words: i64,
+}
+
+/// How a window's inner loop addresses its walks, by what the target states.
+#[derive(Clone, Copy)]
+enum Form {
+    /// Far pointers that never carry into a selector (`Machine::huge_window`):
+    /// their space, and the bytes of a window.
+    Far { space: u32, window: i64 },
+    /// One narrow index shared by the walks, added to a base fixed for the
+    /// window (`Machine::index_register_bits`): its width in bits.
+    Index { bits: u32 },
+}
+
+impl Form {
+    fn of(machine: &dyn llrm_mir::target::Machine) -> Option<Form> {
+        machine
+            .huge_window()
+            .map(|(space, window)| Form::Far { space, window })
+            .or_else(|| machine.index_register_bits().map(|bits| Form::Index { bits }))
+    }
 }
 
 /// Each loop's huge recurrences split into windows, where that pays.
@@ -234,7 +278,7 @@ pub fn windowed(
     outer: &Outer,
     size: bool,
 ) -> bool {
-    let Some((far, window)) = outer.target().huge_window() else { return false };
+    let Some(form) = Form::of(outer.target()) else { return false };
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let mut done = std::collections::BTreeSet::new();
     let mut changed = false;
@@ -250,7 +294,7 @@ pub fn windowed(
             let mut found = None;
             for one in &loops {
                 if done.insert(one.header) {
-                    found = _found(&view, one, window).filter(|found| _pays(found, &costs, size));
+                    found = _found(&view, one, form).filter(|found| _pays(found, form, &costs, size));
                     if found.is_some() {
                         break;
                     }
@@ -259,9 +303,22 @@ pub fn windowed(
             found
         };
         let Some(found) = found else { break };
-        _split(unit, far, &found);
+        _split(unit, form, &found);
         crate::dead::dead(unit.context, outer.callees(), unit.function);
         changed = true;
+    }
+    // The trips and the sums a window makes are exact but unfolded (`0 - (0 -
+    // n)`), and an index of a few bits has no later pass to fold them.
+    if changed && matches!(form, Form::Index { .. }) {
+        crate::combine::combine(
+            unit.context,
+            &outer.globals,
+            outer.callees(),
+            &outer.metadata,
+            unit.layout,
+            unit.function,
+            unit.declared,
+        );
     }
     changed
 }
@@ -287,13 +344,21 @@ fn _walk(
     view: &memory::Unit,
     loop_: &Loop,
     recurrence: PointerRecurrence,
+    live_out: bool,
 ) -> Option<Walk> {
     let function = view.function;
     let within = |inst: InstId| function.parent(inst).is_some_and(|block| loop_.body.contains(&cfg::id(block)));
     recurrence.step.to_i64()?;
     let stepped = function.instruction(recurrence.stepping).result?;
-    if function.users(stepped).iter().any(|one| one.user != recurrence.phi) {
-        return None;
+    let mut last = Vec::new();
+    for one in function.users(stepped) {
+        if one.user == recurrence.phi {
+            continue;
+        }
+        if !live_out || within(one.user) {
+            return None;
+        }
+        last.push((one.user, one.index as usize));
     }
     let mut reads = Vec::new();
     let (mut low, mut high) = (i64::MAX, i64::MIN);
@@ -338,13 +403,13 @@ fn _walk(
             _ => read(one.user, one.index as usize, 0, &mut reads)?,
         }
     }
-    (!reads.is_empty()).then_some(Walk { recurrence, reads, low, high })
+    (!reads.is_empty()).then_some(Walk { recurrence, reads, low, high, last })
 }
 
 fn _found(
     view: &memory::Unit,
     loop_: &Loop,
-    window: i64,
+    form: Form,
 ) -> Option<Found> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
@@ -355,11 +420,22 @@ fn _found(
     let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
     let walks: Vec<Walk> = induction::pointers(view, loop_)
         .into_iter()
-        .filter(|one| view.space(Operand::Value(one.value)).is_some_and(|space| view.layout.carries(space)))
-        .filter_map(|one| _walk(view, loop_, one))
+        .filter(|one| match (form, view.space(Operand::Value(one.value))) {
+            (Form::Far { .. }, Some(space)) => view.layout.carries(space),
+            (Form::Index { .. }, Some(space)) => !view.layout.carries(space),
+            _ => false,
+        })
+        .filter_map(|one| _walk(view, loop_, one, matches!(form, Form::Index { .. })))
         .collect();
     if walks.is_empty() {
         return None;
+    }
+    // One index steps every walk alike, upward.
+    if matches!(form, Form::Index { .. }) {
+        let step = walks[0].step();
+        if step <= 0 || walks.iter().any(|walk| walk.step() != step) {
+            return None;
+        }
     }
     // The proof's test leaves: the header's before each trip, or the latch's
     // after.
@@ -368,13 +444,35 @@ fn _found(
     let proof = proofs
         .into_iter()
         .find(|one| !one.stops && (tested(one, header) && !one.posttested || tested(one, latch) && one.posttested))?;
-    let most = walks.iter().map(|walk| (window - walk.fixed()).div_euclid(walk.step().abs())).min()?;
+    let words = match (form, view.space(Operand::Value(walks[0].recurrence.value))) {
+        (Form::Index { bits }, Some(space)) => i64::from(view.layout.pointer(space).index_bits.div_ceil(bits)),
+        _ => 1,
+    };
+    let most = match form {
+        Form::Far { window, .. } => {
+            walks.iter().map(|walk| (window - walk.fixed()).div_euclid(walk.step().abs())).min()?
+        }
+        Form::Index { bits } => (1i64 << bits) / walks[0].step(),
+    };
     if most < 2 {
         return None;
     }
     // One window changes no block: the loop keeps its own test.
-    if proof.count.as_ref().and_then(ToPrimitive::to_i64).is_some_and(|count| count <= most) {
-        return Some(Found { preheader, header, latch, body: header, exit: header, proof, walks, most, one: true });
+    if matches!(form, Form::Far { .. })
+        && proof.count.as_ref().and_then(ToPrimitive::to_i64).is_some_and(|count| count <= most)
+    {
+        return Some(Found {
+            preheader,
+            header,
+            latch,
+            body: header,
+            exit: header,
+            proof,
+            walks,
+            most,
+            one: true,
+            words,
+        });
     }
     // The trips must be placeable before the loop.
     if proof.count.is_none() && induction::trips(&proof, &mut |_, args| args[0].clone()).is_none() {
@@ -393,12 +491,25 @@ fn _found(
             return None;
         }
     }
+    // A pointer read past the loop is the one past the last trip: the exit
+    // takes it from the test after a trip, through a phi of its own.
+    let lives_out = walks.iter().any(|walk| !walk.last.is_empty());
+    if lives_out
+        && (!proof.posttested
+            || function.predecessors(exit) != [test]
+            || walks.iter().flat_map(|walk| &walk.last).any(|&(user, _)| function.parent(user) == Some(exit)))
+    {
+        return None;
+    }
     // What the loop computes is read outside only by the exit's phis. A
     // window leaves from its latch: before each trip, only a header phi's
     // value is known there; after, anything the latch reaches.
     for &block in &loop_.body {
         for inst in function.iter_block(cfg::block(block)) {
             let Some(result) = function.instruction(inst).result else { continue };
+            if walks.iter().any(|walk| walk.recurrence.stepping == inst) {
+                continue;
+            }
             for one in function.users(result) {
                 let Some(at) = function.parent(one.user) else { continue };
                 if inside(at) {
@@ -417,7 +528,7 @@ fn _found(
             }
         }
     }
-    Some(Found { preheader, header, latch, body, exit, proof, walks, most, one: false })
+    Some(Found { preheader, header, latch, body, exit, proof, walks, most, one: false, words })
 }
 
 /// Whether the carries a split saves outweigh its windows' setup: each
@@ -426,14 +537,29 @@ fn _found(
 /// estimate where they are unknown; size once.
 fn _pays(
     found: &Found,
+    form: Form,
     costs: &OperationCosts,
     size: bool,
 ) -> bool {
     let walks = found.walks.len() as i64;
-    let saved = walks * costs.carry_step;
-    let normalize = walks * 3 * costs.add;
-    let setup =
-        if found.one { normalize } else { normalize + walks * costs.carry_step + 4 * costs.add + 2 * costs.branch };
+    let (saved, setup) = match form {
+        Form::Far { .. } => {
+            let normalize = walks * 3 * costs.add;
+            let setup = if found.one {
+                normalize
+            } else {
+                normalize + walks * costs.carry_step + 4 * costs.add + 2 * costs.branch
+            };
+            (walks * costs.carry_step, setup)
+        }
+        // Each walk's pointer step, in the index's words, less the one index
+        // step that replaces them; each window sums two pointers per walk
+        // besides its count.
+        Form::Index { .. } => {
+            let words = found.words;
+            (walks * words * costs.add - costs.add, 4 * costs.add + 2 * costs.branch + walks * 2 * words * costs.add)
+        }
+    };
     if size {
         return saved > setup;
     }
@@ -495,15 +621,16 @@ fn _phi(
 /// or, for one window, the start normalized before it.
 fn _split(
     unit: &mut Unit,
-    space: u32,
+    form: Form,
     found: &Found,
 ) {
     let (context, declared, function, layout) =
         (&mut *unit.context, &mut *unit.declared, &mut *unit.function, unit.layout);
-    let far = context.types.ptr(space);
-    let far_index = layout.pointer(space).index_bits;
     let entering = function.terminator(found.preheader).expect("a preheader's branch");
     if found.one {
+        let Form::Far { space, .. } = form else { unreachable!("only a far window holds the trips whole") };
+        let far = context.types.ptr(space);
+        let far_index = layout.pointer(space).index_bits;
         // One window: each walk from its start, the loop's own test kept.
         let count = found.proof.count.clone().expect("one window has a count");
         for walk in &found.walks {
@@ -575,52 +702,127 @@ fn _split(
     function.insert(jump, Position::End(windows)).expect("a new block");
     let fewer = _placed(function, Opcode::ICmp(IntPredicate::Ult), bit, vec![remaining, most], Position::Before(jump));
     let trips_here = _placed(function, Opcode::Select, count_ty, vec![fewer, remaining, most], Position::Before(jump));
-    let counted16 = _resized(context, function, trips_here, width, 16, false, Position::Before(jump));
-    let counted32 = _resized(context, function, trips_here, width, 32, false, Position::Before(jump));
-    // Each walk normalized where this window starts.
     let mut stepped_on = Vec::new();
-    for (walk, &(_, _, outer_value)) in found
-        .walks
-        .iter()
-        .map(|walk| (walk, carried.iter().find(|(phi, ..)| *phi == walk.recurrence.phi).expect("a carried walk")))
-    {
-        let origin =
-            _windowed(context, declared, function, layout, far, walk, outer_value, counted32, Position::Before(jump));
-        let last = _far(context, function, walk, origin, windows, found.header, far, far_index);
-        // The next window's start: the far recurrence past the last trip,
-        // which the window holds, less the accesses' lowest byte. The huge
-        // pointer is not held across the window.
-        let huge = function.value(walk.recurrence.value).ty;
-        let reached =
-            _placed(function, Opcode::Cast(CastOp::AddrSpaceCast), huge, vec![last], Position::End(next_window));
-        let next = if walk.low == 0 {
-            reached
-        } else {
-            let back = counting::constant(context, &BigInt::from(-walk.low), 32);
-            let byte = context.types.int(8);
-            _placed(
-                function,
-                Opcode::GetElementPtr { source: byte },
-                huge,
-                vec![reached, back],
-                Position::End(next_window),
-            )
-        };
-        stepped_on.push((walk.recurrence.phi, next));
-    }
-    // The inner loop counts this window's trips, in place of its own test:
-    // a window runs one at least, so it tests after each.
-    let (count_phi, count) = _phi(function, word, found.header, "window.trips");
-    let one = counting::constant(context, &BigInt::from(1), 16);
-    let counted_down =
-        _placed(function, Opcode::Binary(BinaryOp::Sub), word, vec![count, one], at(function, found.latch));
-    function
-        .set_operands(count_phi, vec![counted16, Operand::Block(windows), counted_down, Operand::Block(found.latch)]);
-    let zero16 = counting::constant(context, &BigInt::from(0), 16);
-    let goes_on =
-        _placed(function, Opcode::ICmp(IntPredicate::Ne), bit, vec![counted_down, zero16], at(function, found.latch));
     let latch_branch = function.terminator(found.latch).expect("a latch's branch");
-    function.set_operands(latch_branch, vec![goes_on, Operand::Block(found.header), Operand::Block(next_window)]);
+    if let Form::Far { space, .. } = form {
+        let far = context.types.ptr(space);
+        let far_index = layout.pointer(space).index_bits;
+        let counted16 = _resized(context, function, trips_here, width, 16, false, Position::Before(jump));
+        let counted32 = _resized(context, function, trips_here, width, 32, false, Position::Before(jump));
+        // Each walk normalized where this window starts.
+        for (walk, &(_, _, outer_value)) in found
+            .walks
+            .iter()
+            .map(|walk| (walk, carried.iter().find(|(phi, ..)| *phi == walk.recurrence.phi).expect("a carried walk")))
+        {
+            let origin = _windowed(
+                context,
+                declared,
+                function,
+                layout,
+                far,
+                walk,
+                outer_value,
+                counted32,
+                Position::Before(jump),
+            );
+            let last = _far(context, function, walk, origin, windows, found.header, far, far_index);
+            // The next window's start: the far recurrence past the last trip,
+            // which the window holds, less the accesses' lowest byte. The huge
+            // pointer is not held across the window.
+            let huge = function.value(walk.recurrence.value).ty;
+            let reached =
+                _placed(function, Opcode::Cast(CastOp::AddrSpaceCast), huge, vec![last], Position::End(next_window));
+            let next = if walk.low == 0 {
+                reached
+            } else {
+                let back = counting::constant(context, &BigInt::from(-walk.low), 32);
+                let byte = context.types.int(8);
+                _placed(
+                    function,
+                    Opcode::GetElementPtr { source: byte },
+                    huge,
+                    vec![reached, back],
+                    Position::End(next_window),
+                )
+            };
+            stepped_on.push((walk.recurrence.phi, next));
+        }
+        // The inner loop counts this window's trips, in place of its own test:
+        // a window runs one at least, so it tests after each.
+        let (count_phi, count) = _phi(function, word, found.header, "window.trips");
+        let one = counting::constant(context, &BigInt::from(1), 16);
+        let counted_down =
+            _placed(function, Opcode::Binary(BinaryOp::Sub), word, vec![count, one], at(function, found.latch));
+        function.set_operands(
+            count_phi,
+            vec![counted16, Operand::Block(windows), counted_down, Operand::Block(found.latch)],
+        );
+        let zero16 = counting::constant(context, &BigInt::from(0), 16);
+        let goes_on = _placed(
+            function,
+            Opcode::ICmp(IntPredicate::Ne),
+            bit,
+            vec![counted_down, zero16],
+            at(function, found.latch),
+        );
+        function.set_operands(latch_branch, vec![goes_on, Operand::Block(found.header), Operand::Block(next_window)]);
+    } else if let Form::Index { bits } = form {
+        // One index counts every walk, from where it must stop (zero) back by
+        // the window's bytes; each walk's base is fixed at the window's start
+        // less the index's range, so the index wraps as the window ends.
+        let step = &found.walks[0].recurrence.step;
+        let narrow = context.types.int(bits);
+        let here = _resized(context, function, trips_here, width, bits, false, Position::Before(jump));
+        let bytes = _scaled(context, function, here, step, bits, Position::Before(jump));
+        let zero = counting::constant(context, &BigInt::from(0), bits);
+        let start = _placed(function, Opcode::Binary(BinaryOp::Sub), narrow, vec![zero, bytes], Position::Before(jump));
+        let (index_phi, index) = _phi(function, narrow, found.header, "window.index");
+        let stepper = counting::constant(context, step, bits);
+        let next =
+            _placed(function, Opcode::Binary(BinaryOp::Add), narrow, vec![index, stepper], at(function, found.latch));
+        function.set_operands(index_phi, vec![start, Operand::Block(windows), next, Operand::Block(found.latch)]);
+        let goes_on =
+            _placed(function, Opcode::ICmp(IntPredicate::Ne), bit, vec![next, zero], at(function, found.latch));
+        function.set_operands(latch_branch, vec![goes_on, Operand::Block(found.header), Operand::Block(next_window)]);
+        let first = function
+            .iter_block(found.header)
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+            .expect("a header's body");
+        let byte = context.types.int(8);
+        let gep = Opcode::GetElementPtr { source: byte };
+        for walk in &found.walks {
+            let &(_, _, outer_value) =
+                carried.iter().find(|(phi, ..)| *phi == walk.recurrence.phi).expect("a carried walk");
+            let pointer = function.value(walk.recurrence.value).ty;
+            let Type::Pointer(space) = *context.types.get(pointer) else { unreachable!("a pointer recurrence") };
+            let wide = layout.pointer(space).index_bits;
+            // The window's end is the next window's start; its base is one
+            // range before, and each access's offset on from there.
+            let counted = _resized(context, function, trips_here, width, wide, false, Position::Before(jump));
+            let moved = _scaled(context, function, counted, step, wide, Position::Before(jump));
+            let end = _placed(function, gep.clone(), pointer, vec![outer_value, moved], Position::Before(jump));
+            let range = counting::constant(context, &BigInt::from(-(1i64 << bits)), wide);
+            let base = _placed(function, gep.clone(), pointer, vec![end, range], Position::Before(jump));
+            let reach = _resized(context, function, index, bits, wide, false, Position::Before(first));
+            let mut bases = std::collections::BTreeMap::new();
+            for &(user, operand, by) in &walk.reads {
+                let origin = *bases
+                    .entry(by)
+                    .or_insert_with(
+                        || if by == 0 {
+                            base
+                        } else {
+                            let by = counting::constant(context, &BigInt::from(by), wide);
+                            _placed(function, gep.clone(), pointer, vec![base, by], Position::Before(jump))
+                        },
+                    );
+                let address = _placed(function, gep.clone(), pointer, vec![origin, reach], Position::Before(user));
+                function.set_operand(user, operand, address);
+            }
+            stepped_on.push((walk.recurrence.phi, end));
+        }
+    }
     // What the branches are known to do, for the blocks' frequencies.
     let expected = _expected(found);
     let windows_run = ((expected + found.most - 1) / found.most).max(1);
@@ -709,6 +911,19 @@ fn _split(
         function
             .set_operands(entering, vec![Operand::Value(skip), Operand::Block(found.exit), Operand::Block(windows)]);
     }
+    for walk in found.walks.iter().filter(|walk| !walk.last.is_empty()) {
+        let pointer = function.value(walk.recurrence.value).ty;
+        let end = stepped_on.iter().find(|(phi, _)| *phi == walk.recurrence.phi).expect("a walk's end").1;
+        let (phi, value) = _phi(function, pointer, found.exit, "window.last");
+        let mut arms = vec![end, Operand::Block(next_window)];
+        if skip.is_some() {
+            arms.extend([walk.recurrence.start, Operand::Block(found.preheader)]);
+        }
+        function.set_operands(phi, arms);
+        for &(user, index) in &walk.last {
+            function.set_operand(user, index, value);
+        }
+    }
     _erased(function, found);
 }
 
@@ -731,6 +946,23 @@ fn _entry_value(
     let Operand::Value(id) = value else { return value };
     let ValueDef::Instruction(inst) = function.value(id).def else { return value };
     carried.iter().find(|(phi, ..)| *phi == inst).and_then(|&(_, outer, _)| start_of(outer)).unwrap_or(value)
+}
+
+/// `value` times the constant `by`, `bits` wide.
+fn _scaled(
+    context: &Context,
+    function: &mut Function,
+    value: Operand,
+    by: &BigInt,
+    bits: u32,
+    at: Position,
+) -> Operand {
+    if *by == BigInt::from(1) {
+        return value;
+    }
+    let ty = context.types.int(bits);
+    let by = counting::constant(context, by, bits);
+    _placed(function, Opcode::Binary(BinaryOp::Mul), ty, vec![value, by], at)
 }
 
 /// `value`, `from` bits wide, as `to` bits.
