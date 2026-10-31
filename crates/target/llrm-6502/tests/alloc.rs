@@ -74,31 +74,33 @@ fn a_word_add_keeps_its_low_byte_in_a_register() {
 /// 4.
 #[test]
 fn more_live_values_than_registers_spill_and_still_compute() {
-    let pairs = [
-        ("a", "b"),
-        ("b", "c"),
-        ("c", "d"),
-        ("d", "e"),
-        ("e", "f"),
-        ("a", "c"),
-        ("b", "d"),
-        ("c", "e"),
-        ("d", "f"),
-        ("a", "f"),
-    ];
-    let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
-    for (n, (x, y)) in pairs.iter().enumerate() {
-        ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
-    }
-    ir += "  %x0 = xor i8 %t0, %t1\n";
-    for n in 2..pairs.len() {
-        ir += &format!("  %x{} = xor i8 %x{}, %t{n}\n", n - 1, n - 2);
-    }
-    ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
-    let text = compile(&ir, "many");
-    assert!(text.contains("s_many_0"), "no spill in:\n{text}");
-    let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
-    assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
+    llrm_6502::alloc::with_spike_allocator(|| {
+        let pairs = [
+            ("a", "b"),
+            ("b", "c"),
+            ("c", "d"),
+            ("d", "e"),
+            ("e", "f"),
+            ("a", "c"),
+            ("b", "d"),
+            ("c", "e"),
+            ("d", "f"),
+            ("a", "f"),
+        ];
+        let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
+        for (n, (x, y)) in pairs.iter().enumerate() {
+            ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
+        }
+        ir += "  %x0 = xor i8 %t0, %t1\n";
+        for n in 2..pairs.len() {
+            ir += &format!("  %x{} = xor i8 %x{}, %t{n}\n", n - 1, n - 2);
+        }
+        ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
+        let text = compile(&ir, "many");
+        assert!(text.contains("s_many_0"), "no spill in:\n{text}");
+        let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
+        assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
+    });
 }
 
 const GCD: &str = "define i8 @gcd(i8 %0, i8 %1) {
@@ -171,11 +173,12 @@ fn a_word_select_returns_the_larger_word() {
 /// t + r = 61; 11 is not `2^n +- 1` times a power of two, so it stays a call.
 #[test]
 fn a_value_live_across_a_call_survives_it() {
-    let ir =
-        "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
-    let text = compile(ir, "across");
-    assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
-    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
+    llrm_6502::alloc::with_spike_allocator(|| {
+        let ir = "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
+        let text = compile(ir, "across");
+        assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
+        assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
+    });
 }
 
 const RECURSIVE: &str = "define i8 @rec(i8 %n) {
@@ -283,22 +286,24 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
 /// 4 + 55 + 1 = 60.
 #[test]
 fn a_pointer_live_across_a_call_survives_it() {
-    let ir = "define i8 @keep(ptr %p, i8 %a) {
-  %x = getelementptr i8, ptr %p, i16 2
-  %u = load i8, ptr %x
-  %m = mul i8 %a, 11
-  %y = getelementptr i8, ptr %p, i16 3
-  %w = load i8, ptr %y
-  %s = add i8 %u, %m
-  %t = add i8 %s, %w
-  ret i8 %t
-}";
-    assert!(on_the_allocator(ir, "keep"));
-    let text = compile(ir, "keep");
-    let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
-    let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
-    assert!(text.contains("s_keep_"), "no spill:\n{text}");
-    assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
+    llrm_6502::alloc::with_spike_allocator(|| {
+        let ir = "define i8 @keep(ptr %p, i8 %a) {
+      %x = getelementptr i8, ptr %p, i16 2
+      %u = load i8, ptr %x
+      %m = mul i8 %a, 11
+      %y = getelementptr i8, ptr %p, i16 3
+      %w = load i8, ptr %y
+      %s = add i8 %u, %m
+      %t = add i8 %s, %w
+      ret i8 %t
+    }";
+        assert!(on_the_allocator(ir, "keep"));
+        let text = compile(ir, "keep");
+        let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
+        let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
+        assert!(text.contains("s_keep_"), "no spill:\n{text}");
+        assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
+    });
 }
 
 /// A recursive function with a local array and a value live across the call:
@@ -884,16 +889,18 @@ const ACROSS: &str = "define i8 @g(i8 %x) {\n  %r = add i8 %x, 3\n  ret i8 %r\n}
 
 #[test]
 fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
-    let single = compile(ACROSS, "across") + &compile(ACROSS, "g");
-    assert!(!single.contains("rc8"), "one call, one value:\n{single}");
-    // across(5) = g(5) + 5 = 8 + 5
-    let program = format!("{single}");
-    assert_eq!(common::run_with("alloc-single-call", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
-    let looped = compile(DIGITS, "digits");
-    assert!(
-        (8..16).any(|n| looped.contains(&format!("rc{n}"))),
-        "a loop of calls keeps its values in a cell:\n{looped}"
-    );
+    llrm_6502::alloc::with_spike_allocator(|| {
+        let single = compile(ACROSS, "across") + &compile(ACROSS, "g");
+        assert!(!single.contains("rc8"), "one call, one value:\n{single}");
+        // across(5) = g(5) + 5 = 8 + 5
+        let program = format!("{single}");
+        assert_eq!(common::run_with("alloc-single-call", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
+        let looped = compile(DIGITS, "digits");
+        assert!(
+            (8..16).any(|n| looped.contains(&format!("rc{n}"))),
+            "a loop of calls keeps its values in a cell:\n{looped}"
+        );
+    });
 }
 
 /// The word result of `name` for a word argument in rc2:rc3 (low byte in A,
@@ -1039,14 +1046,16 @@ fn a_word_equality_against_a_constant_has_no_constant_cells() {
 /// it is a spill slot.
 #[test]
 fn a_callee_saved_cell_goes_to_the_loop_values_only() {
-    let ir = "declare i8 @ext(i8)\n\
-              define i8 @mix(i8 %cold, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
-              %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
-              %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
-    let text = compile(ir, "mix");
-    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
-    assert_eq!(saved, 3, "{text}");
-    assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
+    llrm_6502::alloc::with_spike_allocator(|| {
+        let ir = "declare i8 @ext(i8)\n\
+                  define i8 @mix(i8 %cold, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
+                  %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
+                  %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
+        let text = compile(ir, "mix");
+        let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
+        assert_eq!(saved, 3, "{text}");
+        assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
+    });
 }
 
 /// `shl i16 x, k` for k from 9 to 15 ran k - 8 asl/rol pairs over the whole
@@ -2242,40 +2251,48 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
 /// differential programs miscompiled while the fold was being written.
 #[test]
 fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
-    const N: usize = 16;
-    let mut ir = String::from("@buf = external global [16 x i8]\ndefine i8 @fold() {\n");
-    for i in 0..N {
-        ir +=
-            &format!("  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n");
-    }
-    for i in 0..N / 2 {
-        ir += &format!("  %x{i} = xor i8 %b{i}, %b{}\n  %m{i} = add i8 %x{i}, {}\n", N - 1 - i, 7 * i + 3);
-    }
-    let mut cur = "%m0".to_owned();
-    for i in 1..N / 2 {
-        ir += &format!("  %s{i} = add i8 {cur}, %m{i}\n  %c{i} = and i8 %s{i}, {}\n", 255 - i);
-        cur = format!("%c{i}");
-    }
-    ir += &format!("  ret i8 {cur}\n}}");
-    let want = |buf: &[u8; 16]| {
-        let m = |i: usize| (buf[i] ^ buf[N - 1 - i]).wrapping_add((7 * i + 3) as u8);
-        (1..N / 2).fold(m(0), |cur, i| cur.wrapping_add(m(i)) & (255 - i) as u8)
-    };
-    let text = compile_on(&ir, "fold", 16);
-    for (k, buf) in
-        [[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3], [200, 17, 99, 250, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]
-            .iter()
-            .enumerate()
-    {
-        let data = format!(".export buf\nbuf: .byte {}\n", buf.iter().map(u8::to_string).collect::<Vec<_>>().join(","));
-        let got = common::run_with(&format!("alloc-fold-{k}"), "  jsr fold\n", &format!("{text}{data}"));
-        assert_eq!(got, i32::from(want(buf)), "buf {k}");
-    }
-    assert!(text.contains("s_fold_"), "the test needs spills:\n{text}");
-    let folded = |l: &&str| {
-        ["eor", "and", "adc", "sbc", "ora", "cmp"].iter().any(|m| l.trim_start().starts_with(&format!("{m} s_fold_")))
-    };
-    assert!(text.lines().filter(folded).count() > 0, "a spilled operand is read from its cell:\n{text}");
+    llrm_6502::alloc::with_spike_allocator(|| {
+        const N: usize = 16;
+        let mut ir = String::from("@buf = external global [16 x i8]\ndefine i8 @fold() {\n");
+        for i in 0..N {
+            ir += &format!(
+                "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n"
+            );
+        }
+        for i in 0..N / 2 {
+            ir += &format!("  %x{i} = xor i8 %b{i}, %b{}\n  %m{i} = add i8 %x{i}, {}\n", N - 1 - i, 7 * i + 3);
+        }
+        let mut cur = "%m0".to_owned();
+        for i in 1..N / 2 {
+            ir += &format!("  %s{i} = add i8 {cur}, %m{i}\n  %c{i} = and i8 %s{i}, {}\n", 255 - i);
+            cur = format!("%c{i}");
+        }
+        ir += &format!("  ret i8 {cur}\n}}");
+        let want = |buf: &[u8; 16]| {
+            let m = |i: usize| (buf[i] ^ buf[N - 1 - i]).wrapping_add((7 * i + 3) as u8);
+            (1..N / 2).fold(m(0), |cur, i| cur.wrapping_add(m(i)) & (255 - i) as u8)
+        };
+        let text = compile_on(&ir, "fold", 16);
+        for (k, buf) in [
+            [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3],
+            [200, 17, 99, 250, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let data =
+                format!(".export buf\nbuf: .byte {}\n", buf.iter().map(u8::to_string).collect::<Vec<_>>().join(","));
+            let got = common::run_with(&format!("alloc-fold-{k}"), "  jsr fold\n", &format!("{text}{data}"));
+            assert_eq!(got, i32::from(want(buf)), "buf {k}");
+        }
+        assert!(text.contains("s_fold_"), "the test needs spills:\n{text}");
+        let folded = |l: &&str| {
+            ["eor", "and", "adc", "sbc", "ora", "cmp"]
+                .iter()
+                .any(|m| l.trim_start().starts_with(&format!("{m} s_fold_")))
+        };
+        assert!(text.lines().filter(folded).count() > 0, "a spilled operand is read from its cell:\n{text}");
+    });
 }
 
 /// A byte shifted by 7 either way was seven one-bit shifts (1,692 runs of them
@@ -2315,29 +2332,31 @@ define i8 @left() {
 /// 98 differential programs (3,158 with it).
 #[test]
 fn spills_that_are_not_live_together_share_cells() {
-    let rounds = |groups: usize| {
-        let mut ir = String::from("@g = external global i8\ndefine i8 @fold() {\n  %acc0 = add i8 0, 0\n");
-        for g in 0..groups {
-            for i in 0..16 {
-                ir += &format!("  %b{g}_{i} = load volatile i8, ptr @g\n");
+    llrm_6502::alloc::with_spike_allocator(|| {
+        let rounds = |groups: usize| {
+            let mut ir = String::from("@g = external global i8\ndefine i8 @fold() {\n  %acc0 = add i8 0, 0\n");
+            for g in 0..groups {
+                for i in 0..16 {
+                    ir += &format!("  %b{g}_{i} = load volatile i8, ptr @g\n");
+                }
+                for i in 0..8 {
+                    ir += &format!("  %x{g}_{i} = xor i8 %b{g}_{i}, %b{g}_{}\n", 15 - i);
+                }
+                let mut cur = format!("%acc{g}");
+                for i in 0..8 {
+                    ir += &format!("  %s{g}_{i} = add i8 {cur}, %x{g}_{i}\n");
+                    cur = format!("%s{g}_{i}");
+                }
+                ir += &format!("  %acc{} = add i8 {cur}, 0\n", g + 1);
             }
-            for i in 0..8 {
-                ir += &format!("  %x{g}_{i} = xor i8 %b{g}_{i}, %b{g}_{}\n", 15 - i);
-            }
-            let mut cur = format!("%acc{g}");
-            for i in 0..8 {
-                ir += &format!("  %s{g}_{i} = add i8 {cur}, %x{g}_{i}\n");
-                cur = format!("%s{g}_{i}");
-            }
-            ir += &format!("  %acc{} = add i8 {cur}, 0\n", g + 1);
-        }
-        ir += &format!("  ret i8 %acc{groups}\n}}");
-        let text = compile_on(&ir, "fold", 16);
-        text.lines().filter(|l| l.starts_with("s_fold_") && l.contains(".res")).count()
-    };
-    let (one, six) = (rounds(1), rounds(6));
-    assert!(one > 0, "the test needs spills");
-    assert!(six <= one + 2, "six rounds took {six} cells, one took {one}");
+            ir += &format!("  ret i8 %acc{groups}\n}}");
+            let text = compile_on(&ir, "fold", 16);
+            text.lines().filter(|l| l.starts_with("s_fold_") && l.contains(".res")).count()
+        };
+        let (one, six) = (rounds(1), rounds(6));
+        assert!(one > 0, "the test needs spills");
+        assert!(six <= one + 2, "six rounds took {six} cells, one took {one}");
+    });
 }
 
 /// `freeze` selects to the generic `COPY`, which the selector had no
@@ -2481,4 +2500,20 @@ define void @fill(ptr %p, i8 %c, i16 %n) {
     let text = compile(ir, "fill");
 
     assert!(text.contains("jsr memset") || text.contains("jsr _memset"), "no call of memset in:\n{text}");
+}
+
+/// A 32-bit result computed before the frame is released is read by the
+/// return: `results` stopped at the frame release, so the copies into `rc2`
+/// and `rc3` were no result and greedy, which drops what nothing reads, left
+/// them out (differential seed 250: the high word came back as garbage).
+#[test]
+fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
+    let ir = "define i32 @widen(i16 %a) {\n  %slot = alloca i16\n  store i16 %a, ptr %slot\n  %v = load i16, ptr %slot\n  %r = zext i16 %v to i32\n  ret i32 %r\n}";
+    let text = compile(ir, "widen");
+    // rc2:rc3 hold the argument 0x1234 on entry and must hold zero on return
+    let setup = set("rc2", 0x1234) + &set("rc3", 0x1234 >> 8);
+    let run = |after: &str| common::run_with("alloc-widen", &format!("{setup}  jsr widen\n{after}"), &text);
+    assert_eq!(run("  lda rc2\n"), 0, "{text}");
+    assert_eq!(run("  lda rc3\n"), 0, "{text}");
+    assert_eq!(run(""), 0x34, "{text}");
 }

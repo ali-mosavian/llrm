@@ -78,6 +78,7 @@ thread_local! {
     static SHARED_SAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
+    static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -200,6 +201,10 @@ impl<const STACK: bool> Target for Mos<STACK> {
     }
 
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
+    fn moves_lanes(inst: &Inst) -> bool {
+        matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
+    }
+
     fn spill_clobbers() -> Vec<RegId> {
         if STACK { vec![reg::Y] } else { Vec::new() }
     }
@@ -1680,12 +1685,14 @@ impl<const STACK: bool> Jump for Mos<STACK> {
 }
 
 /// The physical registers the run of copies just before the return sets: the
-/// result.
+/// result. The frame is released between the copies of a result that does not
+/// need `a`, and those of the rest.
 fn results(insts: &[Inst]) -> Vec<RegId> {
     let mut out = Vec::new();
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
+            (Kind::Op("ADJSP"), _) => {}
             _ => break,
         }
     }
@@ -2782,28 +2789,44 @@ fn relax(text: &str) -> String {
 /// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
 /// measure against.
 fn spike_asked() -> bool {
-    std::env::var_os("LLRM_6502_SPIKE").is_some()
+    SPIKE.with(|one| one.get()) || std::env::var_os("LLRM_6502_SPIKE").is_some()
+}
+
+/// `f` with the spike allocator doing the allocation: the tests of its spill
+/// policy (a slot, not a callee-saved cell) run on it until it is deleted.
+pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
+    let before = SPIKE.with(|one| one.replace(true));
+    let result = f();
+    SPIKE.with(|one| one.set(before));
+    result
 }
 
 /// The function allocated: by the shared greedy allocator, which this target
 /// moves onto (`Target::register_allocator`), else by the spike allocator.
 ///
-/// DEVIATE 9: a function greedy cannot take (its fixed registers overlap, or a
-/// spill cannot be written) falls back to the spike allocator rather than
-/// failing the compile. Exit: none such left in the 79 programs and the
-/// differential corpus; then the fallback and `LLRM_6502_SPIKE` go with the
-/// spike allocator.
+/// A function greedy cannot take is an error, not a quiet fall back to the
+/// spike allocator: that hid 600 failures in 300 differential programs.
 fn allocate<const STACK: bool>(
     function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
-    if !spike_asked() {
-        let mut tried = function.clone();
-        if let Ok(done) = allocate_greedy::<Mos<STACK>>(&mut tried) {
-            *function = tried;
-            return Ok(done);
+    // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
+    // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
+    let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();
+    if only.as_deref() == Some("?") {
+        eprintln!("FUNCTION {}", function.name);
+    }
+    let wanted = only.as_deref().is_none_or(|names| names == "?" || names.split(',').any(|n| n == function.name));
+    if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
+        for (at, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                eprintln!("in bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands);
+            }
         }
     }
-    allocate_spilling::<Mos<STACK>>(function, 0)
+    if spike_asked() || !wanted {
+        return allocate_spilling::<Mos<STACK>>(function, 0);
+    }
+    allocate_greedy::<Mos<STACK>>(function)
 }
 
 /// `function` allocated by greedy: converted, its copies joined by the
@@ -2815,7 +2838,9 @@ fn allocate_greedy<T: Target<Class = Class>>(
     use llrm_lir::registers::Regs;
     let regs = Regs(&crate::REGISTER_INFO);
     let mut converted = llrm_spike_mf::tolir::to_lir::<T>(function, regs)?;
-    converted.coalesce(regs, TUNING.with(|t| t.get()) == Tuning::SIZE);
+    if std::env::var_os("LLRM_NO_COALESCE").is_none() {
+        converted.coalesce(regs, TUNING.with(|t| t.get()) == Tuning::SIZE);
+    }
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs, &order);
     let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(function);
@@ -2826,5 +2851,15 @@ fn allocate_greedy<T: Target<Class = Class>>(
     }
     let back = llrm_spike_mf::tolir::from_lir::<T>(function, &converted, &decided, regs)?;
     *function = back.function;
+    if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
+        for (at, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                eprintln!("bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands);
+            }
+        }
+    }
+    if std::env::var_os("LLRM_6502_CHECK").is_some() {
+        llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &back.assignment)?;
+    }
     Ok((back.assignment, back.slots))
 }

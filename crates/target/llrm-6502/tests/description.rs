@@ -64,7 +64,8 @@ fn results_leave_in_a_then_x_then_rc2() {
 /// registers first, then rc2..rc25; rc0/rc1 are the soft stack pointer.
 #[test]
 fn the_byte_order_names_a_x_y_then_the_zero_page_bytes() {
-    let names: Vec<_> = llrm_6502::REGISTER_INFO.bytes.iter().filter_map(|r| llrm_6502::REGISTER_INFO.name(*r)).collect();
+    let names: Vec<_> =
+        llrm_6502::REGISTER_INFO.bytes.iter().filter_map(|r| llrm_6502::REGISTER_INFO.name(*r)).collect();
     assert_eq!(&names[..3], ["a", "x", "y"]);
     assert_eq!(names.len(), 3 + 24);
     assert!(!names.contains(&"rc0") && !names.contains(&"rc1"), "{names:?}");
