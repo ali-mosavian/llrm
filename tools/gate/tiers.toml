@@ -98,6 +98,11 @@ step = "measure"
 why = "compile cost (QCport and the 66 programs at -O1/-O2/-O3/-Os) and its growth with size (axes at N and 2N, and each step of the compile) against the merge-base's measurement in ~/.cache/llrm/measure: 3-8 minutes when the base is not measured yet"
 owners = ["crates/backend/**", "crates/codegen/**", "crates/driver/llrm-driver/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/driver/llrm-cc/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "tools/measure.py", "bench/**"]
 
+[[heavy]]
+step = "objsweep"
+why = "the objects of the merge-base's compiler against this tree's over m16, m32 and m64, plain and -g (tools/pairs/objsweep_gate.py): two dist builds, minutes when the base is not built yet"
+owners = ["crates/mc/**", "crates/target/*/src/mc/**", "crates/codegen/llrm-codegen/src/backend/objbuild.rs", "crates/codegen/llrm-codegen/src/backend/debuginfo.rs", "crates/codegen/llrm-codegen/src/backend/valuetrack.rs", "crates/codegen/llrm-codegen/src/backend/frame.rs", "crates/codegen/llrm-codegen/src/backend/cfi*.rs", "tools/pairs/objsweep*"]
+
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]
 qb = ["crates/frontends/qb/**", "crates/frontends/qb/**", "runtime/qb/**", "tests/run/qb/**"]
@@ -207,7 +212,7 @@ steps = ["fmt", "docs", "products", "scans", "facts"]
 tests = ["docs_links"]
 # Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
 [prepush.checks]
-"diff check" = "base=$(git merge-base HEAD origin/feat/parity 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
+"diff check" = "base=$(git merge-base HEAD origin/${LAND_BRANCH:-release/next} 2>/dev/null || git merge-base HEAD origin/main) && git diff --check $base && ! git diff -U0 $base | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
@@ -229,6 +234,7 @@ bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one 
 reference = ["turbo", "cv4", "qcport", "oracle-qcport"]
 dos = ["dos-slow"]
 cost = ["measure"]
+objects = ["objsweep"]
 
 # Tools that are not in the repository and not free to fetch. A host without one has the capability missing:
 # its [requires] steps are SKIPPED with the reason, and the LLRM_REQUIRE_* variables in `require` are unset so the

@@ -314,15 +314,17 @@ impl FunctionPass for IndVars {
         let sunk = crate::exitsink::sunk(unit.function, &loops);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead = (compared || rewrote || canonical || strengthened || optimized || predicated || tested || sunk || merged) && {
-            match unit.function.touched_since(start) {
-                Some(touched) => {
-                    let seeds: Vec<_> = touched.named.iter().collect();
-                    dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
-                }
-                None => dead::dead(unit.context, outer.callees(), unit.function),
-            }
-        };
+        let dead =
+            (compared || rewrote || canonical || strengthened || optimized || predicated || tested || sunk || merged)
+                && {
+                    match unit.function.touched_since(start) {
+                        Some(touched) => {
+                            let seeds: Vec<_> = touched.named.iter().collect();
+                            dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
+                        }
+                        None => dead::dead(unit.context, outer.callees(), unit.function),
+                    }
+                };
         // The edits after the last step (lftr, the sinking, the dead code).
         // The sinking moves instructions no count reads, LFTR keeps the exit
         // count it was built from and the dead code is values

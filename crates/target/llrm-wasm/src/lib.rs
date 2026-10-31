@@ -10,7 +10,6 @@ pub mod custom_inserter;
 pub mod dag;
 pub mod dagisel;
 pub mod driver;
-pub mod emit;
 pub mod explicit_locals;
 pub mod fix_br_table_defaults;
 pub mod fix_irreducible;
@@ -79,6 +78,17 @@ mod tests {
             layout(Width::W64).datalayout,
             "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"
         );
+    }
+
+    /// The driver kept a second copy of the datalayout string: a change to
+    /// `machines/datalayout*.toml` left a module without a layout reading
+    /// the old one.
+    #[test]
+    fn the_driver_states_the_machine_descriptions_datalayout() {
+        for width in [Width::W32, Width::W64] {
+            let module = crate::driver::module("define void @f() {\n  ret void\n}\n", width).unwrap();
+            assert_eq!(module.datalayout, Some(layout(width).datalayout), "{width:?}");
+        }
     }
 
     #[test]

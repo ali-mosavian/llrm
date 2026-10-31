@@ -97,8 +97,8 @@ pub fn compile_function(
     f.binding =
         module.named(name).map_or_else(Default::default, |id| crate::mir::Binding::of(module.global(id).linkage));
     lower_memory_pseudos(&mut f);
-    // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no module: its signature
-    // is what the call passes and returns.
+    // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no
+    // module: its signature is what the call passes and returns.
     let library_calls = library_callees(&f, module);
     argument_move(&mut f);
     set_p2align_operands(&mut f);
@@ -125,7 +125,8 @@ pub fn compile_function(
     Ok(f)
 }
 
-/// The signature of each called symbol that is no function of `module`, from its first call.
+/// The signature of each called symbol that is no function of `module`, from
+/// its first call.
 fn library_callees(
     f: &Function,
     module: &Module,

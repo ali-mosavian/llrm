@@ -717,6 +717,30 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a
+/// target that does not price a divide above a multiply, which then keeps the
+/// pin's rule.
+fn div_prices(
+    costs: &llrm_mir::target::OperationCosts,
+    bitness: u32,
+) -> Option<super::dag::DivPrices> {
+    if costs.divide <= costs.multiply {
+        return None;
+    }
+    Some(super::dag::DivPrices {
+        operand: i64::from(bitness.min(32) / 8),
+        prefix: costs.prefix,
+        add: costs.add,
+        shift: costs.shift,
+        extend: costs.extend,
+        multiply: costs.multiply,
+        multiply_long: costs.multiply_long,
+        divide: costs.divide,
+        divide_long: costs.divide_long,
+        margin: costs.divide_margin,
+    })
+}
+
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
 fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
@@ -810,7 +834,8 @@ fn selected_in(
         // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
-        .with_int_div_cheap(cpu.size || cpu.min_size || cpu.target().tuning().int_div_cheap)
+        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_div_prices(div_prices(&cpu.target().costs(), bitness))
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -916,8 +941,12 @@ fn selected_in(
         },
         opt_none: false,
         opt_for_size: cpu.size,
-        min_size: false,
+        min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
+        multiply_early_out: crate::backend::timing::signed_multiply(cpu, 4, false)
+            .ok()
+            .flatten()
+            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
     });
     let selector = Selector::new(if m16 {
@@ -1023,7 +1052,12 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2, min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering {
+                cmov: tli.can_use_cmov(),
+                sse2,
+                min_size: cpu.min_size || bytes_beat_clocks,
+                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+            },
             &selector,
             &mut hooks,
             &Info { source_order: true },
@@ -1050,6 +1084,25 @@ fn selected_in(
                 let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
                 arrival.defines.push(value);
                 arrival.delivers.push((Held { value, width }, view));
+            }
+            // A sibling call through an argument that arrives in a register
+            // the epilogue leaves alone jumps through that register, as the
+            // pin's does (`jmp *rdi`), not through a copy of it.
+            let arrives: HashMap<u32, llrm_lir::registers::RegId> =
+                arrival.delivers.iter().map(|(held, view)| (held.value, *view)).collect();
+            for block in &mut done.blocks {
+                for insn in &mut block.insns {
+                    let jump =
+                        insn.what.as_ref().is_some_and(|what| what.indirect && what.name.as_deref() == Some("jmp"));
+                    let Some(&(callee, _)) = insn.requires.last().filter(|_| jump) else { continue };
+                    let Some(&view) = arrives.get(&callee.value) else { continue };
+                    let others = &insn.requires[..insn.requires.len() - 1];
+                    if caller_saved.contains(&regs.root(view))
+                        && others.iter().all(|(_, taken)| regs.root(*taken) != regs.root(view))
+                    {
+                        std::sync::Arc::make_mut(insn).requires.last_mut().expect("the callee").1 = view;
+                    }
+                }
             }
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }

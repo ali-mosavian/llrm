@@ -1,18 +1,22 @@
-//! `WebAssemblyCFGSort`: the blocks in an order where every loop is contiguous, every block comes
-//! after its predecessors (back edges apart) and a branch to a block that is not next can be
-//! expressed as a `br` out of a `block` or up to a `loop`.
+//! `WebAssemblyCFGSort`: the blocks in an order where every loop is contiguous,
+//! every block comes after its predecessors (back edges apart) and a branch to
+//! a block that is not next can be expressed as a `br` out of a `block` or up
+//! to a `loop`.
 //!
 //! # How it works
-//! Blocks are taken in order. Of the successors that become ready (all forward predecessors
-//! placed), the lowest-numbered ones are preferred; a block the open loop does not dominate waits
-//! until the loop is done. When the block placed has a different layout successor than before, its
-//! terminators are updated (`updateTerminator`).
+//! Blocks are taken in order. Of the successors that become ready (all forward
+//! predecessors placed), the lowest-numbered ones are preferred; a block the
+//! open loop does not dominate waits until the loop is done. When the block
+//! placed has a different layout successor than before, its terminators are
+//! updated (`updateTerminator`).
 //!
-//! DEVIATE: no exception regions (`WebAssemblyExceptionInfo`) and no `EHPad` ordering. Reason: the
-//! slice has no exception handling; `ON ERROR` traps. Exit: with wasm exception handling.
+//! DEVIATE W1: no exception regions (`WebAssemblyExceptionInfo`) and no `EHPad`
+//! ordering. Reason: the QB has no exception handling; `ON ERROR` traps. Exit:
+//! with wasm exception handling.
 //!
 //! # See also
-//! `WebAssemblyCFGSort.cpp` (`sortBlocks`), `WebAssemblySortRegion.cpp`, pin d1106deb71cc.
+//! `WebAssemblyCFGSort.cpp` (`sortBlocks`), `WebAssemblySortRegion.cpp`, pin
+//! d1106deb71cc.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -24,7 +28,8 @@ use crate::branch::update_terminator;
 use crate::cfg::Cfg;
 use crate::mir::Function;
 
-/// An open region: a loop, the blocks of it still to place, and the blocks that wait for it.
+/// An open region: a loop, the blocks of it still to place, and the blocks that
+/// wait for it.
 struct Entry {
     region: LoopId,
     header: usize,
@@ -32,7 +37,8 @@ struct Entry {
     deferred: Vec<usize>,
 }
 
-/// `maybeUpdateTerminator`: only a block all of whose terminators are branches changes.
+/// `maybeUpdateTerminator`: only a block all of whose terminators are branches
+/// changes.
 fn maybe_update_terminator(
     f: &mut Function,
     block: usize,

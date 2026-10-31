@@ -18,12 +18,13 @@ fn hooks() -> X86Hooks {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
     })
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None }
 }
 
 fn input(
@@ -162,7 +163,7 @@ fn a_target_code_is_named_or_already_the_pins_number() {
 /// EFLAGS (28) read as the builder's 28th virtual register in the emitter.
 #[test]
 fn the_pins_physical_registers_are_physical_register_nodes() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     use llrm_dagisel::generated::ids::x86;
     use llrm_lir::registers::RegId;
 
@@ -181,10 +182,11 @@ fn the_pins_physical_registers_are_physical_register_nodes() {
 
 /// A target whose map lacks a register the selector names read it as a
 /// virtual register of the pin's number (AArch64's NZCV, 7, became vreg 7).
-/// The adapter now records a refusal; x86's map still reads a stranger as virtual.
+/// The adapter now records a refusal; x86's map still reads a stranger as
+/// virtual.
 #[test]
 fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     use llrm_dagisel::generated::ids::mvt;
     use llrm_lir::registers::RegId;
 
@@ -231,7 +233,7 @@ fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
 /// never could).
 #[test]
 fn a_store_narrower_than_its_value_is_truncating() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let (value, ptr) = (input(&mut dag, 1), input(&mut dag, 2));
@@ -300,6 +302,21 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
     }
     assert_eq!(machine_name(&dag, zero.node), "LD_Fp080");
     assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
+}
+
+/// A pattern that takes a float as an immediate (`fpimm`, wasm's `f64.const`)
+/// asks for the constant as a target constant; a `ConstantFP` stayed a
+/// `ConstantFP`, which no machine instruction's pattern accepts.
+#[test]
+fn a_float_constant_converts_to_a_target_constant() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let value = dag.get_constant_fp(2.5f64.to_bits().into(), EVT::Simple(super::mvt::MVT::F64));
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let target = adapter.convert_to_target(PinValue::new(value.node, value.res));
+    let target = SDValue { node: target.node, res: target.res };
+    assert_eq!(dag.opcode(target), ISD::TargetConstantFP);
+    assert_eq!(dag.value_type(target), EVT::Simple(super::mvt::MVT::F64));
 }
 
 /// Every node of ours that the matcher passes through has an id in
@@ -419,7 +436,15 @@ fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
         };
         let slot = dag.get_frame_index(EVT::I32, 3);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: int,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(3),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let fist = dag.intern(
             super::x86_lowering::x86isd::FIST,
             &[EVT::OTHER],
@@ -455,8 +480,15 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
         dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0, 0));
     let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: f64_vt,
+        align: 8,
+        volatile: false,
+        base: MemBase::ConstantPool(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let load = dag.get_load(f64_vt, chain, address, info);
     let mut adapter = DagisAdapter::new(&mut dag);
 
@@ -475,7 +507,7 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
 /// "only user" answer are the same as a scan of every live node gives.
 #[test]
 fn use_queries_agree_with_a_scan_of_the_live_nodes() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
 
     let mut dag = SelectionDAG::new(DagConfig::default());
     let a = input(&mut dag, 40);
@@ -498,7 +530,7 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
 /// an allocation.
 #[test]
 fn pin_opcode_and_the_use_queries_allocate_nothing() {
-    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
     use llrm_dagisel::x86_addr::AddrDag;
 
     let (_, made) = llrm_support::alloc_count::counted(|| {
@@ -676,6 +708,29 @@ fn a_node_morphed_to_read_a_later_node_is_walked_through() {
         adapter.has_predecessor_helper(z.node, &mut visited, &mut vec![user.node], 0),
         "the morphed node was pruned from a search for what it now reads"
     );
+}
+
+/// `setcc a, b, cc` morphed to an instruction that reads only `a` and `b` left
+/// the condition-code node live, and selection then refused it
+/// (`CannotSelect("CondCodeNode")`: 6 of wasm's 29 IR tests).
+#[test]
+fn a_morphed_node_deletes_the_operands_it_stops_reading() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    use llrm_dagisel::generated::ids::mvt;
+
+    use super::isd::CondCode;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let (a, b) = (input(&mut dag, 40), input(&mut dag, 41));
+    let cc = dag.get_cond_code(CondCode::SetEq);
+    let setcc = dag.get_node(ISD::SetCC, EVT::I1, &[a, b, cc]);
+    let root = dag.get_node(ISD::Truncate, EVT::I1, &[setcc]);
+    dag.set_root(root);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    assert!(!adapter.is_dead(cc.node), "the premise: the code is live before");
+    let operands = [a, b].map(|v| PinValue { node: v.node, res: 0 });
+    adapter.morph_node_to(setcc.node, 1, &[mvt::i1], &operands);
+    assert!(adapter.is_dead(cc.node), "the code node outlived the node that read it");
+    assert!(!adapter.is_dead(a.node), "an operand still read was deleted");
 }
 
 /// A node marked selected (`setNodeId(-1)`) ends the spread of

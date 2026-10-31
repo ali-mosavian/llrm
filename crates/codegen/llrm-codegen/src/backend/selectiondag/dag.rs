@@ -112,6 +112,9 @@ pub struct MemInfo {
     /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
     /// (`fs` 257, `gs` 256) the IR's pointer names.
     pub space: u32,
+    /// The ordering of an atomic access
+    /// (`MachineMemOperand::getSuccessOrdering`); none for a plain one.
+    pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -150,6 +153,29 @@ pub enum BooleanContents {
     Undefined,
 }
 
+/// What a target charges for the operations a divide by a constant is made of
+/// or replaced by: the divide's own price, and the multiply-high sequence's
+/// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
+/// alone).
+#[derive(Clone, Copy, Debug)]
+pub struct DivPrices {
+    /// The target's own operand size in bytes: a value of another width runs
+    /// under the prefix.
+    pub operand: i64,
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    /// Percent of the divide's price the multiply-high sequence must exceed it
+    /// by: below the spread of the sheet's own prices the pin's sequence
+    /// stays.
+    pub margin: i64,
+}
+
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
 #[derive(Clone, Copy, Debug)]
@@ -165,16 +191,28 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
-    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an `sdiv` by a power of two stays an `sdiv`.
+    /// Prices that decide `isIntDivCheap` per divisor and width; see
+    /// [`DivPrices`].
+    pub div_prices: Option<DivPrices>,
+    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
+    /// `sdiv` by a power of two stays an `sdiv`.
     pub sdiv_pow2_stays: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// `computeKnownBitsForTargetNode`: what the target knows of one of its
+    /// nodes, given the known bits of operand `n`; `None` for a node it
+    /// says nothing about.
+    pub known_bits_for_target_node: Option<TargetKnownBits>,
     /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
     /// other end.
     pub big_endian: bool,
 }
+
+/// See [`DagConfig::known_bits_for_target_node`].
+pub type TargetKnownBits =
+    fn(&SelectionDAG, SDValue, &dyn Fn(usize) -> super::known_bits::KnownBits) -> Option<super::known_bits::KnownBits>;
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
@@ -186,8 +224,10 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_prices: None,
             sdiv_pow2_stays: false,
             fp_extended: false,
+            known_bits_for_target_node: None,
             big_endian: false,
         }
     }
@@ -1166,6 +1206,55 @@ impl SelectionDAG {
         store
     }
 
+    /// `getIndexedLoad`: `load` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the loaded value, the new base and the chain.
+    pub fn get_indexed_load(
+        &mut self,
+        load: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(load).data else { panic!("an indexed load of a load") };
+        let vt = self.value_type(load);
+        let chain = self.operand(load, 0);
+        let result = self.intern(
+            if post { ISD::LoadPost } else { ISD::LoadPre },
+            &[vt, self.value_type(base), EVT::OTHER],
+            &[chain, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
+    /// `getIndexedStore`: `store` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the new base and the chain.
+    pub fn get_indexed_store(
+        &mut self,
+        store: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(store).data else { panic!("an indexed store of a store") };
+        let (chain, value) = (self.operand(store, 0), self.operand(store, 1));
+        let result = self.intern(
+            if post { ISD::StorePost } else { ISD::StorePre },
+            &[self.value_type(base), EVT::OTHER],
+            &[chain, value, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
     /// `getAtomic` of `ATOMIC_SWAP`: the old value at `ptr` and a chain,
     /// `value` stored.
     pub fn get_atomic_swap(
@@ -1636,9 +1725,11 @@ impl Iterator for LiveUsers<'_> {
     }
 }
 
-/// The nodes the pin makes with `IROrder` 0 whatever instruction is being visited (`ConstantSDNode`, `FrameIndexSDNode`,
-/// `RegisterSDNode`, `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an empty one). The scheduler
-/// reads 0 as "no order" and ranks such a node differently from an ordered one.
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being
+/// visited (`ConstantSDNode`, `FrameIndexSDNode`, `RegisterSDNode`,
+/// `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an
+/// empty one). The scheduler reads 0 as "no order" and ranks such a node
+/// differently from an ordered one.
 fn has_no_ir_order(opcode: ISD) -> bool {
     use ISD::*;
     matches!(

@@ -1144,6 +1144,7 @@ like = "qb45"
 evidence = "rt/strfcn.asm B$FLEN: the length word of the descriptor."
 parameters = ["string"]
 result = "len($0)"
+inline = "always"
 
 [semantics."B$FASC"]
 evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."
@@ -1405,6 +1406,13 @@ names = ["B$RDSD"]
 bytes = 6
 evidence = '''
 QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-string length; shared return removes 6 bytes.
+'''
+
+[[pop]]
+names = ["B$RDFS"]
+bytes = 6
+evidence = '''
+The llrm runtime's entry for a fixed-string destination (runtime/qb/rdfs.c) takes B$RDSD's two arguments; a program for the Microsoft runtimes never calls it.
 '''
 
 [[pop]]

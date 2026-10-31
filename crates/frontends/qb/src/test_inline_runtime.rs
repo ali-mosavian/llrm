@@ -111,10 +111,10 @@ fn an_asc_of_mid_loop_has_no_temporary_or_far_call() {
     }
 }
 
-/// ASC and MID$ inlined only where the size model or `-fno-inline-functions`
-/// let them: crc's loop kept a far call each under `-Os` and with inlining
-/// off, 2.7k clocks against 2.7k x several. They inline whatever the model
-/// says.
+/// ASC, MID$ and LEN inlined only where the size model or
+/// `-fno-inline-functions` let them: crc's loop kept a far call each under
+/// `-Os` and with inlining off, 2.7k clocks against 2.7k x several. They inline
+/// whatever the model says.
 #[test]
 fn asc_and_mid_inline_whatever_the_size_model_says() {
     let directory = tempfile::tempdir().expect("creates a directory");
@@ -129,7 +129,7 @@ fn asc_and_mid_inline_whatever_the_size_model_says() {
         let mir = optimized_mir_inlining(&program, threshold);
         for function in ["A&", "B&", "C&", "D&", "E&"] {
             let text = body(&mir, function);
-            for routine in ["B$FMID", "B$FASC"] {
+            for routine in ["B$FMID", "B$FASC", "B$FLEN"] {
                 assert_eq!(calls(text, routine), 0, "{name} {function}: {routine} stays\n{text}");
             }
         }

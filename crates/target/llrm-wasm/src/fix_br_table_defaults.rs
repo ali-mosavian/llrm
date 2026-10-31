@@ -3,8 +3,8 @@
 //! Where the guard's check is the plain `i32.gt_u`, the guard's target becomes
 //! the `br_table`'s default and the table is spliced into the guard's block.
 //!
-//! DEVIATE: `fixBrTableIndex` (the `i64` index of wasm64) is not translated; a
-//! `BR_TABLE_I64` is left alone. Reason: wasm64 does not reach it. Exit:
+//! DEVIATE W9: `fixBrTableIndex` (the `i64` index of wasm64) is not translated;
+//! a `BR_TABLE_I64` is left alone. Reason: wasm64 does not reach it. Exit:
 //! wasm64.
 //!
 //! # See also

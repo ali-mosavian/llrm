@@ -3,8 +3,8 @@
 # (WebAssembly*Gen*.inc) are made here with the pin's tblgen into a stand-in build directory.
 set -euo pipefail
 
-LLVM_SRC=${LLVM_SRC:-$HOME/scratch/llvm-src}
-PIN_BUILD=${PIN_BUILD:-$HOME/scratch/llvm-build}
+LLVM_SRC=${LLRM_PIN_SRC:?set LLRM_PIN_SRC to the pin source tree}
+PIN_BUILD=${LLRM_PIN_BUILD:?set LLRM_PIN_BUILD to the pin build directory}
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 B=$(mktemp -d); trap 'rm -rf "$B"' EXIT
 T=$LLVM_SRC/llvm/lib/Target/WebAssembly

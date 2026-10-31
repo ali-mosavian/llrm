@@ -38,13 +38,13 @@
 //! ([L5432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L5432)).
 
 use llrm_mir::hash::HashSet;
+use llrm_sdag::lowering::ShiftAmount;
 
 use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::{CondCode, ISD};
 use super::legalize_types::LegalizeError;
 use super::mvt::{EVT, MVT};
-use llrm_sdag::lowering::ShiftAmount;
 
 /// What the target supplies (`TLI.LowerOperation`).
 pub trait Hooks {
@@ -216,6 +216,36 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
+    /// `LegalizeLoadOps`, extending loads: one the target does not have is an
+    /// any-extending load and an extension in the register. The value and
+    /// the chain it replaces.
+    fn expand_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let ext = info.ext.filter(|ext| *ext != super::actions::LoadExt::ExtLoad)?;
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(node), info.mem_vt) else { return None };
+        if self.tli.load_ext_action(ext, wide, mem) != Action::Expand {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let any =
+            self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, ptr, MemInfo { ext: None, ..info });
+        let value = if ext == super::actions::LoadExt::SExtLoad {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            self.dag.get_node(ISD::SignExtendInReg, vt, &[any, ty])
+        } else {
+            let mask = self.dag.get_constant(super::fold::mask(info.mem_vt.size_in_bits()), vt);
+            self.dag.get_node(ISD::And, vt, &[any, mask])
+        };
+        Some((value, SDValue { node: any.node, res: 1 }))
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -228,6 +258,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if let Some(result) = self.expand_ext_load(node) {
+            self.replace_node(node, result.0);
+            self.replace_node(SDValue { node: n, res: 1 }, result.1);
+            return Ok(());
         }
         let vt = self.action_type(node);
         let mut action = match vt {
@@ -304,7 +339,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         };
         let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
         let args: Vec<SDValue> = (0..arity).map(|at| self.dag.operand(node, at)).collect();
-        // `vt` is the type the action is keyed by: `LRINT` of a float returns an integer.
+        // `vt` is the type the action is keyed by: `LRINT` of a float returns
+        // an integer.
         let ret = self.dag.value_type(node);
         let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, ret, signed) else { return Err(refused) };
         self.replace_node(node, result);
@@ -324,8 +360,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
         let address = self.dag.get_node(ISD::Add, pointer, &[table, index]);
-        let info =
-            MemInfo { mem_vt: pointer, align: entry, volatile: false, base: MemBase::JumpTable, ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: entry,
+            volatile: false,
+            base: MemBase::JumpTable,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
@@ -345,9 +388,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
     }
 
-    /// `TargetLowering::LegalizeSetCCCondCode` of a `SETCC` whose code the target expands: the operands swapped,
-    /// the condition inverted (and the result negated), or two compares joined by `and` or `or`. The `i1` case
-    /// is not translated.
+    /// `TargetLowering::LegalizeSetCCCondCode` of a `SETCC` whose code the
+    /// target expands: the operands swapped, the condition inverted (and
+    /// the result negated), or two compares joined by `and` or `or`. The `i1`
+    /// case is not translated.
     fn expand_setcc_code(
         &mut self,
         node: SDValue,
@@ -356,7 +400,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
         let EVT::Simple(op_vt) = self.dag.value_type(lhs) else { return None };
         let tli = self.tli;
-        let legal_or_custom = |cc: CondCode| matches!(tli.cond_code_action(cc, op_vt), Action::Legal | Action::Custom);
+        let legal_or_custom = |cc: CondCode| matches!(
+            tli.cond_code_action(cc, op_vt),
+            Action::Legal | Action::Custom
+        );
         let legal = |cc: CondCode| tli.cond_code_action(cc, op_vt) == Action::Legal;
         let float = self.dag.value_type(lhs).is_floating_point();
         // Swapping the operands.
@@ -377,7 +424,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return Some(self.get_logical_not(compare));
         }
         if !float {
-            // An integer code with no swap or inverse the target takes: x86's `oeq`/`une` are the only ones here.
+            // An integer code with no swap or inverse the target takes: x86's
+            // `oeq`/`une` are the only ones here.
             return None;
         }
         let unordered = cc as u8 & 0x8 != 0;
@@ -423,7 +471,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let cell = self.dag.create_stack_temporary(size, 4);
         let pointer = self.dag.config().pointer;
         let slot = self.dag.get_frame_index(pointer, cell);
-        let info = MemInfo { mem_vt: from, align: 4, volatile: false, base: MemBase::Stack(cell), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: from,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let entry = self.dag.entry_node();
         let store = self.dag.get_store(entry, src, slot, info);
         self.dag.get_load(to, store, slot, MemInfo { mem_vt: to, ..info })
@@ -586,6 +642,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     base: MemBase::Unknown,
                     ext: None,
                     space: 0,
+                    ordering: None,
                 };
                 let loaded = self.dag.get_load(pointer, chain, src, info);
                 Some(vec![self.dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, dest, info)])
@@ -758,7 +815,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             unreachable!("a float constant has its bits")
         };
         let EVT::Simple(mvt) = vt else { unreachable!("floats are simple types") };
-        // A target that sets `ConstantFP` to `Legal` takes every constant (wasm: `f32.const`).
+        // A target that sets `ConstantFP` to `Legal` takes every constant
+        // (wasm: `f32.const`).
         if self.tli.operation_action(ISD::ConstantFP, vt) == Action::Legal || self.tli.is_fp_imm_legal(mvt, bits) {
             return Ok(());
         }
@@ -798,6 +856,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             base: MemBase::ConstantPool(entry),
             ext: None,
             space: 0,
+            ordering: None,
         };
         let chain = self.dag.entry_node();
         // a narrower entry is read by an extending load (`ExpandConstantFP`'s

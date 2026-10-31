@@ -2,9 +2,9 @@
 //! becomes a local, read by `local.get` before its user and written by
 //! `local.set` after its definer.
 //!
-//! DEVIATE: not translated are inline asm operands,
-//! `FAKE_USE`, debug values and the virtual frame base. Reason: the slice has
-//! none. Exit: with the frame lowering (W8).
+//! DEVIATE W7: not translated are inline asm operands, `FAKE_USE` and debug
+//! values. Reason: QB produces none. Exit: with wasm inline asm and debug
+//! info.
 //!
 //! # See also
 //! `WebAssemblyExplicitLocals.cpp`, pin d1106deb71cc: `explicitLocals` (L261),
@@ -17,9 +17,9 @@ use crate::mir::{Function, IMPLICIT_DEF, Inst, Operand, VReg, is_argument, is_co
 /// `findStartOfTree`: the index in `block` of the first instruction of the
 /// stackified tree whose root defines `reg`, which a use before `before` reads.
 ///
-/// DEVIATE: the definition is searched upwards from the use, not found through
-/// a def list: a stackified register is defined in its use's block, above it,
-/// and the list would shift under the inserts.
+/// DEVIATE W8: the definition is searched upwards from the use, not found
+/// through a def list: a stackified register is defined in its use's block,
+/// above it, and the list would shift under the inserts.
 fn find_start_of_tree(
     f: &Function,
     reg: VReg,

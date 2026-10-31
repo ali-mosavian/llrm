@@ -182,6 +182,7 @@ impl Machine for Dos {
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
+            recursive_inlining: (!self.pin_tuning).then_some((2, 14)),
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
@@ -243,6 +244,10 @@ impl Machine for Dos {
         llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
+    fn fills_by_pattern(&self) -> bool {
+        true
+    }
+
     fn tuning(&self) -> llrm_mir::target::Tuning {
         if self.pin_tuning {
             return llrm_mir::target::Tuning::PIN;
@@ -274,7 +279,17 @@ impl Machine for Dos {
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
             // 1703).
             inline_threshold: Some(50),
-            int_div_cheap: true,
+            // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
+            // not copied into a speed caller where it grows the code (D11).
+            // qlight c: `ls_scale_byte` x4, 376 -> 185 B. Open rows, clocks
+            // above 854bb7efc4 (numbered, owner w10): parity/qlight c +19,
+            // branch c +16, qmove c +41, qbsp c +36, sum_three c +2. Cause: a
+            // constant `imul` where main has a shift chain (the pin keeps
+            // imul; a priced chain measured 2 to 3 B per clock, not worth
+            // it), and frame reloads in sum_three. Exit 2026-11-30: the
+            // bytes those rows hold above main recovered by the register
+            // allocator, then re-price the chain.
+            inline_size_guard_at_speed: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the

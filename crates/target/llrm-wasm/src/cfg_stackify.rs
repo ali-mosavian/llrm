@@ -1,19 +1,23 @@
-//! `WebAssemblyCFGStackify`: `BLOCK`, `LOOP` and their ends placed around the sorted blocks, and
-//! each branch's target block replaced by the depth of the scope it leaves or repeats.
+//! `WebAssemblyCFGStackify`: `BLOCK`, `LOOP` and their ends placed around the
+//! sorted blocks, and each branch's target block replaced by the depth of the
+//! scope it leaves or repeats.
 //!
 //! # How it works
-//! A loop header gets a `LOOP` at its start and the block after the loop's last block an
-//! `END_LOOP`. A block that is branched to from above gets an `END_BLOCK` at its start and the
-//! `BLOCK` goes to the nearest common dominator of its predecessors, as late as it can while
-//! enclosing nothing it must not cross (`ScopeTops`). Depths count the scopes open at a branch.
+//! A loop header gets a `LOOP` at its start and the block after the loop's last
+//! block an `END_LOOP`. A block that is branched to from above gets an
+//! `END_BLOCK` at its start and the `BLOCK` goes to the nearest common
+//! dominator of its predecessors, as late as it can while enclosing nothing it
+//! must not cross (`ScopeTops`). Depths count the scopes open at a branch.
 //!
-//! DEVIATE: no `TRY`, `TRY_TABLE`, `DELEGATE` or `RETHROW`, so none of `placeTryMarker`,
-//! `fixCallUnwindMismatches`, `fixCatchUnwindMismatches` and `removeUnnecessaryInstrs`. Reason: no
-//! exception handling in the slice. Exit: with wasm exception handling.
+//! DEVIATE W2: no `TRY`, `TRY_TABLE`, `DELEGATE` or `RETHROW`, so none of
+//! `placeTryMarker`, `fixCallUnwindMismatches`, `fixCatchUnwindMismatches` and
+//! `removeUnnecessaryInstrs`. Reason: no exception handling in QB. Exit: with
+//! wasm exception handling.
 //!
 //! # See also
-//! `WebAssemblyCFGStackify.cpp` (`placeBlockMarker` L295, `placeLoopMarker` L446,
-//! `rewriteDepthImmediates` L2595, `fixEndsAtEndOfFunction` L2381), pin d1106deb71cc.
+//! `WebAssemblyCFGStackify.cpp` (`placeBlockMarker` L295, `placeLoopMarker`
+//! L446, `rewriteDepthImmediates` L2595, `fixEndsAtEndOfFunction` L2381), pin
+//! d1106deb71cc.
 
 use std::collections::HashMap;
 
@@ -33,7 +37,8 @@ struct Stackify<'a> {
     cfg: Cfg,
     tree: DomTree,
     loops: LoopInfo<BlockId>,
-    /// `ScopeTops`: the first block of the outermost scope that ends in each block.
+    /// `ScopeTops`: the first block of the outermost scope that ends in each
+    /// block.
     scope_tops: Vec<Option<usize>>,
     /// Marker tag to the marker at the other end of its scope.
     begin_to_end: HashMap<u32, u32>,
@@ -127,12 +132,16 @@ impl Stackify<'_> {
         self.update_scope_tops(mbb, after_loop);
     }
 
-    /// `WebAssembly::isChild`: an instruction whose first operand defines a stackified register.
+    /// `WebAssembly::isChild`: an instruction whose first operand defines a
+    /// stackified register.
     fn is_child(
         &self,
         inst: &Inst,
     ) -> bool {
-        matches!(inst.operands.first(), Some(Operand::Def(reg)) if self.f.is_stackified(*reg))
+        matches!(
+            inst.operands.first(),
+            Some(Operand::Def(reg)) if self.f.is_stackified(*reg)
+        )
     }
 
     fn place_block_marker(
@@ -166,7 +175,8 @@ impl Stackify<'_> {
             return;
         }
         assert!(mbb != 0, "header blocks have no predecessors");
-        // Do not start the block inside a scope that ends before `mbb`: begin at that scope's top.
+        // Do not start the block inside a scope that ends before `mbb`: begin
+        // at that scope's top.
         let mut at = mbb - 1;
         while at != header {
             if let Some(top) = self.scope_tops[at] {
@@ -205,7 +215,8 @@ impl Stackify<'_> {
         let begin = self.new_marker(BLOCK, &[Operand::Imm(VOID)], header);
         let begin_tag = begin.tag;
         self.f.blocks[header].insert(insert_at, begin);
-        // The end goes after any `END_LOOP` of a loop that began at or below the header.
+        // The end goes after any `END_LOOP` of a loop that began at or below
+        // the header.
         let ends: Vec<bool> = self.f.blocks[mbb]
             .iter()
             .map(|inst| inst.opcode == END_LOOP && self.block_of[&self.end_to_begin[&inst.tag]] >= header)
@@ -254,7 +265,8 @@ impl Stackify<'_> {
         assert!(stack.is_empty(), "control flow should be balanced");
     }
 
-    /// `fixEndsAtEndOfFunction`: scopes that end the function carry its result type.
+    /// `fixEndsAtEndOfFunction`: scopes that end the function carry its result
+    /// type.
     fn fix_ends(&mut self) {
         let Some(&result) = self.f.results.first() else { return };
         assert!(self.f.results.len() == 1, "multivalue results are not translated");
@@ -275,7 +287,8 @@ impl Stackify<'_> {
                 }
                 let begin = self.end_to_begin[&inst.tag];
                 let home = self.block_of[&begin];
-                let marker = self.f.blocks[home].iter_mut().find(|marker| marker.tag == begin).expect("the begin marker");
+                let marker =
+                    self.f.blocks[home].iter_mut().find(|marker| marker.tag == begin).expect("the begin marker");
                 marker.operands[0] = Operand::Imm(code);
             }
             if b == 0 {

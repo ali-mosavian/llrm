@@ -22,11 +22,11 @@ pub use semantic::SemanticError;
 pub use semantic::compile;
 pub use syntax::Module;
 pub mod arm64;
-pub mod wasm32;
 pub mod cli;
 pub mod compile;
 pub mod driver;
 pub mod qbstages;
+pub mod wasm32;
 mod zero_fill;
 
 #[cfg(test)]

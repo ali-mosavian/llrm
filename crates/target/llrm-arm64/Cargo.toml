@@ -8,6 +8,7 @@ description = "The arm64 (AArch64) target: its descriptions, translated from LLV
 [dependencies]
 llrm-lir = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
 llrm-codegen = { workspace = true }
@@ -18,8 +19,6 @@ llrm-macho = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-elf = { workspace = true }
 llrm-target = { workspace = true }
-llrm-sdag = { workspace = true }
-llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 
 [build-dependencies]
 llrm-lir = { workspace = true }

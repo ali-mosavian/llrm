@@ -1,6 +1,7 @@
-//! `llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-o OUT] FILE.ll`: LLVM IR through the wasm
-//! backend to assembly text or a relocatable object, as the pin's `llc -O0 -fast-isel=false` does.
-//! `-no-stackify` drops `RegStackify`, which LLVM 20's `llc -O0` does not run.
+//! `llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-o OUT]
+//! FILE.ll`: LLVM IR through the wasm backend to assembly text or a relocatable
+//! object, as the pin's `llc -O0 -fast-isel=false` does. `-no-stackify` drops
+//! `RegStackify`, which LLVM 20's `llc -O0` does not run.
 
 use llrm_wasm::dag::Options;
 use llrm_wasm::driver;
@@ -52,8 +53,9 @@ fn run() -> i32 {
     match built {
         Ok(bytes) => {
             let extension = if object { "o" } else { "s" };
-            let path = output
-                .unwrap_or_else(|| std::path::Path::new(&input).with_extension(extension).to_string_lossy().into_owned());
+            let path = output.unwrap_or_else(|| {
+                std::path::Path::new(&input).with_extension(extension).to_string_lossy().into_owned()
+            });
             if let Err(error) = std::fs::write(&path, bytes) {
                 eprintln!("llrm-wasm-llc: {path}: {error}");
                 return 1;

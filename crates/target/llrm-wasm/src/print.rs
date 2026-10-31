@@ -1,11 +1,6 @@
 //! The assembly printer: `llc`'s text for one function, from the strings of
 //! `WebAssemblyInstrInfo.td` (`NAME_S` records).
 //!
-//! DEVIATE: operands print as decimal integers, except `p2align`, which is
-//! omitted at its default; floating-point immediates, symbols and block
-//! labels are not printed yet. Reason: the slice has none. Exit: calls and
-//! branches (W9).
-//!
 //! # See also
 //! `WebAssemblyInstPrinter.cpp` (`printWebAssemblyP2AlignOperand`), pin
 //! d1106deb71cc.
@@ -47,13 +42,19 @@ pub fn instruction(
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no assembly string", inst.opcode));
     let mut text = asm.text.to_string();
     if inst.opcode == crate::dagisel::post_ids::CALL_INDIRECT {
-        // `printOperand` of the table, then the type as `(params) -> (results)`; the table keeps a space.
+        // `printOperand` of the table, then the type as `(params) ->
+        // (results)`; the table keeps a space.
         let mut immediates = inst.operands.iter().filter(|o| o.is_immediate());
         let (Some(&Operand::Imm(at)), Some(&Operand::Sym(table))) = (immediates.next(), immediates.next()) else {
             unreachable!("a call_indirect names its type and its table")
         };
         let (params, results) = &f.signatures[at as usize];
-        return format!("call_indirect\t {}, ({}) -> ({})", f.symbols[table as usize].0, type_list(params), type_list(results));
+        return format!(
+            "call_indirect\t {}, ({}) -> ({})",
+            f.symbols[table as usize].0,
+            type_list(params),
+            type_list(results)
+        );
     }
     if asm.names == ["brl"] {
         // `printBrList`: every target operand, the default last.
@@ -110,7 +111,8 @@ pub fn function(f: &Function) -> String {
     let name = &f.name;
     let begin = format!("# -- Begin function {name}");
     let mut out = vec![format!("\t.section\t.text.{name},\"\",@")];
-    // The begin-function comment rides on the first directive: `.globl` or `.weak` where there is one.
+    // The begin-function comment rides on the first directive: `.globl` or
+    // `.weak` where there is one.
     match f.binding {
         Binding::Local => out.push(with_comment(&format!("\t.type\t{name},@function"), &begin)),
         Binding::Global | Binding::Weak => {
@@ -130,8 +132,9 @@ pub fn function(f: &Function) -> String {
     out.join("\n") + "\n"
 }
 
-/// `APFloat::convertToHexString` as `WebAssemblyInstPrinter` shows a float immediate: `0x1.8p0`, no `+` on the
-/// exponent, trailing zero digits dropped. `bits` hold `mantissa_bits` of fraction under `exponent_bits`.
+/// `APFloat::convertToHexString` as `WebAssemblyInstPrinter` shows a float
+/// immediate: `0x1.8p0`, no `+` on the exponent, trailing zero digits dropped.
+/// `bits` hold `mantissa_bits` of fraction under `exponent_bits`.
 fn hex_float(
     bits: u64,
     mantissa_bits: u32,

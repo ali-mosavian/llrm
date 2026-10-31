@@ -1,7 +1,6 @@
 //! LLVM IR to wasm assembly text: `llc -O0 -fast-isel=false`'s job for the
 //! functions of a module, one after another.
 
-use llrm_codegen::backend::masm::Datum;
 use crate::Width;
 use crate::dag::{Options, compile_function};
 use crate::print;
@@ -15,12 +14,10 @@ pub fn width_of(triple: &str) -> Result<Width, String> {
     }
 }
 
-/// The pin clang's datalayout for `--target=wasm32` and `wasm64`.
-pub fn datalayout(width: Width) -> &'static str {
-    match width {
-        Width::W32 => "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20",
-        Width::W64 => "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20",
-    }
+/// The pin clang's datalayout for `--target=wasm32` and `wasm64`, from the
+/// machine description.
+pub fn datalayout(width: Width) -> String {
+    crate::layout(width).datalayout
 }
 
 /// `text`, LLVM IR, as a module: the lines and words MIR's reader leaves out of
@@ -39,15 +36,16 @@ pub fn module(
     }
     let mut module = llrm_mir::parse::module(&kept).map_err(|error| error.to_string())?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
-    // No `atomics` feature: the pin's `LowerAtomicPass` makes the accesses plain.
+    // No `atomics` feature: the pin's `LowerAtomicPass` makes the accesses
+    // plain.
     llrm_mir::atomic::lowered_single_thread(&mut module)?;
     // `llc` takes the target's layout when the module states none.
     match module.datalayout.as_deref() {
-        Some(stated) if stated != datalayout(width) => {
+        Some(stated) if *stated != datalayout(width) => {
             return Err(format!("the module's datalayout `{stated}` is not wasm's `{}`", datalayout(width)));
         }
         Some(_) => {}
-        None => module.datalayout = Some(datalayout(width).to_owned()),
+        None => module.datalayout = Some(datalayout(width)),
     }
     Ok(module)
 }
@@ -91,7 +89,8 @@ pub fn object(
     Ok(crate::object::write(&functions, &data(&module, width)?))
 }
 
-/// The assembler's name for `global`: `.L` ahead of a private one (`Mangler` with the private prefix `.L`).
+/// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`
+/// with the private prefix `.L`).
 pub fn symbol_name(global: &llrm_mir::module::GlobalValue) -> String {
     let name = global.name.as_deref().unwrap_or("");
     match global.linkage {
@@ -100,16 +99,16 @@ pub fn symbol_name(global: &llrm_mir::module::GlobalValue) -> String {
     }
 }
 
-/// The variables of `module`: the defined ones as data segments, in module order, and the names of the declared
-/// ones.
+/// The variables of `module`: the defined ones as data segments, in module
+/// order, and the names of the declared ones.
 fn data(
     module: &llrm_mir::module::Module,
     width: Width,
 ) -> Result<crate::object::Data, String> {
-    use crate::object::{Data, DataKind, DataObject, DataReloc};
     use llrm_codegen::backend::{globals, masm::Datum};
-    use llrm_codegen::objectfile::module::Space;
     use llrm_mir::module::{GlobalKind, Linkage, UnnamedAddr};
+
+    use crate::object::{Data, DataKind, DataObject, DataReloc};
 
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("no datalayout")?)?;
     let mut names = llrm_codegen::support::hash::IndexMap::default();
@@ -164,23 +163,12 @@ fn data(
             }
         }
         if constructors {
-            // `globals::datums` lists only the functions, by ascending priority; the priorities are the
-            // initializer's, in the same order. The entries are `{ i32 priority, ptr function, ptr data }`.
-            let llrm_mir::ConstantKind::Aggregate(entries) = &module.context.get(initializer).kind else {
-                return Err("a malformed llvm.global_ctors".to_owned());
-            };
-            let mut priorities = Vec::new();
-            for entry in entries {
-                let llrm_mir::ConstantKind::Aggregate(fields) = &module.context.get(*entry).kind else { continue };
-                if let Some(llrm_mir::ConstantKind::Int(priority)) = fields.first().map(|f| &module.context.get(*f).kind) {
-                    priorities.push(*priority as u16);
-                }
-            }
-            priorities.sort();
-            if priorities.len() != relocs.len() {
-                return Err("llvm.global_ctors: an entry without a function".to_owned());
-            }
-            out.init_funcs = priorities.into_iter().zip(relocs.iter().map(|reloc| reloc.symbol.clone())).collect();
+            // The shared reader's order and its drop of an entry without a
+            // function.
+            out.init_funcs = globals::constructor_entries(module, &layout, initializer)?
+                .into_iter()
+                .map(|(priority, function, _)| (priority as u16, symbol_name(module.global(function))))
+                .collect();
             continue;
         }
         let align = globals::alignment(module, Some(&layout), variable, false, false).unwrap_or(1);
@@ -189,8 +177,12 @@ fn data(
             (true, _) => DataKind::Rodata,
             _ => DataKind::Data,
         };
-        // `getKindForGlobal`: a constant whose address does not matter, and that is one C string, merges.
-        let is_string = matches!(module.context.get(initializer).kind, llrm_mir::ConstantKind::Bytes(_))
+        // `getKindForGlobal`: a constant whose address does not matter, and
+        // that is one C string, merges.
+        let is_string = matches!(
+            module.context.get(initializer).kind,
+            llrm_mir::ConstantKind::Bytes(_)
+        )
             && bytes.last() == Some(&0)
             && !bytes[..bytes.len() - 1].contains(&0);
         out.objects.push(DataObject {

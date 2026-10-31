@@ -5,7 +5,7 @@
 # which does not run RegStackify at -O0.
 set -uo pipefail
 OURS=${OURS:-}
-LLC=${LLC:-$HOME/scratch/llvm-build-wasm/bin/llc}
+LLC=${LLC:-${LLRM_PIN_LLC:?set LLRM_PIN_LLC to the pin llc built with the WebAssembly target}}
 BIN=${BIN:-$(cd "$(dirname "$0")/../../.." && pwd)/target/debug/llrm-wasm-llc}
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 # The function bodies of llc's output: from `.section .text.` to `# -- End function`, nothing else.

@@ -1,7 +1,7 @@
 //! `SelectAddrOperands32` and `SelectAddrOperands64`: a load or store address
 //! as an offset immediate and a base.
 //!
-//! DEVIATE: an `or` with a non-constant right side is not folded into the
+//! DEVIATE W5: an `or` with a non-constant right side is not folded into the
 //! offset. Reason: `Dag` has no `computeKnownBits`. The address is still
 //! correct, the `or` stays a separate instruction. Exit: known bits in `Dag`.
 //!

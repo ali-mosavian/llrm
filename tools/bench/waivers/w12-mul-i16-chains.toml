@@ -1,0 +1,182 @@
+reason = "TEMPORARY trade-off (owner w12; -O2 code bytes for clocks): i16 multiply by a constant is the pin's lea/shift chain, built at i16 because m16 does not promote i16 to i32 (DEVIATE SD441: 66h/67h prefixes; the pin promotes then chains, X86ISelLowering.cpp L64277 + L51191). All rows with a clock count gain clocks; the jpeg rows are timed-only and gain 0.17-0.78% on the 486 model. Exit: SD441's promotion priced against its prefix bytes."
+exception = true
+
+[[row]]
+label = "bintree bas -O2"
+counter = "code_bytes"
+tip = 609
+to = 622
+
+[[row]]
+label = "bintree bq16 -O2"
+counter = "code_bytes"
+tip = 615
+to = 628
+
+[[row]]
+label = "bintree c -O2"
+counter = "code_bytes"
+tip = 225
+to = 241
+
+[[row]]
+label = "bintree nib -O2"
+counter = "code_bytes"
+tip = 313
+to = 321
+
+[[row]]
+label = "histo bas -O2"
+counter = "code_bytes"
+tip = 236
+to = 242
+
+[[row]]
+label = "histo bq16 -O2"
+counter = "code_bytes"
+tip = 243
+to = 249
+
+[[row]]
+label = "histo c -O2"
+counter = "code_bytes"
+tip = 125
+to = 129
+
+[[row]]
+label = "histo nib -O2"
+counter = "code_bytes"
+tip = 131
+to = 135
+
+[[row]]
+label = "jpeg_fixed bas -O2"
+counter = "code_bytes"
+tip = 4837
+to = 4929
+
+[[row]]
+label = "jpeg_fixed bq16 -O2"
+counter = "code_bytes"
+tip = 4948
+to = 5035
+
+[[row]]
+label = "jpeg_fixed c -O2"
+counter = "code_bytes"
+tip = 3063
+to = 3101
+
+[[row]]
+label = "jpeg_fixed nib -O2"
+counter = "code_bytes"
+tip = 5588
+to = 5615
+
+[[row]]
+label = "jpeg_single bas -O2"
+counter = "code_bytes"
+tip = 4526
+to = 4620
+
+[[row]]
+label = "jpeg_single bq16 -O2"
+counter = "code_bytes"
+tip = 4637
+to = 4726
+
+[[row]]
+label = "jpeg_single c -O2"
+counter = "code_bytes"
+tip = 2945
+to = 2983
+
+[[row]]
+label = "jpeg_single nib -O2"
+counter = "code_bytes"
+tip = 5434
+to = 5461
+
+[[row]]
+label = "matmul bas -O2"
+counter = "code_bytes"
+tip = 547
+to = 548
+
+[[row]]
+label = "matmul bq16 -O2"
+counter = "code_bytes"
+tip = 551
+to = 552
+
+[[row]]
+label = "matmul c -O2"
+counter = "code_bytes"
+tip = 309
+to = 317
+
+[[row]]
+label = "matmul nib -O2"
+counter = "code_bytes"
+tip = 407
+to = 411
+
+[[row]]
+label = "parity/branch nib -O2"
+counter = "code_bytes"
+tip = 74
+to = 75
+
+[[row]]
+label = "parity/memory bas -O2"
+counter = "code_bytes"
+tip = 211
+to = 216
+
+[[row]]
+label = "parity/memory bq16 -O2"
+counter = "code_bytes"
+tip = 218
+to = 223
+
+[[row]]
+label = "parity/memory nib -O2"
+counter = "code_bytes"
+tip = 76
+to = 81
+
+[[row]]
+label = "parity/qbsp bas -O2"
+counter = "code_bytes"
+tip = 628
+to = 635
+
+[[row]]
+label = "parity/qbsp bq16 -O2"
+counter = "code_bytes"
+tip = 633
+to = 640
+
+[[row]]
+label = "parity/qbsp c -O2"
+counter = "code_bytes"
+tip = 365
+to = 368
+
+[[row]]
+label = "parity/qbsp nib -O2"
+counter = "code_bytes"
+tip = 409
+to = 412
+
+[[row]]
+label = "recgcd c -O2"
+counter = "code_bytes"
+tip = 110
+to = 118
+
+[[row]]
+label = "recsum c -O2"
+counter = "code_bytes"
+tip = 74
+to = 80

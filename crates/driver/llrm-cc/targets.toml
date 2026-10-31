@@ -173,25 +173,3 @@ llc = ["-fobject-format=elf", "-mabi=sysv"]
 object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
-
-# m68k Linux, as far as assembly text: the backend has no object writer behind llrm-cc, so a row stops at -S.
-# The pin's clang gives the target a 64-bit long double (`[c]` of the description).
-[m68k-68000]
-description = "m68k"
-triple = "m68k-unknown-linux-gnu"
-datalayout = "{datalayout:m68k}"
-clang = ["-ffp-contract=off", "-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
-llc = ["-mcpu=68000"]
-llc_program = "llrm-m68k-llc"
-object = "asm"
-link = []
-
-[m68k-68020]
-description = "m68k"
-triple = "m68k-unknown-linux-gnu"
-datalayout = "{datalayout:m68k}"
-clang = ["-ffp-contract=off", "-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
-llc = ["-mcpu=68020"]
-llc_program = "llrm-m68k-llc"
-object = "asm"
-link = []

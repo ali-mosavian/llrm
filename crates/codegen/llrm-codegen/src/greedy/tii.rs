@@ -18,13 +18,211 @@ use llrm_lir::registers::RegId;
 
 use crate::backend::allocresult::Error;
 use crate::backend::classes::RegisterClasses;
-use crate::backend::frame::Frame;
+use crate::backend::frame::FrameInfo;
 use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
 /// `frame.WORD` at the width type this module uses.
 const WORD: u32 = crate::backend::frame::WORD as u32;
+
+/// What the greedy allocator asks of the target's instructions
+/// (`TargetInstrInfo`). `X86InstrInfo` answers for LIR's x86 forms; another
+/// ISA answers with its own.
+pub trait TargetInstrInfo {
+    /// Whether `what` is a plain move that copies its source whole
+    /// (`isCopyInstr` for X86 `MOV`, not `MOVZX` or `MOVSX`).
+    fn is_plain_move(
+        &self,
+        what: &Semantics,
+    ) -> bool;
+
+    /// `BuildMI(COPY)`: a copy of `from` into `to`, `width` bytes.
+    fn copy_semantics(
+        &self,
+        to: u32,
+        from: u32,
+        width: u32,
+    ) -> Semantics;
+
+    /// The register `one` copies, when it is a plain copy and nothing else
+    /// (`isCopyInstr`).
+    fn copy_source(
+        &self,
+        one: &Insn,
+    ) -> Option<u32> {
+        let w = one.what.as_ref()?;
+        match (w.dests.as_slice(), w.sources.as_slice()) {
+            ([Loc::Held(_)], [Loc::Held(from)])
+                if self.is_plain_move(w)
+                    && one.uses == [from.value]
+                    && one.group.is_none()
+                    && one.requires.is_empty()
+                    && one.delivers.is_empty()
+                    && one.clobbers.is_empty() =>
+            {
+                Some(from.value)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether `one` is a definition `isTriviallyReMaterializable` takes
+    /// in shape: one register written, nothing pinned or destroyed.
+    fn remat_shape(
+        &self,
+        one: &Insn,
+    ) -> bool;
+
+    /// `isTriviallyReMaterializable`.
+    fn is_trivially_re_materializable(
+        &self,
+        def: &Insn,
+        invariant: bool,
+    ) -> bool;
+
+    /// `isLoadFromInvariantOrConstantMemory` over a body: the values loaded
+    /// from an immutable stack object nothing writes.
+    fn argument_loads(
+        &self,
+        body: &crate::model::lir::LirBody,
+    ) -> BTreeSet<u32>;
+
+    /// `foldMemoryOperand`.
+    fn fold_memory_operand(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+    ) -> Option<Arc<Insn>>;
+
+    /// `foldMemoryOperand` for one move of a parallel copy.
+    fn fold_copy_member(
+        &self,
+        one: &Insn,
+        values: &BTreeSet<u32>,
+        frame: &mut dyn FrameInfo,
+        home: &dyn Fn(u32) -> u32,
+    ) -> Result<Option<Arc<Insn>>, Error>;
+
+    /// `loadRegFromStackSlot`.
+    fn load_reg_from_stack_slot(
+        &self,
+        beside: &Insn,
+        into: u32,
+        cell: &Mem,
+    ) -> Arc<Insn>;
+
+    /// `storeRegToStackSlot`.
+    fn store_reg_to_stack_slot(
+        &self,
+        beside: &Insn,
+        out_of: u32,
+        cell: &Mem,
+    ) -> Arc<Insn>;
+
+    /// Whether `one` reads the register every unprefixed access reads, so a
+    /// split puts a reload of it ahead of `one`.
+    fn needs_data_group(
+        &self,
+        one: &Insn,
+    ) -> bool;
+}
+
+/// `X86InstrInfo` at the width and register classes of one compile.
+pub struct X86InstrInfo<'a> {
+    pub bits: u32,
+    pub classes: &'a RegisterClasses,
+}
+
+impl TargetInstrInfo for X86InstrInfo<'_> {
+    fn is_plain_move(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        what.op == Operation::Move && what.name.as_deref() == Some("mov")
+    }
+
+    fn copy_semantics(
+        &self,
+        to: u32,
+        from: u32,
+        width: u32,
+    ) -> Semantics {
+        Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(Held { value: to, width })],
+            sources: vec![Loc::Held(Held { value: from, width })],
+            ..Semantics::new(Operation::Move)
+        }
+    }
+
+    fn remat_shape(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        super::inlinespiller::remat_shape(one)
+    }
+
+    fn is_trivially_re_materializable(
+        &self,
+        def: &Insn,
+        invariant: bool,
+    ) -> bool {
+        super::remat::is_trivially_re_materializable(def, invariant)
+    }
+
+    fn argument_loads(
+        &self,
+        body: &crate::model::lir::LirBody,
+    ) -> BTreeSet<u32> {
+        super::remat::argument_loads(body)
+    }
+
+    fn fold_memory_operand(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+    ) -> Option<Arc<Insn>> {
+        fold_memory_operand(one, reg, cell, self.bits, self.classes)
+    }
+
+    fn fold_copy_member(
+        &self,
+        one: &Insn,
+        values: &BTreeSet<u32>,
+        frame: &mut dyn FrameInfo,
+        home: &dyn Fn(u32) -> u32,
+    ) -> Result<Option<Arc<Insn>>, Error> {
+        fold_copy_member(one, values, frame, home)
+    }
+
+    fn load_reg_from_stack_slot(
+        &self,
+        beside: &Insn,
+        into: u32,
+        cell: &Mem,
+    ) -> Arc<Insn> {
+        load_reg_from_stack_slot(beside, into, cell)
+    }
+
+    fn store_reg_to_stack_slot(
+        &self,
+        beside: &Insn,
+        out_of: u32,
+        cell: &Mem,
+    ) -> Arc<Insn> {
+        store_reg_to_stack_slot(beside, out_of, cell)
+    }
+
+    fn needs_data_group(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        crate::backend::target::needs_data_group(one)
+    }
+}
 
 /// `foldMemoryOperand`: `one` with `cell` for every operand naming `reg`, or
 /// `None` where that form does not exist. A narrower operand reads or writes
@@ -218,7 +416,7 @@ pub(crate) fn _inserted(
 pub(crate) fn fold_copy_member(
     one: &Insn,
     values: &BTreeSet<u32>,
-    frame: &mut Frame,
+    frame: &mut dyn FrameInfo,
     home: &dyn Fn(u32) -> u32,
 ) -> Result<Option<Arc<Insn>>, Error> {
     let Some(what) = &one.what else {

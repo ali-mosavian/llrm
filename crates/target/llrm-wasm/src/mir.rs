@@ -1,6 +1,6 @@
 //! The wasm machine function the post-selection passes work on.
 //!
-//! DEVIATE: a spike-local model inside llrm-wasm, keyed to the generated
+//! DEVIATE W15: a spike-local model inside llrm-wasm, keyed to the generated
 //! opcode ids and the pin's operand order (defs first). Reason: the repo has no
 //! target-neutral machine function (`llrm-lir` is x86-register-shaped).
 //! Exit: the neutral machine function, one post-main task for every target.
@@ -23,7 +23,7 @@ pub const IMPLICIT_DEF: u16 = u16::MAX - 1;
 /// A virtual register, by index.
 pub type VReg = u32;
 
-/// The register classes the slice uses: `I32RegClass` .. `F64RegClass`.
+/// The register classes the target has: `I32RegClass` .. `F64RegClass`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValType {
     I32,
@@ -218,9 +218,11 @@ pub struct Function {
     /// `.globl`, `.weak` or neither, and the binding in the object.
     pub binding: Binding,
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
-    /// The (name, type) of each wasm global the code names: an import of the object file.
+    /// The (name, type) of each wasm global the code names: an import of the
+    /// object file.
     pub globals: Vec<(String, ValType)>,
-    /// The (parameters, results) each `CALL_INDIRECT` names by its first immediate.
+    /// The (parameters, results) each `CALL_INDIRECT` names by its first
+    /// immediate.
     pub signatures: Vec<(Vec<ValType>, Vec<ValType>)>,
     /// The (size, alignment) of each stack object, by frame index:
     /// `MachineFrameInfo`.
@@ -361,8 +363,9 @@ impl Function {
     }
 }
 
-/// How the assembler and the object file bind a symbol (`GlobalValue::isWeakForLinker`, `hasLocalLinkage`): `.globl`
-/// and global, `.weak` and weak, internal or private and local.
+/// How the assembler and the object file bind a symbol
+/// (`GlobalValue::isWeakForLinker`, `hasLocalLinkage`): `.globl` and global,
+/// `.weak` and weak, internal or private and local.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Binding {
     #[default]
@@ -372,7 +375,8 @@ pub enum Binding {
 }
 
 impl Binding {
-    /// `weak`, `weak_odr`, `linkonce`, `linkonce_odr`, `common` and `extern_weak` are weak for the linker.
+    /// `weak`, `weak_odr`, `linkonce`, `linkonce_odr`, `common` and
+    /// `extern_weak` are weak for the linker.
     pub fn of(linkage: llrm_mir::module::Linkage) -> Binding {
         use llrm_mir::module::Linkage as L;
         match linkage {

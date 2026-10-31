@@ -6,11 +6,11 @@
 //! joins registers that interfere), greedy colouring, no spilling. The emitter
 //! and expander read only [`Assignment`].
 
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use llrm_lir::registers::RegId;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::sink::{Jump, split_critical_edge};
@@ -48,6 +48,21 @@ pub trait Target {
     ) -> bool {
         one == other
     }
+    /// Whether a register worth `weight` (its mentions, each scaled by its loop
+    /// depth) should take `root`, when `first_use` says no other register
+    /// of the function has taken it yet. A target whose registers cost
+    /// something to use the first time (a callee-saved one is saved and
+    /// restored) answers no for a register that gains less, and that register
+    /// is spilled (`RAGreedy::tryAssignCSRFirstTime`,
+    /// RegAllocGreedy.cpp#L2188).
+    fn worth_taking(
+        _root: RegId,
+        _first_use: bool,
+        _weight: u64,
+    ) -> bool {
+        true
+    }
+
     /// The class the instruction `name` names for operand `index`, where it
     /// does (`MCInstrDesc::operands`).
     fn operand_class(
@@ -60,6 +75,16 @@ pub trait Target {
     /// `None` when the target cannot spill.
     fn spill_store(
         _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+    /// `foldMemoryOperand`: `inst` with its only read of the spilled `register`
+    /// taken straight from frame `slot`, where the target has an
+    /// instruction form for that; the reload then goes.
+    fn fold_spill(
+        _inst: &Inst,
         _register: Reg,
         _slot: i32,
     ) -> Option<Inst> {
@@ -277,7 +302,7 @@ pub fn fold_reserved_copies<T: Target>(function: &mut MFunction<T::Class>) {
             defs[*v as usize] += 1;
         }
     }
-    let mut replace: HashMap<u32, RegId> = HashMap::new();
+    let mut replace: HashMap<u32, RegId> = HashMap::default();
     for block in &mut function.blocks {
         block
             .insts
@@ -363,8 +388,8 @@ fn liveness<C>(
     effects_of: &[Vec<(Vec<usize>, Vec<usize>)>],
 ) -> (Vec<HashSet<usize>>, Vec<HashSet<usize>>) {
     let blocks = function.blocks.len();
-    let mut reads = vec![HashSet::new(); blocks];
-    let mut writes = vec![HashSet::new(); blocks];
+    let mut reads = vec![HashSet::default(); blocks];
+    let mut writes = vec![HashSet::default(); blocks];
     for (at, block) in effects_of.iter().enumerate() {
         for (defs, uses) in block {
             for u in uses {
@@ -377,7 +402,7 @@ fn liveness<C>(
     }
     let successors = successors(function);
     let mut live_in = reads.clone();
-    let mut live_out = vec![HashSet::new(); blocks];
+    let mut live_out = vec![HashSet::default(); blocks];
     loop {
         let mut changed = false;
         for at in (0..blocks).rev() {
@@ -399,12 +424,15 @@ pub struct GraphColoring<T> {
     /// Join copies that run on every trip of a loop before the ones in a
     /// branch of it (see [`GraphColoring::colour`]).
     pub by_frequency: bool,
+    /// Registers that cannot be spilled again (made by spill code), so a colour
+    /// that costs more than the register is worth is better than none.
+    unspillable: HashSet<u32>,
     marker: PhantomData<T>,
 }
 
 impl<T> Default for GraphColoring<T> {
     fn default() -> Self {
-        GraphColoring { by_frequency: false, marker: PhantomData }
+        GraphColoring { by_frequency: false, unspillable: HashSet::default(), marker: PhantomData }
     }
 }
 
@@ -427,7 +455,17 @@ impl<T: Target> GraphColoring<T> {
     /// A colourer that joins in the order [`GraphColoring::colour`] describes
     /// where `by_frequency`.
     pub fn by_frequency(by_frequency: bool) -> Self {
-        GraphColoring { by_frequency, marker: PhantomData }
+        GraphColoring { by_frequency, unspillable: HashSet::default(), marker: PhantomData }
+    }
+
+    /// The same, where the registers in `unspillable` take any colour that
+    /// fits.
+    pub fn with_unspillable(
+        mut self,
+        unspillable: &HashSet<u32>,
+    ) -> Self {
+        self.unspillable = unspillable.clone();
+        self
     }
 
     /// The copies in the order the coalescer tries them. `RegisterCoalescer`
@@ -465,8 +503,9 @@ impl<T: Target> GraphColoring<T> {
         keyed.into_iter().map(|(_, inst)| inst).collect()
     }
 
-    /// Colour every register, or name each one nothing fits, in colouring order. A register left
-    /// uncoloured constrains no other, so one round names every victim the others still leave.
+    /// Colour every register, or name each one nothing fits, in colouring
+    /// order. A register left uncoloured constrains no other, so one round
+    /// names every victim the others still leave.
     pub fn colour(
         &self,
         function: &MFunction<T::Class>,
@@ -480,7 +519,7 @@ impl<T: Target> GraphColoring<T> {
             .collect();
         let total = count + nodes.physical.len();
         let (_, live_out) = liveness(function, &effects_of);
-        let mut edges: Vec<HashSet<usize>> = vec![HashSet::new(); total];
+        let mut edges: Vec<HashSet<usize>> = vec![HashSet::default(); total];
         let connect = |a: usize, b: usize, edges: &mut Vec<HashSet<usize>>| {
             if a != b {
                 edges[a].insert(b);
@@ -493,7 +532,7 @@ impl<T: Target> GraphColoring<T> {
         // written in the block holds its own entry value.
         let mut fresh = total as u32;
         for (at, block) in function.blocks.iter().enumerate() {
-            let mut current: HashMap<usize, u32> = HashMap::new();
+            let mut current: HashMap<usize, u32> = HashMap::default();
             let mut before = Vec::with_capacity(block.insts.len());
             let mut made: Vec<Vec<u32>> = Vec::with_capacity(block.insts.len());
             for (inst, (defs, uses)) in block.insts.iter().zip(&effects_of[at]) {
@@ -603,15 +642,22 @@ impl<T: Target> GraphColoring<T> {
                 }
             }
         }
-        let mut colour: HashMap<usize, RegId> = HashMap::new();
+        let mut colour: HashMap<usize, RegId> = HashMap::default();
         for (at, root) in nodes.physical.iter().enumerate() {
             colour.insert(count + at, *root);
         }
         let mut assigned: Vec<Option<RegId>> = vec![None; count];
+        let mentions = crate::spill::costs(function);
+        let mut weight = vec![0u64; total];
+        for v in 0..count {
+            weight[find(&mut parent, v)] += mentions[v];
+        }
+        let mut taken_roots: Vec<RegId> = Vec::new();
         let mut failures: Vec<Uncolourable> = Vec::new();
-        let mut failed_nodes: HashSet<usize> = HashSet::new();
+        let mut failed_nodes: HashSet<usize> = HashSet::default();
         // the most constrained class first, so a word is not left with what
         // the bytes took
+        let minimal = crate::spill::minimal_vregs(function);
         let mut order: Vec<usize> = (0..count).collect();
         let reach: Vec<usize> = (0..count)
             .map(|v| {
@@ -631,10 +677,27 @@ impl<T: Target> GraphColoring<T> {
             }
             if !colour.contains_key(&node) {
                 let taken: HashSet<RegId> = edges[node].iter().filter_map(|n| colour.get(n).copied()).collect();
-                let Some(chosen) = T::candidates(classes[node])
-                    .into_iter()
-                    .find(|root| !taken.iter().any(|one| T::overlaps(*one, *root)))
-                else {
+                let fits = |root: &RegId| !taken.iter().any(|one| T::overlaps(*one, *root));
+                let first_use = |root: &RegId| !taken_roots.iter().any(|one| T::overlaps(*one, *root));
+                let candidates = T::candidates(classes[node]);
+                // a register the spill code made (one short run) cannot be
+                // spilled again
+                let chosen = candidates
+                    .iter()
+                    .copied()
+                    .find(
+                        |root| fits(root)
+                            && (self.unspillable.contains(&(v as u32))
+                                || minimal[v]
+                                || T::worth_taking(*root, first_use(root), weight[node])),
+                    );
+                if chosen.is_none() && candidates.iter().any(|root| fits(root)) {
+                    let crowd = (0..count as u32).filter(|u| find(&mut parent, *u as usize) == node).collect();
+                    failed_nodes.insert(node);
+                    failures.push(Uncolourable { vreg: v as u32, crowd, blockers: Vec::new() });
+                    continue;
+                }
+                let Some(chosen) = chosen else {
                     let near: Vec<usize> = edges[node].iter().copied().chain([node]).collect();
                     let crowd = (0..count as u32).filter(|u| near.contains(&find(&mut parent, *u as usize))).collect();
                     let wanted = T::candidates(classes[node]);
@@ -652,6 +715,7 @@ impl<T: Target> GraphColoring<T> {
                     failures.push(Uncolourable { vreg: v as u32, crowd, blockers });
                     continue;
                 };
+                taken_roots.push(chosen);
                 colour.insert(node, chosen);
             }
             assigned[v] = Some(T::view(colour[&node], function.classes[v]));

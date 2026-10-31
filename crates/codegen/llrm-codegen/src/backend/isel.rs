@@ -176,7 +176,8 @@ use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::SrcLoc;
 use crate::model::lir::{
-    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
+    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteArg, NoteExpr,
+    NoteValue, Phi,
 };
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
@@ -1454,7 +1455,7 @@ fn homed(
 }
 
 /// The source line the `!dbg` of `inst` names.
-pub(crate) fn dbg_line(
+pub fn dbg_line(
     module: &Module,
     function: &Function,
     inst: InstId,
@@ -1517,6 +1518,76 @@ fn lined(
         })
         .collect();
     body.with_blocks(blocks)
+}
+
+/// What `ops` make of `args`, as a note: the part of the variable they say (a
+/// trailing `DW_OP_LLVM_fragment`) and the value. Without `listed`, the
+/// one argument is pushed first. A leading `DW_OP_deref` of the lone argument
+/// makes the place it addresses, not a value.
+pub(crate) fn expression_note(
+    args: Vec<NoteValue>,
+    ops: Vec<llrm_mir::DwOp>,
+    listed: bool,
+) -> (NoteValue, Option<(u32, u32)>) {
+    use llrm_debug::ExprOp as E;
+    use llrm_mir::DwOp;
+    use llrm_mir::module::{DwBinary as B, DwUnary as U};
+    let nothing = (NoteValue::Nothing, None);
+    let mut ops = ops.as_slice();
+    let piece = match ops {
+        [rest @ .., DwOp::Fragment { offset, size }] if offset % 8 == 0 && size % 8 == 0 => {
+            let (Ok(offset), Ok(bytes)) = (u32::try_from(offset / 8), u32::try_from(size / 8)) else { return nothing };
+            ops = rest;
+            Some((offset, bytes))
+        }
+        _ => None,
+    };
+    let stacked = ops.last() == Some(&DwOp::StackValue);
+    if stacked {
+        ops = &ops[..ops.len() - 1];
+    }
+    let place = !stacked && !listed && ops.first() == Some(&DwOp::Deref);
+    if place {
+        ops = &ops[1..];
+    }
+    let mut made = Vec::new();
+    if !listed {
+        made.push(E::Arg(0));
+    }
+    for op in ops {
+        made.push(match *op {
+            DwOp::Arg(n) => E::Arg(n),
+            DwOp::Constu(n) => E::Constu(n),
+            DwOp::Consts(n) => E::Consts(n),
+            DwOp::PlusUconst(n) => E::PlusUconst(n),
+            DwOp::Deref => E::Deref,
+            DwOp::Binary(B::Plus) => E::Plus,
+            DwOp::Binary(B::Minus) => E::Minus,
+            DwOp::Binary(B::Mul) => E::Mul,
+            DwOp::Binary(B::And) => E::And,
+            DwOp::Binary(B::Or) => E::Or,
+            DwOp::Binary(B::Xor) => E::Xor,
+            DwOp::Binary(B::Shl) => E::Shl,
+            DwOp::Binary(B::Shr) => E::Shr,
+            DwOp::Binary(B::Shra) => E::Shra,
+            DwOp::Unary(U::Not) => E::Not,
+            DwOp::Unary(U::Neg) => E::Neg,
+            _ => return nothing,
+        });
+    }
+    let mut named = Vec::new();
+    for arg in args {
+        named.push(match arg {
+            NoteValue::Value(vreg) => NoteArg::Value(vreg),
+            NoteValue::Constant(value) => NoteArg::Constant(value),
+            _ => return nothing,
+        });
+    }
+    let uses = |n: u32| (n as usize) < named.len();
+    if made.iter().any(|op| matches!(op, E::Arg(n) if !uses(*n))) {
+        return nothing;
+    }
+    (NoteValue::Expr(Arc::new(NoteExpr { args: named, ops: made, value: !place })), piece)
 }
 
 /// `body` with what `-g` says of the values a variable has, as notes: each
@@ -1596,7 +1667,46 @@ pub(crate) fn noted(
         }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
-            llrm_mir::DebugWhat::Value(one) => (said(one), None),
+            // Read by the assignment tracking analysis, not by the notes.
+            llrm_mir::DebugWhat::Assign { .. } => continue,
+            llrm_mir::DebugWhat::Value(one) => {
+                // What the expression does to the value: nothing, add to it, or
+                // say a part of the variable; any other is not read, and the
+                // value it would make is not said.
+                let ops_all = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let ops = ops_all.strip_suffix(&[llrm_mir::DwOp::StackValue]).unwrap_or(&ops_all);
+                let ops_all = ops_all.clone();
+                match (ops, said(one)) {
+                    ([], value) => (value, None),
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Value(vreg)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Offset(vreg, add)), None)
+                    }
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Constant(value)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Constant(value + add)), None)
+                    }
+                    ([llrm_mir::DwOp::Fragment { offset, size }], value) if offset % 8 == 0 && size % 8 == 0 => {
+                        match (u32::try_from(offset / 8), u32::try_from(size / 8)) {
+                            (Ok(offset), Ok(bytes)) => (value, Some((offset, bytes))),
+                            _ => (NoteValue::Nothing, None),
+                        }
+                    }
+                    _ => expression_note(vec![said(one)], ops_all, false),
+                }
+            }
+            llrm_mir::DebugWhat::Args(list) => {
+                let ops = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let operands = function.debug_args(list);
+                if operands.iter().any(|operand| {
+                    matches!(
+                        operand,
+                        llrm_mir::Operand::Value(one) if wides.contains_key(one)
+                    )
+                }) {
+                    (NoteValue::Nothing, None)
+                } else {
+                    expression_note(operands.iter().map(|&operand| said(operand)).collect(), ops, true)
+                }
+            }
             llrm_mir::DebugWhat::Piece { value, offset, bytes } => (said(value), Some((offset, bytes))),
             llrm_mir::DebugWhat::GonePiece { offset, bytes } => (NoteValue::Nothing, Some((offset, bytes))),
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
@@ -1610,31 +1720,63 @@ pub(crate) fn noted(
     // last is no longer known) say nothing of it.
     let mut seen: BTreeSet<(i64, u32, Option<(u32, u32)>, NoteValue)> = BTreeSet::new();
     let mut unsure: BTreeSet<(i64, u32)> = BTreeSet::new();
-    for &(at, variable, piece, value) in &said_at {
+    for (at, variable, piece, value) in &said_at {
+        let (at, variable, piece) = (*at, *variable, *piece);
         let clash = said_at
             .iter()
             .any(
-                |&(other_at, other_variable, other_piece, other_value)| other_at == at
-                    && other_variable == variable
-                    && (other_piece, other_value) != (piece, value)
-                    && (other_piece == piece || other_piece.is_none() || piece.is_none()),
+                |(other_at, other_variable, other_piece, other_value)| *other_at == at
+                    && *other_variable == variable
+                    && (*other_piece, other_value) != (piece, value)
+                    && (*other_piece == piece || other_piece.is_none() || piece.is_none()),
             );
         if clash {
             unsure.insert((at, variable));
         }
     }
+    // The register each parameter arrives in, by the number its value has.
+    let arrivals: Vec<(RegId, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .find(|one| one.arrival())
+        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
+        .unwrap_or_default();
     for (at, variable, piece, value) in said_at {
         let (piece, value) = if unsure.contains(&(at, variable)) { (None, NoteValue::Nothing) } else { (piece, value) };
         // Said twice by two passes: said once.
-        if !seen.insert((at, variable, piece, value)) {
+        // A parameter said to be its own value, whole, is also what it arrived
+        // as: where it is held nowhere, it is the value the function was
+        // entered with.
+        let value = match value {
+            NoteValue::Value(vreg)
+                if piece.is_none()
+                    && llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(variable))
+                        .is_some_and(|one| one.parameter) =>
+            {
+                arrivals
+                    .iter()
+                    .find(|(_, arrived)| *arrived == vreg)
+                    .map_or(NoteValue::Value(vreg), |&(register, _)| NoteValue::Arrived(vreg, register))
+            }
+            other => other,
+        };
+        if !seen.insert((at, variable, piece, value.clone())) {
             continue;
         }
         let note = u32::try_from(notes.len()).expect("a few notes");
+        match &value {
+            NoteValue::Value(vreg) | NoteValue::Offset(vreg, _) | NoteValue::Arrived(vreg, _) => {
+                named.insert(*vreg);
+            }
+            NoteValue::Expr(expr) => named.extend(expr.args.iter().filter_map(|arg| match arg {
+                NoteArg::Value(vreg) => Some(*vreg),
+                NoteArg::Constant(_) => None,
+            })),
+            _ => {}
+        }
         notes.push(DebugNote { variable, piece, value });
         before.entry(at).or_default().push(note);
-        if let NoteValue::Value(vreg) = value {
-            named.insert(vreg);
-        }
     }
     // A variable some of whose records went with deleted code is said to be
     // nowhere: a note that stands before no instruction is one that was
@@ -1647,22 +1789,16 @@ pub(crate) fn noted(
     // register from the entry, as a note, and the tracking that follows a
     // variable the code moves says for how long. Its number is past the
     // metadata's.
-    let arrivals: Vec<(RegId, u32)> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .find(|one| one.arrival())
-        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
-        .unwrap_or_default();
     let mut entry_notes: Vec<u32> = Vec::new();
     for (index, variable) in body.variables.iter_mut().enumerate() {
         let (DebugPlace::Register(_), Some(delivered)) = (&variable.place, variable.argument) else { continue };
-        let Some(&(_, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered)) else {
+        let Some(&(register, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered))
+        else {
             continue;
         };
         let node = u32::MAX - u32::try_from(index).expect("a few variables");
         entry_notes.push(u32::try_from(notes.len()).expect("a few notes"));
-        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Value(vreg) });
+        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Arrived(vreg, register) });
         named.insert(vreg);
         variable.place = DebugPlace::Tracked(node);
     }
@@ -6259,6 +6395,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
+                // A fact for the passes (SelectionDAGBuilder.cpp#L7680): no
+                // code.
+                Some(Intrinsic::InvariantStart | Intrinsic::InvariantEnd) => Ok(()),
                 // A hint; the 386 and 486 have no prefetch instruction.
                 Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),

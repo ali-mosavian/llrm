@@ -25,8 +25,6 @@ fn eval(
                 CondCode::SetNe => arg(0) != arg(1),
                 CondCode::SetULt => arg(0) < arg(1),
                 CondCode::SetUGe => arg(0) >= arg(1),
-                CondCode::SetUGt => arg(0) > arg(1),
-                CondCode::SetULe => arg(0) <= arg(1),
                 other => panic!("code {other:?}"),
             })
         }

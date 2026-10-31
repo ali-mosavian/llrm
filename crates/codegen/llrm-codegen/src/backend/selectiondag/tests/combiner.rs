@@ -10,7 +10,15 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: vt,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -32,7 +40,9 @@ fn x86(
     level: CombineLevel,
 ) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, level).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, level)
+        .with_tli(&tli)
+        .run();
 }
 
 /// `x * 1` is `x` and `x * 8` is `x << 3`: `getNode` keeps the multiply
@@ -121,6 +131,75 @@ fn multiply_by_other_constants_is_leas_shifts_and_adds() {
     assert_eq!(shape(11), (ISD::Add, ISD::Shl));
     assert_eq!(shape(-5).0, ISD::Sub);
     assert_eq!(shape(7), (ISD::Sub, ISD::Shl));
+}
+
+/// A 486 `imul r16,r16,imm` is 13 clocks: `histo` at -O2 priced `x*7+3` as
+/// one (+26% clocks against main's `shl/sub`). The pin leaves an `i16`
+/// multiply alone; a target whose multiply is dear (`i16_mul_chains`) gets the
+/// `i32` chains (7 is `(x << 3) - x`), and `minsize` keeps the `imul`.
+#[test]
+fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
+    let shape = |c: u128, chains: bool, min_size: bool| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I16, 1);
+        let k = dag.get_constant(c, EVT::I16);
+        let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
+        dag.set_root(product);
+        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains };
+        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
+        dag.opcode(dag.get_root())
+    };
+    // An `i16` has no `lea` pattern for `MUL_IMM`: a chain holding one still
+    // ends in an `imul` (recsum c -O2: `x*11` was `imul 5; add; add`).
+    let holds = |c: u128, op: ISD| {
+        let mut dag = dag();
+        let x = load(&mut dag, EVT::I16, 1);
+        let k = dag.get_constant(c, EVT::I16);
+        let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
+        dag.set_root(product);
+        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: true };
+        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
+        let mut todo = vec![dag.get_root()];
+        while let Some(value) = todo.pop() {
+            if dag.opcode(value) == op {
+                return true;
+            }
+            todo.extend(dag.node(value).ops.iter().copied().filter(|v| dag.opcode(*v) != ISD::Load));
+        }
+        false
+    };
+    for c in [3, 5, 9, 10, 11, 12, 15, 24] {
+        assert!(!holds(c, x86isd::MUL_IMM), "x*{c} kept a MUL_IMM");
+        assert!(!holds(c, ISD::Mul), "x*{c} kept a Mul");
+    }
+    for c in [7, 10, 12, 24, 3, 5, 9] {
+        assert_ne!(shape(c, true, false), ISD::Mul, "x*{c} stayed an imul");
+        assert_eq!(shape(c, false, false), ISD::Mul, "x*{c} left the default");
+        assert_eq!(shape(c, true, true), ISD::Mul, "x*{c} grew a minsize body");
+    }
+    assert_eq!(shape(7, true, false), ISD::Sub);
+}
+
+/// The `i16` multiply chain is built where `i16` is not promoted and nowhere
+/// else: one predicate (`promotes_i16`) decides both, so changing SD441's rule
+/// moves them together.
+#[test]
+fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
+    use super::super::dag_combiner::CombineHooks;
+    use super::super::x86_lowering::promotes_i16;
+    let m16 = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let m32 = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (tli, promotes) in [(m16, false), (m32, true)] {
+        let mut dag = dag();
+        // no foldable load: the pin's rule keeps an op beside one in i16
+        let x = dag.get_register(EVT::I16, 2);
+        let y = dag.get_register(EVT::I16, 3);
+        let sum = dag.get_node(ISD::Add, EVT::I16, &[x, y]);
+        let lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: !promotes_i16(&tli) };
+        assert_eq!(promotes_i16(&tli), promotes);
+        assert_eq!(lowering.promote_type(&dag, &tli, sum).is_some(), promotes);
+        assert_eq!(lowering.i16_mul_chains, !promotes);
+    }
 }
 
 /// A lowering that returns two values (a double-width shift) leaves them as one
@@ -228,4 +307,30 @@ fn a_not_of_a_float_compare_does_not_make_an_illegal_code_after_legalization() {
         let cond = dag.operand(dag.get_root(), 1);
         assert_eq!(dag.opcode(cond) == ISD::SetCC, folds, "{level:?}");
     }
+}
+
+/// The check was x86's `oeq`/`une` by name, so a target that expands another
+/// code (wasm has no `ule`) got `not (setcc ogt)` folded into the expanded
+/// `ule`, which legalization had just undone. The table decides.
+#[test]
+fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
+    let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    tli.set_cond_code_action(CondCode::SetULe, MVT::F64, Action::Expand);
+    let mut dag = dag();
+    let (a, b) = (load(&mut dag, EVT::Simple(MVT::F64), 1), load(&mut dag, EVT::Simple(MVT::F64), 2));
+    let cmp = dag.get_setcc(EVT::I1, a, b, CondCode::SetOGt);
+    let one = dag.get_constant(1, EVT::I1);
+    let not = dag.get_node(ISD::Xor, EVT::I1, &[cmp, one]);
+    let (chain, dest) = (dag.entry_node(), dag.get_basic_block(1));
+    let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, not, dest]);
+    dag.set_root(branch);
+    DagCombiner::new(
+        &mut dag,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        CombineLevel::AfterLegalizeDag,
+    )
+    .with_tli(&tli)
+    .run();
+    let cond = dag.operand(dag.get_root(), 1);
+    assert_eq!(dag.opcode(cond), ISD::Xor, "the not stays; ule is expanded");
 }

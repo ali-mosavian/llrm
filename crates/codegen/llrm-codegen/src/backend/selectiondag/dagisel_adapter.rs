@@ -166,10 +166,11 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Br => pin::BR,
         BrJT => pin::BR_JT,
         BrInd => pin::BRIND,
-        Load => pin::LOAD,
-        Store => pin::STORE,
+        Load | LoadPre | LoadPost => pin::LOAD,
+        Store | StorePre | StorePost => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
-        // No x86 table names these; a target whose table does gets its own id map (B2).
+        // No x86 table names these; a target whose table does gets its own id
+        // map (B2).
         AtomicCmpSwap | AtomicLoadAdd | AtomicLoadSub | AtomicLoadAnd | AtomicLoadOr | AtomicLoadXor
         | AtomicLoadClr | AtomicLoad | AtomicStore => u16::MAX,
         CallSeqStart => pin::CALLSEQ_START,
@@ -288,15 +289,6 @@ pub trait PinRegisters {
         &self,
         id: llrm_lir::registers::RegId,
     ) -> Option<u16>;
-
-    /// Whether `register` is a fixed register of the pin's with no id here (m68k's `PC`, which no
-    /// instruction names): `register_of` then answers it, so a matcher can tell it from a virtual one.
-    fn is_fixed(
-        &self,
-        _register: u16,
-    ) -> bool {
-        false
-    }
 
     /// Whether `register` is one the target cannot map. Selection then refuses
     /// ([`DagisAdapter::refusal`]); the default reads it as virtual.
@@ -568,7 +560,6 @@ impl Dag for DagisAdapter<'_> {
             NodeData::PhysReg(id) => self.registers.pin_register(id),
             // `$noreg`
             NodeData::Register(0) => Some(0),
-            NodeData::Register(number) => u16::try_from(number).ok().filter(|&number| self.registers.is_fixed(number)),
             _ => None,
         }
     }
@@ -726,7 +717,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<LoadExt> {
         let node = &self.dag.nodes()[node as usize];
-        (node.opcode == ISD::Load).then(|| match node.data {
+        matches!(node.opcode, ISD::Load | ISD::LoadPre | ISD::LoadPost).then(|| match node.data {
             NodeData::Mem(info) => match info.ext {
                 None => LoadExt::NonExt,
                 Some(super::actions::LoadExt::ExtLoad) => LoadExt::Ext,
@@ -738,9 +729,21 @@ impl Dag for DagisAdapter<'_> {
     }
     fn is_indexed(
         &self,
-        _: u32,
+        node: u32,
     ) -> bool {
-        false
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPre | ISD::LoadPost | ISD::StorePre | ISD::StorePost
+        )
+    }
+    fn is_post_indexed(
+        &self,
+        node: u32,
+    ) -> bool {
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPost | ISD::StorePost
+        )
     }
     fn is_truncating_store(
         &self,
@@ -748,7 +751,7 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         let n = &self.dag.nodes()[node as usize];
         match n.data {
-            NodeData::Mem(info) if n.opcode == ISD::Store => {
+            NodeData::Mem(info) if matches!(n.opcode, ISD::Store | ISD::StorePre | ISD::StorePost) => {
                 self.dag.value_type(n.ops[1]).size_in_bits() > info.mem_vt.size_in_bits()
             }
             _ => false,
@@ -788,15 +791,6 @@ impl Dag for DagisAdapter<'_> {
         match self.dag.nodes()[node as usize].data {
             NodeData::Mem(info) => !info.volatile,
             _ => false,
-        }
-    }
-    fn fp_bits(
-        &self,
-        value: PinValue,
-    ) -> Option<u128> {
-        match self.dag.node(ours(value)).data {
-            NodeData::ConstFp { bits } => Some(bits),
-            _ => None,
         }
     }
     fn fp_class(
@@ -895,7 +889,9 @@ impl Dag for DagisAdapter<'_> {
             return theirs(self.dag.get_constant_with(bits, vt, true, false));
         }
         if self.dag.opcode(v) == ISD::ConstantFP {
-            let NodeData::ConstFp { bits } = self.dag.node(v).data else { unreachable!("a float constant has its bits") };
+            let NodeData::ConstFp { bits } = self.dag.node(v).data else {
+                unreachable!("a float constant has its bits")
+            };
             let vt = self.dag.value_type(v);
             return theirs(self.dag.get_target_constant_fp(bits, vt));
         }
@@ -974,8 +970,9 @@ impl Dag for DagisAdapter<'_> {
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
         let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
-        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no longer
-        // reads, and what only they read (a folded shift and its amount).
+        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no
+        // longer reads, and what only they read (a folded shift and its
+        // amount).
         for operand in old_operands {
             if operand != self.dag.entry_node().node && !self.has_live_users(operand) {
                 self.remove(operand);

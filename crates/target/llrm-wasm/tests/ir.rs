@@ -1,5 +1,5 @@
 //! IR to assembly text through the whole backend, against the pin's `llc
-//! -mtriple=wasm32 -O0 -fast-isel=false` (`~/scratch/llvm-build-wasm`,
+//! -mtriple=wasm32 -O0 -fast-isel=false` (`LLRM_PIN_LLC`,
 //! `compare.sh` regenerates the goldens). Each `tests/ir/NAME.ll` has its
 //! output in `NAME.s`.
 
@@ -128,21 +128,24 @@ fn frames() {
     check("frame");
 }
 
-/// An internal function printed `.globl`; the pin prints none and the comment rides on `.type`.
+/// An internal function printed `.globl`; the pin prints none and the comment
+/// rides on `.type`.
 #[test]
 fn internal_functions_are_not_global() {
     check("internal");
 }
 
-/// A promoted `load i8` was a plain `i32` load of one byte: the legalizer must make it an any-extending load. The
-/// selected `i32.load` of one byte stopped `SetP2AlignOperands` ("the default p2align is the access size").
+/// A promoted `load i8` was a plain `i32` load of one byte: the legalizer must
+/// make it an any-extending load. The selected `i32.load` of one byte stopped
+/// `SetP2AlignOperands` ("the default p2align is the access size").
 #[test]
 fn promoted_loads_are_any_extending() {
     check("anyext_load");
 }
 
-/// Division by a power of two or a constant combined to a shift whose amount was an `i8`; wasm shifts by the
-/// type's own width, so type legalization stopped on "Srl promote operand".
+/// Division by a power of two or a constant combined to a shift whose amount
+/// was an `i8`; wasm shifts by the type's own width, so type legalization
+/// stopped on "Srl promote operand".
 #[test]
 fn division_by_constants() {
     check("div_pow2");
@@ -169,45 +172,48 @@ fn float_libcalls() {
     check("float_libcalls");
 }
 
-/// `memcpy`, `memset` and `memmove` were refused ("a mem intrinsic for a target with no string
-/// instructions"). The pin copies a small constant size with `i64` loads and stores, anything else
-/// with `memory.copy` or `memory.fill` behind a zero-length test (a constant length needs none).
+/// `memcpy`, `memset` and `memmove` were refused ("a mem intrinsic for a target
+/// with no string instructions"). The pin copies a small constant size with
+/// `i64` loads and stores, anything else with `memory.copy` or `memory.fill`
+/// behind a zero-length test (a constant length needs none).
 #[test]
 fn memory_intrinsics() {
     check("mem_intrinsics");
 }
 
-/// A conversion between a float and an `i8` or `i16` was refused ("promote operand" of
-/// `sitofp`, "promote result" of `fptosi`), then `CannotSelect(AssertSext)`.
+/// A conversion between a float and an `i8` or `i16` was refused ("promote
+/// operand" of `sitofp`, "promote result" of `fptosi`), then
+/// `CannotSelect(AssertSext)`.
 #[test]
 fn narrow_integer_conversions() {
     check("float_narrow");
 }
 
-/// A call result marked `zeroext` or `signext`, or such a parameter, was not asserted: `icmp ne i8 %r, 0`
-/// after `call zeroext i8` masked the result again (`i32.const 255; i32.and`), and `zext` of a
-/// `zeroext` parameter did too.
+/// A call result marked `zeroext` or `signext`, or such a parameter, was not
+/// asserted: `icmp ne i8 %r, 0` after `call zeroext i8` masked the result again
+/// (`i32.const 255; i32.and`), and `zext` of a `zeroext` parameter did too.
 #[test]
 fn extension_attributes_assert_the_register() {
     check("ext_attrs");
 }
 
-/// A call through a pointer was selected as `call` of nothing (`call 26` in the object); it is
-/// `call_indirect` with the type and the table, the function pointer last.
+/// A call through a pointer was selected as `call` of nothing (`call 26` in the
+/// object); it is `call_indirect` with the type and the table, the function
+/// pointer last.
 #[test]
 fn indirect_calls() {
     check("indirect");
 }
 
-/// An atomic load or store was refused ("instruction load"). Without the `atomics` feature the pin
-/// makes them plain, and a fence disappears.
+/// An atomic load or store was refused ("instruction load"). Without the
+/// `atomics` feature the pin makes them plain, and a fence disappears.
 #[test]
 fn atomics_without_the_feature_are_plain() {
     check("atomics");
 }
 
-/// A function or call with an `sret` argument was refused ("a parameter attribute that moves it"); on
-/// wasm it is an ordinary pointer.
+/// A function or call with an `sret` argument was refused ("a parameter
+/// attribute that moves it"); on wasm it is an ordinary pointer.
 #[test]
 fn sret_is_an_ordinary_pointer() {
     check("sret");
@@ -223,32 +229,35 @@ fn variadic_calls_pass_a_buffer() {
     check("varargs");
 }
 
-/// A variadic function body was refused ("a wasm variadic function body is not translated"). It takes the
-/// buffer pointer of its variadic arguments as one more parameter; `va_start` stores it to the list,
-/// `va_copy` copies the list's pointer and `va_end` is nothing.
+/// A variadic function body was refused ("a wasm variadic function body is not
+/// translated"). It takes the buffer pointer of its variadic arguments as one
+/// more parameter; `va_start` stores it to the list, `va_copy` copies the
+/// list's pointer and `va_end` is nothing.
 #[test]
 fn variadic_functions_read_their_buffer() {
     check("varargs_body");
 }
 
-/// A loop entered at two blocks was refused ("irreducible control flow ... is not supported yet"), and
-/// Gorillas' `@QB_MAIN` with it. The loop gets one entry, a `br_table` on a label register, and the
-/// registers whose definitions now miss a path are defined at the top.
+/// A loop entered at two blocks was refused ("irreducible control flow ... is
+/// not supported yet"), and Gorillas' `@QB_MAIN` with it. The loop gets one
+/// entry, a `br_table` on a label register, and the registers whose definitions
+/// now miss a path are defined at the top.
 #[test]
 fn a_loop_with_two_entries_gets_one() {
     check("irreducible");
 }
 
-/// `unreachable` lowered to nothing, so control left a `noreturn` call by falling into the next block's
-/// code (Gorillas' `B_SERR` paths: a type mismatch at the end of the function). Wasm traps on it
-/// (`TrapUnreachable`).
+/// `unreachable` lowered to nothing, so control left a `noreturn` call by
+/// falling into the next block's code (Gorillas' `B_SERR` paths: a type
+/// mismatch at the end of the function). Wasm traps on it (`TrapUnreachable`).
 #[test]
 fn unreachable_traps() {
     check("unreachable");
 }
 
-/// A `weak` or `linkonce_odr` function printed `.globl` (and was an object-file global): a weak default
-/// (the runtime's no-op `music_tick`) could not be overridden by the strong one.
+/// A `weak` or `linkonce_odr` function printed `.globl` (and was an object-file
+/// global): a weak default (the runtime's no-op `music_tick`) could not be
+/// overridden by the strong one.
 #[test]
 fn weak_functions_print_weak() {
     check("weak");

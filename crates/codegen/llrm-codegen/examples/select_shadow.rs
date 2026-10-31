@@ -88,6 +88,7 @@ fn main() {
         opt_for_size: std::env::var_os("OPTSIZE").is_some(),
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode,
     });
 
@@ -107,7 +108,8 @@ fn main() {
         for &block in function.layout() {
             blocks += 1;
             let block_name = function.block(block).name.clone().unwrap_or_default();
-            let mut done = match build_block(&module, function, &layout, &target, &arch, &convention, &mut info, block) {
+            let mut done = match build_block(&module, function, &layout, &target, &arch, &convention, &mut info, block)
+            {
                 Ok(done) => done,
                 Err(why) => {
                     println!("REFUSED {name}:{block_name} builder: {}", why.0);
@@ -121,7 +123,7 @@ fn main() {
                 // The driver's own pipeline (`dag_select::legalized`): the
                 // pin's order, with the target, the hooks and the action table
                 // the real route gives each stage.
-                let mut lowering = X86Lowering { cmov: false, sse2: false, min_size: false };
+                let mut lowering = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false };
                 if let Err(why) = legalized(dag, &tli, &mut lowering, arch) {
                     println!("REFUSED {name}:{block_name} legalize: {why:?}");
                     continue;

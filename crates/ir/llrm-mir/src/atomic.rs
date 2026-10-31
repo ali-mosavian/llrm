@@ -138,6 +138,33 @@ pub fn hidden(module: &mut Module) -> Result<(), String> {
     Ok(())
 }
 
+/// The inverse of [`hidden`]: every call of a `llrm.atomic.*` function is the
+/// atomic instruction again. For printing a module the pin's `llc` reads.
+pub fn restored(module: &mut Module) -> Result<(), String> {
+    let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        for (_, inst) in function.walk() {
+            let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
+            if let Some(info) = module.globals[callee.0 as usize].name.as_deref().and_then(decode) {
+                found.push((at, inst, info));
+            }
+        }
+    }
+    for (at, inst, info) in found {
+        let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
+        let call = function.instruction(inst).clone();
+        let operands = call.operands[..call.operands.len() - 1].to_vec();
+        let made = function.create_instruction(Opcode::Atomic(info), call.ty, operands, Flags::default(), None);
+        function.insert(made, crate::edit::Position::Before(inst)).map_err(|why| why.to_string())?;
+        if let (Some(old), Some(new)) = (call.result, function.instruction(made).result) {
+            function.replace_all_uses_with(old, Operand::Value(new));
+        }
+        function.erase(inst).map_err(|why| why.to_string())?;
+    }
+    Ok(())
+}
+
 /// Every call `hidden` made an instruction of the target. A load, or a store
 /// short of `seq_cst`, of at most `native` bits is a volatile plain access
 /// where `tso` (x86: every access is acquire and release already) or the
@@ -222,9 +249,10 @@ pub fn lowered(
     Ok(())
 }
 
-/// `LowerAtomicPass`, which a target without atomics runs before selection (wasm without the `atomics`
-/// feature): an atomic load or store is a plain one, a fence is nothing. A read-modify-write and a
-/// compare-exchange are refused until the pass's expansion into a load, an operation and a store is
+/// `LowerAtomicPass`, which a target without atomics runs before selection
+/// (wasm without the `atomics` feature): an atomic load or store is a plain
+/// one, a fence is nothing. A read-modify-write and a compare-exchange are
+/// refused until the pass's expansion into a load, an operation and a store is
 /// translated.
 pub fn lowered_single_thread(module: &mut Module) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();

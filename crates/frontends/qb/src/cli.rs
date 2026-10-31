@@ -150,6 +150,16 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         spills_extended: true,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
+    // A host (ELF, Mach-O) has no handler of the runtime's for the fault.
+    // Where the OS layer's runtime installs a handler that reports error 11
+    // for the divide fault (`divide_fault_error`), a divide's overflow needs
+    // no check of ours; a host's layer is the POSIX one.
+    let layer = if is_hosted(&codegen.object_format) {
+        Some(llrm_target::os::POSIX_LAYER)
+    } else {
+        bound.target.os_layer().map(|layer| layer.text)
+    };
+    frontend.idiv_overflow_traps = layer.and_then(llrm_target::os::divide_fault_error) == Some(11);
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64, wasm32 })
 }
 
@@ -186,9 +196,18 @@ pub fn main(argv: &[String]) -> i32 {
             codegen.abi = Some("sysv".to_owned());
         }
         let args = Arguments { codegen, ..args };
-        // a host (an ELF or Mach-O object, or wasm) has no memory at the PC's low
+        // a host (an ELF or Mach-O object) has no memory at the PC's low
         // addresses: the object format states it, whatever the pointer width
         program.promises.hosted = args.wasm32 || is_hosted(&args.codegen.object_format);
+        // The Microsoft runtimes are segmented code with far pointers: on a
+        // flat target the object only failed later, "overlapping or
+        // pre-added relocations".
+        if !program.runtime.calls_natively() && args.codegen.arch.object().code_model().flat() {
+            return Err(format!(
+                "the {} runtime is segmented 16-bit code: build for a 32-bit target with -fqb-runtime=llrm",
+                args.frontend.runtime
+            ));
+        }
         if program.runtime.calls_natively() {
             // the `-mabi=` family's convention, else the target's default
             let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;

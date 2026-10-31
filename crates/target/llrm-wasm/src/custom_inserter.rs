@@ -1,15 +1,18 @@
-//! `WebAssemblyTargetLowering::EmitInstrWithCustomInserter` for `MEMCPY` and `MEMSET`: `memory.copy`
-//! and `memory.fill` trap on a bad pointer even for no bytes, so a length that is not a constant is
-//! tested first, in a triangle around the instruction.
+//! `WebAssemblyTargetLowering::EmitInstrWithCustomInserter` for `MEMCPY` and
+//! `MEMSET`: `memory.copy` and `memory.fill` trap on a bad pointer even for no
+//! bytes, so a length that is not a constant is tested first, in a triangle
+//! around the instruction.
 //!
 //! # How it works
-//! A constant length needs no test: zero drops the instruction, any other is the bare instruction.
-//! Otherwise the block is split at the instruction: the head ends in `eqz len; br_if done`, a new
-//! block holds the instruction and a `br done`, and the rest of the block moves to `done`, which
-//! takes over its successors and the incoming edges of their phis.
+//! A constant length needs no test: zero drops the instruction, any other is
+//! the bare instruction. Otherwise the block is split at the instruction: the
+//! head ends in `eqz len; br_if done`, a new block holds the instruction and a
+//! `br done`, and the rest of the block moves to `done`, which takes over its
+//! successors and the incoming edges of their phis.
 //!
 //! # See also
-//! `WebAssemblyISelLowering.cpp`, pin d1106deb71cc: `LowerMemcpy` (L609), `LowerMemset` (L701).
+//! `WebAssemblyISelLowering.cpp`, pin d1106deb71cc: `LowerMemcpy` (L609),
+//! `LowerMemset` (L701).
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::mir::{Function, Inst, Operand, PHI, ValType};
@@ -23,9 +26,10 @@ pub fn lower_memory_pseudos(f: &mut Function) {
 
 fn find(f: &Function) -> Option<(usize, usize)> {
     let pseudos = [op::MEMCPY_A32, op::MEMCPY_A64, op::MEMSET_A32, op::MEMSET_A64];
-    f.blocks.iter().enumerate().find_map(|(block, insts)| {
-        insts.iter().position(|inst| pseudos.contains(&inst.opcode)).map(|at| (block, at))
-    })
+    f.blocks
+        .iter()
+        .enumerate()
+        .find_map(|(block, insts)| insts.iter().position(|inst| pseudos.contains(&inst.opcode)).map(|at| (block, at)))
 }
 
 fn lower(
@@ -41,13 +45,18 @@ fn lower(
         _ => (op::MEMORY_FILL_A64, true, 3),
     };
     let Operand::Use(len) = inst.operands[length] else { unreachable!("the length is a register") };
-    let constant = f.def_use().def(len).and_then(|(b, i)| {
-        let def = &f.blocks[b][i];
-        match (def.opcode, def.operands.get(1)) {
-            (op::CONST_I32 | op::CONST_I64, Some(Operand::Imm(value))) => Some(*value),
-            _ => None,
-        }
-    });
+    let constant = f
+        .def_use()
+        .def(len)
+        .and_then(
+            |(b, i)| {
+                let def = &f.blocks[b][i];
+                match (def.opcode, def.operands.get(1)) {
+                    (op::CONST_I32 | op::CONST_I64, Some(Operand::Imm(value))) => Some(*value),
+                    _ => None,
+                }
+            },
+        );
     match constant {
         Some(0) => {
             f.blocks[block].remove(at);

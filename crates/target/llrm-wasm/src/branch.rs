@@ -1,15 +1,17 @@
-//! `WebAssemblyInstrInfo`'s branch hooks (`analyzeBranch`, `removeBranch`, `insertBranch`,
-//! `reverseBranchCondition`) and `MachineBasicBlock::updateTerminator`, which CFGSort calls
-//! after it moves a block.
+//! `WebAssemblyInstrInfo`'s branch hooks (`analyzeBranch`, `removeBranch`,
+//! `insertBranch`, `reverseBranchCondition`) and
+//! `MachineBasicBlock::updateTerminator`, which CFGSort calls after it moves a
+//! block.
 //!
 //! # See also
-//! `WebAssemblyInstrInfo.cpp` L99..L200 and `MachineBasicBlock.cpp` (`updateTerminator`), pin
-//! d1106deb71cc.
+//! `WebAssemblyInstrInfo.cpp` L99..L200 and `MachineBasicBlock.cpp`
+//! (`updateTerminator`), pin d1106deb71cc.
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::mir::{Inst, Operand, VReg};
 
-/// `Cond`: whether the branch is taken when the register is true, and the register.
+/// `Cond`: whether the branch is taken when the register is true, and the
+/// register.
 pub type Cond = Option<(bool, VReg)>;
 
 /// What `analyzeBranch` finds.
@@ -31,7 +33,8 @@ fn target(inst: &Inst) -> usize {
     block as usize
 }
 
-/// `analyzeBranch`; `None` where it returns true (a terminator it cannot model).
+/// `analyzeBranch`; `None` where it returns true (a terminator it cannot
+/// model).
 pub fn analyze(block: &[Inst]) -> Option<Branches> {
     let mut found = Branches::default();
     let mut have_cond = false;
@@ -94,8 +97,8 @@ pub fn insert(
     }
 }
 
-/// `updateTerminator`: `block` is followed in the layout by `next`; `previous` is the block that
-/// followed it before, whose edge a fallthrough is.
+/// `updateTerminator`: `block` is followed in the layout by `next`; `previous`
+/// is the block that followed it before, whose edge a fallthrough is.
 pub fn update_terminator(
     code: &mut Vec<Inst>,
     succs: &[usize],

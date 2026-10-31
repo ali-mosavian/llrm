@@ -82,9 +82,11 @@ pub struct BuilderTarget {
     pub shift_amount_of: Option<fn(EVT) -> EVT>,
     /// `getMinimumJumpTableEntries`.
     pub min_jump_table_entries: usize,
-    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit tests and peeling run.
+    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
+    /// tests and peeling run.
     pub switch_optimize: bool,
-    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control that reaches it stops.
+    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control
+    /// that reaches it stops.
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
@@ -98,6 +100,10 @@ pub struct BuilderTarget {
     /// Sibling calls become `TC_RETURN`s (tail-call step 3); off until the
     /// emitter lays them (step 5).
     pub tail_calls: bool,
+    /// `TargetLowering::isZExtFree(Val, VT)`: the zero extension of `Val` to
+    /// `VT` costs nothing. A value exported to another block that this
+    /// holds for is zero extended, not any extended.
+    pub is_zext_free: fn(&SelectionDAG, SDValue, EVT) -> bool,
     /// `-fexcess-precision=standard`: an integer too wide for its float type's
     /// mantissa is rounded to that type (x87 would keep it exact).
     pub float_store: bool,
@@ -116,9 +122,10 @@ pub struct BuilderTarget {
     /// decide.
     pub size_trade: Option<SizeTrade>,
     /// The pairs of an inline constant memcpy are chained one after another in
-    /// address order, not left unordered for the scheduler (`getMemcpyLoadsAndStores`
-    /// puts every load and store on the root). DEVIATE: a target that steps a
-    /// pointer with each access wants that order. Off for x86.
+    /// address order, not left unordered for the scheduler
+    /// (`getMemcpyLoadsAndStores` puts every load and store on the root).
+    /// DEVIATE: a target that steps a pointer with each access wants that
+    /// order. Off for x86.
     pub ordered_copies: bool,
     /// The target has x86's `rep movs` and `rep stos`; without them a copy or
     /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
@@ -181,6 +188,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with its `isZExtFree`.
+    pub fn with_zext_free(
+        mut self,
+        is_zext_free: fn(&SelectionDAG, SDValue, EVT) -> bool,
+    ) -> BuilderTarget {
+        self.is_zext_free = is_zext_free;
+        self
+    }
+
     /// This target with sibling calls made.
     pub fn with_tail_calls(
         mut self,
@@ -205,6 +221,16 @@ impl BuilderTarget {
         on: bool,
     ) -> BuilderTarget {
         self.dag.int_div_cheap = on;
+        self
+    }
+
+    /// This target with a divide by a constant kept where its priced clocks
+    /// beat the multiply-high sequence's.
+    pub fn with_div_prices(
+        mut self,
+        prices: Option<super::dag::DivPrices>,
+    ) -> BuilderTarget {
+        self.dag.div_prices = prices;
         self
     }
 
@@ -302,6 +328,7 @@ impl BuilderTarget {
             ordered_copies: false,
             string_instructions: true,
             tail_calls: false,
+            is_zext_free: |_, _, _| false,
             tti: None,
             runtime_calls: None,
             target_nodes: None,
@@ -339,6 +366,7 @@ impl BuilderTarget {
             ordered_copies: false,
             string_instructions: true,
             tail_calls: false,
+            is_zext_free: |_, _, _| false,
             tti: None,
             runtime_calls: None,
             target_nodes: None,
@@ -471,35 +499,28 @@ fn dag_name(
 }
 
 /// An attribute that moves an argument out of the place its type gives it
-/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a target's calling
-/// hook that does not place them refuses.
+/// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a
+/// target's calling hook that does not place them refuses.
 fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
     use llrm_mir::opcode::Attribute;
     const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
     const FLAGS: [&str; 5] = ["inreg", "nest", "swiftself", "swifterror", "swiftasync"];
-    attrs.iter().find_map(|attr| match attr {
-        Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
-        Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
-        _ => None,
-    })
-}
-
-/// The assert a `signext` or `zeroext` attribute makes of a narrow value in a wider register
-/// (`getCopyFromParts`'s `AssertOp`).
-fn ext_assert(attrs: &[llrm_mir::opcode::Attribute]) -> Option<ISD> {
-    if llrm_mir::memory::has(attrs, "signext") {
-        Some(ISD::AssertSext)
-    } else if llrm_mir::memory::has(attrs, "zeroext") {
-        Some(ISD::AssertZext)
-    } else {
-        None
-    }
+    attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Type(name, _) => TYPED.into_iter().find(|one| name == one),
+                Attribute::Flag(name) => FLAGS.into_iter().find(|one| name == one),
+                _ => None,
+            },
+        )
 }
 
 impl<'a> Builder<'a> {
     /// The whole target description, for the paths that read x86-style
     /// `calling.toml` conventions, string registers and runtime routines.
-    /// `Target::string_registers`; none for a target with no x86-style description.
+    /// `Target::string_registers`; none for a target with no x86-style
+    /// description.
     fn string_instructions(&self) -> Option<llrm_target::StringRegisters> {
         self.arch.full().and_then(|arch| arch.string_registers())
     }
@@ -593,8 +614,8 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
-            result_assert: None,
             call_attrs_move_arguments: false,
+            call_result_assert: None,
             fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
@@ -636,12 +657,14 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
-    /// The assert (`AssertZext`, `AssertSext`) the call being lowered makes of its narrow result, from its
-    /// `zeroext` or `signext` return attribute (`LowerCallTo`'s `AssertOp`).
-    result_assert: Option<ISD>,
-    /// The call being lowered has an argument whose attribute moves it (`relocating_attribute`).
+    /// The call being lowered has an argument whose attribute moves it
+    /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
-    /// The parameters the callee declares: the arguments after them are variadic.
+    /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
+    /// for.
+    call_result_assert: Option<ISD>,
+    /// The parameters the callee declares: the arguments after them are
+    /// variadic.
     fixed_args: usize,
     /// A `TC_RETURN` ended the block: nothing after the call is built.
     had_tail_call: bool,
@@ -888,7 +911,7 @@ impl Builder<'_> {
     /// also copied to a register of its own.
     fn lower_arguments(&mut self) -> Result<(), Refused> {
         let entry = self.function.entry();
-        let mut outside = llrm_support::hash::HashSet::default();
+        let mut outside = llrm_mir::dense::IdSet::<ValueId>::new();
         for &block in self.function.layout() {
             for inst in self.function.iter_block(block) {
                 let instruction = self.function.instruction(inst);
@@ -962,6 +985,7 @@ impl Builder<'_> {
                             base: MemBase::Stack(-fixed),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         let load = self.dag.get_load(part_vt, entry_node, ptr, info);
                         // `LowerMemArgument` makes the object immutable unless
@@ -1044,7 +1068,7 @@ impl Builder<'_> {
     fn lower_arguments_with(
         &mut self,
         calling: &'static dyn TargetCalling,
-        outside: &llrm_support::hash::HashSet<ValueId>,
+        outside: &llrm_mir::dense::IdSet<ValueId>,
     ) -> Result<(), Refused> {
         let parameters = self.function.parameters().to_vec();
         if self.function.parameter_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)) {
@@ -1083,7 +1107,7 @@ impl Builder<'_> {
         let mut next = 0;
         for (at, (&arg, (vt, count))) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
-            let value = self.join_from_calling(&parts[next..next + count], vt, ext_assert(attrs));
+            let value = self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs));
             next += count;
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
@@ -1138,8 +1162,15 @@ impl Builder<'_> {
             let base = self.dag.get_frame_index(pointer, save);
             let slot = self.dag.get_constant(at as u128 * 8, pointer);
             let address = self.dag.get_node(ISD::Add, pointer, &[base, slot]);
-            let info =
-                MemInfo { mem_vt: pointer, align: 8, volatile: false, base: MemBase::Stack(save), ext: None, space: 0 };
+            let info = MemInfo {
+                mem_vt: pointer,
+                align: 8,
+                volatile: false,
+                base: MemBase::Stack(save),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
             let root = self.control_root();
             let store = self.dag.get_store(root, value, address, info);
             self.dag.set_root(store);
@@ -1305,7 +1336,8 @@ impl Builder<'_> {
         }
         let (result_type, named, variadic) = self.module.signature(info.function_type);
         let named = named.len();
-        // A target with a calling hook places every part itself: it reads no plan.
+        // A target with a calling hook places every part itself: it reads no
+        // plan.
         let hooked = self.calling().is_some();
         let first = if hooked { 0 } else { self.full_arch()?.first_argument_offset(false) };
         let plan = if hooked {
@@ -1332,8 +1364,8 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
-        if let Some(tail) = self.tail_candidate.take()
-            && !hooked
+        if !hooked
+            && let Some(tail) = self.tail_candidate.take()
             && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
         {
             self.tail_calls.push(tail);
@@ -1436,7 +1468,7 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
-        self.result_assert = ext_assert(&info.return_attrs);
+        self.call_result_assert = extension_assert(&info.return_attrs);
         self.fixed_args = named;
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
@@ -1534,8 +1566,9 @@ impl Builder<'_> {
         self.arch.register_named(name)
     }
 
-    /// Whether an attribute of `attrs` moves its argument out of the ordinary place, for a target
-    /// whose hook leaves some (`sret` on wasm: a pointer like any other) where they are.
+    /// Whether an attribute of `attrs` moves its argument out of the ordinary
+    /// place, for a target whose hook leaves some (`sret` on wasm: a
+    /// pointer like any other) where they are.
     fn moves_argument(
         &self,
         calling: &dyn TargetCalling,
@@ -1554,7 +1587,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
-        // A float is one part, in a register of its own class: the target's `accepts` says which.
+        // A float is one part, in a register of its own class: the target's
+        // `accepts` says which.
         if vt.is_floating_point() {
             return Ok(vec![vt]);
         }
@@ -1591,8 +1625,7 @@ impl Builder<'_> {
         Ok(all)
     }
 
-    /// `getCopyFromParts`: the parts joined into a `vt`; a narrow value in one wider part is
-    /// asserted to fit `assert`'s extension first.
+    /// `getCopyFromParts`: the parts joined into a `vt`.
     fn join_from_calling(
         &mut self,
         parts: &[SDValue],
@@ -1603,13 +1636,14 @@ impl Builder<'_> {
             if self.dag.value_type(*one) == vt {
                 return *one;
             }
+            // `getCopyFromParts` with the `AssertOp` of
+            // `LowerArguments`/`LowerCallTo`
             let one = match assert {
-                Some(code) if vt.is_integer() => {
+                Some(code) => {
                     let narrow = self.dag.get_value_type_node(vt);
-                    let wide = self.dag.value_type(*one);
-                    self.dag.get_node(code, wide, &[*one, narrow])
+                    self.dag.get_node(code, self.dag.value_type(*one), &[*one, narrow])
                 }
-                _ => *one,
+                None => *one,
             };
             return self.dag.get_node(ISD::Truncate, vt, &[one]);
         }
@@ -1637,9 +1671,11 @@ impl Builder<'_> {
         result_type: TypeId,
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
-        let sibling = std::mem::take(&mut self.sibcall);
-        if sibling || flags_answer || byvals.iter().any(Option::is_some) {
-            return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
+        if flags_answer || byvals.iter().any(Option::is_some) {
+            return Err(Refused("flags answer or byval with a target's calling hook"));
+        }
+        if std::mem::take(&mut self.call_attrs_move_arguments) {
+            return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
         if std::mem::take(&mut self.call_attrs_move_arguments) {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
@@ -1661,20 +1697,39 @@ impl Builder<'_> {
             }
         }
         let void = self.module.context.types.is_void(result_type);
-        let (vt, ins) = if void {
-            (EVT::OTHER, Vec::new())
-        } else {
-            if self.is_aggregate(result_type) {
-                return Err(Refused("an aggregate result with a target's calling hook"));
+        // `ComputeValueVTs`: an aggregate result is its leaves, each answered
+        // like a scalar result.
+        let mut layout: Vec<(EVT, usize)> = Vec::new();
+        let mut ins: Vec<In> = Vec::new();
+        let aggregate = !void && self.is_aggregate(result_type);
+        if !void {
+            let leaf_types: Vec<TypeId> = if aggregate {
+                self.leaves(result_type)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![result_type]
+            };
+            for leaf in leaf_types {
+                let vt = self.type_of(leaf)?;
+                let pointer = self.is_pointer_type(leaf);
+                let parts = self.calling_parts(vt)?;
+                let split = parts.len() > 1;
+                layout.push((vt, parts.len()));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
             }
-            let vt = self.type_of(result_type)?;
-            let pointer = self.is_pointer_type(result_type);
-            let parts = self.calling_parts(vt)?;
-            let split = parts.len() > 1;
-            (vt, parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }).collect())
-        };
+        }
+        let vt = layout.first().map_or(EVT::OTHER, |(vt, _)| *vt);
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
+        // `IsTailCall`: the call in tail position, if the target takes it, ends
+        // the block
+        if let Some(tail) = self.tail_candidate.take()
+            && let Some(node) = calling.lower_tail_call(&mut self.dag, root, callee_node, &outs)
+        {
+            self.tail_calls.push(tail);
+            self.dag.set_root(node);
+            self.had_tail_call = true;
+            return Ok(None);
+        }
         let info = &mut *self.info;
         let (chain, parts) = calling.lower_call_with_frame(
             &mut self.dag,
@@ -1686,14 +1741,26 @@ impl Builder<'_> {
             &mut |size, align| info.new_stack_object(size, align),
         );
         self.dag.set_root(chain);
-        let assert = self.result_assert.take();
-        Ok((!void).then(|| self.join_from_calling(&parts, vt, assert)))
+        if void {
+            return Ok(None);
+        }
+        let mut rest = &parts[..];
+        let mut leaves = Vec::new();
+        let assert = if aggregate { None } else { std::mem::take(&mut self.call_result_assert) };
+        for (leaf_vt, count) in layout {
+            let (mine, tail) = rest.split_at(count);
+            leaves.push(self.join_from_calling(mine, leaf_vt, assert));
+            rest = tail;
+        }
+        let _ = vt;
+        Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
     }
 
-    /// `visitUnreachable`: a trap for a target that traps (`NoTrapAfterNoreturn` is off for it).
+    /// `visitUnreachable`: a trap for a target that traps
+    /// (`NoTrapAfterNoreturn` is off for it).
     ///
-    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which has no intrinsic here.
-    /// Exit: with the intrinsic.
+    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which
+    /// has no intrinsic here. Exit: with the intrinsic.
     fn visit_unreachable(&mut self) {
         if !self.target.trap_unreachable {
             return;
@@ -1789,6 +1856,7 @@ impl Builder<'_> {
                             base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         stores.push(self.dag.get_store(chain, *piece, address, mem));
                     }
@@ -2366,6 +2434,17 @@ impl Builder<'_> {
             self.pending_exports.push(chain);
             return Ok(());
         }
+        // `RegsForValue::getCopyToRegs`: "if (ExtendKind == ISD::ANY_EXTEND) if
+        // (TLI.isZExtFree(peekThroughFreeze(Val), RegisterVT))".
+        let mut peeled = value;
+        while self.dag.opcode(peeled) == ISD::Freeze {
+            peeled = self.dag.operand(peeled, 0);
+        }
+        let extend = if extend == ISD::AnyExtend && (self.target.is_zext_free)(&self.dag, peeled, reg_vt) {
+            ISD::ZeroExtend
+        } else {
+            extend
+        };
         let value = if reg_vt == vt { value } else { self.dag.get_node(extend, reg_vt, &[value]) };
         let chain = self.dag.get_copy_to_reg(entry, reg, value);
         self.pending_exports.push(chain);
@@ -2586,7 +2665,15 @@ impl Builder<'_> {
         let align = vt.size_in_bits().div_ceil(8);
         let index = self.info.new_stack_object(align, align);
         let slot = self.dag.get_frame_index(self.target.dag.pointer, index);
-        let info = MemInfo { mem_vt: vt, align, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: vt,
+            align,
+            volatile: false,
+            base: MemBase::Stack(index),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let root = self.root();
         let store = self.dag.get_store(root, operand, slot, info);
         self.dag.set_root(store);
@@ -2912,7 +2999,7 @@ impl Builder<'_> {
                 Some(Type::Pointer(space)) if *space == roles.stack && roles.stack != roles.near => 258,
                 _ => 0,
             };
-        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space })
+        Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space, ordering: None })
     }
 
     fn visit_load(
@@ -3086,7 +3173,9 @@ impl Builder<'_> {
                 SDNodeFlags::default().with(SDNodeFlags::NO_SIGNED_WRAP, nusw).with(SDNodeFlags::NO_UNSIGNED_WRAP, nuw);
             if element != 1 {
                 if element.is_power_of_two() {
-                    let amount = self.dag.get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount_for(ptr_vt));
+                    let amount = self
+                        .dag
+                        .get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount_for(ptr_vt));
                     idx = self.dag.get_node_flags(ISD::Shl, ptr_vt, &[idx, amount], scale_flags);
                 } else {
                     let scale = self.dag.get_constant(u128::from(element), ptr_vt);
@@ -3450,6 +3539,214 @@ mod f80_tests {
         assert_eq!(*stub.outs.lock().unwrap(), [(2, 2), (4, 4)]);
         assert_eq!(*stub.ins.lock().unwrap(), [EVT::I8; 4]);
     }
+
+    /// A target that records the result parts the builder asks it to place.
+    #[derive(Debug, Default)]
+    struct Results {
+        calls: std::sync::Mutex<usize>,
+        results: std::sync::Mutex<Vec<EVT>>,
+    }
+
+    impl TargetCalling for Results {
+        fn lower_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+            ins: &[In],
+        ) -> (SDValue, Vec<SDValue>) {
+            *self.calls.lock().unwrap() += 1;
+            *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
+            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
+            (SDValue { node: call.node, res: 0 }, values)
+        }
+
+        fn lower_formal_arguments(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            ins: &[In],
+            _fixed: FixedObject,
+            live_in: LiveIn,
+        ) -> Vec<SDValue> {
+            ins.iter().map(|one| dag.get_copy_from_reg(chain, live_in(RegId::AL), one.vt)).collect()
+        }
+
+        fn lower_return(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            _outs: &[Out],
+        ) -> SDValue {
+            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+        }
+    }
+
+    fn built_with_results(
+        body: &str,
+        stub: &'static Results,
+    ) {
+        let text = format!("target datalayout = \"e-p:32:32-n8:16:32\"\n{body}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let target = BuilderTarget {
+            legal_ints: vec![8],
+            target_nodes: Some(TargetNodes {
+                call: super::super::x86isd::CALL,
+                ret: super::super::x86isd::RET_GLUE,
+                stack_pointer: "esp",
+                big_endian: false,
+                calling: Some(stub),
+            }),
+            ..BuilderTarget::m32()
+        };
+        build_block(
+            &module,
+            function,
+            &layout,
+            &target,
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    }
+
+    /// A call returning `{ i8, i8 }` was refused ("an aggregate result with a
+    /// target's calling hook"); the hook is asked for each leaf's parts.
+    #[test]
+    fn a_struct_result_is_answered_leaf_by_leaf() {
+        let stub: &'static Results = Box::leak(Box::default());
+        built_with_results(
+            "declare { i8, i8 } @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = call { i8, i8 } @g(i8 %a)\n  %v = extractvalue { i8, i8 } %r, 1\n  ret i8 %v\n}",
+            stub,
+        );
+        assert_eq!(*stub.results.lock().unwrap(), [EVT::I8, EVT::I8]);
+    }
+    /// A target that takes a call in tail position as its own node, or answers
+    /// none.
+    #[derive(Debug, Default)]
+    struct Tails {
+        takes: bool,
+        calls: std::sync::Mutex<usize>,
+        tails: std::sync::Mutex<usize>,
+        results: std::sync::Mutex<Vec<EVT>>,
+    }
+
+    impl TargetCalling for Tails {
+        fn lower_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+            ins: &[In],
+        ) -> (SDValue, Vec<SDValue>) {
+            *self.calls.lock().unwrap() += 1;
+            *self.results.lock().unwrap() = ins.iter().map(|one| one.vt).collect();
+            let call = dag.get_node_multi(super::super::x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &[chain, callee]);
+            let values = ins.iter().map(|one| dag.get_constant(0, one.vt)).collect();
+            (SDValue { node: call.node, res: 0 }, values)
+        }
+
+        fn lower_tail_call(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            callee: SDValue,
+            _outs: &[Out],
+        ) -> Option<SDValue> {
+            self.takes.then(|| {
+                *self.tails.lock().unwrap() += 1;
+                dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain, callee])
+            })
+        }
+
+        fn lower_formal_arguments(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            ins: &[In],
+            _fixed: FixedObject,
+            live_in: LiveIn,
+        ) -> Vec<SDValue> {
+            ins.iter().map(|one| dag.get_copy_from_reg(chain, live_in(RegId::AL), one.vt)).collect()
+        }
+
+        fn lower_return(
+            &self,
+            dag: &mut SelectionDAG,
+            chain: SDValue,
+            _outs: &[Out],
+        ) -> SDValue {
+            dag.get_node(super::super::x86isd::RET_GLUE, EVT::OTHER, &[chain])
+        }
+    }
+
+    fn built_with_tails(
+        body: &str,
+        stub: &'static Tails,
+    ) {
+        let text = format!("target datalayout = \"e-p:32:32-n8:16:32\"\n{body}");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let (id, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("f");
+        let convention =
+            crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+        let mut info = FunctionLoweringInfo::new(function);
+        let target = BuilderTarget {
+            legal_ints: vec![8],
+            target_nodes: Some(TargetNodes {
+                call: super::super::x86isd::CALL,
+                ret: super::super::x86isd::RET_GLUE,
+                stack_pointer: "esp",
+                big_endian: false,
+                calling: Some(stub),
+            }),
+            ..BuilderTarget::m32()
+        };
+        build_block(
+            &module,
+            function,
+            &layout,
+            &target,
+            &llrm_x86_m32::M32,
+            &convention,
+            &mut info,
+            function.entry().unwrap(),
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    }
+
+    /// A call in tail position on a target with a calling hook was refused
+    /// ("tail call ... with a target's calling hook"); the target's
+    /// `lower_tail_call` now ends the block.
+    #[test]
+    fn a_call_in_tail_position_is_the_targets_tail_call_where_it_takes_one() {
+        let stub: &'static Tails = Box::leak(Box::new(Tails { takes: true, ..Tails::default() }));
+        built_with_tails(
+            "declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}",
+            stub,
+        );
+        assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (1, 0));
+    }
+
+    #[test]
+    fn a_target_that_takes_no_tail_call_gets_an_ordinary_call() {
+        let stub: &'static Tails = Box::leak(Box::default());
+        built_with_tails(
+            "declare i8 @g(i8)\ndefine i8 @f(i8 %a) {\n  %r = tail call i8 @g(i8 %a)\n  ret i8 %r\n}",
+            stub,
+        );
+        assert_eq!((*stub.tails.lock().unwrap(), *stub.calls.lock().unwrap()), (0, 1));
+    }
 }
 
 /// Whether `direct` names a `llrm.qb.` routine.
@@ -3460,4 +3757,15 @@ fn is_runtime_routine(
     direct
         .and_then(|global| builder.module.global(global).name.owned())
         .is_some_and(|name| name.starts_with(llrm_hir::mir::RUNTIME))
+}
+
+/// The assertion `signext`/`zeroext` makes of a narrow value's register.
+fn extension_assert(attrs: &[llrm_mir::Attribute]) -> Option<ISD> {
+    if llrm_mir::memory::has(attrs, "signext") {
+        Some(ISD::AssertSext)
+    } else if llrm_mir::memory::has(attrs, "zeroext") {
+        Some(ISD::AssertZext)
+    } else {
+        None
+    }
 }

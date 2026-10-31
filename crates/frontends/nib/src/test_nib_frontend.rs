@@ -324,6 +324,7 @@ fn object_of(
         source,
         layout,
         llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
     )
 }
 

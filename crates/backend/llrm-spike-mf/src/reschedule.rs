@@ -15,7 +15,8 @@
 //!
 //! # See also
 //! `llvm/lib/CodeGen/TwoAddressInstructionPass.cpp`, pin d1106deb71cc:
-//! `rescheduleKillAboveMI` (L1095), called from `tryInstructionTransform` (L1376).
+//! `rescheduleKillAboveMI` (L1095), called from `tryInstructionTransform`
+//! (L1376).
 
 use llrm_lir::registers::RegId;
 
@@ -23,7 +24,8 @@ use crate::commute::Facts;
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::Target;
 
-/// The instructions after the tied one the walk looks through (`rescheduleKillAboveMI`'s limit).
+/// The instructions after the tied one the walk looks through
+/// (`rescheduleKillAboveMI`'s limit).
 const WINDOW: usize = 11;
 
 fn virt_uses(inst: &Inst) -> impl Iterator<Item = u32> + '_ {
@@ -42,9 +44,9 @@ fn phys_defs(inst: &Inst) -> impl Iterator<Item = RegId> + '_ {
     inst.operands.iter().filter_map(|o| if let Operand::Def(Reg::Phys(r)) = o { Some(*r) } else { None })
 }
 
-/// Whether `kill` can move above `other` (`isSafeToMove` and the register checks): `other` neither
-/// defines what `kill` reads, nor reads or defines what `kill` defines, and the two do not reorder
-/// memory or flag accesses.
+/// Whether `kill` can move above `other` (`isSafeToMove` and the register
+/// checks): `other` neither defines what `kill` reads, nor reads or defines
+/// what `kill` defines, and the two do not reorder memory or flag accesses.
 fn can_pass<T: Target>(
     kill: &Inst,
     other: &Inst,
@@ -58,8 +60,11 @@ fn can_pass<T: Target>(
     if (kill.sets_flags || kill.reads_flags) && (other.sets_flags || other.reads_flags) {
         return false;
     }
-    let (kill_defs, other_uses, other_defs) =
-        (virt_defs(kill).collect::<Vec<_>>(), virt_uses(other).collect::<Vec<_>>(), virt_defs(other).collect::<Vec<_>>());
+    let (kill_defs, other_uses, other_defs) = (
+        virt_defs(kill).collect::<Vec<_>>(),
+        virt_uses(other).collect::<Vec<_>>(),
+        virt_defs(other).collect::<Vec<_>>(),
+    );
     if virt_uses(kill).any(|u| other_defs.contains(&u)) {
         return false;
     }
@@ -67,15 +72,17 @@ fn can_pass<T: Target>(
         return false;
     }
     let clash = |one: RegId, many: &[RegId]| many.iter().any(|r| T::overlaps(one, *r));
-    let (other_phys_defs, other_phys_uses): (Vec<RegId>, Vec<RegId>) = (phys_defs(other).collect(), phys_uses(other).collect());
+    let (other_phys_defs, other_phys_uses): (Vec<RegId>, Vec<RegId>) =
+        (phys_defs(other).collect(), phys_uses(other).collect());
     if phys_uses(kill).any(|r| clash(r, &other_phys_defs)) {
         return false;
     }
     !phys_defs(kill).any(|r| clash(r, &other_phys_defs) || clash(r, &other_phys_uses))
 }
 
-/// Whether `copy` puts a value into a register that one of `readers` reads: a fixed register
-/// (`lda v` before a store through `(p),y`) or a virtual one that copy came through.
+/// Whether `copy` puts a value into a register that one of `readers` reads: a
+/// fixed register (`lda v` before a store through `(p),y`) or a virtual one
+/// that copy came through.
 fn feeds<T: Target>(
     copy: &Inst,
     readers: &[Inst],
@@ -89,8 +96,8 @@ fn feeds<T: Target>(
     }
 }
 
-/// Moves the last read of a tied source above the tied instruction, where it is the only read left
-/// and the walk between them is safe.
+/// Moves the last read of a tied source above the tied instruction, where it is
+/// the only read left and the walk between them is safe.
 pub fn reschedule_kills<T: Target>(function: &mut MFunction<T::Class>) {
     let facts = Facts::of(function);
     for b in 0..function.blocks.len() {
@@ -108,8 +115,10 @@ pub fn reschedule_kills<T: Target>(function: &mut MFunction<T::Class>) {
                 if into == source || facts.plainly_killed(function, b, at, source) {
                     continue;
                 }
-                // the one later read of the source, within the window, that ends it
-                let readers: Vec<usize> = (at + 1..insts.len()).filter(|i| virt_uses(&insts[*i]).any(|u| u == source)).collect();
+                // the one later read of the source, within the window, that
+                // ends it
+                let readers: Vec<usize> =
+                    (at + 1..insts.len()).filter(|i| virt_uses(&insts[*i]).any(|u| u == source)).collect();
                 let &[last] = &readers[..] else { continue };
                 if last > at + WINDOW || !facts.plainly_killed(function, b, last, source) {
                     continue;
@@ -122,8 +131,9 @@ pub fn reschedule_kills<T: Target>(function: &mut MFunction<T::Class>) {
                     // a copy is left to the coalescer
                     continue;
                 }
-                // the copies that feed it go with it (a value into the fixed register of a store
-                // through `(p),y`): they are one instruction to the allocator
+                // the copies that feed it go with it (a value into the fixed
+                // register of a store through `(p),y`): they
+                // are one instruction to the allocator
                 let mut start = last;
                 while start > at + 1 && feeds::<T>(&insts[start - 1], &insts[start..=last]) {
                     start -= 1;

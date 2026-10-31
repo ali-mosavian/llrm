@@ -112,8 +112,15 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
                 // Every function has call frame information: one the code could
                 // not be followed through has none.
                 let frames = Command::new(&dump).arg("--debug-frame").arg(&object).output().unwrap();
+                // `--debug-frame` lists `.eh_frame` after `.debug_frame`: the
+                // count is of the first.
                 let (fdes, functions) = (
-                    String::from_utf8_lossy(&frames.stdout).matches(" FDE ").count(),
+                    String::from_utf8_lossy(&frames.stdout)
+                        .split(".eh_frame contents")
+                        .next()
+                        .unwrap()
+                        .matches(" FDE ")
+                        .count(),
                     // An inlined function's abstract subprogram has no code.
                     shown.matches("DW_TAG_subprogram").count() - shown.matches("DW_AT_inline\t").count(),
                 );
@@ -1229,4 +1236,141 @@ fn a_call_the_optimizer_inlines_becomes_an_inlined_subroutine_at_its_call() {
     assert!(dump.contains("DW_AT_call_column\t(68)"), "{dump}");
     let verified = Command::new(dwarfdump).arg("--verify").arg(&object).output().unwrap();
     assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stdout));
+}
+
+/// `q = &s->c` kept as `dbg.value(%2, !DIExpression(DW_OP_plus_uconst, 8,
+/// DW_OP_stack_value))` was written as the register alone: a debugger showed
+/// `q` 8 bytes short (`DW_OP_reg0`). It is `DW_OP_breg0 +8, DW_OP_stack_value`.
+#[test]
+fn a_value_plus_a_constant_is_written_with_its_constant() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("offset.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/offset.ll");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
+        .args(["-O2", "-march=i486", "-fobject-format=elf", "-mabi=sysv", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    assert!(dump.contains("DW_OP_breg0 EAX+8, DW_OP_stack_value"), "{dump}");
+}
+
+/// A function that sets its frame up in a block past the entry (shrink-wrapped:
+/// bintree's `walk` at -O0 pushes `ecx` and `esi` where the early return does
+/// not) had no `.eh_frame` entry: 2 FDEs for 4 functions, where the pin has 4.
+/// Every entry starts and ends in the frame address the caller had
+/// (`CFA=ESP+4`): the exit of one function had opened the next one's at `16`
+/// (crc -Os), and a call that popped its own arguments left the address
+/// `8` too high at the exit (recmany -O0).
+#[test]
+fn every_function_of_an_m32_object_has_an_eh_frame_entry_from_and_back_to_the_callers_frame() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for (program, level, functions) in [("bintree", "-O0", 4), ("crc", "-Os", 2), ("recmany", "-O0", 3)] {
+        let object = scratch.path().join("x.o");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("bench/{program}/{program}.c"));
+        let made = compile(&source, &["-m32", level, "-fobject-format=elf"], &object);
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let dumped = Command::new(&dwarfdump).arg("--eh-frame").arg(&object).output().unwrap();
+        let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+        let frames: Vec<&str> = dump.split(" FDE ").skip(1).collect();
+        assert_eq!(frames.len(), functions, "{program} {level}: {dump}");
+        for frame in frames {
+            let rows: Vec<&str> = frame.lines().filter(|line| line.contains(": CFA=ESP")).collect();
+            let (first, last) = (rows.first().unwrap(), rows.last().unwrap());
+            assert!(first.contains("CFA=ESP+4:") && last.contains("CFA=ESP+4:"), "{program} {level}: {frame}");
+        }
+    }
+}
+
+/// x86-64 functions that set their frame up past an early return
+/// (shrink-wrapped at -Os) declare it: 3 FDEs, each from and back to
+/// `CFA=RSP+8`, and the registers pushed in the body are restored
+/// (`DW_CFA_restore`) where the code goes on without them.
+#[test]
+fn a_shrink_wrapped_m64_function_declares_its_frame_and_restores_its_registers() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("wrapped.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/wrapped.c");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-m64", "-Os", "-c", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(dwarfdump).arg("--eh-frame").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    let frames: Vec<&str> = dump.split(" FDE ").skip(1).collect();
+    assert_eq!(frames.len(), 3, "{dump}");
+    for frame in &frames {
+        let rows: Vec<&str> = frame.lines().filter(|line| line.contains(": CFA=RSP")).collect();
+        assert!(rows.first().unwrap().contains("CFA=RSP+8:") && rows.last().unwrap().contains("CFA=RSP+8:"), "{frame}");
+    }
+    assert!(dump.matches("DW_CFA_restore").count() >= 4, "{dump}");
+}
+
+/// `r = g(a, 7); return h(r + b) + r;` at -O2 on x86-64: the object had no
+/// `DW_TAG_call_site`, no declaration of `g` or `h` and no `call_all_calls`,
+/// so a debugger could not show what `g` was called with. The call to `g`
+/// passes 7 in `rsi` and `a`, untouched since entry, in `rdi`.
+#[test]
+fn an_x86_64_o2_object_describes_its_calls_and_what_their_arguments_hold() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("call_sites.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/call_sites.c");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-m64", "--isel=dag", "-O2", "-g", "-c"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let verified = Command::new(&dwarfdump).arg("--verify").arg(&object).output().unwrap();
+    assert!(String::from_utf8_lossy(&verified.stdout).trim_end().ends_with("No errors."));
+    let said = Command::new(&dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    assert!(text.contains("DW_AT_call_all_calls"), "{text}");
+    let sites: Vec<&str> = text.split("DW_TAG_call_site\n").skip(1).collect();
+    assert_eq!(sites.len(), 2, "{text}");
+    let first = sites[0].split("NULL").next().unwrap();
+    assert!(
+        first.contains("DW_AT_call_origin") && first.contains("DW_AT_call_return_pc\t(0x000000000000000f)"),
+        "{first}"
+    );
+    assert!(first.contains("DW_OP_entry_value(DW_OP_reg5 RDI)") && first.contains("DW_OP_lit7"), "{first}");
+    assert_eq!(text.matches("DW_AT_declaration").count(), 2, "g and h: {text}");
+    // Without optimisation the frontend describes no call: no declaration
+    // either (they were written for every callee, at every level).
+    let plain = scratch.path().join("plain.o");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-m64", "--isel=dag", "-O0", "-g", "-c"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&plain)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(&dwarfdump).arg("--debug-info").arg(&plain).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    assert!(!text.contains("DW_AT_declaration") && !text.contains("DW_TAG_call_site"), "{text}");
 }

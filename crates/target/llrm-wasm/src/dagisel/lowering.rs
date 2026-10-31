@@ -7,13 +7,12 @@
 //! index its target form, which the selector's patterns and
 //! [`super::addr`] match.
 //!
-//! DEVIATE: not translated yet are the floating-point rows, the SIMD, reference
-//! type and atomic rows, `LOAD`/`STORE` `Custom` (only address spaces 1 and the
-//! reference types use it), `VAARG` (no such ISD opcode yet), `DEBUGTRAP`,
-//! `ExternalSymbol`, `VASTART`, `CopyToReg` and the
-//! position-independent path of `LowerGlobalAddress`. Reason: each needs DAG
-//! nodes or target state the straight-line slice does not reach, and a `Custom`
-//! row whose lowering returns nothing would expand the node. Exit: W4 onwards.
+//! DEVIATE W6: not translated are the SIMD, reference type and atomic rows,
+//! `LOAD`/`STORE` `Custom` (only address spaces 1 and the reference types use
+//! it), `VAARG` (no such ISD opcode), `DEBUGTRAP`, `ExternalSymbol`,
+//! `VASTART`, `CopyToReg` and the position-independent path of
+//! `LowerGlobalAddress`. Reason: QB reaches none of them, and a `Custom` row
+//! whose lowering returns nothing would expand the node. Exit: with the rows.
 //!
 //! # See also
 //! `llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp`, pin
@@ -51,7 +50,11 @@ fn pointer(cpu: Cpu) -> MVT {
 pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let words = [MVT::I32, MVT::I64];
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::wasm());
+    let mut tl = TargetLowering::empty(
+        // `getSetCCResultType` is `i32`; a shift's amount has the type of the
+        // value shifted (`getScalarShiftAmountTy`, up to 64 bits).
+        TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false).with_shift_by_value_type().with_set_cc_result(MVT::I32),
+    );
     tl.init_actions();
     let mut set = |ops: &[ISD], vts: &[MVT], action: Action| {
         for &op in ops {
@@ -96,7 +99,8 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         ] {
             tl.set_cond_code_action(cc, vt, Action::Expand);
         }
-        // Expand floating-point library function operators; the scalar remainder is a libcall.
+        // Expand floating-point library function operators; the scalar
+        // remainder is a libcall.
         for op in [FSin, FCos] {
             tl.set_operation_action(op, vt, Action::Expand);
         }
@@ -105,7 +109,8 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         tl.set_libcall_name(LRint, vt, if vt == MVT::F32 { "lrintf" } else { "lrint" });
         // `TargetLoweringBase`: the transcendentals default to `Expand`, a call
         // to the C routine of that type.
-        for (op, name) in [(FSin, "sin"), (FCos, "cos"), (FAtan, "atan"), (FLog, "log"), (FExp, "exp"), (FRem, "fmod")] {
+        for (op, name) in [(FSin, "sin"), (FCos, "cos"), (FAtan, "atan"), (FLog, "log"), (FExp, "exp"), (FRem, "fmod")]
+        {
             tl.set_operation_action(op, vt, if op == FRem { Action::LibCall } else { Action::Expand });
             let name = if vt == MVT::F32 { f32_name(name) } else { name };
             tl.set_libcall_name(op, vt, name);
@@ -151,8 +156,8 @@ impl Hooks for WasmLowering<'_> {
         }
     }
 
-    /// `makeLibCall` through `LowerCall`: the routine is an external symbol, the
-    /// chain the entry node.
+    /// `makeLibCall` through `LowerCall`: the routine is an external symbol,
+    /// the chain the entry node.
     fn make_lib_call(
         &mut self,
         dag: &mut SelectionDAG,

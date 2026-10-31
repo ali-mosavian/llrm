@@ -32,7 +32,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>maskscale window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -132,6 +132,7 @@ use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries,
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
+use llrm_mir::opcode::Attribute;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::program::Program;
 
@@ -454,7 +455,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" | "cgpaddr" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -1042,6 +1043,9 @@ pub fn recorded(
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
+    if applied.options.optimize && applied.options.prefers_size() {
+        mark_for_size(program, applied.options.has_min_size);
+    }
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
@@ -1099,7 +1103,7 @@ pub fn recorded(
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
-    let late = applied.options.inline.recursive.then(|| {
+    let late = Some({
         let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
         crate::walk::SelfInline {
             simplify: Box::new(move |module, analyses, id, stage| {
@@ -1108,6 +1112,8 @@ pub fn recorded(
                 TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             }),
             for_size: applied.options.prefers_size(),
+            inlining: applied.options.inline.limit != 0,
+            flag: applied.options.inline.recursive,
         }
     });
     manager.add_program(Interprocedural {
@@ -1237,6 +1243,27 @@ pub fn recorded(
     done
 }
 
+/// What clang does at -Os and -Oz: every defined function carries `optsize`,
+/// and `minsize` at -Oz (`Function::hasOptSize` / `hasMinSize` read them).
+fn mark_for_size(
+    program: &mut Program,
+    min_size: bool,
+) {
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            let GlobalKind::Function(function) = &mut global.kind else { continue };
+            if function.is_declaration() {
+                continue;
+            }
+            for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
+                if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
+                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                }
+            }
+        }
+    }
+}
+
 /// Each loop's counters chosen once, on the loop the passes before leave. LSR
 /// requires LoopSimplify and LCSSA (`getAnalysisUsage`): an exit value read
 /// through a phi that is not LCSSA is not a use outside the loop, and LSR gave
@@ -1255,6 +1282,11 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
+        // A masked counter read as an index is the byte offset, where the
+        // target prices a scaled index.
+        if applied.options.wanted("maskscale") {
+            passes.push(Box::new(crate::maskscale::MaskScale));
+        }
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));

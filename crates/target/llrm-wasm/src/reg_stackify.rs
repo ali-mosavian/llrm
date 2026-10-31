@@ -10,12 +10,13 @@
 //! stackified the instruction's commutable operands are swapped once to try
 //! the other order.
 //!
-//! DEVIATE: only the `Optimize == false` path (the pin runs it at -O0): no
+//! DEVIATE W14: only the `Optimize == false` path (the pin runs it at -O0): no
 //! moving of definitions across other instructions, no rematerialization, no
 //! tee for several uses, no dominance or live-interval queries.
 //! Reason: those need `LiveIntervals`, the dominator tree and memory-effect
-//! queries over instructions the slice lacks. At -O0 a move is always a no-op,
-//! because the definition is already the instruction above. Exit: W8.
+//! queries over instructions this MIR lacks. At -O0 a move is always a no-op,
+//! because the definition is already the instruction above. Exit: an
+//! optimizing level for wasm.
 //!
 //! # See also
 //! `WebAssemblyRegStackify.cpp`, pin d1106deb71cc: `regStackify` (L841),

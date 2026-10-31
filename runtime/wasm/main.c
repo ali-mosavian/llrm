@@ -1,4 +1,4 @@
-/* A compiled QB program on the headless device, started by the host: `llrm_wasm_start` is what the page or the node
+/* A compiled QB program on the headless device, started by the host: `llrm_wasm_start` is what the node
    harness calls after the constructors; the host types keys with headless_type, reads the screen
    (host_pixels, host_colors) and ends with the program's exit. */
 #include "headless.h"

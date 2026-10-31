@@ -100,6 +100,29 @@ pub fn is_trivially_re_materializable(
     }
 }
 
+/// The values one definition of which is a load the instruction itself calls
+/// invariant (`Insn::invariant`, from `!invariant.load` or a read of constant
+/// memory): the pin's `isLoadFromInvariantOrConstantMemory` on the load's
+/// memory operand. This is the exit of D-I; `values` still asks the shape of
+/// the load.
+pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
+    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.invariant())
+        .filter_map(|one| match one.defines.as_slice() {
+            [value] if definitions.get(value) == Some(&1) => Some(*value),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The loads of an incoming stack argument that nothing in `body` writes or
 /// takes the address of. X86 lowers a stack argument to an immutable fixed
 /// stack object, and `isLoadFromInvariantOrConstantMemory` takes a load of one
@@ -177,6 +200,7 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
 pub fn values(
     body: &LirBody,
     invariant: &BTreeSet<u32>,
+    tii: &dyn super::tii::TargetInstrInfo,
 ) -> BTreeSet<u32> {
     let mut definitions: IndexMap<u32, Vec<&Arc<Insn>>> = IndexMap::default();
     let mut widest: IndexMap<u32, u32> = IndexMap::default();
@@ -216,7 +240,7 @@ pub fn values(
                 );
             let literal = first.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)]));
             let narrow = !literal || widest.get(value).copied().unwrap_or(0) <= first_width(first);
-            (alike && narrow && is_trivially_re_materializable(first, invariant.contains(value))).then_some(*value)
+            (alike && narrow && tii.is_trivially_re_materializable(first, invariant.contains(value))).then_some(*value)
         })
         .collect()
 }
@@ -257,6 +281,7 @@ pub(crate) fn group_source(one: &Insn) -> Option<Held> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::classes::RegisterClasses;
     use crate::model::ir::{Held, Imm, Mem, Semantics};
 
     fn def(
@@ -329,7 +354,14 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        assert_eq!(values(&body, &BTreeSet::new()), BTreeSet::from([1]));
+        assert_eq!(
+            values(
+                &body,
+                &BTreeSet::new(),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() }
+            ),
+            BTreeSet::from([1])
+        );
     }
 
     fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -397,5 +429,36 @@ mod tests {
         };
         let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
         assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
+    }
+
+    /// A load the instruction calls invariant is rematerialised and the same
+    /// load without the flag is not: the consumer of `!invariant.load` that the
+    /// spiller ignored (it took only the per-range proof and stack arguments).
+    #[test]
+    fn test_a_load_flagged_invariant_is_rematerialised_and_an_unflagged_one_is_not() {
+        let cell = || Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 2));
+        let flagged = |at: i64, value: u32| {
+            let one = move_of(at, word(value), cell(), vec![value]);
+            Arc::new(Insn { invariant: true, ..(*one).clone() })
+        };
+        let body = one_block(vec![flagged(0, 1), move_of(1, word(2), cell(), vec![2])]);
+        assert_eq!(flagged_loads(&body), BTreeSet::from([1]));
+        assert_eq!(
+            values(
+                &body,
+                &flagged_loads(&body),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() }
+            ),
+            BTreeSet::from([1])
+        );
+        assert!(
+            values(
+                &body,
+                &BTreeSet::new(),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() }
+            )
+            .is_empty(),
+            "the flag is what takes the load"
+        );
     }
 }

@@ -99,6 +99,7 @@ fn hooks() -> X86Hooks {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
     })
 }
@@ -145,7 +146,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         let emitted = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
             &selector,
             &mut hooks(),
             &Info,
@@ -204,7 +205,7 @@ fn the_combiner_runs_between_the_legalizers() {
     super::dag_select::legalized(
         &mut built.dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
         &machine,
     )
     .expect("legalizes");
@@ -259,4 +260,83 @@ fn nodes_a_selection_makes_are_selected_too() {
     let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %v, i32 %c) {\nentry:\n  %n = sub i32 32, %c\n  %r = shl i32 %v, %n\n  ret i32 %r\n}\n";
     let blocks = through(text).unwrap_or_else(|e| panic!("refused: {e}"));
     assert!(blocks[0].iter().any(|line| line.contains("shl")), "{blocks:#?}");
+}
+
+/// A target other than [`X86Target`] drives the same path: `select_units` asks
+/// it to preprocess once, after legalizing and before any selection, and the
+/// units it returns are the ones x86's own wrapper gets.
+#[test]
+fn a_dag_target_is_preprocessed_once_before_it_selects() {
+    use super::dag_select::{X86Chooser, X86Target};
+    use super::dag_target::{DagTarget, Phases, select_units};
+
+    struct Recording<'a> {
+        inner: X86Target<'a>,
+        log: Vec<&'static str>,
+    }
+    impl DagTarget for Recording<'_> {
+        type Lowering = X86Lowering;
+
+        fn phases(&mut self) -> Phases<'_, X86Lowering> {
+            self.log.push("legalize");
+            self.inner.phases()
+        }
+
+        fn selection(&mut self) -> (&dyn super::dagisel_adapter::PinRegisters, &mut dyn super::dag_target::Select) {
+            self.log.push("select");
+            self.inner.selection()
+        }
+
+        fn preprocess(
+            &mut self,
+            dag: &mut super::SelectionDAG,
+            temporaries: &mut dyn super::x86_preprocess::FrameObjects,
+        ) {
+            self.log.push("preprocess");
+            self.inner.preprocess(dag, temporaries);
+        }
+    }
+
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %a, i32 %b) {\nentry:\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).expect("layout");
+    let machine = llrm_x86_m32::M32;
+    let (id, _, function) = module.functions().next().expect("a function");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &machine).expect("a convention");
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let selector = Selector::new(TABLE);
+    let mut units = Vec::new();
+    for through_trait in [false, true] {
+        let mut info = FunctionLoweringInfo::new(function);
+        let mut built = build_block(
+            &module,
+            function,
+            &layout,
+            &BuilderTarget::m32(),
+            &machine,
+            &convention,
+            &mut info,
+            function.layout()[0],
+        )
+        .expect("builds");
+        let (mut lowering, mut hooks) =
+            (X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false }, hooks());
+        let x86 = X86Target {
+            tli: &tli,
+            lowering: &mut lowering,
+            chooser: X86Chooser { selector: &selector, hooks: &mut hooks },
+            arch: &machine,
+        };
+        let made = if through_trait {
+            let mut target = Recording { inner: x86, log: Vec::new() };
+            let made = select_units(&mut built.dag, &mut target, &Info, &mut NoTemps).expect("selects");
+            assert_eq!(target.log, ["legalize", "preprocess", "select"]);
+            made
+        } else {
+            let mut x86 = x86;
+            select_units(&mut built.dag, &mut x86, &Info, &mut NoTemps).expect("selects")
+        };
+        units.push(made.len());
+    }
+    assert_eq!(units[0], units[1]);
 }

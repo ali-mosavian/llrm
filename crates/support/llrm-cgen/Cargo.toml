@@ -1,9 +1,0 @@
-[package]
-name = "llrm-cgen"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-description = "Random C programs free of undefined behaviour, for differential tests of a backend"
-
-# No dependencies: the callers run the compilers.
-[dependencies]

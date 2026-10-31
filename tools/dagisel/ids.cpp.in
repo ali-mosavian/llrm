@@ -9,9 +9,6 @@
 
 using namespace llvm;
 
-// Defined by the library a header would link against; nothing here needs it.
-namespace llvm { int DisableABIBreakingChecks = 0; }
-
 
 // @ENUMS@
 

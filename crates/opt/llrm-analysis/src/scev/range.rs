@@ -698,16 +698,24 @@ impl ScalarEvolution {
         }
     }
 
-    /// `GetRangeFromMetadata`: the `!range` of an instruction.
+    /// `GetRangeFromMetadata`
+    /// ([ScalarEvolution.cpp#L6437](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L6437)):
+    /// the `!range` of an instruction, else the `range` return attribute of a
+    /// call, else the `range` attribute of a parameter.
     fn get_range_from_metadata(
         &self,
         cx: &Cx,
         value: Operand,
     ) -> Option<ConstantRange> {
         let Operand::Value(id) = value else { return None };
-        let ValueDef::Instruction(inst) = cx.function.value(id).def else { return None };
         let q = cx.query(None);
-        let node = q.metadata_node(inst, "range")?;
+        let inst = match cx.function.value(id).def {
+            ValueDef::Instruction(inst) => inst,
+            ValueDef::Argument(at) => return llrm_mir::valuetracking::pattern::argument_range(&q, at),
+        };
+        let Some(node) = q.metadata_node(inst, "range") else {
+            return llrm_mir::valuetracking::pattern::call_range(&q, cx.function.instruction(inst));
+        };
         let mut range: Option<ConstantRange> = None;
         for pair in node.operands.chunks(2) {
             let (

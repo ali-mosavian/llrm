@@ -23,8 +23,8 @@
 //! off by default) is not ported.
 
 use llrm_analysis::scev::ScalarEvolution;
-use llrm_mir::tti::AddressingMode;
 use llrm_analysis::scev::expr::Scev;
+use llrm_mir::tti::AddressingMode;
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::Collection;
@@ -145,7 +145,7 @@ impl Collection<'_, '_> {
                         lu.min_offset,
                         lu.max_offset,
                         lu.kind,
-                        lu.access_ty.addr_space,
+                        lu.access_ty,
                         lu.formulae[i].base_gv.is_some(),
                         lu.formulae[i].base_offset,
                         lu.formulae[i].has_base_reg,
@@ -269,7 +269,7 @@ impl Collection<'_, '_> {
                                 min,
                                 max,
                                 other.kind,
-                                other.access_ty.addr_space,
+                                other.access_ty,
                                 f.base_gv.is_some(),
                                 f.base_offset,
                                 f.has_base_reg,

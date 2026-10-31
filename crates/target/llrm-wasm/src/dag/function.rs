@@ -59,7 +59,8 @@ pub fn builder_target(width: Width) -> BuilderTarget {
             pointer: pointer(width),
             offset_folding: true,
             boolean_contents: BooleanContents::ZeroOrOne,
-            // The pin keeps `i32.div_s` for `sdiv x, 4` at every level: `isIntDivCheap`.
+            // The pin keeps `i32.div_s` for `sdiv x, 4` at every
+            // level: `isIntDivCheap`.
             int_div_cheap: true,
             sdiv_pow2_stays: true,
             ..DagConfig::default()

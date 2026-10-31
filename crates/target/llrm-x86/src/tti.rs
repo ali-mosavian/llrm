@@ -86,6 +86,9 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -101,6 +104,20 @@ impl X86 {
     /// The bits of the integer registers.
     pub fn native(&self) -> u32 {
         if self.quad { 64 } else { 32 }
+    }
+
+    /// The profile of the baseline cpu of `triple`'s architecture: the 32-bit
+    /// ones by their `-march` (`i686` is `pentiumpro`), `x86_64` long mode.
+    pub fn of_triple(triple: &str) -> Option<X86> {
+        let cpu = match triple.split('-').next()? {
+            "x86_64" => "x86-64",
+            "i386" => "i386",
+            "i486" => "i486",
+            "i586" => "pentium",
+            "i686" => "pentiumpro",
+            _ => return None,
+        };
+        X86::of_cpu(cpu)
     }
 
     /// The profile of a `-march` llrm supports.
@@ -517,6 +534,10 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.recursive_inlining
+    }
+
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
         let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
         Some(real.unroll_size_few_trips)
@@ -529,6 +550,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
+    fn speed_inline_by_code_size(&self) -> bool {
+        self.tuning.inline_size_guard_at_speed
+    }
+
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
     /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
     /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
@@ -539,6 +564,18 @@ impl Tti for X86 {
 
     fn float_code_size_percent(&self) -> i64 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits))
     }
 
     fn is_type_legal(
@@ -922,6 +959,10 @@ impl Tti for X86 {
     }
 
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
     }
 

@@ -80,10 +80,15 @@ pub fn apply_pass_flag(
 ) -> bool {
     let Some(name) = flag.strip_prefix("-f") else { return false };
     let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
-    PASSES.iter().find(|(one, _)| *one == name).is_some_and(|(_, set)| {
-        set(options, on);
-        true
-    })
+    PASSES
+        .iter()
+        .find(|(one, _)| *one == name)
+        .is_some_and(
+            |(_, set)| {
+                set(options, on);
+                true
+            },
+        )
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
@@ -225,7 +230,7 @@ pub struct Flags {
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
-    pub debug_format: llrm_object::debug::Format,
+    pub debug_format: llrm_debug::Format,
     /// `-gdwarf` without a version: the target's default.
     dwarf_unversioned: bool,
     /// `-fobject-format=`: the object format to write, where the target has
@@ -312,24 +317,24 @@ impl Flags {
             },
             "-g" => (self.debug, self.debug_format) = (true, Default::default()),
             "-g0" => self.debug = false,
-            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
+            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_debug::Format::CodeView),
             "-gdwarf" | "-gdwarf-5" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 5 });
                 self.dwarf_unversioned = flag == "-gdwarf";
             }
             "-gdwarf-4" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 4 });
                 self.dwarf_unversioned = false;
             }
             "-gdwarf-3" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 3 });
                 self.dwarf_unversioned = false;
             }
             "-gdwarf-2" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 2 });
                 self.dwarf_unversioned = false;
             }
-            "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
+            "-gtd" => (self.debug, self.debug_format) = (true, llrm_debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
@@ -543,8 +548,8 @@ impl Flags {
         // is.
         let object_format = self.format(&*arch).map_or("omf", |format| format.name());
         let debug_format = match self.debug_format {
-            llrm_object::debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
-                llrm_object::debug::Format::Dwarf { version: arch.object().dwarf_version }
+            llrm_debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
+                llrm_debug::Format::Dwarf { version: arch.object().dwarf_version }
             }
             other => other,
         };

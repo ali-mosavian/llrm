@@ -1,4 +1,5 @@
-//! `reschedule_kills`: the last read of a tied instruction's source moves above it.
+//! `reschedule_kills`: the last read of a tied instruction's source moves above
+//! it.
 
 mod common;
 
@@ -50,10 +51,16 @@ fn names(f: &MFunction<()>) -> Vec<&'static str> {
         .collect()
 }
 
-/// `q = p + 1; x = *p` read `p` after the step, so the step kept a copy of `p`; the load goes first.
+/// `q = p + 1; x = *p` read `p` after the step, so the step kept a copy of `p`;
+/// the load goes first.
 #[test]
 fn a_load_of_the_source_moves_above_the_step() {
-    let mut f = function(vec![op("def", vec![Operand::Def(v(0))]), tied_step(1, 0), load(2, 0), op("use", vec![Operand::Use(v(1)), Operand::Use(v(2))])]);
+    let mut f = function(vec![
+        op("def", vec![Operand::Def(v(0))]),
+        tied_step(1, 0),
+        load(2, 0),
+        op("use", vec![Operand::Use(v(1)), Operand::Use(v(2))]),
+    ]);
     reschedule_kills::<Two>(&mut f);
     assert_eq!(names(&f), ["def", "load", "step", "use"]);
 }
@@ -119,9 +126,10 @@ fn a_source_that_lives_on_or_is_read_twice_stays() {
     assert_eq!(names(&lives), ["def", "step", "load"]);
 }
 
-/// A store that takes its value in a fixed register moves with the copy that puts the value there:
-/// the copy and the store are one instruction to the allocator. Without the copy moving too, the
-/// store read a register the copy made after the step and stayed (170 bytes of lz4 on the 6502).
+/// A store that takes its value in a fixed register moves with the copy that
+/// puts the value there: the copy and the store are one instruction to the
+/// allocator. Without the copy moving too, the store read a register the copy
+/// made after the step and stayed (170 bytes of lz4 on the 6502).
 #[test]
 fn a_store_through_a_fixed_register_takes_its_feeding_copy_along() {
     use llrm_lir::registers::RegId;
@@ -155,7 +163,8 @@ fn a_store_through_a_fixed_register_takes_its_feeding_copy_along() {
     assert_eq!(names(&g), ["def", "def", "put", "step", "copy", "use"]);
 }
 
-/// The copy that feeds the store's fixed register may itself come through a virtual register.
+/// The copy that feeds the store's fixed register may itself come through a
+/// virtual register.
 #[test]
 fn a_chain_of_copies_into_the_fixed_register_moves_whole() {
     use llrm_lir::registers::RegId;

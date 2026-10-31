@@ -1,0 +1,32 @@
+reason = "TEMPORARY trade-off (owner w2). A copy folded to a store is now a mergeable spill (pin InlineSpiller.cpp#L1058-L1066), so hoistAllSpills moves the outer loop variable's store out of the inner loop (pin rule, InlineSpiller.cpp#L1569). The reload that followed the store in the inner block stays, as forwarding is block-local. bintree nib -O2 returns to its tip count. Removal 2026-11-06: forwarding across a join, or the pin's own shape shown to lack the reload."
+exception = true
+
+[[row]]
+label = "matmul c -O2"
+counter = "instructions"
+tip = 6684
+to = 6692
+
+[[row]]
+label = "matmul c -O2"
+counter = "memory_operands"
+tip = 2114
+to = 2122
+
+[[row]]
+label = "matmul c -O2"
+counter = "code_bytes"
+tip = 306
+to = 309
+
+[[row]]
+label = "quicksort bq32 -O2"
+counter = "code_bytes"
+tip = 572
+to = 588
+
+[[row]]
+label = "stft_fixed bq32 -O2"
+counter = "code_bytes"
+tip = 1827
+to = 1843

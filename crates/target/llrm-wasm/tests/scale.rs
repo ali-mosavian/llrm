@@ -1,5 +1,6 @@
-//! The passes are linear in the size of the function: doubling it must not quadruple the time.
-//! A quadratic scan per register (`use_empty`, `getVRegDef` over the whole function) did.
+//! The passes are linear in the size of the function: doubling it must not
+//! quadruple the time. A quadratic scan per register (`use_empty`, `getVRegDef`
+//! over the whole function) did.
 
 use std::time::Instant;
 

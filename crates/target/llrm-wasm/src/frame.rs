@@ -12,7 +12,7 @@
 //! return writes the incoming value back. A frame index becomes an offset from
 //! the new stack pointer.
 //!
-//! DEVIATE: not translated are the frame pointer (`hasFP`: variable-sized
+//! DEVIATE W11: not translated are the frame pointer (`hasFP`: variable-sized
 //! objects, taken frame address), the base pointer for over-aligned objects,
 //! `WasmLocal` stack objects, stack maps and the libcall thread context.
 //! Reason: each needs IR the slice does not reach. A function that needs one is

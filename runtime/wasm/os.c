@@ -1,4 +1,4 @@
-/* The OS layer on wasm32 (runtime/shared/interface.toml): what the page or the node harness gives. Output and exit
+/* The OS layer on wasm32 (runtime/shared/interface.toml): what the node harness gives. Output and exit
    and the clock are imports of the module (`env`); memory is a bump heap in the module's own. */
 #include <time.h>
 

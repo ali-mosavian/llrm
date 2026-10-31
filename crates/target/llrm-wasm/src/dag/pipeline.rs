@@ -11,8 +11,10 @@
 //! The pin runs no scheduler preference of its own at `-O0`:
 //! `createDefaultScheduler` gives `source`.
 //!
-//! DEVIATE: no target combines (`WebAssemblyTargetLowering::PerformDAGCombine`)
-//! and no `PreprocessISelDAG`. Reason: the slice does not reach them. Exit: W6.
+//! DEVIATE W4: no target combines
+//! (`WebAssemblyTargetLowering::PerformDAGCombine`) and no `PreprocessISelDAG`.
+//! Reason: they serve SIMD, atomics and `BUILD_VECTOR`, which QB does not
+//! produce. Exit: with those rows.
 //!
 //! # See also
 //! `SelectionDAGISel::CodeGenAndEmitDAG` and `WebAssemblyISelDAGToDAG.cpp`
@@ -21,18 +23,18 @@
 use std::collections::BTreeMap;
 
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::{DagisAdapter, PinRegisters};
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
-use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
+use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::dag::{Dag, SDValue as PinValue};
 use llrm_dagisel::interp::{Outcome, Selector};
 
 use super::call::{CALL, RET_CALL};
-use crate::dagisel::generated::ids::{isd, opcode as op, reg as pin};
+use crate::dagisel::generated::ids::{isd, reg as pin};
 use crate::dagisel::generated::instrinfo::{self, flag};
 use crate::dagisel::generated::{wasm_wasm32, wasm_wasm64};
 use crate::dagisel::hooks::{Cpu, WasmHooks};
@@ -99,18 +101,10 @@ impl SchedInfo for WasmSched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
-    fn call_frame_setup(&self) -> Option<u32> {
-        Some(u32::from(op::ADJCALLSTACKDOWN))
-    }
-
-    fn call_frame_destroy(&self) -> Option<u32> {
-        Some(u32::from(op::ADJCALLSTACKUP))
-    }
-
     /// `createDefaultScheduler` at `-O0` (`OptLevel == None`) is the
     /// source-order list scheduler.
-    fn preference(&self) -> Preference {
-        Preference::Source
+    fn source_order(&self) -> bool {
+        true
     }
 }
 
@@ -119,6 +113,16 @@ impl SchedInfo for WasmSched {
 pub enum Refusal {
     Legalize(String),
     CannotSelect(String),
+}
+
+/// The combiner's target hooks: `SimplifySetCC` makes `x <= c` into `x < c +
+/// 1`, as the pin does for wasm.
+struct WasmCombines;
+
+impl CombineHooks for WasmCombines {
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
 }
 
 /// `WebAssemblyDAGToDAGISel::Select` for `CALL` and `RET_CALL`.
@@ -134,11 +138,11 @@ fn select_call(
         // one is called indirectly.
         if at == 1 && Dag::opcode(adapter, operand.node) == isd::Wrapper {
             let inner = Dag::operand(adapter, operand.node, 0);
-            use llrm_codegen::backend::selectiondag::isd::ISD::{TargetExternalSymbolNode as TARGET_EXTERNAL, TargetGlobalAddress as TARGET_GLOBAL};
+            use llrm_codegen::backend::selectiondag::isd::ISD::{
+                TargetExternalSymbolNode as TARGET_EXTERNAL, TargetGlobalAddress as TARGET_GLOBAL,
+            };
             let symbol = |isd| llrm_codegen::backend::selectiondag::dagisel_adapter::pin_opcode(isd);
-            if [TARGET_GLOBAL, TARGET_EXTERNAL]
-                .into_iter()
-                .any(|kind| Dag::opcode(adapter, inner.node) == symbol(kind))
+            if [TARGET_GLOBAL, TARGET_EXTERNAL].into_iter().any(|kind| Dag::opcode(adapter, inner.node) == symbol(kind))
             {
                 operand = inner;
             }
@@ -182,17 +186,18 @@ pub fn select_block(
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu);
     let mut lowering = WasmLowering { tables };
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).with_opt_none().run();
+    DagCombiner::new(dag, &mut WasmCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).with_opt_none().run();
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
         eprintln!("{}", dag.dump());
     }
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).with_opt_none().run();
+    DagCombiner::new(dag, &mut WasmCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).with_opt_none().run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).with_opt_none().run();
+    DagCombiner::new(dag, &mut WasmCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).with_opt_none().run();
 
-    // `LLRM_DAGDUMP=all`: each block's DAG as selection sees it, as the x86 driver does.
+    // `LLRM_DAGDUMP=all`: each block's DAG as selection sees it, as the x86
+    // driver does.
     if llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "all") {
         eprintln!("{}", dag.dump());
     }

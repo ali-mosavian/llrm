@@ -122,6 +122,7 @@ mod x86_addr {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         })
     }
@@ -267,6 +268,7 @@ mod rmw {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         })
     }
@@ -372,6 +374,7 @@ mod fold_load {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         })
     }
@@ -537,6 +540,7 @@ mod select_without_cmov {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, cmov), Outcome::Selected);
@@ -725,6 +729,7 @@ mod far_pointer_loads {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: mode,
         })
     }
@@ -893,6 +898,7 @@ mod string_instructions {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode,
         })
     }
@@ -981,6 +987,7 @@ mod segment_overrides {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: AddrMode::Real16,
         });
         assert_eq!(Selector::new(crate::generated::x86_m16::TABLE).select(dag, &mut hooks, load), Outcome::Selected);
@@ -1101,6 +1108,7 @@ mod x87_pseudos {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: AddrMode::Flat32,
         })
     }
@@ -1166,6 +1174,7 @@ mod select_loop {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: AddrMode::Flat32,
         })
     }
@@ -1291,6 +1300,7 @@ fn a_return_glue_node_is_selected_to_ret() {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: crate::x86_addr::AddrMode::Flat32,
     });
 
@@ -1379,6 +1389,7 @@ mod divrem {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         select_node(&Selector::new(table::TABLE), dag, &mut hooks, node)
@@ -1471,6 +1482,7 @@ mod mul_lohi {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1512,6 +1524,7 @@ mod llrm_intrinsics {
                 opt_for_size: false,
                 min_size: false,
                 has_frame_pointer: true,
+                multiply_early_out: false,
                 address_mode: crate::x86_addr::AddrMode::Real16,
             });
 
@@ -1540,6 +1553,7 @@ mod llrm_intrinsics {
                 opt_for_size: false,
                 min_size: false,
                 has_frame_pointer: true,
+                multiply_early_out: false,
                 address_mode: crate::x86_addr::AddrMode::Real16,
             });
 
@@ -1566,6 +1580,7 @@ mod llrm_intrinsics {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Real16,
         });
 
@@ -1592,6 +1607,7 @@ mod llrm_intrinsics {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Real16,
         });
 
@@ -1639,6 +1655,7 @@ mod fcmp_without_fcomi {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
 
@@ -1675,6 +1692,7 @@ mod pop_from_x87 {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
 
@@ -1727,6 +1745,7 @@ mod decrement_for_flags {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
@@ -1765,6 +1784,7 @@ mod and_with_a_low_mask {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, and), Outcome::Selected);
@@ -1808,6 +1828,7 @@ mod setcc_carry {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1853,6 +1874,7 @@ mod x64_table {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
@@ -1884,6 +1906,7 @@ mod x64_table {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
@@ -1961,6 +1984,7 @@ mod x64_table {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
@@ -1985,6 +2009,7 @@ mod x64_table {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
@@ -2005,8 +2030,158 @@ mod x64_table {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         };
         assert_eq!(options.pointer_type(), mvt::i64);
     }
+}
+
+mod minsize_store_immediate {
+    use super::*;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+
+    fn selected_store(
+        value: i64,
+        vt: crate::matcher::Vt,
+        min_size: bool,
+    ) -> &'static str {
+        let mut dag = TestDag::new();
+        let p = dag.input(1, mvt::i32);
+        let constant = dag.make_constant(value, vt);
+        let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
+        let store = dag.add(Node {
+            opcode: isd::STORE,
+            vts: vec![mvt::Other],
+            ops: vec![SDValue::new(0, 0), constant, p, off],
+            memory_vt: Some(vt),
+            ..Node::default()
+        });
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: min_size,
+            min_size,
+            has_frame_pointer: true,
+            multiply_early_out: false,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, store), Outcome::Selected);
+        selected(&dag, store)
+    }
+
+    /// X86InstrCompiler.td:1308: at OptForMinSize a store of 0 is `and [m], 0`
+    /// and of -1 `or [m], -1`, a byte immediate where `mov` has four.
+    #[test]
+    fn a_store_of_zero_or_minus_one_is_and_or_or_at_minsize_and_mov_otherwise() {
+        assert_eq!(selected_store(0, mvt::i32, false), "MOV32mi");
+        assert_eq!(selected_store(0, mvt::i32, true), "AND32mi");
+        assert_eq!(selected_store(-1, mvt::i32, true), "OR32mi");
+        assert_eq!(selected_store(0, mvt::i16, true), "AND16mi");
+        assert_eq!(selected_store(-1, mvt::i16, true), "OR16mi");
+        assert_eq!(selected_store(5, mvt::i32, true), "MOV32mi");
+    }
+}
+
+/// A target that is not x86 implements `Hooks` and nothing else. The x86
+/// PatFrags' subtarget and user queries (`hasSSEUnalignedMem`, `isDef32`, ..)
+/// were methods of `Hooks`, so m68k's hooks named seven that mean nothing
+/// there. A table of another target needs only `Hooks`; x86's takes
+/// `X86Predicates`.
+#[test]
+fn a_target_that_is_not_x86_implements_hooks_alone() {
+    use crate::dag::Hooks;
+    use crate::generated::ids::mvt::i32 as pointer;
+
+    struct Bare;
+    impl Hooks<TestDag> for Bare {
+        fn pointer_type(&self) -> crate::matcher::Vt {
+            pointer
+        }
+        fn check_pattern_predicate(
+            &self,
+            _: u16,
+        ) -> bool {
+            false
+        }
+        fn check_node_predicate(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: u16,
+        ) -> bool {
+            false
+        }
+        fn check_complex_pattern(
+            &mut self,
+            _: &mut TestDag,
+            _: u32,
+            _: Option<u32>,
+            _: SDValue,
+            _: u8,
+            _: &mut Vec<(SDValue, Option<u32>)>,
+        ) -> bool {
+            false
+        }
+        fn run_xform(
+            &mut self,
+            _: &mut TestDag,
+            value: SDValue,
+            _: u8,
+        ) -> SDValue {
+            value
+        }
+        fn is_profitable_to_fold(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: u32,
+            _: u32,
+        ) -> bool {
+            true
+        }
+        fn is_legal_to_fold(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: u32,
+            _: u32,
+        ) -> bool {
+            true
+        }
+        fn check_and_mask(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: i64,
+            _: i64,
+        ) -> bool {
+            false
+        }
+        fn check_or_mask(
+            &self,
+            _: &TestDag,
+            _: SDValue,
+            _: i64,
+            _: i64,
+        ) -> bool {
+            false
+        }
+        fn may_load_store(
+            &self,
+            _: u16,
+        ) -> (bool, bool) {
+            (false, false)
+        }
+    }
+
+    let mut dag = TestDag::new();
+    let a = dag.input(1, mvt::i32);
+    let add = dag.node(isd::ADD, &[mvt::i32], &[a, a]);
+    let selector = Selector::new(table::TABLE);
+    assert_eq!(
+        selector.select(&mut dag, &mut Bare, add),
+        Outcome::Selected,
+        "the matcher asks `Hooks` and nothing more"
+    );
 }

@@ -1,8 +1,9 @@
 /* The few C library routines the runtime's wasm32 build calls; the compiler lowers its own copies and fills
-   to calls of these past the inline limit. A byte at a time: no instruction a loop idiom pass could turn back into
-   a call of the routine itself. */
+   to calls of these past the inline limit. Each is `no_builtin`, as the routines of compiler-rt are: a loop in
+   it is never recognised as a call of the routine itself. */
 #include <stddef.h>
 
+__attribute__((no_builtin("memcpy")))
 void *memcpy(void *to, const void *from, size_t count)
 {
     unsigned char *d = to;
@@ -13,6 +14,7 @@ void *memcpy(void *to, const void *from, size_t count)
     return to;
 }
 
+__attribute__((no_builtin("memmove")))
 void *memmove(void *to, const void *from, size_t count)
 {
     unsigned char *d = to;
@@ -27,6 +29,7 @@ void *memmove(void *to, const void *from, size_t count)
     return to;
 }
 
+__attribute__((no_builtin("memset")))
 void *memset(void *to, int value, size_t count)
 {
     unsigned char *d = to;

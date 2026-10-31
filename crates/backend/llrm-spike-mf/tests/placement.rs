@@ -162,7 +162,11 @@ fn names(items: &[&str]) -> Vec<String> {
 }
 
 fn odds(edges: &[(u32, u32, u32)]) -> Odds {
-    edges.iter().enumerate().map(|(rank, &(from, to, percent))| ((from, to), (BranchProbability::new(percent, 100), rank))).collect()
+    edges
+        .iter()
+        .enumerate()
+        .map(|(rank, &(from, to, percent))| ((from, to), (BranchProbability::new(percent, 100), rank)))
+        .collect()
 }
 
 /// The cold block between a branch and its likely target goes to the end, and

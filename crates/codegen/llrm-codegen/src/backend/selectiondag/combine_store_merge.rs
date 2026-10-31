@@ -24,9 +24,11 @@
 //! `tryStoreMergeOfLoads`
 //! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
+use super::actions::{Action, TargetLowering};
 use super::dag::{MemBase, MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
+use super::lowering::TypeAction;
 use super::mvt::EVT;
 
 /// The most nodes the candidate search looks at (`MaxSearchNodes`).
@@ -320,6 +322,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let first = stores[0].store;
             let NodeData::Mem(first_info) = self.dag.node(first).data else { return changed };
             let mut last_legal = 1;
+            let mut last_trunc = false;
             let mut non_zero = false;
             let mut first_zero_after_non_zero = consecutive;
             for i in 0..consecutive {
@@ -333,6 +336,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     break;
                 }
                 if tli.types.is_type_legal(EVT::integer(bits)) {
+                    last_trunc = false;
+                    last_legal = i + 1;
+                } else if self.hooks.merge_stores_via_trunc_store() && self.trunc_store_is_legal(tli, bits) {
+                    last_trunc = true;
                     last_legal = i + 1;
                 }
             }
@@ -354,7 +361,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 consecutive -= last_legal;
                 continue;
             }
-            changed |= self.merge_store_constants(&stores[..last_legal], mem);
+            changed |= self.merge_store_constants(&stores[..last_legal], mem, last_trunc);
             stores.drain(..last_legal);
             consecutive -= last_legal;
         }
@@ -376,6 +383,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         stores: &[Link],
         mem: EVT,
+        truncating: bool,
     ) -> bool {
         let element_bits = mem.size_in_bits();
         let total = element_bits * stores.len() as u32;
@@ -388,7 +396,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         let first = stores[0].store;
         let (chain, info) = self.merged_chain_and_info(stores, total);
-        let value = self.dag.get_constant(joined, EVT::integer(total));
+        let stored = if truncating { self.promoted(total) } else { EVT::integer(total) };
+        let value = self.dag.get_constant(joined, stored);
         let ptr = self.dag.operand(first, 2);
         let new = self.dag.get_store(chain, value, ptr, info);
         for link in stores {
@@ -396,6 +405,33 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         self.add_to_worklist(chain.node);
         true
+    }
+
+    /// The type an illegal integer of `bits` is promoted to.
+    fn promoted(
+        &self,
+        bits: u32,
+    ) -> EVT {
+        self.tli.expect("a merge has a target").types.type_conversion(EVT::integer(bits)).1
+    }
+
+    /// `isTruncStoreLegal(promoted, StoreTy)` for a `StoreTy` of `bits` that
+    /// the type legalizer promotes.
+    fn trunc_store_is_legal(
+        &self,
+        tli: &TargetLowering,
+        bits: u32,
+    ) -> bool {
+        let store_ty = EVT::integer(bits);
+        if tli.types.type_action(store_ty) != TypeAction::PromoteInteger {
+            return false;
+        }
+        match (self.promoted(bits), store_ty) {
+            (promoted @ EVT::Simple(wide), EVT::Simple(narrow)) => {
+                tli.types.is_type_legal(promoted) && tli.trunc_store_action(wide, narrow) == Action::Legal
+            }
+            _ => false,
+        }
     }
 
     /// `getMergeStoreChains` and the `MemInfo` of the joined store of `total`

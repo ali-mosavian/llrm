@@ -11,10 +11,10 @@
 //! its address as one more argument; a callee that is variadic gets that
 //! pointer as its last parameter.
 //!
-//! DEVIATE: integers and floats only, one returned part, no byval, tail call,
-//! swift or funcref call, and no variadic function body (`va_start`); `accepts`
-//! refuses what it can see. Reason: the callers the runtime needs. Exit: the
-//! varargs definition step.
+//! DEVIATE W3: integers and floats only, one returned part, no byval, tail
+//! call, swift or funcref call, and no variadic function body (`va_start`);
+//! `accepts` refuses what it can see. Reason: the callers the runtime needs.
+//! Exit: the varargs definition step.
 //!
 //! # See also
 //! `WebAssemblyISelLowering.cpp` at the pin d1106deb71cc: `LowerCall` (L1281),
@@ -142,6 +142,7 @@ impl TargetCalling for WasmCalling {
                             base: MemBase::Stack(index),
                             ext: None,
                             space: 0,
+                            ordering: None,
                         };
                         dag.get_store(chain, out.value, address, info)
                     })

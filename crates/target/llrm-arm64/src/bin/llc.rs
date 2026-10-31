@@ -5,10 +5,7 @@
 //! that name) through the mid-end and the arm64 backend to an object (`-S`: its
 //! instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
 //! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already
-//! optimized; `-f[no-]PASS`: a mid-end pass as gcc names it, `-fno-unroll-loops`;
-//! `--isel=hand|dag|shadow`: the hand selector, the DAG path from the
-//! pin's AArch64 table, or the DAG path with the hand selector for what it
-//! refuses, counted on stderr). The platform is the module's `target triple`.
+//! optimized). The platform is the module's `target triple`.
 
 use llrm_arm64::driver;
 
@@ -22,6 +19,7 @@ fn main() {
 
 fn run() -> i32 {
     let mut assembly = false;
+    let mut debug = false;
     let mut level = driver::Level::O2;
     let mut output = None;
     let mut input = None;
@@ -29,15 +27,12 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
+            "-g" => debug = true,
             "-debug-only=inline-cost" => {
                 llrm_env::preset("LLRM_INLINE_REMARKS");
                 llrm_env::preset("LLRM_EXP_INLINETRACE");
             }
             "--no-opt" => level = driver::Level::O0,
-            "--isel=dag" => llrm_env::preset("LLRM_ISEL_DAG"),
-            "--isel=shadow" => llrm_env::preset("LLRM_ISEL_SHADOW"),
-            "--isel=hand" => {}
-            other if other.starts_with("-f") && driver::pass_flag(other) => {}
             other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
                 Err(why) => {
@@ -54,7 +49,7 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input else {
-        eprintln!("usage: llrm-arm64-llc [-S] [-O0|-O1|-O2|-O3|-Os|-Oz] [--no-opt] [-o OUT] FILE.ll");
+        eprintln!("usage: llrm-arm64-llc [-S] [-g] [-O0|-O1|-O2|-O3|-Os|-Oz] [--no-opt] [-o OUT] FILE.ll");
         return 2;
     };
     let text = match std::fs::read_to_string(&input) {
@@ -73,7 +68,7 @@ fn run() -> i32 {
     let result = if assembly {
         driver::assembly(&text, platform, level).map(String::into_bytes)
     } else {
-        driver::object_file(&text, platform, &name, level)
+        driver::object_file_with(&text, platform, &name, level, debug)
     };
     match result {
         Ok(bytes) => {

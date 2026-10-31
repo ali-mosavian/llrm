@@ -102,15 +102,30 @@ impl Selector<'_> {
                 PhiSource::Value(src) => loads.push((copy.dst, src)),
             }
         }
-        let ops = crate::mfunc::sequence_copies(moves, |src| {
-            let made = match src {
-                Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
-                Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
-            };
-            made
-        });
-        for op in ops {
-            self.emit(op);
+        while !moves.is_empty() {
+            // A move whose destination no other move reads.
+            let ready = moves.iter().position(|(dst, _)| !moves.iter().any(|(_, src)| src == dst));
+            match ready {
+                Some(at) => {
+                    let (dst, src) = moves.remove(at);
+                    self.emit(Op::Copy { dst, src });
+                }
+                None => {
+                    // A cycle: park one source in a new register.
+                    let (dst, src) = moves[0];
+                    let temporary = match src {
+                        Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
+                        Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
+                    };
+                    self.emit(Op::Copy { dst: temporary, src });
+                    for (_, reader) in moves.iter_mut() {
+                        if *reader == src {
+                            *reader = temporary;
+                        }
+                    }
+                    let _ = dst;
+                }
+            }
         }
         for (dst, src) in loads {
             self.load_into(dst, src)?;
@@ -172,7 +187,7 @@ impl Selector<'_> {
         // branch.
         let saved = self.current;
         let edge_label = format!(".L{}.e{}", self.mf.name, self.mf.blocks.len());
-        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Vec::new() });
+        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Default::default() });
         self.current = self.mf.blocks.len() - 1;
         let result = self.emit_copies(copies);
         self.emit(branch_to(&label));
@@ -336,8 +351,8 @@ impl Selector<'_> {
         self.emit(jump(Cond::Lo, &below));
         let saved = self.current;
         let right = format!(".L{}.s{}", self.mf.name, self.mf.blocks.len() + 1);
-        self.mf.blocks.push(MBlock { label: below.clone(), ops: Vec::new() });
-        self.mf.blocks.push(MBlock { label: right.clone(), ops: Vec::new() });
+        self.mf.blocks.push(MBlock { label: below.clone(), ops: Default::default() });
+        self.mf.blocks.push(MBlock { label: right.clone(), ops: Default::default() });
         let (left_index, right_index) = (self.mf.blocks.len() - 2, self.mf.blocks.len() - 1);
         self.emit(branch_to(&right));
         self.current = left_index;

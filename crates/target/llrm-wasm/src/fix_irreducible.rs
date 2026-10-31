@@ -1,22 +1,26 @@
-//! `WebAssemblyFixIrreducibleControlFlow`: a loop with several entries gets one, a block that
-//! dispatches (`br_table`) on a label register to each former entry; the edges into the entries
-//! become a set of the label and a branch to the dispatch block.
+//! `WebAssemblyFixIrreducibleControlFlow`: a loop with several entries gets
+//! one, a block that dispatches (`br_table`) on a label register to each former
+//! entry; the edges into the entries become a set of the label and a branch to
+//! the dispatch block.
 //!
 //! # How it works
-//! A region is a set of blocks with one entry and no branch back to it. Its strongly connected
-//! components are found, and each loop whose entries (its blocks with a predecessor outside it)
-//! are mutually reachable gets a dispatch block; this repeats until none is left, then each loop is
-//! a region of its own. Blocks are numbered in the order they were made, not by layout, until the
-//! end renumbers them.
+//! A region is a set of blocks with one entry and no branch back to it. Its
+//! strongly connected components are found, and each loop whose entries (its
+//! blocks with a predecessor outside it) are mutually reachable gets a dispatch
+//! block; this repeats until none is left, then each loop is a region of its
+//! own. Blocks are numbered in the order they were made, not by layout, until
+//! the end renumbers them.
 //!
-//! DEVIATE: a block's predecessors come in the order of their numbers, not in the order their
-//! branches were added; a block's loop entries are visited in order of number. Reason: the pin's
-//! orders are those of pointer sets and of the instruction selector's visit. Exit: none; only the
-//! numbers of the new blocks, and so the order of the routing blocks at the end, can differ.
+//! DEVIATE W10: a block's predecessors come in the order of their numbers, not
+//! in the order their branches were added; a block's loop entries are visited
+//! in order of number. Reason: the pin's orders are those of pointer sets and
+//! of the instruction selector's visit. Exit: none; only the numbers of the new
+//! blocks, and so the order of the routing blocks at the end, can differ.
 //!
 //! # See also
-//! `WebAssemblyFixIrreducibleControlFlow.cpp` at the pin d1106deb71cc: `makeSingleEntryLoop`
-//! (L275), `processRegion` (L426), `addImplicitDefs` (L524).
+//! `WebAssemblyFixIrreducibleControlFlow.cpp` at the pin d1106deb71cc:
+//! `makeSingleEntryLoop` (L275), `processRegion` (L426), `addImplicitDefs`
+//! (L524).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,7 +29,8 @@ use crate::mir::{Function, IMPLICIT_DEF, Inst, Operand, ValType, is_argument};
 
 type Blocks = BTreeSet<usize>;
 
-/// `ReachabilityGraph`: the SCC of each block of a region, and the loop entries.
+/// `ReachabilityGraph`: the SCC of each block of a region, and the loop
+/// entries.
 struct Graph {
     scc: BTreeMap<usize, usize>,
     loop_entries: Blocks,
@@ -43,8 +48,8 @@ fn predecessors(f: &Function) -> Vec<Vec<usize>> {
 }
 
 impl Graph {
-    /// `ReachabilityGraph::calculate`: Tarjan's walk from `entry` over the branches inside `blocks`
-    /// that are not to `entry`.
+    /// `ReachabilityGraph::calculate`: Tarjan's walk from `entry` over the
+    /// branches inside `blocks` that are not to `entry`.
     fn of(
         f: &Function,
         entry: usize,
@@ -67,7 +72,8 @@ impl Graph {
                     if member == entry {
                         continue;
                     }
-                    // A predecessor outside the region has no component: it is outside this one.
+                    // A predecessor outside the region has no component: it is
+                    // outside this one.
                     if preds[member].iter().any(|pred| graph.scc.get(pred) != Some(&id)) {
                         graph.loop_entries.insert(member);
                         graph.entries_by_scc[id].insert(member);
@@ -113,8 +119,8 @@ impl Walk {
     }
 }
 
-/// The strongly connected components reachable from `entry`, each after the ones it reaches
-/// (`scc_iterator`'s order).
+/// The strongly connected components reachable from `entry`, each after the
+/// ones it reaches (`scc_iterator`'s order).
 fn tarjan(
     entry: usize,
     succs: &dyn Fn(usize) -> Vec<usize>,
@@ -152,7 +158,8 @@ fn tarjan(
     components
 }
 
-/// `makeSingleEntryLoop`: a dispatch block for `entries`, and a routing block for the edges into them.
+/// `makeSingleEntryLoop`: a dispatch block for `entries`, and a routing block
+/// for the edges into them.
 fn make_single_entry_loop(
     f: &mut Function,
     layout: &mut Vec<usize>,
@@ -214,7 +221,8 @@ fn make_single_entry_loop(
         }
     }
 
-    // At most two routing blocks per entry: one for the predecessors outside the loop, one inside.
+    // At most two routing blocks per entry: one for the predecessors outside
+    // the loop, one inside.
     let mut routing: BTreeMap<(usize, bool), usize> = BTreeMap::new();
     for &pred in &all_preds {
         let inside = in_loop.contains(&pred);
@@ -290,8 +298,9 @@ fn process_region(
     }
 }
 
-/// `addImplicitDefs`: every register used and not defined by an `ARGUMENT` gets an `IMPLICIT_DEF` at
-/// the top of the entry block, for the uses that now have a path with no definition.
+/// `addImplicitDefs`: every register used and not defined by an `ARGUMENT` gets
+/// an `IMPLICIT_DEF` at the top of the entry block, for the uses that now have
+/// a path with no definition.
 fn add_implicit_defs(f: &mut Function) {
     let mut used = vec![false; f.num_vregs()];
     let mut argument = vec![false; f.num_vregs()];

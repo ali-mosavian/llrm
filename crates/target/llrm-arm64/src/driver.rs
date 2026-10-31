@@ -77,6 +77,12 @@ pub fn platform_of(triple: &str) -> Option<Platform> {
     }
 }
 
+/// The platform of an AArch64 `triple` that names none (`aarch64--`): Linux,
+/// the pin's default; `None` for another architecture.
+pub fn platform_or_default(triple: &str) -> Option<Platform> {
+    platform_of(triple).or_else(|| matches!(triple.split('-').next()?, "aarch64" | "arm64").then_some(Platform::Linux))
+}
+
 /// `text` read as a program for `platform`, its datalayout the platform's.
 pub fn program(
     text: &str,
@@ -156,19 +162,6 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
-/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`), applied
-/// to every mid-end run of the process.
-static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
-/// Records `flag` if it names a mid-end pass; false when it does not.
-pub fn pass_flag(flag: &str) -> bool {
-    if !llrm_codegen::driver::flags::apply_pass_flag(&mut Options::default(), flag) {
-        return false;
-    }
-    PASS_FLAGS.lock().unwrap().push(flag.to_owned());
-    true
-}
-
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -176,9 +169,6 @@ pub fn optimized_at(
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
-    for flag in PASS_FLAGS.lock().unwrap().iter() {
-        llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
-    }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
@@ -195,38 +185,17 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
         .collect()
 }
 
-/// Which instruction selector makes the machine function.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum IselMode {
-    Hand,
-    Dag,
-    Shadow,
-}
-
-fn isel_mode() -> IselMode {
-    if llrm_support::env_flag!("LLRM_ISEL_DAG") {
-        IselMode::Dag
-    } else if llrm_support::env_flag!("LLRM_ISEL_SHADOW") {
-        IselMode::Shadow
-    } else {
-        IselMode::Hand
-    }
-}
-
-/// `name` through the DAG path: the pin's table and the shared stages.
-fn dag_select(
-    module: &llrm_mir::module::Module,
-    name: &str,
-    layout: &llrm_mir::datalayout::DataLayout,
-    platform: Platform,
-) -> Result<crate::mfunc::MFunc, String> {
-    let blocks = crate::dag::function::select_function_in(module, name, layout, platform)?;
-    crate::dag::emit::emit(name, &blocks)
-}
-
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
+    functions_with(program, false)
+}
+
+/// [`functions`], each carrying its source places where `lines`.
+pub fn functions_with(
+    program: &Program,
+    lines: bool,
+) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
     let mut out = Vec::new();
@@ -235,16 +204,8 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let mut machine = match isel_mode() {
-            IselMode::Hand => crate::isel::select(module, id, &program.layout, platform),
-            IselMode::Dag => dag_select(module, &name, &program.layout, platform),
-            // A refusal of the DAG path falls back to the hand selector, counted.
-            IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
-                eprintln!("isel-shadow: @{name}: {why}");
-                crate::isel::select(module, id, &program.layout, platform)
-            }),
-        }
-        .map_err(|why| format!("@{name}: {why}"))?;
+        let mut machine = crate::isel::selected(module, id, &program.layout, platform, lines)
+            .map_err(|why| format!("@{name}: {why}"))?;
         dump("Select", &machine);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
@@ -258,6 +219,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         dump("OrderCopies", &machine);
         let allocation = crate::regalloc::allocate(&mut machine);
         dump("RegAlloc", &machine);
+        let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
         let blocks = crate::pairs::fold(blocks);
@@ -265,6 +227,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),
             blocks,
+            variables,
         });
     }
     Ok(out)
@@ -305,13 +268,29 @@ pub fn object(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<llrm_object::Object, String> {
+    object_with(text, platform, name, level, false).map(|described| described.object)
+}
+
+/// [`object`], with the debug information (`-g`) where `debug`.
+pub fn object_with(
+    text: &str,
+    platform: Platform,
+    name: &str,
+    level: impl Into<Level>,
+    debug: bool,
+) -> Result<llrm_debug::Described, String> {
     let mut program = program(text, platform)?;
     let level = level.into();
+    if debug {
+        llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
+    }
     if level != Level::O0 {
         optimized_at(&mut program, level)?;
     }
-    let lowered = functions(&program)?;
-    crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
+    let lowered = functions_with(&program, debug)?;
+    let object = crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)?;
+    let debug = if debug { crate::debug::info(&program.modules[0], platform, &object, &lowered, name)? } else { None };
+    Ok(llrm_debug::Described { object, debug })
 }
 
 /// The assembly of the lowered functions, one instruction a line.
@@ -330,7 +309,8 @@ pub fn assembly(
         out.push_str(&format!("{}:\n", function.symbol));
         for block in &function.blocks {
             out.push_str(&format!("{}:\n", block.label));
-            for inst in &block.insts {
+            // A frame mark is for the line table, not the assembler.
+            for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
             }
         }
@@ -345,12 +325,25 @@ pub fn object_file(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<Vec<u8>, String> {
+    object_file_with(text, platform, name, level, false)
+}
+
+/// [`object_file`], with the debug information (`-g`) where `debug`.
+pub fn object_file_with(
+    text: &str,
+    platform: Platform,
+    name: &str,
+    level: impl Into<Level>,
+    debug: bool,
+) -> Result<Vec<u8>, String> {
     use llrm_target::object::Format;
-    let object = object(text, platform, name, level)?;
-    use llrm_object::ObjectTarget;
+    let object = object_with(text, platform, name, level, debug)?;
+    use llrm_debug::DebugObjectTarget;
     let objects = crate::mc::Arm64Objects;
-    let macho = || objects.write_object("macho", &object).map_err(|error| error.to_string());
-    let elf = || objects.write_object("elf", &object).map_err(|error| error.to_string());
+    let macho =
+        || objects.write_described("macho", &object.object, object.debug.as_ref()).map_err(|error| error.to_string());
+    let elf =
+        || objects.write_described("elf", &object.object, object.debug.as_ref()).map_err(|error| error.to_string());
     if let Some(dir) = llrm_target::object::all_writers_dir() {
         for (format, written) in [(Format::MachO, macho()), (Format::Elf, elf())] {
             if let Ok(written) = written {
@@ -367,6 +360,13 @@ pub fn object_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_triple_without_an_os_is_linux_only_for_aarch64() {
+        assert_eq!(platform_or_default("aarch64--"), Some(Platform::Linux));
+        assert_eq!(platform_or_default("arm64-apple-macos"), Some(Platform::Darwin));
+        assert_eq!(platform_or_default("x86_64-unknown-linux-gnu"), None);
+    }
 
     /// Clang writes Apple's variadic reads as `va_arg`, which MIR does not read
     /// ("`va_arg` is not an instruction of MIR's subset"): each becomes the

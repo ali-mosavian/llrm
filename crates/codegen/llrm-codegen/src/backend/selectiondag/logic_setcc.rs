@@ -127,7 +127,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Some(self.dag.get_setcc(vt, add, two, cc));
         }
         // The more general forms, if the compares have no other user.
-        if integer && cc0 == cc1 && self.has_one_use(n0) && self.has_one_use(n1) {
+        if integer
+            && self.hooks.convert_setcc_logic_to_bitwise_logic()
+            && cc0 == cc1
+            && self.has_one_use(n0)
+            && self.has_one_use(n1)
+        {
             if (is_and && cc1 == CondCode::SetEq) || (!is_and && cc1 == CondCode::SetNe) {
                 let xor_left = self.dag.get_node(ISD::Xor, op_vt, &[ll, lr]);
                 let xor_right = self.dag.get_node(ISD::Xor, op_vt, &[rl, rr]);
@@ -219,6 +224,61 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `visitOR`, the compare folds.
+    /// DEVIATE: a dword from two words (`BUILD_PAIR` expanded to `zext lo |
+    /// (aext hi << 16)`, a LONG in `dx:ax`) is `fshr (hi, lo << 16, 16)`, a
+    /// `shl` and a `shrd`: a byte and a clock under the pin's `movzx`,
+    /// `shl`, `or` on the 486. Only once legal, and only when every user
+    /// computes with the whole dword: a far pointer's halves are taken
+    /// apart again, which the `or` form folds away. O(users).
+    fn pack_words_by_shrd(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if self.level != CombineLevel::AfterLegalizeDag || vt != EVT::I32 {
+            return None;
+        }
+        let (a, b) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (low, high) = if self.dag.opcode(a) == ISD::ZeroExtend { (a, b) } else { (b, a) };
+        if self.dag.opcode(low) != ISD::ZeroExtend || self.dag.opcode(high) != ISD::Shl {
+            return None;
+        }
+        let (lo, shifted) = (self.dag.operand(low, 0), self.dag.operand(high, 0));
+        if self.dag.constant(self.dag.operand(high, 1)) != Some(16)
+            || self.dag.opcode(shifted) != ISD::AnyExtend
+            || self.dag.value_type(lo) != EVT::I16
+        {
+            return None;
+        }
+        // Only a value that is computed with stays whole; one that is stored,
+        // passed on or taken apart (a far pointer's halves) is not packed.
+        let computed = self
+            .dag
+            .users(node)
+            .all(
+                |user| matches!(
+                    self.dag.opcode(SDValue { node: user, res: 0 }),
+                    ISD::Add
+                        | ISD::Sub
+                        | ISD::Mul
+                        | ISD::SDiv
+                        | ISD::UDiv
+                        | ISD::SRem
+                        | ISD::URem
+                        | ISD::Xor
+                        | ISD::SetCC
+                        | ISD::SIntToFp
+                ),
+            );
+        if !computed {
+            return None;
+        }
+        let sixteen = self.dag.get_constant(16, EVT::I8);
+        let lo_wide = self.dag.get_node(ISD::AnyExtend, vt, &[lo]);
+        let lo_high = self.dag.get_node(ISD::Shl, vt, &[lo_wide, sixteen]);
+        Some(self.dag.get_node(ISD::FShr, vt, &[shifted, lo_high, sixteen]))
+    }
+
     pub(super) fn visit_or(
         &mut self,
         node: SDValue,
@@ -254,9 +314,34 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(rotated) = self.match_rotate(n0, n1) {
             return Some(rotated);
         }
-        let c1 = c1?;
-        // `(or (and x, c0), c1)` with `c0` and `c1` sharing a bit is
-        // `(and (or x, c1), c0 | c1)`.
+        if let Some(packed) = self.pack_words_by_shrd(node) {
+            return Some(packed);
+        }
+        if let Some(c1) = c1 {
+            if let Some(folded) = self.or_with_shared_mask(n0, c1, vt) {
+                return Some(folded);
+            }
+        }
+        if self.hooks.fold_or_absorption() {
+            if let Some(folded) = self.visit_or_commutative(n0, n1) {
+                return Some(folded);
+            }
+            if let Some(folded) = self.visit_or_commutative(n1, n0) {
+                return Some(folded);
+            }
+        }
+        None
+    }
+
+    /// `(or (and x, c0), c1)` with `c0` and `c1` sharing a bit is
+    /// `(and (or x, c1), c0 | c1)`.
+    fn or_with_shared_mask(
+        &mut self,
+        n0: SDValue,
+        c1: u128,
+        vt: EVT,
+    ) -> Option<SDValue> {
+        let n1 = self.dag.get_constant(c1, vt);
         if self.dag.opcode(n0) == ISD::And && self.dag.has_one_use(n0.node) {
             let (x, mask) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             if let Some(c0) = self.dag.constant(mask) {
@@ -269,5 +354,65 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         None
+    }
+
+    /// `visitORCommutative`, the folds of `or n0, n1` that look into `n0`:
+    /// `(or (and x, y), x)` is `x`; `(or (and x, (not y)), y)` is `(or x, y)`;
+    /// `(or (xor x, n1), n1)` is `(or x, n1)`; `(or (xor x, y), (and/or x, y))`
+    /// is `(or x, y)`.
+    ///
+    /// DEVIATE: the resize peeking and `any_extend (not (truncate x))` of
+    /// `getBitwiseNotOperand`, and the funnel-shift and `build_pair` folds, are
+    /// not translated. Exit: those shapes.
+    fn visit_or_commutative(
+        &mut self,
+        n0: SDValue,
+        n1: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(n0);
+        if self.dag.opcode(n0) == ISD::And {
+            let (n00, n01) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            // fold or (and x, y), x --> x
+            if n00 == n1 || n01 == n1 {
+                return Some(n1);
+            }
+            // fold (or (and x, (xor y, -1)), y) -> (or x, y), and its mirror
+            for (x, not) in [(n00, n01), (n01, n00)] {
+                if self.bitwise_not_operand(not) == Some(n1) {
+                    return Some(self.dag.get_node(ISD::Or, vt, &[x, n1]));
+                }
+            }
+        }
+        if self.dag.opcode(n0) == ISD::Xor {
+            let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            // fold or (xor x, n1), n1 --> or x, n1
+            if y == n1 {
+                return Some(self.dag.get_node(ISD::Or, vt, &[x, n1]));
+            }
+            // fold or (xor x, y), (x and/or y) --> or x, y
+            let joins = |this: &Self, a: SDValue, b: SDValue| {
+                matches!(this.dag.opcode(n1), ISD::And | ISD::Or) && {
+                    let (l, r) = (this.dag.operand(n1, 0), this.dag.operand(n1, 1));
+                    l == a && r == b
+                }
+            };
+            if joins(self, x, y) {
+                return Some(self.dag.get_node(ISD::Or, vt, &[x, y]));
+            }
+        }
+        None
+    }
+
+    /// `isBitwiseNot`: the operand of `(xor v, -1)`.
+    fn bitwise_not_operand(
+        &self,
+        v: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(v) != ISD::Xor {
+            return None;
+        }
+        let vt = self.dag.value_type(v);
+        (self.dag.constant(self.dag.operand(v, 1)) == Some(super::fold::mask(vt.size_in_bits())))
+            .then(|| self.dag.operand(v, 0))
     }
 }

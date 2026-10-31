@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import sys
 import json
 from pathlib import Path
@@ -223,33 +224,6 @@ def test_stale_waivers_are_one_line_of_file_names():
     assert bc.stale_summary([]) == []
 
 
-SCALAR_BASE = {"bq16": 165}
-
-
-def test_the_scalar_o2_waiver_passes_its_size_and_fails_one_byte_more():
-    """parity/scalar bq16 -O2 is main's loop again after the m16 unroll override (353 B to 171, main 165): waived at exactly 171, so one more byte fails."""
-    waivers = bc.waivers()
-    base = {("parity/scalar", lang, "O2"): {"code_bytes": was} for lang, was in SCALAR_BASE.items()}
-    at = {"bq16": 171}
-    for lang, size in at.items():
-        key = ("parity/scalar", lang, "O2")
-        assert bc.judge({key: {"code_bytes": size}}, base, waivers)[0] == [], lang
-        worse = bc.judge({key: {"code_bytes": size + 1}}, base, waivers)[0]
-        assert worse == [(f"parity/scalar {lang} -O2", "code_bytes", SCALAR_BASE[lang], size + 1)], lang
-
-
-def test_the_scalar_waivers_pass_their_limits_and_fail_one_more():
-    """parity/scalar bq16 data 21 to 23 at -O2 and -Os, and -Os code 165 to 171 (LU2 +3, DAG default +4, the cint(val) data cell): waived at exactly those counts."""
-    waivers = bc.waivers()
-    for opt, rows in {"O2": {"data_bytes": (21, 23)}, "Os": {"code_bytes": (165, 171), "data_bytes": (21, 23)}}.items():
-        key = ("parity/scalar", "bq16", opt)
-        base = {key: {counter: was for counter, (was, _) in rows.items()}}
-        assert bc.judge({key: {counter: to for counter, (_, to) in rows.items()}}, base, waivers)[0] == [], opt
-        for counter, (was, to) in rows.items():
-            at = {c: t for c, (_, t) in rows.items()} | {counter: to + 1}
-            assert bc.judge({key: at}, base, waivers)[0] == [(f"parity/scalar bq16 -{opt}", counter, was, to + 1)], (opt, counter)
-
-
 def test_a_base_stored_under_the_old_hash_is_judged_by_the_new_one_not_skipped_whole(tmp_path):
     """programs() stopped hashing `.out` files; a base cached under the old hash then differed from the head in EVERY program (main has an `.out` for
     each): `same` was empty, 424 measurements judged nothing and 218 waivers read stale, with 0 problems printed. A cache that does not say
@@ -374,3 +348,36 @@ def test_an_exception_file_prints_its_rows_every_run_and_fails_a_row_no_longer_w
     assert problems == ["EXCEPTION a.toml: fib bq32 -O2 instructions to 120 is no longer worse than the base: delete it"]
     plain = [{**waivers[0], "exception": False}]
     assert bc.waived_lines([], plain, bc.judge({FIB: row(100)}, base, plain)[2])[1] == []
+
+
+def test_the_two_jpeg_nib_os_rows_the_loopsimplify_fix_moves_are_excused_by_their_file():
+    """release/next carried no waiver for jpeg_fixed / jpeg_single nib -Os code_bytes: the judge reported exactly these two. The file now excuses
+    each at its own ceiling and not one byte above. (It pinned the first ceilings, 5362 / 5223, and went red when d846b3d0f0 lowered them to the
+    measured 5337 / 5198.)"""
+    rows = {("jpeg_fixed", "nib", "Os"): 5304, ("jpeg_single", "nib", "Os"): 5172}
+    ceiling = {w["label"]: w["to"] for w in bc.waivers() if w["counter"] == "code_bytes"}
+    assert {"jpeg_fixed nib -Os", "jpeg_single nib -Os"} <= set(ceiling)
+    base = {key: row(100, code_bytes=size) for key, size in rows.items()}
+    at = {key: row(100, code_bytes=ceiling[bc.label(key)]) for key in rows}
+    over = {key: row(100, code_bytes=ceiling[bc.label(key)] + 1) for key in rows}
+    assert bc.judge(at, base, bc.waivers())[0] == []
+    assert len(bc.judge(over, base, bc.waivers())[0]) == 2
+
+
+def test_two_runs_of_one_compiler_that_differ_in_any_count_are_named_and_equal_runs_pass():
+    """Main read 78 instructions in one run and 2 in another (qlight c -Os, two programs); the baseline was trusted without a second look."""
+    run = {FIB: row(100), ("fib", "c", "O2"): row(50, code_bytes=80), ("fib", "ow", "O2"): row(9)}
+    assert bc.unstable_cells(run, dict(run)) == []
+    flipped = {**run, ("fib", "c", "O2"): row(50, code_bytes=82), ("fib", "ow", "O2"): row(10)}
+    assert bc.unstable_cells(run, flipped) == ["UNSTABLE fib c -O2: code_bytes 80 vs 82"], "the reference compilers do not move with ours and are left out"
+
+
+def test_a_base_measured_on_other_sources_than_the_heads_is_refused_and_rebased_with_the_overlay():
+    """The m16 list took main's counts from main's own tree: parity/qlight c read 15 clocks (constant-argument source) against 460 on the head's
+    source, and 'regression' went out. An edited program without base-compiler rows on the head's sources is refused; with them its rows replace the base's."""
+    base = {"q/c/O2": {"clocks": 15}, "s/c/O2": {"clocks": 7}}
+    was, now = {"q": "a", "s": "b"}, {"q": "z", "s": "b"}
+    with pytest.raises(SystemExit, match="q"):
+        bc.rebased(base, {}, was, now)
+    assert bc.rebased(base, {"q/c/O2": {"clocks": 460}}, was, now) == {"s/c/O2": {"clocks": 7}, "q/c/O2": {"clocks": 460}}
+    assert bc.rebased(base, {}, was, was) == base, "unchanged sources: the base stands, no overlay needed"

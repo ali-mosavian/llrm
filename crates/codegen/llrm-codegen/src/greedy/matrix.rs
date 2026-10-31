@@ -320,6 +320,14 @@ impl LiveRegMatrix {
         q.interfering_vregs(lr, union, max).to_vec()
     }
 
+    /// The register `reg` is a view of, in the target's description.
+    pub fn root(
+        &self,
+        reg: RegId,
+    ) -> RegId {
+        self.tri.regs.root(reg)
+    }
+
     /// `checkRegMaskInterference` (LiveRegMatrix.cpp#L127): `virt` crosses an
     /// instruction that destroys `phys`. The answer for one range is worked out
     /// once and kept (`RegMaskUsable`), whatever register is asked.
@@ -328,7 +336,7 @@ impl LiveRegMatrix {
         virt: &LiveInterval,
         phys: RegId,
     ) -> bool {
-        self.reg_mask_of(virt).is_some_and(|roots| roots.contains(&crate::model::ir::root(phys)))
+        self.reg_mask_of(virt).is_some_and(|roots| roots.contains(&self.tri.regs.root(phys)))
     }
 
     /// The registers `virt` loses to the instructions it is live across, kept
@@ -555,5 +563,56 @@ mod tests {
         assert_eq!(matrix.check_interference(&probe, RegId::BX), InterferenceKind::RegUnit);
         assert_eq!(matrix.check_interference(&probe, RegId::CX), InterferenceKind::VirtReg);
         assert_eq!(matrix.check_interference(&probe, RegId::DX), InterferenceKind::Free);
+    }
+
+    /// A description that roots `BX` at `EAX`, which iced's table does not.
+    fn rooted_elsewhere() -> Regs {
+        use llrm_lir::registers::{Entry, Info};
+        let base = &llrm_x86_m16::REGISTER_INFO;
+        let mut table = base.table;
+        let bx = table[RegId::BX.index()].expect("bx is listed");
+        table[RegId::BX.index()] = Some(Entry { root: RegId::EAX, ..bx });
+        Regs(Box::leak(Box::new(Info {
+            table,
+            frame: base.frame,
+            stack: base.stack,
+            loads: base.loads,
+            scratch: base.scratch,
+            bytes: base.bytes,
+            data_segment: base.data_segment,
+            stack_segment: base.stack_segment,
+            code_segment: base.code_segment,
+            far_segment: base.far_segment,
+            widths: base.widths,
+            effects: base.effects,
+            cache: Default::default(),
+            views: base.views,
+        })))
+    }
+
+    /// The matrix asked iced's `ROOT_OF` whether a call destroyed a register,
+    /// so a target whose ids are not iced's got an x86 family: a register the
+    /// description roots at the destroyed one was reported free.
+    #[test]
+    fn test_a_call_mask_is_read_through_the_descriptions_roots() {
+        let at = indexes();
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(rooted_elsewhere()), Box::new(Calls));
+        let probe = interval(2, 12, 18, &at);
+        assert_eq!(matrix.check_interference(&probe, RegId::BX), InterferenceKind::RegMask);
+    }
+
+    /// Greedy reads roots from the description; x86 results are unchanged only
+    /// while each x86 file roots a register where iced's table does.
+    #[test]
+    fn test_the_x86_files_root_every_register_as_iced_does() {
+        for (name, info) in [
+            ("m16", &llrm_x86_m16::REGISTER_INFO),
+            ("m32", &llrm_x86_m32::REGISTER_INFO),
+            ("m64", &llrm_x86_m64::REGISTER_INFO),
+        ] {
+            for entry in info.table.iter().flatten() {
+                assert_eq!(info.root(entry.id), entry.id.root(), "{name}: {} is rooted differently", entry.name);
+            }
+        }
     }
 }

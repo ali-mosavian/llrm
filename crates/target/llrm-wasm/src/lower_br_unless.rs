@@ -1,5 +1,5 @@
-//! `WebAssemblyLowerBrUnless`: `BR_UNLESS` becomes `BR_IF` over the inverted comparison that
-//! defines its condition, or over an `EQZ` of the condition.
+//! `WebAssemblyLowerBrUnless`: `BR_UNLESS` becomes `BR_IF` over the inverted
+//! comparison that defines its condition, or over an `EQZ` of the condition.
 //!
 //! # See also
 //! `WebAssemblyLowerBrUnless.cpp`, pin d1106deb71cc.
@@ -49,10 +49,13 @@ pub fn lower_br_unless(f: &mut Function) -> bool {
                 continue;
             }
             changed = true;
-            let [dst, Operand::Use(mut cond)] = f.blocks[b][i].operands[..] else { unreachable!("BR_UNLESS dst, cond") };
+            let [dst, Operand::Use(mut cond)] = f.blocks[b][i].operands[..] else {
+                unreachable!("BR_UNLESS dst, cond")
+            };
             let mut inverted = false;
             if f.is_stackified(cond) {
-                // A stackified register is defined by the instruction just above.
+                // A stackified register is defined by the instruction just
+                // above.
                 let at = i - 1;
                 let def = &mut f.blocks[b][at];
                 debug_assert!(def.defs().eq([cond]));

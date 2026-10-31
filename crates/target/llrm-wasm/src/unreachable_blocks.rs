@@ -1,4 +1,5 @@
-//! `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are removed.
+//! `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are
+//! removed.
 //!
 //! # See also
 //! `UnreachableBlockElim.cpp`, pin d1106deb71cc.

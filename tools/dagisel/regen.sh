@@ -49,9 +49,8 @@ t = open(src).read()
 t = t.replace("// @ENUMS@", open(work + "/enums.cpp").read()).replace("@SYMBOLS@", open(work + "/symbols.cpp").read()).replace("@MEMBERS@", open(work + "/members.cpp").read())
 open(work + "/ids.cpp", "w").write(t)
 PY
-if [ "$(uname)" = Darwin ]; then UNRESOLVED=(-Wl,-undefined,dynamic_lookup); else UNRESOLVED=(-Wl,--unresolved-symbols=ignore-all); fi
 g++ -std=c++17 -w -I"$S/include" -I"$LLVM_BUILD/include" -I"$X" -I"$LLVM_BUILD/lib/Target/X86" \
-  "$WORK/ids.cpp" -o "$WORK/ids" "${UNRESOLVED[@]}"
+  "$WORK/ids.cpp" -o "$WORK/ids" -Wl,--unresolved-symbols=ignore-all
 "$WORK/ids" | sed 's/^SelectionDAGISel:://' > "$WORK/ids.txt"
 # Numbers for the X86ISD nodes m16.td defines; the pin's headers do not have them.
 cat "$ROOT/tools/dagisel/own_ids.txt" >> "$WORK/ids.txt"

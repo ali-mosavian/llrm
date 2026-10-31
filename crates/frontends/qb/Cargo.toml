@@ -33,6 +33,7 @@ toml = { workspace = true }
 [dev-dependencies]
 llrm-x86-m16 = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 regex = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-codegen = { workspace = true, features = ["testing"] }

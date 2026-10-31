@@ -726,10 +726,8 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
         let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
     };
-    llrm_x86_m16::with_pin_tuning(|| {
-        assert!(names(false).iter().all(|n| n != "idiv"), "speed: the reciprocal, as the pin");
-        assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
-    });
+    assert!(names(false).iter().all(|n| n != "idiv"), "speed: the reciprocal, as the pin");
+    assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
@@ -1396,4 +1394,37 @@ define cc 1000 i16 @f(i16 %a) {
     let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
     let disturbs = &call.call.as_ref().expect("a call").disturbs;
     assert!(disturbs.contains(&RegId::ESI) && disturbs.contains(&RegId::EDI), "{disturbs:?}");
+}
+
+const UREM_BY_251: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = urem i32 %a, 251
+  ret i32 %r
+}
+";
+
+/// The `mul` of `x % 251` by reciprocal, as (accumulator, r/m operand) with
+/// whether each is a constant made by a `mov`.
+fn urem_mul_operands(cpu: &str) -> (bool, bool) {
+    let module = crate::testing::module(UREM_BY_251).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile(cpu).expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let all = done.body.insns();
+    let insns: Vec<_> = all.iter().filter_map(|i| i.what.as_ref()).collect();
+    let constant = |held: &crate::model::ir::Loc| {
+        insns.iter().any(|i| i.dests.contains(held) && matches!(i.sources.as_slice(), [crate::model::ir::Loc::Imm(_)]))
+    };
+    let mul = insns.iter().find(|i| i.name.as_deref() == Some("mul")).expect("a mul");
+    (constant(&mul.sources[0]), constant(&mul.sources[1]))
+}
+
+/// frames, huge m16 486: `x % 251` was `mov edx, magic; mul edx`, the r/m
+/// operand the 31-bit magic the 486 reads (`mul` 43 clocks against 19 for a
+/// short dividend; +4M clocks on 7 rows). The magic goes in EAX and the
+/// dividend is the r/m operand. The P5, whose multiply takes 10 clocks whatever
+/// the operands, keeps the pin's order (SD444).
+#[test]
+fn on_a_486_the_magic_is_the_accumulator_and_the_dividend_the_multiplier() {
+    assert_eq!(urem_mul_operands("486"), (true, false));
+    assert_eq!(urem_mul_operands("P5"), (false, true));
 }

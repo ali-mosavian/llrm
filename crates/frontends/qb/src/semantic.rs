@@ -4,10 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 mod absolute;
+mod allocation;
 mod assignment;
 mod bounds;
 mod debug;
+mod exclusive;
 mod format_spec;
+mod invariance;
 mod merging;
 mod shapes;
 mod tags;
@@ -286,9 +289,21 @@ struct Function {
     // Each element pointer into a far array: the place of the descriptor
     // owning the allocation it stays inside.
     allocations: BTreeMap<u32, u32>,
+    // Each element pointer of any array, whichever descriptor it came from.
+    elements: BTreeSet<u32>,
+    // Each descriptor-word load nothing rewrites: `!invariant.load`.
+    invariant: BTreeSet<u32>,
+    // Reference parameters (by index) nothing else reaches: `noalias`.
+    no_alias: BTreeSet<usize>,
+    // Back-edge blocks of loops that reach no far
+    // allocation: `NoFarAllocation`.
+    quiet_loops: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
+    // The POKE pointers among them whose segment is a literal: memory no
+    // variable of the program lives in (`Region::Absolute`).
+    unowned: BTreeSet<u32>,
 }
 
 struct Compiler {
@@ -517,6 +532,8 @@ pub struct Options {
     /// /D's overflow check: INTEGER + - * and negation, LONG + - and
     /// negation, and LONG to INTEGER raise error 6.
     pub checked_overflow: bool,
+    /// See `Frontend::idiv_overflow_traps`.
+    pub idiv_overflow_traps: bool,
     /// /MBF.
     pub mbf: bool,
     /// /FPa.
@@ -611,6 +628,9 @@ pub fn compile_debugged(
         merging::applied(&mut compiler);
     }
     shapes::applied(&mut compiler);
+    invariance::applied(&mut compiler);
+    exclusive::applied(&mut compiler);
+    allocation::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -1935,7 +1955,12 @@ impl Compiler {
             promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            elements: BTreeSet::new(),
+            invariant: BTreeSet::new(),
+            no_alias: BTreeSet::new(),
+            quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
+            unowned: BTreeSet::new(),
         });
     }
 
@@ -4084,7 +4109,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -4129,7 +4154,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -5933,6 +5958,18 @@ impl Compiler {
         let pointer = self.value(pointer_type);
         self.emit("address", vec![pointer], vec![Operand::Place(place)]);
         Ok(pointer)
+    }
+
+    /// The runtime entry that reads a string item into a string of `width`
+    /// bytes (0: a variable one). The Microsoft runtimes' B$RDSD takes
+    /// both; the llrm C runtime keeps B$RDSD for the variable string, so a
+    /// program without a fixed-string READ links nothing more, and reads a
+    /// fixed one with B$RDFS.
+    fn read_string_entry(
+        &self,
+        width: usize,
+    ) -> &'static str {
+        if width > 0 && self.runtime == "llrm" { "B$RDFS" } else { "B$RDSD" }
     }
 
     fn string_width(
@@ -8731,6 +8768,16 @@ impl Compiler {
             && matches!(op, Binary::Modulo | Binary::IntegerDivide)
             && !matches!(left_type, SINGLE | DOUBLE | LONG)
             && !matches!(right_type, SINGLE | DOUBLE | LONG);
+        // Where the processor's divide faults on an overflowing quotient and
+        // the runtime reports it as error 11, an INTEGER divide is the 16-bit
+        // `idiv` BC emits and `-32768 \ -1` needs no check of ours. Not where
+        // an ON ERROR handler is active (the trap names no statement to
+        // RESUME), nor by the constant -1, which the optimizer turns into a
+        // negation.
+        let hardware_idiv = narrow_divmod
+            && self.options.idiv_overflow_traps
+            && !matches!(&right_operand, Operand::Constant(_, Number::Integer(-1)));
+        let narrow_divmod = narrow_divmod && !hardware_idiv;
         let integral = matches!(
             op,
             Binary::And | Binary::Or | Binary::Xor | Binary::Eqv | Binary::Imp | Binary::Modulo | Binary::IntegerDivide
@@ -8750,7 +8797,7 @@ impl Compiler {
             // QB rounds floating operands before every integral/logical
             // operator. Any floating operand selects LONG evaluation; BYTE is
             // promoted to INTEGER. Keep both conversions explicit in HIR.
-            let target = if matches!(op, Binary::Modulo | Binary::IntegerDivide)
+            let target = if (matches!(op, Binary::Modulo | Binary::IntegerDivide) && !hardware_idiv)
                 || matches!(left_type, SINGLE | DOUBLE)
                 || matches!(right_type, SINGLE | DOUBLE)
                 || left_type == LONG
@@ -8810,7 +8857,7 @@ impl Compiler {
         // -fsanitize=integer-divide-by-zero made it.
         if matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
             self.division_checked(&left_operand, &right_operand, common, narrow_divmod, true)?;
-            if !narrow_divmod {
+            if !narrow_divmod && !hardware_idiv {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
             }
@@ -10608,6 +10655,24 @@ impl Compiler {
                             );
                         }
                     }
+                    if function.invariant.contains(&instruction.id) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Invariant,
+                        );
+                    }
+                    if let Some(region) = region(instruction, function) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Access(region),
+                        );
+                    }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
@@ -10818,6 +10883,45 @@ impl Compiler {
                 facts.state(
                     llrm_hir::facts::Subject::Param { function: i64::from(function.id), index },
                     llrm_hir::facts::Fact::Dereferenceable(bytes as u64),
+                );
+                // A reference is the address of a variable its caller names:
+                // never null, never an undefined value.
+                let at = llrm_hir::facts::Subject::Param { function: i64::from(function.id), index };
+                facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
+                if function.no_alias.contains(&(index as usize)) {
+                    facts.state(at, llrm_hir::facts::Fact::NoAlias);
+                }
+            }
+        }
+        // `mustprogress` deletes a side-effect-free loop it cannot prove ends,
+        // which BASIC's delay and wait loops (`FOR i = 1 TO n: NEXT`,
+        // `DO WHILE flag = 0: LOOP` for an ON KEY handler) must survive: only
+        // a routine with no loop at all, and no call of a routine of the
+        // program (which may recurse or loop), states it.
+        for function in &self.functions {
+            let calls_program = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter_map(|instruction| instruction.callee.as_deref())
+                .any(|callee| self.functions.iter().any(|one| one.name == callee));
+            if has_loop(function) || calls_program {
+                continue;
+            }
+            if let Some(callable) = self.callables.iter().find(|one| one.name == function.name) {
+                facts.state(
+                    llrm_hir::facts::Subject::Callable(i64::from(callable.id)),
+                    llrm_hir::facts::Fact::MustProgress,
+                );
+            }
+        }
+        // A loop that reaches no far allocation keeps every far descriptor's
+        // words.
+        for function in &self.functions {
+            for &block in &function.quiet_loops {
+                facts.state(
+                    llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },
+                    llrm_hir::facts::Fact::NoFarAllocation,
                 );
             }
         }
@@ -11434,6 +11538,45 @@ fn numbers(
     }
 }
 
+/// The region of memory a load or store reaches, where the frontend knows it:
+/// a descriptor's field, or an element of an array (its subscripts are in
+/// range, which an access promises).
+fn region(
+    instruction: &Instruction,
+    function: &Function,
+) -> Option<llrm_hir::facts::Region> {
+    use llrm_hir::facts::Region;
+    if !matches!(instruction.op, "load" | "store") {
+        return None;
+    }
+    if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
+        return Some(Region::Descriptor);
+    }
+    // A literal segment is memory the program owns nothing in; a reference
+    // parameter points at a variable (a near pointer into DS) or an element of
+    // an array of the program, so a routine that writes such memory states the
+    // two apart.
+    if let [Operand::Indirect { base, .. }, ..] = instruction.operands.as_slice() {
+        if function.unowned.contains(base) {
+            return Some(Region::Absolute);
+        }
+        if !function.unowned.is_empty() && function.promises.iter().any(|&(value, _)| value == *base) {
+            return Some(Region::Referent);
+        }
+    }
+    instruction
+        .operands
+        .iter()
+        .any(|operand| match operand {
+            Operand::Indirect { base, inbounds: true, .. } => function.elements.contains(base),
+            // A named array's element, which a parameter may be bound to.
+            Operand::Element(..) => true,
+            Operand::Projection { indices, .. } => !indices.is_empty(),
+            _ => false,
+        })
+        .then_some(Region::Element)
+}
+
 fn operand_json(
     out: &mut String,
     operand: &Operand,
@@ -11516,4 +11659,24 @@ fn plural(
     noun: &str,
 ) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+/// Whether the blocks of a routine hold a cycle: a jump back to a block on the
+/// path to it.
+fn has_loop(function: &Function) -> bool {
+    fn visit(
+        function: &Function,
+        id: u32,
+        state: &mut BTreeMap<u32, bool>,
+    ) -> bool {
+        match state.get(&id) {
+            Some(&on_path) => return on_path,
+            None => state.insert(id, true),
+        };
+        let targets = function.blocks.iter().find(|block| block.id == id).and_then(|block| block.terminator.as_ref());
+        let cyclic = targets.is_some_and(|one| one.targets.iter().any(|&next| visit(function, next, state)));
+        state.insert(id, false);
+        cyclic
+    }
+    function.blocks.first().is_some_and(|entry| visit(function, entry.id, &mut BTreeMap::new()))
 }

@@ -24,7 +24,6 @@ for s in $sources; do
     -Xclang -disable-llvm-passes -I "$root/runtime/qb/posix" -I "$root/runtime/qb" -I "$root/runtime/qb/dev" \
     -I "$root/runtime/qb/dev/headless" -I "$root/runtime/qb/dev/host" -I "$root/runtime/shared/posix" \
     "$root/$s" -o "$obj/$n.ll"
-  sed -i -E 's/ hidden / /' "$obj/$n.ll"
   "$llc" -filetype=obj "$obj/$n.ll" -o "$obj/$n.o" || { echo "llc failed: $s" >&2; failed=1; }
 done
 [ $failed = 0 ] || exit 1

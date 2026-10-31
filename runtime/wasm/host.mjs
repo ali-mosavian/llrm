@@ -1,4 +1,4 @@
-// What a wasm32 QB module needs of its host, for the node harness (headless.mjs) and the page's worker (web/worker.mjs):
+// What a wasm32 QB module needs of its host, for the node harness (headless.mjs):
 // the `env` imports, the clock tick, and the page of memory the host keeps for itself. The caller says what time it is and
 // what to do on a poll, a key look, output, exit and a tone.
 export const TICK_MS = 54.9254; // 18.2 a second: the timer interrupt that takes PLAY's notes off its queue

@@ -36,7 +36,14 @@ pub fn set_p2align_operands(f: &mut Function) -> bool {
     for inst in f.blocks.iter_mut().flatten() {
         let Some(natural) = default_p2align(inst.opcode) else { continue };
         let mem = inst.mem.expect("a load or store has one memory operand");
-        assert_eq!(mem.size, 1 << natural, "the default p2align is the access size ({} of {} bytes in @{})", find(inst.opcode).map_or("?", |a| a.text), mem.size, name);
+        assert_eq!(
+            mem.size,
+            1 << natural,
+            "the default p2align is the access size ({} of {} bytes in @{})",
+            find(inst.opcode).map_or("?", |a| a.text),
+            mem.size,
+            name
+        );
         let at = inst.operands.iter().position(|o| matches!(o, Operand::Imm(_))).expect("a p2align operand");
         assert_eq!(inst.operands[at], Operand::Imm(0), "selection sets p2align to 0");
         inst.operands[at] = Operand::Imm(u64::from(mem.align.trailing_zeros()).min(natural) as i64);

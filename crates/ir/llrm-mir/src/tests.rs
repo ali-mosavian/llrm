@@ -186,6 +186,14 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
     assert_eq!(round(&once), once);
 }
 
+/// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
+/// printer, so a printed module lost it (the pipeline's text round trips).
+#[test]
+fn a_global_section_survives_printing() {
+    let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";
+    assert_eq!(round(text), text);
+}
+
 #[test]
 fn every_invalid_fixture_is_refused_for_its_reason() {
     let fixtures = fixtures(true);
@@ -412,6 +420,44 @@ fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
         let found = problems(bits);
         assert!(found.iter().any(|one| one.contains("bswap must be an even number of bytes")), "i{bits}: {found:?}");
     }
+}
+
+/// `llvm.invariant.start` and `.end` are intrinsics MIR has (`Intrinsics.td`):
+/// a scope's call verifies, and the start's size is -1, 0 or positive
+/// (Verifier.cpp#L6072). MIR said "an intrinsic MIR does not have" of both.
+#[test]
+fn an_invariant_scope_verifies_and_a_size_below_minus_one_is_reported() {
+    let problems = |size: i64| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\n\
+                 declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)\n\
+                 define void @f(ptr %p) {{\nb0:\n  %s = call ptr @llvm.invariant.start.p0(i64 {size}, ptr %p)\n  \
+                 call void @llvm.invariant.end.p0(ptr %s, i64 {size}, ptr %p)\n  ret void\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    for size in [-1, 0, 4] {
+        assert_eq!(problems(size), Vec::<String>::new(), "size {size}");
+    }
+    let found = problems(-2);
+    assert!(
+        found.iter().any(|one| one.contains("invariant_start parameter must be -1, 0 or a positive number")),
+        "{found:?}"
+    );
+}
+
+/// `Intrinsics.td` gives `invariant.start` the result `ptr`, whatever pointer
+/// it covers: an `i32` result is a wrong signature.
+#[test]
+fn an_invariant_start_with_a_wrong_result_is_a_wrong_signature() {
+    let found = crate::verify::verify(
+        &parse::module("declare i32 @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\n")
+            .unwrap_or_else(|error| panic!("{error}")),
+    );
+    let error = found.join("\n");
+    assert!(error.contains("incorrect return type"), "{error}");
 }
 
 /// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
@@ -878,6 +924,22 @@ fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     assert_eq!(counts["a.rs"], 0, "SparseIdMap is sanctioned");
     assert_eq!(counts["b.rs"], 1, "a generic alias applied to an id is one keyed map; applied to a string it is none");
     assert_eq!(counts["hash.rs"], 0, "the alias lines themselves count none");
+}
+
+/// A ceiling for a file that moved or went away in the re-org stayed in
+/// `dense-keys.txt`: 8 of them were left, naming nothing, and a ceiling that
+/// names nothing guards nothing.
+#[test]
+fn every_dense_key_ceiling_names_a_file_that_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let stale: Vec<&str> = include_str!("../dense-keys.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, _)| file)
+        .filter(|file| !root.join(file).exists())
+        .collect();
+    assert!(stale.is_empty(), "dense-keys.txt names files that are gone: {stale:?}");
 }
 
 #[test]

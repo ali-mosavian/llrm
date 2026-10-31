@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:9510ba3ec5e2d29af3a15bad5f6ec2b46c730d924fcd28f43d44b34313b4c2d1 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:01de55c3837bb495f46328166caa9995de003e28820e250cdd9eccb157b2a942 -->
 
 # speculate
 
@@ -26,8 +26,8 @@ more.
   speculate. A store runs early (`HoistCondStores`) with
   `isSafeToSpeculateStore` (D6).
 - D2. No branch weights or `!unpredictable` (`isProfitableToSpeculate` is
-  true), no ephemeral values (no assumption cache), no pseudo probes, no
-  `minsize` (costs are `SizeAndLatency`).
+  true), no ephemeral values (no assumption cache), no pseudo probes. A
+  `minsize` function is priced as `CodeSize` (`cost_kind`).
 - D3. A hoisted instruction keeps the metadata kinds LLVM keeps and loses
   the rest, as in [`twoentryphi`](twoentryphi.md) (D4 there).
 - D4. No constant expressions in function bodies: LLVM's price of one is not
@@ -49,4 +49,4 @@ end:   %p = phi i32 [ %t, %then ], [ %x, %entry ]
 ```
 
 ## Used by
-Named by `simplifycfg`.
+Named by `branchtocommon`, `simplifycfg`.
