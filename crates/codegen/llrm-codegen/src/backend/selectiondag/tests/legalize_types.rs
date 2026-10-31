@@ -80,6 +80,21 @@ fn an_odd_width_integer_converts_to_and_from_a_float() {
     assert_eq!(dag.opcode(dag.operand(wide, 0)), ISD::FpToSInt);
 }
 
+/// An `lrint` to a narrow integer had no promotion ("promote result");
+/// `PromoteIntRes_XRINT` rounds to the wider type.
+#[test]
+fn a_narrow_lrint_rounds_to_the_promoted_type() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = super::dag();
+    let f = dag.get_register(EVT::Simple(MVT::F64), 9);
+    let rint = dag.get_node(ISD::LRint, EVT::Int(12), &[f]);
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[rint]);
+    dag.set_root(byte);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let wide = dag.operand(dag.get_root(), 0);
+    assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::LRint, EVT::I16));
+}
+
 /// `trunc(load i12 + load i12)` to a byte: before legalization the root
 /// reads an `i12`, which no register holds. After it the add is an `i16`
 /// add of extending loads, and the root is rewritten to read it.
