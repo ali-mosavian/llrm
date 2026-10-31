@@ -199,6 +199,11 @@ impl<const STACK: bool> Target for Mos<STACK> {
         register
     }
 
+    /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
+    fn spill_clobbers() -> Vec<RegId> {
+        if STACK { vec![reg::Y] } else { Vec::new() }
+    }
+
     /// `rc0` and `rc1` are the software stack pointer.
     fn reserved(root: RegId) -> bool {
         root == reg::RC0 || root == reg::RC1
@@ -2146,7 +2151,7 @@ fn emit_with<const STACK: bool>(
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
-    let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
@@ -2466,23 +2471,15 @@ fn emit_with<const STACK: bool>(
                     let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
                     let load = |out: &mut String, value: &Operand, at: Option<RegId>| match (value, at) {
                         (Operand::Imm(v), _) => writeln!(out, "  lda #{v}").unwrap(),
+                        // a value already in `a`
+                        (_, Some(r)) if r == reg::A => {}
                         (_, Some(r)) if r == reg::X => out.push_str("  txa\n"),
                         (_, Some(r)) if r == reg::Y => out.push_str("  tya\n"),
                         (_, Some(r)) => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                         (_, None) => unreachable!(),
                     };
-                    let mut read = inst
-                        .operands
-                        .iter()
-                        .filter_map(
-                            |o| match o {
-                                Operand::Use(Reg::Virt(_)) => Some(at(match o {
-                                    Operand::Use(r) => *r,
-                                    _ => unreachable!(),
-                                })),
-                                _ => None,
-                            },
-                        );
+                    let mut read =
+                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
                     let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
                     let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
                     // `a` holds the compare's left side: `lda lhs; cmp rhs`
@@ -2780,4 +2777,54 @@ fn relax(text: &str) -> String {
         }
     }
     out
+}
+
+/// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
+/// measure against.
+fn spike_asked() -> bool {
+    std::env::var_os("LLRM_6502_SPIKE").is_some()
+}
+
+/// The function allocated: by the shared greedy allocator, which this target
+/// moves onto (`Target::register_allocator`), else by the spike allocator.
+///
+/// DEVIATE 9: a function greedy cannot take (its fixed registers overlap, or a
+/// spill cannot be written) falls back to the spike allocator rather than
+/// failing the compile. Exit: none such left in the 79 programs and the
+/// differential corpus; then the fallback and `LLRM_6502_SPIKE` go with the
+/// spike allocator.
+fn allocate<const STACK: bool>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    if !spike_asked() {
+        let mut tried = function.clone();
+        if let Ok(done) = allocate_greedy::<Mos<STACK>>(&mut tried) {
+            *function = tried;
+            return Ok(done);
+        }
+    }
+    allocate_spilling::<Mos<STACK>>(function, 0)
+}
+
+/// `function` allocated by greedy: converted, its copies joined by the
+/// coalescer, allocated with the spills written into it, and written back.
+fn allocate_greedy<T: Target<Class = Class>>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
+    use llrm_lir::registers::Regs;
+    let regs = Regs(&crate::REGISTER_INFO);
+    let mut converted = llrm_spike_mf::tolir::to_lir::<T>(function, regs)?;
+    converted.coalesce(regs, TUNING.with(|t| t.get()) == Tuning::SIZE);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs, &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(function);
+    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true)
+        .ok_or_else(|| format!("{}: greedy refused", function.name))?;
+    if decided.spill_failed || decided.report.stats.failed > 0 {
+        return Err(format!("{}: greedy could not allocate", function.name));
+    }
+    let back = llrm_spike_mf::tolir::from_lir::<T>(function, &converted, &decided, regs)?;
+    *function = back.function;
+    Ok((back.assignment, back.slots))
 }
