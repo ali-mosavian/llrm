@@ -146,6 +146,15 @@ def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
     assert "bench_io.h" not in listed and "programs.py" in (HERE / "run.sh").read_text()
 
 
+def test_ctime_times_the_programs_programs_py_lists_and_no_file():
+    """`ctime.py` listed `ls bench` and timed `bench_io.h` as a program: the run stopped before writing ctime.json."""
+    import importlib
+    import ctime
+    importlib.reload(ctime)
+    names = sorted(ctime.programs.sources())
+    assert names and "bench_io.h" not in names and all(ctime.cmds(n) for n in names), names
+
+
 def test_every_x87_encoding_has_a_clock_price():
     """#1659 made an unpriced x87 instruction an error, and `frndint` (Open Watcom's float-to-int, in floats and fpbench) was
     one: tools/bench died on those programs and main's gate failed. Every encoding of D8-DF, 16- and 32-bit, is priced."""
