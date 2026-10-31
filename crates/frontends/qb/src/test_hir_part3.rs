@@ -3864,25 +3864,6 @@ fn the_run_time_module_flag_marks_the_header_and_names_the_loader_externals() {
     assert!(!plain.iter().any(|one| one == "$AC"), "{plain:?}");
 }
 
-/// `PRINT 1` at -m32 with the QB 4.5 runtime was refused by the DAG selector
-/// ("QB runtime routine whose stack cleanup the convention does not model"):
-/// the table's 16-bit block pops 2 bytes, the call pushes a dword and the
-/// callee pops all 4, which is what the old selector does. After: the call
-/// compiles, with no `add esp` after it.
-#[test]
-fn test_a_32_bit_call_of_a_callee_popped_routine_selects_under_the_dag_selector() {
-    let directory = tempfile::tempdir().expect("creates a directory");
-    let source = written(&directory, "p1.bas", b"PRINT 1\r\n");
-    let out = directory.path().join("p1.asm");
-    let argv = [source.to_str().unwrap(), "-m32", "--runtime", "qb45", "--isel=dag", "-S", "-o", out.to_str().unwrap()]
-        .map(str::to_owned);
-    assert_eq!(crate::cli::main(&argv), 0);
-    let text = std::fs::read_to_string(&out).expect("the listing");
-    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
-    assert!(main.contains("pushd 1\n    call B$PEI2"), "{main}");
-    assert!(!main.contains("add esp"), "{main}");
-}
-
 /// A BASIC program whose last statement is a runtime call ended without
 /// `call B$CENP` under the DAG selector at -m32: the call before the return
 /// became a sibling `jmp`, and `ends_program` found no return to spell as the

@@ -94,7 +94,8 @@ fn run(
     std::fs::write(directory.join(tool.input.0), tool.input.1).unwrap();
     if tool.name == "llrm-cc" {
         // llrm-cc names its target by `LLRM_CC_TARGET`; the helper maps `-m32`.
-        // The Watcom m32 row names its headers by LLRM_OW; only the flag parse is under test, so any path will do.
+        // The Watcom m32 row names its headers by LLRM_OW; only the flag parse
+        // is under test, so any path will do.
         let headers = std::env::var_os("LLRM_OW").unwrap_or_else(|| directory.as_os_str().to_owned());
         return common::cc::llrm_c()
             .current_dir(directory)
@@ -136,7 +137,8 @@ fn every_binary_is_classified() {
 fn every_compiler_takes_m32_from_the_one_parser() {
     for tool in tools() {
         let directory = tempfile::tempdir().unwrap();
-        // The QB 4.5 runtime is 16-bit code, which a 32-bit target refuses by name (5458b82e96): llrm-qb takes the llrm one.
+        // The QB 4.5 runtime is 16-bit code, which a 32-bit target refuses by
+        // name (5458b82e96): llrm-qb takes the llrm one.
         let tool = if tool.name == "llrm-qb" {
             Tool { more: &["--dialect", "qb45", "--runtime", "llrm", "-S", "-o", "a.s"], ..tool }
         } else {
