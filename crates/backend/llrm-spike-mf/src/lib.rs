@@ -19,6 +19,7 @@ pub mod reloads;
 pub mod reschedule;
 pub mod sink;
 pub mod spill;
+pub mod tolir;
 
 pub use commute::commute_tied;
 pub use fold::{
