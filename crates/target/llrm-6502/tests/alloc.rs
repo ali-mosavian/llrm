@@ -2512,7 +2512,7 @@ fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
     let text = compile(ir, "widen");
     // rc2:rc3 hold the argument 0x1234 on entry and must hold zero on return
     let setup = set("rc2", 0x1234) + &set("rc3", 0x1234 >> 8);
-    let run = |after: &str| common::run_with("alloc-widen", &format!("{setup}  jsr widen\n{after}"), &text);
+    let run = |after: &str| common::run_with("alloc-long-result", &format!("{setup}  jsr widen\n{after}"), &text);
     assert_eq!(run("  lda rc2\n"), 0, "{text}");
     assert_eq!(run("  lda rc3\n"), 0, "{text}");
     assert_eq!(run(""), 0x34, "{text}");
