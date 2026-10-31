@@ -58,6 +58,8 @@ pub struct Converted<T: Target> {
     pub saved: Vec<RegId>,
     /// `(block, instruction)` of the instruction numbered `at / 2`.
     pub origin: Vec<(usize, usize)>,
+    /// Whether a path from the entry reaches each block.
+    pub reachable: Vec<bool>,
     pub tii: SpikeInstrInfo<T>,
     pub tri: SpikeRegisterInfo,
 }
@@ -106,6 +108,7 @@ pub fn to_lir<T: Target>(
     }
     let widths: Vec<u32> = function.classes.iter().map(|class| class_width::<T>(registers, *class)).collect();
     let successors = successors(function);
+    let reachable = reachable(&successors);
     let mut made = Made {
         function,
         registers,
@@ -119,13 +122,17 @@ pub fn to_lir<T: Target>(
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
-        for (position, inst) in block.insts.iter().enumerate() {
+        // DEVIATE 2b: greedy is not given a block no path reaches (LLVM
+        // removes them first); `from_lir` returns it as it was.
+        for (position, inst) in block.insts.iter().enumerate().filter(|_| reachable[at]) {
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             insns.push(Arc::new(made.insn(inst, 2 * ordinal)));
         }
         let mut lir = LirBlock::new(at as i64, insns);
-        lir.succ = successors[at].iter().map(|to| *to as i64).collect();
+        if reachable[at] {
+            lir.succ = successors[at].iter().map(|to| *to as i64).collect();
+        }
         blocks.push(LirBlockRef::from(lir));
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
@@ -154,6 +161,7 @@ pub fn to_lir<T: Target>(
         unspillable,
         saved,
         origin: made.origin,
+        reachable,
         tii: SpikeInstrInfo { classes: function.classes.clone(), registers, marker: PhantomData },
         tri: SpikeRegisterInfo { copy_cost: 1, csr_first_use_cost: 0 },
     })
@@ -592,6 +600,18 @@ impl FrameInfo for SpikeFrame {
     }
 }
 
+/// The blocks a path from block 0 reaches.
+fn reachable(successors: &[Vec<usize>]) -> Vec<bool> {
+    let mut seen = vec![false; successors.len()];
+    let mut work = if successors.is_empty() { Vec::new() } else { vec![0] };
+    while let Some(at) = work.pop() {
+        if !std::mem::replace(&mut seen[at], true) {
+            work.extend(successors[at].iter().copied().filter(|to| !seen[*to]));
+        }
+    }
+    seen
+}
+
 /// The allocatable physical registers `inst` reads and writes.
 fn physical<T: Target>(inst: &Inst) -> (impl Iterator<Item = RegId> + '_, impl Iterator<Item = RegId> + '_) {
     let of = |operand: &Operand, def: bool| match operand {
@@ -701,6 +721,10 @@ pub fn from_lir<T: Target>(
     let mut slots: Vec<(i32, T::Class)> = Vec::new();
     let mut blocks = Vec::with_capacity(edited.blocks.len());
     for (at, block) in edited.blocks.iter().enumerate() {
+        if !converted.reachable[at] {
+            blocks.push(original.blocks[at].clone());
+            continue;
+        }
         let mut insts = Vec::with_capacity(block.insns.len());
         for insn in block.insns.iter() {
             let what = insn.what.as_ref().ok_or("an instruction with no semantics")?;
