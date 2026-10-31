@@ -54,14 +54,6 @@ fn a_mask_is_a_moveq_only_within_its_signed_byte() {
     }
 }
 
-fn code_size(
-    ir: &str,
-    options: Options,
-) -> usize {
-    let items = items_with(&module(ir), "f", Cpu::M68000, options).unwrap();
-    llrm_m68k::object::assemble(&items, 0).unwrap().code.len()
-}
-
 /// `s + (a > b) + a` is `sgt; and.l #1; add`, the pin's patterns. `moveq #0`
 /// before the compare and `neg.b` after the `sgt` were a rewrite of it, 2 bytes
 /// shorter, that the pin does not make.
@@ -485,12 +477,10 @@ done:
   ret i32 %z
 }";
 
-/// A loop over three byte pointers and a count: LSR kept one shared index
-/// register for the pointers, `move.b (%a0,%d1), ...`; with post-indexed
-/// addressing each pointer steps in its own access. Runs, and no pointer is
-/// stepped apart from its access.
+/// A loop over three byte pointers and a count: the pin's addressing mode is
+/// none, so no pointer is post-incremented. Runs.
 #[test]
-fn a_loop_over_three_pointers_steps_each_in_its_access() {
+fn a_loop_over_three_pointers_runs_without_post_increment() {
     use llrm_m68k::kernels::Arg::{Data, Imm};
     let args = [Data(128), Data(0), Data(0), Imm(5)];
     for options in [Options::default(), Options::PINNED] {
@@ -499,7 +489,7 @@ fn a_loop_over_three_pointers_steps_each_in_its_access() {
         }
     }
     let text = text_with(&module(THREE_POINTERS), "k", Cpu::M68000, Options::default()).unwrap();
-    assert!(text.matches(")+").count() >= 3, "{text}");
+    assert!(!text.contains("%a0)+") && !text.contains("%a1)+") && !text.contains("%a2)+"), "{text}");
 }
 
 /// A phi only other phis read had no register and its inputs were dropped
@@ -713,12 +703,11 @@ define i32 @f(ptr %d, ptr %s) {{
     )
 }
 
-/// An inline struct copy walks both pointers with `(An)+`: 2 bytes a move where
-/// the later ones were 6 (`move.l (4,%a0), (4,%a1)`), and what is read from the
-/// destination afterwards is the same bytes, at the displacement less the
-/// chain.
+/// An inline struct copy is the pin's moves with displacements, `(4,%a0)`;
+/// `(An)+` chains were a rewrite of them, and what is read from the destination
+/// afterwards is read at its own displacement.
 #[test]
-fn an_inline_copy_steps_both_pointers_and_later_reads_see_the_copy() {
+fn an_inline_copy_keeps_the_pins_displacements() {
     for bytes in [8, 24, 32] {
         let after = format!(
             "  %p = getelementptr i8, ptr %d, i32 {}
@@ -731,9 +720,7 @@ fn an_inline_copy_steps_both_pointers_and_later_reads_see_the_copy() {
         );
         let ir = copy_of(bytes, &after);
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert_eq!(asm.matches("(%a0)+").count(), bytes as usize / 4, "{bytes}: {asm}");
-        assert_eq!(asm.matches("(%a1)+").count(), bytes as usize / 4, "{bytes}: {asm}");
-        assert!(!asm.contains("(4,%a0)") && !asm.contains("(8,%a0)"), "{bytes}: {asm}");
+        assert!(!asm.contains("%a0)+") && !asm.contains("%a1)+"), "{bytes}: {asm}");
         let pinned = text_with(&module(&ir), "f", Cpu::M68000, Options::PINNED).unwrap();
         assert!(!pinned.contains(")+"), "{pinned}");
     }

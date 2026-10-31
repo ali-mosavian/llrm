@@ -5,7 +5,6 @@ pub mod abi;
 pub mod address;
 pub mod amiga;
 pub mod atari;
-pub mod chain;
 pub mod compile;
 pub mod dagisel;
 pub mod driver;

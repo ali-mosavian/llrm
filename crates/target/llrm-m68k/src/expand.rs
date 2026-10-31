@@ -321,16 +321,6 @@ pub fn finish(
         }
     }
     lines.extend(out.into_iter().map(Line::Inst));
-    // the registers a `ret` reads: the result, live at the `rts`
-    let returned: Vec<RegId> = insts
-        .iter()
-        .filter(|inst| inst.kind == Kind::Op("RET"))
-        .flat_map(|inst| &inst.operands)
-        .filter_map(|operand| match operand {
-            Operand::Use(Reg::Phys(register)) => Some(*register),
-            _ => None,
-        })
-        .collect();
     if overlay {
         lines = lines
             .into_iter()
@@ -344,9 +334,6 @@ pub fn finish(
         lines = crate::overlay::narrow_immediates(lines);
         lines = crate::overlay::drop_redundant_tests(lines);
         lines = crate::overlay::drop_repeated_compares(lines);
-        lines = crate::overlay::fold_post_increment(lines);
-        lines = crate::chain::chain_post_increment(lines, &returned);
-        lines = crate::chain::loop_post_increment(lines);
     }
     Ok(lines)
 }

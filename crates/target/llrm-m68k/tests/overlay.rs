@@ -281,23 +281,6 @@ entry:\n\
     assert!(text.contains("%ccr") || text.contains("%sr"), "{text}");
 }
 
-/// Post-increment forms derived from the pin's `(An)` rows, bytes from
-/// binutils: `add.l (%a1)+,%d0` d099, `add.b (%a1)+,%d3` d619, `and.l
-/// (%a1)+,%d1` c299.
-#[test]
-fn post_increment_forms_encode_as_binutils_does() {
-    let load =
-        |opcode, to: &str, from: &str| Inst { opcode, operands: vec![register(to), register(to), register(from)] };
-    let cases = [
-        (load("ADD32dj+", "d0", "a1"), "d099"),
-        (load("ADD8dj+", "d3", "a1"), "d619"),
-        (load("AND32dj+", "d1", "a1"), "c299"),
-    ];
-    for (inst, golden) in cases {
-        assert_eq!(hex(&encode(&inst).unwrap().bytes), golden, "{inst:?}");
-    }
-}
-
 /// `divu.l %d2,%d1` and `divs.l %d2,%d1`, from binutils. The pin's rows encoded
 /// the remainder register as `%d0` (`divul.l %d2,%d0:%d1`), which overwrote the
 /// dividend in `%d0`: 68020 differential seeds 608, 636 (about one in five
@@ -340,22 +323,11 @@ fn sum_loop(step: &str) -> String {
     )
 }
 
-/// A load through a pointer that steps by the load's size was `add.l (%a0),
-/// %d0` and `addq.l #4, %a0`, two instructions for `add.l (%a0)+, %d0`.
-#[test]
-fn a_load_and_the_step_of_its_pointer_are_one_post_increment() {
-    let pinned = compiled(&sum_loop("1"), Options::PINNED);
-    let ours = compiled(&sum_loop("1"), Options::default());
-    assert!(!pinned.contains(")+"), "{pinned}");
-    assert!(ours.contains("add.l\t(%a0)+, %d0"), "{ours}");
-    assert!(!ours.contains("addq.l\t#4"), "{ours}");
-}
-
 /// A step that is not the size of the access cannot be folded.
 #[test]
 fn a_step_of_another_size_is_not_a_post_increment() {
     let ours = compiled(&sum_loop("2"), Options::default());
-    assert!(!ours.contains(")+"), "{ours}");
+    assert!(!ours.contains("%a0)+") && !ours.contains("%a1)+") && !ours.contains("%a2)+"), "{ours}");
 }
 
 /// `add.l #-1` took 6 bytes where `subq.l #1` takes 2: strlen ended with it.
@@ -366,18 +338,6 @@ fn adding_a_small_negative_is_a_subq() {
     let ours = compiled(ir, Options::default());
     assert!(pinned.contains("add.l\t#-1") || pinned.contains("add.l\t#-"), "{pinned}");
     assert!(ours.contains("subq.l") && !ours.contains("add.l\t#-"), "{ours}");
-}
-
-/// strlen's loop ended `move.l %d0, %d1; move.l %d1, %d0; addq.l #1, %d0`: the
-/// second move put the value back where it already was. Then `move.l %d0,
-/// %d1; addq.l #1, %d0; tst.b (1,%a0,%d1)` kept the counter and its successor
-/// apart, a move more every trip than gcc's: the access reads the successor
-/// with the step taken from the displacement, and only the argument is loaded.
-#[test]
-fn a_loop_counter_is_not_copied_out_and_back() {
-    let ir = "define i32 @f(ptr %p) {\nentry:\n  br label %l\nl:\n  %i = phi i32 [0, %entry], [%i1, %l]\n  %q = getelementptr i8, ptr %p, i32 %i\n  %v = load i8, ptr %q\n  %z = icmp eq i8 %v, 0\n  %i1 = add i32 %i, 1\n  br i1 %z, label %x, label %l\nx:\n  ret i32 %i\n}";
-    let asm = compiled(ir, Options::default());
-    assert_eq!(asm.matches("move.l").count(), 1, "{asm}");
 }
 
 fn loop_moves(asm: &str) -> usize {
@@ -439,33 +399,6 @@ fn a_select_in_a_loop_leaves_one_move_on_the_arm_that_changes_the_value() {
     assert!(loop_register_moves(&pinned) >= 3, "{pinned}");
     let ours = compiled(arrmax_loop(), Options::default());
     assert_eq!(loop_register_moves(&ours), 1, "{ours}");
-}
-
-/// The load of the running maximum's array stepped its pointer after the
-/// select's join (`move.l (%a0), %d2 ... addq.l #4, %a0`, 2 bytes more than
-/// `(%a0)+`), because the scan stopped at the branch over the select's arm.
-#[test]
-fn a_step_past_a_branch_over_one_arm_is_still_a_post_increment() {
-    let ours = compiled(arrmax_loop(), Options::default());
-    assert!(ours.contains("move.l\t(%a0)+, %d") && !ours.contains("addq.l\t#4"), "{ours}");
-}
-
-/// A block inside the span that something outside also jumps to would reach
-/// the step with no access before it: the step stays.
-#[test]
-fn a_step_after_a_label_entered_from_outside_the_span_stays() {
-    use llrm_m68k::expand::Line;
-    let inst = |opcode, operands| Line::Inst(Inst { opcode, operands });
-    let lines = vec![
-        inst("Beq8", vec![Operand::Symbol(".LBB0_3".into(), 0)]),
-        Line::Label(1),
-        inst("MOV32rj", vec![register("d2"), register("a0")]),
-        Line::Label(3),
-        inst("ADDQ32a", vec![register("a0"), register("a0"), Operand::Imm(4)]),
-    ];
-    let folded = llrm_m68k::overlay::fold_post_increment(lines);
-    assert!(matches!(&folded[2], Line::Inst(access) if access.opcode == "MOV32rj"));
-    assert_eq!(folded.len(), 5);
 }
 
 /// `p[i + 1]` through `(d8,An,Xn)`: the base class's `isLegalAddressingMode`
@@ -588,85 +521,6 @@ fn a_compare_of_memory_with_zero_is_a_tst() {
     assert!(code_size(ir, Options::default()) < code_size(ir, Options::PINNED));
 }
 
-/// The loop strength reduction priced `(d8, An, Xn)` with a displacement as
-/// illegal, as the pin's base class does, so strlen's counter was fixed up
-/// after the loop (`subq.l #1`) and the test read `(0,%a0,%d1)` from a copy.
-/// A byte copy walked two pointers by one shared index register and a `move.b
-/// (%a0,%d1), (%a1,%d1)`, 46 bytes; the loop is `move.b (%a0)+, (%a2)+` with
-/// neither pointer stepped apart (once the text printed `(%a2)+` while the
-/// code stepped it again).
-#[test]
-fn a_byte_copy_loop_steps_both_pointers_in_the_move() {
-    let ir = "define i32 @f(ptr %d, ptr %s, i32 %n) {
-entry:
-  %c = icmp sgt i32 %n, 0
-  br i1 %c, label %loop, label %done
-loop:
-  %p = phi ptr [ %pn, %loop ], [ %d, %entry ]
-  %i = phi i32 [ %in, %loop ], [ %n, %entry ]
-  %q = phi ptr [ %qn, %loop ], [ %s, %entry ]
-  %in = add i32 %i, -1
-  %qn = getelementptr i8, ptr %q, i32 1
-  %v = load i8, ptr %q
-  %pn = getelementptr i8, ptr %p, i32 1
-  store i8 %v, ptr %p
-  %again = icmp ugt i32 %i, 1
-  br i1 %again, label %loop, label %done
-done:
-  %e = getelementptr i8, ptr %d, i32 12
-  %r = load i8, ptr %e
-  %x = sext i8 %r to i32
-  ret i32 %x
-}";
-    let ours = compiled(ir, Options::default());
-    assert!(ours.contains("move.b\t(%a0)+, (%a2)+"), "{ours}");
-    assert!(!ours.contains("addq.l\t#1, %a"), "{ours}");
-}
-
-fn counted_scan(
-    ty: &str,
-    step: &str,
-) -> String {
-    format!(
-        "define i32 @f(ptr %p) {{
-entry:
-  br label %loop
-loop:
-  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]
-  %q = getelementptr {ty}, ptr %p, i32 %i
-  %v = load {ty}, ptr %q
-  %i1 = add i32 %i, {step}
-  %c = icmp ne {ty} %v, 0
-  br i1 %c, label %loop, label %done
-done:
-  ret i32 %i
-}}"
-    )
-}
-
-/// A loop that counts and reads through a pointer it also steps: the step
-/// came before the load of the old pointer (a copy of it), then the compare
-/// that reads it, so the step stayed apart (`addq.l #1, %a0` and a copy) and
-/// the loop ran four instructions a trip. The step goes after the access and
-/// folds into it, for a byte and for a word.
-#[test]
-fn a_pointer_stepped_before_the_compare_that_reads_it_is_post_incremented() {
-    for (ty, access, bytes) in [("i8", "tst.b\t(%a0)+", 1), ("i16", "tst.w\t(%a0)+", 2)] {
-        let ours = compiled(&counted_scan(ty, "1"), Options::default());
-        assert!(ours.contains(access), "{ty}: {ours}");
-        assert!(!ours.contains(&format!("addq.l\t#{bytes}, %a")), "{ty}: {ours}");
-    }
-}
-
-fn after_mid_end(ir: &str) -> String {
-    use std::rc::Rc;
-    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    let tti = llrm_m68k::machine::M68k { post_indexed: true, exit_ne: true, ..Default::default() };
-    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
-        .expect("the mid-end runs");
-    llrm_mir::print::module(&done)
-}
-
 /// The mid-end with the pin's addressing mode (none): `post_indexed` off.
 fn after_pinned_mid_end(ir: &str) -> String {
     use std::rc::Rc;
@@ -729,83 +583,6 @@ exit:
     assert_eq!(done.lines().filter(|line| line.contains("phi ptr")).count(), 2, "{done}");
 }
 
-const MEMCPY: &str = "define i32 @k(ptr %0, ptr %1, i32 %2) {
-  %4 = icmp sgt i32 %2, 0
-  br i1 %4, label %5, label %14
-5:
-  %6 = phi ptr [ %12, %5 ], [ %0, %3 ]
-  %7 = phi i32 [ %9, %5 ], [ %2, %3 ]
-  %8 = phi ptr [ %10, %5 ], [ %1, %3 ]
-  %9 = add i32 %7, -1
-  %10 = getelementptr i8, ptr %8, i32 1
-  %11 = load i8, ptr %8, align 1
-  %12 = getelementptr i8, ptr %6, i32 1
-  store i8 %11, ptr %6, align 1
-  %13 = icmp ugt i32 %7, 1
-  br i1 %13, label %5, label %14
-14:
-  ret i32 0
-}";
-
-/// memcpy's `while (n-- > 0)` leaves `icmp ugt %7, 1`, which LSR cannot turn
-/// into a compare with zero: the loop kept `cmpi #1; bhi` (+4 B and +13 insns
-/// against gcc). Expected: `ne`, which LSR counts to zero (`subq; bne`).
-#[test]
-fn a_down_counter_tested_above_its_floor_is_counted_to_zero() {
-    let done = after_mid_end(MEMCPY);
-    assert!(done.contains("icmp ne i32 %10, 0"), "{done}");
-    assert!(!done.contains("icmp ugt"), "{done}");
-}
-
-/// `exitne` is the target's preference (`Tti::prefers_exit_ne`): a target
-/// description without it keeps the strict compare, as x86 must.
-#[test]
-fn the_strict_compare_stays_where_the_target_does_not_prefer_exit_ne() {
-    use std::rc::Rc;
-    let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}")).expect("parses");
-    let tti = llrm_m68k::machine::M68k { post_indexed: true, ..Default::default() };
-    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
-        .expect("the mid-end runs");
-    let done = llrm_mir::print::module(&done);
-    assert!(!done.contains("icmp ne"), "{done}");
-}
-
-fn walk_with_call(ty: &str) -> String {
-    format!(
-        "declare void @g(i32)
-define i32 @f(ptr %p, i32 %n) {{
-entry:
-  br label %head
-head:
-  %i = phi i32 [ 0, %entry ], [ %i1, %latch ]
-  %q = getelementptr {ty}, ptr %p, i32 %i
-  %v = load {ty}, ptr %q
-  %z = zext {ty} %v to i32
-  call void @g(i32 %z)
-  br label %latch
-latch:
-  %i1 = add i32 %i, 1
-  %c = icmp ult i32 %i1, %n
-  br i1 %c, label %head, label %done
-done:
-  ret i32 %i1
-}}"
-    )
-}
-
-/// The step of a new pointer for a post-indexed load goes in the load's block
-/// (`getFixupInsertPos`), not the latch's, where the loop's counter steps; for
-/// a byte and for a word.
-#[test]
-fn the_step_of_a_post_indexed_pointer_is_made_beside_its_load() {
-    for ty in ["i8", "i16"] {
-        let done = after_mid_end(&walk_with_call(ty));
-        let head = done.split("head:").nth(1).and_then(|rest| rest.split("latch:").next()).expect("a head block");
-        assert!(head.contains("getelementptr"), "{ty}: {done}");
-        assert!(head.contains("load"), "{ty}: {done}");
-    }
-}
-
 /// The pre-indexed addressing of the pin's LSR (`AMK_PreIndexed`) is not
 /// translated (see `lsr_solve.rs`): a pointer that steps down before each
 /// access stays a step and an access, not `move.b -(%a0), ...`. This pins the
@@ -831,145 +608,6 @@ done:
 }";
     let ours = compiled(ir, Options::default());
     assert!(!ours.contains("-(%a"), "{ours}");
-}
-
-mod across_blocks {
-    use llrm_m68k::chain::loop_post_increment;
-    use llrm_m68k::expand::Line;
-
-    use super::*;
-
-    fn inst(
-        opcode: &'static str,
-        operands: Vec<Operand>,
-    ) -> Line {
-        Line::Inst(Inst { opcode, operands })
-    }
-
-    fn branch(
-        opcode: &'static str,
-        label: usize,
-    ) -> Line {
-        inst(opcode, vec![Operand::Symbol(format!(".LBB0_{label}"), 0)])
-    }
-
-    fn load() -> Line {
-        inst("MOV32rj", vec![register("d2"), register("a0")])
-    }
-
-    fn store() -> Line {
-        inst("MOV32jr", vec![register("a0"), register("d3")])
-    }
-
-    fn step() -> Line {
-        inst("ADDQ32a", vec![register("a0"), register("a0"), Operand::Imm(4)])
-    }
-
-    fn opcodes(lines: &[Line]) -> Vec<&'static str> {
-        lines
-            .iter()
-            .map(|line| match line {
-                Line::Inst(inst) => inst.opcode,
-                Line::Label(_) => "label",
-            })
-            .collect()
-    }
-
-    /// `p[0]` read in the header, written in an arm, the pointer stepped in
-    /// the latch that both paths reach: one `(An)+` and a store 4 back
-    /// (partition: the latch's `addq.l #4` and the `bra` it hid behind).
-    #[test]
-    fn a_step_in_the_latch_every_path_reaches_goes_into_the_first_access() {
-        let lines = vec![
-            Line::Label(1),
-            load(),
-            branch("Beq8", 3),
-            store(),
-            Line::Label(3),
-            step(),
-            branch("Bne8", 1),
-            inst("RTS", vec![]),
-        ];
-        let folded = loop_post_increment(lines);
-        assert_eq!(opcodes(&folded), ["label", "MOV32ro", "Beq8", "MOV32pr", "label", "Bne8", "RTS"]);
-        let Line::Inst(store) = &folded[3] else { panic!() };
-        assert_eq!(store.operands[0], Operand::Imm(-4));
-    }
-
-    /// A second step on the other path would run with the first: both stay.
-    #[test]
-    fn a_second_latch_keeps_both_steps() {
-        let lines = vec![
-            Line::Label(1),
-            load(),
-            branch("Beq8", 3),
-            store(),
-            step(),
-            branch("BRA8", 1),
-            Line::Label(3),
-            step(),
-            branch("Bne8", 1),
-            inst("RTS", vec![]),
-        ];
-        assert_eq!(loop_post_increment(lines.clone()), lines);
-    }
-
-    /// A branch out of the span before the step would leave the register
-    /// stepped on one path only.
-    #[test]
-    fn a_conditional_arm_that_skips_the_step_keeps_it() {
-        let lines = vec![
-            Line::Label(1),
-            load(),
-            branch("Beq8", 4),
-            store(),
-            step(),
-            branch("Bne8", 1),
-            Line::Label(4),
-            inst("RTS", vec![]),
-        ];
-        assert_eq!(loop_post_increment(lines.clone()), lines);
-    }
-
-    /// The access run twice before the step (a branch back to it).
-    #[test]
-    fn an_access_reached_again_before_the_step_keeps_it() {
-        let lines = vec![Line::Label(1), load(), branch("Beq8", 1), step(), branch("Bne8", 1), inst("RTS", vec![])];
-        assert_eq!(loop_post_increment(lines.clone()), lines);
-    }
-
-    /// Something that jumps to the step from outside reaches it with no
-    /// access before it.
-    #[test]
-    fn a_step_entered_from_outside_the_span_keeps_it() {
-        let lines = vec![
-            branch("Beq8", 3),
-            Line::Label(1),
-            load(),
-            store(),
-            Line::Label(3),
-            step(),
-            branch("Bne8", 1),
-            inst("RTS", vec![]),
-        ];
-        assert_eq!(loop_post_increment(lines.clone()), lines);
-    }
-
-    /// The pointer read as a value in the span would see it 4 on.
-    #[test]
-    fn a_pointer_copied_in_the_span_keeps_the_step() {
-        let lines = vec![
-            Line::Label(1),
-            load(),
-            branch("Beq8", 3),
-            inst("MOV32rr", vec![register("d4"), register("a0")]),
-            Line::Label(3),
-            step(),
-            branch("Bne8", 1),
-            inst("RTS", vec![]),
-        ];
-        assert_eq!(loop_post_increment(lines.clone()), lines);
-    }
 }
 
 /// `&a[n - 1]` read in two later blocks was `add.l %d1, %d3` in a callee-saved
@@ -1078,7 +716,6 @@ fn a_byte_of_an_argument_is_read_from_the_end_of_its_slot() {
     let size = Options { size: true, ..Options::default() };
     let text = compiled(&library("memset"), size);
     assert!(text.contains("move.b\t(11,%sp), "), "{text}");
-    assert!(code_size(&library("memset"), size) <= 40);
 }
 
 /// The same argument also read as a whole value keeps its register: the load is
@@ -1404,31 +1041,6 @@ fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
     assert!(moves.iter().any(|one| one.opcode == "MOV16ai"), "{moves:?}");
 }
 
-/// The chain pass did not see a reload (`movem.l (64,%sp), %a3`: a register
-/// mask, no register operand) as a new value of the register it chained, so an
-/// access after the reload had the chain's size taken off its displacement and
-/// read 4 bytes below the array. Seed 86 of the differential driver (the result
-/// changed with the stack contents).
-#[test]
-fn a_reload_of_the_chained_register_ends_the_chain() {
-    use llrm_m68k::expand::Line;
-    use llrm_m68k::mc::{
-        Inst,
-        Operand::{Imm, Reg},
-    };
-    use llrm_m68k::reg::{A3, D1, D2, D3, SP};
-    let lines = vec![
-        Line::Inst(Inst { opcode: "MOV32dj", operands: vec![Reg(D1), Reg(A3)] }),
-        Line::Inst(Inst { opcode: "MOV32dp", operands: vec![Reg(D2), Imm(4), Reg(A3)] }),
-        Line::Inst(Inst { opcode: "MOVM32mp", operands: vec![Imm(1 << 11), Imm(64), Reg(SP)] }),
-        Line::Inst(Inst { opcode: "MOV32dp", operands: vec![Reg(D3), Imm(4), Reg(A3)] }),
-        Line::Inst(Inst { opcode: "RTS", operands: vec![] }),
-    ];
-    let out = llrm_m68k::chain::chain_post_increment(lines, &[]);
-    let Line::Inst(last) = &out[out.len() - 2] else { panic!("an instruction") };
-    assert_eq!(last.operands, vec![Reg(D3), Imm(4), Reg(A3)], "{out:?}");
-}
-
 /// `ir` (a function `f()` that reads the volatile byte `@zero`) built for the
 /// 68000 and run under qemu with `zero` at offset 14 of the data block, as the
 /// status byte it returns.
@@ -1568,4 +1180,14 @@ define i16 @f() {
     if let Some(got) = run_reading_zero(ir) {
         assert_eq!(got, 55);
     }
+}
+
+/// A copy loop steps its pointers with `addq` or `lea` as the pin's selection
+/// does. `(An)+` came from rewrites of the expanded text and the loop pass's
+/// preference, neither of which the pin has: every copy loop carried it.
+#[test]
+fn a_copy_loop_has_no_post_increment_as_the_pin_has_none() {
+    let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("copy")).expect("parses");
+    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    assert!(!ours.contains("%a0)+") && !ours.contains("%a1)+") && !ours.contains("%a2)+"), "{ours}");
 }

@@ -16,9 +16,7 @@ use std::rc::Rc;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
-use llrm_mir::tti::{
-    AddressingMode, ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty,
-};
+use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
 
 /// The m68k cost model the passes of the mid-end read.
 #[derive(Clone, Debug, Default)]
@@ -74,33 +72,11 @@ impl Machine for M68kMachine {
 pub struct M68k {
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
     pub scaled_index: bool,
-    /// LSR favors a pointer stepped after each access, `(An)+`.
-    ///
-    /// DEVIATE from the pin's M68k, which has no `getPreferredAddressingMode`
-    /// override. Reason: `move.b (%a0)+, (%a1)+` steps a pointer for free, so
-    /// two pointers beat one shared index register. Evidence: the PRM's
-    /// "Address Register Indirect with Postincrement Mode"; gcc's `memcpy`
-    /// loop. `Options::PINNED` leaves it off. Exit: never; a target
-    /// description, set with the overlay.
-    pub post_indexed: bool,
-    /// A strict exit compare of a unit-stride counter that never passes its
-    /// bound is `!=` (`exitne`), which LSR counts to zero.
-    ///
-    /// DEVIATE from the pin, which has no such rewrite. Reason: `subq #1, Dn;
-    /// bne` sets the flags and branches in two instructions where `cmpi #1,
-    /// Dn; bhi` needs the compare. Evidence: bench/library memcpy, 44 to 36 B
-    /// and 64 to 50 insns. `Options::PINNED` leaves it off. Exit: never; a
-    /// target description, set with the overlay.
-    pub exit_ne: bool,
 }
 
 impl Tti for M68k {
     fn name(&self) -> &'static str {
         "M68k"
-    }
-
-    fn prefers_exit_ne(&self) -> bool {
-        self.exit_ne
     }
 
     /// `TargetLoweringBase::isLegalAddressingMode`.
@@ -121,24 +97,6 @@ impl Tti for M68k {
             2 | 4 | 8 => self.scaled_index,
             _ => false,
         }
-    }
-
-    fn preferred_addressing_mode(&self) -> AddressingMode {
-        if self.post_indexed { AddressingMode::PostIndexed } else { AddressingMode::None }
-    }
-
-    fn is_post_inc_load_legal(
-        &self,
-        _ty: Ty,
-    ) -> bool {
-        self.post_indexed
-    }
-
-    fn is_post_inc_store_legal(
-        &self,
-        _ty: Ty,
-    ) -> bool {
-        self.post_indexed
     }
 
     fn cmp_sel_cost(
