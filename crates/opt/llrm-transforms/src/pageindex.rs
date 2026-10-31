@@ -10,7 +10,9 @@
 //!
 //! The pass rewrites the loops of one latch and one way in whose pointers are
 //! used only as the address of a byte load or store (or of a constant offset
-//! from it). Pointers it cannot rewrite keep their own steps.
+//! from it). Pointers it cannot rewrite keep their own steps. A loop rotated to
+//! load the next byte before it tests steps in the latch at that load, and the
+//! load reads the next page's base through a join block after it.
 //!
 //! DEVIATE: it is not LLVM's. `MOSIndexIV` (llvm-mos) rewrites a pointer to a
 //! base and an 8-bit index only where `ScalarEvolution` proves the index stays
@@ -59,6 +61,8 @@ struct Walker {
     step: u128,
     /// The instructions that read it as an address.
     accesses: Vec<(InstId, usize)>,
+    /// The loads and stores that read its next value, in the latch.
+    ahead: Vec<(InstId, usize)>,
     /// The instructions outside the loop that read it.
     after: Vec<(InstId, usize)>,
     /// The one-armed phis outside the loop that read it.
@@ -172,11 +176,30 @@ fn walkers(
             }
             _ => continue,
         };
-        if function.parent(next).is_none_or(|at| !in_loop(at)) {
+        if function.parent(next) != Some(latch) {
             continue;
         }
-        // the next pointer is read by this phi alone
-        if function.users(next_value).into_iter().any(|one| one.user != phi) {
+        // the next pointer is read by this phi and by loads and stores after
+        // it in the latch (a loop rotated to read the next element ahead)
+        let mut ahead = Vec::new();
+        let mut kept = true;
+        for one in function.users(next_value) {
+            let user = function.instruction(one.user);
+            match (&user.opcode, one.index) {
+                _ if one.user == phi => {}
+                (Opcode::Load { .. }, 0) if Some(user.ty) == byte && function.parent(one.user) == Some(latch) => {
+                    ahead.push((one.user, 0))
+                }
+                (Opcode::Store { .. }, 1)
+                    if function.operand_type(context, user.operands[0]) == byte
+                        && function.parent(one.user) == Some(latch) =>
+                {
+                    ahead.push((one.user, 1))
+                }
+                _ => kept = false,
+            }
+        }
+        if !kept {
             continue;
         }
         let mut accesses = Vec::new();
@@ -201,8 +224,8 @@ fn walkers(
                 _ => plain = false,
             }
         }
-        if plain && !accesses.is_empty() {
-            found.push(Walker { phi, value, start, next, step, accesses, after, exits });
+        if plain && !(accesses.is_empty() && ahead.is_empty()) {
+            found.push(Walker { phi, value, start, next, step, accesses, ahead, after, exits });
         }
     }
     found
@@ -232,6 +255,10 @@ fn rewrite(
     let Some(step) = found.first().map(|one| one.step) else { return Ok(false) };
     found.retain(|one| one.step == step);
 
+    let others: Vec<InstId> = crate::edges::phis(function, header)
+        .into_iter()
+        .filter(|phi| !found.iter().any(|one| one.phi == *phi))
+        .collect();
     let word = context.types.int(16);
     let flag = context.types.int(1);
     let void = function.instruction(jump).ty;
@@ -247,13 +274,46 @@ fn rewrite(
     let value_of =
         |function: &Function, made: InstId| Operand::Value(function.instruction(made).result.expect("a result"));
 
-    // the blocks: the latch steps the index, the bump moves the bases
-    let stepper = function.create_block(Some("page-step"));
-    function.insert_block(stepper, Some(latch)).map_err(|why| why.to_string())?;
+    // A loop that reads a pointer's next value ahead steps in the latch at the
+    // first such read and joins in a block after it. Any other steps on the
+    // back edge: in the latch if it jumps to the header, else in a block of
+    // its own.
+    let order: Vec<InstId> = function.iter_block(latch).collect();
+    let split = found
+        .iter()
+        .filter(|one| !one.ahead.is_empty())
+        .filter_map(|one| order.iter().position(|&inst| inst == one.next))
+        .min()
+        .map(|at| order[at]);
+    let (stepper, join) = match split {
+        Some(at) => {
+            let tail = crate::edges::split_block_at(function, latch, at);
+            function.set_block_name(tail, "page-tail");
+            let joined = function.terminator(latch).ok_or("a terminated latch")?;
+            function.erase(joined).map_err(|why| why.to_string())?;
+            (latch, tail)
+        }
+        None if function.instruction(jump).operands.len() == 1 => {
+            function.erase(jump).map_err(|why| why.to_string())?;
+            (latch, header)
+        }
+        None => {
+            let step_block = function.create_block(Some("page-step"));
+            function.insert_block(step_block, Some(latch)).map_err(|why| why.to_string())?;
+            let at = function
+                .instruction(jump)
+                .operands
+                .iter()
+                .position(|one| *one == Operand::Block(header))
+                .ok_or("a back edge")?;
+            function.set_operand(jump, at, Operand::Block(step_block));
+            (step_block, header)
+        }
+    };
     let bump = function.create_block(Some("page-bump"));
     function.insert_block(bump, Some(stepper)).map_err(|why| why.to_string())?;
 
-    // the index and the bases, phis at the top of the header
+    // the index and the bases, phis at the top of the header and of the join
     let zero = int(context, byte, 0);
     let step_value = int(context, byte, step);
     let index = new(function, Position::Before(first), Opcode::Phi, byte, Vec::new(), Flags::default())?;
@@ -263,9 +323,16 @@ fn rewrite(
         bases.push(new(function, Position::Before(first), Opcode::Phi, ty, Vec::new(), Flags::default())?);
     }
     let gep = Opcode::GetElementPtr { source: byte };
+    let mut onward = Vec::new();
+    if join != header {
+        let top = function.iter_block(join).next().ok_or("a terminated join")?;
+        for walker in &found {
+            let ty = function.operand_type(context, Operand::Value(walker.value)).ok_or("a typed pointer")?;
+            onward.push(new(function, Position::Before(top), Opcode::Phi, ty, Vec::new(), Flags::default())?);
+        }
+    }
 
-    // the latch's edge to the header goes through the step
-    crate::edges::retarget(function, jump, header, stepper);
+    // the stepper steps the index; where it wraps the bases move on a page
     let next_index = new(
         function,
         Position::End(stepper),
@@ -298,7 +365,7 @@ fn rewrite(
         Position::End(stepper),
         Opcode::Br,
         void,
-        vec![value_of(function, wrapped), Operand::Block(bump), Operand::Block(header)],
+        vec![value_of(function, wrapped), Operand::Block(bump), Operand::Block(join)],
         Flags::default(),
     )?;
     let page = int(context, word, 256);
@@ -314,46 +381,51 @@ fn rewrite(
             Flags::default(),
         )?);
     }
-    new(function, Position::End(bump), Opcode::Br, void, vec![Operand::Block(header)], Flags::default())?;
+    new(function, Position::End(bump), Opcode::Br, void, vec![Operand::Block(join)], Flags::default())?;
 
-    // the phis: the index starts at 0, a base at the pointer's start
-    function.set_operands(
-        index,
-        [(zero, preheader), (value_of(function, next_index), stepper), (value_of(function, next_index), bump)]
-            .iter()
-            .flat_map(|(value, from)| [*value, Operand::Block(*from)])
-            .collect(),
-    );
-    for ((walker, base), moved) in found.iter().zip(&bases).zip(&moved) {
-        let own = value_of(function, *base);
-        set_arms(function, *base, &[(walker.start, preheader), (own, stepper), (value_of(function, *moved), bump)]);
+    // the other phis of the header now take the back edge from the step and
+    // the bump
+    if join == header {
+        for &phi in &others {
+            let arms: Vec<_> = arms(function, phi)
+                .into_iter()
+                .flat_map(
+                    |(value, from)| {
+                        if from == latch { vec![(value, stepper), (value, bump)] } else { vec![(value, from)] }
+                    },
+                )
+                .collect();
+            set_arms(function, phi, &arms);
+        }
     }
-    // the header's other phis come in from the step and the bump now
-    for phi in crate::edges::phis(function, header) {
-        if bases.contains(&phi) || phi == index || found.iter().any(|one| one.phi == phi) {
-            continue;
+    // the phis: the index starts at 0, a base at the pointer's start
+    let next = value_of(function, next_index);
+    if join == header {
+        set_arms(function, index, &[(zero, preheader), (next, stepper), (next, bump)]);
+        for ((walker, base), moved) in found.iter().zip(&bases).zip(&moved) {
+            let own = value_of(function, *base);
+            let page_on = value_of(function, *moved);
+            set_arms(function, *base, &[(walker.start, preheader), (own, stepper), (page_on, bump)]);
         }
-        let mut incoming = Vec::new();
-        for (value, from) in arms(function, phi) {
-            if from == latch {
-                incoming.extend([(value, stepper), (value, bump)]);
-            } else {
-                incoming.push((value, from));
-            }
+    } else {
+        set_arms(function, index, &[(zero, preheader), (next, join)]);
+        for (((walker, base), moved), onward) in found.iter().zip(&bases).zip(&moved).zip(&onward) {
+            let (own, ahead) = (value_of(function, *base), value_of(function, *onward));
+            set_arms(function, *base, &[(walker.start, preheader), (ahead, join)]);
+            set_arms(function, *onward, &[(own, stepper), (value_of(function, *moved), bump)]);
         }
-        set_arms(function, phi, &incoming);
     }
     // the sum is made where the pointer was read, for the selector to fold
     // into the access
-    for (walker, base) in found.iter().zip(&bases) {
+    for (n, (walker, base)) in found.iter().zip(&bases).enumerate() {
         let ty = function.operand_type(context, Operand::Value(walker.value)).ok_or("a typed pointer")?;
-        let sum = |function: &mut Function, position: Position| -> Result<Operand, String> {
+        let sum = |function: &mut Function, position: Position, base: InstId, by: InstId| -> Result<Operand, String> {
             let wide = new(
                 function,
                 position,
                 Opcode::Cast(CastOp::ZExt),
                 word,
-                vec![value_of(function, index)],
+                vec![value_of(function, by)],
                 Flags::default(),
             )?;
             let made = new(
@@ -361,13 +433,17 @@ fn rewrite(
                 position,
                 gep.clone(),
                 ty,
-                vec![value_of(function, *base), value_of(function, wide)],
+                vec![value_of(function, base), value_of(function, wide)],
                 Flags::default(),
             )?;
             Ok(value_of(function, made))
         };
         for &(user, at_operand) in walker.accesses.iter().chain(&walker.after) {
-            let made = sum(function, Position::Before(user))?;
+            let made = sum(function, Position::Before(user), *base, index)?;
+            function.set_operand(user, at_operand, made);
+        }
+        for &(user, at_operand) in &walker.ahead {
+            let made = sum(function, Position::Before(user), onward[n], next_index)?;
             function.set_operand(user, at_operand, made);
         }
         for &phi in &walker.exits {
@@ -376,7 +452,7 @@ fn rewrite(
                 .iter_block(block)
                 .find(|&one| function.instruction(one).opcode != Opcode::Phi)
                 .ok_or("a terminated block")?;
-            let made = sum(function, Position::Before(top))?;
+            let made = sum(function, Position::Before(top), *base, index)?;
             let result = function.instruction(phi).result.ok_or("a phi result")?;
             function.replace_all_uses_with(result, made);
             function.erase(phi).map_err(|why| why.to_string())?;

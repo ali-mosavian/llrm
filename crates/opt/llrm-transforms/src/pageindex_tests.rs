@@ -80,3 +80,59 @@ done:
     let mut module = llrm_mir::parse::module(text).expect("parses");
     assert_eq!(crate::pageindex::indexed(&mut module).expect("runs"), Vec::<String>::new());
 }
+
+/// A loop rotated to read the next byte before it tests (the shape of a
+/// `strcmp`) reads the pointer's next value in the latch. The step moved after
+/// that read left the pointer unconverted and the loop with its two steps; or
+/// read the next byte through the old base after the index wrapped, and the
+/// answer differed from the pointer walk's past the first page.
+#[test]
+fn a_loop_that_reads_the_next_byte_ahead_walks_by_page() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [600 x i8]
+  %b = alloca [600 x i8]
+  br label %fill
+fill:
+  %i = phi i16 [ 0, %entry ], [ %i2, %fill ]
+  %p = getelementptr inbounds i8, ptr %a, i16 %i
+  %v = trunc i16 %i to i8
+  %o = or i8 %v, 1
+  store i8 %o, ptr %p
+  %i2 = add i16 %i, 1
+  %c = icmp ult i16 %i2, 600
+  br i1 %c, label %fill, label %start
+start:
+  %first = load i8, ptr %a
+  br label %copy
+copy:
+  %sp = phi ptr [ %a, %start ], [ %sq, %copy ]
+  %dp = phi ptr [ %b, %start ], [ %dq, %copy ]
+  %k = phi i16 [ %n, %start ], [ %k2, %copy ]
+  %cur = phi i8 [ %first, %start ], [ %nx, %copy ]
+  store i8 %cur, ptr %dp
+  %sq = getelementptr inbounds i8, ptr %sp, i16 1
+  %nx = load i8, ptr %sq
+  %dq = getelementptr inbounds i8, ptr %dp, i16 1
+  %k2 = sub i16 %k, 1
+  %d = icmp ne i16 %k2, 0
+  br i1 %d, label %copy, label %done
+done:
+  %y = load i8, ptr %dp
+  %w = zext i8 %y to i16
+  %z = zext i8 %nx to i16
+  %r = add i16 %w, %z
+  ret i16 %r
+}
+";
+    let before = llrm_mir::parse::module(text).expect("parses");
+    let mut after = before.clone();
+    let changed = crate::pageindex::indexed(&mut after).expect("rewrites");
+    assert_eq!(changed, vec!["f".to_owned()]);
+    let printed = llrm_mir::print::module(&after);
+    assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{printed}");
+    assert!(!printed.contains("%sq ="), "the pointer still steps:\n{printed}");
+    for n in [1, 2, 255, 256, 257, 300, 511, 512, 513, 598] {
+        assert_eq!(answer(&after, n), answer(&before, n), "length {n}");
+    }
+}
