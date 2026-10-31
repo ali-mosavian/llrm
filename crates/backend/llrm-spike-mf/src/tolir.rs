@@ -770,6 +770,18 @@ pub fn from_lir<T: Target>(
             None => Reg::Virt(numbered(value, classes)),
         }
     };
+    // The literal and address definitions of the function by what they set:
+    // the spiller makes one again where it is read, or puts it in place of a
+    // copy of the value, and that instruction stands at another one's place.
+    let mut definitions: IndexMap<String, (usize, usize)> = IndexMap::default();
+    for block in &converted.body.blocks {
+        for insn in block.insns.iter() {
+            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else { continue };
+            if insn.defines.len() == 1 && insn.uses.is_empty() {
+                definitions.entry(format!("{:?}{:?}", what.name, what.sources)).or_insert(*origin);
+            }
+        }
+    }
     let mut slots: Vec<(i32, T::Class)> = Vec::new();
     let mut blocks = Vec::with_capacity(edited.blocks.len());
     for (at, block) in edited.blocks.iter().enumerate() {
@@ -783,7 +795,7 @@ pub fn from_lir<T: Target>(
             let held = |locs: &[Loc]| -> Vec<u32> {
                 locs.iter().filter_map(|loc| if let Loc::Held(held) = loc { Some(held.value) } else { None }).collect()
             };
-            if insn.spill_store || insn.spill_reload {
+            if (insn.spill_store || insn.spill_reload) && !insn.rematerialized {
                 let value =
                     held(&what.dests).into_iter().chain(held(&what.sources)).next().ok_or("a spill of nothing")?;
                 let cell = what
@@ -791,7 +803,7 @@ pub fn from_lir<T: Target>(
                     .iter()
                     .chain(&what.sources)
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
-                let slot = slot_of(cell.ok_or("a spill with no cell")?);
+                let slot = slot_of(cell.ok_or_else(|| format!("a spill with no cell: {what:?}"))?);
                 let register = number(value, &mut classes);
                 let class = classes[match register {
                     Reg::Virt(v) => v as usize,
@@ -808,10 +820,23 @@ pub fn from_lir<T: Target>(
                 }
                 continue;
             }
-            let (from, inst) = *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
-            let source = &original.blocks[from].insts[inst];
+            let (mut from, mut inst) =
+                *converted.origin.get((insn.at / 2) as usize).ok_or("an instruction from nowhere")?;
             let name = what.name.as_deref();
-            if name == Some(COPY) && source.kind != Kind::Copy {
+            let agrees = match original.blocks[from].insts[inst].kind {
+                Kind::Copy => name == Some(COPY),
+                Kind::Op(op) => name == Some(op),
+            };
+            if !agrees && name != Some(COPY) {
+                (from, inst) = *definitions
+                    .get(&format!("{:?}{:?}", what.name, what.sources))
+                    .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;
+            }
+            let source = &original.blocks[from].insts[inst];
+            // a copy a split made stands beside an instruction and claims none
+            // of its bytes, whatever that instruction is
+            let made_by_split = insn.covers.is_some_and(|(from, to)| from == to);
+            if name == Some(COPY) && (source.kind != Kind::Copy || made_by_split) {
                 let (Some(to), Some(from)) = (held(&what.dests).first().copied(), held(&what.sources).first().copied())
                 else {
                     return Err("a copy that does not move a value".into());

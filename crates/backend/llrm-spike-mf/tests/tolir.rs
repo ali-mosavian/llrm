@@ -820,3 +820,66 @@ fn test_no_value_is_offered_a_register_the_spill_code_overwrites() {
     let converted = to_lir::<Clobbering>(&lowered(set_here_read_there()), regs()).expect("converts");
     assert_eq!(converted.order(1), vec![RegId::ECX]);
 }
+
+/// The first use of a callee-saved register costs a save and a restore, and
+/// a range that has not been split yet is split rather than take it
+/// (`tryAssignCSRFirstTime`). A cost that never reached greedy would leave the
+/// range whole, whatever the register costs.
+#[test]
+fn test_the_cost_of_a_first_use_of_a_callee_saved_register_reaches_greedy() {
+    struct Saver;
+    impl Target for Saver {
+        type Class = ();
+        fn meet(
+            _: (),
+            _: (),
+        ) -> Option<()> {
+            Some(())
+        }
+        fn any() {}
+        fn candidates(_: ()) -> Vec<RegId> {
+            vec![RegId::EBX, RegId::ECX]
+        }
+        fn view(
+            root: RegId,
+            _: (),
+        ) -> RegId {
+            root
+        }
+        fn root(register: RegId) -> RegId {
+            register
+        }
+        fn reserved(root: RegId) -> bool {
+            root == RegId::ESP
+        }
+        fn caller_saved() -> Vec<RegId> {
+            vec![RegId::ECX]
+        }
+        fn spill_store(
+            _: (),
+            register: Reg,
+            slot: i32,
+        ) -> Option<Inst> {
+            Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+        }
+        fn spill_load(
+            _: (),
+            register: Reg,
+            slot: i32,
+        ) -> Option<Inst> {
+            Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+        }
+    }
+    let splits_with = |cost: u32| {
+        let f = lowered(across_a_call(1));
+        let mut converted = to_lir::<Saver>(&f, regs()).expect("converts");
+        converted.tri.csr_first_use_cost = cost;
+        let order = |value: u32| converted.order(value);
+        let inputs = converted.inputs(regs(), &order);
+        let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+        let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+        (decided.parents.len(), decided.placed.iter().filter(|(_, r)| *r == RegId::EBX).count())
+    };
+    assert_eq!(splits_with(0), splits_with(0), "the control: the answer does not depend on chance");
+    assert_ne!(splits_with(0), splits_with(1_000), "the cost never changed what greedy did");
+}

@@ -63,6 +63,13 @@ pub trait Target {
         true
     }
 
+    /// Whether `inst` only moves the lanes of one register into those of
+    /// another (the 6502's `PACK` and `UNPACK`): its operands may share
+    /// storage, a lane at a time.
+    fn moves_lanes(_inst: &Inst) -> bool {
+        false
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.
@@ -513,10 +520,12 @@ impl<T: Target> GraphColoring<T> {
     /// Colour every register, or name each one nothing fits, in colouring
     /// order. A register left uncoloured constrains no other, so one round
     /// names every victim the others still leave.
-    pub fn colour(
+    /// The registers and virtual registers (as nodes) that hold different
+    /// values at once, and so cannot share storage.
+    fn interference(
         &self,
         function: &MFunction<T::Class>,
-    ) -> Result<Assignment, Vec<Uncolourable>> {
+    ) -> (usize, Nodes, usize, Vec<HashSet<usize>>) {
         let count = function.classes.len();
         let mut nodes = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
@@ -585,6 +594,93 @@ impl<T: Target> GraphColoring<T> {
                 live.extend(uses.iter().copied());
             }
         }
+        (count, nodes, total, edges)
+    }
+
+    /// Whether `assignment` gives two registers that interfere storage that
+    /// overlaps; the first such pair, as text.
+    pub fn check(
+        &self,
+        function: &MFunction<T::Class>,
+        assignment: &Assignment,
+    ) -> Result<(), String> {
+        let (count, nodes, total, edges) = self.interference(function);
+        // a virtual register live into the entry is read before anything sets it
+        let mut scratch = Nodes { count, physical: Vec::new() };
+        let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
+            .blocks
+            .iter()
+            .map(|block| block.insts.iter().map(|inst| effects::<T>(inst, &mut scratch)).collect())
+            .collect();
+        let (live_in, _) = liveness(function, &effects_of);
+        if let Some(entry) = live_in.first()
+            && let Some(node) = entry.iter().filter(|node| **node < count).min()
+        {
+            return Err(format!("{}: {} is read before it is set", function.name, name_of(*node, count)));
+        }
+        let register_of = |node: usize| -> Option<RegId> {
+            if node < count { assignment.0.get(node).copied().map(T::root) } else { Some(nodes.physical[node - count]) }
+        };
+        let mut lanes: HashSet<(usize, usize)> = HashSet::default();
+        for block in &function.blocks {
+            for inst in block.insts.iter().filter(|inst| T::moves_lanes(inst)) {
+                let nodes_of: Vec<usize> = inst
+                    .operands
+                    .iter()
+                    .filter_map(|operand| match operand {
+                        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(*v as usize),
+                        _ => None,
+                    })
+                    .collect();
+                for one in &nodes_of {
+                    for other in &nodes_of {
+                        lanes.insert((*one, *other));
+                    }
+                }
+            }
+        }
+        for a in 0..total {
+            for b in edges[a].iter().filter(|b| **b > a && (a < count || **b < count) && !lanes.contains(&(a, **b))) {
+                if let (Some(x), Some(y)) = (register_of(a), register_of(*b))
+                    && T::overlaps(x, y)
+                {
+                    let mut mentions = String::new();
+                    for (at, block) in function.blocks.iter().enumerate() {
+                        for (i, inst) in block.insts.iter().enumerate() {
+                            let mentioned = inst.operands.iter().any(|operand| match operand {
+                                Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => *v as usize == a || *v as usize == *b,
+                                _ => false,
+                            });
+                            if mentioned {
+                                mentions.push_str(&format!("\n  bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands));
+                            }
+                        }
+                    }
+                    if std::env::var_os("LLRM_SPIKE_DUMP").is_some() {
+                        mentions.clear();
+                        for (at, block) in function.blocks.iter().enumerate() {
+                            for (i, inst) in block.insts.iter().enumerate() {
+                                mentions.push_str(&format!("\n  bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands));
+                            }
+                        }
+                    }
+                    return Err(format!(
+                        "{}: {} and {} are live together in overlapping registers {x:?} and {y:?}{mentions}",
+                        function.name,
+                        name_of(a, count),
+                        name_of(*b, count)
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn colour(
+        &self,
+        function: &MFunction<T::Class>,
+    ) -> Result<Assignment, Vec<Uncolourable>> {
+        let (count, mut nodes, total, mut edges) = self.interference(function);
         let mut parent: Vec<usize> = (0..total).collect();
         fn find(
             parent: &mut [usize],
@@ -732,4 +828,11 @@ impl<T: Target> GraphColoring<T> {
         }
         Ok(Assignment(assigned.into_iter().map(|one| one.expect("every register is coloured")).collect()))
     }
+}
+
+fn name_of(
+    node: usize,
+    count: usize,
+) -> String {
+    if node < count { format!("%{node}") } else { format!("physical#{}", node - count) }
 }
