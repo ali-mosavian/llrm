@@ -191,3 +191,11 @@ class MapTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+def test_a_dos_name_finds_the_file_of_another_case(tmp_path):
+    """stft_fixed opens SIGNAL and the corpus file is `signal`: the emulator opened nothing and the program printed -1."""
+    (tmp_path / "signal").write_bytes(b"x")
+    assert icount.dos_file(tmp_path, "SIGNAL") == tmp_path / "signal"
+    assert icount.dos_file(tmp_path, "C:\\SIGNAL") == tmp_path / "signal"
+    assert icount.dos_file(tmp_path, "NEW") == tmp_path / "NEW"

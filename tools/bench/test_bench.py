@@ -6,6 +6,7 @@ import sys
 import json
 import subprocess
 import pytest
+import types
 import unittest
 from pathlib import Path
 
@@ -1065,3 +1066,28 @@ def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_
     assert len(out) == 1 and "INVALID" in out[0], out
     assert bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0}) == []
     assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
+
+
+def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
+    """jpeg_fixed, jpeg_single, stft_fixed and stft_single were timed only: 40 m16 rows had no instructions or clocks. Counted with no
+    input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
+    for name in ("jpeg_fixed", "jpeg_single", "stft_fixed", "stft_single"):
+        for variant in bench.variants(bench.BENCH / name):
+            assert variant.emulated and variant.ci_bytes == 0, (name, variant.language)
+    exe = tmp_path / "V0.exe"
+    exe.write_bytes(b"")
+    data = tmp_path / "PHOTO.JPG"
+    data.write_bytes(b"x")
+    seen = {}
+
+    def fake_run(exe_, entry, cwd, **_):
+        seen["files"] = sorted(p.name for p in Path(cwd).iterdir())
+        return types.SimpleNamespace(output=b"1\n", error="", region=None)
+
+    monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
+    monkeypatch.setattr(bench.icount, "run", fake_run)
+    monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "code_bytes", lambda obj: 0)
+    bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
+    assert seen["files"] == ["PHOTO.JPG"], seen

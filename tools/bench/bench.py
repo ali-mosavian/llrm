@@ -128,6 +128,7 @@ class Variant:
     timed_only: bool = False  # no instruction count (the emulator would step ~10^8 of them): timed in DOSBox, sized, output-checked there
     data: tuple[str, ...] = ()  # files it reads, as run_tests' `data:` header: `@name` is a cached corpus
     ci_bytes: int = 0  # the default bench (no --time) feeds a timed-only program this many bytes of its corpus, and checks NAME.ci.out
+    emulated: bool = False  # timed_only, and yet counted by the m16 emulator, which serves its declared `data` files from a private folder
 
 
 def directory_name(directory: Path) -> str:
@@ -152,7 +153,8 @@ def variants(directory: Path) -> list[Variant]:
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
-                              bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0))))
+                              bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)),
+                              bool(settings.get("emulated"))))
     return out
 
 
@@ -301,14 +303,21 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
-    stem, exe, listing, region, want, obj = job
+    stem, exe, listing, region, want, obj, *more = job
     if region is None:  # timed only: its output is checked where it is timed
         data, bss = sizes.data_bytes(obj)
         return {"code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
         return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
-    result = icount.run(exe, entry, exe.parent)
+    cwd = exe.parent
+    if more and more[0]:  # the files it reads, in a folder of its own: the programs of one folder write the same output names
+        cwd = exe.with_suffix(".run")
+        shutil.rmtree(cwd, ignore_errors=True)
+        cwd.mkdir()
+        for file in more[0]:
+            shutil.copy(file, cwd / file.name)
+    result = icount.run(exe, entry, cwd)
     got = run_tests.lines(result.output.decode("latin1"))
     if result.error and not (result.error == icount.NEVER_ENTERED and got == want):
         return {"error": result.error}
@@ -416,7 +425,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], None if variant.timed_only else variant.region, expected_output(directory), obj)))
+            owned.append((key, (stem, built[0], built[1], None if variant.timed_only and not variant.emulated else variant.region, expected_output(directory), obj)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
@@ -582,7 +591,9 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         elif directory == STARTUP:
             plain[key] = exe  # timed, not counted
         else:
-            jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
+            files = input_files(variant) if variant.emulated else ()
+            counted = not variant.timed_only or (variant.emulated and files)  # an unavailable corpus leaves it timed only
+            jobs.append((key, (stem, exe, listing, variant.region if counted else None, expected_output(directory), folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
@@ -632,6 +643,14 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
             elif not broken:
                 measured[key] = {"xpass": variant.known, **measured[key]}
     return measured
+
+
+def input_files(variant: Variant) -> tuple[Path, ...]:
+    """The files `variant` declares it reads (`// data:`; `@name` a cached corpus), or () where the corpus is not here."""
+    try:
+        return tuple(corpus.path(one[1:]) if one.startswith("@") else variant.source.parent / one for one in variant.data)
+    except corpus.Unavailable:
+        return ()
 
 
 def timing_input(variant: Variant, directory: Path, reduced: Path | None = None) -> dict | None:
