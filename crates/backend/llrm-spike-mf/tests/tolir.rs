@@ -446,3 +446,17 @@ fn test_a_register_and_a_part_of_it_in_one_function_is_refused() {
     f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]));
     assert!(to_lir::<Flat>(&lowered(f), regs()).is_err());
 }
+
+/// The two bytes of one pair are two registers, not one: a function that reads
+/// both converts. The check refused every 6502 function that took two byte
+/// arguments (`rc2` and `rc3`, lanes of `rs1`): 22 of 38 kernels.
+#[test]
+fn test_two_lanes_of_one_root_are_not_an_overlap() {
+    let mut f = set_here_read_there();
+    f.blocks[0].insts[0] = op("set", vec![Operand::Def(Reg::Phys(RegId::BL))]);
+    f.blocks[1].insts[0] = op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]);
+    f.blocks[1].insts.insert(1, op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BH))]));
+    if let Err(why) = to_lir::<Flat>(&lowered(f), regs()) {
+        panic!("{why}");
+    }
+}
