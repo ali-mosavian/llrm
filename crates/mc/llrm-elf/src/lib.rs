@@ -245,7 +245,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
                 symbol(&mut symtab, name, offset as u64, one.size as u64, binding << 4 | kind, section as u16 + 1);
             }
-            Definition::Undefined => symbol(&mut symtab, name, 0, 0, STB_GLOBAL << 4, 0),
+            Definition::Undefined => {
+                let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
+                symbol(&mut symtab, name, 0, 0, binding << 4, 0)
+            }
         }
         elf_symbol[index] = Some(next);
         next += 1;
