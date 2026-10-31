@@ -718,3 +718,29 @@ fn a_register_holding_the_constant_is_not_loaded_again() {
     assert!(!text.contains("cmp #0"), "tests a byte the load set the flags of:\n{text}");
     assert_eq!(text.matches("ldy #0").count(), 1, "y loaded with 0 more than once:\n{text}");
 }
+
+/// The sum of two globals loaded one after the other was `lda g; sta rc2; lda
+/// g+1; clc; adc rc2`: a byte and three clocks over `lda g; clc; adc g+1`
+/// (`sum4`, 28 bytes unrolled against 16).
+#[test]
+fn a_global_read_once_by_an_add_is_its_memory_operand() {
+    let ir = module(
+        "@g = global [4 x i8] zeroinitializer\n\
+         define i8 @f() {\n  %a = load i8, ptr @g\n  %p = getelementptr i8, ptr @g, i16 1\n  \
+         %b = load i8, ptr %p\n  %s = add i8 %a, %b\n  ret i8 %s\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc g+1") || text.contains("adc g\n"), "no memory operand:\n{text}");
+    assert!(!text.contains("sta rc"), "a load went through a cell:\n{text}");
+}
+
+/// A store between the load and the add changes what the add must read.
+#[test]
+fn a_store_between_a_load_and_its_add_keeps_the_load() {
+    let ir = module(
+        "@g = global [4 x i8] zeroinitializer\n\
+         define i8 @f(i8 %x) {\n  %a = load i8, ptr @g\n  store i8 %x, ptr @g\n  %b = add i8 %a, %x\n  ret i8 %b\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap();
+    assert!(!text.contains("adc g"), "the add reads the stored value:\n{text}");
+}

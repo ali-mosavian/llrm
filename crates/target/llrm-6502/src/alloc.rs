@@ -293,6 +293,9 @@ struct Builder {
     packs: Vec<(Reg, Reg, Reg)>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
+    /// Cells loaded once from a global and read once by an add, subtract or
+    /// logic op after it with no store between: the op reads the global.
+    folded: HashMap<String, String>,
     /// The block each label names.
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
@@ -723,6 +726,7 @@ impl Builder {
         let (d, a) = (self.byte(d)?, self.byte(a)?);
         let second = match self.constants.get(b) {
             Some(value) => Operand::Imm(*value & 0xFF),
+            None if self.folded.contains_key(b) => Operand::Symbol(self.folded[b].clone(), 0),
             None => {
                 let b = self.byte(b)?;
                 self.require(b, Class::MEM)?;
@@ -989,6 +993,83 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
     values
 }
 
+/// The cells loaded once from a global (`LDABS`) and read once, by the second
+/// operand of an add, subtract or logic op (either, if it commutes) in the
+/// same block, with only instructions that write no memory between: the op
+/// reads the global itself, as `adc buf+2` does.
+fn folded_loads(items: &[Item]) -> HashMap<String, String> {
+    let mut defs: HashMap<&str, usize> = HashMap::new();
+    let mut uses: HashMap<&str, usize> = HashMap::new();
+    for item in items {
+        let Item::Inst(MInst { operands, .. }) = item else { continue };
+        for (at, operand) in operands.iter().enumerate() {
+            if let Machine::Reg(cell) = operand {
+                *if at == 0 { &mut defs } else { &mut uses }.entry(cell.as_str()).or_default() += 1;
+            }
+        }
+    }
+    let writes_no_memory = |opcode: u16| {
+        matches!(
+            opcode,
+            op::LDI8
+                | op::LDI16
+                | op::COPY8
+                | op::COPY16
+                | op::ADD8
+                | op::SUB8
+                | op::AND8
+                | op::OR8
+                | op::XOR8
+                | op::ADD16
+                | op::SUB16
+                | op::AND16
+                | op::OR16
+                | op::XOR16
+                | op::INC8
+                | op::DEC8
+                | op::SHL8
+                | op::SRL8
+                | op::SRA8
+                | op::SHL16
+                | op::SRL16
+                | op::SRA16
+                | op::LDABS
+                | op::LDAX
+                | op::LDP8
+                | op::LDP16
+                | op::LDPI8
+        )
+    };
+    let mut folded = HashMap::new();
+    // an op that reads two loaded cells folds one
+    let mut claimed: HashSet<usize> = HashSet::new();
+    for (at, item) in items.iter().enumerate() {
+        let Item::Inst(MInst { opcode: op::LDABS, operands }) = item else { continue };
+        let (Some(Machine::Reg(cell)), Ok(symbol)) = (operands.first(), address(&operands[1], &operands[2])) else {
+            continue;
+        };
+        if !cell.starts_with("v_") || defs.get(cell.as_str()) != Some(&1) || uses.get(cell.as_str()) != Some(&1) {
+            continue;
+        }
+        for (later_at, later) in items.iter().enumerate().skip(at + 1) {
+            let Item::Inst(MInst { opcode, operands }) = later else { break };
+            let reads = |position: usize| matches!(&operands[position], Machine::Reg(read) if read == cell);
+            let second = matches!(*opcode, op::ADD8 | op::SUB8 | op::AND8 | op::OR8 | op::XOR8) && reads(2);
+            let first = matches!(*opcode, op::ADD8 | op::AND8 | op::OR8 | op::XOR8) && reads(1) && !reads(2);
+            if (second || first) && claimed.insert(later_at) {
+                folded.insert(cell.clone(), symbol);
+                break;
+            }
+            if !writes_no_memory(*opcode)
+                || operands.iter().skip(1).any(|o| matches!(o, Machine::Reg(read) if read == cell))
+            {
+                break;
+            }
+        }
+    }
+    folded
+}
+
 /// `items` as a machine function on virtual registers, with the labels of each
 /// block; or an error naming what is not built.
 pub fn build(
@@ -1018,6 +1099,7 @@ pub fn build(
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
         constants: constants(items),
+        folded: folded_loads(items),
         block_of,
         versions: HashMap::new(),
         pending: None,
@@ -1084,7 +1166,10 @@ pub fn build(
                     b.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(byte)]));
                 }
             }
-            op::ADD8 => b.alu("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD8 => {
+                let (x, y) = if b.folded.contains_key(name(&o[1])?) { (&o[2], &o[1]) } else { (&o[1], &o[2]) };
+                b.alu("ADC", Some("CLC"), name(&o[0])?, name(x)?, name(y)?)?
+            }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
             op::INC8 | op::DEC8 => {
@@ -1094,9 +1179,18 @@ pub fn build(
                 b.copy(d, a);
                 b.push(Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(d)]));
             }
-            op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::AND8 => {
+                let (x, y) = if b.folded.contains_key(name(&o[1])?) { (&o[2], &o[1]) } else { (&o[1], &o[2]) };
+                b.alu("AND", None, name(&o[0])?, name(x)?, name(y)?)?
+            }
+            op::OR8 => {
+                let (x, y) = if b.folded.contains_key(name(&o[1])?) { (&o[2], &o[1]) } else { (&o[1], &o[2]) };
+                b.alu("ORA", None, name(&o[0])?, name(x)?, name(y)?)?
+            }
+            op::XOR8 => {
+                let (x, y) = if b.folded.contains_key(name(&o[1])?) { (&o[2], &o[1]) } else { (&o[1], &o[2]) };
+                b.alu("EOR", None, name(&o[0])?, name(x)?, name(y)?)?
+            }
             op::ADD16 => b.alu16("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::SUB16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
@@ -1118,6 +1212,9 @@ pub fn build(
             op::STZABS => {
                 let symbol = address(&o[0], &o[1]).map_err(Unsupported)?;
                 b.push(Inst::new(Kind::Op("STZM"), vec![Operand::Symbol(symbol, 0)]));
+            }
+            op::LDABS if b.folded.contains_key(name(&o[0])?) => {
+                b.define(name(&o[0])?);
             }
             op::LDABS | op::STABS => {
                 let symbol = address(&o[1], &o[2]).map_err(Unsupported)?;
@@ -2431,6 +2528,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second, ..]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
+                        Operand::Symbol(symbol, _) => symbol.clone(),
                         Operand::Frame(slot) => slot_name(*slot),
                         _ => register_name(regs[2]),
                     };

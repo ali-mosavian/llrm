@@ -142,7 +142,7 @@ fn a_global_at_a_constant_offset_is_an_absolute_load() {
     let ir = "@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]\n\
         define i8 @pair() {\n  %p = getelementptr i8, ptr @buf, i16 1\n  %a = load i8, ptr %p\n  %q = getelementptr i8, ptr @buf, i16 3\n  %b = load i8, ptr %q\n  %r = add i8 %a, %b\n  ret i8 %r\n}";
     let text = compile(ir, "pair");
-    assert!(text.contains("lda buf+1") && text.contains("buf+3"), "{text}");
+    assert!(text.contains("buf+1") && text.contains("buf+3"), "{text}");
     assert!(!text.contains("),y"), "{text}");
     let data = ".segment \"DATA\"\nbuf: .byte 1, 2, 3, 4\n.segment \"CODE\"\n";
     assert_eq!(common::run_with("alloc-pair", "  jsr pair\n", &format!("{text}{data}")), 6);
@@ -2243,10 +2243,14 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
 #[test]
 fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
     const N: usize = 16;
-    let mut ir = String::from("@buf = external global [16 x i8]\ndefine i8 @fold() {\n");
+    // each byte is stored too, so no load is the memory operand of its one
+    // user and the pressure stays
+    let mut ir =
+        String::from("@buf = external global [16 x i8]\n@out = external global [16 x i8]\ndefine i8 @fold() {\n");
     for i in 0..N {
-        ir +=
-            &format!("  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n");
+        ir += &format!(
+            "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n  %q{i} = getelementptr inbounds i8, ptr @out, i16 {i}\n  store i8 %b{i}, ptr %q{i}, align 1\n"
+        );
     }
     for i in 0..N / 2 {
         ir += &format!("  %x{i} = xor i8 %b{i}, %b{}\n  %m{i} = add i8 %x{i}, {}\n", N - 1 - i, 7 * i + 3);
@@ -2267,7 +2271,10 @@ fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
             .iter()
             .enumerate()
     {
-        let data = format!(".export buf\nbuf: .byte {}\n", buf.iter().map(u8::to_string).collect::<Vec<_>>().join(","));
+        let data = format!(
+            ".export buf\nbuf: .byte {}\n.export out\nout: .res 16\n",
+            buf.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+        );
         let got = common::run_with(&format!("alloc-fold-{k}"), "  jsr fold\n", &format!("{text}{data}"));
         assert_eq!(got, i32::from(want(buf)), "buf {k}");
     }
