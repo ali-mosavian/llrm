@@ -186,6 +186,14 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
     assert_eq!(round(&once), once);
 }
 
+/// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
+/// printer, so a printed module lost it (the pipeline's text round trips).
+#[test]
+fn a_global_section_survives_printing() {
+    let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";
+    assert_eq!(round(text), text);
+}
+
 #[test]
 fn every_invalid_fixture_is_refused_for_its_reason() {
     let fixtures = fixtures(true);
@@ -916,6 +924,22 @@ fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     assert_eq!(counts["a.rs"], 0, "SparseIdMap is sanctioned");
     assert_eq!(counts["b.rs"], 1, "a generic alias applied to an id is one keyed map; applied to a string it is none");
     assert_eq!(counts["hash.rs"], 0, "the alias lines themselves count none");
+}
+
+/// A ceiling for a file that moved or went away in the re-org stayed in
+/// `dense-keys.txt`: 8 of them were left, naming nothing, and a ceiling that
+/// names nothing guards nothing.
+#[test]
+fn every_dense_key_ceiling_names_a_file_that_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let stale: Vec<&str> = include_str!("../dense-keys.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, _)| file)
+        .filter(|file| !root.join(file).exists())
+        .collect();
+    assert!(stale.is_empty(), "dense-keys.txt names files that are gone: {stale:?}");
 }
 
 #[test]

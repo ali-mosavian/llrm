@@ -918,6 +918,10 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
+        multiply_early_out: crate::backend::timing::signed_multiply(cpu, 4, false)
+            .ok()
+            .flatten()
+            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
     });
     let selector = Selector::new(if m16 {
@@ -1023,7 +1027,12 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2, min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering {
+                cmov: tli.can_use_cmov(),
+                sse2,
+                min_size: cpu.min_size || bytes_beat_clocks,
+                i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+            },
             &selector,
             &mut hooks,
             &Info { source_order: true },

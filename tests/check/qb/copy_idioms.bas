@@ -1,8 +1,10 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' Loops people write that are one string move, and look-alikes that are not.
-' The pin keeps a word fill and a descending copy as counted loops; only the ascending copy and the byte fill are string moves.
+' The pin keeps a descending copy as a counted loop. A word fill is `rep stosw` where it pays (loopidioms), the
+' pin keeps the loop: DEVIATE, 64 words execute 7 instructions and 1 memory operand as the fill, 194 and 64 as
+' the loop (nib twin).
 ' CHECK-LABEL: SETPAL proc
-' CHECK-NOT: rep
+' CHECK: rep stosw
 ' CHECK: SETPAL endp
 ' CHECK-LABEL: DOCOPY proc
 ' CHECK: rep movsd

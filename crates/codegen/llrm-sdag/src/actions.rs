@@ -319,7 +319,7 @@ impl TargetLowering {
     }
 
     /// `TargetLoweringBase::initActions`, for the opcodes [`ISD`] has.
-    fn init_actions(&mut self) {
+    pub fn init_actions(&mut self) {
         use ISD::*;
         for vt in ALL {
             self.set_ops(

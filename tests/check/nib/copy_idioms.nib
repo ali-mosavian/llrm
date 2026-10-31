@@ -8,13 +8,15 @@
 # CHECK-LABEL: _scroll_up proc
 # CHECK: rep movsd
 # CHECK: _scroll_up endp
-# The pin keeps a word fill and a descending copy as counted loops.
+# The pin keeps a descending copy as a counted loop.
 # CHECK-LABEL: _scroll_down proc
 # CHECK-NOT: rep
 # CHECK-NOT: std
 # CHECK: _scroll_down endp
+# A word fill is `rep stosw` where it pays (loopidioms); the pin keeps the loop. DEVIATE: 64 words execute 7
+# instructions and 1 memory operand as the fill, 194 and 64 as the loop.
 # CHECK-LABEL: _palette proc
-# CHECK-NOT: rep
+# CHECK: rep stosw
 # CHECK: _palette endp
 # CHECK-LABEL: _smear proc
 # CHECK-NOT: rep
