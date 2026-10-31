@@ -37,9 +37,9 @@
 //!   a frame array (SI, DI) has no register that fits all reads. The reads that
 //!   fit the most others keep the value; each remaining read takes a copy, live
 //!   across that instruction alone.
-//! - cold reads (`distinct_classes_given`, last loop): a read that leaves a value
-//!   fewer than `MinRCSize` (4) registers, in a block less deep in loops than
-//!   the value's deepest reference, reads a copy of its own.
+//! - cold reads (`distinct_classes_given`, last loop): a read that leaves a
+//!   value fewer than `MinRCSize` (4) registers, in a block less deep in loops
+//!   than the value's deepest reference, reads a copy of its own.
 //!
 //!   DEVIATE N1: `InstrEmitter::AddRegisterOperand`
 //!   ([`MinRCSize`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L40),
