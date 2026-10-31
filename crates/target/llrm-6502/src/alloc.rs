@@ -2257,7 +2257,7 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
 fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
     use llrm_mir::blockfrequency::BranchProbability;
     let cfg = llrm_spike_mf::cfg::Cfg::new(function);
-    let mut odds = llrm_spike_mf::placement::Odds::new();
+    let mut odds = llrm_spike_mf::placement::Odds::default();
     for (from, succs) in cfg.succs.iter().enumerate() {
         if succs.len() != 2 {
             continue;
