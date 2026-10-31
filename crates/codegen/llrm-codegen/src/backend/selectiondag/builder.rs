@@ -58,6 +58,16 @@ impl std::fmt::Debug for TtiHandle {
     }
 }
 
+impl BuilderTarget {
+    /// `getScalarShiftAmountTy(vt)`.
+    pub fn shift_amount_for(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        self.shift_amount_of.map_or(self.shift_amount, |amount| amount(vt))
+    }
+}
+
 /// The target facts the builder asks (`TLI->` in the pin).
 #[derive(Clone, Debug)]
 pub struct BuilderTarget {
@@ -67,6 +77,15 @@ pub struct BuilderTarget {
     pub dag: DagConfig,
     /// `getShiftAmountTy`: x86 shifts by `i8`.
     pub shift_amount: EVT,
+    /// `getScalarShiftAmountTy` for a target whose amount depends on the type
+    /// shifted (wasm); none: `shift_amount`.
+    pub shift_amount_of: Option<fn(EVT) -> EVT>,
+    /// `getMinimumJumpTableEntries`.
+    pub min_jump_table_entries: usize,
+    /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit tests and peeling run.
+    pub switch_optimize: bool,
+    /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control that reaches it stops.
+    pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
     /// The library routines the target's runtime has, each with the calling
@@ -268,6 +287,10 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
+            shift_amount_of: None,
+            min_jump_table_entries: 4,
+            switch_optimize: true,
+            trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -301,6 +324,10 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I16, offset_folding: true, ..DagConfig::default() },
             shift_amount: EVT::I8,
+            shift_amount_of: None,
+            min_jump_table_entries: 4,
+            switch_optimize: true,
+            trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
             libcalls: None,
             stack_align: None,
@@ -1649,6 +1676,19 @@ impl Builder<'_> {
         Ok((!void).then(|| self.join_from_calling(&parts, vt)))
     }
 
+    /// `visitUnreachable`: a trap for a target that traps (`NoTrapAfterNoreturn` is off for it).
+    ///
+    /// DEVIATE: no exception for the call before it being a `llvm.trap`, which has no intrinsic here.
+    /// Exit: with the intrinsic.
+    fn visit_unreachable(&mut self) {
+        if !self.target.trap_unreachable {
+            return;
+        }
+        let root = self.root();
+        let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+        self.dag.set_root(trap);
+    }
+
     fn call_node(&self) -> ISD {
         self.target.target_nodes.map_or(super::x86isd::CALL, |t| t.call)
     }
@@ -2374,7 +2414,7 @@ impl Builder<'_> {
             Opcode::Alloca { .. }
                 if instruction.result.is_some_and(|result| self.info.static_allocas.contains_key(&result)) => {}
             Opcode::Alloca { allocated, align, .. } => self.visit_alloca(&instruction, *allocated, *align)?,
-            Opcode::Unreachable => {}
+            Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
             Opcode::Call(info) => {
@@ -2433,7 +2473,7 @@ impl Builder<'_> {
         if matches!(opcode, ISD::Shl | ISD::Srl | ISD::Sra) {
             // visitShift: the amount in the target's shift type, and only these
             // flags
-            rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount);
+            rhs = self.dag.get_zext_or_trunc(rhs, self.target.shift_amount_for(self.dag.value_type(lhs)));
             flags = SDNodeFlags(
                 flags.0 & (SDNodeFlags::NO_UNSIGNED_WRAP.0 | SDNodeFlags::NO_SIGNED_WRAP.0 | SDNodeFlags::EXACT.0),
             );
@@ -3041,7 +3081,7 @@ impl Builder<'_> {
                 SDNodeFlags::default().with(SDNodeFlags::NO_SIGNED_WRAP, nusw).with(SDNodeFlags::NO_UNSIGNED_WRAP, nuw);
             if element != 1 {
                 if element.is_power_of_two() {
-                    let amount = self.dag.get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount);
+                    let amount = self.dag.get_constant(u128::from(element.trailing_zeros()), self.target.shift_amount_for(ptr_vt));
                     idx = self.dag.get_node_flags(ISD::Shl, ptr_vt, &[idx, amount], scale_flags);
                 } else {
                     let scale = self.dag.get_constant(u128::from(element), ptr_vt);

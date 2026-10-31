@@ -168,6 +168,8 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an `sdiv` by a power of two stays an `sdiv`.
+    pub sdiv_pow2_stays: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
@@ -187,6 +189,7 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            sdiv_pow2_stays: false,
             fp_extended: false,
             big_endian: false,
         }
