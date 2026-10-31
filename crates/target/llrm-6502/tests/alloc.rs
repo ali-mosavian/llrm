@@ -2517,3 +2517,25 @@ fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
     assert_eq!(run("  lda rc3\n"), 0, "{text}");
     assert_eq!(run(""), 0x34, "{text}");
 }
+
+/// `lda` of a reload or a copy overwrites the zero and negative flags, so the
+/// allocator may put nothing between a compare and what reads its flags: the
+/// branches and every conditional move (`CMOV16` was missed, and a reload
+/// between its `CMP` and it chose the wrong side: differential seeds 192, 283).
+#[test]
+fn every_reader_of_the_flags_is_kept_with_the_compare_before_it() {
+    use llrm_spike_mf::regalloc::Target;
+    use llrm_spike_mf::{Inst, Kind};
+    let reader = |kind: &'static str, terminator: bool| {
+        let mut inst = Inst::new(Kind::Op(kind), vec![]);
+        inst.reads_flags = true;
+        inst.terminator = terminator;
+        inst
+    };
+    type M = llrm_6502::alloc::Mos<false>;
+    for kind in ["CMOV", "CMOV16"] {
+        assert!(M::reads_flags_set_just_before(&reader(kind, false)), "{kind}");
+    }
+    assert!(M::reads_flags_set_just_before(&reader("BEQ", true)));
+    assert!(!M::reads_flags_set_just_before(&Inst::new(Kind::Op("ADC"), vec![])));
+}
