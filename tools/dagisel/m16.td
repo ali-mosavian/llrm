@@ -74,3 +74,10 @@ let Predicates = [Not64BitMode] in {
 def : Pat<(X86mul_imm GR16:$src1, imm:$src2), (IMUL16rri GR16:$src1, imm:$src2)>;
 def : Pat<(X86mul_imm GR32:$src1, imm:$src2), (IMUL32rri GR32:$src1, imm:$src2)>;
 }
+
+// SD331: a byte widened to a word is the word form: in 16-bit mode the pin's `MOVZX32` of
+// `sub_16bit` (X86InstrCompiler.td L1850) carries an operand-size prefix, +1 byte and +1 clock.
+let AddedComplexity = 1, Predicates = [In16BitMode] in {
+def : Pat<(i16 (zext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
+def : Pat<(zextloadi16i8 addr:$src), (MOVZX16rm8 addr:$src)>;
+}

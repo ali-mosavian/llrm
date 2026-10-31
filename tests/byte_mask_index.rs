@@ -42,3 +42,11 @@ fn a_mask_with_a_non_address_user_stays_a_movzx() {
     let text = listing("unsigned f(unsigned a, unsigned b) { return (a * 7 + b) & 255; }\n", "-O2");
     assert!(!text.contains(", 255"), "{text}");
 }
+
+/// A byte loaded into a word was `movzx ecx, byte ptr` (the pin's `MOVZX32rm8`
+/// of `sub_16bit`): an operand-size prefix, +1 byte and +1 clock per load.
+#[test]
+fn a_byte_widened_to_a_word_is_a_word_movzx() {
+    let text = listing("unsigned short f(unsigned char *p, unsigned short s) { return *p * 7 + s; }\n", "-O2");
+    assert!(text.contains("movzx ") && !text.contains("movzx e"), "{text}");
+}
