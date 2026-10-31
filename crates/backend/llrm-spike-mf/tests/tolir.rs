@@ -714,3 +714,24 @@ fn test_a_value_across_a_call_is_not_joined_into_a_register_the_call_clobbers() 
         back.function.blocks[0].insts
     );
 }
+
+/// A call writes a pair and each of its bytes in one instruction: that is not
+/// two values meeting in a register. Greedy refused every function that named
+/// both (`pass`, `put`: a pointer argument in `rs1`, a byte in `rc2`).
+#[test]
+fn test_a_call_that_clobbers_a_pair_and_its_byte_is_no_conflict() {
+    let mut f = MFunction::<()>::new("both");
+    f.classes = vec![(); 2];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]));
+    only.insts.push(call());
+    only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(Reg::Phys(RegId::BL)), Operand::Use(v(0))]));
+    only.insts.push(op("get", vec![Operand::Def(v(1)), Operand::Use(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("store", vec![Operand::Use(v(1))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
+}
