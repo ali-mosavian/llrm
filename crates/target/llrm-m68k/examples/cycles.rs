@@ -103,16 +103,21 @@ fn price(
     let pcs = trace(exe);
     let mut total = Total { insns: 0, clocks: [0; 2], partial: false, unknown: 0 };
     let mut seen = std::collections::HashSet::new();
+    // CYCLES_LISTING=1: each distinct executed instruction, its count and
+    // clocks
+    let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
     for (index, pc) in pcs.iter().enumerate() {
         if !range.contains(pc) {
             continue;
         }
         total.insns += 1;
+        *counts.entry(*pc).or_default() += 1;
         let Some((bytes, text)) = at.get(pc) else {
             total.unknown += 1;
             continue;
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
+        let mut failed = false;
         for (slot, cpu) in [Cpu::M68000, Cpu::M68020].into_iter().enumerate() {
             match cost(cpu, text, *bytes as u32, taken) {
                 Ok(one) => {
@@ -120,13 +125,20 @@ fn price(
                     total.partial |= one.partial;
                 }
                 Err(why) => {
-                    if slot == 0 {
-                        total.unknown += 1;
-                        if seen.insert(why.clone()) {
-                            eprintln!("unpriced: {why}");
-                        }
+                    failed = true;
+                    if seen.insert(why.clone()) {
+                        eprintln!("unpriced: {why}");
                     }
                 }
+            }
+        }
+        total.unknown += usize::from(failed);
+    }
+    if std::env::var_os("CYCLES_LISTING").is_some() {
+        for (pc, count) in &counts {
+            if let Some((bytes, text)) = at.get(pc) {
+                let one = |cpu| cost(cpu, text, *bytes as u32, false).map_or(0, |c| c.clocks);
+                eprintln!("{pc:x} x{count} {text}  [68000 {} / 68020 {}]", one(Cpu::M68000), one(Cpu::M68020));
             }
         }
     }

@@ -140,6 +140,20 @@ fn a_movem_of_one_register_is_priced() {
     assert_eq!(clocks(Cpu::M68020, "movem.l %d2, (0,%sp)"), 4 + 3 + 4);
 }
 
+/// `cmpi.b #0,(1,%a0,%d1)` ends the `strlen` loop. The 68020 model had no
+/// immediate-to-memory row and returned an error that the cycles tool counted
+/// as zero clocks on the 68020 only: strlen read 213 for 59 instructions when
+/// the instruction before it read 283. MC68020UM 8.2.2 (p. 8-14) and 8.2.9
+/// (p. 8-31): `CMPI` 2 plus `#<data>.W,(d8,An,Xn)` 9, `ADDI` to memory 4 plus
+/// the fetch.
+#[test]
+fn a_68020_immediate_to_memory_is_priced() {
+    assert_eq!(clocks(Cpu::M68020, "cmpi.b #0, (1,%a0,%d1)"), 2 + 9);
+    assert_eq!(clocks(Cpu::M68020, "cmpi.l #0, (%a0)"), 2 + 4);
+    assert_eq!(clocks(Cpu::M68020, "addi.l #5, (4,%a0)"), 4 + 7);
+    assert_eq!(clocks(Cpu::M68020, "add.w #5, -(%a0)"), 4 + 5);
+}
+
 /// An instruction the tables do not cover is an error, never zero clocks.
 #[test]
 fn an_unmodelled_instruction_is_an_error() {

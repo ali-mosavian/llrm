@@ -461,6 +461,27 @@ fn fetch68020(
     }
 }
 
+/// MC68020UM 8.2.2 (p. 8-14), cache case: fetching an immediate and the
+/// address of its memory destination (a byte or word immediate is the `.W`
+/// row).
+fn fetch_immediate68020(
+    mode: Mode,
+    size: Size,
+) -> Option<u32> {
+    let long = size == Size::L;
+    let (word, long_time) = match mode {
+        Mode::Dn => (2, 4),
+        Mode::Ind => (4, 4),
+        Mode::Post => (6, 8),
+        Mode::Pre => (5, 7),
+        Mode::Disp | Mode::AbsW => (5, 7),
+        Mode::AbsL => (6, 8),
+        Mode::Index => (9, 11),
+        _ => return None,
+    };
+    Some(if long { long_time } else { word })
+}
+
 /// MC68020UM 8.2.3 (p. 8-16), cache case: calculating an address only.
 fn calculate68020(mode: Mode) -> Option<u32> {
     match mode {
@@ -562,13 +583,17 @@ fn clocks68020(
                 (_, Mode::An) => Some(if base == "cmp" || base == "cmpa" { 4 } else { 2 } + fetch68020(source, size)),
                 (_, Mode::Dn) => Some(2 + fetch68020(source, size)),
                 (_, memory) if source == Mode::Dn => Some(4 + fetch68020(memory, size)),
+                (_, memory) if source == Mode::Imm => Some(4 + fetch_immediate68020(memory, size)?),
                 _ => None,
             }
         }
-        ("addi" | "subi" | "andi" | "ori" | "eori" | "cmpi", [_, destination]) => match mode(destination)? {
-            Mode::Dn => Some(2 + wide(2, 4)),
-            _ => None,
-        },
+        ("addi" | "subi" | "andi" | "ori" | "eori" | "cmpi", [_, destination]) => {
+            let to_memory = if base == "cmpi" { 2 } else { 4 };
+            match mode(destination)? {
+                Mode::Dn => Some(2 + fetch_immediate68020(Mode::Dn, size)?),
+                memory => Some(to_memory + fetch_immediate68020(memory, size)?),
+            }
+        }
         ("addq" | "subq", [_, destination]) => match mode(destination)? {
             Mode::Dn | Mode::An => Some(2),
             memory => Some(4 + fetch68020(memory, size)),
