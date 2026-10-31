@@ -350,11 +350,17 @@ def test_an_exception_file_prints_its_rows_every_run_and_fails_a_row_no_longer_w
 
 
 def test_the_two_jpeg_nib_os_rows_the_loopsimplify_fix_moves_are_excused_by_their_file():
-    """release/next carried no waiver for jpeg_fixed 5362 / jpeg_single 5223 (base 5304 / 5172): the judge reported exactly these two."""
-    measured = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5362), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5223)}
-    base = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5304), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5172)}
-    assert len(bc.judge(measured, base, [])[0]) == 2
-    assert bc.judge(measured, base, bc.waivers())[0] == []
+    """release/next carried no waiver for jpeg_fixed / jpeg_single nib -Os code_bytes: the judge reported exactly these two. The file now excuses
+    each at its own ceiling and not one byte above. (It pinned the first ceilings, 5362 / 5223, and went red when d846b3d0f0 lowered them to the
+    measured 5337 / 5198.)"""
+    rows = {("jpeg_fixed", "nib", "Os"): 5304, ("jpeg_single", "nib", "Os"): 5172}
+    ceiling = {w["label"]: w["to"] for w in bc.waivers() if w["counter"] == "code_bytes"}
+    assert {"jpeg_fixed nib -Os", "jpeg_single nib -Os"} <= set(ceiling)
+    base = {key: row(100, code_bytes=size) for key, size in rows.items()}
+    at = {key: row(100, code_bytes=ceiling[bc.label(key)]) for key in rows}
+    over = {key: row(100, code_bytes=ceiling[bc.label(key)] + 1) for key in rows}
+    assert bc.judge(at, base, bc.waivers())[0] == []
+    assert len(bc.judge(over, base, bc.waivers())[0]) == 2
 
 
 def test_two_runs_of_one_compiler_that_differ_in_any_count_are_named_and_equal_runs_pass():
