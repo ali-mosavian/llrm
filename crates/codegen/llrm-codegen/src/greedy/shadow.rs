@@ -69,6 +69,7 @@ pub struct ShadowInputs<'a> {
     /// The target's instruction forms: copies, spills, folds,
     /// rematerialization.
     pub tii: &'a dyn super::tii::TargetInstrInfo,
+    pub tri: &'a dyn super::targetinfo::TargetRegisterInfo,
 }
 
 /// What the shadow allocator decided.
@@ -86,6 +87,7 @@ pub struct ShadowReport {
 struct BodyEnv<'a> {
     orders: Rc<Tables>,
     tii: &'a dyn super::tii::TargetInstrInfo,
+    tri: &'a dyn super::targetinfo::TargetRegisterInfo,
     /// The register each pinned value is fixed to, as a root: the physical
     /// hint of a copy from it (`copyHint`).
     pins: IndexMap<u32, RegId>,
@@ -175,7 +177,7 @@ impl GreedyEnv for BodyEnv<'_> {
         &self,
         _virt: u32,
     ) -> u32 {
-        1
+        self.tri.copy_cost()
     }
 
     fn same_reg_class(
@@ -202,8 +204,7 @@ impl GreedyEnv for BodyEnv<'_> {
     }
 
     fn csr_first_use_cost(&self) -> u32 {
-        // push + pop (`X86RegisterInfo::getCSRFirstUseCost`).
-        if self.saved.is_empty() { 0 } else { 2 }
+        self.tri.csr_first_use_cost(!self.saved.is_empty())
     }
 }
 
@@ -293,7 +294,7 @@ fn reclass_orders(
             Confinement::Unknown => continue,
             Confinement::Free => sets.available.clone(),
             Confinement::Only(allowed) => {
-                let wanted: BTreeSet<RegId> = allowed.iter().map(|one| crate::model::ir::root(*one)).collect();
+                let wanted: BTreeSet<RegId> = allowed.iter().map(|one| registers.root(*one)).collect();
                 sets.available.iter().copied().filter(|one| wanted.contains(one)).collect()
             }
         };
@@ -511,6 +512,7 @@ struct CallMasks {
     lane: std::cell::Cell<Option<u32>>,
     /// The registers some call keeps the low half of only.
     lane_registers: RegSet,
+    regs: Regs,
 }
 
 thread_local! {
@@ -540,6 +542,7 @@ impl CallMasks {
     /// The masks of `calls`, each (slot, destroyed, high halves destroyed,
     /// read): what a narrow and a wide value live across lose is found once.
     fn of(
+        regs: Regs,
         calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)>,
         blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
         widths: Rc<Tables>,
@@ -577,6 +580,7 @@ impl CallMasks {
             reach: Default::default(),
             lane: Default::default(),
             lane_registers,
+            regs,
         }
     }
 
@@ -955,7 +959,7 @@ impl PhysInterference for CallMasks {
         i: usize,
         phys: RegId,
     ) -> bool {
-        let root = crate::model::ir::root(phys);
+        let root = self.regs.root(phys);
         let (slot, destroyed, high, _) = &self.calls[i];
         if destroyed.contains(&root) {
             return true;
@@ -969,7 +973,7 @@ impl PhysInterference for CallMasks {
         &self,
         phys: RegId,
     ) -> Option<u32> {
-        let root = crate::model::ir::root(phys);
+        let root = self.regs.root(phys);
         self.flow.as_ref()?;
         if self.lane_registers.contains(&root) { self.lane.get() } else { None }
     }
@@ -1131,13 +1135,13 @@ pub fn decide_with_split(
         let mut order: Vec<RegId> = if floats.contains(&reg) {
             inputs.registers.rfp_registers().to_vec()
         } else {
-            (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
+            (inputs.order)(reg).into_iter().map(|one| inputs.registers.root(one)).collect()
         };
         order.dedup();
         if widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
             let roots = order.clone();
             let lanes: Vec<RegId> =
-                bytes.iter().copied().filter(|byte| roots.contains(&crate::model::ir::root(*byte))).collect();
+                bytes.iter().copied().filter(|byte| roots.contains(&inputs.registers.root(*byte))).collect();
             if !lanes.is_empty() {
                 order = lanes;
             }
@@ -1206,15 +1210,16 @@ pub fn decide_with_split(
         .pins
         .iter()
         .filter(|(reg, _)| !floats.contains(reg))
-        .map(|(&reg, &phys)| (reg, crate::model::ir::root(phys)))
+        .map(|(&reg, &phys)| (reg, inputs.registers.root(phys)))
         .collect();
     let env = BodyEnv {
         orders: Rc::clone(&tables),
         tii: inputs.tii,
+        tri: inputs.tri,
         pins,
         freq,
         exiting,
-        saved: inputs.saved.iter().map(|one| crate::model::ir::root(*one)).collect(),
+        saved: inputs.saved.iter().map(|one| inputs.registers.root(*one)).collect(),
     };
     // The calls.
     let mut calls = Vec::new();
@@ -1235,7 +1240,7 @@ pub fn decide_with_split(
             let read: RegSet = inputs
                 .data
                 .filter(|_| at_edge || inputs.tii.needs_data_group(one))
-                .map(crate::model::ir::root)
+                .map(|one| inputs.registers.root(one))
                 .into_iter()
                 .collect();
             // The stack is empty at a call and wherever an instruction names a
@@ -1245,7 +1250,7 @@ pub fn decide_with_split(
             if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() || !read.is_empty() || empties {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
                 let roots =
-                    |list: &BTreeSet<RegId>| -> RegSet { list.iter().map(|r| crate::model::ir::root(*r)).collect() };
+                    |list: &BTreeSet<RegId>| -> RegSet { list.iter().map(|r| inputs.registers.root(*r)).collect() };
                 let mut destroyed = roots(&one.clobbers);
                 if empties {
                     destroyed.extend(inputs.registers.rfp_registers().iter().copied());
@@ -1266,7 +1271,7 @@ pub fn decide_with_split(
         RegisterInfo::new(inputs.registers),
         Box::new(Fixed {
             calls: {
-                let masks = CallMasks::of(calls, blocks, Rc::clone(&tables));
+                let masks = CallMasks::of(inputs.registers, calls, blocks, Rc::clone(&tables));
                 if lanes { masks.with_flow(successors(body)) } else { masks }
             },
             pins: Rc::clone(&pins_cell),
@@ -1286,9 +1291,11 @@ pub fn decide_with_split(
                 inputs.pins.keys().copied().collect::<crate::support::hash::HashSet<u32>>(),
                 inputs.registers,
             );
-            Box::new(InlineSpiller::new(frame, inputs.tii, inputs.order, Rc::clone(&tables)).with_reclass(Box::new(
-                move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), registers, lis, regs),
-            )))
+            Box::new(
+                InlineSpiller::new(frame, inputs.tii, inputs.registers, inputs.order, Rc::clone(&tables)).with_reclass(
+                    Box::new(move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), registers, lis, regs)),
+                ),
+            )
         }
     };
     let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
@@ -1326,7 +1333,7 @@ pub fn decide_with_split(
             .into_iter()
             .map(|(reg, phys)| FixedPin {
                 reg,
-                root: crate::model::ir::root(phys),
+                root: inputs.registers.root(phys),
                 segments: greedy
                     .lis
                     .interval_rc(reg)
@@ -1396,7 +1403,7 @@ pub fn decide_with_split(
     // evicted or spilled.
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
-            tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
+            tables.orders.borrow_mut().insert(reg, vec![inputs.registers.root(phys)]);
             if !fixed_regs.iter().any(|(fixed, _)| *fixed == reg) {
                 greedy.pinned.insert(reg);
             }
@@ -1536,6 +1543,7 @@ mod tests {
             stable_loads: true,
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tri: &crate::greedy::targetinfo::X86RegisterInfo,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1603,6 +1611,7 @@ mod tests {
             stable_loads: true,
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tri: &crate::greedy::targetinfo::X86RegisterInfo,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1633,6 +1642,7 @@ mod tests {
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
         let masks = CallMasks::of(
+            Regs(&llrm_x86_m16::REGISTER_INFO),
             vec![(at(5), RegSet::new(), [esi].into_iter().collect(), RegSet::new())],
             Vec::new(),
             widths(&[(1, 4), (2, 2)]),
@@ -1665,6 +1675,7 @@ mod tests {
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
         let masks = CallMasks::of(
+            Regs(&llrm_x86_m16::REGISTER_INFO),
             vec![(at(5), RegSet::new(), [esi].into_iter().collect(), RegSet::new())],
             Vec::new(),
             widths(&[(1, 4)]),
@@ -1693,6 +1704,7 @@ mod tests {
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let ds = crate::model::ir::root(RegId::DS);
         let masks = CallMasks::of(
+            Regs(&llrm_x86_m16::REGISTER_INFO),
             vec![(at(5), RegSet::new(), RegSet::new(), [ds].into_iter().collect())],
             Vec::new(),
             widths(&[]),
@@ -1773,6 +1785,7 @@ mod tests {
                 stable_loads: true,
                 saved: &[],
                 tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+                tri: &crate::greedy::targetinfo::X86RegisterInfo,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1828,6 +1841,7 @@ mod tests {
             stable_loads: true,
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tri: &crate::greedy::targetinfo::X86RegisterInfo,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1851,7 +1865,7 @@ mod tests {
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
         let calls = (10..1990).map(|n| (at(n), RegSet::new(), [esi].into_iter().collect(), RegSet::new())).collect();
-        let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
+        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), calls, Vec::new(), widths(&[(1, 4)]));
         let mut li = LiveInterval::new(1, 1.0);
         let v = li.get_next_value(at(2));
         li.add_segment(Segment::new(at(2), at(4), Some(v.clone())));
@@ -1889,7 +1903,7 @@ mod tests {
             })
             .into_iter()
             .collect();
-        let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
+        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), calls, Vec::new(), widths(&[(1, 4)]));
         let mut li = LiveInterval::new(1, 1.0);
         let v = li.get_next_value(at(10));
         li.add_segment(Segment::new(at(10), at(20), Some(v.clone())));
@@ -1918,7 +1932,7 @@ mod tests {
         let esi = crate::model::ir::root(RegId::ESI);
         let calls =
             (10..90).map(|n| (at(n), [esi].into_iter().collect::<RegSet>(), RegSet::new(), RegSet::new())).collect();
-        let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
+        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), calls, Vec::new(), widths(&[(1, 4)]));
         let mut li = LiveInterval::new(1, 1.0);
         let v = li.get_next_value(at(2));
         li.add_segment(Segment::new(at(2), at(95), Some(v)));
@@ -1960,6 +1974,7 @@ mod tests {
             stable_loads: true,
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tri: &crate::greedy::targetinfo::X86RegisterInfo,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2007,6 +2022,7 @@ mod tests {
             stable_loads: true,
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tri: &crate::greedy::targetinfo::X86RegisterInfo,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");

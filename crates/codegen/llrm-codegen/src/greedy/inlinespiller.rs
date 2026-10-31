@@ -55,7 +55,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 use super::greedy::{SpillContext, Spiller};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
@@ -155,6 +155,7 @@ pub fn remat_shape(one: &Insn) -> bool {
 pub struct InlineSpiller<'a> {
     frame: &'a mut dyn FrameInfo,
     tii: &'a dyn TargetInstrInfo,
+    regs: Regs,
     order_of: &'a dyn Fn(u32) -> Vec<RegId>,
     tables: Rc<Tables>,
     /// `recomputeRegClass` of the registers an edit made
@@ -221,12 +222,14 @@ impl<'a> InlineSpiller<'a> {
     pub fn new(
         frame: &'a mut dyn FrameInfo,
         tii: &'a dyn TargetInstrInfo,
+        regs: Regs,
         order_of: &'a dyn Fn(u32) -> Vec<RegId>,
         tables: Rc<Tables>,
     ) -> Self {
         Self {
             frame,
             tii,
+            regs,
             order_of,
             tables,
             reclass: None,
@@ -632,11 +635,11 @@ impl<'a> InlineSpiller<'a> {
             .iter()
             .flat_map(|one| one.requires.iter().chain(&one.delivers))
             .find(|(held, _)| held.value == new)
-            .map(|(_, register)| crate::model::ir::root(*register));
+            .map(|(_, register)| self.regs.root(*register));
         // The class of the value it stands for, which a split may have changed.
         let held = self.tables.orders.borrow().get(&reg).cloned();
         let mut order: Vec<RegId> = held.unwrap_or_else(|| {
-            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
+            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(|one| self.regs.root(one)).collect();
             order.dedup();
             order
         });
@@ -1701,7 +1704,6 @@ impl Spiller for InlineSpiller<'_> {
 
 #[cfg(test)]
 mod tests {
-    use llrm_lir::registers::Regs;
 
     use super::*;
     use crate::backend::classes::RegisterClasses;
@@ -1928,7 +1930,7 @@ mod tests {
             tables.widths.borrow_mut().insert(value, 2);
         }
         let order_of = |_: u32| vec![RegId::EBX, RegId::ESI];
-        let mut spiller = InlineSpiller::new(&mut frame, &tii, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -1992,7 +1994,7 @@ mod tests {
             tables.widths.borrow_mut().insert(value, 10);
         }
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&mut frame, &tii, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -2049,7 +2051,7 @@ mod tests {
             tables.widths.borrow_mut().insert(value, 10);
         }
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&mut frame, &tii, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -2121,7 +2123,13 @@ mod tests {
         let classes = RegisterClasses::m16();
         let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&mut frame, &tii, &order_of, Rc::new(Tables::default()));
+        let mut spiller = InlineSpiller::new(
+            &mut frame,
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            &order_of,
+            Rc::new(Tables::default()),
+        );
         spiller.originals.insert(7, lis.get_interval(1).range.clone());
         for store in [&left, &right] {
             spiller
@@ -2205,7 +2213,13 @@ mod tests {
         let classes = RegisterClasses::m16();
         let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&mut frame, &tii, &order_of, Rc::new(Tables::default()));
+        let mut spiller = InlineSpiller::new(
+            &mut frame,
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            &order_of,
+            Rc::new(Tables::default()),
+        );
         spiller.original = 1;
         spiller.reg = 3;
         let (two, three) = (lis.get_interval(2).range.clone(), lis.get_interval(3).range.clone());
@@ -2299,7 +2313,7 @@ mod tests {
             tables.widths.borrow_mut().insert(value, 2);
         }
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&mut frame, &tii, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());

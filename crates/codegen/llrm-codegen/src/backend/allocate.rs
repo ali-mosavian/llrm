@@ -307,6 +307,7 @@ pub fn greedy_rewritten(
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
         tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes },
+        tri: &crate::greedy::targetinfo::X86RegisterInfo,
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);

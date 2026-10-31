@@ -255,6 +255,7 @@ impl AllocationOrder {
         vrm: &VirtRegMap,
         order: Vec<RegId>,
         hints: &BTreeMap<u32, Vec<Hint>>,
+        root: &dyn Fn(RegId) -> RegId,
     ) -> Self {
         let mut found: Vec<RegId> = Vec::new();
         for hint in hints.get(&virt).into_iter().flatten() {
@@ -271,8 +272,8 @@ impl AllocationOrder {
                 if order.contains(&phys) {
                     phys
                 } else {
-                    let root = crate::model::ir::root(phys);
-                    order.iter().copied().find(|one| crate::model::ir::root(*one) == root).unwrap_or(phys)
+                    let family = root(phys);
+                    order.iter().copied().find(|one| root(*one) == family).unwrap_or(phys)
                 }
             });
             if let Some(phys) = phys {
@@ -894,7 +895,13 @@ impl<'a> RAGreedy<'a> {
         &self,
         virt: u32,
     ) -> AllocationOrder {
-        AllocationOrder::create(virt, &self.matrix.vrm, self.env.allocation_order(self.class_reg(virt)), &self.hints)
+        AllocationOrder::create(
+            virt,
+            &self.matrix.vrm,
+            self.env.allocation_order(self.class_reg(virt)),
+            &self.hints,
+            &|reg| self.matrix.root(reg),
+        )
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.
