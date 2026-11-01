@@ -17,6 +17,10 @@ pub const LAYOUT: &str = include_str!("machines/datalayout.toml");
 /// `machines/calling.toml`: SDCC's register convention.
 pub const CALLING: &str = include_str!("machines/calling.toml");
 
+/// `runtime/z80_rt.s`: multiply, divide, remainder and shifts by a variable, in
+/// sdasz80 syntax.
+pub const RUNTIME: &str = include_str!("../runtime/z80_rt.s");
+
 /// The register ids, numbered by `registers.regs`'s lines: `reg::HL`.
 pub mod reg {
     use super::RegId;
