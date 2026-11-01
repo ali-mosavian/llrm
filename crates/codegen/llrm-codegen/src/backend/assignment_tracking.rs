@@ -7,7 +7,8 @@
 //! in, [`FunctionVarLocsBuilder`]: the variables (a variable and the bit range
 //! of it a location covers), the variables that have one location for their
 //! whole scope, and the locations that start just before an instruction. The
-//! analysis that fills it comes in later commits.
+//! analysis that fills it comes in later commits; the first part of it is here,
+//! the overlap map and the stores it reads.
 //!
 //! # Example
 //! A variable `x` kept in `%a` from its first use, and `y` in its stack slot
@@ -31,10 +32,16 @@
 //! # See also
 //! `llvm/lib/CodeGen/AssignmentTrackingAnalysis.cpp`, pin d1106deb71cc.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
-use llrm_mir::{DebugRecord, DwOp, InstId, MetadataId, Module, Operand};
+use llrm_mir::types::Type;
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::nonzero::{get_pointer_offset_from, strip_and_accumulate_constant_offsets};
+use llrm_mir::{
+    ConstantKind, DebugRecord, DebugWhat, DwOp, Function, InstId, MetadataId, Module, Opcode, Operand, ValueDef,
+    ValueId,
+};
 
 /// A number of a variable in [`FunctionVarLocs::variables`]; 0 is reserved
 /// (`VariableID::Reserved`), as the pin's table is one-based.
@@ -57,6 +64,14 @@ pub struct DebugVariable {
     pub fragment: Option<Fragment>,
     /// The `DILocation` of the call this instance was inlined at.
     pub inlined_at: Option<MetadataId>,
+}
+
+impl DebugVariable {
+    /// `getFragmentOrDefault`: a variable with no fragment is all bits, up
+    /// to `u32::MAX`.
+    pub fn fragment_or_default(&self) -> Fragment {
+        self.fragment.unwrap_or(Fragment { offset: 0, size: u64::from(u32::MAX) })
+    }
 }
 
 /// One definition: the variable is what the expression makes of the values,
@@ -445,6 +460,394 @@ impl FunctionVarLocs {
     }
 }
 
+/// The bits of the variable a trailing `DW_OP_LLVM_fragment` names
+/// (`DIExpression::getFragmentInfo`).
+pub fn fragment_of(ops: &[DwOp]) -> Option<Fragment> {
+    ops.iter()
+        .rev()
+        .find_map(
+            |op| match *op {
+                DwOp::Fragment { offset, size } => Some(Fragment { offset, size }),
+                _ => None,
+            },
+        )
+}
+
+/// `DIExpression::extractLeadingOffset`: the bytes the leading
+/// `plus_uconst`/`constu`+`plus|minus` operations add, and the operations
+/// after them. None when an operation is none of those or a `deref` or fragment
+/// (which end the offset), or the expression reads more than one location.
+pub fn extract_leading_offset(ops: &[DwOp]) -> Option<(i64, &[DwOp])> {
+    let ops = match ops {
+        [DwOp::Arg(0), rest @ ..] => rest,
+        _ => ops,
+    };
+    if ops.iter().any(|op| matches!(op, DwOp::Arg(_))) {
+        return None;
+    }
+    let mut offset = 0_i64;
+    let mut at = 0;
+    while let Some(op) = ops.get(at) {
+        match *op {
+            DwOp::Deref | DwOp::Fragment { .. } => break,
+            DwOp::PlusUconst(n) => offset = offset.wrapping_add(n as i64),
+            DwOp::Constu(n) => {
+                at += 1;
+                match ops.get(at) {
+                    Some(DwOp::Binary(llrm_mir::module::DwBinary::Plus)) => offset = offset.wrapping_add(n as i64),
+                    Some(DwOp::Binary(llrm_mir::module::DwBinary::Minus)) => offset = offset.wrapping_sub(n as i64),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+        at += 1;
+    }
+    Some((offset, &ops[at..]))
+}
+
+/// What a store writes: bytes `[offset, offset + size)` of an alloca
+/// (`at::AssignmentInfo`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignmentInfo {
+    pub base: ValueId,
+    /// The alloca's instruction.
+    pub alloca: InstId,
+    pub offset_in_bits: u64,
+    pub size_in_bits: u64,
+}
+
+/// `at::getAssignmentInfo` for a store or a `memcpy`/`memmove`/`memset` of
+/// constant length: None when its destination is no constant offset from an
+/// alloca, the offset is negative, or the length is not a constant.
+pub fn assignment_info(
+    q: &Query,
+    inst: InstId,
+) -> Option<AssignmentInfo> {
+    let instruction = q.function.instruction(inst);
+    let (dest, size_in_bits) = match &instruction.opcode {
+        Opcode::Store { .. } => {
+            let value_type = q.type_of(*instruction.operands.first()?)?;
+            (*instruction.operands.get(1)?, q.layout.size_bits(&q.context.types, value_type))
+        }
+        Opcode::Call(_) => {
+            let callee = llrm_mir::memory::callee(q.context, q.function, inst)?;
+            let id = q.globals.get(callee.0 as usize)?.name.intrinsic_id()?;
+            use llrm_mir::valuetracking::pattern::IntrinsicId as I;
+            if !matches!(id, I::Memset | I::Memcpy | I::MemcpyInline | I::Memmove) {
+                return None;
+            }
+            let Some(Operand::Constant(length)) = instruction.operands.get(2).copied() else { return None };
+            let ConstantKind::Int(bytes) = q.context.get(length).kind else { return None };
+            (*instruction.operands.first()?, u64::try_from(bytes).ok()?.checked_mul(8)?)
+        }
+        _ => return None,
+    };
+    let width = match q.type_of(dest).map(|ty| q.context.types.get(ty)) {
+        Some(Type::Pointer(space)) => q.layout.pointer(*space).index_bits,
+        _ => 64,
+    };
+    let (base, offset) = strip_and_accumulate_constant_offsets(q, dest, width, true);
+    let offset = i128::try_from(offset).ok()?;
+    let offset = if width < 128 && offset >> (width - 1) & 1 == 1 { offset - (1_i128 << width) } else { offset };
+    let offset_in_bytes = u64::try_from(offset).ok().filter(|&bytes| bytes != u64::MAX)?;
+    let Operand::Value(base) = base else { return None };
+    let ValueDef::Instruction(def) = q.function.value(base).def else { return None };
+    matches!(q.function.instruction(def).opcode, Opcode::Alloca { .. }).then_some(AssignmentInfo {
+        base,
+        alloca: def,
+        offset_in_bits: offset_in_bytes.checked_mul(8)?,
+        size_in_bits,
+    })
+}
+
+/// `DIExpression::calculateFragmentIntersect`: the bits of a variable's
+/// fragment `var` (the memory at `dbg_ptr` plus `dbg_offset_in_bits`) that
+/// the memory `[slice_offset, slice_offset + slice_size)` bits past
+/// `slice_start` covers. `Some(None)` is the whole of `var`; None where the
+/// distance of the pointers is no constant or the variable's size is not known.
+pub fn calculate_fragment_intersect(
+    q: &Query,
+    slice_start: Operand,
+    slice_offset_in_bits: u64,
+    slice_size_in_bits: u64,
+    dbg_ptr: Operand,
+    dbg_offset_in_bits: i64,
+    var: Fragment,
+) -> Option<Option<Fragment>> {
+    if var.size == 0 {
+        return None;
+    }
+    let apart = get_pointer_offset_from(q, slice_start, dbg_ptr)?;
+    let mem_start = apart * 8 + slice_offset_in_bits as i64 - dbg_offset_in_bits;
+    let mem_end = mem_start + slice_size_in_bits as i64;
+    if mem_end < 0 {
+        return Some(Some(Fragment { offset: 0, size: 0 }));
+    }
+    let start_in_var = mem_start + var.offset as i64;
+    let end_in_var = start_in_var + slice_size_in_bits as i64;
+    // The slice of the variable, trimmed to `var` (`FragmentInfo::intersect`).
+    let left = start_in_var.max(0).max(var.offset as i64);
+    let right = end_in_var.min((var.offset + var.size) as i64);
+    let trimmed = if right > left {
+        Fragment { offset: left as u64, size: (right - left) as u64 }
+    } else {
+        Fragment { offset: 0, size: 0 }
+    };
+    Some((trimmed != var).then_some(trimmed))
+}
+
+/// `at::calculateFragmentIntersect`: as above, for the memory a store
+/// writes and a `#dbg_assign`'s address and variable. None where the record
+/// has no address, its address expression is more than an offset, or the
+/// variable's size is not known.
+pub fn calculate_fragment_intersect_of_assign(
+    q: &Query,
+    module: &Module,
+    destination: Operand,
+    slice_offset_in_bits: u64,
+    slice_size_in_bits: u64,
+    record: &DebugRecord,
+) -> Option<Option<Fragment>> {
+    let DebugWhat::Assign { address: Some(address), address_expression, .. } = record.what else { return None };
+    let (offset_in_bytes, _) = extract_leading_offset(&module.expression(address_expression)?)?;
+    let var = fragment_or_entire_variable(module, record)?;
+    calculate_fragment_intersect(
+        q,
+        destination,
+        slice_offset_in_bits,
+        slice_size_in_bits,
+        address,
+        offset_in_bytes * 8,
+        var,
+    )
+}
+
+/// `DbgVariableRecord::getFragmentOrEntireVariable`: the fragment the record's
+/// expression names, else all of the variable's type; None for a variable of
+/// no known size.
+pub fn fragment_or_entire_variable(
+    module: &Module,
+    record: &DebugRecord,
+) -> Option<Fragment> {
+    let ops = record.expression.and_then(|id| module.expression(id)).unwrap_or_default();
+    if let Some(fragment) = fragment_of(&ops) {
+        return Some(fragment);
+    }
+    Some(Fragment { offset: 0, size: variable_size_in_bits(module, record.variable)? })
+}
+
+/// The operand of the specialized node `id` written as `field:`.
+fn field<'m>(
+    module: &'m Module,
+    id: MetadataId,
+    name: &str,
+) -> Option<&'m llrm_mir::module::MetadataOperand> {
+    let special = module.special.get(&id)?;
+    let at = special.fields.iter().position(|one| one == name)?;
+    module.metadata[id.0 as usize].operands.get(at)
+}
+
+/// `DIVariable::getSizeInBits`: the variable's `size:`, else its type's, which
+/// a typedef or qualifier takes from the type it wraps. None for size 0.
+pub fn variable_size_in_bits(
+    module: &Module,
+    variable: MetadataId,
+) -> Option<u64> {
+    use llrm_mir::module::MetadataOperand as Operand;
+    let size = |id| match field(module, id, "size")? {
+        Operand::Constant(value) => match module.context.get(*value).kind {
+            ConstantKind::Int(bits) => u64::try_from(bits).ok().filter(|&bits| bits != 0),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(bits) = size(variable) {
+        return Some(bits);
+    }
+    let Some(&Operand::Node(mut ty)) = field(module, variable, "type") else { return None };
+    // A chain of base types is as long as the source's nesting.
+    for _ in 0..module.metadata.len() {
+        if let Some(bits) = size(ty) {
+            return Some(bits);
+        }
+        let Some(&Operand::Node(base)) = field(module, ty, "baseType") else { return None };
+        ty = base;
+    }
+    None
+}
+
+/// The `#dbg_assign` records linked to each `!DIAssignID`, by index in the
+/// function's records (`at::getDVRAssignmentMarkers`, which the pin finds
+/// through a map of the id's users): [`Function::assignment_markers`] scans
+/// every record per call.
+#[derive(Debug, Default)]
+pub struct AssignmentMarkers {
+    by_id: HashMap<MetadataId, Vec<usize>>,
+}
+
+impl AssignmentMarkers {
+    pub fn new(function: &Function) -> AssignmentMarkers {
+        let mut by_id: HashMap<MetadataId, Vec<usize>> = HashMap::new();
+        for (at, record) in function.debug_records().iter().enumerate() {
+            if let DebugWhat::Assign { id, .. } = record.what {
+                by_id.entry(id).or_default().push(at);
+            }
+        }
+        AssignmentMarkers { by_id }
+    }
+
+    /// The records linked to `inst` by the `!DIAssignID` it carries.
+    pub fn of(
+        &self,
+        function: &Function,
+        inst: InstId,
+    ) -> &[usize] {
+        function
+            .instruction(inst)
+            .metadata
+            .iter()
+            .find(|(kind, _)| kind == "DIAssignID")
+            .and_then(|(_, id)| self.by_id.get(id))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The variables with a stack slot: those a `#dbg_assign` is linked to an
+/// instruction of (`findVarsWithStackSlot`). An aggregate is the variable's
+/// node alone: the inliner drops the callee's records, so none is inlined.
+pub fn vars_with_stack_slot(
+    function: &Function,
+    markers: &AssignmentMarkers,
+) -> HashSet<MetadataId> {
+    function
+        .walk()
+        .flat_map(|(_, inst)| markers.of(function, inst))
+        .map(|&at| function.debug_records()[at].variable)
+        .collect()
+}
+
+/// What `buildOverlapMapAndRecordDeclares` finds out about a function.
+#[derive(Debug, Default)]
+pub struct Prepared {
+    /// Per variable the variables of its aggregate whose bits it fully
+    /// contains (`OverlapMap`).
+    pub contains: HashMap<VariableId, Vec<VariableId>>,
+    /// Per untagged store the variables it writes (`UntaggedStoreVars`).
+    pub untagged_stores: HashMap<InstId, Vec<(VariableId, AssignmentInfo)>>,
+    /// One more than the last variable the dataflow tracks
+    /// (`TrackedVariablesVectorSize`).
+    pub tracked_variables: usize,
+}
+
+/// `fullyContains`: `a` has all the bits of `b`.
+fn fully_contains(
+    a: Fragment,
+    b: Fragment,
+) -> bool {
+    b.offset >= a.offset && b.offset + b.size <= a.offset + a.size
+}
+
+/// The variable a record sets (`DebugVariable(DVR)`).
+pub fn debug_variable_of(
+    module: &Module,
+    record: &DebugRecord,
+) -> DebugVariable {
+    let ops = record.expression.and_then(|id| module.expression(id)).unwrap_or_default();
+    DebugVariable { variable: record.variable, fragment: fragment_of(&ops), inlined_at: None }
+}
+
+/// `buildOverlapMapAndRecordDeclares` without escaping calls and unknown
+/// stores: the variables the dataflow tracks, which contain which, and which
+/// untagged stores write them; each `#dbg_declare` becomes a location valid
+/// for the variable's whole scope.
+///
+/// O(n log n) in the records, for the fragments' sort, and quadratic in the
+/// fragments of one variable, as the pin is. The pin numbers the variables
+/// of its fragment map in the hash order of a `DenseMap`; here they follow
+/// the order the records stand in, so the numbers (not the table) differ
+/// from `llc -print-debug-ata`.
+pub fn build_overlap_map(
+    module: &Module,
+    q: &Query,
+    builder: &mut FunctionVarLocsBuilder,
+    markers: &AssignmentMarkers,
+    with_stack_slot: &HashSet<MetadataId>,
+) -> Prepared {
+    let function = q.function;
+    let mut before: HashMap<InstId, Vec<usize>> = HashMap::new();
+    for (at, record) in function.debug_records().iter().enumerate() {
+        before.entry(record.before).or_default().push(at);
+    }
+    let mut prepared = Prepared::default();
+    let mut seen: HashSet<DebugVariable> = HashSet::new();
+    let mut fragments: BTreeMap<MetadataId, Vec<DebugVariable>> = BTreeMap::new();
+    let mut declares = Vec::new();
+    let mut note = |variable: DebugVariable| {
+        if with_stack_slot.contains(&variable.variable) && seen.insert(variable) {
+            fragments.entry(variable.variable).or_default().push(variable);
+        }
+    };
+    for (_, inst) in function.walk() {
+        for &at in before.get(&inst).map_or(&[][..], Vec::as_slice) {
+            let record = &function.debug_records()[at];
+            if matches!(record.what, DebugWhat::Declare(_)) {
+                declares.push(at);
+            } else {
+                note(debug_variable_of(module, record));
+            }
+        }
+        let Some(info) = assignment_info(q, inst) else { continue };
+        for &at in markers.of(function, info.alloca) {
+            let record = &function.debug_records()[at];
+            // Skip a record whose variable the bits written lie outside of.
+            let Some(intersect) = calculate_fragment_intersect_of_assign(
+                q,
+                module,
+                Operand::Value(info.base),
+                info.offset_in_bits,
+                info.size_in_bits,
+                record,
+            ) else {
+                continue;
+            };
+            if intersect.is_some_and(|fragment| fragment.size == 0) {
+                continue;
+            }
+            let own = debug_variable_of(module, record);
+            let variable = DebugVariable { fragment: intersect.or(own.fragment), ..own };
+            if !with_stack_slot.contains(&variable.variable) {
+                continue;
+            }
+            // Only a store the ids do not tag is cached for later; a tagged
+            // one is processed through its markers.
+            if !function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "DIAssignID") {
+                prepared.untagged_stores.entry(inst).or_default().push((builder.insert_variable(variable), info));
+            }
+            note(variable);
+        }
+    }
+    for list in fragments.values_mut() {
+        list.sort_by_key(|one| one.fragment_or_default().size);
+        for (at, one) in list.iter().enumerate() {
+            let this = builder.insert_variable(*one);
+            for other in &list[at + 1..] {
+                if fully_contains(other.fragment_or_default(), one.fragment_or_default()) {
+                    prepared.contains.entry(builder.insert_variable(*other)).or_default().push(this);
+                }
+            }
+        }
+    }
+    prepared.tracked_variables = builder.number_of_variables() + 1;
+    for at in declares {
+        let record = &function.debug_records()[at];
+        let DebugWhat::Declare(address) = record.what else { continue };
+        let ops = record.expression.and_then(|id| module.expression(id)).unwrap_or_default();
+        builder.add_single_loc_var(debug_variable_of(module, record), ops, record.location, vec![address]);
+    }
+    prepared
+}
+
 /// The operations of an expression as LLVM prints them.
 pub fn expression_text(ops: &[DwOp]) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -557,5 +960,153 @@ mod tests {
         assert!(result.locs_before(InstId(4)).is_empty());
         assert_eq!(result.single_locs().len(), 1);
         assert_eq!(result.variable(VariableId(3)).variable, MetadataId(7));
+    }
+
+    const DATALAYOUT: &str = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+
+    /// `int a[3]` with its first word, and the second one, stored: clang's
+    /// own records, `tag` the id of the first store.
+    fn array(
+        first: &str,
+        second: &str,
+    ) -> Module {
+        let text = format!(
+            "target datalayout = \"{DATALAYOUT}\"\n\
+define i32 @f(i32 %n) {{\nentry:\n\
+  %a = alloca [3 x i32], align 4, !DIAssignID !24\n\
+    #dbg_assign(i1 poison, !20, !DIExpression(), !24, ptr %a, !DIExpression(), !25)\n\
+  store i32 %n, ptr %a, align 4{first}\n\
+    #dbg_assign(i32 %n, !20, !DIExpression(DW_OP_LLVM_fragment, 0, 32), !28, ptr %a, !DIExpression(), !25)\n\
+  %p = getelementptr inbounds i8, ptr %a, i64 4\n\
+  store i32 %n, ptr %p, align 4{second}\n\
+    #dbg_assign(i32 %n, !20, !DIExpression(DW_OP_LLVM_fragment, 32, 32), !29, ptr %a, !DIExpression(DW_OP_plus_uconst, 4), !25)\n\
+  ret i32 %n\n}}\n\
+!17 = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n\
+!20 = !DILocalVariable(name: \"a\", scope: !14, type: !21)\n\
+!21 = !DICompositeType(tag: DW_TAG_array_type, baseType: !17, size: 96)\n\
+!24 = distinct !DIAssignID()\n!28 = distinct !DIAssignID()\n!29 = distinct !DIAssignID()\n\
+!14 = distinct !DISubprogram(name: \"f\")\n!25 = !DILocation(line: 0, scope: !14)\n"
+        );
+        llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn function_f(module: &Module) -> &Function {
+        module.global(module.named("f").expect("@f")).function().expect("a body")
+    }
+
+    /// The layout the function's pointers are read with.
+    fn prepare(module: &Module) -> (Prepared, FunctionVarLocsBuilder) {
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let function = function_f(module);
+        let q = Query::new(module, function, &layout);
+        let markers = AssignmentMarkers::new(function);
+        let with_slot = vars_with_stack_slot(function, &markers);
+        let mut builder = FunctionVarLocsBuilder::default();
+        let prepared = build_overlap_map(module, &q, &mut builder, &markers, &with_slot);
+        (prepared, builder)
+    }
+
+    const TAGGED_1: &str = ", !DIAssignID !28";
+    const TAGGED_2: &str = ", !DIAssignID !29";
+
+    /// The leading offset stops at a deref or a fragment, reads
+    /// `constu n; plus|minus`, and refuses anything else: a wrong read put a
+    /// store's bits at the wrong place in its variable.
+    #[test]
+    fn the_leading_offset_is_what_the_pin_extracts() {
+        use llrm_mir::module::DwBinary::{Minus, Plus};
+        let frag = DwOp::Fragment { offset: 0, size: 8 };
+        assert_eq!(extract_leading_offset(&[]), Some((0, &[][..])));
+        assert_eq!(extract_leading_offset(&[DwOp::PlusUconst(4), DwOp::Deref]), Some((4, &[DwOp::Deref][..])));
+        assert_eq!(
+            extract_leading_offset(&[DwOp::Constu(8), DwOp::Binary(Minus), DwOp::PlusUconst(3), frag]),
+            Some((-5, &[frag][..]))
+        );
+        assert_eq!(extract_leading_offset(&[DwOp::Constu(8), DwOp::Binary(Plus)]), Some((8, &[][..])));
+        assert_eq!(extract_leading_offset(&[DwOp::Constu(8), DwOp::Deref]), None);
+        assert_eq!(extract_leading_offset(&[DwOp::StackValue]), None);
+        assert_eq!(extract_leading_offset(&[DwOp::Arg(1)]), None);
+    }
+
+    /// A store of an `i32` 4 bytes into a 12-byte alloca writes bits 32..64
+    /// of it; one through a pointer that is no constant offset writes none.
+    #[test]
+    fn a_store_writes_bits_of_its_alloca() {
+        let module = array(TAGGED_1, TAGGED_2);
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let function = function_f(&module);
+        let q = Query::new(&module, function, &layout);
+        let stores: Vec<_> = function
+            .walk()
+            .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+            .map(|(_, inst)| assignment_info(&q, inst).map(|one| (one.offset_in_bits, one.size_in_bits)))
+            .collect();
+        assert_eq!(stores, [Some((0, 32)), Some((32, 32))]);
+    }
+
+    /// The variable `a` has no fragment of its own, so its size is its
+    /// type's; the two halves clang wrote are inside it, and neither
+    /// contains the other.
+    #[test]
+    fn a_variable_contains_the_fragments_written_to_it() {
+        let module = array(TAGGED_1, TAGGED_2);
+        let (prepared, builder) = prepare(&module);
+        let frag = |at: usize| builder.variable(VariableId(at as u32)).fragment;
+        assert_eq!(builder.number_of_variables(), 3, "a, a[0..32), a[32..64)");
+        assert_eq!(prepared.tracked_variables, 4);
+        let whole = (1..=3).find(|&at| frag(at).is_none()).expect("the whole variable");
+        let mut inside: Vec<_> =
+            prepared.contains[&VariableId(whole as u32)].iter().map(|id| frag(id.0 as usize)).collect();
+        inside.sort_by_key(|one| one.map(|f| f.offset));
+        assert_eq!(inside, [Some(Fragment { offset: 0, size: 32 }), Some(Fragment { offset: 32, size: 32 })]);
+        assert!(prepared.contains.len() == 1, "the halves hold nothing");
+    }
+
+    /// A store that lost its `!DIAssignID` is recorded with the variable
+    /// bits it wrote (the pin's `UntaggedStoreVars`); a tagged one is not:
+    /// treating a tagged store as untagged double counted its assignment.
+    #[test]
+    fn only_a_store_without_an_id_is_an_untagged_store() {
+        let module = array(TAGGED_1, "");
+        let (prepared, builder) = prepare(&module);
+        let function = function_f(&module);
+        let untagged: Vec<_> = prepared
+            .untagged_stores
+            .values()
+            .flatten()
+            .map(|(variable, info)| (builder.variable(*variable).fragment, info.offset_in_bits))
+            .collect();
+        assert_eq!(untagged, [(Some(Fragment { offset: 32, size: 32 }), 32)]);
+        assert_eq!(prepared.untagged_stores.len(), 1);
+        let _ = function;
+    }
+
+    /// The bits of a variable a store covers, past a `dbg_assign`'s own
+    /// offset: a 4-byte store at +4 of an address that is itself at +4 is the
+    /// variable's first word.
+    #[test]
+    fn a_fragment_is_found_relative_to_the_records_address() {
+        let module = array(TAGGED_1, TAGGED_2);
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let function = function_f(&module);
+        let q = Query::new(&module, function, &layout);
+        let (_, alloca) = function.walk().next().map(|(b, i)| (b, function.instruction(i).result.unwrap())).unwrap();
+        let slice = |offset, size, dbg_offset, var| {
+            calculate_fragment_intersect(
+                &q,
+                Operand::Value(alloca),
+                offset,
+                size,
+                Operand::Value(alloca),
+                dbg_offset,
+                var,
+            )
+        };
+        let whole = Fragment { offset: 0, size: 96 };
+        assert_eq!(slice(32, 32, 0, whole), Some(Some(Fragment { offset: 32, size: 32 })));
+        assert_eq!(slice(0, 96, 0, whole), Some(None), "all of the variable");
+        assert_eq!(slice(32, 32, 32, whole), Some(Some(Fragment { offset: 0, size: 32 })));
+        assert_eq!(slice(0, 32, 64, whole), Some(Some(Fragment { offset: 0, size: 0 })), "before the variable");
+        assert_eq!(slice(0, 32, 0, Fragment { offset: 0, size: 0 }), None, "no size");
     }
 }
