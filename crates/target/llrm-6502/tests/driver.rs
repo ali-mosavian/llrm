@@ -803,3 +803,17 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// A CRC-16 step tests bit 15 and shifts left. The test was `ldx rc3; bpl`
+/// after the shift had already put that bit in the carry (crc16: 14 bytes and
+/// 20% over a hand bit loop); the branch now reads the carry.
+#[test]
+fn a_crc_step_branches_on_the_carry_of_its_shift() {
+    let ir = module(
+        "define i16 @step(i16 %c) {\n  %t = and i16 %c, 32768\n  %b = icmp ne i16 %t, 0\n  \
+         %s = shl i16 %c, 1\n  %x = xor i16 %s, 4129\n  %r = select i1 %b, i16 %x, i16 %s\n  ret i16 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("bcc") || text.contains("bcs"), "no branch on the carry:\n{text}");
+    assert!(!text.contains("bpl") && !text.contains("bmi"), "a sign branch is left:\n{text}");
+}

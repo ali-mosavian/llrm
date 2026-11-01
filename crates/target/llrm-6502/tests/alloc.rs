@@ -2826,3 +2826,36 @@ b:
     let text = compile(ir, "f");
     assert!(!text.contains("cmp #0"), "{text}");
 }
+
+/// One CRC step tests bit 15 of `c` and shifts `c` left: `lda rc3; sta rc4;
+/// asl rc2; rol rc4; ldx rc3; bpl l` read the top bit twice, a load and three
+/// clocks over `bcc l` on the carry the `rol` made (crc16 bit loop, 14 bytes
+/// and 20% over Greg Cook's hand CRC16_S). The register the load set must be
+/// written again before it is read, and the copy must hold the tested cell.
+#[test]
+fn a_sign_test_of_the_cell_just_shifted_is_a_branch_on_the_carry() {
+    use llrm_6502::peephole::branch_on_shift_carry;
+    let step = "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
+    assert_eq!(
+        pass(branch_on_shift_carry, step),
+        "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  bcc l\n  eor #33\nl:\n  ldx rc4\n  rts\n"
+    );
+    assert_eq!(
+        pass(branch_on_shift_carry, &step.replace("bpl", "bmi")),
+        "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  bcs l\n  eor #33\nl:\n  ldx rc4\n  rts\n"
+    );
+    let live = "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, live), live, "rts returns x");
+    let other = "  lda rc5\n  sta rc4\n  asl rc2\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, other), other, "rc4 holds rc5, not rc3");
+    let written = "  lda rc3\n  sta rc4\n  inc rc3\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, written), written, "rc3 changed after the copy");
+    let register = "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  txa\n  bmi l\n  lda rc6\nl:\n  tya\n  rts\n";
+    assert_eq!(
+        pass(branch_on_shift_carry, register),
+        "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  bcs l\n  lda rc6\nl:\n  tya\n  rts\n",
+        "x held the old byte of rc6"
+    );
+    let moved = "  stx rc6\n  inx\n  asl rc5\n  rol rc6\n  txa\n  bmi l\n  lda rc6\nl:\n  tya\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, moved), moved, "x changed after the copy");
+}
