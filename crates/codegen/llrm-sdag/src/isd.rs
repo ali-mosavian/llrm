@@ -192,6 +192,13 @@ pub enum ISD {
     CallSeqEnd,
     DynamicStackAlloc,
     Trap,
+    /// `INTRINSIC_WO_CHAIN`: `(id, args...)`; `INTRINSIC_W_CHAIN`:
+    /// `(chain, id, args...)` to the result and a chain; `INTRINSIC_VOID`:
+    /// `(chain, id, args...)` to a chain. `id` is a target constant the
+    /// target numbers.
+    IntrinsicWoChain,
+    IntrinsicWChain,
+    IntrinsicVoid,
 
     Target(u16),
     Machine(u32),
@@ -365,6 +372,9 @@ impl ISD {
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",
             Trap => "trap",
+            IntrinsicWoChain => "intrinsic_wo_chain",
+            IntrinsicWChain => "intrinsic_w_chain",
+            IntrinsicVoid => "intrinsic_void",
             Target(code) => return super::x86isd::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
@@ -435,6 +445,9 @@ pub enum CondCode {
 }
 
 impl CondCode {
+    /// The codes by their number, as `ISD::CondCode` numbers them.
+    pub const ALL_CODES: [CondCode; 24] = Self::ALL;
+
     const ALL: [CondCode; 24] = {
         use CondCode::*;
         [

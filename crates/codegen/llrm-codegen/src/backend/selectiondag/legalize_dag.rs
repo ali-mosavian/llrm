@@ -216,6 +216,60 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
+    /// `LegalizeLoadOps` for an extending load of memory that is not a power
+    /// of two wide (`i56`, seven bytes): a zero-extending load of each power of
+    /// two it is the sum of, shifted into place and or-ed, sign-extended in
+    /// the register for a signed load. The value and the chain it replaces.
+    fn expand_odd_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let vt = self.dag.value_type(node);
+        let pieces = super::legalize_types::odd_memory(info.mem_vt)
+            .filter(|_| vt.size_in_bits() > info.mem_vt.size_in_bits())?;
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let mut joined: Option<SDValue> = None;
+        let mut chains = Vec::new();
+        let mut at = 0u32;
+        for piece in pieces {
+            let piece_ptr = if at == 0 {
+                ptr
+            } else {
+                let by = self.dag.get_constant(u128::from(at / 8), self.dag.value_type(ptr));
+                self.dag.get_node(ISD::Add, self.dag.value_type(ptr), &[ptr, by])
+            };
+            let piece_info = MemInfo {
+                mem_vt: piece,
+                align: if at == 0 { info.align } else { info.align.min(at / 8) },
+                ext: Some(super::actions::LoadExt::ZExtLoad),
+                ..info
+            };
+            let part = self.dag.get_ext_load(super::actions::LoadExt::ZExtLoad, vt, chain, piece_ptr, piece_info);
+            chains.push(SDValue { node: part.node, res: 1 });
+            let part = if at == 0 {
+                part
+            } else {
+                let by = self.dag.get_constant(u128::from(at), EVT::I8);
+                self.dag.get_node(ISD::Shl, vt, &[part, by])
+            };
+            joined = Some(match joined {
+                Some(low) => self.dag.get_node(ISD::Or, vt, &[low, part]),
+                None => part,
+            });
+            at += piece.size_in_bits();
+        }
+        let mut value = joined?;
+        if info.ext == Some(super::actions::LoadExt::SExtLoad) {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            value = self.dag.get_node(ISD::SignExtendInReg, vt, &[value, ty]);
+        }
+        Some((value, self.dag.get_token_factor(&chains)))
+    }
+
     /// `LegalizeLoadOps`, extending loads: one the target does not have is an
     /// any-extending load and an extension in the register. The value and
     /// the chain it replaces.
@@ -259,7 +313,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
         }
-        if let Some(result) = self.expand_ext_load(node) {
+        if let Some(result) = self.expand_odd_ext_load(node).or_else(|| self.expand_ext_load(node)) {
             self.replace_node(node, result.0);
             self.replace_node(SDValue { node: n, res: 1 }, result.1);
             return Ok(());
@@ -327,14 +381,22 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let refused = LegalizeError::Unsupported { op, ty: vt, what: "convert node to libcall" };
-        let signed = match op {
-            ISD::SDiv | ISD::SRem => true,
-            ISD::UDiv | ISD::URem | ISD::Mul => false,
+        let (signed, arity) = match op {
+            ISD::SDiv | ISD::SRem => (true, 2),
+            ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
+            // `ExpandFPLibCall`: every operand, none signed.
+            ISD::FRem => (false, 2),
+            ISD::FSin | ISD::FCos | ISD::FAtan | ISD::FLog | ISD::FLog2 | ISD::FExp | ISD::FExp2 | ISD::LRint => {
+                (false, 1)
+            }
             _ => return Err(refused),
         };
         let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
-        let args = [self.dag.operand(node, 0), self.dag.operand(node, 1)];
-        let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, vt, signed) else { return Err(refused) };
+        let args: Vec<SDValue> = (0..arity).map(|at| self.dag.operand(node, at)).collect();
+        // `vt` is the type the action is keyed by: `LRINT` of a float returns
+        // an integer.
+        let ret = self.dag.value_type(node);
+        let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, ret, signed) else { return Err(refused) };
         self.replace_node(node, result);
         Ok(())
     }
@@ -365,21 +427,89 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
 
-    /// `LegalizeSetCCCondCode` for the two codes that need two compares:
-    /// `oeq` is `eq` and ordered, `une` is `ne` or unordered.
+    /// `getLogicalNOT`: `xor v, 1` (`-1` where booleans are all ones).
+    fn get_logical_not(
+        &mut self,
+        value: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(value);
+        match self.dag.config().boolean_contents {
+            super::dag::BooleanContents::ZeroOrNegativeOne => self.dag.get_not(value, vt),
+            _ => {
+                let one = self.dag.get_constant(1, vt);
+                self.dag.get_node(ISD::Xor, vt, &[value, one])
+            }
+        }
+    }
+
+    /// `TargetLowering::LegalizeSetCCCondCode` of a `SETCC` whose code the
+    /// target expands: the operands swapped, the condition inverted (and
+    /// the result negated), or two compares joined by `and` or `or`. The `i1`
+    /// case is not translated.
     fn expand_setcc_code(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
-        let (first, second, combine) = match cc {
-            CondCode::SetOEq => (CondCode::SetEq, CondCode::SetO, ISD::And),
-            CondCode::SetUNe => (CondCode::SetNe, CondCode::SetUo, ISD::Or),
-            _ => return None,
-        };
         let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
-        let (one, other) = (self.dag.get_setcc(vt, lhs, rhs, first), self.dag.get_setcc(vt, lhs, rhs, second));
-        Some(self.dag.get_node(combine, vt, &[one, other]))
+        let EVT::Simple(op_vt) = self.dag.value_type(lhs) else { return None };
+        let tli = self.tli;
+        let legal_or_custom = |cc: CondCode| matches!(
+            tli.cond_code_action(cc, op_vt),
+            Action::Legal | Action::Custom
+        );
+        let legal = |cc: CondCode| tli.cond_code_action(cc, op_vt) == Action::Legal;
+        let float = self.dag.value_type(lhs).is_floating_point();
+        // Swapping the operands.
+        let swapped = cc.swapped_operands();
+        if legal_or_custom(swapped) {
+            return Some(self.dag.get_setcc(vt, rhs, lhs, swapped));
+        }
+        // Inverting the condition, then swapping on top of it.
+        let mut inverse = if float { cc.inverse_float() } else { cc.inverse_integer() };
+        let mut swap = false;
+        if !legal_or_custom(inverse) {
+            inverse = inverse.swapped_operands();
+            swap = true;
+        }
+        if legal_or_custom(inverse) {
+            let (l, r) = if swap { (rhs, lhs) } else { (lhs, rhs) };
+            let compare = self.dag.get_setcc(vt, l, r, inverse);
+            return Some(self.get_logical_not(compare));
+        }
+        if !float {
+            // An integer code with no swap or inverse the target takes: x86's
+            // `oeq`/`une` are the only ones here.
+            return None;
+        }
+        let unordered = cc as u8 & 0x8 != 0;
+        let generic = |cc: CondCode| {
+            (
+                CondCode::ALL_CODES[((cc as u8 & 0x7) | 0x10) as usize],
+                if unordered { CondCode::SetUo } else { CondCode::SetO },
+                if unordered { ISD::Or } else { ISD::And },
+                false,
+            )
+        };
+        let (cc1, cc2, opcode, invert) = match cc {
+            CondCode::SetUo if legal(CondCode::SetUNe) => (CondCode::SetUNe, CondCode::SetUNe, ISD::Or, false),
+            CondCode::SetUo => (CondCode::SetOEq, CondCode::SetOEq, ISD::And, true),
+            CondCode::SetO => (CondCode::SetOEq, CondCode::SetOEq, ISD::And, false),
+            CondCode::SetONe | CondCode::SetUEq
+                if !legal(if unordered { CondCode::SetUo } else { CondCode::SetO })
+                    && (legal(CondCode::SetOGt) || legal(CondCode::SetOLt)) =>
+            {
+                (CondCode::SetOGt, CondCode::SetOLt, ISD::Or, unordered)
+            }
+            _ => generic(cc),
+        };
+        let (first, second) = if cc != CondCode::SetO && cc != CondCode::SetUo {
+            (self.dag.get_setcc(vt, lhs, rhs, cc1), self.dag.get_setcc(vt, lhs, rhs, cc2))
+        } else {
+            (self.dag.get_setcc(vt, lhs, lhs, cc1), self.dag.get_setcc(vt, rhs, rhs, cc2))
+        };
+        let joined = self.dag.get_node(opcode, vt, &[first, second]);
+        Some(if invert { self.get_logical_not(joined) } else { joined })
     }
 
     /// `ExpandBitCast` of a float to or from an integer of its size, with no
@@ -527,7 +657,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let high = self.dag.get_node(ISD::AnyExtend, vt, &[hi]);
                 let half = self.dag.get_constant(u128::from(vt.size_in_bits() / 2), EVT::I8);
                 let high = self.dag.get_node(ISD::Shl, vt, &[high, half]);
-                Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
+                // The pair's kind goes on the `or` (DEVIATE PAIR1).
+                let kind = self
+                    .dag
+                    .node(node)
+                    .flags
+                    .intersect(super::dag::SDNodeFlags::PAIR_FAR.union(super::dag::SDNodeFlags::PAIR_LONG));
+                Some(vec![self.dag.get_node_flags(ISD::Or, vt, &[low, high], kind)])
             }
             ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
             ISD::ExtractElement => {
@@ -739,7 +875,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             unreachable!("a float constant has its bits")
         };
         let EVT::Simple(mvt) = vt else { unreachable!("floats are simple types") };
-        if self.tli.is_fp_imm_legal(mvt, bits) {
+        // A target that sets `ConstantFP` to `Legal` takes every constant
+        // (wasm: `f32.const`).
+        if self.tli.operation_action(ISD::ConstantFP, vt) == Action::Legal || self.tli.is_fp_imm_legal(mvt, bits) {
             return Ok(());
         }
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float

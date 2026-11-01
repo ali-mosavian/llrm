@@ -28,26 +28,29 @@ impl Machine for X8664 {
     /// `SHT_X86_64_UNWIND`.
     const UNWIND_TYPE: u32 = 0x7000_0001;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {
-            (FixupKind::DATA_8, false) => (R_X86_64_64, 8, 0),
+        let (kind, width) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_8, false) => (R_X86_64_64, 8),
             // Zero-extended: a signed 32-bit absolute address has its own type,
             // which no encoder asks for yet.
-            (FixupKind::DATA_4, false) => (R_X86_64_32, 4, 0),
-            (FixupKind::DATA_2, false) => (R_X86_64_16, 2, 0),
-            (FixupKind::DATA_1, false) => (R_X86_64_8, 1, 0),
-            (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8, from),
-            (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4, from),
-            (fixup::BRANCH_4, true) => (R_X86_64_PLT32, 4, 4),
-            (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4, from),
-            (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2, from),
-            (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1, from),
+            (FixupKind::DATA_4, false) => (R_X86_64_32, 4),
+            (FixupKind::DATA_2, false) => (R_X86_64_16, 2),
+            (FixupKind::DATA_1, false) => (R_X86_64_8, 1),
+            (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8),
+            (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4),
+            (fixup::BRANCH_4, true) => (R_X86_64_PLT32, 4),
+            (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4),
+            (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2),
+            (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1),
             (fixup::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
             (fixup::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF x86-64 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from })
+        Ok(Relocation { kind, width })
     }
 }
 
@@ -60,7 +63,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 mod tests {
     use std::process::Command;
 
-    use llrm_object::ObjectTarget;
+    use llrm_debug::DebugObjectTarget;
     use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -124,7 +127,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 
@@ -234,7 +236,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         };
         let scratch = tempfile::tempdir().unwrap();
         let (file, program) = (scratch.path().join("puts.o"), scratch.path().join("puts"));
@@ -258,16 +259,15 @@ mod tests {
     /// in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [
-            (llrm_object::debug::Format::CodeView, "CodeView"),
-            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-        ] {
-            let mut made = hello();
-            made.debug = Some(llrm_object::debug::Info {
-                options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+        for (format, name) in
+            [(llrm_debug::Format::CodeView, "CodeView"), (llrm_debug::Format::TurboDebugger, "Turbo Debugger")]
+        {
+            let made = hello();
+            let debug = Some(llrm_debug::Info {
+                options: llrm_debug::DebugOptions { format, ..Default::default() },
                 ..Default::default()
             });
-            let why = crate::mc::X86Objects.write_object("elf", &made).unwrap_err().0;
+            let why = crate::mc::X86Objects.write_described("elf", &made, debug.as_ref()).unwrap_err().0;
             assert!(why.contains("cannot carry") && why.contains(name), "{why}");
         }
     }

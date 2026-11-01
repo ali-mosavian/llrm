@@ -128,8 +128,7 @@ fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
 
 /// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
 /// (sign and exponent, then the 64-bit significand); MIR refused it ("expected
-/// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`. A
-/// constant of the type holds the double nearest its value.
+/// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`.
 #[test]
 fn f0x_takes_the_twenty_digits_of_an_x86_fp80() {
     // 2^64 - 2048 is a double; 1.0 is exponent 0x3FFF with the integer bit set.
@@ -142,6 +141,22 @@ fn f0x_takes_the_twenty_digits_of_an_x86_fp80() {
     assert_eq!(
         refusal("@a = global double f0x3FFF8000000000000000\n"),
         "line 1: f0x3FFF8000000000000000 is not a double's 16 hex digits"
+    );
+}
+
+/// `f0x` of an x86_fp80 went through a double: `(long double)
+/// 0x7fffffffffffffffULL` (`f0x403DFFFFFFFFFFFFFFFE`) became 2^63, and
+/// gcc.c-torture conversion's `ull2ld(~0ULL >> 1) != (long double) (~0ULL >>
+/// 1)` aborted.
+#[test]
+fn f0x_of_an_x86_fp80_keeps_its_sixty_four_bit_significand() {
+    assert_eq!(
+        round("@a = global x86_fp80 f0x403DFFFFFFFFFFFFFFFE\n"),
+        round("@a = global x86_fp80 0xK403DFFFFFFFFFFFFFFFE\n")
+    );
+    assert_ne!(
+        round("@a = global x86_fp80 f0x403DFFFFFFFFFFFFFFFE\n"),
+        round("@a = global x86_fp80 f0x403E8000000000000000\n")
     );
 }
 
@@ -924,6 +939,22 @@ fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     assert_eq!(counts["a.rs"], 0, "SparseIdMap is sanctioned");
     assert_eq!(counts["b.rs"], 1, "a generic alias applied to an id is one keyed map; applied to a string it is none");
     assert_eq!(counts["hash.rs"], 0, "the alias lines themselves count none");
+}
+
+/// A ceiling for a file that moved or went away in the re-org stayed in
+/// `dense-keys.txt`: 8 of them were left, naming nothing, and a ceiling that
+/// names nothing guards nothing.
+#[test]
+fn every_dense_key_ceiling_names_a_file_that_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let stale: Vec<&str> = include_str!("../dense-keys.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, _)| file)
+        .filter(|file| !root.join(file).exists())
+        .collect();
+    assert!(stale.is_empty(), "dense-keys.txt names files that are gone: {stale:?}");
 }
 
 #[test]

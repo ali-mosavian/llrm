@@ -10,6 +10,8 @@ llrm-target = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-x86 = { workspace = true }
+llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 iced-x86 = { workspace = true }
 
 [build-dependencies]

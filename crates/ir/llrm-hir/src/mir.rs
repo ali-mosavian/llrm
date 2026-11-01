@@ -1213,7 +1213,10 @@ fn data_initializer(
         let mut address = target;
         if relocation.addend != 0 {
             let ty = context.types.ptr(space);
-            let index = context.int(i16, i128::from(relocation.addend));
+            // The offset is as wide as the near pointer (the datalayout's), as
+            // an address is.
+            let offset = context.types.int(8 * widths.near as u32);
+            let index = context.int(offset, i128::from(relocation.addend));
             let operands = vec![target, index];
             address = context.constant(Constant {
                 ty,

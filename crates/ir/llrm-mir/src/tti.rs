@@ -411,6 +411,12 @@ pub trait Tti {
         0
     }
 
+    /// What a byte of code is worth in thousandths of a clock at speed, where
+    /// the target trades bytes for clocks; 0: it does not.
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -425,10 +431,31 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-1: the bounds of the recursion the target takes by default
+    /// when optimizing for speed: (depth of a function's copies of itself,
+    /// the largest recursive body in `gcc_insns` that is copied); none: the
+    /// pin's inliner, which copies no recursive callee (`-finline-recursive`
+    /// asks for gcc's).
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// The target's `PartialThreshold` (its tuning table); none: the pass's
+    /// own.
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
+    /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
+    /// 50.
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        None
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read

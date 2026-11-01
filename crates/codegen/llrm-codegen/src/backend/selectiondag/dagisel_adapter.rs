@@ -177,6 +177,9 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        IntrinsicWoChain => pin::INTRINSIC_WO_CHAIN,
+        IntrinsicWChain => pin::INTRINSIC_W_CHAIN,
+        IntrinsicVoid => pin::INTRINSIC_VOID,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
@@ -289,6 +292,16 @@ pub trait PinRegisters {
         &self,
         id: llrm_lir::registers::RegId,
     ) -> Option<u16>;
+
+    /// Whether `register` is a fixed register of the pin's with no id here
+    /// (m68k's `PC`, which no instruction names): `register_of` then
+    /// answers it, so a matcher can tell it from a virtual one.
+    fn is_fixed(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
 
     /// Whether `register` is one the target cannot map. Selection then refuses
     /// ([`DagisAdapter::refusal`]); the default reads it as virtual.
@@ -560,6 +573,7 @@ impl Dag for DagisAdapter<'_> {
             NodeData::PhysReg(id) => self.registers.pin_register(id),
             // `$noreg`
             NodeData::Register(0) => Some(0),
+            NodeData::Register(number) => u16::try_from(number).ok().filter(|&number| self.registers.is_fixed(number)),
             _ => None,
         }
     }
@@ -887,6 +901,13 @@ impl Dag for DagisAdapter<'_> {
             let bits = self.dag.constant(v).expect("a constant");
             let vt = self.dag.value_type(v);
             return theirs(self.dag.get_constant_with(bits, vt, true, false));
+        }
+        if self.dag.opcode(v) == ISD::ConstantFP {
+            let NodeData::ConstFp { bits } = self.dag.node(v).data else {
+                unreachable!("a float constant has its bits")
+            };
+            let vt = self.dag.value_type(v);
+            return theirs(self.dag.get_target_constant_fp(bits, vt));
         }
         value
     }

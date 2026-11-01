@@ -53,14 +53,14 @@ use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
 use llrm_support::hash::HashMap;
 
-use super::dag::{NodeData, SDValue, SelectionDAG};
+use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::{EVT, MVT};
 use super::opcodes::OpcodeMap;
 use super::schedule::Unit;
 use crate::backend::isel::{_read, _written};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, Phi};
+use crate::model::lir::{Insn, PairKind, Phi};
 
 /// Why a node was not emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -476,6 +476,7 @@ pub fn emit_in(
                     }
                 }
             }
+            emitter.mark_pair(node, before);
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }
@@ -1098,6 +1099,29 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// The join a `PAIR_FAR`/`PAIR_LONG` node selected to is its last
+    /// instruction.
+    fn mark_pair(
+        &mut self,
+        node: u32,
+        before: usize,
+    ) {
+        let flags = self.dag.node(SDValue { node, res: 0 }).flags;
+        let kind = if flags.has(SDNodeFlags::PAIR_FAR) {
+            PairKind::Far
+        } else if flags.has(SDNodeFlags::PAIR_LONG) {
+            PairKind::Long
+        } else {
+            return;
+        };
+        let Some(block) = self.blocks.last_mut() else { return };
+        if block.insns.len() > before
+            && let Some(last) = block.insns.last_mut()
+        {
+            *last = Arc::new(Insn { pair: Some(kind), ..(**last).clone() });
+        }
+    }
+
     fn mark_invariant_loads(
         &mut self,
         before: usize,
@@ -1229,6 +1253,15 @@ impl Emitter<'_, '_> {
                     }
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
+                        // A read the chain orders (`stacksave`) is the pointer
+                        // now, not where its value is used.
+                        if self.dag.has_users(SDValue { node: n, res: 1 }) {
+                            let width = width_of(self.ctx.map.scalar_sse(), self.dag, result);
+                            let held = self.fresh(width);
+                            let sp = Reg { register, width };
+                            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(sp)]);
+                            self.values.insert(result, held.value);
+                        }
                     }
                     // The x87 result of a call: the stack's top (`FP0`), which
                     // the stackifier reads as an unnamed load of no cell
@@ -3975,7 +4008,7 @@ impl Emitter<'_, '_> {
         }
         // The stack pointer itself as a value (`mov edi, esp`, the first byval
         // argument's address): a copy of the register.
-        if self.sp_values.contains(&value) {
+        if self.sp_values.contains(&value) && !self.values.contains_key(&value) {
             let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
             let held = self.fresh(width);
             let sp = Reg { register: self.ctx.stack_pointer, width };

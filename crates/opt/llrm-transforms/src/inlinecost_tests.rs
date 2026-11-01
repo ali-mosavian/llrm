@@ -28,6 +28,7 @@ fn x86_real() -> llrm_x86::tti::X86 {
                 inline_size_guard: true,
                 float_code_size_percent: 100,
                 unroll_size_few_trips: (0, 0),
+                recursive_inlining: None,
             },
         )
 }
@@ -234,8 +235,9 @@ b0:
 }
 
 /// A callee that stays is not copied into a speed caller where the target's
-/// `inline_size_guard_at_speed` says so: qlight c at -O2 inlined a 30-instruction
-/// `ls_scale_byte` four times, 211 -> 376 bytes. Off, the pin's decision stands.
+/// `inline_size_guard_at_speed` says so: qlight c at -O2 inlined a
+/// 30-instruction `ls_scale_byte` four times, 211 -> 376 bytes. Off, the pin's
+/// decision stands.
 #[test]
 fn a_speed_caller_does_not_copy_a_callee_that_stays_where_the_target_guards_size() {
     let text = format!(
@@ -265,7 +267,8 @@ b0:
 }}
 "
     );
-    let guarded = x86_real().with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_speed: true, ..llrm_mir::target::Tuning::PIN });
+    let guarded = x86_real()
+        .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_speed: true, ..llrm_mir::target::Tuning::PIN });
     let (plain, bound) = priced_with(&text, 0, false, CallerSize::Speed, Some(&x86_real()));
     let (cost, held) = priced_with(&text, 0, false, CallerSize::Speed, Some(&guarded));
     assert!(plain < bound, "premise: without the guard the pin inlines it, cost {plain} threshold {bound}");

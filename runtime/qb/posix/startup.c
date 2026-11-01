@@ -37,8 +37,16 @@ void qb_dynamic_region(char **first, char **top)
    ends. */
 void *qb_host_frame_top;
 
+#ifdef QB_HOST_UNWINDS
+/* The host throws, and the `catch_all` of the nearest function with a handler takes it (wasm exception handling). */
+extern _Noreturn void llrm_host_land(void);
+#endif
+
 void qb_land(void)
 {
+#ifdef QB_HOST_UNWINDS
+    llrm_host_land();
+#endif
     if (qb_host_frame_top)
         longjmp(*(jmp_buf *)qb_host_frame_top, 1);
     llrm_os_exit(1);
