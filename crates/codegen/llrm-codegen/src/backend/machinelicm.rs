@@ -373,20 +373,11 @@ pub fn hoisted(
                     // instructions should always be hoisted providing the
                     // register allocator can just pull them down again", unless
                     // a copy in the loop takes the value.
-                    // An immediate or symbol address goes to a general
-                    // register, whatever its width:
-                    // `floating` takes 8 bytes for a float.
-                    let immediate = one
-                        .what
-                        .as_ref()
-                        .is_some_and(
-                            |what| what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(_)]),
-                        );
                     let constant = value.is_some_and(|value| {
                         one.uses.is_empty()
                             && defs.get(&value) == Some(&1)
                             && !copied.contains(&value)
-                            && (immediate || !floating.contains(&value))
+                            && !floating.contains(&value)
                             && one.defines.len() == 1
                             && one.call.is_none()
                             && one.group.is_none()
