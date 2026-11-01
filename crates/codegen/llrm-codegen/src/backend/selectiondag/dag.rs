@@ -31,6 +31,13 @@ impl SDNodeFlags {
     pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
     pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
     pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
+    /// DEVIATE PAIR1 (no pin counterpart: the pin's pointers are one word
+    /// wide): a `BUILD_PAIR` of a far pointer's offset and selector, and the
+    /// `or` its expansion makes. Exit: none; the pin has no far pointer.
+    pub const PAIR_FAR: SDNodeFlags = SDNodeFlags(8192);
+    /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
+    /// convention returns or passes in two registers (`dx:ax`).
+    pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
 
     pub fn union(
         self,
@@ -157,7 +164,7 @@ pub enum BooleanContents {
 /// or replaced by: the divide's own price, and the multiply-high sequence's
 /// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
 /// alone).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DivPrices {
     /// The target's own operand size in bytes: a value of another width runs
     /// under the prefix.
@@ -174,11 +181,27 @@ pub struct DivPrices {
     /// by: below the spread of the sheet's own prices the pin's sequence
     /// stays.
     pub margin: i64,
+    /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
+    /// the selector emits for it (`Machine::multiply_by`).
+    pub product: Option<ProductPrice>,
+}
+
+/// A price by the constant `d`.
+#[derive(Clone)]
+pub struct ProductPrice(pub std::rc::Rc<dyn Fn(i64) -> i64>);
+
+impl std::fmt::Debug for ProductPrice {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("ProductPrice")
+    }
 }
 
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
@@ -327,8 +350,9 @@ pub struct SelectionDAG {
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
     /// The SysV x86-64 `va_list`'s other fields: the register save area's
-    /// frame index and `gp_offset`, the bytes of it the named arguments took.
-    pub var_args_save: Option<(i32, u32)>,
+    /// frame index, `gp_offset` (the bytes of it the named integer arguments
+    /// took) and `fp_offset` (48 plus 16 a named vector argument).
+    pub var_args_save: Option<(i32, u32, u32)>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -1413,7 +1437,7 @@ impl SelectionDAG {
                 &[low, step],
                 SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
             );
-            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
+            return self.get_node_flags(ISD::BuildPair, vt, &[moved, high], SDNodeFlags::PAIR_FAR);
         }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))

@@ -173,6 +173,21 @@ pub trait CombineHooks {
         None
     }
 
+    /// DEVIATE PAIR1: whether the after-legalize combine ends with a sweep that
+    /// packs the joins of two words (`pack_words_by_shrd`). Default off.
+    fn pack_word_pairs(&self) -> bool {
+        false
+    }
+
+    /// Whether `user` compares its first operand with its second, so an `or`
+    /// feeding it against zero sets the flags it reads. Default false.
+    fn is_compare_with_flags(
+        &self,
+        _user: ISD,
+    ) -> bool {
+        false
+    }
+
     /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when
     /// that type is legal. Default false until x86 is judged.
     fn store_fp_constant_as_i64(&self) -> bool {
@@ -340,6 +355,8 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) hooks: &'a mut H,
     pub(super) level: CombineLevel,
     worklist: Vec<u32>,
+    /// The last sweep of an after-legalize combine (`pack_word_pairs`).
+    pub(super) late: bool,
     queued: NodeSet,
     /// `CombinedNodes`: the nodes already visited, whose operands are not
     /// queued again by a visit of their user.
@@ -366,6 +383,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             hooks,
             level,
             worklist: Vec::new(),
+            late: false,
             queued: NodeSet::default(),
             combined: NodeSet::default(),
             tli: None,
@@ -441,6 +459,28 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         for node in self.dag.node_ids() {
             self.add_to_worklist(node);
         }
+        self.drain();
+        // DEVIATE PAIR1: what the folds above settled, then the joins of two
+        // words that remain (their dword is used whole) are packed.
+        if self.level == CombineLevel::AfterLegalizeDag && self.hooks.pack_word_pairs() {
+            self.late = true;
+            for node in self.dag.node_ids() {
+                if self.dag.opcode(SDValue { node, res: 0 }) == ISD::Or {
+                    self.add_to_worklist(node);
+                }
+            }
+            self.drain();
+            self.late = false;
+        }
+        // `RemoveDeadNodes` before selection: a node a fold left behind must
+        // not count as a user of what it read (a load folds into its one user).
+        for node in self.dag.node_ids().rev() {
+            self.dag.delete_dead(node);
+        }
+    }
+
+    /// The worklist walk of `Run`: until it is empty.
+    fn drain(&mut self) {
         while let Some(n) = self.next() {
             if self.is_dead(n) {
                 continue;
@@ -488,11 +528,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             self.dag.delete_dead(n);
             self.dag.delete_replaced(n);
-        }
-        // `RemoveDeadNodes` before selection: a node a fold left behind must
-        // not count as a user of what it read (a load folds into its one user).
-        for node in self.dag.node_ids().rev() {
-            self.dag.delete_dead(node);
         }
     }
 
