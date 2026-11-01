@@ -120,3 +120,14 @@ fn two_joined_compares_are_a_compare_and_a_conditional_compare() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("ccmp x0, x9, #2, lo"), "{asm}");
 }
+
+/// Inserting a byte into a word is the pin's `BFMWri` (`bfxil w0, w1, #0, #8`):
+/// it reads the register it writes, so its result is a copy of the first
+/// operand; the DAG path refused scroll with `machine opcode BFMWri has no
+/// arm64 instruction yet`.
+#[test]
+fn inserting_a_byte_into_a_word_is_a_bitfield_move() {
+    let asm = dag("define i32 @f(i32 %a, i32 %b) {\n  %m = and i32 %a, -256\n  %n = and i32 %b, 255\n  %r = or i32 %m, %n\n  ret i32 %r\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("bfm w0, w1, #0, #7"), "{asm}");
+}

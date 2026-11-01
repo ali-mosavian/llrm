@@ -1240,6 +1240,27 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), *rn);
                         return Ok(());
                     }
+                    // `BFMWri dst, src, immr, imms` inserts into a register it
+                    // reads: the result is a copy of `dst` that the move then
+                    // changes.
+                    (
+                        "BFMWri" | "BFMXri",
+                        [Operand::Reg(old), Operand::Reg(rn), Operand::Imm(immr), Operand::Imm(imms)],
+                    ) => {
+                        let rd = self.mf.gpr();
+                        self.ops.push(Op::Copy { dst: Reg::Gpr(rd), src: Reg::Gpr(*old) });
+                        let width = if name == "BFMWri" { Width::W } else { Width::X };
+                        self.ops.push(Op::I(Inst::BitfieldMove {
+                            op: Bitfield::Bfm,
+                            width,
+                            rd,
+                            rn: *rn,
+                            immr: *immr as u8,
+                            imms: *imms as u8,
+                        }));
+                        self.values.insert((id, 0), rd);
+                        return Ok(());
+                    }
                     ("IMPLICIT_DEF", []) => {
                         let dst = self.mf.gpr();
                         self.values.insert((id, 0), dst);
