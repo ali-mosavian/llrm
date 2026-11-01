@@ -634,15 +634,6 @@ pub fn size_of(
     work(module, body, callees, costs).map(|work| work + calls + kept)
 }
 
-/// What a call costs beyond its own instruction, which inlining saves: the
-/// return, and each argument pushed by the caller and read back by the callee.
-pub fn call_overhead(
-    costs: &OperationCosts,
-    arguments: usize,
-) -> i64 {
-    costs.call + costs.return_ + arguments as i64 * costs.argument
-}
-
 /// Surviving direct call counts.
 pub fn call_counts(module: &Module) -> Counter {
     let mut counts = Counter::default();
