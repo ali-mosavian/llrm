@@ -1,0 +1,19 @@
+#title,10.6 INTEGER UNIT INSTRUCTION TIMINGS: MOVE to CCR | MOVE from SR [a] | MOVE to SR [b],page,10-22,notes,a. This instruction interlocks the <ea> calculate and execute stages. b. Times listed are minimum. This instruction interlocks the <ea> calculate and execute stages and synchronizes some portions of the processor before execution.
+Addressing Mode,MOVE to CCR <ea> Calculate,MOVE to CCR Execute,MOVE from SR [a] <ea> Calculate,MOVE from SR [a] Execute,MOVE to SR [b] <ea> Calculate,MOVE to SR [b] Execute
+Dn,1,2,2,1L + 2,9,1L + 8
+An,—,—,—,—,—,—
+(An),1,2,2,1L + 2,10,2L + 8
+(An)+,1,2,2,1L + 2,10,2L + 8
+–(An),1,2,2,1L + 2,10,2L + 8
+"(d 16,An)",1,2,2,1L + 2,10,2L + 8
+"(d 16,PC)",3,2L + 2,—,—,11,3L + 8
+"(xxx).W, (xxx).L",1,2,2,1L + 2,10,2L + 8
+#<xxx>,1,2,—,—,9,1L + 8
+"(d 8,An,Xn)",3,4,4,5,11,11
+"(d 8,PC,Xn)",4,1L + 4,—,—,12,1L + 11
+"(BR,Xn)",6,1L + 6,6,1L + 6,—,—
+"(bd,BR,Xn)",7,1L + 7,7,1L + 7,14,1L + 13
+"([bd,BR,Xn])",10,1L + 10,10,1L + 10,17,1L + 16
+"([bd,BR,Xn],od)",11,1L + 11,11,1L + 11,18,1L + 17
+"([bd,BR],Xn)",11,3L + 9,11,3L + 9,18,3L + 15
+"([bd,BR],Xn,od)",12,3L + 10,12,3L + 10,19,3L + 16

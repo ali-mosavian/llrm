@@ -721,12 +721,24 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 /// target that does not price a divide above a multiply, which then keeps the
 /// pin's rule.
 fn div_prices(
-    costs: &llrm_mir::target::OperationCosts,
+    cpu: &crate::backend::cpu::Profile,
     bitness: u32,
 ) -> Option<super::dag::DivPrices> {
+    let costs = cpu.target().costs();
     if costs.divide <= costs.multiply {
         return None;
     }
+    let owned = cpu.clone();
+    let multiply = costs.multiply;
+    // What `combine_mul` emits for the constant: the `imul` by its immediate
+    // or a chain, whichever costs fewer clocks (`Machine::multiply_by`).
+    let product = move |factor: i64| {
+        let imul = crate::backend::arithmetic::immediate_multiply(&owned, factor).unwrap_or(multiply);
+        match crate::backend::arithmetic::cheapest_chain(factor, &owned) {
+            Ok(Some((_, clocks))) => clocks.min(imul),
+            _ => imul,
+        }
+    };
     Some(super::dag::DivPrices {
         operand: i64::from(bitness.min(32) / 8),
         prefix: costs.prefix,
@@ -738,6 +750,7 @@ fn div_prices(
         divide: costs.divide,
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
+        product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
     })
 }
 
@@ -835,7 +848,7 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_div_prices(div_prices(&cpu.target().costs(), bitness))
+        .with_div_prices(div_prices(&cpu, bitness))
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -1044,6 +1057,26 @@ fn selected_in(
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     let sse2 = arch.scalar_sse();
+    // SD446: a target that trades bytes for clocks at speed prices a constant
+    // multiply by its block's frequency (the IR one: no machine block exists
+    // before selection).
+    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks {
+        0
+    } else {
+        cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    };
+    let frequencies = (mul_rate > 0).then(|| {
+        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+            llrm_analysis::bpi::Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
+            function,
+        );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, &bpi)
+    });
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
@@ -1057,6 +1090,16 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                profile: frequencies
+                    .as_ref()
+                    .map(
+                        |frequencies| super::x86_lowering::MulPricing {
+                            cpu,
+                            arch,
+                            freq: frequencies.relative_to_entry(parent),
+                            milliclocks_per_byte: mul_rate,
+                        },
+                    ),
             },
             &selector,
             &mut hooks,

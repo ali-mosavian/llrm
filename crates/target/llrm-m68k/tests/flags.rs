@@ -51,17 +51,22 @@ fn a_copy_that_does_not_depend_on_the_compare_moves_above_it() {
     assert_eq!(kinds(&f), [Kind::Copy, Kind::Op("CMP32dr"), Kind::Op("Bne8")]);
 }
 
-/// `add d0; move d2,d0; bne` branched on the copy's codes; the result is
-/// compared with zero again right before the branch (the pin has no `tst`).
+/// `add d0; move d2,d0; bne` branched on the copy's codes, not the add's. The
+/// codes are pushed before the copy and popped after it, as the pin does: the
+/// compare-again and `tst` forms that stood here fired in none of 322 programs
+/// and rested on a hand-written list of instruction names.
 #[test]
-fn a_copy_of_the_setters_result_is_followed_by_a_test_of_it() {
+fn a_copy_of_the_setters_result_pushes_and_pops_the_codes() {
     let mut f = function(vec![
         op("ADD32dr", vec![Operand::Def(v(0)), Operand::Use(v(0)), Operand::Use(v(1))], true, false),
         Inst::copy(v(2), v(0)),
         op("Bne8", vec![], false, true),
     ]);
     preserve_flags(&mut f, &assignment()).unwrap();
-    assert_eq!(kinds(&f), [Kind::Op("ADD32dr"), Kind::Copy, Kind::Op("CMP32di"), Kind::Op("Bne8")]);
+    assert_eq!(
+        kinds(&f),
+        [Kind::Op("ADD32dr"), Kind::Op("CCR_PUSH"), Kind::Copy, Kind::Op("CCR_POP"), Kind::Op("Bne8")]
+    );
 }
 
 /// A copy that overwrites an operand of the compare leaves nothing to compare
@@ -123,7 +128,7 @@ fn spill_displacement(pushed: bool) -> i64 {
         insts.push(op("CCR_POP", vec![], true, false));
     }
     insts.push(op("RET", vec![Operand::Imm(0)], false, false));
-    let lines = finish(&function(insts), &assignment(), 0, &[0], Cpu::M68000).unwrap();
+    let lines = finish(&function(insts), &assignment(), 0, &[0], Cpu::M68000, false).unwrap();
     lines
         .iter()
         .find_map(|line| match line {

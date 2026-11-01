@@ -59,7 +59,7 @@ fn promoted(
     dag.set_root(root);
     let pairs = || SAMPLES.iter().flat_map(|&p| SAMPLES.iter().map(move |&q| (p & 0xFFFF, q & 0xFFFF)));
     let before: Vec<u32> = pairs().map(|pair| eval(&dag, root, pair)).collect();
-    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false };
+    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     let root = dag.get_root();
     let after: Vec<u32> = pairs().map(|pair| eval(&dag, root, pair)).collect();
@@ -108,7 +108,7 @@ fn only_words_and_byte_multiplies_are_promoted_and_not_at_m16() {
     let mul = dag.get_node(ISD::Mul, EVT::I8, &[x, c]);
     let add = dag.get_node(ISD::Add, EVT::I8, &[mul, y]);
     dag.set_root(add);
-    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false };
+    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Add, "a byte add stays");
