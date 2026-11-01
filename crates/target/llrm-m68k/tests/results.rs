@@ -654,11 +654,11 @@ define i32 @f(ptr %d, ptr %s) {{
     )
 }
 
-/// An inline struct copy is the pin's moves with displacements, `(4,%a0)`;
-/// `(An)+` chains were a rewrite of them, and what is read from the destination
-/// afterwards is read at its own displacement.
+/// An inline struct copy is the pin's moves with displacements, `(4,%a0)`, and
+/// `(An)+` moves by default, where what is read from the destination afterwards
+/// is read at its displacement less what the pointer stepped.
 #[test]
-fn an_inline_copy_keeps_the_pins_displacements() {
+fn an_inline_copy_is_post_increment_moves_unless_pinned() {
     for bytes in [8, 24, 32] {
         let after = format!(
             "  %p = getelementptr i8, ptr %d, i32 {}
@@ -671,7 +671,7 @@ fn an_inline_copy_keeps_the_pins_displacements() {
         );
         let ir = copy_of(bytes, &after);
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert!(!asm.contains("%a0)+") && !asm.contains("%a1)+"), "{bytes}: {asm}");
+        assert!(asm.contains(")+, (%a") && asm.contains(")+"), "{bytes}: {asm}");
         let pinned = text_with(&module(&ir), "f", Cpu::M68000, Options::PINNED).unwrap();
         assert!(!pinned.contains(")+"), "{pinned}");
     }
