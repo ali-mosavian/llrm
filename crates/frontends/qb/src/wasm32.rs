@@ -15,6 +15,11 @@
 //! then the module in memory. The conventions (`cc 10NN`) and 16-bit offsets of
 //! the 32-bit mid-end are no longer rewritten: the offset is as wide as the
 //! near pointer and the wasm backend has one convention.
+//!
+//! LIMIT W17: wasm32 has no extended float, so `x ^ y` is the runtime's `pow`
+//! in doubles (`B$LPOW`, keyed on a datalayout with no `f80`), not the x87
+//! sequence in 80 bits. Its digits differ from BC's in the last place, three
+//! ulp at most on the programs of tests/run/qb that print them; no exit.
 
 use std::path::Path;
 

@@ -274,3 +274,87 @@ fn exp_log_and_power_run_on_wasm32() {
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// `^` was the x87 sequence (`log2`, a multiply, `exp2`) on wasm32, which has
+/// no extended float: the product lost its low bits and `10# ^ 400` printed an
+/// infinity where QB raises Overflow. It is a call of the runtime's `pow`
+/// now, and the errors are B$POW4's.
+#[test]
+fn power_is_a_library_call_that_raises_the_errors_of_b_pow4() {
+    for (name, body, message) in [
+        ("powzero", "x# = 0: y# = -1: PRINT x# ^ y#", "Illegal function call"),
+        ("powroot", "x# = -8: y# = 1 / 3: PRINT x# ^ y#", "Illegal function call"),
+        ("powbig", "x# = 10: y# = 400: PRINT x# ^ y#", "Overflow"),
+    ] {
+        let dir = built(name, &format!("{body}\nEND\n"));
+        let (text, code) = run(&dir, name, &[]);
+        assert!(text.starts_with(message), "{name}: {text:?}");
+        assert_eq!(code, Some(255), "{name}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+    let dir = built("powsign", "x# = -2: y# = 3: z# = 0: PRINT x# ^ y#; z# ^ y#; z# ^ z#; 2# ^ -y#\nEND\n");
+    let (text, code) = run(&dir, "powsign", &[]);
+    assert_eq!(text.trim_end(), "-8  0  1  .125");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The words of `text`, each a number where it reads as one: `D` is QB's
+/// exponent letter for a DOUBLE.
+fn words(text: &str) -> Vec<(String, Option<f64>)> {
+    text.split_whitespace().map(|word| (word.to_owned(), word.replace('D', "E").parse().ok())).collect()
+}
+
+/// LIMIT W17: a target without an extended float computes `^` in doubles, so
+/// its digits differ from the x87 programs' in the last place. The four
+/// programs below printed those digits and failed on them; they stay within
+/// `RELATIVE_BOUND` (measured: 6.5e-16, three ulp, printing included) of the
+/// x87 outputs, the numbers compared and not the text, and `^` is the
+/// library call, not the sequence.
+#[test]
+fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
+    const RELATIVE_BOUND: f64 = 1e-15;
+    for name in ["range_power_digits", "pow_unrolled", "pow_stack_depth", "log_exp_digits"] {
+        let source_path = root().join(format!("tests/run/qb/{name}.bas"));
+        let source = std::fs::read_to_string(&source_path).unwrap();
+        // The first alternative of `' flags:`, without the x86 options.
+        let flags = source
+            .lines()
+            .find_map(|line| line.strip_prefix("' flags:"))
+            .map(|line| line.split('|').next().unwrap().split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        let dir = built_with(name, &source, &flags);
+        let (text, code) = run(&dir, name, &[]);
+        assert_eq!(code, Some(0), "{name}: {text}");
+        let expected = std::fs::read_to_string(source_path.with_extension("out")).unwrap();
+        // The harness keeps the last rows of the screen.
+        let kept: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+        let rows: Vec<&str> = expected.lines().filter(|line| !line.trim().is_empty()).collect();
+        let tail = &rows[rows.len() - kept.len()..];
+        let (got, want) = (words(&kept.join(" ")), words(&tail.join(" ")));
+        assert_eq!(got.len(), want.len(), "{name}:\n{text}");
+        for ((got_text, got), (want_text, want)) in got.iter().zip(&want) {
+            match (got, want) {
+                (Some(got), Some(want)) => {
+                    assert!((got - want).abs() <= RELATIVE_BOUND * want.abs(), "{name}: {got} for {want}")
+                }
+                _ => assert_eq!(got_text, want_text, "{name}"),
+            }
+        }
+        let ir = dir.join("module.ll");
+        let made = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .arg(&source_path)
+            .args(["--wasm32", "-o"])
+            .arg(dir.join("module.o"))
+            .args(flags.split_whitespace())
+            .env("LLRM_WASM32_TEXT", &ir)
+            .output()
+            .expect("llrm-qb runs");
+        assert!(made.status.success(), "{name}: {}", String::from_utf8_lossy(&made.stderr));
+        let text = std::fs::read_to_string(&ir).unwrap();
+        if name != "log_exp_digits" {
+            assert!(text.contains("@B_LPOW(") && !text.contains("llvm.exp2"), "{name}: the sequence, not the call");
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+}

@@ -536,6 +536,14 @@ fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
     }
 }
 
+/// `^` is the library call only where the target states no `f80`: an x86
+/// target, which states one, keeps the x87 sequence.
+#[test]
+fn test_power_stays_the_x87_sequence_where_the_target_states_f80() {
+    let text = listing_of("power_x87", "INPUT a#, b#\r\nPRINT a# ^ b#\r\nEND\r\n");
+    assert!(!text.contains("B$LPOW") && text.contains("db 0d9h,0e8h,0d9h,0c9h,0d9h,0f1h"), "{text}");
+}
+
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
 /// the raise ran outside its statement, so the runtime found no statement
 /// to resume after.
