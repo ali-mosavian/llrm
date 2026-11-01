@@ -728,7 +728,6 @@ fn div_prices(
     if costs.divide <= costs.multiply {
         return None;
     }
-    let sizes = cpu.target().size_costs();
     let owned = cpu.clone();
     let multiply = costs.multiply;
     // What `combine_mul` emits for the constant: the `imul` by its immediate
@@ -751,16 +750,6 @@ fn div_prices(
         divide: costs.divide,
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
-        bytes: Some(super::dag::DivBytes {
-            prefix: sizes.prefix,
-            add: sizes.add,
-            shift: sizes.shift,
-            extend: sizes.extend,
-            multiply: sizes.multiply,
-            multiply_long: sizes.multiply_long,
-            divide: sizes.divide,
-            divide_long: sizes.divide_long,
-        }),
         product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
     })
 }

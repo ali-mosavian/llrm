@@ -174,8 +174,6 @@ pub struct DivPrices {
     /// by: below the spread of the sheet's own prices the pin's sequence
     /// stays.
     pub margin: i64,
-    /// The same prices in code bytes, where the target states them.
-    pub bytes: Option<DivBytes>,
     /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
     /// the selector emits for it (`Machine::multiply_by`).
     pub product: Option<ProductPrice>,
@@ -186,22 +184,12 @@ pub struct DivPrices {
 pub struct ProductPrice(pub std::rc::Rc<dyn Fn(i64) -> i64>);
 
 impl std::fmt::Debug for ProductPrice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         f.write_str("ProductPrice")
     }
-}
-
-/// `DivPrices`' operation prices in code bytes.
-#[derive(Clone, Copy, Debug)]
-pub struct DivBytes {
-    pub prefix: i64,
-    pub add: i64,
-    pub shift: i64,
-    pub extend: i64,
-    pub multiply: i64,
-    pub multiply_long: i64,
-    pub divide: i64,
-    pub divide_long: i64,
 }
 
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather

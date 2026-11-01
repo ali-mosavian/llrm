@@ -196,31 +196,6 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             p.product.as_ref().map(|price| (price.0)(d as i64)),
             (bits, d, signed, rem, zeros),
         );
-        // DEVIATE SD445c: a sequence smaller and not slower than the other
-        // wins whatever the margin. Exit: none.
-        if let Some(b) = p.bytes {
-            let size = Self::sequence_price(
-                &DivSet {
-                    prefix: b.prefix,
-                    add: b.add,
-                    shift: b.shift,
-                    extend: b.extend,
-                    multiply: b.multiply,
-                    multiply_long: b.multiply_long,
-                    divide: b.divide,
-                    divide_long: b.divide_long,
-                },
-                p.operand,
-                Some(b.multiply),
-                (bits, d, signed, rem, zeros),
-            );
-            if size.0 < size.1 && clocks.0 <= clocks.1 {
-                return true;
-            }
-            if size.1 < size.0 && clocks.1 <= clocks.0 {
-                return false;
-            }
-        }
         clocks.0 + clocks.0 * p.margin / 100 < clocks.1
     }
 
@@ -237,7 +212,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let width = i64::from(bits / 8);
         let sized = |price: i64| price + if width != operand { set.prefix } else { 0 };
         let wide = |price: i64| price + if 4 != operand { set.prefix } else { 0 };
-        let hardware = sized(if width == 4 { set.divide_long } else { set.divide }) + if signed { set.extend } else { set.add };
+        let hardware =
+            sized(if width == 4 { set.divide_long } else { set.divide }) + if signed { set.extend } else { set.add };
         // A multiply-high of a narrower value is the widened product, its high
         // half taken.
         let high = wide(set.multiply_long) + if width < 4 { set.extend + set.shift } else { 0 };
