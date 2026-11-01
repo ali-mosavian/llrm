@@ -18,6 +18,11 @@
 //! DEVIATE: the live-ins are solved here, over the allocated function, where the pin keeps them on the blocks after
 //! allocation (`addLiveIns`). Reason: the spike machine function has no live-in lists. Exit: the neutral-LIR task.
 //!
+//! DEVIATE: `MachineBasicBlock::computeRegisterLiveness` ([MachineBasicBlock.cpp#L1706]) scans a bounded neighbourhood
+//! and answers unknown beyond it; this answers exactly, from the solved live-ins. Reason: the whole function is at hand.
+//! Exit: none.
+//!
+//! [MachineBasicBlock.cpp#L1706]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBasicBlock.cpp#L1706
 //! [LivePhysRegs.cpp#L68]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LivePhysRegs.cpp#L68
 //! [L31]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LivePhysRegs.cpp#L31
 //! [L179]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LivePhysRegs.cpp#L179
