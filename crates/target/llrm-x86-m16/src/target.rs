@@ -577,6 +577,19 @@ mod encoding_tests {
         assert_eq!(clocks.argument, clocks.load + clocks.store);
     }
 
+    /// The shared call price is read off the 486 table and the byte table:
+    /// the call, the return and two argument words, in clocks and in bytes.
+    #[test]
+    fn the_call_price_of_two_arguments_is_the_486_tables_call_return_and_words() {
+        use llrm_mir::target::Machine;
+        let dos = super::Dos::default();
+        let clocks = super::costs("486");
+        let price = llrm_mir::callprice::CallPrice::new(&clocks, &dos.size_costs(), 2, 500);
+        assert_eq!((clocks.call, clocks.return_, clocks.argument), (18, 13, 2));
+        assert_eq!((price.clocks, price.bytes), (18 + 13 + 2 * 2, 5 + 1 + 2 * 2));
+        assert!(price.pays(305.0, 62.0, 1.0) && !price.pays(30.0, 62.0, 1.0));
+    }
+
     /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte
     /// immediate only where it fits.
     #[test]
