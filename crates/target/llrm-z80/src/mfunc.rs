@@ -22,7 +22,7 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -125,6 +125,8 @@ struct Emitter<'a> {
     builder: HashMap<u32, Reg>,
     /// The argument register each virtual register is a copy of.
     arrives_in: HashMap<Reg, llrm_lir::registers::RegId>,
+    /// The results of the instructions emitted so far.
+    made: HashSet<Reg>,
     /// For the block being emitted: the nodes that read each value.
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
@@ -282,6 +284,7 @@ impl Emitter<'_> {
                         self.new_reg(class)
                     };
                     self.values.insert((node, at as u8), reg);
+                    self.made.insert(reg);
                     if wanted.is_some_and(|one| fixed_register(one.reg_class) == Some(crate::reg::A)) {
                         self.in_acc.insert((node, at as u8));
                     }
@@ -374,7 +377,21 @@ impl Emitter<'_> {
             Operand::Use(reg) => self.arrives_in.get(reg).copied(),
             _ => None,
         };
-        if arrives(&operands[2]) == Some(fixed) && arrives(&operands[1]) != Some(fixed) {
+        // made here and read by nothing else, so the instruction may overwrite it
+        let made = |operand: &Operand| {
+            let Operand::Use(reg) = operand else { return false };
+            self.made.contains(reg)
+                && self
+                    .values
+                    .iter()
+                    .find(|(_, one)| *one == reg)
+                    .is_some_and(|(key, _)| self.users.get(key).is_some_and(|users| users.len() == 1))
+        };
+        // a value made just before can be made in the register; one that lived
+        // on from an earlier block or iteration is wherever its loop keeps it
+        if arrives(&operands[2]) == Some(fixed) && arrives(&operands[1]) != Some(fixed)
+            || arrives(&operands[1]) != Some(fixed) && arrives(&operands[2]) != Some(fixed) && made(&operands[2]) && !made(&operands[1])
+        {
             operands.swap(1, 2);
         }
     }
@@ -524,6 +541,7 @@ pub fn emit(
         values: HashMap::new(),
         builder: HashMap::new(),
         arrives_in: HashMap::new(),
+        made: HashSet::new(),
         users: HashMap::new(),
         in_acc: Default::default(),
     };

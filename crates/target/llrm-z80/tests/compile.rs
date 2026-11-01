@@ -83,3 +83,13 @@ fn a_byte_of_a_pair_is_read_in_place() {
     assert!(out.contains("ld (hl), c") && out.contains("cp a, c"), "{out}");
     assert!(!out.contains("ld d, c"), "{out}");
 }
+
+/// The loaded byte went to a spare pair and the running sum to `hl`, so the
+/// sum was spilled to the frame every iteration: 48 bytes and 2519 T-states for
+/// a loop that fits 21 bytes with no frame access.
+#[test]
+fn a_value_made_for_a_fixed_register_is_made_there() {
+    let ir = include_str!("kernels/ir/sum16.ll");
+    let out = text(ir, "sum16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+}
