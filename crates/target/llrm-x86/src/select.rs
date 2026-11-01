@@ -1521,7 +1521,7 @@ pub fn address_operand(
     if cell.addr.is_some() && cell.index_through == RegId::None {
         return place_operand(
             &ir::AddressRef { through: cell.through, ..ir::AddressRef::new(cell.addr) },
-            false,
+            bits == 64 && cell.through != RegId::None,
             false,
             bits,
         );
