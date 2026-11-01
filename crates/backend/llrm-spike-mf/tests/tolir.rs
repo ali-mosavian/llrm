@@ -1178,3 +1178,41 @@ fn test_a_value_an_instruction_is_cheaper_with_takes_that_register() {
     let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
     assert_eq!(held, Some(RegId::EDX), "{:?}", decided.placed);
 }
+
+/// The coalescer joins the values of a loop's phi copies and renames the
+/// instructions; a hint kept by value named the value `inc` had before the
+/// join, which no instruction held any more, so it never reached the allocator
+/// (6502 corpus: the hook changed no row). Every register a hint names must be
+/// one that an instruction holds.
+#[test]
+fn test_a_hint_names_a_value_its_instruction_holds_after_the_coalescer() {
+    use llrm_codegen::greedy::tii::TargetInstrInfo;
+    let mut f = MFunction::<()>::new("counted");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(branch(1));
+    let mut body = Block { id: 1, ..Block::default() };
+    body.phis.push(llrm_spike_mf::Phi { result: v(1), incoming: vec![(0, v(0)), (1, v(2))] });
+    body.insts.push(op("inc", vec![Operand::Def(v(2)), Operand::Use(v(1))]));
+    let mut again = op("br", vec![Operand::Block(1), Operand::Block(2)]);
+    again.terminator = true;
+    body.insts.push(again);
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(2))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let mut converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let mut named = 0;
+    for block in &converted.body.blocks {
+        for insn in block.insns.iter() {
+            let held: Vec<u32> = insn.uses.iter().chain(&insn.defines).copied().collect();
+            for (value, _) in converted.tii.preferred_registers(insn) {
+                named += 1;
+                assert!(held.contains(&value), "hint names v{value}, the instruction holds {held:?}");
+            }
+        }
+    }
+    assert!(named > 0, "no hint reached an instruction");
+}

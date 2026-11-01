@@ -937,13 +937,12 @@ impl<'a> RAGreedy<'a> {
         &self,
         virt: u32,
     ) -> Vec<RegId> {
-        let original = self.matrix.vrm.get_original(virt);
         let mut wanted: Vec<(RegId, f32)> = Vec::new();
         for operand in self.lis.operands(virt) {
             let at = self.lis.indexes.get_instruction_index(operand.instr);
             let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
             for (value, reg) in self.env.preferred_registers(self.lis.instr(operand.instr)) {
-                if value != original {
+                if value != virt {
                     continue;
                 }
                 match wanted.iter_mut().find(|(one, _)| *one == reg) {
