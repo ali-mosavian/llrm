@@ -954,7 +954,13 @@ impl<'a> RAGreedy<'a> {
         }
         // Most registers have 0 additional cost (RegCosts): nothing cheaper to
         // try.
-        Some(phys)
+        let cost = self.env.reg_cost(phys);
+        if cost == 0 {
+            return Some(phys);
+        }
+        // `phys` is available at a cost: evict interference from a cheaper
+        // alternative, if a lighter range holds one.
+        Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
     }
 
     /// `isUrgentEviction` (RegAllocEvictionAdvisor.cpp#L146): an unspillable

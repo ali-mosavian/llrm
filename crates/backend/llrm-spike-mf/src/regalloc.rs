@@ -95,6 +95,13 @@ pub trait Target {
         false
     }
 
+    /// What using `register` costs beyond a free one (LLVM's `CostPerUse`):
+    /// greedy tries to evict a lighter value from a cheaper register before
+    /// it takes a dearer one.
+    fn register_cost(_register: RegId) -> u8 {
+        0
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.

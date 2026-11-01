@@ -222,6 +222,14 @@ impl<const STACK: bool> Target for Mos<STACK> {
         true
     }
 
+    /// A zero-page byte costs more per use than `A`, `X` and `Y`: an
+    /// instruction on a cell is a byte longer and a clock slower than the
+    /// same on a register, and a transfer is two clocks against three.
+    fn register_cost(register: RegId) -> u8 {
+        let first = reg::RC0.index();
+        u8::from((first..first + usize::from(imaginary())).contains(&register.index()))
+    }
+
     fn spill_clobbers() -> Vec<RegId> {
         if STACK { vec![reg::Y] } else { Vec::new() }
     }

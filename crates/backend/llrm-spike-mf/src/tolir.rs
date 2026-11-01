@@ -232,6 +232,7 @@ pub fn to_lir<T: Target>(
             csr_first_use_cost: T::csr_first_use_cost(),
             csr_cost_scale: T::csr_cost_scale(),
             csr_spill_first: T::csr_spill_first(),
+            register_cost: T::register_cost,
         },
     })
 }
@@ -693,6 +694,7 @@ pub struct SpikeRegisterInfo {
     pub csr_first_use_cost: u32,
     pub csr_cost_scale: u32,
     pub csr_spill_first: bool,
+    pub register_cost: fn(RegId) -> u8,
 }
 
 impl TargetRegisterInfo for SpikeRegisterInfo {
@@ -713,6 +715,13 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
 
     fn csr_spill_first(&self) -> bool {
         self.csr_spill_first
+    }
+
+    fn reg_cost(
+        &self,
+        phys: RegId,
+    ) -> u8 {
+        (self.register_cost)(phys)
     }
 }
 

@@ -221,6 +221,13 @@ impl GreedyEnv for BodyEnv<'_> {
     fn csr_spill_first(&self) -> bool {
         self.tri.csr_spill_first()
     }
+
+    fn reg_cost(
+        &self,
+        phys: RegId,
+    ) -> u8 {
+        self.tri.reg_cost(phys)
+    }
 }
 
 /// What `SplitKit` asks of the function: its loops, its terminators and the

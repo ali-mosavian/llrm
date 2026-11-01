@@ -2570,3 +2570,53 @@ fn every_reader_of_the_flags_is_kept_with_the_compare_before_it() {
     assert!(M::reads_flags_set_just_before(&reader("BEQ", true)));
     assert!(!M::reads_flags_set_just_before(&Inst::new(Kind::Op("ADC"), vec![])));
 }
+
+/// Two counted copy loops, the second one's count loaded before the first.
+const TWO_COPIES: &str = "@io0 = global i16 0
+@io1 = global i16 0
+define ptr @two(ptr %d, ptr %s) {
+entry:
+  %m = load volatile i16, ptr @io0
+  %n = load volatile i16, ptr @io1
+  %n0 = icmp eq i16 %n, 0
+  br i1 %n0, label %mid, label %loop1
+loop1:
+  %i = phi i16 [ %n, %entry ], [ %i2, %loop1 ]
+  %p = phi ptr [ %d, %entry ], [ %p2, %loop1 ]
+  %q = phi ptr [ %s, %entry ], [ %q2, %loop1 ]
+  %i2 = sub i16 %i, 1
+  %b = load i8, ptr %q
+  store i8 %b, ptr %p
+  %p2 = getelementptr i8, ptr %p, i16 1
+  %q2 = getelementptr i8, ptr %q, i16 1
+  %c = icmp eq i16 %i2, 0
+  br i1 %c, label %mid, label %loop1
+mid:
+  %pm = phi ptr [ %d, %entry ], [ %p2, %loop1 ]
+  %qm = phi ptr [ %s, %entry ], [ %q2, %loop1 ]
+  %m0 = icmp eq i16 %m, 0
+  br i1 %m0, label %done, label %loop2
+loop2:
+  %j = phi i16 [ %m, %mid ], [ %j2, %loop2 ]
+  %pp = phi ptr [ %pm, %mid ], [ %pp2, %loop2 ]
+  %j2 = sub i16 %j, 1
+  store i8 7, ptr %pp
+  %pp2 = getelementptr i8, ptr %pp, i16 1
+  %c2 = icmp eq i16 %j2, 0
+  br i1 %c2, label %done, label %loop2
+done:
+  %r = phi ptr [ %pm, %mid ], [ %pp2, %loop2 ]
+  ret ptr %r
+}";
+
+/// The count of the first loop took a pair of zero-page bytes while `x`, with
+/// a count that is not used until after that loop, went idle through it: greedy
+/// takes the first free register and a zero-page byte cost the same as `x`.
+/// With a cost per cell it evicts the lighter holder (the lz4 kernel ran 1.5%
+/// slower in clocks than the spike's).
+#[test]
+fn a_hot_count_takes_x_from_a_count_held_for_later() {
+    let text = compile(TWO_COPIES, "two");
+    let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
+    assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
+}
