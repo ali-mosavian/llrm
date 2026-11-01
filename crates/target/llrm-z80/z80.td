@@ -99,6 +99,16 @@ let Predicates = [HasZ180], Defs = [F] in
                         [(set i16:$d, (mul (zext i8:$a), (zext i8:$b)))]>;
 
 
+// Word logic is the two bytes' ops, expanded when emitted (the 6502's OR16 is the same); the join of two bytes
+// into a pair, `lo | (hi << 8)`, is the more specific pattern below and wins.
+multiclass Logic16<string n, SDPatternOperator op> {
+  let Defs = [F] in
+    def NAME#"16" : Z80Inst<(outs GR16:$d), (ins GR16:$a, GR16:$b), n#"16 $d, $a, $b", [(set i16:$d, (op i16:$a, i16:$b))]>;
+}
+defm AND : Logic16<"and", and>;
+defm OR : Logic16<"or", or>;
+defm XOR : Logic16<"xor", xor>;
+
 // sub hl,rr: or a; sbc hl,rr. The carry out of an add is not an operand here, so a word add and subtract are the
 // one instruction each; i32 and i64 come in through the carry forms later.
 let Defs = [F], Constraints = "$d = $a" in

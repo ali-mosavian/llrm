@@ -77,9 +77,7 @@ pub fn target_lowering() -> TargetLowering {
         }
     };
     set(&[Add, Sub, And, Or, Xor], &[MVT::I8], Action::Legal);
-    set(&[Add, Sub], &[MVT::I16], Action::Legal);
-    // Word logic is the bytes' ops (`lower_wide_logic`).
-    set(&[And, Or, Xor], &[MVT::I16], Action::Custom);
+    set(&[Add, Sub, And, Or, Xor], &[MVT::I16], Action::Legal);
     set(&[Shl, Srl, Sra], &[MVT::I8, MVT::I16], Action::Legal);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SignExtendInReg], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
@@ -99,50 +97,11 @@ impl Hooks for Z80Lowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::And | ISD::Or | ISD::Xor => Some(lower_wide_logic(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             _ => None,
         }
     }
-}
-
-/// A word `and`, `or` or `xor` is the two bytes' ops joined: the pair is `lo |
-/// (hi << 8)`, which the table selects as the two halves of one register.
-fn lower_wide_logic(
-    dag: &mut SelectionDAG,
-    node: SDValue,
-) -> SDValue {
-    let op = dag.opcode(node);
-    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    if op == ISD::Or && is_pair_join(dag, a, b) {
-        return node;
-    }
-    let eight = dag.get_constant(8, EVT::I8);
-    let half = |dag: &mut SelectionDAG, value: SDValue, high: bool| {
-        let value = if high { dag.get_node(ISD::Srl, EVT::I16, &[value, eight]) } else { value };
-        dag.get_node(ISD::Truncate, EVT::I8, &[value])
-    };
-    let (alo, blo) = (half(dag, a, false), half(dag, b, false));
-    let (ahi, bhi) = (half(dag, a, true), half(dag, b, true));
-    let lo = dag.get_node(op, EVT::I8, &[alo, blo]);
-    let hi = dag.get_node(op, EVT::I8, &[ahi, bhi]);
-    dag.get_node(ISD::BuildPair, EVT::I16, &[lo, hi])
-}
-
-/// `lo | (hi << 8)` over extended bytes: the join of a `BuildPair`, which the
-/// table selects as one pair. It is an `or` too, so it must not be split again.
-fn is_pair_join(
-    dag: &SelectionDAG,
-    a: SDValue,
-    b: SDValue,
-) -> bool {
-    let extended = |value: SDValue| {
-        matches!(dag.opcode(value), ISD::ZeroExtend | ISD::AnyExtend)
-            && dag.value_type(dag.operand(value, 0)) == EVT::I8
-    };
-    let high = |value: SDValue| dag.opcode(value) == ISD::Shl && extended(dag.operand(value, 0));
-    (extended(a) && high(b)) || (extended(b) && high(a))
 }
 
 /// `LowerGlobalAddress`: `WRAPPER` of the address, an immediate the linker

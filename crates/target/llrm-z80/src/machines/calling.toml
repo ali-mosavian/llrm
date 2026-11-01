@@ -2,7 +2,9 @@
 # a word in HL, then DE, BC; a byte result in A, a word in DE, a long in HL:DE (HL high). Whatever does not fit goes
 # on the stack, the caller popping it. IX is the frame register and the callee keeps it.
 # DEVIATE from SDCC: its second argument is in L or DE by the first one's width (f(u8, u16): DE); here a word takes
-# the first free pair, HL. Its callee pops the stack arguments; here the caller does. Exit: none yet.
+# the first free pair, HL. Its callee pops the stack arguments; here the caller does. Unpriced: no T-state or byte
+# figure on the corpus yet. Interop with SDCC-built objects is not a goal for the CP/M .COM first target (our own
+# runtime, no SDCC library). Exit: price both on the corpus once emission exists (by 2026-11-05), else follow SDCC.
 default = "z80"
 private = "z80"
 

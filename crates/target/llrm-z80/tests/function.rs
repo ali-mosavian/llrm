@@ -61,12 +61,23 @@ fn an_unsigned_compare_branches_on_carry() {
     assert_eq!(blocks[0], ["CP8r", "JPNC", "JP"]);
 }
 
-/// Word logic is the bytes' ops joined (no 16-bit `and` exists).
+/// Word logic is one pseudo, expanded to the two bytes' ops when emitted.
+/// Before it, `and i16` was a custom lowering whose own `or` join hung the
+/// legalizer.
 #[test]
-fn a_word_and_is_two_byte_ands() {
+fn a_word_and_is_one_word_pseudo() {
     let ir = "define i16 @f(i16 %a, i16 %b) {\n  %r = and i16 %a, %b\n  ret i16 %r\n}";
     let blocks = selected(ir, "f");
-    assert_eq!(blocks[0].iter().filter(|name| **name == "AND8r").count(), 2, "{blocks:?}");
+    assert!(blocks[0].contains(&"AND16"), "{blocks:?}");
+}
+
+/// Two bytes joined into a word are the two halves of one pair, not an `or` of
+/// extensions.
+#[test]
+fn two_bytes_joined_are_a_pair_not_an_or() {
+    let ir = "define i16 @f(i8 %a, i8 %b, i16 %w) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %h = shl i16 %y, 8\n  %r = or i16 %x, %h\n  %s = add i16 %r, %w\n  ret i16 %s\n}";
+    let blocks = selected(ir, "f");
+    assert!(blocks[0].contains(&"REG_SEQUENCE") && !blocks[0].contains(&"OR16"), "{blocks:?}");
 }
 
 /// Known gap: an argument beyond the registers is refused, not misplaced (the
