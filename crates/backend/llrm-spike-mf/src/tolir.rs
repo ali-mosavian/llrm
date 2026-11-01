@@ -1147,3 +1147,31 @@ pub fn from_lir<T: Target>(
     let function = MFunction { blocks, classes, ..original.clone() };
     Ok(Rewritten { function, assignment: Assignment(assignment), slots })
 }
+
+/// `function` allocated by greedy: converted, its copies joined by the
+/// coalescer (`size` joins what saves bytes first), allocated with the spills
+/// written into it, their slots shared, and written back.
+pub fn allocate_greedy<T: Target>(
+    function: &mut MFunction<T::Class>,
+    registers: Regs,
+    size: bool,
+) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
+    let mut converted = to_lir::<T>(function, registers)?;
+    if std::env::var_os("LLRM_NO_COALESCE").is_none() {
+        converted.coalesce(registers, size);
+    }
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(registers, &order);
+    let mut frame = SpikeFrame::of(function);
+    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true)
+        .ok_or_else(|| format!("{}: greedy refused", function.name))?;
+    if decided.spill_failed || decided.report.stats.failed > 0 {
+        return Err(format!("{}: greedy could not allocate", function.name));
+    }
+    let mut back = from_lir::<T>(function, &converted, &decided, registers)?;
+    // `StackSlotColoring`: greedy gave each spilled value a slot of its own
+    crate::spill::share_slots(&mut back.function, &mut back.slots);
+    *function = back.function;
+    Ok((back.assignment, back.slots))
+}

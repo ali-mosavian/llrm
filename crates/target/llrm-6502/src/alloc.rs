@@ -2868,30 +2868,13 @@ fn allocate<const STACK: bool>(
     allocate_greedy::<Mos<STACK>>(function)
 }
 
-/// `function` allocated by greedy: converted, its copies joined by the
-/// coalescer, allocated with the spills written into it, and written back.
+/// `function` allocated by greedy (`llrm_spike_mf::tolir::allocate_greedy`).
 fn allocate_greedy<T: Target<Class = Class>>(
     function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
-    use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
     use llrm_lir::registers::Regs;
-    let regs = Regs(&crate::REGISTER_INFO);
-    let mut converted = llrm_spike_mf::tolir::to_lir::<T>(function, regs)?;
-    if std::env::var_os("LLRM_NO_COALESCE").is_none() {
-        converted.coalesce(regs, TUNING.with(|t| t.get()) == Tuning::SIZE);
-    }
-    let order = |value: u32| converted.order(value);
-    let inputs = converted.inputs(regs, &order);
-    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(function);
-    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true)
-        .ok_or_else(|| format!("{}: greedy refused", function.name))?;
-    if decided.spill_failed || decided.report.stats.failed > 0 {
-        return Err(format!("{}: greedy could not allocate", function.name));
-    }
-    let mut back = llrm_spike_mf::tolir::from_lir::<T>(function, &converted, &decided, regs)?;
-    // `StackSlotColoring`: greedy gave each spilled value a slot of its own
-    llrm_spike_mf::spill::share_slots(&mut back.function, &mut back.slots);
-    *function = back.function;
+    let size = TUNING.with(|t| t.get()) == Tuning::SIZE;
+    let (assignment, slots) = llrm_spike_mf::tolir::allocate_greedy::<T>(function, Regs(&crate::REGISTER_INFO), size)?;
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
@@ -2906,7 +2889,7 @@ fn allocate_greedy<T: Target<Class = Class>>(
         }
     }
     if std::env::var_os("LLRM_6502_CHECK").is_some() {
-        llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &back.assignment)?;
+        llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &assignment)?;
     }
-    Ok((back.assignment, back.slots))
+    Ok((assignment, slots))
 }
