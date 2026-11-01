@@ -1671,14 +1671,25 @@ impl Builder<'_> {
         result_type: TypeId,
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
-        if flags_answer || byvals.iter().any(Option::is_some) {
-            return Err(Refused("flags answer or byval with a target's calling hook"));
+        let sibling = std::mem::take(&mut self.sibcall);
+        if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference()) {
+            return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
         if std::mem::take(&mut self.call_attrs_move_arguments) {
             return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
         }
-        if std::mem::take(&mut self.call_attrs_move_arguments) {
-            return Err(Refused("an argument attribute that moves it, with a target's calling hook"));
+        // a `byval` argument is the address of a copy in this frame
+        let mut values = values.to_vec();
+        for (value, byval) in values.iter_mut().zip(byvals) {
+            let Some((size, align)) = *byval else { continue };
+            let index = self.info.new_stack_object(size as u32, align as u32);
+            let copy_to = self.dag.get_frame_index(self.target.dag.pointer, index);
+            let root = self.root();
+            let copy = self
+                .inline_memcpy(root, copy_to, *value, size, usize::MAX, align, align)?
+                .ok_or(Refused("byval copy"))?;
+            self.dag.set_root(copy);
+            *value = copy_to;
         }
         let mut outs = Vec::new();
         let variadic = std::mem::take(&mut self.variadic_call);

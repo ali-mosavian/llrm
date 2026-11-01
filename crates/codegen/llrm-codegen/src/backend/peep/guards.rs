@@ -535,6 +535,15 @@ pub fn holds_after(
     if !writes.is_disjoint(&guarded) {
         return false;
     }
+    // An SSE register has no lanes, so the check above sees none of its writes.
+    if what.dests.iter().any(|dest| {
+        matches!(
+            dest,
+            Loc::Reg(one) if ir::root(one.register) == ir::root(held.register)
+        )
+    }) {
+        return false;
+    }
     // DEVIATE (pin: a spill slot is a FixedStack operand, alias-free against
     // every other access; the pin's reload there is not kept either). Exit:
     // pin-faithful spill placement leaves no such pair. ASSUMPTION: an access
