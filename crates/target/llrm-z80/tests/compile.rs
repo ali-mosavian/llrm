@@ -170,3 +170,13 @@ fn a_xor_with_a_byte_in_the_high_half_changes_only_the_high_half() {
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("ld l, #0") && !out.contains("xor a, e"), "{out}");
 }
+
+/// Two selects on one compare with a `sub` between them: the second `jr c`
+/// read the carry of that `sub`, not of the compare, so gcd returned 4 where
+/// the answer is 6. The compare is made again before the second reader.
+#[test]
+fn a_flag_reader_after_a_clobber_compares_again() {
+    let ir = "define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %x = select i1 %c, i8 %b, i8 0\n  %d = sub i8 %a, %x\n  %y = select i1 %c, i8 0, i8 %a\n  %e = sub i8 %b, %y\n  %r = xor i8 %d, %e\n  ret i8 %r\n}";
+    let out = compiled(ir, "f");
+    assert_eq!(out.lines().filter(|line| line.trim().starts_with("cp a,")).count(), 2, "{out}");
+}
