@@ -80,6 +80,28 @@ fn two_bytes_joined_are_a_pair_not_an_or() {
     assert!(blocks[0].contains(&"REG_SEQUENCE") && !blocks[0].contains(&"OR16"), "{blocks:?}");
 }
 
+/// `max` is a compare and a conditional move, byte or word. Before the
+/// `SETCC`/`CMOV` nodes, `max8` and `max16` refused with
+/// `CannotSelect(Select)`.
+#[test]
+fn a_select_on_a_compare_is_a_conditional_move() {
+    let byte =
+        "define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
+    assert_eq!(selected(byte, "f"), [["CP8r", "CMOV8", "RET"]]);
+    let word = "define i16 @g(i16 %a, i16 %b) {\n  %c = icmp ult i16 %a, %b\n  %r = select i1 %c, i16 %a, i16 %b\n  ret i16 %r\n}";
+    assert!(selected(word, "g")[0].contains(&"CMOV16"));
+}
+
+/// A signed compare is the unsigned one on sign-flipped operands: an `xor 0x80`
+/// on each side.
+#[test]
+fn a_signed_byte_compare_flips_both_sign_bits() {
+    let ir =
+        "define i8 @f(i8 %a, i8 %b) {\n  %c = icmp slt i8 %a, %b\n  %r = select i1 %c, i8 %a, i8 %b\n  ret i8 %r\n}";
+    let names = &selected(ir, "f")[0];
+    assert_eq!(names.iter().filter(|name| **name == "XOR8i").count(), 2, "{names:?}");
+}
+
 /// A byte read and widened, and a word read, through a pointer: the byte load
 /// with a zero high byte, and the word load. Before them `scmp`, `crc16` and
 /// `sum16` of the bench refused with `CannotSelect(Load)`.

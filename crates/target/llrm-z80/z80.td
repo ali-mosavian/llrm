@@ -41,6 +41,10 @@ def Flags : RegisterClass<"Z80", [i8], 8, (add F)> { let CopyCost = -1; }
 
 def SDTZ80Cmp : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>]>;
 def SDTZ80Brcond : SDTypeProfile<0, 3, [SDTCisVT<0, OtherVT>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
+def SDTZ80Setcc : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
+def SDTZ80Cmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
+def Z80setcc : SDNode<"Z80ISD::SETCC", SDTZ80Setcc>;
+def Z80cmov : SDNode<"Z80ISD::CMOV", SDTZ80Cmov>;
 def Z80cmp : SDNode<"Z80ISD::CMP", SDTZ80Cmp>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -166,6 +170,13 @@ let isBranch = 1, isTerminator = 1 in {
   def JPNC : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nc, $t", [(Z80brcond bb:$t, (i8 2), i8:$f)]>;
   def JPC : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp c, $t", [(Z80brcond bb:$t, (i8 3), i8:$f)]>;
 }
+// A condition as a byte 0 or 1, and a select: branches in the emitted code; `ld` leaves the flags alone, so the
+// loads between the compare and the branch are safe.
+def SETCC8 : Z80Inst<(outs GR8:$d), (ins i8imm:$cc, Flags:$f), "setcc $d, $cc, $f", [(set i8:$d, (Z80setcc imm:$cc, i8:$f))]>;
+def CMOV8 : Z80Inst<(outs GR8:$d), (ins GR8:$f0, GR8:$t, i8imm:$cc, Flags:$f), "cmov $d, $f0, $t, $cc, $f",
+                    [(set i8:$d, (Z80cmov i8:$f0, i8:$t, imm:$cc, i8:$f))]>;
+def CMOV16 : Z80Inst<(outs GR16:$d), (ins GR16:$f0, GR16:$t, i8imm:$cc, Flags:$f), "cmov16 $d, $f0, $t, $cc, $f",
+                     [(set i16:$d, (Z80cmov i16:$f0, i16:$t, imm:$cc, i8:$f))]>;
 // jp or jr: branch relaxation picks the short form once the distance is known.
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JP : Z80Inst<(outs), (ins brtarget:$t), "jp $t", [(br bb:$t)]>;
