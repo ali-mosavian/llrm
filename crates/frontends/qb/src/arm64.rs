@@ -75,7 +75,7 @@ fn arm64_text(
         }
         let mut line =
             line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "").replace(" frame_bound", "");
-        line = without_llrm_attributes(&line);
+        line = ports_as_calls(&without_llrm_attributes(&line));
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
         // a variadic call has no prototype to extend its arguments: on every
@@ -241,6 +241,13 @@ fn framed_function(lines: &[&str]) -> String {
         out.push('\n');
     }
     without_unwinding(&out)
+}
+
+/// `line`, a call or declaration of a port intrinsic, as one of the runtime's
+/// `qb_port_in` and `qb_port_out`: a target without port instructions has no
+/// other way to reach a port (the runtime's device answers it).
+pub(super) fn ports_as_calls(line: &str) -> String {
+    renamed(&renamed(line, "@llrm.ia16.in.i8", "@qb_port_in"), "@llrm.ia16.out.i8", "@qb_port_out")
 }
 
 /// The attributes only llrm reads (its facts about a routine or a pointer),

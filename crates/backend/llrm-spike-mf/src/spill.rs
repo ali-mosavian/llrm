@@ -518,7 +518,7 @@ pub fn verify_sharing<C>(
 /// together share one, and a copy from a slot to another that ends up the same
 /// slot moves nothing, so it goes. A copy is a load into a register followed
 /// at once by a store of that register.
-fn share_slots<C: Copy + PartialEq>(
+pub fn share_slots<C: Copy + PartialEq>(
     function: &mut MFunction<C>,
     slots: &mut Vec<(i32, C)>,
 ) {

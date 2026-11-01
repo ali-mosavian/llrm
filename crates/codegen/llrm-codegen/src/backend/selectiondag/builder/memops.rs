@@ -131,6 +131,7 @@ impl Builder<'_> {
             | Intrinsic::BitReverse
             | Intrinsic::Abs
             | Intrinsic::LRint
+            | Intrinsic::LLRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
             _ => Err(Refused("intrinsic call")),
         }
@@ -317,6 +318,33 @@ impl Builder<'_> {
             return u64::from(self.target.legal_ints.iter().copied().max().unwrap_or(32) / 8);
         }
         if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { Self::WIDEST_MEM_OP }
+    }
+
+    /// The alignment of a frame object a copy of `size` bytes fills, when the
+    /// copy is expanded inline: the ABI alignment of the first piece's type if
+    /// that is more, up to the natural stack alignment
+    /// (`getMemcpyLoadsAndStores`' `DstAlignCanChange`: "Give the stack frame
+    /// object a larger alignment if needed"). A copy by library call keeps
+    /// `align`.
+    pub(super) fn copy_destination_alignment(
+        &self,
+        size: u64,
+        align: u64,
+        opt_size: bool,
+    ) -> u64 {
+        let tuning = &self.target.tuning;
+        let limit = if opt_size { tuning.max_stores_per_memcpy_opt_size } else { tuning.max_stores_per_memcpy };
+        let Some(first) = Self::mem_ops(size, self.widest_mem_op(size), limit, self.volatile_memory)
+            .and_then(|ops| ops.first().copied())
+        else {
+            return align;
+        };
+        let natural = self.target.stack_align.unwrap_or_else(|| self.arch.stack_alignment().max(1) as u64);
+        let mut raised = first;
+        while raised > align && raised > natural {
+            raised /= 2;
+        }
+        align.max(raised)
     }
 
     /// `findOptimalMemOpLowering` for x86 without SSE ([`inline_widths`]).
@@ -933,7 +961,7 @@ impl Builder<'_> {
     /// hook: the loads and stores of a constant size within the limit, then
     /// the target's node (`EmitTargetCodeFor*`), then the C library
     /// routine.
-    fn lower_hooked_mem_intrinsic(
+    pub(super) fn lower_hooked_mem_intrinsic(
         &mut self,
         calling: &'static dyn TargetCalling,
         which: &Intrinsic,
