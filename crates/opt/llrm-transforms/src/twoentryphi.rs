@@ -28,13 +28,13 @@
 //!   (`dropUBImplyingAttrsAndMetadata`) and loses the rest; there are no debug
 //!   records to drop.
 //!
-//! - D5. A target whose `select` is a branch (`Tti::has_cmov` false: the i486)
-//!   keeps a diamond whose arms have code to run: the fold would execute both
-//!   arms and branch anyway. gcc if-converts only where a conditional move
-//!   exists. x_isqrt -18%, x_mergesort -20% clocks, x_crc32 1179 -> 175 B at
-//!   1.58x clocks (numbered trade row; exit 2026-11-20: price the loop-carried
-//!   arm in the cost model so crc keeps the select where the clocks pay). Owner
-//!   llrm-target-x86-m32.
+//! - D5. Where a `select` is a branch (`Tti::has_cmov` false: the i486) the
+//!   fold's selects count against the threshold, which the pin's do not: the
+//!   arms' code then runs on both paths and the branch stays. gcc if-converts
+//!   only where a conditional move exists. x_isqrt -18%, x_mergesort -20%
+//!   clocks, x_crc32 1179 -> 175 B at 1.58x clocks (numbered trade row; exit
+//!   2026-11-20: price the loop-carried arm in the cost model so crc keeps the
+//!   select where the clocks pay). Owner llrm-target-x86-m32.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -56,7 +56,7 @@ use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::tti::{Cost, CostKind, Tti};
+use llrm_mir::tti::{CmpSel, Cost, CostKind, Tti, Ty};
 
 use crate::edges;
 
@@ -337,10 +337,17 @@ pub fn folded(
     {
         return changed;
     }
-    // D5. Where a select is a branch, folding runs the arms' code on both paths
-    // and still branches.
+    // D5. The pin does not price the selects against the threshold; where a
+    // select is a branch, folding runs the arms' code on both paths and still
+    // branches, so the selects count.
     if !spec.tti.has_cmov() && !hoist.is_empty() {
-        return changed;
+        let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {
+            let ty = Ty::of(&context.types, function.instruction(phi).ty);
+            all + ty.map_or(Cost::INVALID, |ty| spec.tti.cmp_sel_cost(CmpSel::Select, ty, crate::speculate::cost_kind(function)))
+        });
+        if (cost + selects).value > THRESHOLD * Cost::BASIC.value || !(cost + selects).valid {
+            return changed;
+        }
     }
     // Unless the arms are emptied, the control flow stays.
     for &arm in &if_blocks {

@@ -28,8 +28,6 @@
 //! - D4. No constant expressions in function bodies: LLVM's price of one is not
 //!   needed.
 //!
-//! - D5. A target whose `select` is a branch (`Tti::has_cmov` false) does not
-//!   run an arm early to form one, as in [`twoentryphi`](crate::twoentryphi).
 //! - D6. `isSafeToSpeculateStore` finds a writable object only among the
 //!   allocas that are not captured: `isWritableObject` of a global would need
 //!   `PointerMayBeCaptured` over the module.
@@ -159,10 +157,6 @@ fn selects_priced(
         let (Some(original), Some(speculated)) = (from(block), from(then)) else { return None };
         if original == speculated {
             continue;
-        }
-        // D5 (see `twoentryphi`): a select that is a branch is no saving.
-        if !spec.tti.has_cmov() {
-            return None;
         }
         let ty = Ty::of(&context.types, function.instruction(phi).ty)?;
         cost = cost + spec.tti.cmp_sel_cost(CmpSel::Select, ty, cost_kind(function));
