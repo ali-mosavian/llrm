@@ -3,11 +3,18 @@
 	.type	f,@function
 f:                                      # @f
 	.functype	f (i32) -> (i32)
+	.local  	i32
 # %bb.0:
+	global.get	__stack_pointer
+	local.set	1
 	local.get	0
 	call	g
 	i32.const	1
 	return
+.Ltmp0:                                 # EH_LABEL
+	catch_all
+	local.get	1
+	global.set	__stack_pointer
 	i32.const	2
 	return
 	end_function

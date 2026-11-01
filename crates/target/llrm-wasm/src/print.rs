@@ -127,7 +127,13 @@ pub fn function(f: &Function) -> String {
         out.push(format!("\t.local  \t{}", type_list(&f.locals)));
     }
     out.push("# %bb.0:".to_string());
-    out.extend(f.blocks.iter().flatten().map(|i| format!("\t{}", instruction(f, i))));
+    out.extend(f.blocks.iter().flatten().map(|i| match i.operands[..] {
+        // `EmitInstruction` of `EH_LABEL`: the label, at the margin.
+        [Operand::Imm(label)] if i.opcode == crate::mir::EH_LABEL => {
+            with_comment(&format!(".Ltmp{label}:"), "# EH_LABEL")
+        }
+        _ => format!("\t{}", instruction(f, i)),
+    }));
     out.push(with_comment("", "# -- End function"));
     out.join("\n") + "\n"
 }

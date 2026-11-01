@@ -19,6 +19,7 @@ use crate::explicit_locals::explicit_locals;
 use crate::fix_br_table_defaults::fix_br_table_defaults;
 use crate::fix_irreducible::fix_irreducible_control_flow;
 use crate::frame::frame_lowering;
+use crate::late_eh_prepare::late_eh_prepare;
 use crate::lower_br_unless::lower_br_unless;
 use crate::mir::{Function, Operand, ValType};
 use crate::phi_elimination::phi_elimination;
@@ -101,13 +102,13 @@ pub fn compile_function(
     width: Width,
     options: Options,
 ) -> Result<Function, String> {
-    if options.exception_model == ExceptionModel::Wasm && has_unwinding(module, name) {
-        return Err("exception handling is not translated yet (docs/working/wasm-eh.md)".into());
-    }
-    let blocks = function::select_function(module, name, width)?;
+    let unwinding = options.exception_model == ExceptionModel::Wasm;
+    let blocks = function::select_function(module, name, width, unwinding)?;
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
+    f.personality = unwinding
+        && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
     f.binding =
@@ -123,6 +124,7 @@ pub fn compile_function(
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
     fix_irreducible_control_flow(&mut f);
+    late_eh_prepare(&mut f);
     if options.stackify {
         reg_stackify(&mut f);
     }
@@ -165,25 +167,4 @@ fn library_callees(
         found.entry(name.clone()).or_insert((params, results));
     }
     found
-}
-
-/// Whether `name` has an `invoke` or a `landingpad`.
-fn has_unwinding(
-    module: &Module,
-    name: &str,
-) -> bool {
-    use llrm_mir::opcode::Opcode;
-
-    let Some(function) = module.named(name).and_then(|id| module.global(id).function()) else { return false };
-    function
-        .layout()
-        .iter()
-        .any(
-            |&block| function
-                .iter_block(block)
-                .any(|inst| matches!(
-                    function.instruction(inst).opcode,
-                    Opcode::Invoke(_) | Opcode::LandingPad { .. }
-                )),
-        )
 }

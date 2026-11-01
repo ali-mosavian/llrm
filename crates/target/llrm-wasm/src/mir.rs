@@ -20,6 +20,11 @@ pub const PHI: u16 = u16::MAX;
 /// `TargetOpcode::IMPLICIT_DEF`: `IMPLICIT_DEF dst`.
 pub const IMPLICIT_DEF: u16 = u16::MAX - 1;
 
+/// `TargetOpcode::EH_LABEL`: `EH_LABEL n`, the temporary label `.Ltmp<n>` at
+/// the head of an EH pad; a block starting with one (after its phis) is the
+/// pin's `isEHPad`.
+pub const EH_LABEL: u16 = u16::MAX - 2;
+
 /// A virtual register, by index.
 pub type VReg = u32;
 
@@ -227,6 +232,11 @@ pub struct Function {
     /// The (size, alignment) of each stack object, by frame index:
     /// `MachineFrameInfo`.
     pub frame: Vec<(u64, u64)>,
+    /// `Function::hasPersonalityFn`.
+    pub personality: bool,
+    /// The register holding the incoming stack pointer (`SP32`), when the
+    /// prologue made one.
+    pub sp: Option<VReg>,
     vregs: Vec<ValType>,
     stackified: Vec<bool>,
 }
@@ -259,6 +269,14 @@ impl Function {
                 *block = new_of[*block as usize] as u32;
             }
         }
+    }
+
+    /// `MachineBasicBlock::isEHPad`: the block starts with an `EH_LABEL`.
+    pub fn is_eh_pad(
+        &self,
+        block: usize,
+    ) -> bool {
+        self.blocks[block].iter().find(|inst| inst.opcode != PHI).is_some_and(|inst| inst.opcode == EH_LABEL)
     }
 
     /// The index of `name + offset` in [`Function::symbols`].
