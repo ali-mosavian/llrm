@@ -293,6 +293,12 @@ pub fn functions_with(
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
+        if llrm_support::env_flag!("LLRM_ARM64_GREEDY_SHADOW") {
+            match crate::greedy::shadow(&machine) {
+                Ok(spills) => eprintln!("greedy-shadow: @{name}: ok, {spills} spill slots"),
+                Err(why) => eprintln!("greedy-shadow: @{name}: {why}"),
+            }
+        }
         let allocation = crate::regalloc::allocate(&mut machine);
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
