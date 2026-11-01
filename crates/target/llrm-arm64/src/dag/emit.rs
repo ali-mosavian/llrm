@@ -240,6 +240,42 @@ fn cond_of(code: u64) -> Result<Cond, String> {
     ALL.get(code as usize).copied().ok_or_else(|| format!("condition code {code}"))
 }
 
+/// `ADDXrx`, `SUBSWrx` and the rest of the extended-register add/sub family.
+fn add_sub_extended(name: &str) -> Option<(AddSub, Width)> {
+    let (op, rest) = if let Some(rest) = name.strip_prefix("ADDS") {
+        (AddSub { subtract: false, set_flags: true }, rest)
+    } else if let Some(rest) = name.strip_prefix("ADD") {
+        (AddSub { subtract: false, set_flags: false }, rest)
+    } else if let Some(rest) = name.strip_prefix("SUBS") {
+        (AddSub { subtract: true, set_flags: true }, rest)
+    } else {
+        (AddSub { subtract: true, set_flags: false }, name.strip_prefix("SUB")?)
+    };
+    match rest {
+        "Wrx" => Some((op, Width::W)),
+        "Xrx" => Some((op, Width::X)),
+        _ => None,
+    }
+}
+
+/// The extend type and shift of an `arith_extend` operand: `getArithExtendImm`
+/// puts the type in bits 3.. (UXTB, UXTH, UXTW, UXTX, SXTB, SXTH, SXTW, SXTX)
+/// and the shift amount below.
+fn extender(operand: u64) -> Result<(Extend, u8), String> {
+    const TYPES: [Extend; 8] = [
+        Extend::Uxtb,
+        Extend::Uxth,
+        Extend::Uxtw,
+        Extend::Uxtx,
+        Extend::Sxtb,
+        Extend::Sxth,
+        Extend::Sxtw,
+        Extend::Sxtx,
+    ];
+    let extend = TYPES.get((operand >> 3) as usize).copied().ok_or_else(|| format!("extend operand {operand}"))?;
+    Ok((extend, (operand & 7) as u8))
+}
+
 /// The instruction of machine opcode `name` writing `rd`.
 fn build(
     name: &str,
@@ -269,6 +305,24 @@ fn build(
                 imm12: u16::try_from(*imm).map_err(|_| format!("{name}: immediate {imm} is no imm12"))?,
                 shift12: *shift == 12,
             }),
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
+    if let Some((op, width)) = add_sub_extended(name) {
+        return match operands {
+            [Operand::Reg(rn), Operand::Reg(rm), Operand::Imm(extend)] => {
+                let (extend, amount) = extender(*extend)?;
+                Ok(Inst::AddSubExtended { op, width, rd, rn: *rn, rm: *rm, extend, amount })
+            }
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
+    if matches!(name, "SMULHrr" | "UMULHrr") {
+        return match operands {
+            [Operand::Reg(rn), Operand::Reg(rm)] => {
+                let op = if name == "SMULHrr" { Mul3::Smulh } else { Mul3::Umulh };
+                Ok(Inst::ThreeSource { op, width: Width::X, rd, rn: *rn, rm: *rm, ra: Gpr::R31 })
+            }
             _ => Err(format!("{name}: operands are not those of its form")),
         };
     }
