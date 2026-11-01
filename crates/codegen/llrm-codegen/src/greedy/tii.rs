@@ -18,13 +18,217 @@ use llrm_lir::registers::RegId;
 
 use crate::backend::allocresult::Error;
 use crate::backend::classes::RegisterClasses;
-use crate::backend::frame::Frame;
+use crate::backend::frame::FrameInfo;
 use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
 /// `frame.WORD` at the width type this module uses.
 const WORD: u32 = crate::backend::frame::WORD as u32;
+
+/// What the greedy allocator asks of the target's instructions
+/// (`TargetInstrInfo`). `X86InstrInfo` answers for LIR's x86 forms; another
+/// ISA answers with its own.
+pub trait TargetInstrInfo {
+    /// Whether `what` is a plain move that copies its source whole
+    /// (`isCopyInstr` for X86 `MOV`, not `MOVZX` or `MOVSX`).
+    fn is_plain_move(
+        &self,
+        what: &Semantics,
+    ) -> bool;
+
+    /// `BuildMI(COPY)`: a copy of `from` into `to`, `width` bytes.
+    fn copy_semantics(
+        &self,
+        to: u32,
+        from: u32,
+        width: u32,
+    ) -> Semantics;
+
+    /// The register `one` copies, when it is a plain copy and nothing else
+    /// (`isCopyInstr`).
+    fn copy_source(
+        &self,
+        one: &Insn,
+    ) -> Option<u32> {
+        let w = one.what.as_ref()?;
+        match (w.dests.as_slice(), w.sources.as_slice()) {
+            ([Loc::Held(_)], [Loc::Held(from)])
+                if self.is_plain_move(w)
+                    && one.uses == [from.value]
+                    && one.group.is_none()
+                    && one.requires.is_empty()
+                    && one.delivers.is_empty()
+                    && one.clobbers.is_empty() =>
+            {
+                Some(from.value)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether `one` is a definition `isTriviallyReMaterializable` takes
+    /// in shape: one register written, nothing pinned or destroyed.
+    fn remat_shape(
+        &self,
+        one: &Insn,
+    ) -> bool;
+
+    /// `isTriviallyReMaterializable`.
+    fn is_trivially_re_materializable(
+        &self,
+        def: &Insn,
+        invariant: bool,
+    ) -> bool;
+
+    /// `isLoadFromInvariantOrConstantMemory` over a body: the values loaded
+    /// from an immutable stack object nothing writes.
+    fn argument_loads(
+        &self,
+        body: &crate::model::lir::LirBody,
+    ) -> BTreeSet<u32>;
+
+    /// `foldMemoryOperand`.
+    fn fold_memory_operand(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+    ) -> Option<Arc<Insn>>;
+
+    /// `foldMemoryOperand` for one move of a parallel copy.
+    fn fold_copy_member(
+        &self,
+        one: &Insn,
+        values: &BTreeSet<u32>,
+        frame: &mut dyn FrameInfo,
+        home: &dyn Fn(u32) -> u32,
+    ) -> Result<Option<Arc<Insn>>, Error>;
+
+    /// `loadRegFromStackSlot`.
+    fn load_reg_from_stack_slot(
+        &self,
+        beside: &Insn,
+        into: u32,
+        cell: &Mem,
+    ) -> Arc<Insn>;
+
+    /// `storeRegToStackSlot`.
+    fn store_reg_to_stack_slot(
+        &self,
+        beside: &Insn,
+        out_of: u32,
+        cell: &Mem,
+    ) -> Arc<Insn>;
+
+    /// Whether `one` reads the register every unprefixed access reads, so a
+    /// split puts a reload of it ahead of `one`.
+    fn needs_data_group(
+        &self,
+        one: &Insn,
+    ) -> bool;
+}
+
+/// `X86InstrInfo` at the width and register classes of one compile.
+pub struct X86InstrInfo<'a> {
+    pub bits: u32,
+    pub classes: &'a RegisterClasses,
+    /// The module is BASIC's (`Target::basic`).
+    pub basic_semantics: bool,
+}
+
+impl TargetInstrInfo for X86InstrInfo<'_> {
+    fn is_plain_move(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        what.op == Operation::Move && what.name.as_deref() == Some("mov")
+    }
+
+    fn copy_semantics(
+        &self,
+        to: u32,
+        from: u32,
+        width: u32,
+    ) -> Semantics {
+        Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Held(Held { value: to, width })],
+            sources: vec![Loc::Held(Held { value: from, width })],
+            ..Semantics::new(Operation::Move)
+        }
+    }
+
+    fn remat_shape(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        super::inlinespiller::remat_shape(one)
+    }
+
+    fn is_trivially_re_materializable(
+        &self,
+        def: &Insn,
+        invariant: bool,
+    ) -> bool {
+        super::remat::is_trivially_re_materializable(def, invariant)
+    }
+
+    fn argument_loads(
+        &self,
+        body: &crate::model::lir::LirBody,
+    ) -> BTreeSet<u32> {
+        let mut loads = super::remat::argument_loads(body);
+        if !self.basic_semantics {
+            loads.extend(x87_stable_loads(body));
+        }
+        loads
+    }
+
+    fn fold_memory_operand(
+        &self,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
+    ) -> Option<Arc<Insn>> {
+        fold_memory_operand(one, reg, cell, self.bits, self.classes)
+    }
+
+    fn fold_copy_member(
+        &self,
+        one: &Insn,
+        values: &BTreeSet<u32>,
+        frame: &mut dyn FrameInfo,
+        home: &dyn Fn(u32) -> u32,
+    ) -> Result<Option<Arc<Insn>>, Error> {
+        fold_copy_member(one, values, frame, home)
+    }
+
+    fn load_reg_from_stack_slot(
+        &self,
+        beside: &Insn,
+        into: u32,
+        cell: &Mem,
+    ) -> Arc<Insn> {
+        load_reg_from_stack_slot(beside, into, cell)
+    }
+
+    fn store_reg_to_stack_slot(
+        &self,
+        beside: &Insn,
+        out_of: u32,
+        cell: &Mem,
+    ) -> Arc<Insn> {
+        store_reg_to_stack_slot(beside, out_of, cell)
+    }
+
+    fn needs_data_group(
+        &self,
+        one: &Insn,
+    ) -> bool {
+        crate::backend::target::needs_data_group(one)
+    }
+}
 
 /// `foldMemoryOperand`: `one` with `cell` for every operand naming `reg`, or
 /// `None` where that form does not exist. A narrower operand reads or writes
@@ -218,7 +422,7 @@ pub(crate) fn _inserted(
 pub(crate) fn fold_copy_member(
     one: &Insn,
     values: &BTreeSet<u32>,
-    frame: &mut Frame,
+    frame: &mut dyn FrameInfo,
     home: &dyn Fn(u32) -> u32,
 ) -> Result<Option<Arc<Insn>>, Error> {
     let Some(what) = &one.what else {
@@ -312,6 +516,31 @@ pub(crate) fn is_encodable(
     Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
 }
 
+/// DEVIATE D-RFP4 (beyond LLVM: gcc's `REG_EQUIV`, 854's `floatassign`): the
+/// x87 `fld` of a global, or of an incoming argument's cell, that nothing may
+/// write while the value lives is made again where it is read, as the pin does
+/// for an invariant load. The pin takes only a load marked invariant, so it
+/// spills the rest: nbody_single -O3 m32 spills 9 loaded globals (clang 50017
+/// frame stores against gcc's 17011).
+///
+/// Left out of a BASIC module (`basic_semantics`): its handler sees a fault in
+/// the statement that raised it, and reading the cell later moves where a
+/// signalling NaN raises.
+/// Complexity: one scan of the body (`_stable_loads_through`).
+fn x87_stable_loads(body: &crate::model::lir::LirBody) -> BTreeSet<u32> {
+    let mut loads = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
+            loads.extend(one.defines.iter().copied());
+        }
+    }
+    if loads.is_empty() {
+        return loads;
+    }
+    crate::backend::bodyfacts::_stable_loads_through(body, &loads, &IndexMap::default()).into_keys().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +563,95 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, -2)), 2);
         let folded = fold_memory_operand(&Arc::new(add), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
         assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
+    }
+
+    fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
+        crate::model::lir::LirBody::new(
+            "x87",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(0, insns))],
+            Default::default(),
+            Default::default(),
+        )
+    }
+
+    fn fld(
+        at: i64,
+        value: u32,
+        cell: Mem,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("fld".into()),
+            dests: vec![Loc::Held(Held { value, width: 10 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::FloatLoad)
+        };
+        Arc::new(Insn::new(at, None, Some(what), vec![value], vec![]))
+    }
+
+    fn fstp(
+        at: i64,
+        value: u32,
+        cell: Mem,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("fstp".into()),
+            dests: vec![Loc::Mem(cell)],
+            sources: vec![Loc::Held(Held { value, width: 10 })],
+            ..Semantics::new(Operation::FloatStore)
+        };
+        Arc::new(Insn::new(at, None, Some(what), vec![], vec![value]))
+    }
+
+    fn global(
+        symbol: i64,
+        disp: i64,
+    ) -> Mem {
+        Mem::new(Some(Addr { index: symbol, ..Addr::new(Space::External, disp) }), 4)
+    }
+
+    fn frame(disp: i64) -> Mem {
+        Mem::new(Some(Addr::new(Space::Frame, disp)), 4)
+    }
+
+    /// nbody_single -O3 m32 stored 9 loaded globals to the frame and loaded
+    /// them again (`fld _vel_y+8; fstp [esp+244]` ... `fld [esp+244]`); gcc
+    /// reads the global again. A global nothing writes while the value
+    /// lives is a load the allocator makes again.
+    #[test]
+    fn test_an_x87_load_of_a_global_nothing_writes_is_made_again() {
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let body = x87_body(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 2, global(1, 0)),
+            fstp(2, 2, frame(-8)),
+            fstp(3, 1, frame(-4)),
+        ]);
+        assert_eq!(tii.argument_loads(&body), BTreeSet::from([1, 2]));
+    }
+
+    /// A store to the cell between the load and the last reader changes the
+    /// value: the load stays.
+    #[test]
+    fn test_an_x87_load_of_a_global_written_while_it_lives_is_kept() {
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let body = x87_body(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 2, global(1, 0)),
+            fstp(2, 2, global(0, 0)),
+            fstp(3, 1, frame(-4)),
+        ]);
+        assert_eq!(tii.argument_loads(&body), BTreeSet::from([2]));
+    }
+
+    /// A BASIC module observes fault order: reading the cell later would move
+    /// where a signalling NaN raises. Without the flag the same body re-reads.
+    #[test]
+    fn test_a_basic_module_keeps_its_x87_loads() {
+        let body = x87_body(vec![fld(0, 1, global(0, 0)), fstp(2, 1, frame(-4))]);
+        let plain = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let basic = X86InstrInfo { basic_semantics: true, ..plain };
+        assert_eq!(plain.argument_loads(&body), BTreeSet::from([1]));
+        assert!(basic.argument_loads(&body).is_empty());
     }
 }

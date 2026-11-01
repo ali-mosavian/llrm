@@ -275,6 +275,15 @@ impl ScalarEvolution {
         Ap::new(bits, self.get_signed_range(cx, s).get_signed_max())
     }
 
+    /// Drops the cached ranges. A range asked while a loop's trip count was
+    /// being worked out saw no count (a recurrence's range reads it), and the
+    /// cache keeps that answer; asked again once the counts are cached, it is
+    /// sharper.
+    pub fn forget_cached_ranges(&mut self) {
+        self.unsigned_ranges.clear();
+        self.signed_ranges.clear();
+    }
+
     /// `setRange`.
     fn set_range(
         &mut self,

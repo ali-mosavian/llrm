@@ -842,14 +842,7 @@ impl Builder<'_> {
                     // no `memcpy` to call for a copy the pin leaves to one
                     // (alignment under 4): dwords, as the old selector copies;
                     // x86 takes them unaligned
-                    (None, Intrinsic::MemCpy, Some(bytes))
-                        if strings_exist
-                            && !self.runtime_has("memcpy")
-                            // the tail of a far copy is made from the far
-                            // pointers moved on, which the string tail at size
-                            // is not
-                            && (opt_size || bytes % 4 == 0 || !(self.is_far(dst) || self.is_far(other))) =>
-                    {
+                    (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && !self.runtime_has("memcpy") => {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
                     }
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
@@ -916,11 +909,16 @@ impl Builder<'_> {
                     // x86 takes them unaligned. Only a size of whole dwords (a
                     // tail costs the bytes the dwords save, and a far one
                     // cannot be named) and not for size: `xor eax, eax` is a
-                    // byte more than `xor al, al`.
+                    // byte more than `xor al, al`. A size of whole words at
+                    // word alignment is words (DEVIATE SD442: the pin calls
+                    // `memset` there, as for a size not known at compile time).
                     (None, Some(bytes))
-                        if strings_exist && !opt_size && !self.runtime_has("memset") && bytes % 4 == 0 =>
+                        if strings_exist
+                            && !opt_size
+                            && !self.runtime_has("memset")
+                            && (bytes % 4 == 0 || (bytes % 2 == 0 && alignment >= 2)) =>
                     {
-                        self.rep_stos(root, dst, other, bytes, 4)?
+                        self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
@@ -1294,10 +1292,10 @@ impl Builder<'_> {
     /// the size is known to be a whole multiple of (`n << 1` bytes of zero are
     /// `n` words), as `rep_stos` takes it from a constant size.
     ///
-    /// DEVIATE: the pin calls `memset` for a size not known at compile time;
-    /// m16 has no libc `memset`, so this was already `rep stosb` here and only
-    /// the unit is new. Every m16 profile has 32-bit operands (the lowest is
-    /// the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
+    /// DEVIATE SD442: the pin calls `memset` for a size not known at compile
+    /// time; m16 has no libc `memset`, so this was already `rep stosb` here and
+    /// only the unit is new. Every m16 profile has 32-bit operands (the lowest
+    /// is the 386; llrm-cc rejects `-march=i286`), so a dword unit needs no
     /// gate. Like every string operation in this file it relies on DF being
     /// clear on entry (the `cld` convention). Exit: a runtime `memset` on
     /// m16 lands and this lowers to the call; this unit choice is then
@@ -1528,7 +1526,11 @@ impl Builder<'_> {
         // block are `movsw` and `movsb` glued after the move, not a load and a
         // store from addresses made again (the pin's tail): 1 byte each. The
         // old selector's tail. Owner w12. Exit: a cost hook on the target.
-        if self.has_opt_size() && self.string_instructions().is_some() {
+        // Far pointers take it at every level: the segment registers are set
+        // once for the move and the tail, where the pin's tail would
+        // make the far addresses again (a 14-byte far copy: `rep movsd`
+        // and `movsw`, not 14 `movsb`; w2).
+        if (self.has_opt_size() || self.is_far(dst) || self.is_far(src)) && self.string_instructions().is_some() {
             let mut last = rep;
             let mut rest = left;
             for width in [2u64, 1] {

@@ -7,6 +7,7 @@ description = "llrm's Mach-O relocatable object writer, for x86-64"
 
 [dependencies]
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 
 [dev-dependencies]
 llrm-arm64 = { workspace = true }

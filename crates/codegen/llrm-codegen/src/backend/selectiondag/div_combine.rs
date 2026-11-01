@@ -28,6 +28,18 @@ use super::div_const::{signed_magic, unsigned_magic};
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
 
+/// One unit's prices for the divide-or-sequence choice (clocks or bytes).
+struct DivSet {
+    prefix: i64,
+    add: i64,
+    shift: i64,
+    extend: i64,
+    multiply: i64,
+    multiply_long: i64,
+    divide: i64,
+    divide_long: i64,
+}
+
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `isOperationLegalOrCustom(op, vt, IsAfterLegalization)`, and the type
     /// legal; false without a table.
@@ -138,6 +150,95 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.dag.config().int_div_cheap && vt != EVT::I8
     }
 
+    /// `isIntDivCheap(VT)` priced per divisor: whether the target's
+    /// `div`/`idiv` of a `vt` value costs fewer clocks than `BuildSDIV`/
+    /// `BuildUDIV`'s multiply-high sequence for the constant `n1` (and, for a
+    /// remainder, the multiply and subtract that follow it). The sequence's
+    /// parts are counted from the same magic numbers the build uses, each
+    /// priced as the sheet prices it, with the operand-size prefix where the
+    /// width is not the target's own. O(1) per node: the magic numbers take
+    /// O(bits). DEVIATE SD445: the pin's hook is `minsize` alone. The target's
+    /// `divide_margin` keeps the sequence where the prices differ by less.
+    fn hardware_divide_wins(
+        &self,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+        signed: bool,
+        rem: bool,
+    ) -> bool {
+        let Some(p) = self.dag.config().div_prices.clone() else { return false };
+        let bits = vt.size_in_bits();
+        let width = i64::from(bits / 8);
+        // A byte divide has no selected form, and the double word of a pair is
+        // a call.
+        if !(2..=4).contains(&width) || bits % 8 != 0 {
+            return false;
+        }
+        let Some(d) = self.dag.constant(n1).map(|c| c & super::fold::mask(bits)) else { return false };
+        if d <= 1 || signed && d == super::fold::mask(bits) {
+            return false;
+        }
+        let known = super::known_bits::known_bits(self.dag, n0);
+        let zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
+        let clocks = Self::sequence_price(
+            &DivSet {
+                prefix: p.prefix,
+                add: p.add,
+                shift: p.shift,
+                extend: p.extend,
+                multiply: p.multiply,
+                multiply_long: p.multiply_long,
+                divide: p.divide,
+                divide_long: p.divide_long,
+            },
+            p.operand,
+            p.product.as_ref().map(|price| (price.0)(d as i64)),
+            (bits, d, signed, rem, zeros),
+        );
+        clocks.0 + clocks.0 * p.margin / 100 < clocks.1
+    }
+
+    /// The divide's price and the multiply-high sequence's, in `set`'s unit:
+    /// `(hardware, sequence)`. `immediate` prices the `imul` by the divisor a
+    /// remainder subtracts (`None`: the multiply or a shift-add chain, the
+    /// cheaper).
+    fn sequence_price(
+        set: &DivSet,
+        operand: i64,
+        immediate: Option<i64>,
+        (bits, d, signed, rem, zeros): (u32, u128, bool, bool, u32),
+    ) -> (i64, i64) {
+        let width = i64::from(bits / 8);
+        let sized = |price: i64| price + if width != operand { set.prefix } else { 0 };
+        let wide = |price: i64| price + if 4 != operand { set.prefix } else { 0 };
+        let hardware =
+            sized(if width == 4 { set.divide_long } else { set.divide }) + if signed { set.extend } else { set.add };
+        // A multiply-high of a narrower value is the widened product, its high
+        // half taken.
+        let high = wide(set.multiply_long) + if width < 4 { set.extend + set.shift } else { 0 };
+        let (add, shift) = (sized(set.add), sized(set.shift));
+        let magic = if signed {
+            let found = signed_magic(d, bits);
+            let top = 1u128 << (bits - 1);
+            let factor = (d & top != 0) != (found.magic & top != 0);
+            high + if factor { add } else { 0 } + if found.shift != 0 { shift } else { 0 } + shift + add
+        } else {
+            let found = unsigned_magic(d, bits, zeros.min(bits - (128 - d.leading_zeros())), true, false);
+            (if found.pre_shift != 0 { shift } else { 0 })
+                + high
+                + if found.is_add { 2 * add + shift } else { 0 }
+                + if found.post_shift != 0 { shift } else { 0 }
+        };
+        // The remainder is `x - q * d`: the product by a constant, the `imul`
+        // the selector emits for it.
+        let product = immediate.map_or_else(
+            || sized(if width == 4 { set.multiply_long } else { set.multiply }).min(2 * shift + 2 * add),
+            sized,
+        );
+        (hardware, magic + if rem { product + add } else { 0 })
+    }
+
     /// `visitSDIVLike`.
     pub(super) fn visit_sdiv_like(
         &mut self,
@@ -171,7 +272,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(if negative { self.dag.get_negative(quotient, vt) } else { quotient });
             }
         }
-        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) {
+        if self.dag.constant(n1).is_some()
+            && !self.int_div_cheap(vt)
+            && !self.hardware_divide_wins(vt, n0, n1, true, false)
+        {
             return self.build_sdiv(n0, n1, node);
         }
         None
@@ -262,7 +366,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, total]));
             }
         }
-        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) {
+        if self.dag.constant(n1).is_some()
+            && !self.int_div_cheap(vt)
+            && !self.hardware_divide_wins(vt, n0, n1, false, false)
+        {
             return self.build_udiv(n0, n1, node);
         }
         None
@@ -336,7 +443,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         // "Checking cheapness here makes sense since the simplification
         // results in fatter code."
-        if self.int_div_cheap(vt) {
+        if self.int_div_cheap(vt) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) }?;

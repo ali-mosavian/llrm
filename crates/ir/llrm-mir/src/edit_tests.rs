@@ -1110,3 +1110,34 @@ fn rewriting_a_phi_after_its_first_arms_relinks_only_what_changed() {
     assert!(links <= 4, "{links} operands relinked for a rewrite that changed the end");
     assert!(f.check_uses().is_empty());
 }
+
+const ASSIGNED: &str = "define i16 @f(i16 %a) {\nentry:\n  %p = alloca i16, !DIAssignID !1\n  %x = add i16 %a, 1\n  store i16 %x, ptr %p, !DIAssignID !2\n  #dbg_assign(i16 %x, !0, !3, !2, ptr %p, !3, !4)\n  ret i16 %x\n}\n\n!0 = !{!\"v\"}\n!1 = distinct !{}\n!2 = distinct !{}\n!3 = !{}\n!4 = !{}\n";
+
+/// An assignment record follows its value and address like any other record:
+/// replaced where another value stands for them, and gone (not the whole
+/// record, whose id ties it to the store) once they are erased. `#dbg_assign`
+/// was refused by the parser, so no pass met one.
+#[test]
+fn an_assignment_record_follows_its_value_and_address_and_keeps_its_id() {
+    let mut parsed = module(ASSIGNED);
+    let f = function(&mut parsed);
+    let (x, value) = named(f, "x");
+    let (_, pointer) = named(f, "p");
+    let a = f.parameters()[0];
+    let assign = |f: &Function| match f
+        .debug_records()
+        .iter()
+        .map(|one| one.what)
+        .find(|one| matches!(one, crate::DebugWhat::Assign { .. }))
+    {
+        Some(crate::DebugWhat::Assign { value, address, id, .. }) => (value, address, id),
+        other => panic!("{other:?}"),
+    };
+    let (before, _, id) = (assign(f).0, (), assign(f).2);
+    assert_eq!(before, Some(Operand::Value(value)));
+    f.replace_value(value, Operand::Value(a));
+    assert_eq!(assign(f).0, Some(Operand::Value(a)));
+    assert_eq!(assign(f).1, Some(Operand::Value(pointer)));
+    assert_eq!(assign(f).2, id);
+    let _ = x;
+}

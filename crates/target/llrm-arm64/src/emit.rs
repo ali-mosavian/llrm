@@ -3,19 +3,20 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
-use llrm_object::assembler::{Fragment, layout as place};
+use llrm_object::assembler::{AsmBackend, Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
 use llrm_support::hash::HashMap;
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
 use crate::machine::Platform;
-use crate::mc::encode::{FixupKind, encode, resolve};
-use crate::mc::inst::{Inst, Target};
+use crate::mc::backend::Arm64Backend;
+use crate::mc::encode::{FixupKind, encode};
+use crate::mc::inst::Target;
 
 /// The words a block's instructions encode to (a directive has none).
-fn words(block: &Lowered) -> usize {
-    block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))).count()
+pub(crate) fn words(block: &Lowered) -> usize {
+    block.insts.iter().filter(|inst| !inst.is_directive()).count()
 }
 
 /// One lowered function.
@@ -23,6 +24,9 @@ pub struct Function {
     pub symbol: String,
     pub binding: Binding,
     pub blocks: Vec<Lowered>,
+    /// The source variables in the frame: each variable's metadata node and its
+    /// distance below the canonical frame address.
+    pub variables: Vec<(llrm_mir::MetadataId, i64)>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -190,7 +194,7 @@ pub fn object(
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
         let mut cursor = *function_offset;
         for block in &function.blocks {
-            for inst in block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))) {
+            for inst in block.insts.iter().filter(|inst| !inst.is_directive()) {
                 let encoded = encode(inst).map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
                 let mut word = encoded.word;
                 if let Some(fixup) = encoded.fixup {
@@ -199,8 +203,17 @@ pub fn object(
                             let Some(&target) = labels.get(label.as_str()) else {
                                 return Err(format!("{}: no block {label}", function.symbol));
                             };
-                            word = resolve(word, fixup.kind, target as i64 - cursor as i64)
-                                .map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
+                            let kind = fixup
+                                .kind
+                                .label_kind()
+                                .ok_or_else(
+                                    || format!("{}: {inst}: {:?} does not name a label", function.symbol, fixup.kind),
+                                )?;
+                            let mut bytes = word.to_le_bytes();
+                            Arm64Backend
+                                .apply_fixup(&mut bytes, 0, kind, true, target as i64 - cursor as i64, &function.symbol)
+                                .map_err(|error| format!("{}: {inst}: {}", function.symbol, error.0))?;
+                            word = u32::from_le_bytes(bytes);
                         }
                         Target::Symbol { name, addend } => {
                             let Some(fix) = fixup.kind.relocation() else {
@@ -226,6 +239,7 @@ pub fn object(
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
             rows: crate::cfi::rows(&function.blocks),
+            cfi: Vec::new(),
             seh: Vec::new(),
         })
         .collect();
@@ -253,6 +267,5 @@ pub fn object(
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames,
-        debug: None,
     })
 }

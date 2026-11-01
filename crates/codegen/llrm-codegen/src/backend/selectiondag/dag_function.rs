@@ -717,6 +717,43 @@ impl super::emit::ConstantCells for PoolCells<'_> {
     }
 }
 
+/// The prices `isIntDivCheap` weighs per divisor (`DivPrices`): none for a
+/// target that does not price a divide above a multiply, which then keeps the
+/// pin's rule.
+fn div_prices(
+    cpu: &crate::backend::cpu::Profile,
+    bitness: u32,
+) -> Option<super::dag::DivPrices> {
+    let costs = cpu.target().costs();
+    if costs.divide <= costs.multiply {
+        return None;
+    }
+    let owned = cpu.clone();
+    let multiply = costs.multiply;
+    // What `combine_mul` emits for the constant: the `imul` by its immediate
+    // or a chain, whichever costs fewer clocks (`Machine::multiply_by`).
+    let product = move |factor: i64| {
+        let imul = crate::backend::arithmetic::immediate_multiply(&owned, factor).unwrap_or(multiply);
+        match crate::backend::arithmetic::cheapest_chain(factor, &owned) {
+            Ok(Some((_, clocks))) => clocks.min(imul),
+            _ => imul,
+        }
+    };
+    Some(super::dag::DivPrices {
+        operand: i64::from(bitness.min(32) / 8),
+        prefix: costs.prefix,
+        add: costs.add,
+        shift: costs.shift,
+        extend: costs.extend,
+        multiply: costs.multiply,
+        multiply_long: costs.multiply_long,
+        divide: costs.divide,
+        divide_long: costs.divide_long,
+        margin: costs.divide_margin,
+        product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
+    })
+}
+
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
 fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
@@ -811,6 +848,7 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_div_prices(div_prices(&cpu, bitness))
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -918,6 +956,10 @@ fn selected_in(
         opt_for_size: cpu.size,
         min_size: llrm_mir::memory::has(&function.attrs, "minsize"),
         has_frame_pointer: true,
+        multiply_early_out: crate::backend::timing::signed_multiply(cpu, 4, false)
+            .ok()
+            .flatten()
+            .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
     });
     let selector = Selector::new(if m16 {
@@ -1015,6 +1057,26 @@ fn selected_in(
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
     let sse2 = arch.scalar_sse();
+    // SD446: a target that trades bytes for clocks at speed prices a constant
+    // multiply by its block's frequency (the IR one: no machine block exists
+    // before selection).
+    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks {
+        0
+    } else {
+        cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    };
+    let frequencies = (mul_rate > 0).then(|| {
+        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+            llrm_analysis::bpi::Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
+            function,
+        );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, &bpi)
+    });
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
@@ -1028,6 +1090,16 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                profile: frequencies
+                    .as_ref()
+                    .map(
+                        |frequencies| super::x86_lowering::MulPricing {
+                            cpu,
+                            arch,
+                            freq: frequencies.relative_to_entry(parent),
+                            milliclocks_per_byte: mul_rate,
+                        },
+                    ),
             },
             &selector,
             &mut hooks,
@@ -1055,6 +1127,25 @@ fn selected_in(
                 let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
                 arrival.defines.push(value);
                 arrival.delivers.push((Held { value, width }, view));
+            }
+            // A sibling call through an argument that arrives in a register
+            // the epilogue leaves alone jumps through that register, as the
+            // pin's does (`jmp *rdi`), not through a copy of it.
+            let arrives: HashMap<u32, llrm_lir::registers::RegId> =
+                arrival.delivers.iter().map(|(held, view)| (held.value, *view)).collect();
+            for block in &mut done.blocks {
+                for insn in &mut block.insns {
+                    let jump =
+                        insn.what.as_ref().is_some_and(|what| what.indirect && what.name.as_deref() == Some("jmp"));
+                    let Some(&(callee, _)) = insn.requires.last().filter(|_| jump) else { continue };
+                    let Some(&view) = arrives.get(&callee.value) else { continue };
+                    let others = &insn.requires[..insn.requires.len() - 1];
+                    if caller_saved.contains(&regs.root(view))
+                        && others.iter().all(|(_, taken)| regs.root(*taken) != regs.root(view))
+                    {
+                        std::sync::Arc::make_mut(insn).requires.last_mut().expect("the callee").1 = view;
+                    }
+                }
             }
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }

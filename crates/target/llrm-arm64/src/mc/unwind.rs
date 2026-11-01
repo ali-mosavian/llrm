@@ -2,8 +2,8 @@
 //! the AArch64 DWARF register numbers: `x0`..`x30` are 0..30, `sp` 31 and
 //! `v0`..`v31` 64..95).
 
-use llrm_dwarf::eh_frame::EhTarget;
-use llrm_object::debug::FrameRow;
+use llrm_debug::FrameRow;
+use llrm_dwarf::eh_frame::{EhTarget, Pointer};
 
 /// The DWARF number of the frame pointer, `x29`.
 pub const FP: u16 = 29;
@@ -78,6 +78,7 @@ pub fn compact_encoding(
 /// address is in `x30`.
 pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
+        pointer: Pointer::Pcrel4,
         address: 8,
         return_column: u64::from(LR),
         return_saved: false,

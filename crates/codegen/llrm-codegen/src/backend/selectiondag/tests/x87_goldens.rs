@@ -46,6 +46,7 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: AddrMode::Flat32,
         });
         let mut info = FunctionLoweringInfo::new(function);
@@ -65,7 +66,7 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
             if let Err(why) = legalized(
                 dag,
                 &tli,
-                &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+                &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
                 &machine,
             )
             .and_then(|()| do_instruction_selection(dag, &selector, &mut hooks))
@@ -106,8 +107,9 @@ fn pin(text: &str) -> BTreeMap<String, Counts> {
 
 /// The functions that differ from the pin today, and whose stage it is. The
 /// test requires this list to be exact, so a fixed function must come off it.
-const DIFFERS: [(&str, &str); 4] = [
+const DIFFERS: [(&str, &str); 5] = [
     ("compare", "sdag-b: SetCC on f64 has no lowering (x87 UCOM_FPr + FNSTSW)"),
+    ("from_int", "SD332 (DEVIATE): a single-use i16/i32 load folds into FILD; the pin does it only for i64"),
     ("narrow", "sdag-b: FP_ROUND through a stack slot (truncating store, reload)"),
     ("to_int", "sdag-d: the custom inserter for FP_TO_INT32_IN_MEM (control word) is not run"),
     ("widen", "sdag-b: fp_extend of a load is not an extending load"),

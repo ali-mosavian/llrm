@@ -154,7 +154,7 @@ impl Inst {
             | Inst::Dmb { .. }
             | Inst::Nop => {}
             Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => f(G(rt), Role::Use),
-            Inst::Cfi(_) => {}
+            Inst::Cfi(_) | Inst::Mark(_) => {}
             Inst::BranchReg { rn, .. } | Inst::Ret { rn } => f(G(rn), Role::Use),
             Inst::Load { mem, addr, .. } => {
                 memory(mem, Role::Def, f);

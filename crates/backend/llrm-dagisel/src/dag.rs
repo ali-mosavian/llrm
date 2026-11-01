@@ -256,6 +256,14 @@ pub trait Dag {
         &self,
         value: SDValue,
     ) -> Option<FpClass>;
+    /// The bit pattern of a `ConstantFPSDNode`
+    /// (`getValueAPF().bitcastToAPInt()`); `None` for any other node.
+    fn fp_bits(
+        &self,
+        _value: SDValue,
+    ) -> Option<u128> {
+        None
+    }
     /// `SDNodeFlags::hasDisjoint`.
     fn has_disjoint_flag(
         &self,
@@ -419,6 +427,16 @@ pub trait Hooks<D: Dag> {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool;
+    /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the
+    /// 8-bit code of an `fmov` immediate, `None` if there is none. A target
+    /// without the form never has one.
+    fn fp_imm_code(
+        &self,
+        _bits: u128,
+        _double: bool,
+    ) -> Option<u8> {
+        None
+    }
     /// The generated `RunSDNodeXForm`.
     fn run_xform(
         &mut self,

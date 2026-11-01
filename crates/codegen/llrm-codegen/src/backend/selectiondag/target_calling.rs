@@ -7,8 +7,11 @@
 //! [`Out`]s and [`In`]s, and joins the parts the target returns
 //! (`getCopyFromParts`). Where each part goes is the target's.
 //!
-//! DEVIATE: integers and pointers only; no byval, sret, tail calls, floats or
-//! aggregates. Reason: the targets using the hook need none yet. Exit: with the
+//! A call in tail position is the target's `lower_tail_call` (`TC_RETURN`), or
+//! an ordinary call where it answers none.
+//!
+//! DEVIATE: integers and pointers only; no byval, sret, floats or aggregates.
+//! Reason: the targets using the hook need none yet. Exit: with the
 //! first target that does.
 
 use std::fmt::Debug;
@@ -81,7 +84,33 @@ pub enum Site {
     Return,
 }
 
+/// A function the target lowers as an `INTRINSIC_*` node of its own
+/// (`llvm.wasm.throw`): the number the target gives it, and whether it has
+/// side effects or reads memory (a chain, as `visitTargetIntrinsic`'s
+/// `HasChain`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetIntrinsic {
+    pub id: u32,
+    pub chained: bool,
+}
+
 pub trait TargetCalling: Debug + Sync {
+    /// The intrinsic this name is for the target; none: an ordinary call.
+    fn intrinsic(
+        &self,
+        _name: &str,
+    ) -> Option<TargetIntrinsic> {
+        None
+    }
+
+    /// Whether a `byval` argument is passed as the address of a copy the
+    /// caller makes in its own frame, the callee reading through the pointer.
+    /// A target that puts the bytes in the argument area says no, and a call
+    /// with one is refused.
+    fn byval_by_reference(&self) -> bool {
+        false
+    }
+
     /// Whether the target places these parts (`outs` the values sent, `ins` the
     /// values received); the builder refuses with the reason when it does not.
     fn accepts(
@@ -114,6 +143,20 @@ pub trait TargetCalling: Debug + Sync {
         outs: &[Out],
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>);
+
+    /// `LowerCall` of a call in tail position (`IsTailCall`): the `TC_RETURN`
+    /// node that ends the block, or none where the target does not take the
+    /// call as a tail call (`isEligibleForTailCallOptimization`), which is
+    /// then an ordinary call.
+    fn lower_tail_call(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _callee: SDValue,
+        _outs: &[Out],
+    ) -> Option<SDValue> {
+        None
+    }
 
     /// `LowerCall` of a target that makes frame objects of its own
     /// (`MachineFrameInfo::CreateStackObject`: size, alignment, the frame
