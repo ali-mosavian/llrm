@@ -287,9 +287,9 @@ pub(super) fn clocks(
             by_mode(&format!("{}I", name), mode(destination)?)
         }
         (
-            "add" | "sub" | "and" | "or" | "eor" | "cmp" | "tst" | "adda" | "suba" | "clr" | "neg" | "negx" | "not"
-            | "nbcd" | "tas" | "pea" | "lea" | "addi" | "subi" | "andi" | "ori" | "eori" | "cmpi" | "addq" | "subq"
-            | "chk" | "scc" | "jmp" | "jsr",
+            "add" | "sub" | "and" | "or" | "eor" | "cmp" | "cmp2" | "chk2" | "tst" | "adda" | "suba" | "clr" | "neg"
+            | "negx" | "not" | "nbcd" | "tas" | "pea" | "lea" | "addi" | "subi" | "andi" | "ori" | "eori" | "cmpi"
+            | "addq" | "subq" | "chk" | "scc" | "jmp" | "jsr",
             _,
         ) => {
             let operand = match operands {
@@ -331,6 +331,25 @@ pub(super) fn clocks(
             miscellaneous(&name, if mode(first)? == Mode::Dn { "Dy,Dx" } else { "-(Ay),-(Ax)" })
         }
         ("cmpm", _) => miscellaneous("CMPM", ""),
+        ("pack" | "unpk", [first, ..]) => miscellaneous(&name, if mode(first)? == Mode::Dn { "Dx" } else { "-(Ay)" }),
+        ("move16", [source, destination]) => {
+            let label = |mode| match mode {
+                Mode::Ind => Some("(An)"),
+                Mode::Post => Some("(An)+"),
+                Mode::AbsL => Some("xxx.L"),
+                _ => None,
+            };
+            let pair = match (mode(source)?, mode(destination)?) {
+                (Mode::Post, Mode::Post) => "(Ax)+,(Ay)+".to_owned(),
+                (source, destination) => format!("{},{}", label(source)?, label(destination)?),
+            };
+            miscellaneous("MOVE16", &pair)
+        }
+        ("moves", [first, second]) => match (first, second) {
+            (_, Operand::Mode(Mode::An, _)) => by_mode("MOVES <ea>,An", mode(first)?),
+            (_, Operand::Mode(Mode::Dn, _)) => by_mode("MOVES <ea>,Dn", mode(first)?),
+            _ => by_mode("MOVES Rn,<ea>", mode(second)?),
+        },
         ("ext", _) => miscellaneous("EXT", if long { "Long" } else { "Word" }),
         ("extb", _) => miscellaneous("EXTB", ""),
         ("exg", [first, second]) => miscellaneous(

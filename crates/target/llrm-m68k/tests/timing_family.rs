@@ -407,3 +407,16 @@ fn m68060_unlisted_is_an_error() {
     assert!(cost_on(Cpu::M68060, "fadd.x %fp0, %fp1", 4, true).is_err());
     assert!(cost_on(Cpu::M68060, "add.l (%a0)+, %d0", 2, true).is_ok());
 }
+
+/// MC68040UM 10.5 (pp. 10-11, 10-12): PACK Dx 1, 3 and -(Ay) 3, 2L + 3; UNPK
+/// -(Ay) 3, 2L + 4; MOVE16 (Ax)+,(Ay)+ 6, 1L + 7 and xxx.L,(An) 4, 7; 10.6 (p.
+/// 10-24) MOVES Rn,(An); (p. 10-18) CMP2 (An).
+#[test]
+fn m68040_pack_move16_moves_and_cmp2() {
+    assert_eq!(m68040("pack %d0, %d1, #0"), 3);
+    assert_eq!(m68040("unpk -(%a0), -(%a1), #0"), 4);
+    assert_eq!(m68040("move16 (%a0)+, (%a1)+"), 7);
+    assert_eq!(m68040("move16 0x1000:l, (%a0)"), 7);
+    assert!(cost_on(Cpu::M68040, "moves.l %d0, (%a0)", 4, true).is_ok());
+    assert!(cost_on(Cpu::M68040, "cmp2.l (%a0), %d0", 4, true).is_ok());
+}
