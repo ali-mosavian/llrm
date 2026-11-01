@@ -536,7 +536,12 @@ pub fn holds_after(
         return false;
     }
     // An SSE register has no lanes, so the check above sees none of its writes.
-    if what.dests.iter().any(|dest| matches!(dest, Loc::Reg(one) if ir::root(one.register) == ir::root(held.register))) {
+    if what.dests.iter().any(|dest| {
+        matches!(
+            dest,
+            Loc::Reg(one) if ir::root(one.register) == ir::root(held.register)
+        )
+    }) {
         return false;
     }
     // DEVIATE (pin: a spill slot is a FixedStack operand, alias-free against
