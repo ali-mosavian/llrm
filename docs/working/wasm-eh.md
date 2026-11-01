@@ -63,7 +63,11 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
 - Open row: `llvm.lrint.i64.*` calls `lrint` with an i64 result (the pin's choice, `RTLIB::getLRINT` ignores the result
   type), where C's `lrint` returns a 32-bit `long` on wasm32; a module with both widths imports one name twice.
   `llvm.llrint.*` is not lowered at all (the call keeps the intrinsic's name). Exit: select `llrint` by result width.
-- palette_using_pds71 does not build (`Target(24586)` legalize). None touches EH.
+- Open row, palette_using_pds71 does not build. Minimal repro: `OUT &H3C8, 7` (or `INP(&H3C9)`) alone gives
+  `Legalize(Unsupported { op: Target(24586) })`, the x86 port-I/O node (`LLRM_PORT`). arm64 builds the same program into
+  an undefined `llrm.ia16.out.i8`, which cannot link. It is the only program of `tests/run/qb` with `OUT` or `INP`.
+  Exit: a target without port instructions lowers the port intrinsics to `qb_port_in`/`qb_port_out`, and the host
+  runtime (`dev/host/video.c`, which holds the DAC) answers ports 3C7 to 3C9.
 
 The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).
 
