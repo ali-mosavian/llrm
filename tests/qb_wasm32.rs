@@ -62,6 +62,7 @@ fn run_raw(
         .args(["--limit-ms", "30000", "--out"])
         .arg(dir.join("frames"))
         .args(flags)
+        .current_dir(dir)
         .output()
         .expect("node runs")
 }
@@ -177,6 +178,36 @@ fn read_fills_a_fixed_length_string_padded_and_cut() {
     );
     let (text, code) = run(&dir, "fixed", &[]);
     assert_eq!(text.trim_end(), "[ab   ][xy]");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// OPEN, PRINT#, LINE INPUT#, NAME and KILL: the OS layer denied every file
+/// (and left `llrm_os_open` and fifteen more unresolved), so grep, jpeg, stft,
+/// fieldbuf and open_modes could not instantiate.
+#[test]
+fn files_are_written_read_renamed_and_killed() {
+    let dir = built(
+        "files",
+        "OPEN \"t.dat\" FOR OUTPUT AS #1\nPRINT #1, \"hello\"; 42\nCLOSE #1\n\
+         NAME \"t.dat\" AS \"u.dat\"\nOPEN \"u.dat\" FOR INPUT AS #1\nLINE INPUT #1, a$\nCLOSE #1\n\
+         PRINT a$\nOPEN \"v.dat\" FOR OUTPUT AS #2\nPRINT #2, 1\nCLOSE #2\nKILL \"u.dat\"\nEND\n",
+    );
+    let (text, code) = run(&dir, "files", &[]);
+    assert_eq!(text.trim_end(), "hello 42");
+    assert_eq!(code, Some(0));
+    assert!(!dir.join("u.dat").exists() && !dir.join("t.dat").exists(), "KILL and NAME left files");
+    assert_eq!(std::fs::read_to_string(dir.join("v.dat")).unwrap(), " 1 \r\n");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// COMMAND$ is the arguments after the program's name, a blank apart, upper
+/// case; the harness gives them with `--arg`.
+#[test]
+fn the_command_line_is_the_harness_arguments() {
+    let dir = built("cmdline", "PRINT COMMAND$\nEND\n");
+    let (text, code) = run(&dir, "cmdline", &["--arg", "ab", "--arg", "cd"]);
+    assert_eq!(text.trim_end(), "AB CD");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
