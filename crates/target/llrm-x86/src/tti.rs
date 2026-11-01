@@ -89,6 +89,9 @@ pub struct RealMode {
     /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
     /// none: the pin's.
     pub recursive_inlining: Option<(u32, i64)>,
+    /// DEVIATE REC-1: the ceilings of the priced copies of a function in
+    /// itself (`Tti::priced_self_inlining`); none: `recursive_inlining`.
+    pub priced_self_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -552,6 +555,10 @@ impl Tti for X86 {
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.recursive_inlining
+    }
+
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.priced_self_inlining
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
