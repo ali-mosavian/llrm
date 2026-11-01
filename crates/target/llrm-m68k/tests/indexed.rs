@@ -3,8 +3,6 @@
 //! bits). The pin sets no indexed action, so each loop here was a load or store
 //! plus a separate pointer update, 3 instructions through a data register.
 
-use std::path::PathBuf;
-
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::object::{executable, start, write_executable};
@@ -12,10 +10,6 @@ use llrm_m68k::object::{executable, start, write_executable};
 mod support;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
-
-fn qemu() -> Option<PathBuf> {
-    ["/usr/bin/qemu-m68k", "/usr/local/bin/qemu-m68k"].iter().map(PathBuf::from).find(|path| path.exists())
-}
 
 fn module(ir: &str) -> llrm_mir::module::Module {
     llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses")
@@ -27,16 +21,15 @@ fn status(
     args: &[i64],
     options: Options,
 ) -> Option<i32> {
-    let qemu = qemu().or_else(|| {
-        eprintln!("qemu-m68k is not installed: not run");
-        None
-    })?;
+    let qemu = support::qemu()?;
     let mut all = start("f", args);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, options).expect("compiles"));
     let path = support::unique_path("indexed");
     write_executable(&path, &executable(&all).unwrap()).unwrap();
     let code = support::run(&qemu, &[], &path);
     std::fs::remove_file(&path).ok();
+    // a run that ends on a signal is a failure, not a skipped check
+    assert!(code.is_some(), "f({args:?}) ended on a signal");
     code
 }
 

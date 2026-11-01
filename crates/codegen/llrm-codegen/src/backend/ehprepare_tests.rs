@@ -1,6 +1,6 @@
 use llrm_mir::Module;
 
-use super::prepared;
+use super::{prepared, prepared_for};
 
 const DECLARED: &str = r#"
 declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
@@ -62,6 +62,41 @@ fn the_handler_registered_is_the_landing_and_err_is_what_it_kept() {
     assert!(!text.contains("void @llrm.qb.onerror(i1 true)"), "{text}");
     assert!(!text.contains("extractvalue"), "{text}");
     assert!(text.contains("load i16, ptr @$QB$LANDED"), "{text}");
+}
+
+/// The registration replaces `onerror`, which cannot throw. Declared without
+/// `nounwind`, a backend that delegates a throwing call out of a `try` wrapped
+/// it in a `try` / `delegate` of its own.
+#[test]
+fn the_registrations_are_declared_nounwind_like_the_calls_they_replace() {
+    let mut module = parsed(HANDLED);
+    prepared(&mut module, &llrm_x86_m16::layout()).expect("prepared");
+    let text = printed(&module);
+    let declared =
+        text.lines().find(|line| line.starts_with("declare") && line.contains("@llrm.qb.B$OEGA")).expect("declared");
+    assert!(declared.contains("nounwind"), "{declared}");
+}
+
+/// With the host throwing to the pad nothing runs the landing function, so
+/// `$QB$LANDED` held 0 and the handler saw ERR 0; the pad asks the runtime.
+#[test]
+fn a_pad_the_host_throws_to_asks_the_runtime_for_err() {
+    let mut module = parsed(HANDLED);
+    prepared_for(&mut module, &llrm_x86_m16::layout(), true).expect("prepared");
+    let errors = llrm_mir::verify::verify(&module);
+    assert!(errors.is_empty(), "{errors:?}");
+    let text = printed(&module);
+    let pad = &text[text.find("landing:").expect("the pad")..];
+    let asked = pad.find("i16 @llrm.qb.B$FERR()").unwrap_or_else(|| panic!("ERR asked in the pad: {pad}"));
+    let kept = pad.find("store i16 %err1").expect("ERR kept");
+    let read = pad.find("load i16, ptr @$QB$LANDED").expect("ERR read");
+    assert!(asked < kept && kept < read, "{pad}");
+    let mut module = parsed(HANDLED);
+    prepared(&mut module, &llrm_x86_m16::layout()).expect("prepared");
+    let text = printed(&module);
+    let pad = &text[text.find("landing:").expect("the pad")..];
+    let pad = &pad[..pad.find("\n}").expect("the end")];
+    assert!(!pad.contains("B$FERR"), "the runtime lands: it kept ERR\n{pad}");
 }
 
 /// The pad is entered with every register the runtime's: `%x`, made before
