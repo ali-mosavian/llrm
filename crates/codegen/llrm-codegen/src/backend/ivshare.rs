@@ -80,7 +80,6 @@ struct Index {
     doubler: Option<Arc<Insn>>,
     start: u32,
     step: Arc<Insn>,
-    block: i64,
 }
 
 fn operands(one: &Insn) -> impl Iterator<Item = &Loc> {
@@ -180,10 +179,10 @@ pub fn shared(
                         .insns
                         .iter()
                         .find(|one| one.defines == [step_value] && steps(one, phi.result))
-                        .map(|one| (Arc::clone(one), *at)),
+                        .map(|one| Arc::clone(one)),
                 );
-            if let Some((step, block)) = step {
-                index = Some(Index { phi: phi.result, key: phi.result, factor: 1, doubler: None, start, step, block });
+            if let Some(step) = step {
+                index = Some(Index { phi: phi.result, key: phi.result, factor: 1, doubler: None, start, step });
                 break;
             }
         }
