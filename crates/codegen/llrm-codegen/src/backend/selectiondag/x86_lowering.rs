@@ -1803,12 +1803,11 @@ fn lower_vastart(
         };
         return Some(dag.get_store(chain, first, list, info));
     }
-    let (save, gp_offset) = dag.var_args_save?;
+    let (save, gp_offset, fp_offset) = dag.var_args_save?;
     let mut stores = Vec::new();
     let fields: [(u128, EVT, SDValue); 4] = [
         (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
-        // 6 * 8: the vector registers' part of the area starts there
-        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (4, EVT::I32, dag.get_constant(u128::from(fp_offset), EVT::I32)),
         (8, pointer, dag.get_frame_index(pointer, index)),
         (16, pointer, dag.get_frame_index(pointer, save)),
     ];
