@@ -1193,3 +1193,42 @@ define void @f(i64 %n) {
     assert_eq!((reads.len(), writes.len()), (2, 2), "the save, the alloca's read; the alloca's write, the restore");
     assert!(reads.iter().all(|read| *read < writes[0]), "both reads precede the first write: {reads:?} {writes:?}");
 }
+
+/// A load of seven bytes (`i56`, a packed bit-field struct) read only the
+/// first four: the memory type split into a power of two and a rest that was
+/// no type, so it stayed one load. gcc.c-torture pr57344-2 read `s[1].b` from
+/// bits the load never fetched and aborted.
+#[test]
+fn a_seven_byte_load_reads_all_seven_bytes() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+@s = global [16 x i8] zeroinitializer
+define i64 @f() {
+  %1 = load i56, ptr getelementptr inbounds nuw (i8, ptr @s, i64 8), align 8
+  %2 = zext i56 %1 to i64
+  ret i64 %2
+}
+define void @g(i56 %v) {
+  store i56 %v, ptr getelementptr inbounds nuw (i8, ptr @s, i64 8), align 8
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let bytes = |name: &str, load: bool| -> u32 {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+        let insns = done.body.insns();
+        insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter_map(|w| match (load, &w.dests[..], &w.sources[..]) {
+                (true, [_], [Loc::Mem(cell)]) | (false, [Loc::Mem(cell)], [_]) => Some(cell.width),
+                _ => None,
+            })
+            .sum()
+    };
+    assert_eq!(bytes("f", true), 7, "loaded");
+    assert_eq!(bytes("g", false), 7, "stored");
+}
