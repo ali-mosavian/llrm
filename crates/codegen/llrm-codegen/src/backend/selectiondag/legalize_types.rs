@@ -698,10 +698,10 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
-            ISD::LRint => {
+            ISD::LRint | ISD::LLRint => {
                 // `PromoteIntRes_XRINT`: the same rounding to the wider type.
                 let input = self.dag.operand(value, 0);
-                self.dag.get_node(ISD::LRint, to, &[input])
+                self.dag.get_node(self.dag.opcode(value), to, &[input])
             }
             ISD::SignExtendInReg => {
                 // `PromoteIntRes_SIGN_EXTEND_INREG`: the promoted operand,

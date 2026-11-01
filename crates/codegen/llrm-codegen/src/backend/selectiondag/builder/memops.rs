@@ -131,6 +131,7 @@ impl Builder<'_> {
             | Intrinsic::BitReverse
             | Intrinsic::Abs
             | Intrinsic::LRint
+            | Intrinsic::LLRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
             _ => Err(Refused("intrinsic call")),
         }
