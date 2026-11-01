@@ -563,7 +563,9 @@ pub fn cfg_stackify(f: &mut Function) -> Result<bool, String> {
         }
     }
     if state.f.personality {
-        state.check_unwind_mismatches()?;
+        if state.f.calls_unwind {
+            state.check_unwind_mismatches()?;
+        }
         state.remove_unnecessary_instrs();
     }
     state.rewrite_depths();

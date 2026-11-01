@@ -364,35 +364,29 @@ fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
     }
 }
 
-/// EH stage 0: `--wasm-exceptions` keeps a function's `invoke`s and
-/// `landingpad`s in the text the wasm backend gets (`ehprepare` and the
-/// `setjmp` frame are skipped), and without it the module is as before. The
-/// backend refuses the unwinding by name until its stages land; this test moves
-/// to the programs running then.
+/// ON ERROR lands on wasm32 with exception handling: the runtime throws and the
+/// function's `catch_all` takes it. With the `setjmp` stub the program ended at
+/// the first error with "ON ERROR landed: longjmp is not supported". The pad
+/// branches back into the function (RESUME NEXT, RESUME 0), which a `catch`
+/// cannot do, so the function runs inside a dispatch loop.
 #[test]
-fn wasm_exceptions_keep_the_landing_pads_for_the_backend() {
-    let dir = std::env::temp_dir().join(format!("eh0_wasm32_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let bas = dir.join("eh.bas");
-    std::fs::write(&bas, "ON ERROR GOTO h\nERROR 5\nPRINT \"after\"\nEND\nh:\nPRINT \"err\"; ERR\nRESUME NEXT\n")
-        .unwrap();
-    let compile = |flags: &[&str]| {
-        let text = dir.join("eh.ll");
-        let made = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
-            .arg(&bas)
-            .args(["--wasm32", "-o"])
-            .arg(dir.join("eh.o"))
-            .args(flags)
-            .env("LLRM_WASM32_TEXT", &text)
-            .output()
-            .expect("llrm-qb runs");
-        (made, std::fs::read_to_string(&text).unwrap())
-    };
-    let (made, text) = compile(&[]);
-    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    assert!(text.contains("_setjmp") && !text.contains("landingpad"), "{text}");
-    let (made, text) = compile(&["--wasm-exceptions"]);
-    assert!(text.contains("invoke ") && text.contains("landingpad") && !text.contains("_setjmp"), "{text}");
-    assert!(String::from_utf8_lossy(&made.stderr).contains("exception handling is not translated yet"));
+fn on_error_lands_with_wasm_exceptions() {
+    let source = "ON ERROR GOTO h\nPRINT \"a\"\nERROR 5\nPRINT \"b\"\nERROR 6\nPRINT \"c\"\nEND\n\
+        h:\nPRINT \"err\"; ERR\nRESUME NEXT\n";
+    let dir = built_with("eh_land", source, "--wasm-exceptions");
+    let (text, code) = run(&dir, "eh_land", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["a", "err", "5", "b", "err", "6", "c"], "{text}");
+    assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A module's `catch_all` catches what an import throws, so the host's
+/// endings (`END`, a fatal error) are traps: thrown, `END` inside a function
+/// with a handler landed in the handler and the program went on.
+#[test]
+fn a_host_ending_gets_through_a_catch_all() {
+    need("node");
+    let probe = root().join("runtime/wasm/probe_end.mjs");
+    let out = Command::new("node").arg(&probe).output().expect("node");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "escaped", "{}", String::from_utf8_lossy(&out.stderr));
 }

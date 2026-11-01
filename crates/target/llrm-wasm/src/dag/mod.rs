@@ -86,11 +86,16 @@ pub struct Options {
     /// `RegStackify`: the pin runs it at `-O0`, LLVM 20's `llc -O0` does not.
     pub stackify: bool,
     pub exception_model: ExceptionModel,
+    /// A `call` that is not the last of a block with an unwind edge may throw,
+    /// as in LLVM. DEVIATE W19: off, such a call never throws (QB's mid-end
+    /// makes every call that can raise an `invoke`), so the pin's
+    /// `fixCallUnwindMismatches` has nothing to fix. Exit: that pass.
+    pub calls_unwind: bool,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { stackify: true, exception_model: ExceptionModel::None }
+        Options { stackify: true, exception_model: ExceptionModel::None, calls_unwind: true }
     }
 }
 
@@ -107,6 +112,7 @@ pub fn compile_function(
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
+    f.calls_unwind = options.calls_unwind;
     f.personality = unwinding
         && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc

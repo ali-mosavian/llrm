@@ -234,6 +234,8 @@ pub struct Function {
     pub frame: Vec<(u64, u64)>,
     /// `Function::hasPersonalityFn`.
     pub personality: bool,
+    /// A call that is not an `invoke` may throw (`Options::calls_unwind`).
+    pub calls_unwind: bool,
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,

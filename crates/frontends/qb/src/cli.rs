@@ -158,7 +158,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.pow_libcall = !llrm_target::layout::states_extended_float(&object_layout);
     let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
-        keep_landing_pads: wasm32 && wasm_exceptions,
+        wasm_exceptions: wasm32 && wasm_exceptions,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
     // A host (ELF, Mach-O) has no handler of the runtime's for the fault.
