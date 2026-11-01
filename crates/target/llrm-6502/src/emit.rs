@@ -19,6 +19,7 @@ use std::fmt::Write;
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::platform::Platform;
+use crate::target::imaginary;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Operand {
@@ -71,7 +72,7 @@ fn halves(name: &str) -> Option<(String, String)> {
         return Some((name.to_owned(), format!("{name}+1")));
     }
     let n: usize = name.strip_prefix("rs")?.parse().ok()?;
-    Some((format!("rc{}", 2 * n), format!("rc{}", 2 * n + 1)))
+    Some((imaginary::name(2 * n), imaginary::name(2 * n + 1)))
 }
 
 fn reg(operand: &Operand) -> Result<&str, String> {
@@ -126,7 +127,7 @@ fn zero_page_pointer(
     lo: &str,
     hi: &str,
 ) -> String {
-    if lo.starts_with("rc") {
+    if imaginary::is(lo) {
         return lo.to_owned();
     }
     writeln!(out, "  lda {lo}\n  sta rc6\n  lda {hi}\n  sta rc7").unwrap();

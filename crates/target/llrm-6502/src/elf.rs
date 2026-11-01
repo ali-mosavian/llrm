@@ -34,6 +34,8 @@ use llrm_object::{
 };
 pub use opcodes::OPCODES;
 
+use crate::target::imaginary;
+
 /// `EM_MOS` (llvm-mos `ELF.h`).
 const EM_MOS: u16 = 6502;
 /// `EF_MOS_ARCH_6502 | EF_MOS_ARCH_6502_BCD`, the flags `llvm-mc` writes for
@@ -222,14 +224,9 @@ fn expr(
     Ok(result)
 }
 
-/// An imaginary register, `rcN`: a byte of the zero page the platform places.
-fn imaginary(symbol: &str) -> bool {
-    symbol.strip_prefix("rc").is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
-}
-
 /// `rcN` is `__rcN` in the object; other names are as written.
 fn linked(symbol: &str) -> String {
-    if imaginary(symbol) { format!("__{symbol}") } else { symbol.to_owned() }
+    if imaginary::is(symbol) { imaginary::object_symbol(symbol) } else { symbol.to_owned() }
 }
 
 struct Piece {
@@ -351,7 +348,7 @@ pub fn object(
         let operand = operand.trim();
         let is_zero_page = |value: &Expr| -> bool {
             match &value.symbol {
-                Some(symbol) => imaginary(symbol) || zero_page.contains_key(symbol.as_str()),
+                Some(symbol) => imaginary::is(symbol) || zero_page.contains_key(symbol.as_str()),
                 None => (0..256).contains(&value.addend),
             }
         };

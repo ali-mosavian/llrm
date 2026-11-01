@@ -25,6 +25,25 @@ static CALLING: LazyLock<Calling> =
 static DIALECT: LazyLock<Dialect> =
     LazyLock::new(|| Dialect::parse(include_str!("instructions/dialect.toml")).expect("mos dialect.toml parses"));
 
+/// The imaginary registers: bytes of the zero page the platform places,
+/// `rc0`, `rc1`... in assembly and `__rc0`... in an object (llvm-mos's names).
+pub mod imaginary {
+    /// The assembly name of byte `n`.
+    pub fn name(n: usize) -> String {
+        format!("rc{n}")
+    }
+
+    /// Whether `symbol` is the assembly name of one.
+    pub fn is(symbol: &str) -> bool {
+        symbol.strip_prefix("rc").is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    }
+
+    /// The symbol an object names it by.
+    pub fn object_symbol(symbol: &str) -> String {
+        format!("__{symbol}")
+    }
+}
+
 /// The mos target.
 pub struct Mos;
 
