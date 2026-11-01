@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
-use llrm_dagisel::instr::OperandDesc;
+use llrm_dagisel::instr::{InstrDesc, OperandDesc};
 pub use llrm_spike_mf as mf;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
 
@@ -78,6 +78,39 @@ impl Class {
             EVT::I16 => Class::Dr16,
             _ => Class::Xr32,
         }
+    }
+}
+
+/// The instruction `name` over `operands`, with what the pin's description
+/// `desc` says of it: tied operands, the codes it sets and reads, its memory
+/// and control effects.
+pub fn op_inst(
+    name: &'static str,
+    desc: &InstrDesc,
+    operands: Vec<Operand>,
+) -> Inst {
+    let ties = desc
+        .operands
+        .iter()
+        .enumerate()
+        .filter(|(_, one)| one.tied_to >= 0)
+        .map(|(at, one)| (one.tied_to as usize, at))
+        .collect();
+    let ccr = pin::CCR;
+    Inst {
+        call: desc.has(flag::CALL),
+        ties,
+        terminator: desc.has(flag::TERMINATOR),
+        barrier: desc.has(flag::BARRIER),
+        sets_flags: desc.implicit_defs.contains(&ccr),
+        reads_flags: desc.implicit_uses.contains(&ccr),
+        may_load: desc.has(flag::MAY_LOAD),
+        may_store: desc.has(flag::MAY_STORE),
+        side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+        cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
+        commutable: desc.has(flag::COMMUTABLE),
+        rematerializable: desc.has(flag::REMATERIALIZABLE),
+        ..Inst::new(Kind::Op(name), operands)
     }
 }
 
@@ -424,33 +457,12 @@ impl Emitter<'_> {
                         operands.push(operand);
                     }
                 }
-                let ties = desc
-                    .operands
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, one)| one.tied_to >= 0)
-                    .map(|(at, one)| (one.tied_to as usize, at))
-                    .collect();
                 let ccr = pin::CCR;
                 let sets_flags = desc.implicit_defs.contains(&ccr);
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
-                into.push(Inst {
-                    call: desc.has(flag::CALL),
-                    ties,
-                    terminator: desc.has(flag::TERMINATOR),
-                    barrier: desc.has(flag::BARRIER),
-                    sets_flags,
-                    reads_flags: desc.implicit_uses.contains(&ccr),
-                    may_load: desc.has(flag::MAY_LOAD),
-                    may_store: desc.has(flag::MAY_STORE),
-                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
-                    cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
-                    commutable: desc.has(flag::COMMUTABLE),
-                    rematerializable: desc.has(flag::REMATERIALIZABLE),
-                    ..Inst::new(Kind::Op(name), operands)
-                });
+                into.push(op_inst(name, desc, operands));
                 if self.save.contains(&node) {
                     let kept = self.new_reg(Class::Dr16);
                     // not a `Copy`: the allocator takes a copy for the same
