@@ -14,7 +14,7 @@ fn lowered(code: CondCode) -> (SelectionDAG, SDValue) {
     legalized(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
         &llrm_x86_m32::M32,
     )
     .unwrap();
