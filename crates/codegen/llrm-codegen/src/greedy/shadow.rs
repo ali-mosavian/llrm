@@ -98,6 +98,7 @@ struct BodyEnv<'a> {
     freq: Vec<f32>,
     exiting: Vec<bool>,
     saved: Vec<RegId>,
+    registers: Regs,
 }
 
 impl SpillWeightEnv for BodyEnv<'_> {
@@ -204,11 +205,30 @@ impl GreedyEnv for BodyEnv<'_> {
         &self,
         phys: RegId,
     ) -> Option<RegId> {
-        self.saved.contains(&phys).then_some(phys)
+        // `getLastCalleeSavedAlias`: `saved` names a register's root; where a
+        // lane is saved on its own (a 6502 pair's two cells are two saves) the
+        // register itself is the alias
+        let root = self.registers.root(phys);
+        self.saved.contains(&root).then_some(if self.tri.lanes_saved_apart() { phys } else { root })
     }
 
     fn csr_first_use_cost(&self) -> u32 {
         self.tri.csr_first_use_cost(!self.saved.is_empty())
+    }
+
+    fn csr_cost_scale(&self) -> u32 {
+        self.tri.csr_cost_scale()
+    }
+
+    fn csr_spill_first(&self) -> bool {
+        self.tri.csr_spill_first()
+    }
+
+    fn reg_cost(
+        &self,
+        phys: RegId,
+    ) -> u8 {
+        self.tri.reg_cost(phys)
     }
 }
 
@@ -1233,6 +1253,7 @@ pub fn decide_with_split(
         freq,
         exiting,
         saved: inputs.saved.iter().map(|one| inputs.registers.root(*one)).collect(),
+        registers: inputs.registers,
     };
     // The calls.
     let mut calls = Vec::new();

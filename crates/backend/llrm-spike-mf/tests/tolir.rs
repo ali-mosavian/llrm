@@ -820,3 +820,293 @@ fn test_no_value_is_offered_a_register_the_spill_code_overwrites() {
     let converted = to_lir::<Clobbering>(&lowered(set_here_read_there()), regs()).expect("converts");
     assert_eq!(converted.order(1), vec![RegId::ECX]);
 }
+
+/// The first use of a callee-saved register costs a save and a restore, and
+/// a range that has not been split yet is split rather than take it
+/// (`tryAssignCSRFirstTime`). A cost that never reached greedy would leave the
+/// range whole, whatever the register costs.
+#[test]
+fn test_the_cost_of_a_first_use_of_a_callee_saved_register_reaches_greedy() {
+    struct Saver;
+    impl Target for Saver {
+        type Class = ();
+        fn meet(
+            _: (),
+            _: (),
+        ) -> Option<()> {
+            Some(())
+        }
+        fn any() {}
+        fn candidates(_: ()) -> Vec<RegId> {
+            vec![RegId::EBX, RegId::ECX]
+        }
+        fn view(
+            root: RegId,
+            _: (),
+        ) -> RegId {
+            root
+        }
+        fn root(register: RegId) -> RegId {
+            register
+        }
+        fn reserved(root: RegId) -> bool {
+            root == RegId::ESP
+        }
+        fn caller_saved() -> Vec<RegId> {
+            vec![RegId::ECX]
+        }
+        fn spill_store(
+            _: (),
+            register: Reg,
+            slot: i32,
+        ) -> Option<Inst> {
+            Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+        }
+        fn spill_load(
+            _: (),
+            register: Reg,
+            slot: i32,
+        ) -> Option<Inst> {
+            Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+        }
+    }
+    let splits_with = |cost: u32| {
+        let f = lowered(across_a_call(1));
+        let mut converted = to_lir::<Saver>(&f, regs()).expect("converts");
+        converted.tri.csr_first_use_cost = cost;
+        let order = |value: u32| converted.order(value);
+        let inputs = converted.inputs(regs(), &order);
+        let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+        let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+        (decided.parents.len(), decided.placed.iter().filter(|(_, r)| *r == RegId::EBX).count())
+    };
+    assert_eq!(splits_with(0), splits_with(0), "the control: the answer does not depend on chance");
+    assert_ne!(splits_with(0), splits_with(1_000), "the cost never changed what greedy did");
+}
+
+/// A literal live across a call is made again where it is read, not stored and
+/// loaded. The spiller puts that copy of the definition beside the read; the
+/// way back wrote the read's own instruction in its place and refused it
+/// ("a spill with no cell": 558 refusals in 300 differential programs).
+#[test]
+fn test_a_literal_made_again_after_a_call_comes_back_as_the_literal() {
+    let mut f = MFunction::<()>::new("literal");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut literal = op("ldi", vec![Operand::Def(v(0)), Operand::Imm(7)]);
+    literal.rematerializable = true;
+    entry.insts.push(literal);
+    entry.insts.push(op("load", vec![Operand::Def(v(1))]));
+    entry.insts.push(call());
+    entry.insts.push(op("add", vec![Operand::Def(v(2)), Operand::Use(v(1)), Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(2))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let back = rewritten(&lowered(f));
+    let insts: Vec<&Inst> = back.function.blocks.iter().flat_map(|b| &b.insts).collect();
+    let literals = insts.iter().filter(|i| i.kind == Kind::Op("ldi")).count();
+    // the one before the call is gone: nothing reads it
+    assert_eq!(literals, 1, "{insts:?}");
+    let call_at = insts.iter().position(|i| i.call).unwrap();
+    assert_eq!(insts[call_at + 1].kind, Kind::Op("ldi"), "{insts:?}");
+    for ldi in insts.iter().filter(|i| i.kind == Kind::Op("ldi")) {
+        assert!(matches!(ldi.operands.as_slice(), [Operand::Def(_), Operand::Imm(7)]), "{ldi:?}");
+    }
+    assert_allocated(&back.function, &back.assignment);
+    every_read_is_set(&back.function).unwrap();
+}
+
+/// Every virtual register an instruction reads is set by one.
+fn every_read_is_set(function: &MFunction<()>) -> Result<(), String> {
+    let mut set = std::collections::BTreeSet::new();
+    let mut read = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|b| &b.insts) {
+        for operand in &inst.operands {
+            match operand {
+                Operand::Def(Reg::Virt(n)) => {
+                    set.insert(*n);
+                }
+                Operand::Use(Reg::Virt(n)) => {
+                    read.insert(*n);
+                }
+                _ => {}
+            }
+        }
+    }
+    match read.difference(&set).next() {
+        Some(n) => Err(format!("%{n} is read and never set")),
+        None => Ok(()),
+    }
+}
+
+/// A target whose copies, spills and reloads overwrite the status flags (the
+/// 6502's `lda`), and which says so: a compare and the instruction that reads
+/// its flags are one instruction to greedy.
+struct Flags;
+
+impl Target for Flags {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+    fn any() {}
+    fn candidates(_: ()) -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+    fn root(register: RegId) -> RegId {
+        register
+    }
+    fn reserved(root: RegId) -> bool {
+        root == RegId::ESP
+    }
+    fn caller_saved() -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags
+    }
+    fn spill_store(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+    }
+    fn spill_load(
+        _: (),
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// A reload for the instruction that reads the flags of a compare stood
+/// between the two, and overwrote the flags: a conditional move took the wrong
+/// side (differential seed 212, `RELOAD` between a `CMP` and its `CMOV`).
+#[test]
+fn test_nothing_stands_between_a_compare_and_the_instruction_that_reads_its_flags() {
+    let mut f = MFunction::<()>::new("flags");
+    f.classes = vec![(); 6];
+    let mut entry = Block { id: 0, ..Block::default() };
+    for n in 0..4 {
+        entry.insts.push(op("load", vec![Operand::Def(v(n))]));
+    }
+    entry.insts.push(call());
+    let mut compare = op("cmp", vec![Operand::Use(v(0))]);
+    compare.sets_flags = true;
+    entry.insts.push(compare);
+    let mut select = op("cmov", vec![Operand::Def(v(4)), Operand::Use(v(1)), Operand::Use(v(2))]);
+    select.reads_flags = true;
+    entry.insts.push(select);
+    entry.insts.push(op("add", vec![Operand::Def(v(5)), Operand::Use(v(4)), Operand::Use(v(3))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(5))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let mut converted = to_lir::<Flags>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let back = from_lir::<Flags>(&f, &converted, &decided, regs()).expect("writes back");
+    let insts = &back.function.blocks[0].insts;
+    let read = insts.iter().position(|i| i.reads_flags).unwrap();
+    assert!(insts[read - 1].sets_flags, "{insts:?}");
+    converted.coalesce(regs(), false);
+}
+
+/// A literal made again stands beside whatever instruction needs it, and
+/// carries that instruction's position. Beside another literal, the way back
+/// took the neighbour for its source and wrote the neighbour's immediate:
+/// `ldi 0` came back as `ldi 3` (seed 850269 of the 6502 difftest: 171 for
+/// 129).
+#[test]
+fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
+    use llrm_codegen::model::ir::Held;
+    let mut f = MFunction::<()>::new("neighbours");
+    f.classes = vec![(); 2];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut seven = op("ldi", vec![Operand::Def(v(0)), Operand::Imm(7)]);
+    seven.rematerializable = true;
+    entry.insts.push(seven);
+    entry.insts.push(op("ldi", vec![Operand::Def(v(1)), Operand::Imm(9)]));
+    entry.insts.push(op("store", vec![Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(1))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let mut decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let edited = decided.edited.as_mut().expect("an edited body");
+    edited
+        .blocks[0]
+        .insns
+        .edit(
+            |insns| {
+                let nine = insns.iter().position(|one| one.defines == [2]).expect("the second literal");
+                let seven = insns.iter().position(|one| one.defines == [1]).expect("the first literal");
+                let mut again = (*insns[seven]).clone();
+                again.at = insns[nine].at;
+                again.covers = Some((again.at, again.at));
+                again.defines = vec![3];
+                again.spill_reload = true;
+                again.rematerialized = true;
+                let what = again.what.as_mut().expect("semantics");
+                what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
+                insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
+                insns.insert(nine + 1, std::sync::Arc::new(again));
+            },
+        );
+    let back = from_lir::<Flat>(&f, &converted, &decided, regs()).expect("writes back");
+    let literals: Vec<i64> = back
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.kind == Kind::Op("ldi"))
+        .filter_map(|i| i.operands.iter().find_map(|o| if let Operand::Imm(n) = o { Some(*n as i64) } else { None }))
+        .collect();
+    assert_eq!(literals, vec![7, 9, 7], "{literals:?}");
+}
+
+/// A function states no branch odds, so greedy's block frequencies took every
+/// edge as 1 in 2 and a loop body ran 1.0 times per entry: spill weights
+/// treated loop code as cold (6502 `lz4` grew cycles by 545 over the spike
+/// allocator). The edge that stays in a loop is 31 in 32, as LLVM's loop branch
+/// heuristic.
+#[test]
+fn test_a_loop_body_runs_many_times_per_entry() {
+    let mut f = MFunction::<()>::new("counted");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(branch(1));
+    let mut body = Block { id: 1, ..Block::default() };
+    body.insts.push(op("add", vec![Operand::Def(v(1)), Operand::Use(v(0)), Operand::Use(v(0))]));
+    let mut again = op("br", vec![Operand::Block(1), Operand::Block(2)]);
+    again.terminator = true;
+    body.insts.push(again);
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(1))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let freq = llrm_codegen::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&converted.body);
+    let loop_body = freq.get_block_freq_relative_to_entry_block(1);
+    assert!(loop_body >= 8.0, "the loop body runs {loop_body} times per entry");
+}

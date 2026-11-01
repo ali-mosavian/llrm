@@ -316,7 +316,37 @@ pub fn estimate_calling(
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
     let label_at =
         |name: &str| lines.iter().position(|l| l.trim_end().strip_suffix(':').is_some_and(|label| label == name));
-    // a backward branch makes the lines from its label to it a loop
+    // a backward branch makes the lines from its label to it a loop, if the
+    // code at the label can run on to the branch: a branch up to a block that
+    // ends in `rts` is an exit placed above the code, not a loop
+    let branch_target = |line: &str| {
+        let mut parts = line.split_whitespace();
+        let mnemonic = parts.next()?;
+        matches!(
+            mnemonic,
+            "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp"
+        )
+            .then(|| parts.next().and_then(label_at))
+            .flatten()
+    };
+    let reaches = |from: usize, to: usize| {
+        let mut seen = vec![false; lines.len()];
+        let mut work = vec![from];
+        while let Some(at) = work.pop() {
+            if at == to {
+                return true;
+            }
+            if at >= lines.len() || std::mem::replace(&mut seen[at], true) {
+                continue;
+            }
+            let mnemonic = lines[at].split_whitespace().next();
+            if !matches!(mnemonic, Some("jmp" | "bra" | "rts" | "rti")) {
+                work.push(at + 1);
+            }
+            work.extend(branch_target(lines[at]));
+        }
+        false
+    };
     let mut depth = vec![0u32; lines.len()];
     let mut backward = vec![false; lines.len()];
     for (at, line) in lines.iter().enumerate() {
@@ -328,7 +358,7 @@ pub fn estimate_calling(
         ) {
             continue;
         }
-        if let Some(to) = label_at(target).filter(|to| *to <= at) {
+        if let Some(to) = label_at(target).filter(|to| *to <= at && reaches(*to, at)) {
             backward[at] = true;
             for d in &mut depth[to..=at] {
                 *d += 1;
