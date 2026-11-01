@@ -19,4 +19,4 @@ pub mod local;
 pub mod lowering;
 pub mod pipeline;
 pub mod predicates;
-pub mod quick;
+pub mod short;

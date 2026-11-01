@@ -107,8 +107,9 @@ fn pin(text: &str) -> BTreeMap<String, Counts> {
 
 /// The functions that differ from the pin today, and whose stage it is. The
 /// test requires this list to be exact, so a fixed function must come off it.
-const DIFFERS: [(&str, &str); 4] = [
+const DIFFERS: [(&str, &str); 5] = [
     ("compare", "sdag-b: SetCC on f64 has no lowering (x87 UCOM_FPr + FNSTSW)"),
+    ("from_int", "SD332 (DEVIATE): a single-use i16/i32 load folds into FILD; the pin does it only for i64"),
     ("narrow", "sdag-b: FP_ROUND through a stack slot (truncating store, reload)"),
     ("to_int", "sdag-d: the custom inserter for FP_TO_INT32_IN_MEM (control word) is not run"),
     ("widen", "sdag-b: fp_extend of a load is not an extending load"),
