@@ -162,6 +162,64 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// DEVIATE G1 (x87 only: with SSE the conversion is in registers): the
+    /// `fist` to a scratch slot, the load of the slot and the store of it
+    /// become one `fist` to the store's address.
+    ///
+    /// Taken only when the slot is the pair's alone (the `fist` is read by
+    /// that load, the slot node by those two), the load's value is the store's
+    /// only input, all three are plain accesses of one width, and the
+    /// conversion does not widen (an unsigned `i32` goes through an `i64` slot
+    /// and is left). The new `fist` takes the store's chain, so it runs where
+    /// the store did and orders against every access as the store did.
+    /// O(1) per store.
+    fn store_of_converted_slot(
+        &self,
+        dag: &mut SelectionDAG,
+        store: SDValue,
+    ) -> Option<SDValue> {
+        if self.sse2 {
+            return None;
+        }
+        let (chain, value, address) = (dag.operand(store, 0), dag.operand(store, 1), dag.operand(store, 2));
+        let NodeData::Mem(stored) = dag.node(store).data else { return None };
+        let plain = |info: &MemInfo| !info.volatile && info.ordering.is_none() && info.ext.is_none();
+        if dag.opcode(value) != ISD::Load || !dag.has_one_use(value.node) || !plain(&stored) {
+            return None;
+        }
+        let NodeData::Mem(loaded) = dag.node(value).data else { return None };
+        if !plain(&loaded) || loaded.mem_vt != stored.mem_vt || dag.value_type(value) != stored.mem_vt {
+            return None;
+        }
+        let fist = dag.operand(value, 0);
+        if fist.res != 0 || !matches!(dag.opcode(fist), x86isd::FIST | x86isd::FP_TO_INT_IN_MEM) {
+            return None;
+        }
+        let NodeData::Mem(converted) = dag.node(fist).data else { return None };
+        let slot = dag.operand(fist, 2);
+        if !plain(&converted)
+            || converted.mem_vt != loaded.mem_vt
+            || dag.opcode(slot) != ISD::FrameIndex
+            || dag.operand(value, 1) != slot
+            || !dag.has_one_use(fist.node)
+            || dag.use_count_up_to(slot.node, 3) != 2
+        {
+            return None;
+        }
+        let info = MemInfo { align: stored.align, base: stored.base, space: stored.space, ..converted };
+        let opcode = dag.opcode(fist);
+        let converted_value = dag.operand(fist, 1);
+        // Chained where the store was, so every access that came before it in
+        // the program still comes before the `fist`, whatever it aliases.
+        Some(dag.intern(
+            opcode,
+            &[EVT::OTHER],
+            &[chain, converted_value, address],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        ))
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,

@@ -5,13 +5,6 @@ widths = [8, 16, 32]
 assembler_column = false
 arithmetic = ["X", "N", "Z", "V", "C"]
 
-[flags]
-C = 1
-V = 2
-Z = 4
-N = 8
-X = 16
-
 # `{cc}`: the condition codes of M68k::CondCode, with the flags each tests.
 conditions = [
     { name = "t", flags = [] },
@@ -31,3 +24,10 @@ conditions = [
     { name = "gt", flags = ["N", "V", "Z"] },
     { name = "le", flags = ["N", "V", "Z"] },
 ]
+
+[flags]
+C = 1
+V = 2
+Z = 4
+N = 8
+X = 16
