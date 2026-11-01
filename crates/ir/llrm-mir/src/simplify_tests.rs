@@ -812,6 +812,28 @@ fn undef_in_a_phi_or_a_select_folds_as_the_pin_does() {
     check("  %r = select i1 %c, i16 undef, i16 %y\n", "r", None);
 }
 
+/// `phi [undef, entry], [%a, loop]` is not `%a` when `%a` is another phi of the
+/// same block: the back edge carries the previous trip's `%a`. `dominates(Def,
+/// PHI)` is true only of a definition in a dominating block, not an earlier
+/// phi of the block. instcombine made gcc.c-torture pr34415's `end` the
+/// current pointer, and `foo` returned it unchecked.
+#[test]
+fn a_phi_does_not_dominate_a_phi_of_its_block() {
+    let text = "define void @f(i16 noundef %x, i1 %c) {
+b0:
+  br label %h
+h:
+  %a = phi i16 [ %x, %b0 ], [ %n, %h ]
+  %r = phi i16 [ undef, %b0 ], [ %a, %h ]
+  %n = freeze i16 %a
+  br i1 %c, label %h, label %e
+e:
+  ret void
+}
+";
+    assert_eq!(simplified(text, "r"), None);
+}
+
 /// Old: `freeze` of a value that is neither undef nor poison was kept
 /// (`simplifyFreezeInst` was not translated): a constant, a freeze of a
 /// freeze. A freeze of an undef, a poison or an unknown argument stays.
