@@ -11,7 +11,9 @@ fn have(tool: &str) -> bool {
 
 /// `ir`'s function `f` called with a = `a` and l = `l`; the byte it returns.
 fn run(ir: &str, a: u8, l: u8, callee: &str) -> u8 {
-    let dir = std::env::temp_dir().join(format!("z80-frame-{}-{a}-{l}", std::process::id()));
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("z80-frame-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("makes a directory");
     let body = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     let asm = format!(
@@ -55,4 +57,41 @@ fn a_local_whose_address_reaches_a_call_is_that_local() {
     }
     // (-5 + 10) mod 256
     assert_eq!(run(IR, 10, 20, OFFSET), 5);
+}
+
+/// The callee adds the bytes at 1, 2 and 3 from the address it is given.
+const SUM3: &str = "_ext::\n\tinc hl\n\tld a,(hl)\n\tinc hl\n\tadd a,(hl)\n\tinc hl\n\tadd a,(hl)\n\tret\n";
+
+/// Stored in place (`ld d(ix), r` and `ld d(ix), n`) and read through the address `LEAFI` makes: the two must agree.
+#[test]
+fn a_local_written_in_place_is_where_its_address_says() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+        declare i8 @ext(ptr)\n\
+        define i8 @f(i8 %a, i8 %b) {\n  %buf = alloca [8 x i8]\n  %p1 = getelementptr i8, ptr %buf, i8 1\n  \
+        %p2 = getelementptr i8, ptr %buf, i8 2\n  %p3 = getelementptr i8, ptr %buf, i8 3\n  store i8 77, ptr %p1\n  \
+        store i8 %a, ptr %p2\n  store i8 %b, ptr %p3\n  %r = call i8 @ext(ptr %buf)\n  ret i8 %r\n}\n";
+    if !["sdasz80", "sdldz80", "ucsim_z80"].into_iter().all(have) {
+        return;
+    }
+    assert_eq!(run(ir, 10, 20, SUM3), 107);
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("(ix)") && !out.contains("add hl, de"), "{out}");
+}
+
+/// The callee returns the byte at 4 from the address it is given.
+const AT4: &str = "_ext::\n\tinc hl\n\tinc hl\n\tinc hl\n\tinc hl\n\tld a,(hl)\n\tret\n";
+
+/// A word stored at 4 and read back in place: the low byte is at 4, the high byte at 5.
+#[test]
+fn a_word_local_is_its_two_bytes_in_order() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+        declare i8 @ext(ptr)\n\
+        define i8 @f(i8 %a, i8 %b) {\n  %buf = alloca [8 x i8]\n  %p = getelementptr i8, ptr %buf, i8 4\n  \
+        %ha = zext i8 %a to i16\n  %hb = zext i8 %b to i16\n  %hi = shl i16 %ha, 8\n  %w = or i16 %hi, %hb\n  \
+        store volatile i16 %w, ptr %p\n  %r = call i8 @ext(ptr %buf)\n  %x = load volatile i16, ptr %p\n  \
+        %xs = lshr i16 %x, 8\n  %xb = trunc i16 %xs to i8\n  %s = add i8 %r, %xb\n  ret i8 %s\n}\n";
+    if !["sdasz80", "sdldz80", "ucsim_z80"].into_iter().all(have) {
+        return;
+    }
+    assert_eq!(run(ir, 10, 20, AT4), 30);
 }

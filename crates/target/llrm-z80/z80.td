@@ -238,6 +238,28 @@ let Defs = [F], Uses = [SP] in
   def LEAFI : Z80Inst<(outs HLR:$d), (ins i16imm:$fi), "leafi $d, $fi", []>;
 def : Pat<(i16 frameindex:$fi), (LEAFI (to_tframeindex $fi))>;
 
+// A frame object read or written in place, `d(ix)`: 3 bytes and 19 T-states a byte, no address built. A word is its two
+// bytes, as a spill is.
+let mayLoad = 1 in {
+  def LD8rf : Z80Inst<(outs GR8:$d), (ins i16imm:$fi, i16imm:$o), "ld $d, $o($fi)", []>;
+  def LD16rf : Z80Inst<(outs GR16:$d), (ins i16imm:$fi, i16imm:$o), "ld16 $d, $o($fi)", []>;
+}
+let mayStore = 1 in {
+  def LD8fr : Z80Inst<(outs), (ins GR8:$s, i16imm:$fi, i16imm:$o), "ld $o($fi), $s", []>;
+  def LD8fi : Z80Inst<(outs), (ins i8imm:$v, i16imm:$fi, i16imm:$o), "ld $o($fi), $v", []>;
+  def LD16fr : Z80Inst<(outs), (ins GR16:$s, i16imm:$fi, i16imm:$o), "ld16 $o($fi), $s", []>;
+}
+def : Pat<(i8 (load frameindex:$fi)), (LD8rf (to_tframeindex $fi), 0)>;
+def : Pat<(i8 (load (add frameindex:$fi, imm:$o))), (LD8rf (to_tframeindex $fi), imm:$o)>;
+def : Pat<(i16 (load frameindex:$fi)), (LD16rf (to_tframeindex $fi), 0)>;
+def : Pat<(i16 (load (add frameindex:$fi, imm:$o))), (LD16rf (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store (i8 imm:$v), frameindex:$fi), (LD8fi imm:$v, (to_tframeindex $fi), 0)>;
+def : Pat<(store (i8 imm:$v), (add frameindex:$fi, imm:$o)), (LD8fi imm:$v, (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store GR8:$s, frameindex:$fi), (LD8fr GR8:$s, (to_tframeindex $fi), 0)>;
+def : Pat<(store GR8:$s, (add frameindex:$fi, imm:$o)), (LD8fr GR8:$s, (to_tframeindex $fi), imm:$o)>;
+def : Pat<(store GR16:$s, frameindex:$fi), (LD16fr GR16:$s, (to_tframeindex $fi), 0)>;
+def : Pat<(store GR16:$s, (add frameindex:$fi, imm:$o)), (LD16fr GR16:$s, (to_tframeindex $fi), imm:$o)>;
+
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : Z80Inst<(outs), (ins), "ret", [(Z80retglue)]>;
 

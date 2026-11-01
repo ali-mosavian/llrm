@@ -472,6 +472,31 @@ impl Printer<'_> {
                 self.push(format!("ld hl, #{}", offset + self.frame.below_ix()));
                 self.push("add hl, sp");
             }
+            "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
+                // register first for a load, the stored value first for a store; the frame object and its offset last
+                let load = op.ends_with("rf");
+                let at = 1;
+                let index = self.frame_index(inst, at)?;
+                let extra = match inst.operands.get(at + 1) {
+                    Some(Operand::Imm(extra)) => *extra,
+                    other => return Err(format!("a frame offset that is {other:?}")),
+                };
+                if op == "LD8fi" {
+                    let value = self.immediate(inst, 0, 0xFF)?;
+                    let slot = self.slot(index, extra)?;
+                    self.push(format!("ld {slot}, {value}"));
+                } else if op.starts_with("LD8") {
+                    let register = name_of(self, 0)?;
+                    let slot = self.slot(index, extra)?;
+                    self.push(if load { format!("ld {register}, {slot}") } else { format!("ld {slot}, {register}") });
+                } else {
+                    let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                    for (byte, plus) in [(lo, 0), (hi, 1)] {
+                        let slot = self.slot(index, extra + plus)?;
+                        self.push(if load { format!("ld {}, {slot}", name(byte)) } else { format!("ld {slot}, {}", name(byte)) });
+                    }
+                }
+            }
             "SPILL8" | "RELOAD8" => {
                 let (index, register) = if op == "SPILL8" {
                     (self.frame_index(inst, 0)?, 1)

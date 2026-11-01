@@ -152,14 +152,13 @@ fn function(
 /// and the fourth has no register. Worked out from `calling.toml`: `a` HL, `b`
 /// DE, `c` BC, `d` the first stack argument, offset 0 from the first stack byte
 /// (the return address and saved IX in front of it are the frame resolver's, 4
-/// bytes). The callee loads it from that fixed object, through the object's
-/// address.
+/// bytes). The callee loads it from that fixed object in place, `d(ix)`.
 #[test]
 fn a_fourth_word_argument_is_a_fixed_object_at_offset_zero() {
     let ir = "define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  ret i16 %d\n}";
     let f = function(ir, "f");
     assert_eq!(f.blocks.len(), 1);
-    assert!(names(&f.blocks[0]).starts_with(&["LEAFI", "LD16rm"]), "{:?}", names(&f.blocks[0]));
+    assert!(names(&f.blocks[0]).starts_with(&["LD16rf"]), "{:?}", names(&f.blocks[0]));
     assert_eq!(f.blocks[0].dag.fixed_offsets.values().copied().collect::<Vec<_>>(), [0]);
 }
 
