@@ -67,16 +67,29 @@ pub fn signature(
     Ok((params, results))
 }
 
+/// `-exception-model=` of the pin's `llc` (`TargetOptions::ExceptionModel`),
+/// the two it takes for wasm.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExceptionModel {
+    /// No unwinding: an `invoke` is a call and a `landingpad` builds nothing.
+    #[default]
+    None,
+    /// `-exception-model=wasm` with `-mattr=+exception-handling`: `try`,
+    /// `catch` and `throw`.
+    Wasm,
+}
+
 /// Which passes run.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// `RegStackify`: the pin runs it at `-O0`, LLVM 20's `llc -O0` does not.
     pub stackify: bool,
+    pub exception_model: ExceptionModel,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { stackify: true }
+        Options { stackify: true, exception_model: ExceptionModel::None }
     }
 }
 
@@ -88,6 +101,9 @@ pub fn compile_function(
     width: Width,
     options: Options,
 ) -> Result<Function, String> {
+    if options.exception_model == ExceptionModel::Wasm && has_unwinding(module, name) {
+        return Err("exception handling is not translated yet (docs/working/wasm-eh.md)".into());
+    }
     let blocks = function::select_function(module, name, width)?;
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
@@ -149,4 +165,25 @@ fn library_callees(
         found.entry(name.clone()).or_insert((params, results));
     }
     found
+}
+
+/// Whether `name` has an `invoke` or a `landingpad`.
+fn has_unwinding(
+    module: &Module,
+    name: &str,
+) -> bool {
+    use llrm_mir::opcode::Opcode;
+
+    let Some(function) = module.named(name).and_then(|id| module.global(id).function()) else { return false };
+    function
+        .layout()
+        .iter()
+        .any(
+            |&block| function
+                .iter_block(block)
+                .any(|inst| matches!(
+                    function.instruction(inst).opcode,
+                    Opcode::Invoke(_) | Opcode::LandingPad { .. }
+                )),
+        )
 }

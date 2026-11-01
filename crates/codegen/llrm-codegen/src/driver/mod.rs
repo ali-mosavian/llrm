@@ -92,6 +92,10 @@ pub struct Options {
     /// where it is named, the selector's `rep movs` where not; and the symbol
     /// the routine has in the object (Open Watcom's `memcpy_`, C's `_memcpy`).
     pub libcalls: Vec<(String, u32, String)>,
+    /// The target lowers `invoke` and `landingpad` itself, as the IR has them:
+    /// `ehprepare`, which turns QB's landing pad into one the runtime enters,
+    /// is not run.
+    pub keep_landing_pads: bool,
 }
 
 impl Options {
@@ -122,6 +126,7 @@ impl Options {
             stack_check: false,
             isel,
             libcalls: Vec::new(),
+            keep_landing_pads: false,
         }
     }
 
@@ -529,14 +534,16 @@ pub fn optimized(
     let tso = options.arch.name().starts_with("x86");
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
-    timed("mir ehprepare", || {
-        program
-            .modules
-            .iter_mut()
-            .try_for_each(
-                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
-            )
-    })?;
+    if !options.keep_landing_pads {
+        timed("mir ehprepare", || {
+            program
+                .modules
+                .iter_mut()
+                .try_for_each(
+                    |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+                )
+        })?;
+    }
     // The DAG route expands it itself (`expandFP_TO_UINT`), after the combines.
     if options.arch.expands("fptoui.i64") && options.isel != crate::backend::shadow::Selector::Dag {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;

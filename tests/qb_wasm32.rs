@@ -363,3 +363,36 @@ fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
         std::fs::remove_dir_all(dir).ok();
     }
 }
+
+/// EH stage 0: `--wasm-exceptions` keeps a function's `invoke`s and
+/// `landingpad`s in the text the wasm backend gets (`ehprepare` and the
+/// `setjmp` frame are skipped), and without it the module is as before. The
+/// backend refuses the unwinding by name until its stages land; this test moves
+/// to the programs running then.
+#[test]
+fn wasm_exceptions_keep_the_landing_pads_for_the_backend() {
+    let dir = std::env::temp_dir().join(format!("eh0_wasm32_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bas = dir.join("eh.bas");
+    std::fs::write(&bas, "ON ERROR GOTO h\nERROR 5\nPRINT \"after\"\nEND\nh:\nPRINT \"err\"; ERR\nRESUME NEXT\n")
+        .unwrap();
+    let compile = |flags: &[&str]| {
+        let text = dir.join("eh.ll");
+        let made = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .arg(&bas)
+            .args(["--wasm32", "-o"])
+            .arg(dir.join("eh.o"))
+            .args(flags)
+            .env("LLRM_WASM32_TEXT", &text)
+            .output()
+            .expect("llrm-qb runs");
+        (made, std::fs::read_to_string(&text).unwrap())
+    };
+    let (made, text) = compile(&[]);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    assert!(text.contains("_setjmp") && !text.contains("landingpad"), "{text}");
+    let (made, text) = compile(&["--wasm-exceptions"]);
+    assert!(text.contains("invoke ") && text.contains("landingpad") && !text.contains("_setjmp"), "{text}");
+    assert!(String::from_utf8_lossy(&made.stderr).contains("exception handling is not translated yet"));
+    std::fs::remove_dir_all(dir).ok();
+}

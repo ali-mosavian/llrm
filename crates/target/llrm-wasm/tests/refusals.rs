@@ -39,3 +39,20 @@ fn an_over_aligned_object_is_refused_by_name() {
     );
     assert!(why.contains("stack realignment"), "{why}");
 }
+
+/// `-exception-model=wasm` is the EH port's switch (stage 0): a function with
+/// an `invoke` or a `landingpad` is refused by name until the stages that
+/// lower them land, not compiled as if there were no unwinding; and the model
+/// changes nothing for a function without either, which stays the pin's
+/// `-exception-model=none` output.
+#[test]
+fn the_wasm_exception_model_refuses_unwinding_and_leaves_the_rest_alone() {
+    use llrm_wasm::dag::ExceptionModel;
+
+    let model = Options { exception_model: ExceptionModel::Wasm, ..Options::default() };
+    let unwinding = "declare void @g(i32)\ndeclare i32 @p(...)\ndefine i32 @f(i32 %a) personality ptr @p {\nentry:\n  invoke void @g(i32 %a) to label %ok unwind label %pad\nok:\n  ret i32 1\npad:\n  %l = landingpad { ptr, i32 } cleanup\n  ret i32 2\n}\n";
+    let why = assembly(unwinding, Width::W32, model).expect_err("refused");
+    assert!(why.contains("exception handling is not translated yet"), "{why}");
+    let plain = "define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n";
+    assert_eq!(assembly(plain, Width::W32, model), assembly(plain, Width::W32, Options::default()));
+}

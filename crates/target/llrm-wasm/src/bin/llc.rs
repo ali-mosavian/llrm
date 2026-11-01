@@ -3,7 +3,7 @@
 //! object, as the pin's `llc -O0 -fast-isel=false` does. `-no-stackify` drops
 //! `RegStackify`, which LLVM 20's `llc -O0` does not run.
 
-use llrm_wasm::dag::Options;
+use llrm_wasm::dag::{ExceptionModel, Options};
 use llrm_wasm::driver;
 
 fn main() {
@@ -15,6 +15,7 @@ fn run() -> i32 {
     let mut object = false;
     let mut triple = "wasm32".to_owned();
     let mut options = Options::default();
+    let mut handling = false;
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
@@ -24,6 +25,9 @@ fn run() -> i32 {
             "-filetype=obj" => object = true,
             "-o" => output = arguments.next(),
             "-no-stackify" => options.stackify = false,
+            "-exception-model=wasm" => options.exception_model = ExceptionModel::Wasm,
+            "-exception-model=none" => options.exception_model = ExceptionModel::None,
+            "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
             other => {
@@ -33,9 +37,16 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input.filter(|_| assembly || object) else {
-        eprintln!("usage: llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-no-stackify] [-o OUT] FILE.ll");
+        eprintln!(
+            "usage: llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-no-stackify] [-exception-model=wasm -mattr=+exception-handling] [-o OUT] FILE.ll"
+        );
         return 2;
     };
+    // The pin refuses one without the other.
+    if (options.exception_model == ExceptionModel::Wasm) != handling {
+        eprintln!("llrm-wasm-llc: -exception-model=wasm and -mattr=+exception-handling go together");
+        return 2;
+    }
     let text = match std::fs::read_to_string(&input) {
         Ok(text) => text,
         Err(error) => {
