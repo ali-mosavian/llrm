@@ -200,6 +200,12 @@ impl<const STACK: bool> Target for Mos<STACK> {
         register
     }
 
+    /// What a register-to-register copy costs in [`Self::operand_cost`]'s
+    /// unit (bytes plus clocks): a transfer, `tax`, from the timing table.
+    fn copy_cost() -> u32 {
+        crate::timing::estimate(Cpu::Mos6502, "tax").map_or(1, |priced| priced.bytes + priced.cycles as u32)
+    }
+
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
     fn reads_flags_set_just_before(inst: &Inst) -> bool {
         inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
