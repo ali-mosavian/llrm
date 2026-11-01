@@ -130,8 +130,9 @@ fn zero_page_pointer(
     if imaginary::is(lo) {
         return lo.to_owned();
     }
-    writeln!(out, "  lda {lo}\n  sta rc6\n  lda {hi}\n  sta rc7").unwrap();
-    "rc6".to_owned()
+    let (low, high) = (imaginary::name(6), imaginary::name(7));
+    writeln!(out, "  lda {lo}\n  sta {low}\n  lda {hi}\n  sta {high}").unwrap();
+    low
 }
 
 /// A byte copy `d := s` through the accumulator where neither side is a
@@ -342,14 +343,14 @@ pub fn expand(
         // rs0 += n; the carry runs from the low byte to the high.
         op::ADJSP => {
             let n = imm(&o[0])? as u16;
-            writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta rc0\n  lda rc1\n  adc #{}\n  sta rc1", n & 0xFF, n >> 8)
-                .unwrap();
+            crate::alloc::adjust(&mut out, i64::from(n));
         }
         op::LEASP16 => {
             let ((dl, dh), n) = (word(&o[0])?, imm(&o[1])? as u16);
+            let (sp_low, sp_high) = (imaginary::name(0), imaginary::name(1));
             writeln!(
                 out,
-                "  clc\n  lda rc0\n  adc #{}\n  sta {dl}\n  lda rc1\n  adc #{}\n  sta {dh}",
+                "  clc\n  lda {sp_low}\n  adc #{}\n  sta {dl}\n  lda {sp_high}\n  adc #{}\n  sta {dh}",
                 n & 0xFF,
                 n >> 8
             )
@@ -364,35 +365,35 @@ pub fn expand(
                 op::SRLV8 => "__lshrqi3",
                 _ => "__ashrqi3",
             };
-            copy_byte(&mut out, "rc2", reg(&o[1])?);
-            copy_byte(&mut out, "rc3", reg(&o[2])?);
+            copy_byte(&mut out, &imaginary::name(2), reg(&o[1])?);
+            copy_byte(&mut out, &imaginary::name(3), reg(&o[2])?);
             writeln!(out, "  jsr {routine}").unwrap();
             copy_byte(&mut out, reg(&o[0])?, "a");
         }
         op::UDIVREM8 => {
-            copy_byte(&mut out, "rc2", reg(&o[2])?);
-            copy_byte(&mut out, "rc3", reg(&o[3])?);
+            copy_byte(&mut out, &imaginary::name(2), reg(&o[2])?);
+            copy_byte(&mut out, &imaginary::name(3), reg(&o[3])?);
             writeln!(out, "  jsr __udivmodqi4").unwrap();
             copy_byte(&mut out, reg(&o[0])?, "a");
-            copy_byte(&mut out, reg(&o[1])?, "rc6");
+            copy_byte(&mut out, reg(&o[1])?, &imaginary::name(6));
         }
         op::UDIVREM16 => {
             let ((ql, qh), (rl, rh)) = (word(&o[0])?, word(&o[1])?);
             let ((xl, xh), (yl, yh)) = (word(&o[2])?, word(&o[3])?);
-            copy_byte(&mut out, "rc2", &xl);
-            copy_byte(&mut out, "rc3", &xh);
-            copy_byte(&mut out, "rc4", &yl);
-            copy_byte(&mut out, "rc5", &yh);
+            copy_byte(&mut out, &imaginary::name(2), &xl);
+            copy_byte(&mut out, &imaginary::name(3), &xh);
+            copy_byte(&mut out, &imaginary::name(4), &yl);
+            copy_byte(&mut out, &imaginary::name(5), &yh);
             writeln!(out, "  jsr __udivhi3").unwrap();
             copy_byte(&mut out, &ql, "a");
             copy_byte(&mut out, &qh, "x");
-            copy_byte(&mut out, &rl, "rc6");
-            copy_byte(&mut out, &rh, "rc7");
+            copy_byte(&mut out, &rl, &imaginary::name(6));
+            copy_byte(&mut out, &rh, &imaginary::name(7));
         }
         op::UMUL8X8 => {
             let (dl, dh) = word(&o[0])?;
-            copy_byte(&mut out, "rc2", reg(&o[1])?);
-            copy_byte(&mut out, "rc3", reg(&o[2])?);
+            copy_byte(&mut out, &imaginary::name(2), reg(&o[1])?);
+            copy_byte(&mut out, &imaginary::name(3), reg(&o[2])?);
             writeln!(out, "  jsr __umulqihi3").unwrap();
             copy_byte(&mut out, &dl, "a");
             copy_byte(&mut out, &dh, "x");
@@ -407,16 +408,16 @@ pub fn expand(
                 _ => "__ashrhi3",
             };
             let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[1])?);
-            copy_byte(&mut out, "rc2", &al);
-            copy_byte(&mut out, "rc3", &ah);
+            copy_byte(&mut out, &imaginary::name(2), &al);
+            copy_byte(&mut out, &imaginary::name(3), &ah);
             // A shift count is a byte in `rc4`; the other operations take a
             // second word.
             if matches!(inst.opcode, op::SHLV16 | op::SRLV16 | op::SRAV16) {
-                copy_byte(&mut out, "rc4", reg(&o[2])?);
+                copy_byte(&mut out, &imaginary::name(4), reg(&o[2])?);
             } else {
                 let (bl, bh) = word(&o[2])?;
-                copy_byte(&mut out, "rc4", &bl);
-                copy_byte(&mut out, "rc5", &bh);
+                copy_byte(&mut out, &imaginary::name(4), &bl);
+                copy_byte(&mut out, &imaginary::name(5), &bh);
             }
             writeln!(out, "  jsr {routine}").unwrap();
             copy_byte(&mut out, &dl, "a");
@@ -596,6 +597,6 @@ pub fn relax_bra(text: &str) -> String {
 /// on.
 pub fn equates(platform: &Platform) -> String {
     (0..usize::from(platform.zero_page))
-        .map(|n| format!("rc{n} = ${:02X}\n", platform.imag_base as usize + n))
+        .map(|n| format!("{} = ${:02X}\n", imaginary::name(n), platform.imag_base as usize + n))
         .collect()
 }

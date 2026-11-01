@@ -44,8 +44,7 @@ enum Mode {
 
 /// Whether `name` is a zero-page byte the emitter names (`rc5`, `rc5+1`).
 fn zero_page(name: &str) -> bool {
-    let name = name.split('+').next().unwrap_or(name);
-    name.strip_prefix("rc").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    crate::target::imaginary::operand(name)
 }
 
 fn mode(

@@ -513,7 +513,7 @@ fn lower(
                     let (low, high) = match word.strip_prefix("rs") {
                         Some(pair) => {
                             let pair: usize = pair.parse().map_err(|_| "a bad pair register")?;
-                            (format!("rc{}", 2 * pair), format!("rc{}", 2 * pair + 1))
+                            (crate::target::imaginary::name(2 * pair), crate::target::imaginary::name(2 * pair + 1))
                         }
                         None => (word.clone(), format!("{word}+1")),
                     };

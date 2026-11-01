@@ -63,9 +63,11 @@ pub fn c64_startup(platform: &Platform) -> String {
     format!(
         ".segment \"LOADADDR\"\n.word $0801\n\
          .segment \"BASIC\"\n.word next\n.word 10\n.byte $9E, \"2061\", 0\nnext:\n.word 0\n\
-         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
+         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta {sp_low}\n  lda #${:02X}\n  sta {sp_high}\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
         platform.soft_stack & 0xFF,
-        platform.soft_stack >> 8
+        platform.soft_stack >> 8,
+        sp_low = crate::target::imaginary::name(0),
+        sp_high = crate::target::imaginary::name(1)
     )
 }
 
@@ -76,9 +78,11 @@ pub fn c64_startup(platform: &Platform) -> String {
 pub fn apple2_startup(platform: &Platform) -> String {
     format!(
         ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - __MAIN_START__\n\
-         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
+         .segment \"CODE\"\n.export start\nstart:\n  lda #${:02X}\n  sta {sp_low}\n  lda #${:02X}\n  sta {sp_high}\n  jsr _main\n  sta $0400\nhalt:\n  jmp halt\n",
         platform.soft_stack & 0xFF,
-        platform.soft_stack >> 8
+        platform.soft_stack >> 8,
+        sp_low = crate::target::imaginary::name(0),
+        sp_high = crate::target::imaginary::name(1)
     )
 }
 
@@ -89,11 +93,13 @@ pub fn apple2_startup(platform: &Platform) -> String {
 pub fn nes_startup(platform: &Platform) -> String {
     format!(
         ".segment \"HEADER\"\n.byte \"NES\", $1A, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0\n\
-         .segment \"CODE\"\n.export start\nstart:\n  sei\n  cld\n  ldx #$FF\n  txs\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $00\nhalt:\n  jmp halt\n\
+         .segment \"CODE\"\n.export start\nstart:\n  sei\n  cld\n  ldx #$FF\n  txs\n  lda #${:02X}\n  sta {sp_low}\n  lda #${:02X}\n  sta {sp_high}\n  jsr _main\n  sta $00\nhalt:\n  jmp halt\n\
          nmi:\n  rti\nirq:\n  rti\n\
          .segment \"VECTORS\"\n.word nmi, start, irq\n.segment \"CODE\"\n",
         platform.soft_stack & 0xFF,
-        platform.soft_stack >> 8
+        platform.soft_stack >> 8,
+        sp_low = crate::target::imaginary::name(0),
+        sp_high = crate::target::imaginary::name(1)
     )
 }
 
@@ -105,9 +111,11 @@ pub fn atari8_startup(platform: &Platform) -> String {
     format!(
         ".import __MAIN_START__, __MAIN_LAST__\n.segment \"HEADER\"\n.word $FFFF\n\
          .segment \"MAINHDR\"\n.word __MAIN_START__\n.word __MAIN_LAST__ - 1\n\
-         .segment \"CODE\"\n.export start, halt\nstart:\n  lda #${:02X}\n  sta rc0\n  lda #${:02X}\n  sta rc1\n  jsr _main\n  sta $0600\nhalt:\n  jmp halt\n\
+         .segment \"CODE\"\n.export start, halt\nstart:\n  lda #${:02X}\n  sta {sp_low}\n  lda #${:02X}\n  sta {sp_high}\n  jsr _main\n  sta $0600\nhalt:\n  jmp halt\n\
          .segment \"TRAILER\"\n.word $02E0, $02E1, start\n.segment \"CODE\"\n",
         platform.soft_stack & 0xFF,
-        platform.soft_stack >> 8
+        platform.soft_stack >> 8,
+        sp_low = crate::target::imaginary::name(0),
+        sp_high = crate::target::imaginary::name(1)
     )
 }

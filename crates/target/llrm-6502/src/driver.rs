@@ -111,7 +111,7 @@ fn reserved(name: &str) -> bool {
     let numbered =
         |stem: &str| lower.strip_prefix(stem).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
     RESERVED.contains(&lower.as_str())
-        || numbered("rc")
+        || crate::target::imaginary::is(&lower)
         || numbered("bbr")
         || numbered("bbs")
         || numbered("rmb")

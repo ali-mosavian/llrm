@@ -33,9 +33,23 @@ pub mod imaginary {
         format!("rc{n}")
     }
 
+    /// The byte a name is of, if it is the assembly name of one.
+    pub fn parse(symbol: &str) -> Option<usize> {
+        symbol
+            .strip_prefix("rc")
+            .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))?
+            .parse()
+            .ok()
+    }
+
     /// Whether `symbol` is the assembly name of one.
     pub fn is(symbol: &str) -> bool {
-        symbol.strip_prefix("rc").is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        parse(symbol).is_some()
+    }
+
+    /// Whether an operand names one, or the byte after it (`rc5`, `rc5+1`).
+    pub fn operand(operand: &str) -> bool {
+        is(operand.split('+').next().unwrap_or(operand))
     }
 
     /// The symbol an object names it by.

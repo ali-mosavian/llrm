@@ -27,6 +27,7 @@ use crate::dagisel::hooks::Cpu;
 use crate::emit::{MInst, Operand as Machine, address, spill};
 use crate::reg;
 use crate::select::Item;
+use crate::target::imaginary;
 
 /// The registers a value may live in, as a set: `A`, `X`, `Y`, and the
 /// zero-page bytes (`MEM`).
@@ -335,7 +336,7 @@ impl Builder {
             "a" => Some(reg::A),
             "x" => Some(reg::X),
             "y" => Some(reg::Y),
-            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 16).map(rc),
+            _ => imaginary::parse(n).filter(|n| *n < 16).map(|n| rc(n as u8)),
         };
         if let Some(r) = named(name) {
             return Ok(Reg::Phys(r));
@@ -1767,7 +1768,7 @@ fn register_name(register: RegId) -> String {
     } else if register == reg::Y {
         "y".into()
     } else {
-        format!("rc{}", register.index() - reg::RC0.index())
+        imaginary::name(register.index() - reg::RC0.index())
     }
 }
 
@@ -2011,12 +2012,19 @@ fn emit_on(
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
-fn adjust(
+pub(crate) fn adjust(
     out: &mut String,
     n: i64,
 ) {
     let n = n as u16;
-    writeln!(out, "  clc\n  lda rc0\n  adc #{}\n  sta rc0\n  lda rc1\n  adc #{}\n  sta rc1", n & 0xFF, n >> 8).unwrap();
+    let (low, high) = (imaginary::name(0), imaginary::name(1));
+    writeln!(
+        out,
+        "  clc\n  lda {low}\n  adc #{}\n  sta {low}\n  lda {high}\n  adc #{}\n  sta {high}",
+        n & 0xFF,
+        n >> 8
+    )
+    .unwrap();
 }
 
 /// The callee-saved bytes the allocation used are stored to a slot of their own
@@ -2431,9 +2439,9 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("LEA"), [_, _, _, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16);
                     let n = if n >= old { n + spilled } else { n };
-                    writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
+                    writeln!(out, "  clc\n  lda {}\n  adc #{}", imaginary::name(0), n & 0xFF).unwrap();
                     move_byte(&mut out, regs[0], reg::A, false, None);
-                    writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    writeln!(out, "  lda {}\n  adc #{}", imaginary::name(1), (n >> 8) & 0xFF).unwrap();
                     move_byte(&mut out, regs[1], reg::A, false, None);
                 }
                 // against zero, a load or an ALU result has already set the
@@ -2586,13 +2594,14 @@ fn emit_with<const STACK: bool>(
                         writeln!(out, "  ldy #{offset}").unwrap();
                         let name = register_name(byte);
                         let direct = byte == reg::A;
+                        let pointer = imaginary::name(0);
                         let body = match (kind, byte) {
-                            ("SPILL", b) if b == reg::A => "  sta (rc0),y\n".to_owned(),
-                            ("SPILL", b) if b == reg::X => "  txa\n  sta (rc0),y\n".to_owned(),
-                            ("SPILL", _) => format!("  lda {name}\n  sta (rc0),y\n"),
-                            (_, b) if b == reg::A => "  lda (rc0),y\n".to_owned(),
-                            (_, b) if b == reg::X => "  lda (rc0),y\n  tax\n".to_owned(),
-                            (_, _) => format!("  lda (rc0),y\n  sta {name}\n"),
+                            ("SPILL", b) if b == reg::A => format!("  sta ({pointer}),y\n"),
+                            ("SPILL", b) if b == reg::X => format!("  txa\n  sta ({pointer}),y\n"),
+                            ("SPILL", _) => format!("  lda {name}\n  sta ({pointer}),y\n"),
+                            (_, b) if b == reg::A => format!("  lda ({pointer}),y\n"),
+                            (_, b) if b == reg::X => format!("  lda ({pointer}),y\n  tax\n"),
+                            (_, _) => format!("  lda ({pointer}),y\n  sta {name}\n"),
                         };
                         if direct {
                             out.push_str(&body);
@@ -2674,7 +2683,7 @@ fn own_labels(
 /// flags, so it stays when a branch reads them before anything sets them again.
 pub fn drop_reloads(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    let cell = |operand: &str| operand.starts_with("rc") || operand.starts_with("s_");
+    let cell = |operand: &str| imaginary::operand(operand) || operand.starts_with("s_");
     let sets_flags = |mnemonic: &str| {
         matches!(
             mnemonic,
