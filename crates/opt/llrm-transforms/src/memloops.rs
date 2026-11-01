@@ -36,9 +36,8 @@
 //! LLVM's `createMemCpyLoopUnknownSize`
 //! ([LowerMemIntrinsics.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LowerMemIntrinsics.cpp#L35)).
 
-use std::collections::BTreeSet;
-
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Module, Operand};
@@ -65,7 +64,7 @@ fn copies(
     context: &Context,
     intrinsics: &[Option<Intrinsic>],
     function: &Function,
-) -> BTreeSet<InstId> {
+) -> IdSet<InstId> {
     function
         .walk()
         .filter_map(|(_, inst)| {
@@ -105,7 +104,7 @@ pub fn expanded(
         if !global.name.as_deref().is_some_and(wanted) {
             continue;
         }
-        for call in copies(context, &intrinsics, function) {
+        for call in copies(context, &intrinsics, function).iter() {
             loop_of(context, function, call)?;
         }
     }
