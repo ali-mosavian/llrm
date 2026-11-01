@@ -159,9 +159,14 @@ impl<const STACK: bool> Target for Mos<STACK> {
     /// `inc` and `dec` are one byte in `x` and `y` (`inx`), `clc; adc #1` in `a`.
     fn operand_hint(
         inst: &Inst,
-        _operand: usize,
+        operand: usize,
     ) -> Option<RegId> {
-        matches!(inst.kind, Kind::Op("INC" | "DEC")).then_some(reg::X)
+        match inst.kind {
+            Kind::Op("INC" | "DEC") => Some(reg::X),
+            // a compared byte follows its source (a copy hint); with none, `a`
+            Kind::Op("CMP") if operand == 1 => Some(reg::A),
+            _ => None,
+        }
     }
 
     type Class = Class;
