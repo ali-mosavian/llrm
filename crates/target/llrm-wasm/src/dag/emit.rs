@@ -26,7 +26,7 @@ use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 
 use super::function::{PhiCopy, Selected};
 use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};
-use crate::mir::{Function, Inst, Mem, Operand, PHI, VReg, ValType};
+use crate::mir::{Function, IMPLICIT_DEF, Inst, Mem, Operand, PHI, VReg, ValType};
 
 /// The register class of a value type, `None` for a chain or glue.
 fn class(vt: EVT) -> Option<ValType> {
@@ -166,7 +166,12 @@ impl Emitter<'_> {
                     }
                 }
                 ISD::Machine(code) => {
-                    let code = code as u16;
+                    // `TargetOpcode::IMPLICIT_DEF` is the generic opcode the matcher
+                    // selects for `undef`; the wasm passes know it by `mir::IMPLICIT_DEF`.
+                    let code = match code as u16 {
+                        llrm_dagisel::generated::ids::target_opcode::IMPLICIT_DEF => IMPLICIT_DEF,
+                        code => code,
+                    };
                     let mut operands = Vec::new();
                     for res in 0..data.values.len() {
                         if let Some(ty) = class(data.values[res]) {

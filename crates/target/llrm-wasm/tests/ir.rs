@@ -262,3 +262,11 @@ fn unreachable_traps() {
 fn weak_functions_print_weak() {
     check("weak");
 }
+
+/// A returned or passed `undef` selects `IMPLICIT_DEF`, which reached the
+/// encoder as opcode 10 ("has no encoding") and killed llrm-qb --wasm32 on 20
+/// programs of tests/run/qb. The pin turns it into a zero constant.
+#[test]
+fn undef_values() {
+    check("undef_values");
+}
