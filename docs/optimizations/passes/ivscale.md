@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ivscale.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ivscale.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ivscale.rs sha256:5fc8bdf97bcd56eb11365373540dfc4fe998ef07fe77f06646d9408aeaca575a -->
+<!-- src: crates/opt/llrm-transforms/src/ivscale.rs sha256:1442ab45b04dd22c17cdc1fc2dedf01e961364b7713eb29b33d5be13de362d6a -->
 
 # ivscale
 
@@ -25,8 +25,17 @@ The rewrite is exact when `i << k` hits the bound on the trip `i` does: `B`
 is at least `start` (plus one for the test of `i + 1`) and below `2^(w-k)`,
 so the counter reaches `B` before either wraps. Both come from `B`'s
 unsigned range under the loop's guards (SCEV), so a bound the analysis
-cannot limit is left alone. The latch add loses its wrap flags. Only a
-target that prices a scaled index (`Tti::scaled_index_insns`) runs it.
+cannot limit is left alone. The latch add loses its wrap flags.
+
+The shifted bound is a value beside the bound across the loops around this
+one, so the rewrite stands only where the bound has no other reader: a
+`shl B, k` already made is the shifted bound, and a compare of `B` with a
+constant that its range decides (BASIC's `half > 0` guard) folds, its branch
+left to SimplifyCFG. Any other reader leaves the loop as it is: the frame
+of stft_single (BASIC) grew 2 B and a reload came in (+15 B) with both live.
+
+Only a target that prices a scaled index (`Tti::scaled_index_insns`) runs
+it, and not for a function optimized for size.
 Cost: O(uses) per loop.
 
 DEVIATE LSR4 (the pin's LSR chooses the scaled form and its code prices it

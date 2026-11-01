@@ -20,8 +20,17 @@
 //! is at least `start` (plus one for the test of `i + 1`) and below `2^(w-k)`,
 //! so the counter reaches `B` before either wraps. Both come from `B`'s
 //! unsigned range under the loop's guards (SCEV), so a bound the analysis
-//! cannot limit is left alone. The latch add loses its wrap flags. Only a
-//! target that prices a scaled index (`Tti::scaled_index_insns`) runs it.
+//! cannot limit is left alone. The latch add loses its wrap flags.
+//!
+//! The shifted bound is a value beside the bound across the loops around this
+//! one, so the rewrite stands only where the bound has no other reader: a
+//! `shl B, k` already made is the shifted bound, and a compare of `B` with a
+//! constant that its range decides (BASIC's `half > 0` guard) folds, its branch
+//! left to SimplifyCFG. Any other reader leaves the loop as it is: the frame
+//! of stft_single (BASIC) grew 2 B and a reload came in (+15 B) with both live.
+//!
+//! Only a target that prices a scaled index (`Tti::scaled_index_insns`) runs
+//! it, and not for a function optimized for size.
 //! Cost: O(uses) per loop.
 //!
 //! DEVIATE LSR4 (the pin's LSR chooses the scaled form and its code prices it
@@ -53,7 +62,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 
-use crate::ivutil::{constant, def, int};
+use crate::ivutil::{constant, def, int, wrap};
 
 /// `size`: the function is optimized for size, where the counter's wider step
 /// (`add 4` for `inc`) costs what the shift saves.
@@ -78,14 +87,16 @@ struct Scaled {
     width: u32,
 }
 
-/// `ScevSession` over the headers of `function`'s loops, innermost first.
+/// `ScevSession` over the headers of `function`'s loops, innermost first:
+/// whether anything changed, and whether a compare was folded (the branch on
+/// it is SimplifyCFG's).
 pub fn scaled_in(
     session: &mut ScevSession,
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
-) -> bool {
+) -> (bool, bool) {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
         let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
@@ -100,6 +111,7 @@ pub fn scaled_in(
     }
     se.forget_cached_ranges();
     let mut changed = false;
+    let mut folded = false;
     for header in headers {
         let phis: Vec<InstId> =
             function.iter_block(header).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect();
@@ -110,23 +122,78 @@ pub fn scaled_in(
                 if !l.is_loop_simplify_form(cx.function) {
                     continue;
                 }
-                matched(context, function, &l, header, phi).map(|one| {
-                    let s = se.get_scev(&cx, one.bound);
-                    let guarded = se.apply_loop_guards(&cx, s, header);
-                    (se.get_unsigned_range(&cx, guarded), one)
-                })
+                matched(context, function, &l, header, phi)
+                    .map(|one| {
+                        let s = se.get_scev(&cx, one.bound);
+                        let guarded = se.apply_loop_guards(&cx, s, header);
+                        let range = se.get_unsigned_range(&cx, guarded);
+                        llrm_support::debug!("ivscale", "counter shifted by {}: bound range {range:?}", one.shift);
+                        exact(&range, &one)
+                            .then(|| plan_users(context, function, cx.tree, &range, &one))
+                            .flatten()
+                            .map(|plan| (one, plan))
+                    })
+                    .flatten()
             };
-            let found = matched_here.and_then(|(range, one)| {
-                llrm_support::debug!("ivscale", "counter shifted by {}: bound range {range:?}", one.shift);
-                exact(&range, &one).then_some(one)
-            });
-            if let Some(one) = found {
-                rewrite(context, function, &one);
+            let found = matched_here;
+            if let Some((one, plan)) = found {
+                rewrite(context, function, &one, &plan);
                 changed = true;
+                folded |= !plan.folds.is_empty();
             }
         }
     }
-    changed
+    (changed, folded)
+}
+
+/// What else reads the bound. The rewrite reads `B << k` in place of `B`; both
+/// stay live across the loops around this one unless `B` has no other reader.
+/// A `shl B, k` already made is the shifted bound (no value is added), and a
+/// compare against a constant that `B`'s range decides is folded (so `B` is
+/// dead past the shift). Any other reader keeps the loop as it is.
+struct Plan {
+    reuse: Option<Operand>,
+    folds: Vec<(InstId, bool)>,
+}
+
+fn plan_users(
+    context: &Context,
+    function: &Function,
+    tree: &llrm_mir::domtree::DomTree,
+    range: &ConstantRange,
+    one: &Scaled,
+) -> Option<Plan> {
+    let mut plan = Plan { reuse: None, folds: Vec::new() };
+    let Operand::Value(bound) = one.bound else { return Some(plan) };
+    for user in function.users(bound).iter() {
+        if user.user == one.icmp {
+            continue;
+        }
+        let reader = function.instruction(user.user);
+        match reader.opcode {
+            Opcode::Binary(BinaryOp::Shl)
+                if user.index == 0 && constant(context, reader.operands[1]) == Some(u128::from(one.shift)) =>
+            {
+                let placed = function.parent(user.user).is_some_and(|block| tree.dominates(block, one.preheader));
+                if plan.reuse.is_none() && placed {
+                    plan.reuse = reader.result.map(Operand::Value);
+                }
+            }
+            Opcode::ICmp(predicate) if user.index == 0 => {
+                let at = constant(context, reader.operands[1])?;
+                let other = ConstantRange::new(one.width, at, wrap(at + 1, one.width));
+                if range.icmp(predicate, &other) {
+                    plan.folds.push((user.user, true));
+                } else if range.icmp(predicate.inverse(), &other) {
+                    plan.folds.push((user.user, false));
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(plan)
 }
 
 /// The scaled counter hits the bound on the trip the counter does: the bound
@@ -231,15 +298,17 @@ fn rewrite(
     context: &Context,
     function: &mut Function,
     one: &Scaled,
+    plan: &Plan,
 ) {
     let ty = function.instruction(one.phi).ty;
     let scaled = |value: u128| int(context, ty, value << one.shift, one.width);
     function.set_operand(one.phi, one.start_slot, scaled(one.start));
     function.set_operand(one.next, 1, scaled(1));
     function.set_flags(one.next, Flags::default());
-    let bound = match constant(context, one.bound) {
-        Some(value) => scaled(value),
-        None => {
+    let bound = match (constant(context, one.bound), plan.reuse) {
+        (Some(value), _) => scaled(value),
+        (None, Some(shifted)) => shifted,
+        (None, None) => {
             let terminator = function.terminator(one.preheader).expect("a preheader terminator");
             let made = function.create_instruction(
                 Opcode::Binary(BinaryOp::Shl),
@@ -253,6 +322,12 @@ fn rewrite(
         }
     };
     function.set_operand(one.icmp, one.bound_slot, bound);
+    for &(compare, holds) in &plan.folds {
+        let result = function.instruction(compare).result.expect("a compare value");
+        let truth = int(context, function.instruction(compare).ty, u128::from(holds), 1);
+        function.replace_all_uses_with(result, truth);
+        function.erase(compare).expect("a compare nothing reads");
+    }
     let counter = function.instruction(one.phi).result.expect("a counter value");
     for &shift in &one.shifts {
         let result = function.instruction(shift).result.expect("a shift value");
@@ -283,7 +358,12 @@ impl FunctionPass for IvScale {
             return PreservedAnalyses::all();
         }
         let mut session = ScevSession::within(unit.context, &outer.globals, &outer.metadata, unit.function);
-        if scaled_in(&mut session, unit.context, unit.layout, unit.function, &outer) {
+        let (changed, folded) = scaled_in(&mut session, unit.context, unit.layout, unit.function, &outer);
+        if folded {
+            // A branch on a folded compare is a branch on a constant.
+            return crate::simplifycfg::SimplifyCfg::default().run(unit, analyses);
+        }
+        if changed {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()

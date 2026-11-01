@@ -194,3 +194,67 @@ fn a_bound_the_loop_changes_keeps_the_counter() {
     let (before, after) = m16(&text);
     assert_eq!(before, after);
 }
+
+/// `DOUBLING` with `outer` also making `extra` of the bound and `latch`
+/// summing `use_` into the result.
+fn doubling_with(
+    outer: &str,
+    use_: &str,
+) -> String {
+    DOUBLING
+        .replace("  br label %loop\n", &format!("{outer}  br label %loop\n"))
+        .replace("  %t2 = add i32 %s2, 1\n", &format!("{use_}  %t2 = add i32 %s2, 1\n"))
+        .replace("  ret i32 %t2", "  ret i32 %t2")
+}
+
+/// stft_single (BASIC) kept `half > 0` as the loop guard: with the bound and
+/// the shifted bound both live across the enclosing loop the frame grew 2 B
+/// and a reload came in (+15 B). The range (1..=128) decides the guard, so it
+/// folds and the bound is dead past its shift.
+#[test]
+fn a_guard_the_range_decides_is_folded_with_the_rewrite() {
+    let text =
+        doubling_with("  %g = icmp sgt i16 %half, 0\n", "  %z = select i1 %g, i32 %s2, i32 0\n  %s3 = add i32 %z, 1\n");
+    let (before, after) = m16(&text);
+    agree(&before, &after);
+    assert!(after.contains("add i16 %j, 4"), "{after}");
+    assert!(!after.contains("icmp sgt"), "{after}");
+}
+
+/// A `shl B, k` already made is the shifted bound: no second one is made.
+#[test]
+fn a_shift_of_the_bound_already_made_is_the_shifted_bound() {
+    let text = doubling_with("  %q = shl i16 %half, 2\n", "  %w = zext i16 %q to i32\n  %s3 = add i32 %w, %s2\n");
+    let (before, after) = m16(&text);
+    agree(&before, &after);
+    assert!(after.contains("add i16 %j, 4"), "{after}");
+    assert_eq!(after.matches("shl").count(), 2, "one for the doubling, one for the bound: {after}");
+}
+
+/// Another reader of the bound keeps it live beside its shift: left alone.
+#[test]
+fn a_bound_another_instruction_reads_keeps_the_counter() {
+    let text = doubling_with("", "  %w = zext i16 %half to i32\n  %s3 = add i32 %w, %s2\n");
+    let (before, after) = m16(&text);
+    assert_eq!(before, after);
+}
+
+/// The guard of BASIC's loop (`if half > 0`) was a branch: once the range
+/// decides it, no branch on a constant is left to cost a `test`/`jne`.
+#[test]
+fn a_branch_on_a_folded_guard_is_removed() {
+    let text = DOUBLING
+        .replace(
+            "  br label %loop\n",
+            "  br label %guard\nguard:\n  %g = icmp sgt i16 %half, 0\n  br i1 %g, label %pre, label %latch\npre:\n  br label %loop\n",
+        )
+        .replace("[ 0, %outer ], [ %next", "[ 0, %pre ], [ %next")
+        .replace("[ %t, %outer ]", "[ %t, %pre ]")
+        .replace("br i1 %c, label %latch, label %loop", "br i1 %c, label %exit, label %loop")
+        .replace("latch:\n", "exit:\n  br label %latch\nlatch:\n  %s4 = phi i32 [ 0, %guard ], [ %s2, %exit ]\n")
+        .replace("%t2 = add i32 %s2, 1", "%t2 = add i32 %s4, 1");
+    let (before, after) = m16(&text);
+    agree(&before, &after);
+    assert!(after.contains("add i16 %j, 4"), "{after}");
+    assert!(!after.contains("br i1 %g") && !after.contains("br i1 true"), "{after}");
+}
