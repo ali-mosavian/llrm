@@ -107,6 +107,8 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         tl.set_operation_action(FRem, vt, Action::LibCall);
         tl.set_operation_action(LRint, vt, Action::LibCall);
         tl.set_libcall_name(LRint, vt, if vt == MVT::F32 { "lrintf" } else { "lrint" });
+        tl.set_operation_action(LLRint, vt, Action::LibCall);
+        tl.set_libcall_name(LLRint, vt, if vt == MVT::F32 { "llrintf" } else { "llrint" });
         // `TargetLoweringBase`: the transcendentals default to `Expand`, a call
         // to the C routine of that type.
         for (op, name) in [

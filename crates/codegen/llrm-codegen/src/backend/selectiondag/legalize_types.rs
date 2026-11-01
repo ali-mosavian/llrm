@@ -698,10 +698,10 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
-            ISD::LRint => {
+            ISD::LRint | ISD::LLRint => {
                 // `PromoteIntRes_XRINT`: the same rounding to the wider type.
                 let input = self.dag.operand(value, 0);
-                self.dag.get_node(ISD::LRint, to, &[input])
+                self.dag.get_node(self.dag.opcode(value), to, &[input])
             }
             ISD::SignExtendInReg => {
                 // `PromoteIntRes_SIGN_EXTEND_INREG`: the promoted operand,
@@ -1152,6 +1152,7 @@ impl<'a> TypeLegalizer<'a> {
                 let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
                 (self.dag.get_node(ISD::Freeze, half, &[lo]), self.dag.get_node(ISD::Freeze, half, &[hi]))
             }
+            ISD::Abs | ISD::AbsMinPoison => self.expand_abs(value, half),
             ISD::CtPop => self.expand_ctpop(value, half),
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
             ISD::BitReverse => {
@@ -1413,6 +1414,48 @@ impl<'a> TypeLegalizer<'a> {
                 }
             }
         }
+    }
+
+    /// `ExpandIntRes_ABS`: the low half's own abs when the high half is all
+    /// sign bits; else the sra+xor+sub sequence on the halves with a borrow
+    /// chain; else the negation selected by the sign of the high half.
+    fn expand_abs(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let operand = self.dag.operand(value, 0);
+        let (lo, hi) = self.expanded_integer(operand);
+        let half_bits = half.size_in_bits();
+        let sign_bits = super::known_bits::num_sign_bits(self.dag, operand);
+        if sign_bits > half_bits {
+            let abs = if sign_bits > half_bits + 1 { ISD::AbsMinPoison } else { ISD::Abs };
+            return (self.dag.get_node(abs, half, &[lo]), self.dag.get_constant(0, half));
+        }
+        // `getTypeToExpandTo(NVT)`
+        let mut expands_to = half;
+        while !self.tli.types.is_type_legal(expands_to) {
+            expands_to = self.tli.types.type_conversion(expands_to).1;
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::USubOCarry, expands_to) {
+            let sign_shift = self.shift_const(u128::from(half_bits - 1), half);
+            let sign = self.dag.get_node(ISD::Sra, half, &[hi, sign_shift]);
+            let overflow_vt = self.tli.types.set_cc_result_type(half);
+            let lo = self.dag.get_node(ISD::Xor, half, &[lo, sign]);
+            let hi = self.dag.get_node(ISD::Xor, half, &[hi, sign]);
+            let lo = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[lo, sign]);
+            let borrow = SDValue { node: lo.node, res: 1 };
+            let hi = self.dag.get_node_multi(ISD::USubOCarry, &[half, overflow_vt], &[hi, sign, borrow]);
+            return (lo, hi);
+        }
+        let vt = self.dag.value_type(value);
+        let zero = self.dag.get_constant(0, vt);
+        let neg = self.dag.get_node(ISD::Sub, vt, &[zero, operand]);
+        let (neg_lo, neg_hi) = self.split_integer(neg, half);
+        let cc_vt = self.tli.types.set_cc_result_type(half);
+        let zero_half = self.dag.get_constant(0, half);
+        let negative = self.dag.get_setcc(cc_vt, hi, zero_half, CondCode::SetLt);
+        (self.dag.get_select(half, negative, neg_lo, lo), self.dag.get_select(half, negative, neg_hi, hi))
     }
 
     /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow

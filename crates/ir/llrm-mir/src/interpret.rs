@@ -573,7 +573,7 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
-            Intrinsic::LRint => {
+            Intrinsic::LRint | Intrinsic::LLRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {
                     FloatKind::Float => f64::from(f32::from_bits(bits as u32)),

@@ -489,6 +489,16 @@ define i8 @both() {
     assert_eq!(exit_code_of(&text, "both"), 0x24, "{text}");
 }
 
+/// A region split left the complement of a loop-carried value a phi-only range
+/// with no instruction naming it, and the allocator panicked ("Non-empty but
+/// used interval"; 2 of 300 difftest programs). LLVM removes such an interval.
+#[test]
+fn a_split_that_leaves_a_range_without_uses_compiles() {
+    let ir = include_str!("driver/range-left-without-uses.ll");
+    let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
+    assert!(text.contains("test:"), "{text}");
+}
+
 /// A function returning an `i64` was refused: "calling.toml has a result row"
 /// (6502 `pair_return`, `value_of_valueless`), then, with the row,
 /// "ExtractElement I32 expand result" and "Truncate I32 expand result". The
