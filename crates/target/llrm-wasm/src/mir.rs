@@ -234,8 +234,6 @@ pub struct Function {
     pub frame: Vec<(u64, u64)>,
     /// `Function::hasPersonalityFn`.
     pub personality: bool,
-    /// A call that is not an `invoke` may throw (`Options::calls_unwind`).
-    pub calls_unwind: bool,
     /// The callees that never throw (`Function::doesNotThrow`, and the
     /// libcalls `mayThrow` lists).
     pub nothrow: std::collections::HashSet<String>,

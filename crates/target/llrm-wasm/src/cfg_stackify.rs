@@ -14,10 +14,9 @@
 //! (`placeTryMarker`); a `BLOCK` made redundant by it is removed
 //! (`removeUnnecessaryInstrs`).
 //!
-//! DEVIATE W2: no `TRY_TABLE`, `DELEGATE` or `RETHROW`, so no
-//! `fixCallUnwindMismatches` and `fixCatchUnwindMismatches`: a call inside a
-//! `try` that does not unwind to it is refused by name. Reason: QB's calls
-//! unwind to one pad per procedure. Exit: the next EH stage.
+//! DEVIATE W2: no `TRY_TABLE` or `RETHROW`, and no `fixCatchUnwindMismatches`,
+//! which acts only on typed `catch` pads (`CATCH_LEGACY`); the pads here are
+//! `catch_all` (W18), which catch everything and never mismatch. Exit: W18.
 //!
 //! # See also
 //! `WebAssemblyCFGStackify.cpp` (`placeBlockMarker` L295, `placeLoopMarker`
@@ -410,23 +409,17 @@ impl Stackify<'_> {
         }
     }
 
-    /// `WebAssembly::mayThrow` of instruction `at` of `block`. Where plain
-    /// calls never throw (`Function::calls_unwind` off) only the call that
-    /// ends a block with an unwind edge does.
+    /// `WebAssembly::mayThrow` of instruction `at` of `block`.
     fn may_throw(
         &self,
         block: usize,
         at: usize,
     ) -> bool {
-        let insts = &self.f.blocks[block];
-        let inst = &insts[at];
+        let inst = &self.f.blocks[block][at];
         match inst.opcode {
             THROW | RETHROW | CALL_INDIRECT => return true,
             _ if !crate::branch::is_call(inst) => return false,
             _ => {}
-        }
-        if !self.f.calls_unwind {
-            return self.has_pad_successor(block) && insts.iter().rposition(|one| self.is_call(one)) == Some(at);
         }
         match inst.operands.iter().find_map(|operand| if let Operand::Sym(at) = operand { Some(*at) } else { None }) {
             Some(symbol) => !self.f.nothrow.contains(&self.f.symbols[symbol as usize].0),

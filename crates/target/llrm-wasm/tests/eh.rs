@@ -9,7 +9,7 @@ use llrm_wasm::Width;
 use llrm_wasm::dag::{ExceptionModel, Options};
 use llrm_wasm::driver::{assembly, object};
 
-const MODEL: Options = Options { stackify: true, exception_model: ExceptionModel::Wasm, calls_unwind: true };
+const MODEL: Options = Options { stackify: true, exception_model: ExceptionModel::Wasm };
 
 /// `compare.sh`'s `norm`: comments, trailing blanks, block labels and blank
 /// lines are not compared.

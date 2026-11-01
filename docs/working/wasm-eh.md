@@ -17,6 +17,7 @@ Every stage is O(n) in the blocks and instructions of a function (one pass over 
 | 8 | Text and object: `try`/`catch_all`/`end_try`, `exception-handling` feature, the table the pin keeps for a personality | | `every_fixture_object_is_the_pins` (llrm-wasm `tests/object.rs`) |
 | 9 | QB: `ehprepare` always runs; a handler lands by `llrm_host_land` (a JS throw) into the function's `catch_all`; the pad reads ERR from the runtime (`ehprepare`, `prepared_for`); host endings are traps, so `END` is not caught | | `on_error_lands_with_wasm_exceptions`, `a_host_ending_gets_through_a_catch_all` |
 | 10 | `eh_reentry`: a pad that branches back into the code it guards runs the body in a dispatch loop (replaces QB's `unwinding()` text transform) | Pin: none, it asserts (W20) | `a_pad_that_branches_back_into_its_body_resumes_there`, `a_pad_entered_again_from_the_body_it_re_enters_runs_that_body_again`, `the_default_successor_of_the_same_pad_is_entered_too` (`tests/reentry.rs`); `a_pad_the_host_throws_to_asks_the_runtime_for_err` |
+| 11 | `fixCallUnwindMismatches`: a call that may throw inside another pad's `try` is wrapped in a `try` / `delegate` to its pad or the caller; `addNestedTryDelegate`, `DELEGATE` depths, `unstackifyVRegsUsedInSplitBB`; `mayThrow` from the callee's `nounwind` | [CFGStackify.cpp:1582](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L1582), [L1164](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L1164) | `a_call_that_may_throw_inside_a_try_is_delegated_to_the_caller` and five more in `tests/eh.rs`; `the_registrations_are_declared_nounwind_like_the_calls_they_replace` |
 
 ## Evidence at edaaadf5cd
 
@@ -30,7 +31,7 @@ instantiated under node (imports: memory, `g`).
 | `two_invokes.ll` | 308860c0f5 | 308860c0f5 | instantiates |
 | `loop_invoke.ll` | d185cb6d82 | d185cb6d82 | instantiates |
 
-`call_in_try.ll` is a refusal fixture (pin: `try`/`delegate`; ours stops by name, DEVIATE W2).
+`call_in_try`, `two_pads`, `call_run`, `call_after_try`, `call_in_loop` and `nested_pads` (stage 11) are text- and object-identical to the pin too; the pin's objects are in `tests/eh/*.wasm`, each linked with `wasm-ld` and instantiated under node.
 
 Non-EH code is unchanged. `llrm-qb` over 693 `.bas` at m16, `-m32`, `-m64`, `--arm64=linux`, `--arm64=darwin`: object md5s
 of the base build (385a3b1c92, binary md5 7317e9ccc1) and this head (0d5f765952) differ in 0 of 693 files on each target
@@ -45,10 +46,9 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
 
 | Id | Difference | Exit |
 |----|-----------|------|
-| W2 | No `TRY_TABLE`, `DELEGATE`, `RETHROW`, so no `fixCallUnwindMismatches`/`fixCatchUnwindMismatches`: a call in a `try` that does not unwind to it is refused by name | port those passes |
+| W2 | No `TRY_TABLE` or `RETHROW`, and no `fixCatchUnwindMismatches`: it acts only on typed `catch` pads, ours are `catch_all`, which never mismatch | W18 |
 | W18 | No `hoistCatches`, `catchret`/`cleanupret` replacement, `THROW_REF`, `try_table` | a frontend with typed catches or funclet pads |
 | W20 | `eh_reentry` has no pin counterpart: the pin asserts on a pad that branches back into a `try`'s body, which C++ never makes | none |
-| W19 | `Options::calls_unwind = false` for QB: its mid-end makes every call that can raise an `invoke`, so a plain call in a `try` never throws | port `fixCallUnwindMismatches` |
 
 ## ON ERROR programs (28 under `tests/run/qb`, built with `--wasm-exceptions` and each header's flags, run under node)
 
@@ -76,4 +76,4 @@ does not dominate it; `tests/eh/*.ll` and C++-shaped pads (a `try` in a loop) ar
 
 ## Open items
 
-1. `fixCallUnwindMismatches` port (removes W2 and W19). Due 2026-11-07.
+None for EH. `fixCatchUnwindMismatches` waits for typed catches (W18).
