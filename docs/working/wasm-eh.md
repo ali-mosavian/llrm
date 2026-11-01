@@ -15,7 +15,8 @@ Every stage is O(n) in the blocks and instructions of a function (one pass over 
 | 6 | CFGSort: EH pads first, regions are loops or exceptions | [CFGSort.cpp:397:397](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp#L397) | `two_invokes_share_a_try` |
 | 7 | CFGStackify `placeTryMarker`, `removeUnnecessaryInstrs` | [CFGStackify.cpp:511:511](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L511), [L982:982](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L982) | `a_call_inside_a_try_that_does_not_unwind_to_it_is_refused_by_name` |
 | 8 | Text and object: `try`/`catch_all`/`end_try`, `exception-handling` feature, the table the pin keeps for a personality | | `every_fixture_object_is_the_pins` (llrm-wasm `tests/object.rs`) |
-| 9 | QB: `ehprepare` always runs; a handler lands by `llrm_host_land` (a JS throw) into the function's `catch_all`, which re-enters the body through a dispatch loop; host endings are traps, so `END` is not caught | | `on_error_lands_with_wasm_exceptions`, `a_host_ending_gets_through_a_catch_all` |
+| 9 | QB: `ehprepare` always runs; a handler lands by `llrm_host_land` (a JS throw) into the function's `catch_all`; the pad reads ERR from the runtime (`ehprepare`, `prepared_for`); host endings are traps, so `END` is not caught | | `on_error_lands_with_wasm_exceptions`, `a_host_ending_gets_through_a_catch_all` |
+| 10 | `eh_reentry`: a pad that branches back into the code it guards runs the body in a dispatch loop (replaces QB's `unwinding()` text transform) | Pin: none, it asserts (W20) | `a_pad_that_branches_back_into_its_body_resumes_there`, `a_pad_entered_again_from_the_body_it_re_enters_runs_that_body_again`, `the_default_successor_of_the_same_pad_is_entered_too` (`tests/reentry.rs`); `a_pad_the_host_throws_to_asks_the_runtime_for_err` |
 
 ## Evidence at edaaadf5cd
 
@@ -46,6 +47,7 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
 |----|-----------|------|
 | W2 | No `TRY_TABLE`, `DELEGATE`, `RETHROW`, so no `fixCallUnwindMismatches`/`fixCatchUnwindMismatches`: a call in a `try` that does not unwind to it is refused by name | port those passes |
 | W18 | No `hoistCatches`, `catchret`/`cleanupret` replacement, `THROW_REF`, `try_table` | a frontend with typed catches or funclet pads |
+| W20 | `eh_reentry` has no pin counterpart: the pin asserts on a pad that branches back into a `try`'s body, which C++ never makes | none |
 | W19 | `Options::calls_unwind = false` for QB: its mid-end makes every call that can raise an `invoke`, so a plain call in a `try` never throws | port `fixCallUnwindMismatches` |
 
 ## ON ERROR programs (28 under `tests/run/qb`, built with `--wasm-exceptions` and each header's flags, run under node)
@@ -59,7 +61,19 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
 
 The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).
 
+## Pin on a re-entering pad
+
+`tests/eh/reentry.ll` (two invokes unwinding to one pad that switches back to the block between them; no QB names):
+
+```
+llc -mtriple=wasm32 -O0 -fast-isel=false -exception-model=wasm -mattr=+exception-handling tests/eh/reentry.ll
+WebAssemblyCFGStackify.cpp:525: placeTryMarker: Assertion `!explicitlyBranchesTo(Pred, &MBB) && "Explicit branch to an EH pad!"' failed.
+```
+
+The pin's `FixIrreducibleControlFlow` has no `isEHPad` case, so the multi-entry cycle through the pad is dispatched into the pad.
+`eh_reentry` runs on the IR, before selection, only for a pad with a successor that reaches an invoke unwinding to it and
+does not dominate it; `tests/eh/*.ll` and C++-shaped pads (a `try` in a loop) are untouched.
+
 ## Open items
 
-1. `unwinding()` (crates/frontends/qb/src/wasm32.rs) rewrites QB's IR text. Plan, due 2026-11-04: an IR pass `eh_reentry` in llrm-wasm on the parsed module, between the reader and selection, for `ExceptionModel::Wasm`. For each function with a `landingpad`, it wraps the body in the dispatch loop (`resume` slot, one re-entry block per pad successor that lies in the invoking region) on the module's blocks, not text. The pass keys on the CFG (a pad successor dominated by an invoke that unwinds to it), not on QB names. Then the text transform and W16's EH part go. Test: pad fixtures vs the pin's accepted forms plus the 22 ON ERROR programs and the 693-file md5 sweep. O(n).
-2. `fixCallUnwindMismatches` port (removes W2 and W19). Due 2026-11-07, after item 1.
+1. `fixCallUnwindMismatches` port (removes W2 and W19). Due 2026-11-07.
