@@ -19,6 +19,8 @@
 //!   brings its own flags.
 //! - [`drop_cancelling_transfers`]: `tya; tay` and its three twins: the second
 //!   moves what the first just moved.
+//! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
+//!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces both.
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
 //!
 //! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
@@ -39,7 +41,7 @@
 
 use std::collections::HashSet;
 
-use crate::asm::{Asm, Flags, Inst, Line, Op, Operand, Registers};
+use crate::asm::{Asm, Flags, Index, Inst, Line, Op, Operand, Registers};
 
 /// Whether the zero and sign flags are set again before anything reads them,
 /// from `lines[from]` on.
@@ -79,6 +81,7 @@ pub fn run(asm: &mut Asm) {
     drop_known_loads(asm);
     drop_zero_compares(asm);
     drop_cancelling_transfers(asm);
+    branch_on_shift_carry(asm);
     jump_to_return(asm);
 }
 
@@ -279,4 +282,276 @@ pub fn jump_to_return(asm: &mut Asm) {
             *line = Line::Inst(Inst::new(Op::Rts, Operand::None));
         }
     }
+}
+
+/// Whether the instruction writes the zero-page or spill cell `cell`.
+fn writes_cell(
+    inst: &Inst,
+    cell: &Operand,
+) -> bool {
+    matches!(
+        inst.op,
+        Op::Sta | Op::Stx | Op::Sty | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror
+    ) && inst.operand == *cell
+}
+
+/// Whether register `bit` (A, X or Y) is written before it is read, along every
+/// path from `lines[from]`. A call, a return or an instruction not listed
+/// counts as a read.
+fn dead_from(
+    lines: &[Line],
+    from: usize,
+    bit: Registers,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        if !seen.insert(at) {
+            return true;
+        }
+        at += 1;
+        let Line::Inst(inst) = line else {
+            if matches!(line, Line::Raw(_)) {
+                return false;
+            }
+            continue;
+        };
+        let indexed = |index| match (&inst.operand, index) {
+            (Operand::Indexed(_, i), _) => *i == index,
+            (Operand::IndirectX(_), Index::X) | (Operand::IndirectY(_), Index::Y) => true,
+            _ => false,
+        };
+        let (reads, kills) = match (inst.op, bit) {
+            (Op::Lda | Op::Pla, Registers::A) => (false, true),
+            (Op::Ldx | Op::Plx, Registers::X) => (indexed(Index::X), true),
+            (Op::Ldy | Op::Ply, Registers::Y) => (indexed(Index::Y), true),
+            (Op::Tax | Op::Tay | Op::Txa | Op::Tya, _) => {
+                let (from, to) = match inst.op {
+                    Op::Tax => (Registers::A, Registers::X),
+                    Op::Tay => (Registers::A, Registers::Y),
+                    Op::Txa => (Registers::X, Registers::A),
+                    _ => (Registers::Y, Registers::A),
+                };
+                (bit == from, bit == to)
+            }
+            (Op::Sta | Op::Stx | Op::Sty | Op::Clc | Op::Sec | Op::Nop, _) => {
+                let stored = match inst.op {
+                    Op::Sta => Some(Registers::A),
+                    Op::Stx => Some(Registers::X),
+                    Op::Sty => Some(Registers::Y),
+                    _ => None,
+                };
+                (stored == Some(bit) || indexed(if bit == Registers::X { Index::X } else { Index::Y }), false)
+            }
+            (Op::Cpx | Op::Inx | Op::Dex, Registers::X) | (Op::Cpy | Op::Iny | Op::Dey, Registers::Y) => (true, false),
+            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => {
+                (true, false)
+            }
+            (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
+                (matches!(inst.operand, Operand::Acc | Operand::None), false)
+            }
+            (
+                Op::Adc
+                | Op::And
+                | Op::Ora
+                | Op::Eor
+                | Op::Sbc
+                | Op::Cmp
+                | Op::Bit
+                | Op::Asl
+                | Op::Lsr
+                | Op::Rol
+                | Op::Ror
+                | Op::Inc
+                | Op::Dec
+                | Op::Pha
+                | Op::Php
+                | Op::Cld
+                | Op::Sed
+                | Op::Clv,
+                _,
+            ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
+            (Op::Lda | Op::Ldx | Op::Ldy, _) => {
+                (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false)
+            }
+            (Op::Jmp, _) => {
+                return inst.target().is_some_and(|label| {
+                    lines.iter().position(|l| *l == Line::Label(label.to_owned())).is_some_and(|to| {
+                        dead_from(lines, to, bit, seen)
+                    })
+                });
+            }
+            (op, _) if op.opposite().is_some() || op == Op::Bra => {
+                let target = inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+                let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen));
+                if op == Op::Bra {
+                    return taken;
+                }
+                if !taken {
+                    return false;
+                }
+                continue;
+            }
+            _ => return false,
+        };
+        if reads {
+            return false;
+        }
+        if kills {
+            return true;
+        }
+    }
+    false
+}
+
+/// What a test reads: a cell, or a register.
+#[derive(PartialEq)]
+enum Source<'a> {
+    Cell(&'a Operand),
+    Register(Registers),
+}
+
+/// A shift that puts one bit of its operand in the carry, and the branch that
+/// asks for that bit (from the instruction tables: `asl` and `rol` move bit 7
+/// out, which `bpl`/`bmi` test as the sign; `lsr` and `ror` move bit 0 out,
+/// which `and #1` and `beq`/`bne` test).
+struct CarryOut {
+    shifts: [Op; 2],
+    /// `and #1` stands between the load and the branch.
+    masked: bool,
+    /// The branches for "the bit was clear" and "the bit was set".
+    branches: [Op; 2],
+}
+
+const LEFT: CarryOut = CarryOut { shifts: [Op::Asl, Op::Rol], masked: false, branches: [Op::Bpl, Op::Bmi] };
+const RIGHT: CarryOut = CarryOut { shifts: [Op::Lsr, Op::Ror], masked: true, branches: [Op::Beq, Op::Bne] };
+
+/// Whether the instruction writes register `bit`.
+fn writes_register(
+    inst: &Inst,
+    bit: Registers,
+) -> bool {
+    let acc = matches!(inst.operand, Operand::Acc | Operand::None);
+    match inst.op {
+        Op::Lda | Op::Pla | Op::Txa | Op::Tya | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => bit == Registers::A,
+        Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec => acc && bit == Registers::A,
+        Op::Ldx | Op::Plx | Op::Tax | Op::Inx | Op::Dex | Op::Tsx => bit == Registers::X,
+        Op::Ldy | Op::Ply | Op::Tay | Op::Iny | Op::Dey => bit == Registers::Y,
+        _ => false,
+    }
+}
+
+/// `asl|rol c` (`lsr|ror c`) and then, with only loads, transfers and logic
+/// between, a branch on the top (bottom) bit of what `c` held before it: `c`
+/// was a copy of a cell (`ldx m; stx c`) or of a register (`stx c`) that has
+/// not changed since. The shift put that bit in the carry, so `bcc` replaces
+/// `bpl` or `beq` (`bcs` for `bmi`, `bne`) and the test (`ldx m`, `txa`,
+/// `and #1`, ...) goes, when the register it set is written again before
+/// anything reads it. [`LEFT`] and [`RIGHT`] say which shifts and tests pair.
+///
+/// DEVIATE (6502-8): neither LLVM's pin nor llvm-mos folds a bit test of a
+/// value into the carry of its own shift (the pin has ARM Thumb1's `LSLS`
+/// compare and x86's carry of `add x,-1`, both narrower). Exit: a
+/// target-independent shift-with-carry-out in the MIR, so the select that
+/// tests a bit before `c << 1` or `c >> 1` branches on the shift's carry.
+pub fn branch_on_shift_carry(asm: &mut Asm) {
+    let mut at = 2;
+    while at < asm.lines.len() {
+        let rewrite = [&LEFT, &RIGHT].into_iter().find_map(|shape| carry_branch(asm, at, shape));
+        if let Some((carry, from)) = rewrite {
+            let Line::Inst(branch) = &mut asm.lines[at] else { unreachable!() };
+            branch.op = carry;
+            asm.lines.drain(from..at);
+            at = from + 1;
+        } else {
+            at += 1;
+        }
+    }
+}
+
+/// The branch to use and the first line of the test to drop, if the branch
+/// at `lines[at]` tests the bit `shape`'s shift moved into the carry.
+fn carry_branch(
+    asm: &Asm,
+    at: usize,
+    shape: &CarryOut,
+) -> Option<(Op, usize)> {
+    let Line::Inst(branch) = &asm.lines[at] else { return None };
+    let carry = match shape.branches.iter().position(|op| *op == branch.op)? {
+        0 => Op::Bcc,
+        _ => Op::Bcs,
+    };
+    // what the test reads, the register it sets, and its first line
+    let (source, tested, from) = if shape.masked {
+        let Line::Inst(Inst { op: Op::And, operand: Operand::Imm(one) }) = &asm.lines[at - 1] else { return None };
+        if one != "1" {
+            return None;
+        }
+        match asm.lines.get(at - 2) {
+            Some(Line::Inst(Inst { op: Op::Lda, operand })) if operand.is_cell() => {
+                (Source::Cell(operand), Registers::A, at - 2)
+            }
+            Some(Line::Inst(Inst { op: Op::Txa, .. })) => (Source::Register(Registers::X), Registers::A, at - 2),
+            Some(Line::Inst(Inst { op: Op::Tya, .. })) => (Source::Register(Registers::Y), Registers::A, at - 2),
+            // `and #1` alone tests the accumulator as it is
+            _ => (Source::Register(Registers::A), Registers::A, at - 1),
+        }
+    } else {
+        let Line::Inst(Inst { op: read, operand }) = &asm.lines[at - 1] else { return None };
+        match read {
+            Op::Lda if operand.is_cell() => (Source::Cell(operand), Registers::A, at - 1),
+            Op::Ldx if operand.is_cell() => (Source::Cell(operand), Registers::X, at - 1),
+            Op::Ldy if operand.is_cell() => (Source::Cell(operand), Registers::Y, at - 1),
+            Op::Tax => (Source::Register(Registers::A), Registers::X, at - 1),
+            Op::Tay => (Source::Register(Registers::A), Registers::Y, at - 1),
+            Op::Txa => (Source::Register(Registers::X), Registers::A, at - 1),
+            Op::Tya => (Source::Register(Registers::Y), Registers::A, at - 1),
+            _ => return None,
+        }
+    };
+    let unchanged = |inst: &Inst| match &source {
+        Source::Cell(cell) => !writes_cell(inst, cell),
+        Source::Register(bit) => !writes_register(inst, *bit),
+    };
+    // the shift, past instructions that leave the carry and the source alone
+    let mut shift = from;
+    let copy = loop {
+        shift = shift.checked_sub(1)?;
+        let Line::Inst(before) = &asm.lines[shift] else { return None };
+        match before.op {
+            op if shape.shifts.contains(&op) && before.operand.is_cell() => break &before.operand,
+            Op::Lda | Op::Ldx | Op::Ldy | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Eor | Op::And | Op::Ora
+            | Op::Nop | Op::Inx | Op::Iny | Op::Dex | Op::Dey | Op::Sta | Op::Stx | Op::Sty
+                if unchanged(before) => {}
+            _ => return None,
+        }
+    };
+    if matches!(&source, Source::Cell(cell) if *cell == copy) {
+        return None;
+    }
+    // `copy` held the source before the shift
+    let mut back = shift;
+    let copied = loop {
+        back -= 1;
+        let Line::Inst(before) = &asm.lines[back] else { return None };
+        if writes_cell(before, copy) {
+            let (stored, load) = match before.op {
+                Op::Sta => (Registers::A, Op::Lda),
+                Op::Stx => (Registers::X, Op::Ldx),
+                Op::Sty => (Registers::Y, Op::Ldy),
+                _ => return None,
+            };
+            break match &source {
+                Source::Register(bit) => *bit == stored,
+                Source::Cell(cell) => {
+                    matches!(asm.lines.get(back.checked_sub(1)?)?, Line::Inst(source)
+                        if source.op == load && source.operand == **cell)
+                }
+            };
+        }
+        if before.op == Op::Jsr || before.op.is_branch() || !unchanged(before) {
+            return None;
+        }
+    };
+    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::new())).then_some((carry, from))
 }
