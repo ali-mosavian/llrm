@@ -566,6 +566,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
+    }
+
     fn speed_inline_by_code_size(&self) -> bool {
         self.tuning.inline_size_guard_at_speed
     }

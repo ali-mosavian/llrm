@@ -53,6 +53,10 @@ pub struct Tuning {
     /// also holds a caller optimized for speed; false: the pin's threshold
     /// alone decides there.
     pub inline_size_guard_at_speed: bool,
+    /// A constant offset of an address is a displacement the access folds;
+    /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
+    /// is refused (it costs the displacement). false: the pin's.
+    pub keep_constant_displacements: bool,
 }
 
 impl Tuning {
@@ -74,6 +78,7 @@ impl Tuning {
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,
+        keep_constant_displacements: false,
     };
 }
 
