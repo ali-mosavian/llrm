@@ -848,6 +848,353 @@ pub fn build_overlap_map(
     prepared
 }
 
+/// Where a location starts: just before record `slot` of `inst`, or before
+/// `inst` itself when `slot` is the number of records standing before it
+/// (`VarLocInsertPt`, a `DbgRecord` or an `Instruction`).
+pub type InsertPt = (InstId, u32);
+
+/// `walkToAllocaAndPrependOffsetDeref`: the alloca `address` is a constant
+/// in-bounds offset from, and `ops` as the location of the variable that is
+/// in the memory there: the offset ahead of them and a `deref` at their end,
+/// before a fragment.
+fn alloca_and_deref(
+    q: &Query,
+    address: Operand,
+    mut ops: Vec<DwOp>,
+) -> (Operand, Vec<DwOp>) {
+    let width = match q.type_of(address).map(|ty| q.context.types.get(ty)) {
+        Some(Type::Pointer(space)) => q.layout.pointer(*space).index_bits,
+        _ => 64,
+    };
+    let (base, offset) = strip_and_accumulate_constant_offsets(q, address, width, false);
+    if offset != 0 {
+        ops.insert(0, DwOp::PlusUconst(offset as u64));
+    }
+    let at = ops.iter().position(|op| matches!(op, DwOp::Fragment { .. })).unwrap_or(ops.len());
+    ops.insert(at, DwOp::Deref);
+    (base, ops)
+}
+
+/// The dataflow's state and its transfer functions
+/// (`AssignmentTrackingLowering`).
+pub struct Lowering<'a> {
+    module: &'a Module,
+    q: &'a Query<'a>,
+    markers: &'a AssignmentMarkers,
+    with_slot: &'a HashSet<MetadataId>,
+    prepared: Prepared,
+    builder: FunctionVarLocsBuilder,
+    /// The records standing before each instruction, in order.
+    records: HashMap<InstId, Vec<usize>>,
+    /// The locations to start, by point (`InsertBeforeMap`).
+    insert_before: BTreeMap<InsertPt, Vec<VarLocInfo>>,
+    /// The variables whose live kind was set in this frame.
+    touched: Vec<VariableId>,
+    /// Aggregates that are not in their stack slot all the time
+    /// (`NotAlwaysStackHomed`).
+    not_always_stack_homed: HashSet<MetadataId>,
+}
+
+impl<'a> Lowering<'a> {
+    pub fn new(
+        module: &'a Module,
+        q: &'a Query<'a>,
+        markers: &'a AssignmentMarkers,
+        with_slot: &'a HashSet<MetadataId>,
+        prepared: Prepared,
+        builder: FunctionVarLocsBuilder,
+    ) -> Lowering<'a> {
+        let mut records: HashMap<InstId, Vec<usize>> = HashMap::new();
+        for (at, record) in q.function.debug_records().iter().enumerate() {
+            records.entry(record.before).or_default().push(at);
+        }
+        Lowering {
+            module,
+            q,
+            markers,
+            with_slot,
+            prepared,
+            builder,
+            records,
+            insert_before: BTreeMap::new(),
+            touched: Vec::new(),
+            not_always_stack_homed: HashSet::new(),
+        }
+    }
+
+    fn ops_of(
+        &self,
+        expression: Option<MetadataId>,
+    ) -> Vec<DwOp> {
+        expression.and_then(|id| self.module.expression(id)).unwrap_or_default()
+    }
+
+    fn variable_of(
+        &mut self,
+        record: &DebugRecord,
+    ) -> VariableId {
+        self.builder.insert_variable(debug_variable_of(self.module, record))
+    }
+
+    fn contained(
+        &self,
+        variable: VariableId,
+    ) -> Vec<VariableId> {
+        self.prepared.contains.get(&variable).cloned().unwrap_or_default()
+    }
+
+    fn set_loc_kind(
+        &mut self,
+        live: &mut BlockInfo,
+        variable: VariableId,
+        kind: LocKind,
+    ) {
+        for one in std::iter::once(variable).chain(self.contained(variable)) {
+            live.set_loc_kind(one, kind);
+            self.touched.push(one);
+        }
+    }
+
+    /// `addMemDef`, and `addDbgDef` for `AssignmentKind::Debug`: the
+    /// assignment is the variable's, and its fragments' without a source.
+    fn add_def(
+        &self,
+        live: &mut BlockInfo,
+        kind: AssignmentKind,
+        variable: VariableId,
+        assignment: Assignment,
+    ) {
+        live.set_assignment(kind, variable, assignment);
+        let fragment = match assignment {
+            Assignment::Known { id, .. } => Assignment::Known { id, source: None },
+            Assignment::NoneOrPhi => Assignment::NoneOrPhi,
+        };
+        for one in self.contained(variable) {
+            live.set_assignment(kind, one, fragment);
+        }
+    }
+
+    /// `hasVarWithAssignment`: the variable and its fragments all have it.
+    fn has_assignment(
+        &self,
+        live: &BlockInfo,
+        kind: AssignmentKind,
+        variable: VariableId,
+        assignment: &Assignment,
+    ) -> bool {
+        live.has_assignment(kind, variable, assignment)
+            && self.contained(variable).into_iter().all(|one| live.has_assignment(kind, one, assignment))
+    }
+
+    fn emit(
+        &mut self,
+        at: InsertPt,
+        variable: VariableId,
+        expression: Vec<DwOp>,
+        location: Option<MetadataId>,
+        values: Vec<Operand>,
+    ) {
+        self.insert_before.entry(at).or_default().push(VarLocInfo { variable, expression, location, values });
+    }
+
+    /// `emitDbgValue`: a location for what `source` says, of `kind`, at `at`.
+    fn emit_dbg_value(
+        &mut self,
+        mut kind: LocKind,
+        source: &DebugRecord,
+        at: InsertPt,
+    ) {
+        let variable = self.variable_of(source);
+        let own = self.ops_of(source.expression);
+        if kind == LocKind::Mem {
+            let DebugWhat::Assign { address, address_expression, .. } = source.what else {
+                panic!("a memory location is of a #dbg_assign")
+            };
+            match address {
+                // The address was dropped: a value location.
+                None => kind = LocKind::Val,
+                Some(address) => {
+                    let mut ops = self.ops_of(Some(address_expression));
+                    if let Some(fragment) = fragment_of(&own) {
+                        ops.push(DwOp::Fragment { offset: fragment.offset, size: fragment.size });
+                    }
+                    let (base, ops) = alloca_and_deref(self.q, address, ops);
+                    self.emit(at, variable, ops, source.location, vec![base]);
+                    return;
+                }
+            }
+        }
+        let values = match (kind, source.what) {
+            (LocKind::None, _) => Vec::new(),
+            (_, DebugWhat::Value(value) | DebugWhat::Piece { value, .. }) => vec![value],
+            (_, DebugWhat::Assign { value, .. }) => value.into_iter().collect(),
+            (_, DebugWhat::Args(list)) => self.q.function.debug_args(list).to_vec(),
+            _ => Vec::new(),
+        };
+        self.emit(at, variable, own, source.location, values);
+    }
+
+    /// `processTaggedInstruction`: a store linked to `#dbg_assign`s.
+    fn process_tagged(
+        &mut self,
+        live: &mut BlockInfo,
+        inst: InstId,
+        after: InsertPt,
+    ) {
+        let function = self.q.function;
+        for &at in self.markers.of(function, inst) {
+            let assign = function.debug_records()[at];
+            let DebugWhat::Assign { id, .. } = assign.what else { continue };
+            let variable = self.variable_of(&assign);
+            let stored = Assignment::Known { id, source: None };
+            self.add_def(live, AssignmentKind::Stack, variable, stored);
+            if self.has_assignment(live, AssignmentKind::Debug, variable, &stored) {
+                self.set_loc_kind(live, variable, LocKind::Mem);
+                self.emit_dbg_value(LocKind::Mem, &assign, after);
+                return;
+            }
+            match live.loc_kind(variable) {
+                LocKind::Val => self.set_loc_kind(live, variable, LocKind::Val),
+                LocKind::Mem => match *live.assignment(AssignmentKind::Debug, variable) {
+                    Assignment::NoneOrPhi => {
+                        self.set_loc_kind(live, variable, LocKind::None);
+                        self.emit_dbg_value(LocKind::None, &assign, after);
+                    }
+                    Assignment::Known { source, .. } => {
+                        self.set_loc_kind(live, variable, LocKind::Val);
+                        match source {
+                            Some(source) => self.emit_dbg_value(LocKind::Val, &source, after),
+                            None => self.emit_dbg_value(LocKind::None, &assign, after),
+                        }
+                    }
+                },
+                LocKind::None => self.set_loc_kind(live, variable, LocKind::None),
+            }
+        }
+    }
+
+    /// `processUntaggedInstruction`: a store the ids do not tag is taken to
+    /// write the stack home of the variables it lies in.
+    fn process_untagged(
+        &mut self,
+        live: &mut BlockInfo,
+        inst: InstId,
+        after: InsertPt,
+    ) {
+        let Some(variables) = self.prepared.untagged_stores.get(&inst).cloned() else { return };
+        for (variable, info) in variables {
+            self.add_def(live, AssignmentKind::Stack, variable, Assignment::NoneOrPhi);
+            self.add_def(live, AssignmentKind::Debug, variable, Assignment::NoneOrPhi);
+            self.set_loc_kind(live, variable, LocKind::Mem);
+            let mut ops = Vec::new();
+            if info.offset_in_bits != 0 {
+                ops.push(DwOp::PlusUconst(info.offset_in_bits / 8));
+            }
+            ops.push(DwOp::Deref);
+            if let Some(fragment) = self.builder.variable(variable).fragment {
+                ops.push(DwOp::Fragment { offset: fragment.offset, size: fragment.size });
+            }
+            self.emit(after, variable, ops, None, vec![Operand::Value(info.base)]);
+        }
+    }
+
+    /// `processDbgAssign`.
+    fn process_dbg_assign(
+        &mut self,
+        live: &mut BlockInfo,
+        record: &DebugRecord,
+        after: InsertPt,
+    ) {
+        if !self.with_slot.contains(&record.variable) {
+            return;
+        }
+        let DebugWhat::Assign { id, address, .. } = record.what else { return };
+        let variable = self.variable_of(record);
+        let assignment = Assignment::Known { id, source: Some(*record) };
+        self.add_def(live, AssignmentKind::Debug, variable, assignment);
+        let kind = if self.has_assignment(live, AssignmentKind::Stack, variable, &assignment) {
+            if address.is_none() { LocKind::Val } else { LocKind::Mem }
+        } else {
+            LocKind::Val
+        };
+        self.set_loc_kind(live, variable, kind);
+        self.emit_dbg_value(kind, record, after);
+    }
+
+    /// `processDbgValue`: a `#dbg_value` overrides, with no assignment.
+    fn process_dbg_value(
+        &mut self,
+        live: &mut BlockInfo,
+        record: &DebugRecord,
+        after: InsertPt,
+    ) {
+        if !self.with_slot.contains(&record.variable) {
+            return;
+        }
+        let variable = self.variable_of(record);
+        self.add_def(live, AssignmentKind::Debug, variable, Assignment::NoneOrPhi);
+        self.set_loc_kind(live, variable, LocKind::Val);
+        self.emit_dbg_value(LocKind::Val, record, after);
+    }
+
+    /// `process`: the instructions of `block` in order, each after the
+    /// records standing before it; `live` is the state going in and, after,
+    /// the state going out.
+    pub fn process(
+        &mut self,
+        block: llrm_mir::BlockId,
+        live: &mut BlockInfo,
+    ) {
+        let function = self.q.function;
+        let instructions: Vec<InstId> = function.iter_block(block).collect();
+        for (at, &inst) in instructions.iter().enumerate() {
+            let records = self.records.get(&inst).cloned().unwrap_or_default();
+            for (slot, &index) in records.iter().enumerate() {
+                let record = function.debug_records()[index];
+                let after = (inst, slot as u32 + 1);
+                // The location a record made before is made again.
+                self.insert_before.remove(&after);
+                if matches!(record.what, DebugWhat::Declare(_)) {
+                    continue;
+                }
+                if fragment_of(&self.ops_of(record.expression)).is_some_and(|fragment| fragment.size == 0) {
+                    continue;
+                }
+                match record.what {
+                    DebugWhat::Assign { .. } => self.process_dbg_assign(live, &record, after),
+                    _ => self.process_dbg_value(live, &record, after),
+                }
+            }
+            // A frame is an instruction and the records after it.
+            self.finish_frame(live);
+            if function.instruction(inst).opcode.is_terminator() {
+                break;
+            }
+            let next = instructions[at + 1];
+            let after = (next, 0);
+            self.insert_before.remove(&after);
+            if function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "DIAssignID") {
+                self.process_tagged(live, inst, after);
+            } else {
+                self.process_untagged(live, inst, after);
+            }
+        }
+    }
+
+    /// The end of a frame: a variable that is not in memory now cannot be
+    /// a single location.
+    fn finish_frame(
+        &mut self,
+        live: &BlockInfo,
+    ) {
+        for variable in std::mem::take(&mut self.touched) {
+            if live.loc_kind(variable) != LocKind::Mem {
+                self.not_always_stack_homed.insert(self.builder.variable(variable).variable);
+            }
+        }
+    }
+}
+
 /// The operations of an expression as LLVM prints them.
 pub fn expression_text(ops: &[DwOp]) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -1108,5 +1455,86 @@ define i32 @f(i32 %n) {{\nentry:\n\
         assert_eq!(slice(32, 32, 32, whole), Some(Some(Fragment { offset: 0, size: 32 })));
         assert_eq!(slice(0, 32, 64, whole), Some(Some(Fragment { offset: 0, size: 0 })), "before the variable");
         assert_eq!(slice(0, 32, 0, Fragment { offset: 0, size: 0 }), None, "no size");
+    }
+
+    /// Runs the dataflow over the entry block and gives the locations it made,
+    /// as (instruction's name or opcode, slot, variable's fragment, expression
+    /// text, number of values).
+    fn lowered(module: &Module) -> Vec<(String, u32, Option<Fragment>, String, usize)> {
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let function = function_f(module);
+        let q = Query::new(module, function, &layout);
+        let markers = AssignmentMarkers::new(function);
+        let with_slot = vars_with_stack_slot(function, &markers);
+        let mut builder = FunctionVarLocsBuilder::default();
+        let prepared = build_overlap_map(module, &q, &mut builder, &markers, &with_slot);
+        let size = prepared.tracked_variables;
+        let mut lowering = Lowering::new(module, &q, &markers, &with_slot, prepared, builder);
+        let mut live = BlockInfo::new(size);
+        lowering.process(function.entry().unwrap(), &mut live);
+        lowering
+            .insert_before
+            .iter()
+            .flat_map(|(&(inst, slot), locs)| {
+                let name = function.instruction(inst).opcode.mnemonic().to_owned();
+                let lowering = &lowering;
+                locs.iter().map(move |one| {
+                    (
+                        name.clone(),
+                        slot,
+                        lowering.builder.variable(one.variable).fragment,
+                        expression_text(&one.expression),
+                        one.values.len(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The records clang wrote for `int a[3]`, followed through the block as
+    /// the pin does: the alloca's id makes the whole variable's stack home
+    /// match its first `dbg_assign` (a memory location, though its value is
+    /// poison); each half's store then matches its `dbg_assign` (memory); and a
+    /// store that comes before its record leaves the half without a value
+    /// (none) until the record. Derived by hand from the pin's functions.
+    #[test]
+    fn a_store_and_its_assign_make_a_memory_location() {
+        let module = array(TAGGED_1, TAGGED_2);
+        let f = |offset, size| Some(Fragment { offset, size });
+        assert_eq!(
+            lowered(&module),
+            [
+                ("store".to_owned(), 1, None, "DW_OP_deref".to_owned(), 1),
+                ("getelementptr".to_owned(), 0, f(0, 32), "DW_OP_LLVM_fragment, 0, 32".to_owned(), 0),
+                ("getelementptr".to_owned(), 1, f(0, 32), "DW_OP_deref, DW_OP_LLVM_fragment, 0, 32".to_owned(), 1),
+                ("ret".to_owned(), 0, f(32, 32), "DW_OP_LLVM_fragment, 32, 32".to_owned(), 0),
+                (
+                    "ret".to_owned(),
+                    1,
+                    f(32, 32),
+                    "DW_OP_plus_uconst, 4, DW_OP_deref, DW_OP_LLVM_fragment, 32, 32".to_owned(),
+                    1
+                ),
+            ]
+        );
+    }
+
+    /// A store without an id is taken to write its variable's stack home: the
+    /// half it lies in is in memory from the store on, at its offset, with
+    /// no record to say so.
+    #[test]
+    fn an_untagged_store_makes_a_memory_location_for_its_variable() {
+        let module = array(TAGGED_1, "");
+        let locations = lowered(&module);
+        assert!(
+            locations.contains(&(
+                "ret".to_owned(),
+                0,
+                Some(Fragment { offset: 32, size: 32 }),
+                "DW_OP_plus_uconst, 4, DW_OP_deref, DW_OP_LLVM_fragment, 32, 32".to_owned(),
+                1
+            )),
+            "{locations:?}"
+        );
     }
 }
