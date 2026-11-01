@@ -26,8 +26,10 @@ one and prints the driver and version).
 | 15 | `mfunc.rs`, `object.rs` | spike-local machine function and static-executable writer; every `ObjectTarget` format answers `Unsupported`; no 16->32 branch relaxation | neutral-lir and the object refactor |
 | 16 | `mac.rs` | the Mac resource layout follows the book and is not run (no emulator or ROM) | when a ROM is fetched |
 | 17 | `dagisel/indexed.rs`, `lowering.rs` | `(An)+` and `-(An)` accesses (the shared indexed combine, on) with m68k-local writeback opcodes (value and new base, base tied). The pin models them with one def and no tied base, its `SelectARIPI`/`SelectARIPD` never match and it sets no indexed action. Off for `Options::PINNED`. Loads that extend are not indexed | none: the goal is best of gcc and clang |
+| 18 | `frame.rs`, `expand.rs` | the saved registers are pushed and popped (`move.l %d2,-(%sp)`, `movem.l regs,-(%sp)`) in place of the pin's `suba.l` and `movem` into slots, where the prologue and the epilogue are each no larger and no slower on the CPU (encoder bytes, timing tables); not with a frame pointer. Off for `Options::PINNED` | none: the goal is best of gcc and clang |
+| 19 | `encode.rs` | `MOVM*em` (`movem` to `-(An)`) takes the mask in printed order and encodes it reversed (`movem.l %d2-%d3,-(%sp)` is `48E7 3000`, as the pin's `llvm-mc` gives); the pin's table takes it pre-reversed and prints it forward | none: the pin's encoding is wrong for hardware |
 
-Items 4 to 6 and 17 are the only places the code differs from the pin's output on purpose; the rest is
+Items 4 to 6, 17, 18 and 19 are the only places the code differs from the pin's output on purpose; the rest is
 unfinished translation.
 
 ## What the removed overlay bought, per piece

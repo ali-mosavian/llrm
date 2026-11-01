@@ -41,17 +41,21 @@ pub struct Options {
     pub source_order: bool,
     /// Form `(An)+` and `-(An)` accesses, which gcc does and the pin does not.
     pub indexed: bool,
+    /// Push and pop the saved registers where that is no larger and no
+    /// slower than the pin's `suba.l` and `movem` into slots.
+    pub push_frame: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options = Options { mid_end: false, size: false, source_order: false, indexed: false };
+    pub const PINNED: Options =
+        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true }
+        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true }
     }
 }
 
@@ -103,7 +107,7 @@ pub fn items_with(
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
-    for line in finish(&function, &assignment, number, &slots, cpu)? {
+    for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
