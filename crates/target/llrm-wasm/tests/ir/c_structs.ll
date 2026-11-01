@@ -89,6 +89,3 @@ define void @pass(ptr noalias sret(%struct.s100) align 4 %0, ptr byval(%struct.s
 
 ; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.memcpy.p0.p0.i32(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i32, i1 immarg)
-
-
-
