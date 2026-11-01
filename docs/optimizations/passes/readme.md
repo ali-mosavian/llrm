@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 229 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 231 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -170,11 +170,13 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
+| memloops | Turns the `llvm.memcpy` calls of chosen functions into byte loops, before instruction selection. | In a target's driver, on a copy of the module, for the functions it names. | [memloops](memloops.md) |
 | memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: `crate::lsr` calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | mldstmotion | Stores to one address on both arms of a diamond become one store below it, as LLVM's `MergedLoadStoreMotion` (`mldst-motion<no-split-footer-bb>`). | Named by `pipeline`. | [mldstmotion](mldstmotion.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
+| pageindex | Pointers that step through memory a byte at a time, as a base and a byte index, before instruction selection. | In a target's driver, after the mid-end, for a target whose | [pageindex](pageindex.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |
 | pipeline_text | The pass pipeline text of `opt -passes=`: `a,b(c,d),e<x;y>`. | Named by `main`. | [pipeline_text](pipeline_text.md) |
 | ports | Each I/O port call narrowed to the memory its device reaches, as the target describes the port. | Twice: once over every body before the per-body pipeline, so a caller's | [ports](ports.md) |
