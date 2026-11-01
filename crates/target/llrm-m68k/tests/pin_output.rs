@@ -54,14 +54,14 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options =
-    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, quick: false };
+    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, short: false };
 
 fn compiled(
     ir: &str,
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, quick: false, ..options })
+    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, short: false, ..options })
         .expect("compiles")
 }
 
@@ -455,7 +455,7 @@ fn word_immediates_encode_as_binutils_does() {
     let word = |opcode, value| Inst { opcode, operands: vec![register("d0"), register("d0"), Operand::Imm(value)] };
     // eori.w #4129,%d0; or.w #40000,%d0 (the pin's `or` with a source of #imm:
     // binutils assembles the same text as `ori`, 0040 9c40, as long and as
-    // quick); and.w #4660,%d0 (c07c 1234)
+    // short); and.w #4660,%d0 (c07c 1234)
     for (inst, golden) in [
         (word("XOR16di", 4129), "0a401021"),
         (word("OR16di", 40000), "807c9c40"),
