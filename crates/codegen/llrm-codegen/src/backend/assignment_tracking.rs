@@ -35,6 +35,7 @@
 
 mod fill;
 mod redundant;
+mod rewrite;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
@@ -46,6 +47,7 @@ use llrm_mir::{
     ConstantKind, DebugRecord, DebugWhat, DwOp, Function, InstId, MetadataId, Module, Opcode, Operand, ValueDef,
     ValueId,
 };
+pub use rewrite::rewrite;
 
 /// Where a location starts: just before record `slot` of `inst`, or before
 /// `inst` itself when `slot` is the number of records standing before it
@@ -1501,18 +1503,52 @@ pub fn analyze(
 pub fn expression_text(ops: &[DwOp]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for op in ops {
-        parts.push(match op {
-            DwOp::PlusUconst(n) => format!("DW_OP_plus_uconst, {n}"),
-            DwOp::StackValue => "DW_OP_stack_value".to_owned(),
-            DwOp::Fragment { offset, size } => format!("DW_OP_LLVM_fragment, {offset}, {size}"),
-            DwOp::Arg(n) => format!("DW_OP_LLVM_arg, {n}"),
-            DwOp::Constu(n) => format!("DW_OP_constu, {n}"),
-            DwOp::Consts(n) => format!("DW_OP_consts, {n}"),
-            DwOp::Deref => "DW_OP_deref".to_owned(),
-            DwOp::Binary(_) | DwOp::Unary(_) | DwOp::Other => "DW_OP_?".to_owned(),
-        });
+        match op_words(op) {
+            Some((name, numbers)) => {
+                parts.push(name.to_owned());
+                parts.extend(numbers.iter().map(i128::to_string));
+            }
+            None => parts.push("DW_OP_?".to_owned()),
+        }
     }
     parts.join(", ")
+}
+
+/// The words an operation is written with: its name and numbers. `None` for
+/// [`DwOp::Other`], which keeps neither.
+fn op_words(op: &DwOp) -> Option<(&'static str, Vec<i128>)> {
+    use llrm_mir::module::{DwBinary, DwUnary};
+    Some(match *op {
+        DwOp::PlusUconst(n) => ("DW_OP_plus_uconst", vec![n.into()]),
+        DwOp::StackValue => ("DW_OP_stack_value", vec![]),
+        DwOp::Fragment { offset, size } => ("DW_OP_LLVM_fragment", vec![offset.into(), size.into()]),
+        DwOp::Arg(n) => ("DW_OP_LLVM_arg", vec![n.into()]),
+        DwOp::Constu(n) => ("DW_OP_constu", vec![n.into()]),
+        DwOp::Consts(n) => ("DW_OP_consts", vec![n.into()]),
+        DwOp::Deref => ("DW_OP_deref", vec![]),
+        DwOp::Binary(one) => (
+            match one {
+                DwBinary::Plus => "DW_OP_plus",
+                DwBinary::Minus => "DW_OP_minus",
+                DwBinary::Mul => "DW_OP_mul",
+                DwBinary::And => "DW_OP_and",
+                DwBinary::Or => "DW_OP_or",
+                DwBinary::Xor => "DW_OP_xor",
+                DwBinary::Shl => "DW_OP_shl",
+                DwBinary::Shr => "DW_OP_shr",
+                DwBinary::Shra => "DW_OP_shra",
+            },
+            vec![],
+        ),
+        DwOp::Unary(one) => (
+            match one {
+                DwUnary::Not => "DW_OP_not",
+                DwUnary::Neg => "DW_OP_neg",
+            },
+            vec![],
+        ),
+        DwOp::Other => return None,
+    })
 }
 
 #[cfg(test)]
@@ -1985,5 +2021,50 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
             builder.add_var_loc((at[2], 0), variable, vec![], None, vec![]);
         });
         assert_eq!((kept[0].len(), kept[1].len(), kept[2].len()), (0, 1, 1));
+    }
+
+    /// An expression with `DW_OP_plus` printed as `DW_OP_?`, which no reader
+    /// takes back: the table's text could not be compared with the pin's.
+    #[test]
+    fn an_expression_prints_every_operation_it_keeps() {
+        use llrm_mir::module::{DwBinary, DwUnary};
+        let ops = [DwOp::Constu(4), DwOp::Binary(DwBinary::Plus), DwOp::Unary(DwUnary::Neg), DwOp::Deref];
+        assert_eq!(expression_text(&ops), "DW_OP_constu, 4, DW_OP_plus, DW_OP_neg, DW_OP_deref");
+    }
+
+    fn rewritten(text: &str) -> Module {
+        let mut module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let locs = run(text);
+        assert!(rewrite(&mut module, "f", &locs));
+        module
+    }
+
+    /// The loop's `#dbg_assign`s stood for a variable always in its stack
+    /// home: afterwards one `Declare` of the alloca stands, before the first
+    /// instruction, and no `#dbg_assign` does.
+    #[test]
+    fn a_single_location_becomes_one_declare_ahead_of_the_first_instruction() {
+        let module = rewritten(LOOP);
+        let function = function_f(&module);
+        let first = function.walk().next().unwrap().1;
+        let alloca = Operand::Value(function.instruction(first).result.unwrap());
+        let records = function.debug_records();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!((records[0].before, records[0].what), (first, DebugWhat::Declare(alloca)));
+        assert_eq!(records[0].expression, None);
+    }
+
+    /// A variable a `dbg_value` overrides has wedges: each is a `Value`, and
+    /// the module prints and reads back with the same records.
+    #[test]
+    fn wedges_become_values_and_the_module_reads_back() {
+        let text = LOOP.replace("%j = add", "#dbg_value(i32 %i, !20, !DIExpression(), !25)\n  %j = add");
+        let module = rewritten(&text);
+        let records = function_f(&module).debug_records();
+        assert!(records.iter().any(|one| matches!(one.what, DebugWhat::Value(_))), "{records:?}");
+        assert!(records.iter().all(|one| !matches!(one.what, DebugWhat::Assign { .. })), "{records:?}");
+        let printed = llrm_mir::print::module(&module);
+        let again = llrm_mir::parse::module(&printed).unwrap_or_else(|error| panic!("{error}\n{printed}"));
+        assert_eq!(function_f(&again).debug_records().len(), records.len(), "{printed}");
     }
 }

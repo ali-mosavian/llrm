@@ -808,6 +808,14 @@ impl Function {
         &self.debug_records
     }
 
+    /// Says all of it again: the records `records` stand for those there were.
+    pub fn replace_debug_records(
+        &mut self,
+        records: Vec<DebugRecord>,
+    ) {
+        self.debug_records = records;
+    }
+
     /// As [`add_debug_record`](Self::add_debug_record), ahead of the records
     /// already standing before `before`: a pass that says what the
     /// instruction before `before` made says it earlier than what the code was
