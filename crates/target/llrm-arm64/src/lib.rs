@@ -13,6 +13,7 @@ pub mod flagcse;
 pub mod frame;
 pub mod isel;
 pub mod layout;
+pub mod lir_view;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;

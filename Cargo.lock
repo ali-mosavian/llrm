@@ -271,6 +271,7 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-sdag",
+ "llrm-spike-mf",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
