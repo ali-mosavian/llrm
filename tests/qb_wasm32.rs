@@ -593,7 +593,7 @@ fn the_dac_ports_read_back_what_was_written_on_wasm32() {
 #[test]
 fn palette_using_prints_the_bc_output_on_wasm32() {
     let path = root().join("tests/run/qb/palette_using_pds71.bas");
-    let dir = built_with("paluse", &std::fs::read_to_string(&path).unwrap(), "--wasm-exceptions");
+    let dir = built_with("paluse", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
     let (text, code) = run(&dir, "paluse", &[]);
     let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
     let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
