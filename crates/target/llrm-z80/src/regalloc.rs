@@ -99,10 +99,9 @@ impl Target for Z80Registers {
         crate::mfunc::operand_class(name, index)
     }
 
-    /// A branch or select reads the flags the compare before it set.
-    fn reads_flags_set_just_before(inst: &Inst) -> bool {
-        inst.reads_flags
-    }
+    // `reads_flags_set_just_before` stays false: every copy, spill and reload
+    // the allocator inserts is an `ld`, which leaves the flags alone, so
+    // nothing needs to be kept off the window between a compare and its branch.
 
     fn reserved(root: RegId) -> bool {
         matches!(root, r if r == reg::SP || r == reg::IX || r == reg::FLAGS)

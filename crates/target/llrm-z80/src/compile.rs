@@ -35,6 +35,9 @@ pub fn allocated(
     let mut function = machine_function(ir, name, request)?;
     eliminate_phis_with(&mut function, false);
     two_address(&mut function);
+    if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
+        dump(&function);
+    }
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     remove_identity_copies(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
@@ -62,6 +65,16 @@ pub fn remove_identity_copies(
             (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => register(*dst) != register(*src),
             _ => true,
         });
+    }
+}
+
+/// `function`, one instruction per line, on stderr (`LLRM_Z80_DUMP=name`).
+fn dump(function: &MFunction) {
+    for block in &function.blocks {
+        eprintln!("bb{}:", block.id);
+        for inst in &block.insts {
+            eprintln!("  {:?} {:?}{}{}", inst.kind, inst.operands, if inst.sets_flags { " SF" } else { "" }, if inst.reads_flags { " RF" } else { "" });
+        }
     }
 }
 
