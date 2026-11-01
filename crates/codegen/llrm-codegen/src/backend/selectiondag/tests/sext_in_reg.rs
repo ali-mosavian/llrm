@@ -32,7 +32,7 @@ fn a_one_bit_sign_extension_legalizes_to_a_negated_mask() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .unwrap();
