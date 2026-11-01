@@ -1329,7 +1329,7 @@ pub fn allocate_greedy<T: Target>(
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
     let mut converted = to_lir::<T>(function, registers)?;
-    if std::env::var_os("LLRM_NO_COALESCE").is_none() {
+    if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce(registers, size);
     }
     let order = |value: u32| converted.order(value);

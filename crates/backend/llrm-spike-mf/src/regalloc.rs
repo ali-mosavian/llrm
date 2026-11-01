@@ -750,7 +750,7 @@ impl<T: Target> GraphColoring<T> {
                             }
                         }
                     }
-                    if std::env::var_os("LLRM_SPIKE_DUMP").is_some() {
+                    if llrm_support::env_flag!("LLRM_SPIKE_DUMP") {
                         mentions.clear();
                         for (at, block) in function.blocks.iter().enumerate() {
                             for (i, inst) in block.insts.iter().enumerate() {
