@@ -1549,3 +1549,39 @@ ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w13"
 why = "long-standing quadratic hidden by the 5.0 Minstr floor, exposed by #5802's +20%; 1.231/2.234/5.581/15.07 Minstr at N=64..512; MCP linearization post-FF"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir ivshare"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w12"
+why = "measured 3.9 -> 14.8 Minstr (x3.83); a loop's counters are shared per loop; exit 2026-11-13: cap or O(n) fix, then the limit goes back to 2.3; clean CARGO_INCREMENTAL=0 build of 5cc9c5712b"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir ivzero"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w12"
+why = "measured 3.7 -> 14.5 Minstr (x3.86); exit 2026-11-13: cap or O(n) fix, then the limit goes back to 2.3; clean CARGO_INCREMENTAL=0 build of 5cc9c5712b"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "lir twoaddr"
+ratio = 3.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w12 (triage; hand to its author via oversight if not mine)"
+why = "measured 5.3 -> 16.1 Minstr (x3.02); exit 2026-11-13; clean CARGO_INCREMENTAL=0 build of 5cc9c5712b"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir floatalloc"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w12 (triage)"
+why = "measured 27.0 -> 62.1 Minstr (x2.30, at the limit); exit 2026-11-13; clean CARGO_INCREMENTAL=0 build of 5cc9c5712b"
