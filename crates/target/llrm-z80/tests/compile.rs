@@ -180,3 +180,13 @@ fn a_flag_reader_after_a_clobber_compares_again() {
     let out = compiled(ir, "f");
     assert_eq!(out.lines().filter(|line| line.trim().starts_with("cp a,")).count(), 2, "{out}");
 }
+
+/// A byte loaded into `a` and stored through a pair other than `hl` went through `hl` anyway
+/// (`ld a, (bc)` / `ex de, hl` / `ld (hl), a`): the check for a value made in `a` read the pointer operand.
+#[test]
+fn a_byte_in_a_is_stored_through_any_pair() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+        define void @cp(ptr %a, ptr %b, ptr %c) {\n  %v = load i8, ptr %c\n  store i8 %v, ptr %b\n  %w = load i8, ptr %a\n  store i8 %w, ptr %c\n  ret void\n}\n";
+    let out = text(ir, "cp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ld (de), a") && out.contains("ld (bc), a") && !out.contains("ex de, hl"), "{out}");
+}

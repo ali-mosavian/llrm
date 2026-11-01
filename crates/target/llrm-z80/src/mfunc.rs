@@ -470,7 +470,7 @@ impl Emitter<'_> {
                     (name, code)
                 }
             }
-            "LD8mr" if n.ops.get(1).is_some_and(|value| self.in_acc.contains(&(value.node, value.res))) => {
+            "LD8mr" if n.ops.first().is_some_and(|value| self.in_acc.contains(&(value.node, value.res))) => {
                 ("LD8prA", u32::from(opcode::LD8prA))
             }
             _ => (name, code),
