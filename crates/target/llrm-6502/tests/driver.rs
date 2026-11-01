@@ -376,7 +376,7 @@ fn bytes_at_o2(ir: &str) -> u32 {
 /// of `a_crc_loop_becomes_a_table_lookup` does become the table, so the bound
 /// is checked to see the table when it is there.
 #[test]
-fn crc16_is_the_88_byte_loop_and_the_bound_sees_the_table() {
+fn crc16_is_the_small_loop_and_the_bound_sees_the_table() {
     let looped = bytes_at_o2(
         r#"define i16 @crc16(ptr %p, i8 %n) {
   %crc = alloca i16
@@ -436,6 +436,9 @@ done:
 }"#,
     );
     assert!(looped < 100, "crc16 grew to {looped} bytes: the table is back");
+    // the bit counter steps with `dec` on its cell; joined into the compare's
+    // `a`/`x`/`y` it became `lda; sec; sbc #1; sta` (88 bytes)
+    assert!(looped <= 84, "crc16 is {looped} bytes: the bit counter lost its dec");
     let table = bytes_at_o2(CRC16_SELECT_SHAPED);
     assert!(table > 500, "the select-shaped crc16 is {table} bytes: the bound cannot see the table");
 }
