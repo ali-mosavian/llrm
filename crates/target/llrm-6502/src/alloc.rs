@@ -18,8 +18,8 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
-    Block, Inst, Join, Jump, Kind, MFunction, Operand, Reg, Side, Target, branch_fold, forward_reloads, machine_sink_in_place,
-    remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
+    Block, Inst, Join, Jump, Kind, MFunction, Operand, Reg, Side, Target, branch_fold, forward_reloads,
+    machine_sink_in_place, remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
@@ -161,7 +161,8 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
-    /// `inc` and `dec` are one byte in `x` and `y` (`inx`), `clc; adc #1` in `a`.
+    /// `inc` and `dec` are one byte in `x` and `y` (`inx`), `clc; adc #1` in
+    /// `a`.
     fn operand_hint(
         inst: &Inst,
         operand: usize,
@@ -176,7 +177,9 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     /// A byte class the compare class narrowed has `any` as its larger class.
     fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
-        if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register)) || is_pair_order(order) {
+        if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register))
+            || is_pair_order(order)
+        {
             return None;
         }
         let any = Self::candidates(Class::ANY);
