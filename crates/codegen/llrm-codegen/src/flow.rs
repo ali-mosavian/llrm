@@ -262,7 +262,8 @@ pub fn machine_with<'a>(
         }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
-                .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
+                .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect())
+                .with_basic_semantics(basic_semantics),
         ),
         // After allocation: which moves in a phi's copy conflict is a question
         // about locations.

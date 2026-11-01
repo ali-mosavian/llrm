@@ -1,8 +1,6 @@
 //! Overlay rewrites against their boundaries: the text each one gives, and the
 //! value the program computes under `qemu-m68k` (the exit status, 8 bits).
 
-use std::path::PathBuf;
-
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::object::{executable, start, write_executable};
@@ -10,10 +8,6 @@ use llrm_m68k::object::{executable, start, write_executable};
 mod support;
 
 const DATALAYOUT: &str = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16";
-
-fn qemu() -> Option<PathBuf> {
-    ["/usr/bin/qemu-m68k", "/usr/local/bin/qemu-m68k"].iter().map(PathBuf::from).find(|path| path.exists())
-}
 
 fn module(ir: &str) -> llrm_mir::module::Module {
     llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses")
@@ -25,10 +19,7 @@ fn status(
     args: &[i64],
     options: Options,
 ) -> Option<i32> {
-    let qemu = qemu().or_else(|| {
-        eprintln!("qemu-m68k is not installed: not run");
-        None
-    })?;
+    let qemu = support::qemu()?;
     let mut all = start("f", args);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, options).expect("compiles"));
     let path = support::unique_path("results");
@@ -171,7 +162,7 @@ fn status_with_data(
     args: &[llrm_m68k::kernels::Arg],
     options: Options,
 ) -> Option<i32> {
-    let qemu = qemu()?;
+    let qemu = support::qemu()?;
     let code = items_with(&module(ir), "k", Cpu::M68000, options).expect("compiles");
     let program = llrm_m68k::kernels::program_with_data(args, code, &llrm_m68k::kernels::library_data());
     let path = support::unique_path("results-data");
@@ -274,7 +265,7 @@ fn status_with_runtime(
     args: &[i64],
     options: Options,
 ) -> Option<i32> {
-    let qemu = qemu()?;
+    let qemu = support::qemu()?;
     let mut all = start("f", args);
     // one module, so the local labels of the routines do not meet
     let rt = include_str!("../bench/library/rt.ll");
@@ -825,7 +816,7 @@ fn a_shifted_one_against_zero_is_a_btst() {
 /// different program.
 #[test]
 fn programs_of_one_length_run_in_parallel_without_sharing_an_executable() {
-    if qemu().is_none() {
+    if support::qemu().is_none() {
         return;
     }
     let ir = |value: i32| format!("define i32 @f() {{\n  ret i32 {value}\n}}");
@@ -843,7 +834,7 @@ fn programs_of_one_length_run_in_parallel_without_sharing_an_executable() {
 #[test]
 #[should_panic(expected = "did not finish")]
 fn a_run_cut_off_by_the_timeout_is_not_a_status() {
-    let Some(qemu) = qemu() else { panic!("did not finish: no qemu, the test passes") };
+    let Some(qemu) = support::qemu() else { panic!("did not finish: no qemu, the test passes") };
     let ir = "define i32 @f() {\nentry:\n  br label %l\nl:\n  br label %l\n}";
     let mut all = start("f", &[]);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, Options::default()).expect("compiles"));

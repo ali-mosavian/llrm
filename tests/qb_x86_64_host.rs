@@ -116,3 +116,15 @@ fn currency_is_exact_to_four_places_on_x86_64() {
         ]
     );
 }
+
+/// B$SCLR was defined by no flat runtime, x86-64's included: a program with
+/// CLEAR did not link. CLEAR zeroes numbers, strings and arrays.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn clear_zeroes_the_module_variables_on_x86_64() {
+    let screen = run(
+        "clear64",
+        "' dialect: qb45\nDIM a(3) AS INTEGER\nx% = 5: l& = 70000: s$ = \"hello\": a(2) = 9\nCLEAR\nPRINT STR$(x%); STR$(l&); s$; \"|\"; STR$(a(2))\nEND\n",
+    );
+    assert_eq!(screen.trim_end(), " 0 0| 0");
+}
