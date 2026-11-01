@@ -2421,10 +2421,16 @@ fn constant_compare(
     let compare = _insn(1, Operation::Compare, name, vec![], vec![dword(), other], None);
     let mut source = body(
         "f",
-        1,
+        0,
         vec![
-            block(1, vec![load, compare, _branch(1, cc, 3), _jump(1, 2)], vec![3, 2]).into(),
-            block(2, vec![_move(2, imm(0)), _return(2)], vec![]).into(),
+            block(0, vec![_branch(0, "jp", 2), _jump(0, 1)], vec![2, 1]).into(),
+            block(
+                1,
+                vec![load, compare, _branch(1, cc, 3), _jump(1, 2)].into_iter().map(_inserted).collect(),
+                vec![3, 2],
+            )
+            .into(),
+            block(2, vec![_move(2, imm(0)), _jump(2, 3)], vec![3]).into(),
             block(3, vec![_return(3)], vec![]).into(),
         ],
     );
@@ -2465,12 +2471,21 @@ fn test_a_branch_on_a_compare_of_a_loaded_constant_goes_one_way() {
         (i64::from(i32::MAX), "cmp", Loc::Imm(Imm { value: -1, width: 4, address: None }), "jg", true),
     ];
     for (value, name, other, cc, taken) in cases {
-        let result = threaded(&constant_compare(value, name, other, cc));
+        let result = threaded(&placed(&constant_compare(value, name, other, cc)).unwrap());
         let got = names(&result);
         assert!(!got.iter().any(|one| one == name), "{name} {cc} {value}: {got:?}");
-        // The taken way is the bare return; the other also clears the result.
-        let moves = got.iter().filter(|one| *one == "mov").count();
-        assert_eq!(moves, if taken { 1 } else { 2 }, "{name} {cc} {value}: {got:?}");
+        // Nothing follows a jump: an anchor after it made `masm` refuse to
+        // free the frame register (qlight at -m32 kept `push ebp`).
+        for block in &result.blocks {
+            let ends = block
+                .insns
+                .iter()
+                .position(
+                    |one| one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Return)),
+                );
+            assert!(ends.is_none_or(|at| at + 1 == block.insns.len()), "{name} {cc} {value}: {:?}", block.insns);
+        }
+        assert!(!got.iter().any(|one| one == cc), "{name} {cc} {value}: the branch stays {got:?}");
     }
 }
 
@@ -2487,10 +2502,10 @@ fn test_a_branch_after_the_constant_is_changed_keeps_its_compare() {
         vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
         None,
     );
-    let block = source.blocks[0].clone();
+    let block = source.blocks[1].clone();
     let mut insns = block.insns.to_vec();
     insns.insert(1, byte);
-    source.blocks[0] = block.with_insns(insns).into_inner().into();
+    source.blocks[1] = block.with_insns(insns).into_inner().into();
     let got = names(&threaded(&source));
     assert!(got.iter().any(|one| one == "test"), "{got:?}");
 }

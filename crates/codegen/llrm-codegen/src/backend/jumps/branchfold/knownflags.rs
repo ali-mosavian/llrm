@@ -157,12 +157,14 @@ impl Folder<'_> {
         let cond_at = block.insns.iter().position(|one| Arc::ptr_eq(one, cond)).expect("the branch is in its block");
         let (kept, dropped) = if goes { (taken, other) } else { (other, taken) };
         let spent = flags_dead_after(regs, bits, &block, cond_at);
+        // The jump that ends the block stays last: nothing may follow it.
+        let ends = exit.jump.clone().unwrap_or_else(|| Arc::clone(cond));
         let insns = block
             .insns
             .iter()
             .enumerate()
             .map(|(at, one)| {
-                if at == cond_at && goes {
+                if goes && Arc::ptr_eq(one, &ends) {
                     Arc::new(Insn {
                         what: Some(Semantics {
                             name: Some("jmp".into()),
@@ -172,10 +174,7 @@ impl Folder<'_> {
                         uses: Vec::new(),
                         ..(**one).clone()
                     })
-                } else if at == cond_at
-                    || (at == compare_at && spent)
-                    || (goes && exit.jump.as_ref().is_some_and(|j| Arc::ptr_eq(j, one)))
-                {
+                } else if at == cond_at || (at == compare_at && spent) {
                     lir::anchor(Arc::clone(one))
                 } else {
                     Arc::clone(one)
