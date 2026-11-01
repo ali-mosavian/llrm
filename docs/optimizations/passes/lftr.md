@@ -15,8 +15,9 @@ conditional branch and belongs to the loop itself:
   loop-invariant value.
 - The block's exact exit count is known, is not zero, is cheap to expand
   (`isHighCostExpansion`, budget 4) and is safe to expand.
-- `FindLoopCounter` picks a header phi that is a unit-stride counter at
-  least as wide as the count, with a concrete start, preferring one that
+- `FindLoopCounter` picks a header phi that is a counter (a unit stride, or a
+  constant one whose increment cannot wrap: DEVIATE LFTR1, the pin wants one)
+  at least as wide as the count, with a concrete start, preferring one that
   counts from zero or is wider, and not one that only this test keeps alive.
 - `genLoopLimit` writes the counter's value after the count (a post-inc
   value where the test is in the latch) before the branch, and the branch
