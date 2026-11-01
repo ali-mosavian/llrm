@@ -126,3 +126,65 @@ fn the_push_forms_encode_as_the_manual_gives_them() {
     let pop_a = Inst { opcode: "MOV32ao", operands: vec![reg(reg::A2), reg(reg::SP)] };
     assert_eq!(encode(&pop_a).unwrap().bytes, [0x24, 0x5F]);
 }
+
+fn four_saved(frame_pointer: bool) -> llrm_m68k::frame::Layout {
+    llrm_m68k::frame::layout(&llrm_m68k::frame::Function {
+        saved: vec![reg::D2, reg::D3, reg::D4, reg::D5],
+        frame_pointer_all: frame_pointer,
+        ..Default::default()
+    })
+}
+
+fn pushes(ops: &[llrm_m68k::frame::FrameOp]) -> bool {
+    ops.iter().any(|op| matches!(
+        op,
+        llrm_m68k::frame::FrameOp::Push { .. } | llrm_m68k::frame::FrameOp::Pop { .. }
+    ))
+}
+
+/// Four saved registers go through one `movem` push on each CPU when the tables
+/// say it is no larger and no slower; a push priced dearer than the pin's by
+/// more than its margin (the tables never do), in a byte or in a clock, leaves
+/// the pin's `suba.l` and `movem` into slots. A rule that always pushed would
+/// pass the first and fail the other two.
+#[test]
+fn the_pin_frame_is_kept_where_the_tables_price_the_push_dearer() {
+    use llrm_m68k::expand::{frame_cost, frame_ops_priced};
+    use llrm_m68k::frame::FrameOp;
+    let layout = four_saved(false);
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let real = |ops: &[FrameOp]| frame_cost(ops, cpu);
+        let (opening, closing) = frame_ops_priced(&layout, true, real).unwrap();
+        assert!(pushes(&opening) && pushes(&closing), "{cpu:?}: {opening:?} {closing:?}");
+        let dearer_clock =
+            |ops: &[FrameOp]| frame_cost(ops, cpu).map(|(b, c)| (b, c + if pushes(ops) { 1000 } else { 0 }));
+        let dearer_byte =
+            |ops: &[FrameOp]| frame_cost(ops, cpu).map(|(b, c)| (b + if pushes(ops) { 1000 } else { 0 }, c));
+        for (what, cost) in [("1000 clocks", &dearer_clock as &dyn Fn(&[FrameOp]) -> _), ("1000 bytes", &dearer_byte)] {
+            let (opening, closing) = frame_ops_priced(&layout, true, cost).unwrap();
+            assert!(!pushes(&opening) && !pushes(&closing), "{cpu:?}, {what} dearer: {opening:?} {closing:?}");
+            assert_eq!((opening, closing), (layout.prologue(), layout.epilogue()));
+        }
+    }
+}
+
+/// A frame pointer keeps the pin's frame (`link`, `movem` into slots, `unlk`),
+/// whatever the tables say.
+#[test]
+fn a_frame_with_a_frame_pointer_keeps_the_pins_frame() {
+    use llrm_m68k::expand::{frame_cost, frame_ops_priced};
+    let layout = four_saved(true);
+    let (opening, closing) = frame_ops_priced(&layout, true, |ops| frame_cost(ops, Cpu::M68000)).unwrap();
+    assert!(!pushes(&opening) && !pushes(&closing), "{opening:?} {closing:?}");
+    assert_eq!((opening, closing), (layout.prologue(), layout.epilogue()));
+}
+
+/// `Options::PINNED` never pushes.
+#[test]
+fn the_pinned_options_keep_the_pins_frame() {
+    use llrm_m68k::expand::{frame_cost, frame_ops_priced};
+    let layout = four_saved(false);
+    let (opening, closing) =
+        frame_ops_priced(&layout, Options::PINNED.push_frame, |ops| frame_cost(ops, Cpu::M68000)).unwrap();
+    assert_eq!((opening, closing), (layout.prologue(), layout.epilogue()));
+}

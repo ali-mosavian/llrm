@@ -82,7 +82,7 @@ fn frame_op(
 
 /// Bytes and clocks of `ops` on `cpu`, from the encoder and the manuals'
 /// tables.
-fn frame_cost(
+pub fn frame_cost(
     ops: &[FrameOp],
     cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<(usize, u32), String> {
@@ -105,13 +105,23 @@ fn frame_ops(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
+    frame_ops_priced(layout, push_frame, |ops| frame_cost(ops, cpu))
+}
+
+/// [`frame_ops`] with the price of a sequence, `(bytes, clocks)`, given: a test
+/// makes the push dearer to see the pin's frame chosen.
+pub fn frame_ops_priced(
+    layout: &frame::Layout,
+    push_frame: bool,
+    cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
+) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
     let pushed = if push_frame { layout.push_prologue().zip(layout.push_epilogue()) } else { None };
     let Some((opening, closing)) = pushed else {
         return Ok((pin_opening, pin_closing));
     };
     let no_worse = |ours: &[FrameOp], pin: &[FrameOp]| -> Result<bool, String> {
-        let ((ours_bytes, ours_clocks), (pin_bytes, pin_clocks)) = (frame_cost(ours, cpu)?, frame_cost(pin, cpu)?);
+        let ((ours_bytes, ours_clocks), (pin_bytes, pin_clocks)) = (cost(ours)?, cost(pin)?);
         Ok(ours_bytes <= pin_bytes && ours_clocks <= pin_clocks)
     };
     if no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)? {
