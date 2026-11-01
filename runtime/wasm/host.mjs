@@ -8,6 +8,22 @@ export class Exit extends Error {
   constructor(code) { super(`exit ${code}`); this.code = code; }
 }
 
+// ON ERROR's landing: thrown by `llrm_host_land` and caught by the `catch_all` of the nearest function with a handler.
+export class Land extends Error {
+  constructor() { super('ON ERROR landed with no handler on the stack'); }
+}
+
+// A module's `catch_all` catches what an import throws but not a trap, so the host's own endings (exit, failure, the
+// run limit) are traps: the error is kept and `run` throws it once the call has unwound.
+const TRAP = Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 7, 5, 1, 1, 116, 0, 0, 10, 5, 1, 3, 0, 0, 11);
+
+/** An ending the module cannot catch: `end(error)` stops the call that is running, `ended` is `error` after it. */
+export function ender() {
+  const trap = new WebAssembly.Instance(new WebAssembly.Module(TRAP)).exports.t;
+  const one = { ended: null, end: (error) => { one.ended = error; trap(); } };
+  return one;
+}
+
 // The C math routines the wasm backend calls where the pin does (`RTLIB`): the double routine, and the float one
 // rounded to a float.
 const doubles = { sin: Math.sin, cos: Math.cos, atan: Math.atan, exp: Math.exp, log: Math.log, log2: Math.log2,
@@ -23,6 +39,9 @@ export const lrint = (x) => { const r = Math.round(x); return Math.abs(x % 1) ==
  */
 export async function instantiate(bytes, hooks) {
   const host = { exports: null, scratch: 0, now: 0 };
+  const ending = ender();
+  host.end = ending.end;
+  Object.defineProperty(host, 'ended', { get: () => ending.ended });
   const mem = () => new Uint8Array(host.exports.memory.buffer);
   host.mem = mem;
   host.cstring = (at) => { const m = mem(); let end = at; while (m[end]) end++; return Buffer_latin1(m.subarray(at, end)); };
@@ -70,8 +89,9 @@ export async function instantiate(bytes, hooks) {
       const one = (hooks.env ?? [])[index];
       return one === undefined ? -1 : text_out(ptr, max, one);
     },
-    llrm_host_exit: (code) => { throw new Exit(code); },
-    llrm_host_fail: (msg) => { throw new Error(host.cstring(msg)); },
+    llrm_host_exit: (code) => host.end(new Exit(code)),
+    llrm_host_fail: (msg) => host.end(new Error(host.cstring(msg))),
+    llrm_host_land: () => { throw new Land(); },
     llrm_host_now: look,
     llrm_host_key_poll: (ready) => hooks.keyPoll?.(ready, host.now),
     llrm_host_poll: () => { look(); },
@@ -91,8 +111,14 @@ export async function instantiate(bytes, hooks) {
       host.exports.__wasm_call_ctors();
       return host.exports.llrm_wasm_start();
     } catch (error) {
+      if (host.ended) throw host.ended;
+      if (error instanceof Land) throw new Error(error.message);
       if (!(error instanceof RangeError)) throw error;
-      return host.exports.llrm_wasm_stack_overflow();
+      try {
+        return host.exports.llrm_wasm_stack_overflow();
+      } catch (ending) {
+        throw host.ended ?? ending;
+      }
     }
   };
 

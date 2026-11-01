@@ -17,10 +17,13 @@ sources="$sources runtime/qb/posix/startup.c runtime/qb/posix/block.c runtime/qb
   runtime/qb/dev/headless/headless.c runtime/qb/dev/host/video.c runtime/qb/dev/host/vgadata.c
   runtime/qb/dev/host/tick.c runtime/wasm/libc.c runtime/wasm/os.c runtime/wasm/main.c"
 failed=0
+# A program built with --wasm-exceptions lands by throwing (runtime/qb/posix/startup.c).
+unwinds=
+case " ${LLRM_QB_FLAGS:-} " in *" --wasm-exceptions "*) unwinds=-DQB_HOST_UNWINDS ;; esac
 for s in $sources; do
   n=$(echo "$s" | tr / _)
   clang -target wasm32-unknown-unknown -O0 -ffreestanding -nostdinc -isystem "$root/runtime/wasm/include" \
-    -isystem "$(clang -print-resource-dir)/include" -fvisibility=default -std=gnu11 -w -D__cdecl= "-DQB_IDLE()=llrm_host_poll()" -include "$root/runtime/wasm/idle.h" -emit-llvm -S \
+    -isystem "$(clang -print-resource-dir)/include" -fvisibility=default -std=gnu11 -w -D__cdecl= $unwinds "-DQB_IDLE()=llrm_host_poll()" -include "$root/runtime/wasm/idle.h" -emit-llvm -S \
     -Xclang -disable-llvm-passes -I "$root/runtime/qb/posix" -I "$root/runtime/qb" -I "$root/runtime/qb/dev" \
     -I "$root/runtime/qb/dev/headless" -I "$root/runtime/qb/dev/host" -I "$root/runtime/shared/posix" \
     "$root/$s" -o "$obj/$n.ll"

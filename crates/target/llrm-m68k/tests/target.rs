@@ -29,9 +29,12 @@ fn the_layout_is_big_endian_with_four_byte_pointers() {
 }
 
 /// After the object refactor `Target` asked for `objects` and `debug_target`;
-/// m68k answered neither and the crate did not build.
+/// m68k answered neither and the crate did not build. It writes ELF now
+/// (3f55493bf5) and no other format; the test still said it had no writer.
 #[test]
-fn the_target_has_no_object_writer_and_says_so() {
-    assert!(M68k.objects().asm_info("elf").is_none());
+fn the_target_writes_elf_and_no_other_object_format() {
+    assert!(M68k.objects().asm_info("elf").is_some());
+    assert!(M68k.objects().asm_info("coff").is_none());
+    assert!(M68k.objects().asm_info("omf").is_none());
     assert_eq!(M68k.debug_target().address_bytes, 4);
 }

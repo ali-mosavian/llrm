@@ -39,3 +39,56 @@ fn an_over_aligned_object_is_refused_by_name() {
     );
     assert!(why.contains("stack realignment"), "{why}");
 }
+
+/// A call that does not unwind to a pad, laid out inside that pad's `try`,
+/// would be caught by it: the pin wraps it in a `try`/`delegate` to the caller
+/// (`fixCallUnwindMismatches`), which is not translated. It must stop at
+/// compile time by name; the output had the call inside the `try` unguarded.
+#[test]
+fn a_call_inside_a_try_that_does_not_unwind_to_it_is_refused_by_name() {
+    use llrm_wasm::dag::ExceptionModel;
+
+    let model = Options { exception_model: ExceptionModel::Wasm, ..Options::default() };
+    let text = include_str!("eh/call_in_try.ll");
+    let why = assembly(text, Width::W32, model).expect_err("refused");
+    assert!(why.contains("fixCallUnwindMismatches"), "{why}");
+    // The same calls, each an `invoke`, are the pin's output.
+    let invoked = text.replace("call void @g(i32 1)", "invoke void @g(i32 1) to label %b2 unwind label %pad\nb2:");
+    assert!(assembly(&invoked, Width::W32, model).is_ok());
+}
+
+/// `-exception-model=wasm` changes nothing for a function without an `invoke`
+/// or a `landingpad`, which stays the pin's `-exception-model=none` output.
+#[test]
+fn the_wasm_exception_model_leaves_a_function_without_unwinding_alone() {
+    use llrm_wasm::dag::ExceptionModel;
+
+    let model = Options { exception_model: ExceptionModel::Wasm, ..Options::default() };
+    let plain = "define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n";
+    assert_eq!(assembly(plain, Width::W32, model), assembly(plain, Width::W32, Options::default()));
+}
+
+/// `llvm.wasm.throw` and its siblings were plain calls of an undefined symbol
+/// `llvm.wasm.throw` (exit 0, an import that cannot be satisfied). They are
+/// `INTRINSIC_*` nodes now; with no selection for them yet (stage 4) they stop
+/// at compile time by name, in both exception models.
+#[test]
+fn a_wasm_eh_intrinsic_is_never_a_call_of_its_name() {
+    use llrm_wasm::dag::ExceptionModel;
+
+    for (declare, call) in [
+        ("declare void @llvm.wasm.throw(i32, ptr)", "call void @llvm.wasm.throw(i32 0, ptr %p)"),
+        ("declare void @llvm.wasm.rethrow()", "call void @llvm.wasm.rethrow()"),
+        ("declare ptr @llvm.wasm.catch(i32)", "%c = call ptr @llvm.wasm.catch(i32 0)"),
+        ("declare ptr @llvm.wasm.lsda()", "%c = call ptr @llvm.wasm.lsda()"),
+    ] {
+        let text = format!("{declare}\ndefine void @f(ptr %p) {{\n  {call}\n  ret void\n}}\n");
+        for exception_model in [ExceptionModel::None, ExceptionModel::Wasm] {
+            let options = Options { exception_model, ..Options::default() };
+            match assembly(&text, Width::W32, options) {
+                Ok(out) => assert!(!out.contains("llvm.wasm"), "{call}: {out}"),
+                Err(why) => assert!(why.to_lowercase().contains("intrinsic"), "{call}: {why}"),
+            }
+        }
+    }
+}

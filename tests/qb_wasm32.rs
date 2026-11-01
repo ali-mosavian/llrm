@@ -395,6 +395,22 @@ fn clear_closes_the_open_files_on_wasm32() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// ON ERROR lands on wasm32 with exception handling: the runtime throws and the
+/// function's `catch_all` takes it. With the `setjmp` stub the program ended at
+/// the first error with "ON ERROR landed: longjmp is not supported". The pad
+/// branches back into the function (RESUME NEXT, RESUME 0), which a `catch`
+/// cannot do, so the function runs inside a dispatch loop.
+#[test]
+fn on_error_lands_with_wasm_exceptions() {
+    let source = "ON ERROR GOTO h\nPRINT \"a\"\nERROR 5\nPRINT \"b\"\nERROR 6\nPRINT \"c\"\nEND\n\
+        h:\nPRINT \"err\"; ERR\nRESUME NEXT\n";
+    let dir = built_with("eh_land", source, "--wasm-exceptions");
+    let (text, code) = run(&dir, "eh_land", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["a", "err", "5", "b", "err", "6", "c"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// CLEAR in a SUB is Illegal function call, as in QB.
 #[test]
 fn clear_in_a_procedure_is_an_illegal_function_call_on_wasm32() {
@@ -428,6 +444,30 @@ fn clear_zeroes_a_fixed_string_and_a_type_variable_on_wasm32() {
     );
     let (text, code) = run(&dir, "cleartype", &[]);
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["0", "0", "0"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A module's `catch_all` catches what an import throws, so the host's
+/// endings (`END`, a fatal error) are traps: thrown, `END` inside a function
+/// with a handler landed in the handler and the program went on.
+#[test]
+fn a_host_ending_gets_through_a_catch_all() {
+    need("node");
+    let probe = root().join("runtime/wasm/probe_end.mjs");
+    let out = Command::new("node").arg(&probe).output().expect("node");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "escaped", "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// CLEAR closes the files, and the next write on the channel raises error 52
+/// into a handler that resumes (q45cl66). It waited for ON ERROR to land; with
+/// the `setjmp` stub the program ended at the error.
+#[test]
+fn clear_then_a_closed_channel_lands_in_the_handler_on_wasm32() {
+    let path = root().join("tests/differential/conformance/qb45/q45cl66.bas");
+    let dir = built_with("cl66", &std::fs::read_to_string(path).unwrap(), "--wasm-exceptions");
+    let (text, code) = run(&dir, "cl66", &[]);
+    assert_eq!(text.trim_end(), "PASS clear");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }

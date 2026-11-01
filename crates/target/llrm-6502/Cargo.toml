@@ -14,8 +14,12 @@ llrm-debug = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-spike-mf = { workspace = true }
+llrm-elf = { workspace = true }
 llrm-transforms = { workspace = true }
 toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [build-dependencies]
 llrm-target = { workspace = true }
