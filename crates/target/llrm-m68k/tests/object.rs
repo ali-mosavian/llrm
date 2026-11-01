@@ -56,8 +56,11 @@ fn a_call_encodes_as_llvm_mc_does() {
 /// The loop's `blt` is pc-relative, to a label two instructions in.
 #[test]
 fn a_loop_branch_is_resolved_as_llvm_mc_does() {
+    // greedy keeps the running sum in d0 and the index in d1 (the spike's
+    // allocator had them the other way round, hex 7200...2001...): the
+    // allocation order differs, the code is the same size
     let code = assemble(&function("sum"), 0).unwrap().code;
-    assert_eq!(hex(&code), "7200206f00042001d081d2bc00000001b2886df44e75");
+    assert_eq!(hex(&code), "7000206f00042200d081d2bc00000001b2886df44e75");
 }
 
 fn qemu() -> Option<PathBuf> {

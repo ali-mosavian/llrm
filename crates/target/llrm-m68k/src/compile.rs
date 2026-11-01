@@ -93,10 +93,10 @@ pub fn items_with(
     two_address(&mut function);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
-    let (assignment, slots) = if std::env::var_os("LLRM_M68K_GREEDY").is_some() {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
-    } else {
+    let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
+    } else {
+        crate::regalloc::allocate_greedy(&mut function, wants_size)?
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     remove_identity_copies(&mut function, &assignment);
