@@ -38,6 +38,13 @@ impl Class {
 /// The Z80 behind the allocator.
 pub struct Z80Registers;
 
+impl Z80Registers {
+    /// The bytes a value of `class` takes.
+    pub fn bytes_of(class: Class) -> usize {
+        if class.is_byte() { 1 } else { 2 }
+    }
+}
+
 impl Target for Z80Registers {
     type Class = Class;
 
@@ -83,6 +90,18 @@ impl Target for Z80Registers {
 
     fn root(register: RegId) -> RegId {
         REGISTER_INFO.root(register)
+    }
+
+    fn operand_class(
+        name: &str,
+        index: usize,
+    ) -> Option<Class> {
+        crate::mfunc::operand_class(name, index)
+    }
+
+    /// A branch or select reads the flags the compare before it set.
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags
     }
 
     fn reserved(root: RegId) -> bool {

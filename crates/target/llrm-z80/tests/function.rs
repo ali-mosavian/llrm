@@ -133,7 +133,8 @@ fn a_shift_by_a_constant_is_an_instruction() {
 fn loads_through_a_pointer_widen_a_byte_and_read_a_word() {
     let widened = "define i16 @f(ptr %p) {\n  %b = load i8, ptr %p\n  %w = zext i8 %b to i16\n  ret i16 %w\n}";
     let blocks = selected(widened, "f");
-    assert_eq!(blocks, [["LD8rm", "LD8ri", "RET"]]);
+    // the word returns whole in `de`: the two bytes are joined, not copied one by one
+    assert_eq!(blocks, [["LD8rm", "LD8ri", "REG_SEQUENCE", "RET"]]);
     let word = "define i16 @g(ptr %p) {\n  %w = load i16, ptr %p\n  ret i16 %w\n}";
     assert!(selected(word, "g")[0].contains(&"LD16rm"));
 }

@@ -1,8 +1,11 @@
 //! The Z80 target, a sibling of the 6502 and m68k spikes.
 
 pub mod abi;
+pub mod compile;
 pub mod dagisel;
+pub mod expand;
 pub mod driver;
+pub mod mfunc;
 pub mod prepare;
 pub mod regalloc;
 pub mod target;
