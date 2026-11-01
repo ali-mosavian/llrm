@@ -90,12 +90,8 @@ pub fn object_bytes(
         std::fs::write(path, &text).map_err(|error| fail(error.to_string()))?;
     }
     let model = if exceptions { ExceptionModel::Wasm } else { ExceptionModel::None };
-    driver::object(
-        &text,
-        llrm_wasm::Width::W32,
-        WasmOptions { exception_model: model, calls_unwind: !exceptions, ..WasmOptions::default() },
-    )
-    .map_err(fail)
+    driver::object(&text, llrm_wasm::Width::W32, WasmOptions { exception_model: model, ..WasmOptions::default() })
+        .map_err(fail)
 }
 
 #[cfg(test)]
