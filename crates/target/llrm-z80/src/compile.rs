@@ -241,6 +241,124 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
     Ok((result, on_false, on_true, cond))
 }
 
+/// `CodeGenPrepare::sinkSelectOperand`: the instructions that only make one
+/// side of the `CMOV` at `p` move out of the block into the arm that side
+/// takes, so the other path does not run them. They come back in order, taken
+/// out of `insts`; none when nothing but copies would move or a hazard shows.
+///
+/// DEVIATE: the pin sinks one-use IR operands that cost at least `TCC_Expensive`
+/// before selection; this works on the selected instructions, on any side that
+/// holds a non-copy. Reason: the select is expanded here, not in CodeGenPrepare.
+/// Exit: the expansion at selection.
+fn sunk_operand(
+    function: &MFunction,
+    block: usize,
+    p: usize,
+    value: Reg,
+) -> Option<Vec<usize>> {
+    let insts = &function.blocks[block].insts[..p];
+    let mut uses: std::collections::HashMap<Reg, usize> = std::collections::HashMap::new();
+    let mut defs: std::collections::HashMap<Reg, usize> = std::collections::HashMap::new();
+    for one in &function.blocks {
+        for inst in &one.insts {
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Use(reg @ Reg::Virt(_)) => *uses.entry(*reg).or_default() += 1,
+                    Operand::Def(reg @ Reg::Virt(_)) => *defs.entry(*reg).or_default() += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let movable = |inst: &Inst| {
+        !(inst.call || inst.terminator || inst.barrier || inst.reads_flags || inst.side_effects || inst.may_load || inst.may_store)
+    };
+    let touches = |inst: &Inst, reg: Reg| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == reg));
+    let cmov = &function.blocks[block].insts[p];
+    let reads = |inst: &Inst, reg: Reg| inst.operands.iter().filter(|o| matches!(o, Operand::Use(r) if *r == reg)).count();
+    // From the last instruction back, so every reader of a result is in the
+    // slice before its maker is looked at. A value made here that anything
+    // else reads is an input, not part of the slice; a machine register a
+    // member reads must come from a member.
+    let mut slice = std::collections::BTreeSet::new();
+    let mut pending = vec![(value, insts.len(), false)];
+    loop {
+        let resolved: Vec<(usize, Reg, bool)> = pending
+            .iter()
+            .filter_map(|&(reg, before, must)| {
+                insts[..before]
+                    .iter()
+                    .rposition(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == reg)))
+                    .map(|at| (at, reg, must))
+                    .or(None)
+            })
+            .collect();
+        if let Some(&(_, Reg::Phys(_), true)) = pending.iter().map(|&(r, b, m)| (b, r, m)).find(|&(b, r, m)| {
+            m && !insts[..b].iter().any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(x) if *x == r)))
+        }).as_ref() {
+            return None;
+        }
+        let Some(&(at, ..)) = resolved.iter().max_by_key(|one| one.0) else { break };
+        let must = resolved.iter().any(|&(one, _, must)| one == at && must);
+        pending.retain(|&(reg, before, _)| {
+            !insts[..before].iter().rposition(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == reg))).is_some_and(|one| one == at)
+        });
+        if slice.contains(&at) {
+            continue;
+        }
+        let inst = &insts[at];
+        let alone = inst.operands.iter().all(|operand| {
+            let Operand::Def(reg @ Reg::Virt(_)) = operand else { return true };
+            let inside: usize = slice.iter().map(|&one| reads(&insts[one], *reg)).sum();
+            let by_cmov = if *reg == value { reads(cmov, *reg) } else { 0 };
+            defs.get(reg) == Some(&1) && uses.get(reg).copied().unwrap_or(0) == inside + by_cmov
+        });
+        if !movable(inst) || !alone {
+            if must {
+                return None;
+            }
+            continue;
+        }
+        slice.insert(at);
+        for operand in &inst.operands {
+            match operand {
+                Operand::Use(reg @ Reg::Virt(_)) => pending.push((*reg, at, false)),
+                Operand::Use(reg) if *reg != Reg::Phys(crate::reg::FLAGS) => pending.push((*reg, at, true)),
+                _ => {}
+            }
+        }
+    }
+    if !slice.iter().any(|&at| matches!(insts[at].kind, Kind::Op(_))) {
+        return None;
+    }
+    // a register of the machine the slice touches is touched by nothing left
+    // between its first instruction and the `CMOV`
+    let first = *slice.iter().next()?;
+    for &at in &slice {
+        for operand in &insts[at].operands {
+            let (Operand::Def(reg @ Reg::Phys(_)) | Operand::Use(reg @ Reg::Phys(_))) = operand else { continue };
+            if (first..insts.len()).any(|other| !slice.contains(&other) && touches(&insts[other], *reg)) {
+                return None;
+            }
+        }
+    }
+    // the flags the branch reads are not made by the slice, and a flags reader
+    // after the diamond sees what the slice leaves only if the slice leaves none
+    let flags = Reg::Phys(crate::reg::FLAGS);
+    let makes_flags = slice.iter().any(|&at| touches(&insts[at], flags));
+    if makes_flags {
+        if insts.iter().rposition(|inst| touches(inst, flags)).is_some_and(|last| slice.contains(&last)) {
+            return None;
+        }
+        let tail = &function.blocks[block].insts[p + 1..];
+        let wanted = tail.iter().find(|inst| inst.reads_flags || touches(inst, flags));
+        if wanted.is_some_and(|inst| inst.reads_flags) {
+            return None;
+        }
+    }
+    Some(slice.into_iter().collect())
+}
+
 /// `EmitLoweredSelect`: a run of `CMOV` pseudos on one condition (or its
 /// opposite) becomes a diamond. The block jumps to the join on the condition;
 /// the empty block it falls through to is the other path; the join holds a phi
@@ -248,7 +366,9 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
 /// one's result is renamed to the value that result has on each path.
 ///
 /// The arms are empty, and `ld` leaves the flags alone, so a copy the phis
-/// become does not disturb a later reader of the compare.
+/// become does not disturb a later reader of the compare. A lone `CMOV` whose
+/// side is made by instructions nothing else reads has them moved into the
+/// arm that side takes (`sunk_operand`).
 ///
 /// DEVIATE: only `CMOV`s that follow one another are one diamond, and the
 /// cascaded case is not translated. Reason: nothing selected it yet. Exit: when
@@ -261,8 +381,31 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
             at += 1;
             continue;
         };
+        let alone = !function.blocks[at].insts.get(p + 1).is_some_and(is_cmov);
+        let (_, on_false, on_true, first) = cmov_parts(&function.blocks[at].insts[p])?;
+        // the side made in the block alone moves; the true side takes the
+        // inverted jump to reach its arm
+        let sunk = if alone {
+            sunk_operand(function, at, p, on_false)
+                .map(|slice| (false, slice))
+                .or_else(|| sunk_operand(function, at, p, on_true).map(|slice| (true, slice)))
+        } else {
+            None
+        };
+        let (flip, moved) = match sunk {
+            Some((flip, slice)) => {
+                let mut taken = Vec::new();
+                for &index in slice.iter().rev() {
+                    taken.push(function.blocks[at].insts.remove(index));
+                }
+                taken.reverse();
+                (flip, taken)
+            }
+            None => (false, Vec::new()),
+        };
+        let p = function.blocks[at].insts.iter().position(is_cmov).ok_or("the CMOV vanished")?;
         let mut tail = function.blocks[at].insts.split_off(p);
-        let (_, _, _, first) = cmov_parts(&tail[0])?;
+        let first = if flip { first ^ 1 } else { first };
         let same = |inst: &Inst| {
             is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1)
         };
@@ -287,7 +430,7 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         jump.terminator = true;
         jump.reads_flags = true;
         function.blocks[at].insts.push(jump);
-        function.blocks.insert(at + 1, Block { id: otherwise, insts: Vec::new(), phis: Vec::new() });
+        function.blocks.insert(at + 1, Block { id: otherwise, insts: moved, phis: Vec::new() });
         function.blocks.insert(at + 2, Block { id: join, insts: tail, phis });
         // the join is where control leaves the original block, and every block
         // after it moved down by two

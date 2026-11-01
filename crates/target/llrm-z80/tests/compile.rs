@@ -93,3 +93,14 @@ fn a_value_made_for_a_fixed_register_is_made_there() {
     let out = text(ir, "sum16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("(ix)"), "{out}");
 }
+
+/// Both halves of `x << 1 ^ 0x1021` were computed before the test of the top
+/// bit, kept in `bc`, and copied to the frame: crc16 took 122 bytes and 21373
+/// T-states where the xor belongs on the one path that needs it.
+#[test]
+fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let (test, xor) = (out.find("bit 7, d").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
+    assert!(test < xor, "{out}");
+}
