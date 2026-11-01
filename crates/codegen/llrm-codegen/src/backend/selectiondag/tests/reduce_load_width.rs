@@ -22,7 +22,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     let load = dag.get_load(EVT::I32, chain, ptr, info);
     let root = build(&mut dag, load);
     dag.set_root(root);
-    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false };
+    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     let root = dag.get_root();

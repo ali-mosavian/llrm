@@ -4,7 +4,7 @@
 //! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
 //! `mc::elf` are the machines.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, assembler::AsmBackend};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -26,12 +26,10 @@ const STT_SECTION: u8 = 3;
 const STT_FILE: u8 = 4;
 const SHN_ABS: u16 = 0xFFF1;
 
-/// A relocation type, the bytes of the field it patches, and the distance from
-/// the field's start to the place a pc-relative value is relative to.
+/// A relocation type and the bytes of the field it patches.
 pub struct Relocation {
     pub kind: u32,
     pub width: usize,
-    pub from: usize,
 }
 
 /// What a machine says of its ELF.
@@ -48,6 +46,10 @@ pub trait Machine {
     const UNWIND_TYPE: u32 = SHT_PROGBITS;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
+
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend() -> &'static dyn AsmBackend;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -198,7 +200,24 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     for index in 0..object.sections.len() {
         symbol(&mut symtab, 0, 0, 0, STB_LOCAL << 4 | STT_SECTION, index as u16 + 1);
     }
-    let first_global = 2 + object.sections.len();
+    // The locals come before the globals (`sh_info` is the first global), as
+    // `ELFObjectWriter` lists them; relocations name a local through its
+    // section's symbol.
+    let mut locals = 0;
+    for one in &object.symbols {
+        if let (Definition::Defined { section, offset }, Binding::Local) = (one.definition, one.binding) {
+            // A label inside a function has no size: it is private, as `.L`
+            // ones are.
+            if one.is_private() || (object.sections[section].role == Role::Text && one.size == 0) {
+                continue;
+            }
+            let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
+            let name = strings.add(&one.name);
+            symbol(&mut symtab, name, offset as u64, one.size as u64, STB_LOCAL << 4 | kind, section as u16 + 1);
+            locals += 1;
+        }
+    }
+    let first_global = 2 + object.sections.len() + locals;
     // The ELF symbol of each object symbol that is global.
     let mut elf_symbol: Vec<Option<u32>> = vec![None; object.symbols.len()];
     let mut next = first_global as u32;
@@ -230,7 +249,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from } = M::relocation(one)?;
+            let Relocation { kind, width } = M::relocation(one)?;
             let (symbol, own) = match one.target {
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
                 // The section's own symbol.
@@ -242,12 +261,12 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                     (None, Definition::Undefined) => unreachable!("an undefined symbol is global"),
                 },
             };
-            // S + A - P, where the model's value is S + addend - (at + from).
-            let addend = one.addend + own - from as i64;
+            // S + A - P: the addend is the model's, less the pc bias.
+            let addend = one.addend + own;
             // Checked for RELA too: the addend must fit the field the linker
             // would have patched.
             let mut field = [0u8; 8];
-            apply_fixup(&mut field, 0, width, one.pc_rel, addend, &section.name)?;
+            M::backend().apply_fixup(&mut field, 0, one.kind, one.pc_rel, addend, &section.name)?;
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
                 entries.extend((u64::from(symbol) << 32 | u64::from(kind)).to_le_bytes());

@@ -722,6 +722,8 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -
     (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged."""
     if want is None:
         return []
+    if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
+        return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
     problems = []
     for counter in (*COUNTERS, *SIZES):
         if counter not in got:

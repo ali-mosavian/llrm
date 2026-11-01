@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use llrm_debug::DebugObjectTarget;
 use llrm_macho::{
     LC_BUILD_VERSION, LC_SYMTAB, MachTargetWriter, N_EXT, N_WEAK_DEF, PLATFORM_MACOS, write as write_with,
 };
@@ -23,6 +24,10 @@ fn write_arm64(object: &Object) -> Result<Vec<u8>, Unsupported> {
 struct Made;
 
 impl MachTargetWriter for Made {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &llrm_object::assembler::GenericBackend
+    }
+
     fn cpu(&self) -> (u32, u32) {
         (0x0100_4242, 7)
     }
@@ -35,9 +40,9 @@ impl MachTargetWriter for Made {
         &self,
         reloc: &Reloc,
     ) -> Result<llrm_macho::Described, Unsupported> {
-        match (reloc.fix(), reloc.pc_rel) {
-            (fix, _) if fix == Fix::abs(8) => {
-                Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, beyond: 0, addend_in_field: true })
+        match (reloc.kind, reloc.pc_rel) {
+            (kind, false) if kind == Fix::abs(8).kind => {
+                Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, baked: 0, addend_in_field: true })
             }
             (other, _) => Err(Unsupported(format!("{other:?}"))),
         }
@@ -134,7 +139,6 @@ fn program() -> Object {
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     }
 }
 
@@ -299,7 +303,6 @@ fn arm64_program() -> Object {
         omf_groups: vec![],
         omf_comdat: vec![],
         frames: Vec::new(),
-        debug: None,
     }
 }
 
@@ -394,7 +397,6 @@ fn ld64_links_it_with_a_clang_object() {
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     };
     std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
     std::fs::write(dir.join("ext.c"), "int ext(void) { return 3; }\n").unwrap();
@@ -486,16 +488,15 @@ fn what_mach_o_cannot_say_is_refused() {
 /// in its place.
 #[test]
 fn a_debug_format_this_object_cannot_carry_is_refused() {
-    for (format, name) in [
-        (llrm_object::debug::Format::CodeView, "CodeView"),
-        (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-    ] {
-        let mut made = program();
-        made.debug = Some(llrm_object::debug::Info {
-            options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+    for (format, name) in
+        [(llrm_debug::Format::CodeView, "CodeView"), (llrm_debug::Format::TurboDebugger, "Turbo Debugger")]
+    {
+        let made = program();
+        let debug = llrm_debug::Info {
+            options: llrm_debug::DebugOptions { format, ..Default::default() },
             ..Default::default()
-        });
-        let why = write(&made).unwrap_err().0;
+        };
+        let why = llrm_x86::mc::X86Objects.write_described("macho", &made, Some(&debug)).unwrap_err().0;
         assert!(why.contains("cannot carry") && why.contains(name), "{why}");
     }
 }
@@ -563,4 +564,72 @@ fn a_weak_symbol_is_a_weak_definition() {
     }
     found.sort();
     assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
+}
+
+/// A backend that marks the fields it is asked to fill.
+struct Marking;
+
+impl llrm_object::assembler::AsmBackend for Marking {
+    fn kind_info(
+        &self,
+        kind: llrm_object::FixupKind,
+    ) -> llrm_object::FixupKindInfo {
+        kind.info()
+    }
+
+    fn write_nop_data(
+        &self,
+        _: &mut Vec<u8>,
+        _: usize,
+    ) -> bool {
+        false
+    }
+
+    fn apply_fixup(
+        &self,
+        image: &mut [u8],
+        at: usize,
+        _: llrm_object::FixupKind,
+        _: bool,
+        _: i64,
+        _: &str,
+    ) -> Result<(), Unsupported> {
+        image[at..at + 8].fill(0xEE);
+        Ok(())
+    }
+}
+
+struct MarkingMade;
+
+impl MachTargetWriter for MarkingMade {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &Marking
+    }
+
+    fn cpu(&self) -> (u32, u32) {
+        Made.cpu()
+    }
+
+    fn lists_locals(&self) -> bool {
+        Made.lists_locals()
+    }
+
+    fn relocation(
+        &self,
+        reloc: &Reloc,
+    ) -> Result<llrm_macho::Described, Unsupported> {
+        Made.relocation(reloc)
+    }
+}
+
+/// The container wrote a field's bytes itself, so a target's backend never saw
+/// the fixups it was made to fill (`applyFixup` is the target's).
+#[test]
+fn a_field_is_filled_by_the_targets_backend() {
+    let mut made = program();
+    made.sections[0].relocs.clear();
+    let plain = write_with(&made, &Made).unwrap();
+    let marked = write_with(&made, &MarkingMade).unwrap();
+    let marks = |bytes: &[u8]| bytes.windows(8).any(|window| window == [0xEE; 8]);
+    assert!(!marks(&plain) && marks(&marked));
 }

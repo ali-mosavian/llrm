@@ -1264,6 +1264,48 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
     }
 }
 
+/// k = a * 3 at m16 -O2 is `mov ax,[a]; lea si,[eax+eax*2]` since #6186; the
+/// LEA took the first part's debug tags and dropped the value the last part
+/// made, so `-gtd` had no `k` (tests/turbo.rs
+/// `tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register`
+/// failed: no register k).
+#[test]
+fn test_the_lea_of_a_pair_keeps_the_value_the_last_part_made_for_the_debugger() {
+    let ax = rl(RegId::AX, 2);
+    let first = Insn {
+        debug: crate::model::lir::DebugTags { defines: vec![5], before: vec![0] },
+        ..insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(RegId::DI, 2)])),
+            vec![],
+            vec![],
+        )
+    };
+    let last = Insn {
+        debug: crate::model::lir::DebugTags { defines: vec![7], before: vec![1] },
+        ..insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])),
+            vec![],
+            vec![],
+        )
+    };
+    let call = Insn {
+        clobbers: BTreeSet::from([RegId::AX, RegId::CX, RegId::DX]),
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    let input =
+        body("lea-debug", 0, vec![block(0, vec![Arc::new(first), Arc::new(last), Arc::new(call)], vec![]).into()]);
+
+    let result = addresses(&input, "486").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["lea", "call"]);
+    let lea = &result.blocks[0].insns[0];
+    assert_eq!((&lea.debug.defines, &lea.debug.before), (&vec![7], &vec![0, 1]));
+}
+
 /// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the
 /// borrow, so stays.
 #[test]

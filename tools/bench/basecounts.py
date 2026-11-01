@@ -98,6 +98,17 @@ def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
     return out
 
 
+def rebased(base: dict, overlay: dict, was: dict[str, str], now: dict[str, str]) -> dict:
+    """`base` (bench.py's --json rows) with the rows of every program edited since the base replaced by `overlay`, the base compiler's rows
+    on the head's sources. Refuses an edited program the overlay lacks: parity/qlight c read 15 clocks on main against 460 now because main
+    was measured on its own, constant-argument qlight.c, and the list called that a regression."""
+    edited = {name for name in now if name in was and was[name] != now[name]}
+    missing = sorted(edited - {key.rsplit("/", 2)[0] for key in overlay})
+    if missing:
+        raise SystemExit("the base ran other sources than the head's: no rows of the base compiler on the head's " + ", ".join(missing))
+    return {key: value for key, value in base.items() if key.rsplit("/", 2)[0] not in edited} | overlay
+
+
 def rows_of(raw: dict) -> dict[tuple[str, str, str], dict]:
     """bench.py's --json keys, "name/language/opt" (the name may hold a slash), as (name, language, opt)."""
     out = {}

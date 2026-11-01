@@ -24,6 +24,9 @@ pub struct Tuning {
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size; 0: bytes alone decide.
     pub size_milliclocks_per_byte: i64,
+    /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
+    /// clocks are not traded.
+    pub speed_milliclocks_per_byte: i64,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -34,6 +37,10 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
+    /// The inliner's D11 bound (a callee that stays must not grow the code)
+    /// also holds a caller optimized for speed; false: the pin's threshold
+    /// alone decides there.
+    pub inline_size_guard_at_speed: bool,
 }
 
 impl Tuning {
@@ -46,10 +53,12 @@ impl Tuning {
         max_stores_per_memmove: 8,
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
+        speed_milliclocks_per_byte: 0,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
         split_merged_conditions: false,
+        inline_size_guard_at_speed: false,
     };
 }
 
@@ -281,6 +290,15 @@ pub struct OperationCosts {
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
+    /// The same on a dword where the target's own word is smaller
+    /// (`imul`/`idiv` r32 in real mode, before the operand-size prefix);
+    /// equal to `multiply`/`divide` elsewhere.
+    pub multiply_long: i64,
+    pub divide_long: i64,
+    /// Percent by which a constant divide's multiply-high sequence must cost
+    /// more than the divide for the divide to stay (`isIntDivCheap`,
+    /// priced); 0 where the target states none.
+    pub divide_margin: i64,
     pub shift: i64,
     pub address: i64,
     /// An address advanced in a space whose displacement carries into its
@@ -431,6 +449,9 @@ impl Default for OperationCosts {
             add: 1,
             multiply: 1,
             divide: 1,
+            multiply_long: 1,
+            divide_long: 1,
+            divide_margin: 0,
             shift: 1,
             address: 1,
             carry: 1,

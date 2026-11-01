@@ -20,7 +20,13 @@ fn legalized(
     let x = value(&mut dag);
     let converted = dag.get_node(op, double(), &[x]);
     dag.set_root(converted);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root)
 }
@@ -78,7 +84,7 @@ fn an_unsigned_i64_adds_the_fudge_when_the_sign_was_set() {
     let x = dag.get_node(ISD::BuildPair, EVT::I64, &[lo, hi]);
     let converted = dag.get_node(ISD::UIntToFp, double(), &[x]);
     dag.set_root(converted);
-    let mut hooks = X86Lowering { cmov: false, sse2: false, min_size: false };
+    let mut hooks = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);
     legalizer.run().unwrap();
     assert!(legalizer.all_legal());

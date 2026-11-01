@@ -7,8 +7,11 @@
 //! [`Out`]s and [`In`]s, and joins the parts the target returns
 //! (`getCopyFromParts`). Where each part goes is the target's.
 //!
-//! DEVIATE: integers and pointers only; no byval, sret, tail calls, floats or
-//! aggregates. Reason: the targets using the hook need none yet. Exit: with the
+//! A call in tail position is the target's `lower_tail_call` (`TC_RETURN`), or
+//! an ordinary call where it answers none.
+//!
+//! DEVIATE: integers and pointers only; no byval, sret, floats or aggregates.
+//! Reason: the targets using the hook need none yet. Exit: with the
 //! first target that does.
 
 use std::fmt::Debug;
@@ -82,17 +85,6 @@ pub enum Site {
 }
 
 pub trait TargetCalling: Debug + Sync {
-    /// Whether the hook places an argument or parameter carrying the attribute
-    /// `name` (`sret`, `byval`, `inreg`..., see `relocating_attribute`)
-    /// where its type puts it; when it does not, a function or call with
-    /// one is refused.
-    fn places_attribute(
-        &self,
-        _name: &str,
-    ) -> bool {
-        false
-    }
-
     /// Whether a `byval` argument is passed as the address of a copy the
     /// caller makes in its own frame, the callee reading through the pointer.
     /// A target that puts the bytes in the argument area says no, and a call
@@ -113,6 +105,16 @@ pub trait TargetCalling: Debug + Sync {
         Ok(())
     }
 
+    /// Whether an argument with this attribute (`sret`, `byval`, ...) is placed
+    /// like any other: the builder refuses the ones the hook would have to
+    /// move.
+    fn passes_in_place(
+        &self,
+        _attribute: &str,
+    ) -> bool {
+        false
+    }
+
     /// `LowerCall`: the call sequence and the call; returns the chain and the
     /// result parts.
     fn lower_call(
@@ -124,6 +126,37 @@ pub trait TargetCalling: Debug + Sync {
         ins: &[In],
     ) -> (SDValue, Vec<SDValue>);
 
+    /// `LowerCall` of a call in tail position (`IsTailCall`): the `TC_RETURN`
+    /// node that ends the block, or none where the target does not take the
+    /// call as a tail call (`isEligibleForTailCallOptimization`), which is
+    /// then an ordinary call.
+    fn lower_tail_call(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _callee: SDValue,
+        _outs: &[Out],
+    ) -> Option<SDValue> {
+        None
+    }
+
+    /// `LowerCall` of a target that makes frame objects of its own
+    /// (`MachineFrameInfo::CreateStackObject`: size, alignment, the frame
+    /// index) or needs to know the callee is variadic with no variadic
+    /// argument passed (`CallLoweringInfo::IsVarArg`).
+    fn lower_call_with_frame(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+        ins: &[In],
+        _variadic: bool,
+        _frame: &mut dyn FnMut(u32, u32) -> i32,
+    ) -> (SDValue, Vec<SDValue>) {
+        self.lower_call(dag, chain, callee, outs, ins)
+    }
+
     /// `LowerFormalArguments`: the value of each part.
     fn lower_formal_arguments(
         &self,
@@ -133,6 +166,43 @@ pub trait TargetCalling: Debug + Sync {
         fixed: FixedObject,
         live_in: LiveIn,
     ) -> Vec<SDValue>;
+
+    /// `LowerFormalArguments` of a variadic function: the pointer to the buffer
+    /// its variadic arguments are in, an extra parameter after the `fixed`
+    /// ones; none for a target that keeps them elsewhere.
+    fn variadic_buffer(
+        &self,
+        _dag: &mut SelectionDAG,
+        _fixed: usize,
+    ) -> Option<SDValue> {
+        None
+    }
+
+    /// `SelectionDAGTargetInfo::EmitTargetCodeForMemcpy` (and `Memmove`, which
+    /// the pin routes to it on wasm): the node that copies `size` bytes, or
+    /// none to leave it to the inline expansion and the library call.
+    fn emit_memcpy(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _dst: SDValue,
+        _src: SDValue,
+        _size: SDValue,
+    ) -> Option<SDValue> {
+        None
+    }
+
+    /// `SelectionDAGTargetInfo::EmitTargetCodeForMemset`.
+    fn emit_memset(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _dst: SDValue,
+        _value: SDValue,
+        _size: SDValue,
+    ) -> Option<SDValue> {
+        None
+    }
 
     /// `LowerReturn`: the return node.
     fn lower_return(

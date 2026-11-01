@@ -3,21 +3,9 @@ exception = true
 
 [[row]]
 label = "nbody bq32 -O2"
-counter = "instructions"
-tip = 57621
-to = 57624
-
-[[row]]
-label = "nbody bq32 -O2"
 counter = "code_bytes"
 tip = 827
 to = 923
-
-[[row]]
-label = "nbody bq32 -Os"
-counter = "instructions"
-tip = 46034
-to = 46041
 
 [[row]]
 label = "nbody bq32 -Os"

@@ -20,18 +20,6 @@ tip = 306
 to = 309
 
 [[row]]
-label = "matmul bq32 -O2"
-counter = "instructions"
-tip = 5765
-to = 5802
-
-[[row]]
-label = "matmul bq32 -O2"
-counter = "code_bytes"
-tip = 1915
-to = 1927
-
-[[row]]
 label = "quicksort bq32 -O2"
 counter = "code_bytes"
 tip = 572
