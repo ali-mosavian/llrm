@@ -50,13 +50,27 @@ pub fn module(
     Ok(module)
 }
 
+/// [`module`], with a landing pad that branches back into its function made
+/// enterable from a `catch` when the module unwinds.
+fn prepared(
+    text: &str,
+    width: Width,
+    options: Options,
+) -> Result<llrm_mir::module::Module, String> {
+    let mut module = module(text, width)?;
+    if options.exception_model == crate::dag::ExceptionModel::Wasm {
+        crate::eh_reentry::reentry(&mut module)?;
+    }
+    Ok(module)
+}
+
 /// Each defined function of `text`: its label and instructions.
 pub fn assembly(
     text: &str,
     width: Width,
     options: Options,
 ) -> Result<String, String> {
-    let module = module(text, width)?;
+    let module = prepared(text, width, options)?;
     let mut out = String::new();
     let mut labels = print::Labels::default();
     for (_, global, function) in module.functions() {
@@ -77,7 +91,7 @@ pub fn object(
     width: Width,
     options: Options,
 ) -> Result<Vec<u8>, String> {
-    let module = module(text, width)?;
+    let module = prepared(text, width, options)?;
     let mut functions = Vec::new();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
