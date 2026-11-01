@@ -65,20 +65,14 @@ __umodqi3:
 3$:	djnz	1$
 	ret
 
-; hl / de -> de (__udivhi3), hl % de -> de (__umodhi3). Restoring division in two shapes. A divisor under 128
+; hl / de -> de (__udivhi3), hl % de -> de (__umodhi3). The division leaves the quotient in de and the remainder in
+; hl; the remainder entry swaps them. Restoring division in two shapes. A divisor under 128
 ; keeps the remainder in a: 16 steps, the quotient shifting into hl as the dividend shifts out. A larger divisor
 ; leaves a quotient of at most 9 bits, so the 7 high bits of the dividend are the first remainder and 9 steps follow
 ; (the remainder is then at most 16 bits, never more), the dividend's low byte in a shifting out as the quotient
 ; shifts in.
 	.globl __udivhi3
 __udivhi3:
-	call	__umodhi3
-	ex	de,hl
-	ret
-
-; hl = quotient, de = remainder
-	.globl __umodhi3
-__umodhi3:
 	ld	a,e
 	and	a,#0x80
 	or	a,d
@@ -92,8 +86,9 @@ __umodhi3:
 	sub	a,e
 	inc	l
 2$:	djnz	1$
-	ld	e,a
-	ld	d,#0
+	ex	de,hl
+	ld	l,a
+	ld	h,#0
 	ret
 4$:	ld	b,#9
 	ld	a,l
@@ -108,9 +103,14 @@ __umodhi3:
 	rla
 	djnz	5$
 	rl	b
+	ld	d,b
+	ld	e,a
+	ret
+
+	.globl __umodhi3
+__umodhi3:
+	call	__udivhi3
 	ex	de,hl
-	ld	h,b
-	ld	l,a
 	ret
 
 ; ---- signed divide and remainder: the unsigned routines on magnitudes ----------------------------
