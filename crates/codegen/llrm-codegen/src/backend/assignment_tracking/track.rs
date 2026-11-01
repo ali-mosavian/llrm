@@ -227,7 +227,7 @@ fn is_zero(kind: &ConstantKind) -> bool {
 }
 
 /// `AllocaInst::isStaticAlloca`: a constant size, in the entry block.
-fn static_alloca(
+pub(super) fn static_alloca(
     function: &llrm_mir::Function,
     inst: InstId,
 ) -> bool {

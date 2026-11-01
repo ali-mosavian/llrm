@@ -524,6 +524,15 @@ pub fn optimized(
     // SelectionDAGBuilder does; the shadow run keeps the old selector's
     // lowering for the functions the DAG path refuses.
     pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
+    if pipeline.optimize {
+        // clang's `-fexperimental-assignment-tracking` runs this first.
+        timed("mir track assignments", || {
+            program
+                .modules
+                .iter_mut()
+                .try_for_each(|module| crate::backend::assignment_tracking::tracked(module).map(drop))
+        })?;
+    }
     let applied =
         llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
     // The pipeline sees an atomic access as a call it cannot move.

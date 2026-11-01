@@ -2184,4 +2184,27 @@ define i32 @f(i32 %n) {\nentry:\n  %x = alloca i32, align 4\n  %s = alloca [2 x 
         let assigns = records.iter().filter(|one| matches!(one.what, DebugWhat::Assign { .. })).count();
         assert_eq!((declares, assigns), (1, 2), "{records:?}");
     }
+
+    /// `x` is in its cell, then `%i`, then (as far as the selectors read) in
+    /// its cell: a wedge of `DW_OP_deref` of the alloca, stated as a wedge,
+    /// left the variable with no place at all (z.c at m32 -O2 -g lost `x`'s
+    /// `DW_AT_location`). It is the one `Declare` of the alloca.
+    #[test]
+    fn a_wedge_in_the_cell_is_the_cells_declare() {
+        let text = LOOP.replace("%j = add", "#dbg_value(i32 %i, !20, !DIExpression(), !25)\n  %j = add");
+        let module = rewritten(&text);
+        let function = function_f(&module);
+        let records = function.debug_records();
+        let declares: Vec<_> = records.iter().filter(|one| matches!(one.what, DebugWhat::Declare(_))).collect();
+        assert_eq!(declares.len(), 1, "{records:?}");
+        assert_eq!(declares[0].expression, None);
+        let derefs = records
+            .iter()
+            .filter(|one| {
+                one.expression.and_then(|node| module.expression(node)).is_some_and(|ops| ops == [DwOp::Deref])
+            })
+            .count();
+        assert_eq!(derefs, 0, "{records:?}");
+        assert_eq!(records.iter().filter(|one| matches!(one.what, DebugWhat::Value(_))).count(), 1);
+    }
 }

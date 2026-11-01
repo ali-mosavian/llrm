@@ -5,16 +5,23 @@
 //! A single location becomes a `Declare` ahead of the first instruction; a
 //! wedge becomes a `Value` (`Args` for several values, `Gone` for none)
 //! ahead of its instruction, in the table's order. O(n) in locations.
+//!
+//! DEVIATE: a wedge that says a variable is in its alloca's cell
+//! (`DW_OP_deref` of a static alloca) is stated as a `Declare` of that alloca,
+//! once, ahead of the first instruction: the selectors read a variable's
+//! frame cell from its `Declare` and do not read memory wedges. Exit: the
+//! selectors read wedges (`DBG_VALUE` through selection and allocation).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use llrm_mir::DwOp;
 use llrm_mir::{
-    DebugRecord, DebugWhat, GlobalId, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module,
+    DebugRecord, DebugWhat, GlobalId, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module, Operand,
     module::Special,
 };
 
-use super::{FunctionVarLocs, VarLocInfo, expression_text, op_words};
+use super::track::static_alloca;
+use super::{FunctionVarLocs, VarLocInfo, VariableId, expression_text, op_words};
 
 /// The `!DIExpression` nodes made so far, one per distinct text.
 #[derive(Default)]
@@ -81,14 +88,38 @@ pub fn rewrite(
     let Some(function) = module.global(at).function() else { return false };
     let first = function.walk().next().map(|(_, inst)| inst);
     let mut wanted: Vec<(InstId, bool, &VarLocInfo)> = Vec::new();
+    // The variables stated in a cell, for the `Declare` each gets once.
+    let mut homed: HashSet<(VariableId, Operand)> = HashSet::new();
+    let in_cell = |one: &VarLocInfo| match (&one.expression[..], &one.values[..]) {
+        ([DwOp::Deref], [address @ Operand::Value(value)]) => match function.value(*value).def {
+            llrm_mir::ValueDef::Instruction(def) if static_alloca(function, def) => Some(*address),
+            _ => None,
+        },
+        _ => None,
+    };
     if let Some(first) = first {
         wanted.extend(locs.single_locs().iter().map(|one| (first, true, one)));
     }
     for inst in locs.instructions() {
-        wanted.extend(locs.locs_before(inst).iter().map(|one| (inst, false, one)));
+        for one in locs.locs_before(inst) {
+            match (in_cell(one), first) {
+                (Some(address), Some(first)) => {
+                    if homed.insert((one.variable, address)) {
+                        wanted.push((first, true, one));
+                    }
+                }
+                _ => wanted.push((inst, false, one)),
+            }
+        }
     }
-    let expressions: Vec<Option<MetadataId>> =
-        wanted.iter().map(|&(_, _, one)| minted.node(module, &one.expression)).collect();
+    let expressions: Vec<Option<MetadataId>> = wanted
+        .iter()
+        .map(|&(_, single, one)| {
+            // The cell's `Declare` is of the address itself.
+            let ops = if single && one.expression == [DwOp::Deref] { &[][..] } else { &one.expression[..] };
+            minted.node(module, ops)
+        })
+        .collect();
     let GlobalKind::Function(function) = &mut module.globals[at.0 as usize].kind else { unreachable!("checked above") };
     let mut records = Vec::with_capacity(wanted.len());
     for ((before, single, one), expression) in wanted.into_iter().zip(expressions) {
