@@ -846,6 +846,12 @@ static void close_all(void)
     file_close(NULL, 0);
 }
 
+/* CLEAR closes every open file too (clear.c). */
+void file_close_all(void)
+{
+    close_all();
+}
+
 /* B$REST: RESET closes every open file. */
 void B_REST(void)
 {

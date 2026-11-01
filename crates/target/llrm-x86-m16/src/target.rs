@@ -66,6 +66,10 @@ pub struct Dos {
     /// The pin's tuning limits instead of the table's overrides: for tests of
     /// a pass's own thresholds.
     pub pin_tuning: bool,
+    /// REC-1: (depth, callee size) of the recursion the target copies at
+    /// speed. None by default (the entry in `RealMode` below); tests of the
+    /// mechanism set it.
+    pub recursive_inlining: Option<(u32, i64)>,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -92,6 +96,7 @@ impl Default for Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            recursive_inlining: None,
         }
     }
 }
@@ -144,6 +149,7 @@ impl Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            recursive_inlining: None,
         }
     }
 }
@@ -182,6 +188,11 @@ impl Machine for Dos {
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
+            // DEVIATE (REC-1, owner x86-m16, review 2026-11-10): none. The
+            // copies of a recursive body (fib 60 -> 152 B, rectwo 80 -> 259 B,
+            // frames 169 -> 338 B at -O2) end past Borland C's bytes (83, 104,
+            // 251) for clocks that were already ahead of it.
+            recursive_inlining: self.recursive_inlining,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
@@ -266,6 +277,8 @@ impl Machine for Dos {
             // Tuning constant fitted to sc.c, weapons, mdl and lru, not
             // derived.
             size_milliclocks_per_byte: 10_000,
+            // The user's rate for m16 at speed: one clock is two bytes.
+            speed_milliclocks_per_byte: 500,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -273,11 +286,35 @@ impl Machine for Dos {
             // and 1350 bytes unrolled, 306 and 418 not.
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
+            // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
+            // (partial and runtime on) copied matmul's outer body, 455 code
+            // bytes against 297, past Borland C's 298.
+            unroll_partial_threshold: Some(0),
+            // DEVIATE: the -O3 non-trivial unswitch copies the loop; the byte
+            // bar holds at every level, so no candidate is cheap enough (queens
+            // 178 -> 229 bytes, Borland C 172).
+            unswitch_threshold: Some(0),
             // DEVIATE: bytes over clocks at every level: the inliner's bar is
             // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
             // 1703).
             inline_threshold: Some(50),
+            // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
+            // not copied into a speed caller where it grows the code (D11).
+            // qlight c: `ls_scale_byte` x4, 376 -> 185 B. Open rows, clocks
+            // above 854bb7efc4 (numbered, owner w10): parity/qlight c +19,
+            // branch c +16, qmove c +41, qbsp c +36, sum_three c +2. Cause: a
+            // constant `imul` where main has a shift chain (the pin keeps
+            // imul; a priced chain measured 2 to 3 B per clock, not worth
+            // it), and frame reloads in sum_three. Exit 2026-11-30: the
+            // bytes those rows hold above main recovered by the register
+            // allocator, then re-price the chain.
+            inline_size_guard_at_speed: true,
+            // DEVIATE: a constant offset is a displacement of the access at
+            // m16; behind a sunk phi it costs an add and a register
+            // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
+            // select, +6 B, +36 clk).
+            keep_constant_displacements: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the
@@ -538,6 +575,19 @@ mod encoding_tests {
         );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// The shared call price is read off the 486 table and the byte table:
+    /// the call, the return and two argument words, in clocks and in bytes.
+    #[test]
+    fn the_call_price_of_two_arguments_is_the_486_tables_call_return_and_words() {
+        use llrm_mir::target::Machine;
+        let dos = super::Dos::default();
+        let clocks = super::costs("486");
+        let price = llrm_mir::callprice::CallPrice::new(&clocks, &dos.size_costs(), 2, 500);
+        assert_eq!((clocks.call, clocks.return_, clocks.argument), (18, 13, 2));
+        assert_eq!((price.clocks, price.bytes), (18 + 13 + 2 * 2, 5 + 1 + 2 * 2));
+        assert!(price.pays(305.0, 62.0, 1.0) && !price.pays(30.0, 62.0, 1.0));
     }
 
     /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte

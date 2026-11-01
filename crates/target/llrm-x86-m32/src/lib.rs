@@ -68,6 +68,27 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
     llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses")
 });
 
+/// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
+/// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
+/// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
+/// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
+/// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
+fn tuning() -> llrm_mir::target::Tuning {
+    llrm_mir::target::Tuning {
+        multiply_by_clocks: true,
+        // DEVIATE (full unroll): the pin's -O2/-O3 thresholds unroll the 8-trip
+        // loops of matmul, tile, fpbench and nbody to 2188, 489, 1724 and 827 B
+        // where gcc -O2, which does not unroll, has 382, 161, 503 and 394 B.
+        // The pass takes the size threshold (a full unroll must not grow the
+        // code), no boost, as m16 does. At
+        // -O2 bytes vs the best of gcc/clang: geomean 1.230 -> 1.059, sum
+        // 28114 -> 20618 B; clocks 0.915 -> 0.973. Owner llrm-target-x86-m32.
+        unroll_threshold: Some(0),
+        unroll_max_percent_threshold_boost: Some(100),
+        ..llrm_mir::target::Tuning::PIN
+    }
+}
+
 impl M32 {
     /// The pressure sets and classes of the pin's x86.
     pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
@@ -88,6 +109,14 @@ impl M32 {
 }
 
 impl llrm_target::Target for M32 {
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(32)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }
@@ -406,7 +435,7 @@ impl llrm_target::Target for M32 {
                     .tti
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
-                    .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                    .map(|one| std::rc::Rc::new(one.with_tuning(tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )
         }
@@ -551,6 +580,30 @@ mod tests {
         assert!(!model.port_touches_memory((0x3DA, 0x3DA)), "the VGA status register");
         assert!(model.port_touches_memory((0x0B, 0x0B)), "the 8237's mode register may start a transfer");
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
+    }
+
+    /// The pin's full-unroll thresholds made matmul 2188 B against gcc's 382 at
+    /// m32 -O2 (tile 489 vs 161): m32 takes the size threshold, so a full
+    /// unroll never grows code.
+    #[test]
+    fn test_m32_full_unroll_may_not_grow_the_code() {
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        assert_eq!(tti.unroll_threshold_overrides(), (Some(0), Some(100)));
     }
 
     /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86

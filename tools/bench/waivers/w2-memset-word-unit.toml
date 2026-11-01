@@ -1,0 +1,26 @@
+reason = "TEMPORARY trade-off (owner w2, fix-by 2026-11-07). SD442: rep stosw word unit for a constant fill; +4 B of setup for -36..-3612 clocks and fewer instructions on the same rows. Removal: the runtime gains memset (SD442 exit) or the 2026-11-07 re-judge."
+exception = true
+
+[[row]]
+label = "bintree bas -O2"
+counter = "code_bytes"
+tip = 609
+to = 613
+
+[[row]]
+label = "bintree bq16 -O2"
+counter = "code_bytes"
+tip = 615
+to = 619
+
+[[row]]
+label = "matmul bas -O2"
+counter = "code_bytes"
+tip = 547
+to = 551
+
+[[row]]
+label = "matmul bq16 -O2"
+counter = "code_bytes"
+tip = 551
+to = 555

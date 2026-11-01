@@ -6,7 +6,7 @@
 pub mod symbols;
 mod types;
 
-use llrm_object::debug::Info;
+use llrm_debug::Info;
 use llrm_object::{Object, Reloc, Unsupported};
 
 /// `CV_SIGNATURE_C13`: what opens both sections.
@@ -23,7 +23,7 @@ impl Registers<'_> {
         &self,
         register: &str,
     ) -> Result<u16, Unsupported> {
-        match self.info.registers.iter().find(|one| one.name == register) {
+        match self.info.registers().named(register) {
             Some(one) => {
                 one.codeview.map_or_else(|| refused(format!("register {register} has no CodeView number")), Ok)
             }
@@ -33,7 +33,7 @@ impl Registers<'_> {
 
     /// The register a frame location is relative to.
     pub(crate) fn frame(&self) -> Result<u16, Unsupported> {
-        self.number(&self.info.frame_register)
+        self.number(&self.info.registers().frame)
     }
 }
 
@@ -96,13 +96,30 @@ pub(crate) fn record(
     Ok(())
 }
 
+/// CodeView 13 as a [`llrm_debug::DebugWriter`]: `.debug$S` and `.debug$T`.
+pub struct CodeView {
+    /// The machine of the symbols' `S_COMPILE3`; none where the width has no
+    /// C13 machine.
+    pub machine: Option<u16>,
+}
+
+impl llrm_debug::DebugWriter for CodeView {
+    fn expanded(
+        &self,
+        object: &Object,
+        info: &llrm_debug::Info,
+    ) -> Result<Object, Unsupported> {
+        expanded(object, info, self.machine)
+    }
+}
+
 /// `object` with its debug information as C13 sections, the information itself
 /// dropped.
 pub fn expanded(
     object: &Object,
+    info: &llrm_debug::Info,
     machine: Option<u16>,
 ) -> Result<Object, Unsupported> {
-    let Some(info) = &object.debug else { return Ok(object.clone()) };
     let encoded = encode(object, info, machine)?;
     let section = |name: &str, one: Section| llrm_object::Section {
         name: name.to_owned(),
@@ -120,7 +137,7 @@ pub fn expanded(
     let mut sections = object.sections.clone();
     sections.push(section(".debug$S", encoded.symbols));
     sections.push(section(".debug$T", encoded.types));
-    Ok(Object { sections, debug: None, ..object.clone() })
+    Ok(Object { sections, ..object.clone() })
 }
 
 /// `object`'s debug sections.

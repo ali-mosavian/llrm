@@ -61,9 +61,12 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
+use llrm_object::assembler::AsmBackend;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
+use llrm_x86::mc::backend::X86Backend;
 
 use crate::backend::masm;
 use crate::backend::select;
@@ -83,7 +86,16 @@ pub const POINTER: Fix = Fix::plain(llrm_x86::mc::fixup::FAR_POINTER);
 /// says 0 for x86's, which made a far pointer in a 16-bit object trip the
 /// width assertion.
 fn width(fix: Fix) -> usize {
-    usize::from(llrm_x86::mc::fixup::kind_info(fix.kind).bits).div_ceil(8)
+    usize::from(backend(false, 0).kind_info(fix.kind).bits).div_ceil(8)
+}
+
+/// x86's assembler backend for `sixteen`-bit mode and a longest no-operation of
+/// `longest` bytes (its fixup table needs neither).
+fn backend(
+    sixteen: bool,
+    longest: usize,
+) -> X86Backend {
+    X86Backend { sixteen, wide: false, longest }
 }
 pub const OFFSET32: Fix = Fix::abs(4);
 pub const OFFSET64: Fix = Fix::abs(8);
@@ -404,20 +416,18 @@ pub fn pack_into(
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
 }
 
-/// `value` into the bytes of a relocated field at `at` that hold an offset.
+/// `value` into the bytes of a relocated field at `at` that hold an offset (a
+/// far pointer's are its first two), refused where it does not fit them.
 fn pack_field(
     buffer: &mut [u8],
     at: usize,
     kind: Fix,
     value: i64,
-) {
-    if width(kind) == 8 {
-        buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
-    } else if width(kind) == 4 && kind != POINTER {
-        buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
-    } else {
-        pack_into(buffer, at, i64::from(value as u16));
-    }
+) -> Result<(), llrm_object::Unsupported> {
+    let bytes = if kind == POINTER { 2 } else { width(kind) };
+    // A far pointer's offset is its first two bytes: patched as data of that
+    // width.
+    llrm_x86::mc::backend::FIELDS.apply_fixup(buffer, at, Fix::abs(bytes).kind, kind.pc_rel, value, "")
 }
 
 /// What a relocated field holds, sign-extended from the bytes that hold an
@@ -538,16 +548,18 @@ pub enum CodeLayout {
 pub fn written(
     module: &masm::Module,
     source: &str,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
-    written_as(module, source, CodeLayout::OneSegment)
+    written_as(module, source, CodeLayout::OneSegment, objects)
 }
 
 pub fn written_as(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
-    written_in(module, source, layout, Format::Omf)
+    written_in(module, source, layout, Format::Omf, objects)
 }
 
 /// `module` as an object file of `format`.
@@ -556,13 +568,14 @@ pub fn written_in(
     source: &str,
     layout: CodeLayout,
     format: Format,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
-        let object = built_inner(module, source, layout, format)?;
-        let bytes = serialized(&object, format)?;
+        let object = built_inner(module, source, layout, format, objects)?;
+        let bytes = serialized(objects, &object, format)?;
         if let Some(dir) = llrm_target::object::all_writers_dir() {
             for other in Format::ALL {
-                let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
+                let written = if other == format { Ok(bytes.clone()) } else { serialized(objects, &object, other) };
                 match written {
                     Ok(written) => llrm_target::object::record_writer(&dir, other, &written),
                     Err(why) => llrm_target::object::record_refusal(&dir, other, &format!("{why:?}")),
@@ -573,21 +586,21 @@ pub fn written_in(
     })
 }
 
-/// What `format` says of the code it holds, from x86's table (the formats the
-/// layout tests use).
-pub fn asm_info(format: Format) -> llrm_object::AsmInfo {
-    llrm_x86::mc::X86Objects.asm_info(format.name()).unwrap_or_default()
+/// What `format` says of the code it holds, from the target's table.
+pub fn asm_info(
+    objects: &dyn ObjectTarget,
+    format: Format,
+) -> llrm_object::AsmInfo {
+    objects.asm_info(format.name()).unwrap_or_default()
 }
 
 /// `object` as a file of `format`.
 pub fn serialized(
-    object: &Object,
+    objects: &dyn DebugObjectTarget,
+    object: &Described,
     format: Format,
 ) -> Result<Vec<u8>, Error> {
-    match format {
-        Format::Omf => Ok(llrm_omf::write::write(object, &llrm_x86::mc::omf::X86Omf)?),
-        other => Ok(llrm_x86::mc::X86Objects.write_object(other.name(), object)?),
-    }
+    Ok(objects.write_described(format.name(), &object.object, object.debug.as_ref())?)
 }
 
 /// `module` laid out as an object.
@@ -595,8 +608,37 @@ pub fn built(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
-) -> Result<Object, Error> {
-    built_inner(module, source, layout, Format::Omf)
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, Format::Omf, objects)
+}
+
+/// [`built`] for `format`, which decides the code too (a Windows 64-bit frame
+/// past a page is probed).
+pub fn built_in(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, format, objects)
+}
+
+/// A Windows 64-bit function probes the frames past a page through `__chkstk`
+/// (`X86FrameLowering::emitStackProbe`): the format decides it, as the triple
+/// does for LLVM. Only a target whose description names the probe's scratch
+/// register has the probe.
+fn stack_probed(
+    mut module: masm::Module,
+    format: Format,
+) -> masm::Module {
+    if format == Format::Coff {
+        for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
+            procedure.probe_stack = Some("__chkstk".to_owned());
+        }
+    }
+    module
 }
 
 fn built_inner(
@@ -604,8 +646,9 @@ fn built_inner(
     source: &str,
     layout: CodeLayout,
     format: Format,
-) -> Result<Object, Error> {
-    let module = &live(module)?;
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    let module = &stack_probed(live(module)?, format);
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -653,16 +696,29 @@ fn built_inner(
     }
     let mut sizes: IndexMap<String, usize> = IndexMap::default();
     for (index, group) in groups.iter().enumerate() {
-        _code(&mut segments[index], index, module, group, &mut symbols, &mut sizes, format)?;
+        _code(
+            &mut segments[index],
+            index,
+            module,
+            group,
+            &mut symbols,
+            &mut sizes,
+            asm_info(objects, format).pref_align,
+        )?;
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
     // writes it has the segment in each address.
-    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1
-    {
+    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_debug::Dialect::Bc) && groups.len() != 1 {
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
-    let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
+    let mut externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
+    // The probe routine is named by the frames that need it, nowhere else.
+    for probe in module.procedures.iter().filter_map(|one| one.probe_stack.as_ref()) {
+        if segments.iter().any(|segment| segment.fixups.iter().any(|one| _target(&one.name) == probe)) {
+            externs.entry(probe.clone()).or_insert_with(|| "near".to_owned());
+        }
+    }
     let mut object = object_of(module, source, segments, &symbols, &sizes, &externs)?;
     // A segment per procedure of one name is one segment to Microsoft's LINK,
     // which keeps the last one's length and loses the rest; a COMDAT per
@@ -705,7 +761,7 @@ pub fn _data(
                 segment.put(&vec![0; width(loc)], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - width(loc);
                 if loc == OFFSET64 {
-                    pack_field(&mut segment.image, at, loc, *offset);
+                    segment.image[at..at + 8].copy_from_slice(&offset.to_le_bytes());
                 } else {
                     pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
                 }
@@ -729,9 +785,9 @@ pub fn _code(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
     sizes: &mut IndexMap<String, usize>,
-    format: Format,
+    pref_align: bool,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, sizes, asm_info(format).pref_align, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, pref_align, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -798,7 +854,9 @@ pub fn _code_by(
             }
             Encoded::Align(_) | Encoded::Prefer { .. } => {
                 let pad = _size(item, at as i64, model);
-                segment.put(&llrm_x86::mc::backend::nops(pad, usize::from(module.padding.nop), model.segmented()), &[]);
+                let mut nops = Vec::new();
+                backend(model.segmented(), usize::from(module.padding.nop)).write_nop_data(&mut nops, pad);
+                segment.put(&nops, &[]);
                 let log2 = match item {
                     Encoded::Align(masm::CodeAlign { log2, .. }) => *log2,
                     Encoded::Prefer { computed, .. } => *computed,
@@ -956,10 +1014,21 @@ pub fn _encoded(
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
+        // Static code at 64 bits: a symbol beside a register is the absolute
+        // sign-extended `disp32`; alone it is `[rip + disp32]`.
+        let based = match one {
+            Loc::Mem(ir::Mem { through, index_through, .. })
+            | Loc::Address(ir::AddressRef { through, index_through, .. }) => {
+                *through != llrm_lir::registers::RegId::None || *index_through != llrm_lir::registers::RegId::None
+            }
+            _ => false,
+        };
         // Long mode reaches a symbol from the instruction pointer: the field is
         // relative to the instruction's end, and an address loaded for
         // a symbol defined elsewhere is its table entry's.
-        let loc = if model == CodeModel::Flat64 {
+        let loc = if model == CodeModel::Flat64 && based {
+            llrm_x86::mc::fixup::abs_signed_4()
+        } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
             if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
                 llrm_x86::mc::fixup::got_pc_rel(from)
@@ -969,7 +1038,7 @@ pub fn _encoded(
         } else {
             loc
         };
-        pack_field(&mut code, at, loc, addend);
+        pack_field(&mut code, at, loc, addend).map_err(|error| Unencodable(error.0))?;
         let name = names
             .get(&(addr.space, addr.index))
             .unwrap_or_else(|| panic!("KeyError: ({}, {})", addr.space.repr(), addr.index));
@@ -1195,7 +1264,7 @@ pub fn object_of(
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
     externs: &IndexMap<String, String>,
-) -> Result<Object, Error> {
+) -> Result<Described, Error> {
     let model = module.object.code_model();
     let used: BTreeSet<String> = segments
         .iter()
@@ -1254,7 +1323,11 @@ pub fn object_of(
         .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
         .transpose()
         .map_err(Unencodable)?;
-    let frames = if model == CodeModel::Flat64 { declared_frames(&segments, symbols, sizes) } else { Vec::new() };
+    let frames = if model == CodeModel::Segmented16 {
+        Vec::new()
+    } else {
+        declared_frames(model.bits(), &segments, symbols, sizes)
+    };
     let mut sections = Vec::new();
     for segment in segments {
         let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
@@ -1266,8 +1339,13 @@ pub fn object_of(
             relocs.push(Reloc::new(one.at, one.kind, target, addend));
         }
         for one in &relocs {
-            if one.fix() != BASE {
-                pack_field(&mut image, one.at, one.fix(), 0);
+            if one.kind != BASE.kind {
+                pack_field(
+                    &mut image,
+                    one.at,
+                    Fix { kind: one.kind, pc_rel: one.pc_rel, pc_bias: 0, spec: one.spec },
+                    0,
+                )?;
             }
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });
@@ -1277,32 +1355,35 @@ pub fn object_of(
     // was handed.
     let name =
         debug.as_ref().and_then(|info| info.files.first()).map_or_else(|| source.to_owned(), |file| file.name.clone());
-    Ok(Object {
-        name,
-        bits: match model {
-            CodeModel::Flat64 => 64u8,
-            CodeModel::Flat32 => 32u8,
-            CodeModel::Segmented16 => 16u8,
-        },
-        sections,
-        symbols: table,
-        omf_groups,
-        omf_comdat: Vec::new(),
-        frames,
+    Ok(Described {
         debug,
+        object: Object {
+            name,
+            bits: match model {
+                CodeModel::Flat64 => 64u8,
+                CodeModel::Flat32 => 32u8,
+                CodeModel::Segmented16 => 16u8,
+            },
+            sections,
+            symbols: table,
+            omf_groups,
+            omf_comdat: Vec::new(),
+            frames,
+        },
     })
 }
 
 /// The frames the procedures declared (`Item::Cfi`): one row where the frame
 /// address or a save changes, as the state after the directives at that offset.
 fn declared_frames(
+    bits: u32,
     segments: &[Segment],
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
 ) -> Vec<llrm_object::Frame> {
+    use llrm_debug::FrameRow;
     use llrm_object::assembler::Cfi;
-    use llrm_object::debug::FrameRow;
-    let name = llrm_x86::mc::unwind::register_label;
+    let name = |number: u16| llrm_x86::mc::unwind::register_label(bits, number);
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
@@ -1311,10 +1392,12 @@ fn declared_frames(
             if !segment.declared.iter().any(within) {
                 continue;
             }
-            let entry = llrm_x86::mc::unwind::entry_row();
+            let entry = llrm_x86::mc::unwind::entry_row(bits);
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
+            let mut ops = Vec::new();
             for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+                ops.push(cfi);
                 match cfi {
                     Cfi::DefCfa { register, offset } => {
                         state.cfa_register = name(register);
@@ -1343,7 +1426,7 @@ fn declared_frames(
                 }
             }
             let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
-            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, seh });
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, cfi: ops, seh });
         }
     }
     frames
@@ -1424,6 +1507,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         }
     }
@@ -1576,6 +1660,7 @@ mod tests {
         let leave = semantics(Operation::Return, "retf", vec![], vec![]);
         let insns = vec![insn(1, load), insn(2, call), insn(3, leave)];
         let built = masm::Module {
+            debug: None,
             registers: crate::backend::registerinfo::test_regs(),
             code: "GET_TEXT".into(),
             names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
@@ -1596,7 +1681,6 @@ mod tests {
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
-            debug: None,
         };
         assert_eq!(
             masm::text(&built).unwrap(),
@@ -1604,7 +1688,7 @@ mod tests {
              L0_1:\n    mov ax, word ptr _d\n    call far ptr _f\n    retf\n_get endp\nend\n"
         );
         assert_eq!(
-            written(&built, "get.c").unwrap(),
+            written(&built, "get.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap(),
             hex("800700056765742e63a39622000004434f4445084745545f544558540444415441055f44415441064447524f55502a98\
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
@@ -1622,6 +1706,7 @@ mod tests {
             items.extend(to.map(|to| masm::Datum::Align(masm::Align { to })));
             items.push(masm::Datum::Bytes(vec![2]));
             let module = masm::Module {
+                debug: None,
                 registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
@@ -1636,9 +1721,10 @@ mod tests {
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
                 stack: 0,
-                debug: None,
             };
-            let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
+            let records =
+                omf::parse(&written(&module, "m.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap())
+                    .unwrap();
             // The code segment, then _DATA.
             records.iter().filter(|one| one.r#type & 0xFE == omf::SEGDEF).map(|one| one.body[0]).collect()
         };
@@ -1694,6 +1780,7 @@ mod tests {
             masm::InlinePart::Fixup("segment".into(), "_far".into(), 0),
         ];
         let rich = masm::Module {
+            debug: None,
             registers: crate::backend::registerinfo::test_regs(),
             code: "RICH_TEXT".into(),
             names: IndexMap::from_iter([
@@ -1745,7 +1832,6 @@ mod tests {
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
-            debug: None,
         };
         assert_eq!(
             masm::text(&rich).unwrap(),
@@ -1762,7 +1848,7 @@ mod tests {
              \x20   retf\n_f endp\nend\n"
         );
         assert_eq!(
-            written(&rich, "rich.c").unwrap(),
+            written(&rich, "rich.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap(),
             hex("80080006726963682e633b9649000004434f444509524943485f544558540444415441055f4441544103425353045f\
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
                  0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
@@ -1811,6 +1897,7 @@ mod tests {
     fn test_a_function_is_aligned_as_emitfunctionheader_does() {
         let small = |size: bool| {
             let mut module = masm::Module {
+                debug: None,
                 registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
@@ -1830,7 +1917,6 @@ mod tests {
                 object: llrm_target::Target::object(&llrm_x86_m32::M32),
                 requests: BTreeSet::new(),
                 stack: 0,
-                debug: None,
             };
             module.object = llrm_target::Target::object(&llrm_x86_m32::M32);
             module
@@ -1852,7 +1938,9 @@ mod tests {
             assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "pref_align {pref_align}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };
-        let offsets = |format: Format, size: bool| offsets_with(asm_info(format).pref_align, size);
+        let offsets = |format: Format, size: bool| {
+            offsets_with(asm_info(llrm_target::Target::objects(&llrm_x86_m32::M32), format).pref_align, size)
+        };
         // `.prefalign` was `Format::Elf` by name: a format that only says
         // `pref_align` got `.p2align`.
         assert_eq!(offsets_with(true, false), ([0, 4, 8], 4), "a format that says pref_align");
@@ -1875,5 +1963,37 @@ mod tests {
         assert_eq!(items[at], masm::Item::Align(masm::CodeAlign { log2: 4, max_skip: 7 }));
         assert!(matches!(&items[at + 1], masm::Item::Label(label) if label.name == "L0_2"), "{items:?}");
         assert_eq!(items.iter().filter(|one| matches!(one, masm::Item::Align(_))).count(), 1);
+    }
+
+    /// An addend past its field's two bytes was wrapped into the field and
+    /// written (`0x12345` as `0x2345`); it is refused, and the ones that fit
+    /// (`-1`, `0xFFFF`) are written as before.
+    #[test]
+    fn an_addend_a_near_field_cannot_hold_is_refused() {
+        let mut image = [0xAA; 4];
+        assert!(pack_field(&mut image, 0, OFFSET, 0x12345).is_err());
+        assert_eq!(image, [0xAA; 4]);
+        pack_field(&mut image, 0, OFFSET, -1).unwrap();
+        pack_field(&mut image, 2, OFFSET, 0xFFFF).unwrap();
+        assert_eq!(image, [0xFF; 4]);
+    }
+
+    /// A procedure's `.seh_*` directives reached `Object.frames` only through
+    /// the call frame information, so a Win64 prologue declared on its own was
+    /// dropped and `.xdata` was read back from the bytes. They are the
+    /// function's, at offsets from its start.
+    #[test]
+    fn declared_seh_directives_reach_the_frame_at_function_relative_offsets() {
+        let mut segment = Segment::new("A_TEXT", Role::Text, true);
+        segment.declared.push(8);
+        segment.seh.push((llrm_object::Seh::PushReg(6), 9));
+        segment.seh.push((llrm_object::Seh::StackAlloc(32), 13));
+        let symbols: IndexMap<String, (usize, usize)> = [("f".to_owned(), (0, 8))].into_iter().collect();
+        let sizes: IndexMap<String, usize> = [("f".to_owned(), 20)].into_iter().collect();
+        let frames = declared_frames(64, &[segment], &symbols, &sizes);
+        assert_eq!(
+            frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
+            vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]
+        );
     }
 }

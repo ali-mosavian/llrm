@@ -146,11 +146,11 @@ label = "queens bq16 -O2"
 counter = "memory_operands"
 tip = 70060
 main = 113297
-to = 80459
+to = 80443
 
 [[row]]
 label = "queens bq16 -Os"
 counter = "memory_operands"
 tip = 70060
 main = 95368
-to = 80459
+to = 80443

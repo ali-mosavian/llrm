@@ -1909,15 +1909,14 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 
 
-def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
-    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
-    assert "wccq" not in ps.bins_command(tmp_path)
+def test_the_rebuild_asks_for_no_legacy_feature_even_when_the_directory_holds_a_leftover_llrm_c(tmp_path):
+    """A leftover llrm-c in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
     (tmp_path / "llrm-c").write_text("")
-    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+    assert "--features" not in ps.bins_command(tmp_path)
 
 
-def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
-    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+def test_the_link_and_behavioural_build_asks_for_no_legacy_feature(tmp_path, monkeypatch):
+    """_build_release must build with `--bins` alone: the wccq feature goes with the Watcom frontend."""
     (tmp_path / "release").mkdir()
     (tmp_path / "release" / "llrm-c").write_text("")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
@@ -1926,7 +1925,7 @@ def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
     ps._build_release()
-    assert ran and "wccq" in ran[0], ran
+    assert ran and "wccq" not in " ".join(ran[0]), ran
 
 
 def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
@@ -2138,3 +2137,37 @@ def test_no_tool_defaults_to_the_old_integration_branch():
     stale = [f"{p.relative_to(root)}:{n}" for p in root.rglob("*.py") if ".venv" not in p.parts and not p.name.startswith("test_") and p != Path(__file__)
              for n, line in enumerate(p.read_text().splitlines(), 1) if "feat/parity" in line.split("#")[0] and ('"origin/feat/parity' in line or ' "feat/parity"' in line or "origin/feat/parity\"" in line)]
     assert stale == []
+
+
+def test_a_pr_that_changes_pass_code_without_a_complexity_line_warns_and_one_with_it_does_not(tmp_path, monkeypatch, capsys):
+    """The 10-31 rule: a new or changed pass states its complexity. Warn only: the PR still passes the precheck."""
+    pass_file = {"path": "crates/opt/llrm-transforms/src/licm.rs"}
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH, "files": [pass_file]}
+    assert ps.complexity_warning("7", {**info, "body": "TL;DR\nOwner: w6"}).startswith("7: WARN: pass code changed and the description has no `Complexity:`")
+    assert ps.complexity_warning("7", {**info, "body": None}) is not None
+    assert ps.complexity_warning("7", {**info, "body": "Complexity: O(n) per loop, the pin's bound"}) is None
+    assert ps.complexity_warning("7", {**info, "body": "x", "files": [{"path": "crates/opt/llrm-transforms/src/licm_tests.rs"}, {"path": "docs/x.md"}]}) is None, "tests and docs are not pass code"
+    assert ps.complexity_warning("7", {"body": "x"}) is None, "no file list read: nothing to name"
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    tree = Tree(set(), set())
+    for n, body in enumerate(("x", "Complexity: O(n)")):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS", "a warning never blocks"
+        assert (f"{n}: WARN: pass code changed and the description has no `Complexity:`" in capsys.readouterr().err) == (n == 0)
+
+
+def test_a_pass_pr_without_a_class_and_two_programs_warns_and_one_with_both_does_not(tmp_path, monkeypatch, capsys):
+    """The 10-31 rule: no row-shaped patch. A pass PR names the class it covers and at least two programs it helps; warn only."""
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH, "files": [{"path": "crates/opt/llrm-transforms/src/licm.rs"}]}
+    both = "Class: loop-invariant float loads\nPrograms: nbody, mandel"
+    assert ps.generality_warning("7", {**info, "body": "Complexity: O(n)"}) == "7: WARN: pass code changed and the description lacks a `Class:` line (the class it covers) and a `Programs:` line naming at least two programs it helps"
+    assert "`Programs:`" in ps.generality_warning("7", {**info, "body": "Class: x\nPrograms: sieve"}), "one program is a one-row patch"
+    assert "`Class:`" in ps.generality_warning("7", {**info, "body": "Programs: a, b"})
+    assert ps.generality_warning("7", {**info, "body": both}) is None
+    assert ps.generality_warning("7", {**info, "body": "x", "files": [{"path": "docs/x.md"}]}) is None
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    tree = Tree(set(), set())
+    for n, body in enumerate(("x", both)):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS"
+        assert (f"{n}: WARN: pass code changed and the description lacks a `Class:`" in capsys.readouterr().err) == (n == 0)

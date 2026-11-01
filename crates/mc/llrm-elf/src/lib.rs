@@ -4,7 +4,7 @@
 //! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
 //! `mc::elf` are the machines.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, assembler::AsmBackend};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -26,12 +26,10 @@ const STT_SECTION: u8 = 3;
 const STT_FILE: u8 = 4;
 const SHN_ABS: u16 = 0xFFF1;
 
-/// A relocation type, the bytes of the field it patches, and the distance from
-/// the field's start to the place a pc-relative value is relative to.
+/// A relocation type and the bytes of the field it patches.
 pub struct Relocation {
     pub kind: u32,
     pub width: usize,
-    pub from: usize,
 }
 
 /// What a machine says of its ELF.
@@ -44,10 +42,19 @@ pub trait Machine {
     const NUMBER: u16;
     /// Relocations carry their addend (RELA); else it is in the field (REL).
     const ADDEND: bool;
+    /// ELFDATA2MSB: the file's own fields are big-endian. The section bytes
+    /// are the target's.
+    const BIG_ENDIAN: bool = false;
+    /// `e_flags`: the machine's own (llvm-mos writes its CPU there).
+    const FLAGS: u32 = 0;
     /// `sh_type` of `.eh_frame`: `SHT_X86_64_UNWIND` on x86-64, else PROGBITS.
     const UNWIND_TYPE: u32 = SHT_PROGBITS;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
+
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend() -> &'static dyn AsmBackend;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -85,18 +92,25 @@ struct Header {
     entry: u64,
 }
 
-fn put16(
+fn put16<M: Machine>(
     out: &mut Vec<u8>,
     value: u16,
 ) {
-    out.extend(value.to_le_bytes());
+    out.extend(if M::BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() });
 }
 
-fn put32(
+fn put32<M: Machine>(
     out: &mut Vec<u8>,
     value: u32,
 ) {
-    out.extend(value.to_le_bytes());
+    out.extend(if M::BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() });
+}
+
+fn put64<M: Machine>(
+    out: &mut Vec<u8>,
+    value: u64,
+) {
+    out.extend(if M::BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() });
 }
 
 /// An address-sized field: 4 bytes in a 32-bit file, 8 in a 64-bit one.
@@ -105,9 +119,9 @@ fn put_word<M: Machine>(
     value: u64,
 ) {
     if M::WIDE {
-        out.extend(value.to_le_bytes());
+        put64::<M>(out, value);
     } else {
-        put32(out, value as u32);
+        put32::<M>(out, value as u32);
     }
 }
 
@@ -178,19 +192,19 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let symbol_size = if M::WIDE { 24 } else { 16 };
     let mut symtab: Vec<u8> = vec![0; symbol_size];
     let symbol = |out: &mut Vec<u8>, name: u32, value: u64, size: u64, info: u8, section: u16| {
-        put32(out, name);
+        put32::<M>(out, name);
         if M::WIDE {
             out.push(info);
             out.push(0);
-            put16(out, section);
-            out.extend(value.to_le_bytes());
-            out.extend(size.to_le_bytes());
+            put16::<M>(out, section);
+            put64::<M>(out, value);
+            put64::<M>(out, size);
         } else {
-            put32(out, value as u32);
-            put32(out, size as u32);
+            put32::<M>(out, value as u32);
+            put32::<M>(out, size as u32);
             out.push(info);
             out.push(0);
-            put16(out, section);
+            put16::<M>(out, section);
         }
     };
     let file = strings.add(&object.name);
@@ -198,7 +212,24 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     for index in 0..object.sections.len() {
         symbol(&mut symtab, 0, 0, 0, STB_LOCAL << 4 | STT_SECTION, index as u16 + 1);
     }
-    let first_global = 2 + object.sections.len();
+    // The locals come before the globals (`sh_info` is the first global), as
+    // `ELFObjectWriter` lists them; relocations name a local through its
+    // section's symbol.
+    let mut locals = 0;
+    for one in &object.symbols {
+        if let (Definition::Defined { section, offset }, Binding::Local) = (one.definition, one.binding) {
+            // A label inside a function has no size: it is private, as `.L`
+            // ones are.
+            if one.is_private() || (object.sections[section].role == Role::Text && one.size == 0) {
+                continue;
+            }
+            let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
+            let name = strings.add(&one.name);
+            symbol(&mut symtab, name, offset as u64, one.size as u64, STB_LOCAL << 4 | kind, section as u16 + 1);
+            locals += 1;
+        }
+    }
+    let first_global = 2 + object.sections.len() + locals;
     // The ELF symbol of each object symbol that is global.
     let mut elf_symbol: Vec<Option<u32>> = vec![None; object.symbols.len()];
     let mut next = first_global as u32;
@@ -216,7 +247,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
                 symbol(&mut symtab, name, offset as u64, one.size as u64, binding << 4 | kind, section as u16 + 1);
             }
-            Definition::Undefined => symbol(&mut symtab, name, 0, 0, STB_GLOBAL << 4, 0),
+            Definition::Undefined => {
+                let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
+                symbol(&mut symtab, name, 0, 0, binding << 4, 0)
+            }
         }
         elf_symbol[index] = Some(next);
         next += 1;
@@ -230,7 +264,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from } = M::relocation(one)?;
+            let Relocation { kind, width } = M::relocation(one)?;
             let (symbol, own) = match one.target {
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
                 // The section's own symbol.
@@ -242,20 +276,20 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                     (None, Definition::Undefined) => unreachable!("an undefined symbol is global"),
                 },
             };
-            // S + A - P, where the model's value is S + addend - (at + from).
-            let addend = one.addend + own - from as i64;
+            // S + A - P: the addend is the model's, less the pc bias.
+            let addend = one.addend + own;
             // Checked for RELA too: the addend must fit the field the linker
             // would have patched.
             let mut field = [0u8; 8];
-            apply_fixup(&mut field, 0, width, one.pc_rel, addend, &section.name)?;
+            M::backend().apply_fixup(&mut field, 0, one.kind, one.pc_rel, addend, &section.name)?;
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
-                entries.extend((u64::from(symbol) << 32 | u64::from(kind)).to_le_bytes());
+                put64::<M>(&mut entries, u64::from(symbol) << 32 | u64::from(kind));
             } else {
-                put32(&mut entries, symbol << 8 | kind);
+                put32::<M>(&mut entries, symbol << 8 | kind);
             }
             if M::ADDEND {
-                entries.extend(addend.to_le_bytes());
+                put_word::<M>(&mut entries, addend as u64);
             } else {
                 image[one.at..one.at + width].copy_from_slice(&field[..width]);
             }
@@ -369,33 +403,50 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     align(&mut out, word);
     let table = out.len() as u64;
     for one in &headers {
-        put32(&mut out, one.name);
-        put32(&mut out, one.kind);
+        put32::<M>(&mut out, one.name);
+        put32::<M>(&mut out, one.kind);
         put_word::<M>(&mut out, one.flags);
         put_word::<M>(&mut out, 0);
         put_word::<M>(&mut out, one.offset);
         put_word::<M>(&mut out, one.size);
-        put32(&mut out, one.link);
-        put32(&mut out, one.info);
+        put32::<M>(&mut out, one.link);
+        put32::<M>(&mut out, one.info);
         put_word::<M>(&mut out, one.align);
         put_word::<M>(&mut out, one.entry);
     }
 
-    out[..16].copy_from_slice(&[0x7F, b'E', b'L', b'F', if M::WIDE { 2 } else { 1 }, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    out[..16].copy_from_slice(&[
+        0x7F,
+        b'E',
+        b'L',
+        b'F',
+        if M::WIDE { 2 } else { 1 },
+        if M::BIG_ENDIAN { 2 } else { 1 },
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]);
     let mut header = Vec::new();
-    put16(&mut header, 1); // ET_REL
-    put16(&mut header, M::NUMBER);
-    put32(&mut header, 1);
+    put16::<M>(&mut header, 1); // ET_REL
+    put16::<M>(&mut header, M::NUMBER);
+    put32::<M>(&mut header, 1);
     put_word::<M>(&mut header, 0); // entry
     put_word::<M>(&mut header, 0); // program headers
     put_word::<M>(&mut header, table);
-    put32(&mut header, 0); // flags
-    put16(&mut header, header_size as u16);
-    put16(&mut header, 0);
-    put16(&mut header, 0);
-    put16(&mut header, if M::WIDE { 64 } else { 40 });
-    put16(&mut header, headers.len() as u16);
-    put16(&mut header, headers.len() as u16 - 1);
+    put32::<M>(&mut header, M::FLAGS);
+    put16::<M>(&mut header, header_size as u16);
+    put16::<M>(&mut header, 0);
+    put16::<M>(&mut header, 0);
+    put16::<M>(&mut header, if M::WIDE { 64 } else { 40 });
+    put16::<M>(&mut header, headers.len() as u16);
+    put16::<M>(&mut header, headers.len() as u16 - 1);
     out[16..header_size].copy_from_slice(&header);
     Ok(out)
 }

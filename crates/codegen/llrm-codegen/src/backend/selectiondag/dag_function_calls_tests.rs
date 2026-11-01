@@ -1388,3 +1388,29 @@ fn minsize_stores_of_zero_and_minus_one_are_and_or() {
     assert!(names.iter().any(|n| n == "and") && names.iter().any(|n| n == "or"), "{names:?}");
     assert!(!names.iter().any(|n| n == "mov"), "no mov of an immediate is left: {names:?}");
 }
+
+const I16_MULTIPLY_BY_SEVEN: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %x) {
+entry:
+  %m = mul i16 %x, 7
+  %s = add i16 %m, 3
+  ret i16 %s
+}
+";
+
+/// histo -O2 `(data*7 + seed) & 255` was `imul ax, ax, 7` (13 clocks on the
+/// 486) where main had `shl; sub`: instructions -10%, clocks +26%. The pin
+/// leaves an `i16` multiply to `imul`; m16 prices at the 486 and does not.
+#[test]
+fn an_i16_multiply_by_seven_is_a_chain_at_m16_not_an_imul() {
+    let module = crate::testing::module(I16_MULTIPLY_BY_SEVEN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("imul") || n == "mul"), "an imul is left: {names:?}");
+}

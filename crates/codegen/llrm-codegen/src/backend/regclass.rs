@@ -210,6 +210,10 @@ pub struct Use {
     pub role: Role,
     /// The instruction writes the value there, rather than reads it.
     pub defining: bool,
+    /// A half of an address pair the roles left registers for: it confines the
+    /// value to the addressing registers, and only `distinct_classes`' cold
+    /// reads use it.
+    pub spare: bool,
 }
 
 /// Every read that confines a value on its own, a byte operand or an address
@@ -742,7 +746,15 @@ fn collected(
                         // The reads are kept only for a caller that asks for
                         // them.
                         if let Some(uses) = uses.as_deref_mut() {
-                            uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                            uses.push(Use {
+                                block: at,
+                                insn: position,
+                                value,
+                                class: choices.clone(),
+                                role,
+                                defining,
+                                spare: false,
+                            });
                         }
                         _restrict(&mut out, value, choices);
                     }
@@ -787,16 +799,20 @@ fn collected(
     if let Some(uses) = uses.as_deref_mut() {
         for (block, insn, base, index) in pair_sites {
             for (value, role, kind) in [(base, Role::Base, Kind::WordBases), (index, Role::Index, Kind::WordIndexes)] {
-                if out.get(&value).is_some_and(BTreeSet::is_empty) {
-                    uses.push(Use {
-                        block,
-                        insn,
-                        value,
-                        class: kind.registers(registers).clone(),
-                        role,
-                        defining: false,
-                    });
-                }
+                let none = out.get(&value).is_some_and(BTreeSet::is_empty);
+                uses.push(Use {
+                    block,
+                    insn,
+                    value,
+                    class: if none {
+                        kind.registers(registers).clone()
+                    } else {
+                        registers.word_bases.union(&registers.word_indexes).copied().collect()
+                    },
+                    role,
+                    defining: false,
+                    spare: !none,
+                });
             }
         }
     }
@@ -1477,11 +1493,20 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// Values no general register holds: x87 values and wider ones, and every phi
-/// web they join.
+/// Values no general register holds: x87 values, those wider than the widest
+/// general register (4 bytes at least: a pair), those an instruction fills
+/// into an xmm register, and every phi web they join.
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     let regs = body.regs();
+    let widest = regs
+        .entries()
+        .filter(|(_, one)| one.classes & (llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT) != 0)
+        .map(|(_, one)| one.bits / 8)
+        .max()
+        .unwrap_or(0)
+        .max(4);
     let mut out: BTreeSet<u32> = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
     for one in body.insns() {
         if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
             out.extend(one.uses.iter().chain(&one.defines).copied());
@@ -1489,9 +1514,16 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
         // A value no general register holds: a float, whatever reads it.
         for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
             for held in crate::model::ir::values(place) {
-                if held.width > 4 {
+                if held.width > widest {
                     out.insert(held.value);
                 }
+            }
+        }
+        items.clear();
+        contribution(regs, &*one, &mut items);
+        for item in &items {
+            if let Item::Restrict { value, kind: Kind::Xmm, .. } = item {
+                out.insert(*value);
             }
         }
     }

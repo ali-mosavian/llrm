@@ -103,6 +103,26 @@ fn lifetime_markers_with_a_size(line: &str) -> String {
     line.to_owned()
 }
 
+/// `setFunctionAttributes` of `CommandFlags.cpp`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CommandFlags.cpp#L664>):
+/// `-frame-pointer=` gives each function without a `"frame-pointer"` attribute
+/// that policy.
+fn with_frame_pointer(
+    module: &mut llrm_mir::module::Module,
+    policy: &str,
+) {
+    use llrm_mir::opcode::Attribute;
+    for global in &mut module.globals {
+        let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        if function.is_declaration()
+            || function.attrs.iter().any(|one| matches!(one, Attribute::Str(key, _) if key == "frame-pointer"))
+        {
+            continue;
+        }
+        function.attrs.push(Attribute::Str("frame-pointer".to_owned(), Some(policy.to_owned())));
+    }
+}
+
 fn bound(
     flags: &Flags,
     triple: Option<&str>,
@@ -387,6 +407,9 @@ pub fn compiled_dumping(
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
+    if let Some(policy) = &flags.frame_pointer {
+        with_frame_pointer(&mut module, policy);
+    }
     with_default_convention(&mut module, default, flags.regcall_default, flags.c_library);
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
@@ -443,7 +466,7 @@ fn refuse_debug_format(
     format: &str,
     bitness: u32,
 ) -> Result<(), String> {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
     if !flags.debug {
         return Ok(());
     }
@@ -640,7 +663,8 @@ fn compile(
     if flags.assembly {
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format)
+        let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
+        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }

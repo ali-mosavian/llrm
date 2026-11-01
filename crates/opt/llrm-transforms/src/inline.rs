@@ -279,6 +279,11 @@ pub struct Caller<'a> {
     /// A recursive callee inlined here may have its own calls inlined in the
     /// copy, gcc's peeling.
     pub peeling: bool,
+    /// The recursion's bounds (`walk::Recursion`): the depth of a function's
+    /// copies of itself and the largest recursive body, in `gcc_insns`,
+    /// that is copied.
+    pub depth: usize,
+    pub callee: i64,
 }
 
 /// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
@@ -381,6 +386,25 @@ pub fn gcc_insns_in(
             }
         })
         .count() as i64
+}
+
+/// The most a block counts in a function's time: the trips gcc's loop
+/// estimates stop at (ipacp's `MAX_FREQUENCY`).
+const LOOP_TRIPS: i64 = 10;
+
+/// What one call of `body` runs, in `gcc_insns`: the size, with the
+/// instructions inside a loop counted at its trips. A copy of the body in
+/// itself saves the call and keeps the loop's work, so a body whose work is
+/// mostly a loop gains little for the code it multiplies; the recursive
+/// callee cap is held to this (bench recchop -O2: the loop between the entry
+/// and the calls, 10242 clocks without the copy, 11310 with).
+pub fn gcc_work(body: &Function) -> i64 {
+    let mut inside = BTreeSet::new();
+    for one in llrm_analysis::cfg::loops_of(body) {
+        inside.extend(one.body.iter().map(|&at| llrm_analysis::cfg::block(at)));
+    }
+    let looped = gcc_insns_in(body, body.walk().filter(|&(block, _)| inside.contains(&block)).map(|(_, inst)| inst));
+    gcc_insns(body) + (LOOP_TRIPS - 1) * looped
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -610,15 +634,6 @@ pub fn size_of(
     work(module, body, callees, costs).map(|work| work + calls + kept)
 }
 
-/// What a call costs beyond its own instruction, which inlining saves: the
-/// return, and each argument pushed by the caller and read back by the callee.
-pub fn call_overhead(
-    costs: &OperationCosts,
-    arguments: usize,
-) -> i64 {
-    costs.call + costs.return_ + arguments as i64 * costs.argument
-}
-
 /// Surviving direct call counts.
 pub fn call_counts(module: &Module) -> Counter {
     let mut counts = Counter::default();
@@ -744,7 +759,8 @@ impl<'a> Plan<'a, '_> {
             // `want_inline_self_recursive_call_p`: the frequency of the
             // call within the body, over the entry's, above the minimum.
             let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
-            if depth > MAX_INLINE_RECURSIVE_DEPTH
+            if depth > self.caller.depth
+                || gcc_work(callee) > self.caller.callee
                 || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
                 || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {

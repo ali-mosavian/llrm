@@ -25,9 +25,13 @@ fn an_undef_float_is_zero() {
         };
         let store = dag.get_store(chain, undef, ptr, info);
         dag.set_root(store);
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
-            .run()
-            .unwrap();
+        DagLegalizer::new(
+            &mut dag,
+            &tli,
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        )
+        .run()
+        .unwrap();
         let root = dag.get_root();
         assert!(!reaches_undef(&dag, root), "{vt:?}: an undef is left");
     }

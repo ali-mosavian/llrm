@@ -1,7 +1,7 @@
 //! The DIE tree as bytes: abbreviations found, offsets laid out, references
 //! resolved.
 
-use llrm_object::debug::Info;
+use llrm_debug::Info;
 use llrm_object::{Object, Unsupported};
 use llrm_support::hash::HashMap;
 

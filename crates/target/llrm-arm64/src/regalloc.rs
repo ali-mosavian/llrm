@@ -23,6 +23,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use llrm_codegen::model::lir::SrcLoc;
+
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{Callee, MFunc, Op};
@@ -491,8 +493,8 @@ fn rewrite(
 ) {
     let spill_slots: HashSet<u32> = spilled.values().copied().collect();
     for block in &mut function.blocks {
-        let mut out = Vec::with_capacity(block.ops.len());
-        for mut op in std::mem::take(&mut block.ops) {
+        let mut out: Vec<(Op, Option<SrcLoc>)> = Vec::with_capacity(block.ops.len());
+        for (mut op, loc) in std::mem::take(&mut block.ops) {
             // The one definition of a value made at each use.
             if op
                 .defs_and_uses()
@@ -509,11 +511,13 @@ fn rewrite(
                 && !made_again.contains_key(dst)
             {
                 match spilled.get(dst) {
-                    None => out.extend(aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst))),
+                    None => out.extend(
+                        aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst)).into_iter().map(|one| (one, loc)),
+                    ),
                     Some(slot) => {
                         let scratch = Reg::Gpr(Gpr(pool::GPR_SCRATCH[0]));
-                        out.extend(aimed_at(def, scratch));
-                        out.push(spill_access(scratch, *slot, false, false));
+                        out.extend(aimed_at(def, scratch).into_iter().map(|one| (one, loc)));
+                        out.push((spill_access(scratch, *slot, false, false), loc));
                     }
                 }
                 continue;
@@ -527,7 +531,7 @@ fn rewrite(
             if let Op::Copy { dst, src } = &op
                 && let Some(done) = spilled_copy(*dst, *src, assigned, spilled, wide.contains(dst))
             {
-                out.extend(done);
+                out.extend(done.into_iter().map(|one| (one, loc)));
                 continue;
             }
             // A copy of 128 bits moves all of them.
@@ -589,23 +593,23 @@ fn rewrite(
                 }
             });
             for (register, slot, quad) in loads {
-                out.push(spill_access(register, slot, true, quad));
+                out.push((spill_access(register, slot, true, quad), loc));
             }
             for (register, key) in again {
-                out.extend(aimed_at(&made_again[&key], register));
+                out.extend(aimed_at(&made_again[&key], register).into_iter().map(|one| (one, loc)));
             }
             let is_noop = matches!(&op, Op::Copy { dst, src } if dst == src)
                 || matches!(&op, Op::I(Inst::VectorMov { rd, rn }) if rd == rn);
             let is_return = matches!(op, Op::Return { .. });
             if !is_noop {
-                out.push(op);
+                out.push((op, loc));
             }
             debug_assert!(!(is_return && !stores.is_empty()));
             for (register, slot, quad) in stores {
-                out.push(spill_access(register, slot, false, quad));
+                out.push((spill_access(register, slot, false, quad), loc));
             }
         }
-        block.ops = forward_copies(forward_spills(out, &spill_slots));
+        block.ops = forward_copies(forward_spills(out, &spill_slots)).into_iter().collect();
     }
 }
 
@@ -613,14 +617,14 @@ fn rewrite(
 /// x0` then `mov x0, x19` with neither written between. A write to either ends
 /// the pair; a call ends every pair with a caller-saved register. The
 /// allocator's scratch registers are left alone.
-fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
+fn forward_copies(ops: Vec<(Op, Option<SrcLoc>)>) -> Vec<(Op, Option<SrcLoc>)> {
     let scratch = |register: &Reg| match register {
         Reg::Gpr(gpr) => pool::GPR_SCRATCH.contains(&gpr.0),
         Reg::Fpr(fpr) => pool::FPR_SCRATCH.contains(&fpr.0),
     };
     let mut equal: Vec<(Reg, Reg)> = Vec::new();
     let mut out = Vec::with_capacity(ops.len());
-    for op in ops {
+    for (op, loc) in ops {
         if let Op::Copy { dst, src } = &op {
             if equal.iter().any(|&(a, b)| (a, b) == (*dst, *src) || (a, b) == (*src, *dst)) {
                 continue;
@@ -636,7 +640,7 @@ fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
                 equal.retain(|&(a, b)| a != register && b != register);
             }
         }
-        out.push(op);
+        out.push((op, loc));
     }
     out
 }
@@ -646,9 +650,9 @@ fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
 /// [slot]` with nothing writing `x15` between. Only the allocator's own slots,
 /// which nothing else writes; a call forgets everything.
 fn forward_spills(
-    ops: Vec<Op>,
+    ops: Vec<(Op, Option<SrcLoc>)>,
     spill_slots: &HashSet<u32>,
-) -> Vec<Op> {
+) -> Vec<(Op, Option<SrcLoc>)> {
     let spill = |op: &Op| -> Option<(Reg, u32, u8, bool)> {
         let (Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset: 0 }, .. })
         | Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset: 0 }, .. })) = op
@@ -663,7 +667,7 @@ fn forward_spills(
     };
     let mut held: HashMap<Reg, (u32, u8)> = HashMap::new();
     let mut out = Vec::with_capacity(ops.len());
-    for op in ops {
+    for (op, loc) in ops {
         if matches!(op, Op::Call { .. }) {
             held.clear();
         } else if let Some((register, slot, bytes, is_load)) = spill(&op) {
@@ -680,7 +684,7 @@ fn forward_spills(
                 held.remove(&register);
             }
         }
-        out.push(op);
+        out.push((op, loc));
     }
     out
 }
@@ -832,7 +836,7 @@ mod tests {
     fn function(ops: Vec<Op>) -> MFunc {
         let mut function = MFunc::new("f");
         function.slot(16, 16);
-        function.blocks.push(MBlock { label: "entry".into(), ops });
+        function.blocks.push(MBlock { label: "entry".into(), ops: ops.into() });
         function
     }
 

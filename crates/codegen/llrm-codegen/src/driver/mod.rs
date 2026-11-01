@@ -66,7 +66,7 @@ pub struct Options {
     pub abi: Option<String>,
     /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g`
     /// writes any.
-    pub debug_format: llrm_object::debug::Format,
+    pub debug_format: llrm_debug::Format,
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
@@ -92,6 +92,10 @@ pub struct Options {
     /// where it is named, the selector's `rep movs` where not; and the symbol
     /// the routine has in the object (Open Watcom's `memcpy_`, C's `_memcpy`).
     pub libcalls: Vec<(String, u32, String)>,
+    /// The object format unwinds natively (wasm exception handling): the host
+    /// hand-over of a QB module keeps the `invoke`s and landing pads for the
+    /// backend instead of a `setjmp` frame. The mid-end is the same.
+    pub wasm_exceptions: bool,
 }
 
 impl Options {
@@ -122,6 +126,7 @@ impl Options {
             stack_check: false,
             isel,
             libcalls: Vec::new(),
+            wasm_exceptions: false,
         }
     }
 
@@ -145,7 +150,7 @@ impl Options {
             // older ones.
             if matches!(
                 debug.format,
-                llrm_object::debug::Format::Dwarf { version } if version < 5
+                llrm_debug::Format::Dwarf { version } if version < 5
             ) && let Some((_, md5)) = debug.source.as_mut()
             {
                 *md5 = None;
@@ -156,21 +161,18 @@ impl Options {
     /// Whether the debug writer this object format and `-g` flavor pick says
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
-        self.debug_format.location_ranges().unwrap_or_else(|| self.format_info().location_ranges)
+        self.debug_caps().location_ranges
     }
 
     /// Whether that writer places a frame cell from the canonical frame
     /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
-        self.debug_format.cfa_locations().unwrap_or_else(|| self.format_info().cfa_locations)
+        self.debug_caps().cfa_locations
     }
 
-    /// What the object format says of the debug writer it picks by default; a
-    /// format unknown to the target is ELF's.
-    fn format_info(&self) -> llrm_object::AsmInfo {
-        use llrm_target::object::Format;
-        let format = Format::parse(self.object_format).unwrap_or(Format::Elf);
-        crate::backend::objbuild::asm_info(format)
+    /// What the debug writer asked for in this object format can say.
+    fn debug_caps(&self) -> llrm_debug::DebugCaps {
+        self.arch.objects().debug_caps(self.object_format, self.debug_format)
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -537,7 +539,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+                |module| crate::backend::ehprepare::prepared_for(
+                    module,
+                    &llrm_target::Target::layout(&*options.arch),
+                    options.wasm_exceptions,
+                ),
             )
     })?;
     // The DAG route expands it itself (`expandFP_TO_UINT`), after the combines.
@@ -753,6 +759,7 @@ pub fn statement_table(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers,
     }
 }
@@ -762,7 +769,7 @@ mod lifetimes_tests;
 
 #[cfg(test)]
 mod location_ranges_tests {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
 
     use super::Options;
 
