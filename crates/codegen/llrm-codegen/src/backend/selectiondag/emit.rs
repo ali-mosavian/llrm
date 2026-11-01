@@ -3807,7 +3807,18 @@ impl Emitter<'_, '_> {
             {
                 return Err(EmitError::Unsupported("an address of registers of two widths at m16".to_owned()));
             }
-            let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 { 4 } else { 2 };
+            let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 {
+                // A base register leaves mod 00/01 to the encoder: the dword
+                // displacement is for the index alone (`[index*scale + disp32]`).
+                match (base.is_some(), disp) {
+                    (false, _) => 4,
+                    (true, 0) => 0,
+                    (true, -128..=127) => 1,
+                    (true, _) => 4,
+                }
+            } else {
+                2
+            };
             return Ok(Mem { base, index, scale, offset: disp, disp_width, ..Mem::new(Some(address), cell_width) });
         }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
