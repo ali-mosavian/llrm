@@ -3039,7 +3039,11 @@ impl Selector<'_, '_, '_> {
             .name
             .as_deref()
             .is_some_and(
-                |name| llrm_mir::intrinsics::is_reserved(name) && Intrinsic::named(name) == Some(Intrinsic::LRint),
+                |name| llrm_mir::intrinsics::is_reserved(name)
+                    && matches!(
+                        Intrinsic::named(name),
+                        Some(Intrinsic::LRint | Intrinsic::LLRint)
+                    ),
             )
     }
 
@@ -6341,7 +6345,7 @@ impl Selector<'_, '_, '_> {
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.
-                Some(Intrinsic::LRint) => {
+                Some(Intrinsic::LRint | Intrinsic::LLRint) => {
                     let result = instruction.result.expect("lrint's value");
                     self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
                 }
