@@ -16,7 +16,7 @@ fn four(options: Options) -> Vec<u8> {
 fn four_functions_are_llcs_object_byte_for_byte() {
     let golden =
         std::fs::read(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
-    let ours = four(Options { stackify: false });
+    let ours = four(Options { stackify: false, ..Options::default() });
     if let Some(path) = std::env::var_os("WASM_DUMP") {
         std::fs::write(path, &ours).expect("dump");
     }

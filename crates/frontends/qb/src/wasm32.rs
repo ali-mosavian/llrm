@@ -25,7 +25,7 @@ use std::path::Path;
 
 use llrm_codegen::driver::Options;
 use llrm_codegen::hir::model;
-use llrm_wasm::dag::Options as WasmOptions;
+use llrm_wasm::dag::{ExceptionModel, Options as WasmOptions};
 use llrm_wasm::driver;
 
 use super::arm64::{
@@ -38,7 +38,8 @@ use super::compile::CompileError;
 fn wasm32_text(
     mir: &str,
     read_data: &[u8],
-) -> String {
+    exceptions: bool,
+) -> Result<String, String> {
     let mut out = String::with_capacity(mir.len());
     for line in mir.lines() {
         if line.starts_with("target datalayout") {
@@ -63,13 +64,16 @@ fn wasm32_text(
         out.push_str(&line);
         out.push('\n');
     }
-    let mut out = framed(&without_results_on_void(&out));
+    // With exception handling the module keeps its `invoke`s and `landingpad`s
+    // for the backend; otherwise a function with a handler registers a
+    // `setjmp` frame.
+    let mut out = if exceptions { without_results_on_void(&out) } else { framed(&without_results_on_void(&out)) };
     let bytes: String = read_data.iter().map(|byte| format!("\\{byte:02X}")).collect();
     out.push_str(&format!("@QB_DATA = constant [{} x i8] c\"{bytes}\"\n", read_data.len()));
     if !out.contains("@QB_STATEMENTS = ") {
         out.push_str("@QB_STATEMENTS = constant [0 x i8] zeroinitializer\n");
     }
-    out
+    Ok(out)
 }
 
 /// The wasm32 object of `program`.
@@ -80,11 +84,14 @@ pub fn object_bytes(
 ) -> Result<Vec<u8>, CompileError> {
     let fail = |why: String| CompileError::Value(why);
     let (mir, read_data) = host_module(program, codegen)?;
-    let text = wasm32_text(&mir, &read_data);
+    let exceptions = codegen.wasm_exceptions;
+    let text = wasm32_text(&mir, &read_data, exceptions).map_err(fail)?;
     if let Some(path) = std::env::var_os("LLRM_WASM32_TEXT") {
         std::fs::write(path, &text).map_err(|error| fail(error.to_string()))?;
     }
-    driver::object(&text, llrm_wasm::Width::W32, WasmOptions::default()).map_err(fail)
+    let model = if exceptions { ExceptionModel::Wasm } else { ExceptionModel::None };
+    driver::object(&text, llrm_wasm::Width::W32, WasmOptions { exception_model: model, ..WasmOptions::default() })
+        .map_err(fail)
 }
 
 #[cfg(test)]
@@ -98,7 +105,7 @@ mod tests {
     #[test]
     fn attributes_only_llrm_reads_are_not_handed_over() {
         let mir = "define cc 1000 i16 @\"DEEP%\"(ptr %0) stackcheck stackcheck nounwind {\nb1:\n  ret i16 0\n}\n";
-        let text = wasm32_text(mir, &[]);
+        let text = wasm32_text(mir, &[], false).unwrap();
         assert!(!text.contains("stackcheck") && text.contains("nounwind {"), "{text}");
     }
 
@@ -111,7 +118,7 @@ mod tests {
             @$string3 = internal constant <{ [4 x i8], ptr }> <{ [4 x i8] c\"\\05\\00\\00\\00\", ptr getelementptr (i8, ptr @$string3, i32 8) }>\n\
             define internal void @__main() {\nb1:\n  tail call cc 1002 void @llrm.qb.B$PESD(ptr @$string3)\n  ret void\n}\n\
             declare cc 1002 void @llrm.qb.B$PESD(ptr) nocallback\n";
-        let text = wasm32_text(mir, &[0xff, 0xff, 0x01]);
+        let text = wasm32_text(mir, &[0xff, 0xff, 0x01], false).unwrap();
         assert!(text.contains("getelementptr (i8, ptr @Q_string3, i32 8)"), "{text}");
         assert!(
             text.contains("define void @QB_MAIN()") && text.contains("call cc 1002 void @B_PESD(ptr @Q_string3)"),

@@ -170,19 +170,18 @@ fn an_i64_constant_is_two_halves_and_logic_follows() {
     assert_eq!(dag.constant(dag.get_root()), Some(0x5566_7788), "trunc of the low half is the low half");
 }
 
-/// A node nothing translated handles is refused by name rather than left
-/// with an illegal type.
+/// A node nothing translated handles (a 12-bit popcount) is refused by name
+/// rather than left with an illegal type.
 #[test]
 fn an_unhandled_node_is_refused_by_name() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut dag = dag();
     let a = load(&mut dag, EVT::Int(12), 1);
-    let b = load(&mut dag, EVT::Int(12), 2);
-    let shifted = dag.get_node(ISD::UDiv, EVT::Int(12), &[a, b]);
-    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[shifted]);
+    let count = dag.get_node(ISD::CtPop, EVT::Int(12), &[a]);
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[count]);
     dag.set_root(byte);
     let error = legalize(&mut dag, &tli).unwrap_err();
-    assert!(matches!(error, LegalizeError::Unsupported { op: ISD::UDiv, .. }), "{error:?}");
+    assert!(matches!(error, LegalizeError::Unsupported { op: ISD::CtPop, .. }), "{error:?}");
 }
 
 /// A zero-extending `i64` load from a dword expanded as two dword loads (the

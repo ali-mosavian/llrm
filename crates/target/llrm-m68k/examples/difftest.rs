@@ -395,6 +395,40 @@ fn check_text(
             Err(why) => return Outcome::Reject(format!("{name}: {why}")),
         }
     }
+    // an instrument that never sees the form it tests agrees with anything
+    let mut forms = 0;
+    for item in &items {
+        let Item::Inst(inst) = item else { continue };
+        let Ok(text) = llrm_m68k::mc::print(inst) else { continue };
+        let mnemonic = text.split_whitespace().next().unwrap_or("");
+        if mnemonic.starts_with("addq") || mnemonic.starts_with("subq") {
+            *INDEXED_FORMS.lock().unwrap().entry(mnemonic.to_owned()).or_insert(0usize) += 1;
+            continue;
+        }
+        let direction = if text.contains(")+") {
+            "(An)+"
+        } else if text.contains("-(%a") {
+            "-(An)"
+        } else {
+            continue;
+        };
+        let width = text.split_whitespace().next().unwrap_or("").trim_start_matches("move");
+        *INDEXED_FORMS.lock().unwrap().entry(format!("move{width} {direction}")).or_insert(0usize) += 1;
+        forms += 1;
+    }
+    if std::env::var_os("DIFF_STATIC").is_some() {
+        let total: usize = items
+            .iter()
+            .map(|item| match item {
+                Item::Inst(inst) => llrm_m68k::encode::encode(inst).map_or(0, |one| one.bytes.len()),
+                _ => 0,
+            })
+            .sum();
+        eprintln!("STATIC {name} {total}");
+    }
+    if forms > 0 {
+        INDEXED_PROGRAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     let bytes = match executable(&image(items)) {
         Ok(bytes) => bytes,
         Err(why) => return Outcome::Reject(format!("assemble: {why}")),
@@ -413,6 +447,10 @@ fn check_text(
         Err(false) => Outcome::Reject("qemu did not run".to_owned()),
     }
 }
+
+static INDEXED_PROGRAMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static INDEXED_FORMS: std::sync::Mutex<std::collections::BTreeMap<String, usize>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// `difftest DIR`: every `DIR/*.c` (a reduced program that once failed, with a
 /// `test`) must agree.
@@ -436,6 +474,7 @@ fn corpus(dir: &Path) -> bool {
         }
     }
     println!("{} programs: {} not ok", files.len(), bad);
+    println!("forms used: {:?}", INDEXED_FORMS.lock().unwrap());
     bad == 0
 }
 
@@ -558,6 +597,11 @@ fn main() {
     }
     println!(
         "{count} programs from seed {first}: {ok} ok, {differs} differ, {hang} hang, {reject} reject, {reference} no reference"
+    );
+    println!(
+        "{} programs used (An)+ or -(An): {:?}",
+        INDEXED_PROGRAMS.load(std::sync::atomic::Ordering::Relaxed),
+        INDEXED_FORMS.lock().unwrap()
     );
 }
 
