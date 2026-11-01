@@ -210,6 +210,10 @@ pub struct DagConfig {
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
     pub dso_local_symbols: bool,
+    /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
+    /// index in its address at 64 bits, as an absolute `disp32`, where
+    /// position-independent code reaches it from `%rip` alone.
+    pub absolute_symbols: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
@@ -245,6 +249,7 @@ impl Default for DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
             dso_local_symbols: false,
+            absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
             div_prices: None,

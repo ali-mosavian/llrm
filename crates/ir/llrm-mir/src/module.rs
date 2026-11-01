@@ -1536,6 +1536,19 @@ impl Module {
         });
     }
 
+    /// Whether the code is position independent: clang's "PIC Level" module
+    /// flag is set. A module that carries no flags at all (not clang's) is.
+    pub fn position_independent(&self) -> bool {
+        let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
+            return true;
+        };
+        let named = |id: &MetadataId| match self.metadata[id.0 as usize].operands.get(1) {
+            Some(MetadataOperand::String(name)) => name == "PIC Level",
+            _ => false,
+        };
+        flags.iter().any(named)
+    }
+
     /// A function type's return type and parameters.
     pub fn signature(
         &self,

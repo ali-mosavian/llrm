@@ -560,10 +560,10 @@ impl TargetLowering {
         t.set_ops(&[FpToUInt], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
         // L300-L303, L850: `lrint` of an x87 value is `fist`
-        t.set_ops(&[LRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
+        t.set_ops(&[LRint, LLRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // an i64 result at 32 bits is expanded after the same `fist`, as
         // FpToSInt's is
-        t.set_ops(&[LRint], &[MVT::I64], Custom);
+        t.set_ops(&[LRint, LLRint], &[MVT::I64], Custom);
         // L316
         if !features.sse2 {
             t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);

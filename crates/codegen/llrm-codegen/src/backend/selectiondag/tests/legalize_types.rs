@@ -387,3 +387,26 @@ fn a_promoted_shift_amount_is_zero_extended_in_the_register() {
         assert_eq!((dag.opcode(by), dag.value_type(by)), (ISD::And, EVT::I32), "{op:?}");
     }
 }
+
+/// `abs` of an `i64` on a 32-bit target stopped the legalizer ("Abs: expand
+/// result"; QB's `_currency_text` did not link at x86 m16/m32 with a CURRENCY
+/// value). `ExpandIntRes_ABS`: sra+xor+sub with a borrow where the target has
+/// one, else the negation selected by the sign of the high half.
+#[test]
+fn an_i64_abs_is_expanded_to_halves_with_and_without_a_borrow_chain() {
+    let no_borrow = TargetLowering::empty(llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I8, MVT::I32], false));
+    let borrow = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (name, tli) in [("select", &no_borrow), ("borrow", &borrow)] {
+        for op in [ISD::Abs, ISD::AbsMinPoison] {
+            let mut dag = dag();
+            let wide = load(&mut dag, EVT::I64, 1);
+            let abs = dag.get_node(op, EVT::I64, &[wide]);
+            let thirty_two = dag.get_constant(32, EVT::I8);
+            let high = dag.get_node(ISD::Srl, EVT::I64, &[abs, thirty_two]);
+            let root = dag.get_node(ISD::Truncate, EVT::I32, &[high]);
+            dag.set_root(root);
+            assert_eq!(legalize(&mut dag, tli), Ok(true), "{name} {op:?}");
+            assert!(all_legal(&mut dag, tli), "{name} {op:?}");
+        }
+    }
+}

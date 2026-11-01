@@ -157,6 +157,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FExp2 => pin::FEXP2,
         FRint => pin::FRINT,
         LRint => pin::LRINT,
+        LLRint => pin::LLRINT,
         FCopySign => pin::FCOPYSIGN,
         SetCC => pin::SETCC,
         Select => pin::SELECT,

@@ -148,6 +148,7 @@ pub enum ISD {
     FExp2,
     FRint,
     LRint,
+    LLRint,
     FCopySign,
 
     SetCC,
@@ -351,6 +352,7 @@ impl ISD {
             FExp2 => "fexp2",
             FRint => "frint",
             LRint => "lrint",
+            LLRint => "llrint",
             FCopySign => "fcopysign",
             SetCC => "setcc",
             Select => "select",
