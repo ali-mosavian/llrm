@@ -1104,12 +1104,18 @@ impl Emitter<'_, '_> {
     ) {
         let Some(block) = self.blocks.last_mut() else { return };
         for one in block.insns.iter_mut().skip(before) {
+            // `isDereferenceableInvariantLoad`: it reads memory, writes none,
+            // and every memory operand is invariant: a plain load, or an
+            // operation with the load folded into it.
             let plain = one
                 .what
                 .as_ref()
                 .is_some_and(
-                    |what| matches!(what.op, Operation::Move | Operation::FloatLoad)
-                        && matches!(what.sources.as_slice(), [Loc::Mem(_)]),
+                    |what| (matches!(what.op, Operation::Move | Operation::FloatLoad)
+                        && matches!(what.sources.as_slice(), [Loc::Mem(_)]))
+                        || (what.sources.iter().filter(|place| matches!(place, Loc::Mem(_))).count() == 1
+                            && !what.dests.iter().any(|place| matches!(place, Loc::Mem(_)))
+                            && what.name.as_deref().is_some_and(|name| name.ends_with("sd") || name.ends_with("ss"))),
                 );
             if plain && !one.volatile() {
                 *one = Arc::new(Insn { invariant: true, ..(**one).clone() });

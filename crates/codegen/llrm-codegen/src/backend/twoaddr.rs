@@ -503,7 +503,7 @@ fn _nothing(beside: &Insn) -> (i64, i64) {
     (at, at)
 }
 
-fn _inserted(
+pub(crate) fn _inserted(
     beside: &Insn,
     what: Semantics,
     defines: Vec<u32>,
@@ -514,7 +514,7 @@ fn _inserted(
     Arc::new(made)
 }
 
-fn _move(
+pub(crate) fn _move(
     into: Loc,
     out_of: Loc,
 ) -> Semantics {

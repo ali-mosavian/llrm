@@ -61,7 +61,7 @@ use std::sync::Arc;
 use crate::analysis::loops as loopy;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
-use crate::model::ir::{Loc, Mem, Operation};
+use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
@@ -109,6 +109,77 @@ pub(crate) fn keeps_loads(one: &Insn) -> bool {
                 Operation::Push | Operation::Pop | Operation::Leave | Operation::Exchange | Operation::Nothing
             )
         })
+}
+
+/// `ExtractHoistableLoad`: the load of an xmm instruction that folds one cell
+/// of invariant memory, and the instruction reading the loaded value instead
+/// (`unfoldMemoryOperand`; `getOpcodeAfterMemoryUnfold` has the register form
+/// of each scalar float operation).
+fn unfolded_load(
+    one: &Insn,
+    next_value: &mut u32,
+    invariant: impl Fn(u32) -> bool,
+) -> Option<(Arc<Insn>, Arc<Insn>)> {
+    let what = one.what.as_ref()?;
+    if !matches!(
+        what.name.as_deref(),
+        Some(
+            "addsd"
+                | "subsd"
+                | "mulsd"
+                | "divsd"
+                | "minsd"
+                | "maxsd"
+                | "sqrtsd"
+                | "ucomisd"
+                | "comisd"
+                | "addss"
+                | "subss"
+                | "mulss"
+                | "divss"
+                | "minss"
+                | "maxss"
+                | "sqrtss"
+                | "ucomiss"
+                | "comiss"
+        )
+    ) || one.volatile()
+        || one.group.is_some()
+        || one.call.is_some()
+    {
+        return None;
+    }
+    let [Loc::Mem(cell)] = what.sources.iter().filter(|place| matches!(place, Loc::Mem(_))).collect::<Vec<_>>()[..]
+    else {
+        return None;
+    };
+    if what.dests.iter().any(|place| matches!(place, Loc::Mem(_))) || cell.selector.is_some() {
+        return None;
+    }
+    let reads: Vec<u32> = crate::model::ir::values(&Loc::Mem(cell.clone())).iter().map(|held| held.value).collect();
+    if !reads.iter().all(|&used| invariant(used)) {
+        return None;
+    }
+    let loaded = Held { value: *next_value, width: cell.width };
+    *next_value += 1;
+    let load = crate::backend::twoaddr::_inserted(
+        one,
+        crate::backend::twoaddr::_move(Loc::Held(loaded), Loc::Mem(cell.clone())),
+        vec![loaded.value],
+        reads,
+    );
+    let mut load = (*load).clone();
+    load.invariant = true;
+    let sources = what
+        .sources
+        .iter()
+        .map(|place| if matches!(place, Loc::Mem(_)) { Loc::Held(loaded) } else { place.clone() })
+        .collect();
+    let mut rest = one.clone();
+    rest.what = Some(Semantics { sources, ..what.clone() });
+    rest.uses = one.uses.iter().copied().chain(std::iter::once(loaded.value)).collect();
+    rest.invariant = false;
+    Some((Arc::new(load), Arc::new(rest)))
 }
 
 /// `fld1` / `fldz`: an x87 constant, made again where it is read. The pin
@@ -162,7 +233,7 @@ fn candidate(
     };
     pure && what.target.is_none()
         && !what.indirect
-        && !one.uses.is_empty()
+        && (!one.uses.is_empty() || (load && one.invariant()))
         && one.defines.len() == 1
         && matches!(what.dests.as_slice(), [Loc::Held(_)])
         && what.sources.iter().all(held)
@@ -190,6 +261,26 @@ pub fn hoisted(
         return body.clone();
     }
     let floating = crate::backend::regclass::floating(body);
+    // An xmm register holds its values like a general one, with a register
+    // count of its own; the x87 stack and the pairs wider than a general
+    // register are refused (ML1).
+    let xmm = crate::backend::regclass::xmm_values(body);
+    let refused: HashSet<u32> = floating.iter().copied().filter(|value| !xmm.contains(value)).collect();
+    let mut next_value =
+        body.blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .flat_map(|one| one.defines.iter().chain(&one.uses).copied())
+                    .chain(block.phis.iter().flat_map(|phi| {
+                        std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))
+                    }))
+                    .collect::<Vec<_>>()
+            })
+            .max()
+            .map_or(0, |last| last + 1);
     let control_word_written = body
         .insns()
         .iter()
@@ -255,6 +346,20 @@ pub fn hoisted(
             })
             .filter(|value| !floating.contains(value))
             .collect();
+        let named_xmm: HashSet<u32> = inside
+            .iter()
+            .flat_map(|at| {
+                let block = &blocks[place[at]];
+                block
+                    .insns
+                    .iter()
+                    .flat_map(|one| one.uses.iter().copied())
+                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
+                    .chain(block.phis.iter().map(|phi| phi.result))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|value| xmm.contains(value))
+            .collect();
         // `HasLoopPHIUse`: the values a copy in the loop reads; a cheap
         // instruction whose value a copy takes would make one more copy.
         let copied: HashSet<u32> = inside
@@ -303,6 +408,7 @@ pub fn hoisted(
             taken
         };
         let limit = classes.available.len();
+        let xmm_limit = classes.xmm_set.len();
         // An x87 value cannot be live across a call (`floatassign` does not
         // spill across one), and the stack holds `float_stack` values.
         let calls = inside
@@ -325,7 +431,7 @@ pub fn hoisted(
                     .chain(block.phis.iter().map(|phi| phi.result))
                     .collect::<Vec<_>>()
             })
-            .filter(|value| floating.contains(value))
+            .filter(|value| refused.contains(value))
             .collect::<HashSet<u32>>()
             .len();
         // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
@@ -343,6 +449,7 @@ pub fn hoisted(
             for at in blocks.iter().map(|block| block.at).filter(|at| inside.contains(at)).collect::<Vec<_>>() {
                 let number = place[&at];
                 let loads_here = loads && every_trip(at);
+                let mut rewrote = false;
                 let mut keep: Vec<Arc<Insn>> = Vec::new();
                 let insns: Vec<Arc<Insn>> = blocks[number].insns.iter().cloned().collect();
                 for (index, one) in insns.iter().enumerate() {
@@ -365,10 +472,15 @@ pub fn hoisted(
                         }
                         continue;
                     }
-                    let mut movable = candidate(one, classes, loads_here)
+                    // A load from invariant memory moves across the stores of
+                    // the loop and need not run on every trip
+                    // (`isDereferenceableInvariantLoad`).
+                    let mut movable = candidate(one, classes, loads_here || one.invariant())
                         && invariant
-                        && value.is_some_and(|value| !floating.contains(&value))
-                        && named.len() < limit;
+                        && value.is_some_and(|value| {
+                            !refused.contains(&value)
+                                && if xmm.contains(&value) { named_xmm.len() < xmm_limit } else { named.len() < limit }
+                        });
                     // `IsProfitableToHoist`: "Trivially rematerializable
                     // instructions should always be hoisted providing the
                     // register allocator can just pull them down again", unless
@@ -389,6 +501,26 @@ pub fn hoisted(
                     if constant && !movable {
                         hoisted_values.extend(value);
                         moved.push(Arc::clone(one));
+                        any = true;
+                        continue;
+                    }
+                    // `ExtractHoistableLoad`: an instruction that cannot move
+                    // as a whole but folds a load of invariant memory is
+                    // unfolded, and the load moves
+                    // (`MachineLICM.cpp`, called from `Hoist`).
+                    if !movable
+                        && one.invariant()
+                        && named_xmm.len() < xmm_limit
+                        && let Some((load, rest)) = unfolded_load(one, &mut next_value, |used| {
+                            hoisted_values.contains(&used)
+                                || defined.get(&used).is_none_or(|home| !inside.contains(home))
+                        })
+                        && candidate(&load, classes, true)
+                    {
+                        hoisted_values.extend(load.defines.iter().copied());
+                        moved.push(load);
+                        keep.push(rest);
+                        rewrote = true;
                         any = true;
                         continue;
                     }
@@ -432,7 +564,7 @@ pub fn hoisted(
                         keep.push(Arc::clone(one));
                     }
                 }
-                if keep.len() != blocks[number].insns.len() {
+                if rewrote || keep.len() != blocks[number].insns.len() {
                     blocks[number] = blocks[number].with_insns(keep);
                 }
             }

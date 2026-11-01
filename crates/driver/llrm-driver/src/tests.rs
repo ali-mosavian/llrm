@@ -2200,3 +2200,29 @@ fn an_srem_loop_with_a_constant_trip_count_compiles_in_a_debug_build() {
         define i32 @main() {\n  %v = call i64 @f(i32 2000)\n  call void @report(i64 %v)\n  ret i32 0\n}\n";
     let _ = compiled(&flags(&["-O2"]), text, "main");
 }
+
+/// Float constants stayed memory operands (`mulsd xmm0, [rip+c]`) in a loop
+/// that stores, where the pin and gcc keep them in registers made before the
+/// loop: the stores kept the pool loads in, and an xmm value was never moved.
+#[test]
+fn float_constants_of_a_loop_that_stores_are_made_before_the_loop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+        target triple = \"x86_64-unknown-linux-gnu\"\n\
+        define void @f(ptr %a, ptr %b, i64 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n  %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n  \
+        %pa = getelementptr inbounds double, ptr %a, i64 %i\n  %pb = getelementptr inbounds double, ptr %b, i64 %i\n  \
+        %x = load double, ptr %pa\n  %m = fmul double %x, 0.7071\n  store double %m, ptr %pb\n  \
+        %s = fadd double %m, 1.5\n  store double %s, ptr %pa\n  \
+        %next = add i64 %i, 1\n  %done = icmp eq i64 %next, %n\n  br i1 %done, label %out, label %loop\n\
+        out:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let folded: Vec<&str> =
+        listing.lines().map(str::trim).filter(|line| line.starts_with("mulsd") || line.starts_with("addsd")).collect();
+    assert!(!folded.is_empty(), "premise: the loop multiplies and adds\n{listing}");
+    assert!(
+        folded.iter().all(|line| !line.contains("ptr")),
+        "a constant is read from memory in the loop: {folded:?}\n{listing}"
+    );
+}

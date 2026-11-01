@@ -1548,6 +1548,42 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
+/// The values an instruction fills into or reads from an xmm register, and
+/// every phi web they join: the part of `floating` an xmm register holds (the
+/// rest is the x87 stack and values wider than a general register).
+pub(crate) fn xmm_values(body: &LirBody) -> BTreeSet<u32> {
+    let regs = body.regs();
+    let mut out: BTreeSet<u32> = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
+    for one in body.insns() {
+        items.clear();
+        contribution(regs, &*one, &mut items);
+        for item in &items {
+            if let Item::Restrict { value, kind: Kind::Xmm, .. } = item {
+                out.insert(*value);
+            }
+        }
+    }
+    loop {
+        let mut grew = false;
+        for block in &body.blocks {
+            for phi in &block.phis {
+                let web: Vec<u32> =
+                    std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)).collect();
+                if web.iter().any(|value| out.contains(value)) {
+                    for value in web {
+                        grew |= out.insert(value);
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    out
+}
+
 /// Each far cell whose selector is also read as a number, or pinned to a
 /// general register, reached through ES: None where no cell is rewritten.
 pub fn explicit_selectors_given(
