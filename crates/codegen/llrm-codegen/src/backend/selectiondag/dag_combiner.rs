@@ -161,6 +161,18 @@ pub trait CombineHooks {
         EVT::I8
     }
 
+    /// DEVIATE G1: a store of a value the target converted through a scratch
+    /// slot (store to the slot, load it back) is the conversion stored to the
+    /// store's own address, when nothing else reads the slot. The pin keeps
+    /// the slot. Exit: the pin gains it; re-check each pin bump.
+    fn store_of_converted_slot(
+        &self,
+        _dag: &mut SelectionDAG,
+        _store: SDValue,
+    ) -> Option<SDValue> {
+        None
+    }
+
     /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when
     /// that type is legal. Default false until x86 is judged.
     fn store_fp_constant_as_i64(&self) -> bool {
@@ -2197,6 +2209,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let float = MemInfo { mem_vt: EVT::Simple(MVT::F32), ..info };
                 return Some(self.dag.get_store(chain, source, ptr, float));
             }
+        }
+        if let Some(direct) = self.hooks.store_of_converted_slot(&mut self.dag, node) {
+            return Some(direct);
         }
         // Walk up the chain skipping the memory nodes this store does not
         // alias, on it and on the stores chained below it.
