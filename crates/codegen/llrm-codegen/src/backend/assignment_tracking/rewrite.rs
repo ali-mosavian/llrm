@@ -8,12 +8,60 @@
 
 use std::collections::HashMap;
 
+use llrm_mir::DwOp;
 use llrm_mir::{
     DebugRecord, DebugWhat, GlobalId, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module,
     module::Special,
 };
 
 use super::{FunctionVarLocs, VarLocInfo, expression_text, op_words};
+
+/// The `!DIExpression` nodes made so far, one per distinct text.
+#[derive(Default)]
+pub(super) struct Expressions {
+    by_text: HashMap<String, MetadataId>,
+}
+
+impl Expressions {
+    /// The node of `ops`, none for no operations (a record's empty expression
+    /// is no node). `ops` hold no [`DwOp::Other`].
+    pub(super) fn node(
+        &mut self,
+        module: &mut Module,
+        ops: &[DwOp],
+    ) -> Option<MetadataId> {
+        if ops.is_empty() {
+            return None;
+        }
+        Some(self.make(module, ops))
+    }
+
+    /// As [`node`](Self::node), a node for no operations too.
+    pub(super) fn make(
+        &mut self,
+        module: &mut Module,
+        ops: &[DwOp],
+    ) -> MetadataId {
+        *self
+            .by_text
+            .entry(expression_text(ops))
+            .or_insert_with(
+                || {
+                    let i64 = module.context.types.int(64);
+                    let mut operands = Vec::new();
+                    for op in ops {
+                        let (word, numbers) = op_words(op).expect("no DwOp::Other");
+                        operands.push(MetadataOperand::Ident(word.to_owned()));
+                        operands.extend(numbers.iter().map(|&n| MetadataOperand::Constant(module.context.int(i64, n))));
+                    }
+                    let id = MetadataId(module.metadata.len() as u32);
+                    module.metadata.push(MetadataNode { distinct: false, operands });
+                    module.special.insert(id, Special { kind: "DIExpression".to_owned(), fields: Vec::new() });
+                    id
+                },
+            )
+    }
+}
 
 /// Replaces the records of the function `at` with those of `locs`. Nothing
 /// changes, and `false` comes back, when an expression has an operation the
@@ -29,25 +77,7 @@ pub fn rewrite(
     if all.iter().any(|one| one.expression.iter().any(|op| op_words(op).is_none())) {
         return false;
     }
-    let mut minted: HashMap<String, MetadataId> = HashMap::new();
-    let mut expression = |module: &mut Module, one: &VarLocInfo| -> Option<MetadataId> {
-        if one.expression.is_empty() {
-            return None;
-        }
-        Some(*minted.entry(expression_text(&one.expression)).or_insert_with(|| {
-            let i64 = module.context.types.int(64);
-            let mut operands = Vec::new();
-            for op in &one.expression {
-                let (word, numbers) = op_words(op).expect("checked above");
-                operands.push(MetadataOperand::Ident(word.to_owned()));
-                operands.extend(numbers.iter().map(|&n| MetadataOperand::Constant(module.context.int(i64, n))));
-            }
-            let id = MetadataId(module.metadata.len() as u32);
-            module.metadata.push(MetadataNode { distinct: false, operands });
-            module.special.insert(id, Special { kind: "DIExpression".to_owned(), fields: Vec::new() });
-            id
-        }))
-    };
+    let mut minted = Expressions::default();
     let Some(function) = module.global(at).function() else { return false };
     let first = function.walk().next().map(|(_, inst)| inst);
     let mut wanted: Vec<(InstId, bool, &VarLocInfo)> = Vec::new();
@@ -57,7 +87,8 @@ pub fn rewrite(
     for inst in locs.instructions() {
         wanted.extend(locs.locs_before(inst).iter().map(|one| (inst, false, one)));
     }
-    let expressions: Vec<Option<MetadataId>> = wanted.iter().map(|&(_, _, one)| expression(module, one)).collect();
+    let expressions: Vec<Option<MetadataId>> =
+        wanted.iter().map(|&(_, _, one)| minted.node(module, &one.expression)).collect();
     let GlobalKind::Function(function) = &mut module.globals[at.0 as usize].kind else { unreachable!("checked above") };
     let mut records = Vec::with_capacity(wanted.len());
     for ((before, single, one), expression) in wanted.into_iter().zip(expressions) {

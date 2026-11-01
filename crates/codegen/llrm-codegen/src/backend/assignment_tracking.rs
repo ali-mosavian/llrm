@@ -36,6 +36,7 @@
 mod fill;
 mod redundant;
 mod rewrite;
+mod track;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
@@ -48,6 +49,7 @@ use llrm_mir::{
     ValueId,
 };
 pub use rewrite::rewrite;
+pub use track::tracked;
 
 /// Where a location starts: just before record `slot` of `inst`, or before
 /// `inst` itself when `slot` is the number of records standing before it
@@ -2121,5 +2123,65 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
         let records = function_f(&module).debug_records();
         assert!(!records.is_empty());
         assert!(records.iter().all(|one| !matches!(one.what, DebugWhat::Assign { .. })), "{records:?}");
+    }
+
+    /// The pin's `opt -passes=declare-to-assign` on this function, line for
+    /// line: a record after the alloca and each store-like of the variable,
+    /// a fragment where the write is part of it, `i8 0` for a zero `memset`.
+    const DECLARED: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+define i32 @f(i32 %n) {\nentry:\n  %x = alloca i32, align 4\n  %s = alloca [2 x i32], align 4\n\
+  #dbg_declare(ptr %x, !20, !DIExpression(), !25)\n  #dbg_declare(ptr %s, !21, !DIExpression(), !25)\n\
+  store i32 %n, ptr %x, align 4\n  %p = getelementptr inbounds i8, ptr %s, i64 4\n\
+  store i32 %n, ptr %p, align 4\n  call void @llvm.memset.p0.i64(ptr %s, i8 0, i64 4, i1 false)\n\
+  %v = load i32, ptr %x, align 4\n  ret i32 %v\n}\n\
+!17 = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n\
+!18 = !DICompositeType(tag: DW_TAG_array_type, baseType: !17, size: 64)\n\
+!20 = !DILocalVariable(name: \"x\", scope: !14, type: !17)\n!21 = !DILocalVariable(name: \"s\", scope: !14, type: !18)\n\
+!14 = distinct !DISubprogram(name: \"f\")\n!25 = !DILocation(line: 1, scope: !14)\n";
+
+    #[test]
+    fn declares_become_the_assigns_the_pin_makes() {
+        let mut module = llrm_mir::parse::module(DECLARED).unwrap();
+        assert!(tracked(&mut module).unwrap());
+        let function = function_f(&module);
+        let order: HashMap<InstId, usize> = function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
+        let mut records = function.debug_records().to_vec();
+        records.sort_by_key(|one| order[&one.before]);
+        let seen: Vec<(u32, bool, Vec<DwOp>)> = records
+            .iter()
+            .map(|one| {
+                let DebugWhat::Assign { value, address, .. } = one.what else { panic!("not an assign: {one:?}") };
+                assert!(address.is_some());
+                let ops = one.expression.map_or(Vec::new(), |node| module.expression(node).unwrap());
+                (one.variable.0, value.is_some(), ops)
+            })
+            .collect();
+        let (x, s) = (records[0].variable.0, records[1].variable.0);
+        assert_ne!(x, s);
+        assert_eq!(
+            seen,
+            [
+                (x, false, vec![]),
+                (s, false, vec![]),
+                (x, true, vec![]),
+                (s, true, vec![DwOp::Fragment { offset: 32, size: 32 }]),
+                (s, true, vec![DwOp::Fragment { offset: 0, size: 32 }]),
+            ]
+        );
+    }
+
+    /// A declare with operations stays a declare (the pin cannot say a
+    /// fragment to `trackAssignments`); the other variable is tracked.
+    #[test]
+    fn a_declare_with_an_expression_is_left_alone() {
+        let text = DECLARED.replace("ptr %s, !21, !DIExpression()", "ptr %s, !21, !DIExpression(DW_OP_plus_uconst, 4)");
+        assert_ne!(text, DECLARED);
+        let mut module = llrm_mir::parse::module(&text).unwrap();
+        assert!(tracked(&mut module).unwrap());
+        let records = function_f(&module).debug_records();
+        let declares = records.iter().filter(|one| matches!(one.what, DebugWhat::Declare(_))).count();
+        let assigns = records.iter().filter(|one| matches!(one.what, DebugWhat::Assign { .. })).count();
+        assert_eq!((declares, assigns), (1, 2), "{records:?}");
     }
 }
