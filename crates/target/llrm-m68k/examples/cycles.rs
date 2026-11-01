@@ -66,7 +66,8 @@ fn trace(exe: &Path) -> Vec<u32> {
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
 /// difftest seed's `ours`) over those functions instead of the kernel `k`.
 fn functions() -> Vec<String> {
-    std::env::var("CYCLES_FUNCS").map_or_else(|_| vec!["k".to_owned()], |list| list.split(',').map(str::to_owned).collect())
+    std::env::var("CYCLES_FUNCS")
+        .map_or_else(|_| vec!["k".to_owned()], |list| list.split(',').map(str::to_owned).collect())
 }
 
 /// `(address, text)` of every instruction of `objdump -d`, and the address
@@ -182,7 +183,13 @@ fn main() {
     if let Some(exe) = std::env::var_os("CYCLES_EXE") {
         let total = price(&gcc, Path::new(&exe), &models);
         let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
-        println!("insns {} clocks {} unpriced {} partial {}", total.insns, clocks.join(" "), total.unknown, total.partial);
+        println!(
+            "insns {} clocks {} unpriced {} partial {}",
+            total.insns,
+            clocks.join(" "),
+            total.unknown,
+            total.partial
+        );
         return;
     }
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
