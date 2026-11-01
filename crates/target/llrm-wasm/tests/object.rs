@@ -14,7 +14,8 @@ fn four(options: Options) -> Vec<u8> {
 
 #[test]
 fn four_functions_are_llcs_object_byte_for_byte() {
-    let golden = std::fs::read(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
+    let golden =
+        std::fs::read(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).expect("golden object");
     let ours = four(Options { stackify: false });
     if let Some(path) = std::env::var_os("WASM_DUMP") {
         std::fs::write(path, &ours).expect("dump");
@@ -32,7 +33,8 @@ fn the_stackified_object_is_written() {
     }
     assert!(
         bytes.len()
-            < std::fs::metadata(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).unwrap().len() as usize
+            < std::fs::metadata(format!("{}/tests/golden/four.wasm", env!("CARGO_MANIFEST_DIR"))).unwrap().len()
+                as usize
     );
 }
 
