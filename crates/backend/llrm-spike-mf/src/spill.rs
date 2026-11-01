@@ -147,7 +147,7 @@ fn split_around_calls<T: Target>(
         let insts = std::mem::take(&mut function.blocks[block].insts);
         let mut out = Vec::with_capacity(insts.len());
         // the values whose slot holds what they hold now
-        let mut clean: HashSet<u32> = HashSet::new();
+        let mut clean: HashSet<u32> = HashSet::default();
         for (i, inst) in insts.into_iter().enumerate() {
             clean.retain(|&v| !mentions(&inst, v).1);
             if let Some(kept) = at_call.get(&(block, i)) {
