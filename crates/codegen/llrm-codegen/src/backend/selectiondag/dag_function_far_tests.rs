@@ -1241,3 +1241,40 @@ entry:
         "{names:?}"
     );
 }
+
+fn pair_kinds(source: &str) -> Vec<Option<crate::model::lir::PairKind>> {
+    let module = llrm_mir::parse::module(m16_ir(source)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body.insns().iter().filter_map(|i| i.pair).map(Some).collect()
+}
+
+/// A far pointer's join was an `or` like any other once selected, so the
+/// allocator could not tell its join from a long's: no instruction carried the
+/// pair kind.
+#[test]
+fn a_far_pointer_join_and_a_long_join_reach_the_lir_marked() {
+    use crate::model::lir::PairKind::{Far, Long};
+    let far = pair_kinds(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i32 @f(ptr addrspace(1) %p) {
+entry:
+  %i = ptrtoint ptr addrspace(1) %p to i32
+  %s = xor i32 %i, 1
+  ret i32 %s
+}
+",
+    );
+    let long = pair_kinds(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 1000
+  ret i1 %c
+}
+",
+    );
+    assert_eq!((far, long), (vec![Some(Far)], vec![Some(Long)]));
+}

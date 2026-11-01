@@ -89,6 +89,9 @@ pub struct RealMode {
     /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
     /// none: the pin's.
     pub recursive_inlining: Option<(u32, i64)>,
+    /// DEVIATE REC-1: the ceilings of the priced copies of a function in
+    /// itself (`Tti::priced_self_inlining`); none: `recursive_inlining`.
+    pub priced_self_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -534,6 +537,10 @@ impl Tti for X86 {
         self.tuning.speed_milliclocks_per_byte
     }
 
+    fn multiply_by_clocks(&self) -> bool {
+        self.tuning.multiply_by_clocks
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
@@ -550,6 +557,10 @@ impl Tti for X86 {
         self.real_mode.as_ref()?.recursive_inlining
     }
 
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.priced_self_inlining
+    }
+
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
         let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
         Some(real.unroll_size_few_trips)
@@ -560,6 +571,10 @@ impl Tti for X86 {
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+    }
+
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
     }
 
     fn speed_inline_by_code_size(&self) -> bool {

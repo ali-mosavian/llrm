@@ -27,6 +27,11 @@ pub struct Tuning {
     /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
     /// clocks are not traded.
     pub speed_milliclocks_per_byte: i64,
+    /// A multiply by a constant at speed is the chain of fewest clocks the
+    /// CPU's table gives, with no byte term (gcc's `synth_mult` at
+    /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
+    /// for its bytes.
+    pub multiply_by_clocks: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -48,6 +53,10 @@ pub struct Tuning {
     /// also holds a caller optimized for speed; false: the pin's threshold
     /// alone decides there.
     pub inline_size_guard_at_speed: bool,
+    /// A constant offset of an address is a displacement the access folds;
+    /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
+    /// is refused (it costs the displacement). false: the pin's.
+    pub keep_constant_displacements: bool,
 }
 
 impl Tuning {
@@ -61,6 +70,7 @@ impl Tuning {
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
+        multiply_by_clocks: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -68,6 +78,7 @@ impl Tuning {
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,
+        keep_constant_displacements: false,
     };
 }
 

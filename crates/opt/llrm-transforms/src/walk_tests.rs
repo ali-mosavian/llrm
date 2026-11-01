@@ -2154,3 +2154,106 @@ fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
     assert!(marked("none"), "control: a body within the cap waits");
     assert!(!marked("halve"), "a loop-bearing body waits for copies it will not get");
 }
+
+/// `walk` over `n` with `loop_body` per trip of a loop before its two calls
+/// (none: fib's), run through the pipeline at the unpinned DOS target, which
+/// prices the copies; the calls of it left.
+fn calls_left_of_a_priced_recursion(loop_body: Option<&str>) -> usize {
+    let Some(loop_body) = loop_body else {
+        return calls_left_in(&parsed(FIB_WALK));
+    };
+    calls_left_in(&parsed(&format!(
+        "define i32 @walk(i32 %n, ptr %p) {{
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %loop
+
+base:
+  ret i32 %n
+
+loop:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %loop ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc1, %loop ]
+{loop_body}
+  %i1 = add nsw i32 %i, 1
+  %more = icmp slt i32 %i1, %n
+  br i1 %more, label %loop, label %rec
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a, ptr %p)
+  %y = call i32 @walk(i32 %b, ptr %p)
+  %s = add i32 %x, %y
+  %t = add i32 %s, %acc1
+  ret i32 %t
+}}
+
+define i32 @main(ptr %p) {{
+b0:
+  %r = call i32 @walk(i32 30, ptr %p)
+  ret i32 %r
+}}
+"
+    )))
+}
+
+const FIB_WALK: &str = "define i32 @walk(i32 %n, ptr %p) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a, ptr %p)
+  %y = call i32 @walk(i32 %b, ptr %p)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main(ptr %p) {
+b0:
+  %r = call i32 @walk(i32 30, ptr %p)
+  ret i32 %r
+}
+";
+
+fn calls_left_in(source: &llrm_mir::module::Module) -> usize {
+    let mut module = source.clone();
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
+        |program: &mut llrm_mir::program::Program| {
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = true;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @walk").count()
+}
+
+/// A flat 16-bit recursion's copies were sized by the literals 14 and 2: a
+/// body with a loop in it was copied like fib (quicksort c: 522 B at 306644
+/// clocks against 389 B at 283450 uncopied). A level is made only when the
+/// calls it removes are worth four times its bytes, so the loop-bodied
+/// recursion keeps its two calls and the call-bound one is copied.
+#[test]
+fn test_a_recursion_with_a_loop_in_it_is_not_copied_for_its_calls() {
+    let flat = calls_left_of_a_priced_recursion(None);
+    assert!(flat > 2, "the flat recursion was not copied: {flat} calls");
+    let heavy = calls_left_of_a_priced_recursion(Some(
+        "  %q = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %w = mul i32 %v, %i
+  %z = xor i32 %w, %acc
+  store i32 %z, ptr %q
+  %acc1 = add i32 %z, %v",
+    ));
+    assert!(heavy == 2, "the loop-bodied recursion was copied: {heavy} calls");
+}

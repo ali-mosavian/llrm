@@ -578,7 +578,15 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         (2, palette(&[RegId::BX, RegId::BP])),
         (3, palette(&[RegId::SI, RegId::DI])),
     ]);
-    let env = TargetEnv { palettes: palettes.into(), pins: IndexMap::default(), size: false };
+    let env = TargetEnv {
+        palettes: palettes.into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: Box::new(|_| true),
+        freq: Vec::new(),
+    };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
     // value (the larger interval is the destination) and its palette is the

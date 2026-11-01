@@ -47,6 +47,17 @@ fn has(
     desc(inst.opcode).is_some_and(|desc| desc.has(flag))
 }
 
+/// Whether `opcode`'s operand after an immediate is its `addr`, which the
+/// offset before it absorbs. `memory.copy` and `memory.fill` follow memory
+/// indices with address operands that name no `addr`: folding into the index
+/// made `memory.copy 0, 12` of a copy to a local.
+fn names_address(opcode: u16) -> bool {
+    !matches!(
+        opcode,
+        op::MEMORY_COPY_A32 | op::MEMORY_COPY_A64 | op::MEMORY_FILL_A32 | op::MEMORY_FILL_A64
+    )
+}
+
 /// Whether anything changed. `pointer` is the type of an address.
 pub fn frame_lowering(
     f: &mut Function,
@@ -121,7 +132,7 @@ pub fn frame_lowering(
             let Operand::Frame(index) = f.blocks[block][i].operands[operand] else { unreachable!() };
             let from_sp = stack_size as i64 + offsets[index as usize];
             let inst = &mut f.blocks[block][i];
-            if (has(inst, flag::MAY_LOAD) || has(inst, flag::MAY_STORE)) && operand > 0 {
+            if (has(inst, flag::MAY_LOAD) || has(inst, flag::MAY_STORE)) && operand > 0 && names_address(inst.opcode) {
                 if let Operand::Imm(offset) = &mut inst.operands[operand - 1] {
                     *offset += from_sp;
                     inst.operands[operand] = Operand::Use(sp);

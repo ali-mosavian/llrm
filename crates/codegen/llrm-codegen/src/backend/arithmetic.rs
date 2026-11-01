@@ -149,6 +149,21 @@ pub fn chain_bytes(
         .sum()
 }
 
+/// The chain for a multiply by `number` where it takes fewer clocks than
+/// `imul r,r,imm` on the CPU's table, whatever its bytes (gcc's `synth_mult`
+/// at speed).
+pub fn chain_by_clocks<'a>(
+    number: i64,
+    width: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    let target = targets::profile(cpu)?;
+    let found = if width == 4 { cheapest_chain(number, target)? } else { cheapest_narrow_chain(number, target)? };
+    let Some((chain, clocks)) = found else { return Ok(None) };
+    let prefix = if width == 4 { dword_prefix(target) } else { 0 };
+    Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
+}
+
 /// The chain for a multiply by `number` of `width` bytes in a block `freq`
 /// times as hot as the entry, where the clocks it saves over `imul r,r,imm`
 /// pay for the bytes it adds at `milliclocks_per_byte` (the target's rate at
