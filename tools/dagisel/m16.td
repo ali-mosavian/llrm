@@ -74,3 +74,18 @@ let Predicates = [Not64BitMode] in {
 def : Pat<(X86mul_imm GR16:$src1, imm:$src2), (IMUL16rri GR16:$src1, imm:$src2)>;
 def : Pat<(X86mul_imm GR32:$src1, imm:$src2), (IMUL32rri GR32:$src1, imm:$src2)>;
 }
+
+// An `i16` extension or mask is the 16-bit instruction. The pin does these in the 32-bit
+// register and takes its low half (a `66h` prefix in real mode, a 4-byte slot for the value),
+// which it prefers where a 16-bit write leaves the upper half stale; in real mode that is
+// the wrong direction (SD447). Tried before the pin's forms.
+let AddedComplexity = 10, Predicates = [In16BitMode] in {
+def : Pat<(extloadi16i8 addr:$src), (MOVZX16rm8 addr:$src)>;
+def : Pat<(zextloadi16i1 addr:$src), (MOVZX16rm8 addr:$src)>;
+def : Pat<(extloadi16i1 addr:$src), (MOVZX16rm8 addr:$src)>;
+def : Pat<(i16 (zextloadi8 addr:$src)), (MOVZX16rm8 addr:$src)>;
+def : Pat<(i16 (zext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
+def : Pat<(i16 (anyext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
+def : Pat<(and GR16:$src1, 0xff), (MOVZX16rr8 (EXTRACT_SUBREG GR16:$src1, sub_8bit))>;
+def : Pat<(sext_inreg GR16:$src, i8), (MOVSX16rr8 (EXTRACT_SUBREG GR16:$src, sub_8bit))>;
+}
