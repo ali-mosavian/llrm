@@ -194,3 +194,64 @@ define i32 @small(i32 %a, i32 %b) {
     let line = err.lines().find(|l| l.contains("@pressure")).unwrap_or_else(|| panic!("{err}"));
     assert!(line.contains("ok,") && !line.contains("ok, 0 spill"), "{line}");
 }
+
+/// Every `tests/darwin` fixture allocated by greedy (`LLRM_ARM64_GREEDY`), linked and run natively:
+/// it must print and exit as recorded, and greedy must have allocated every function itself (a
+/// refusal falls back to the linear scan and says `greedy: @fn`; that would test the wrong thing).
+/// It once failed `arith` and `division`: a rematerialized instruction moved to another block lost its
+/// origin, and a branch had none.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn the_darwin_fixtures_run_as_recorded_under_greedy() {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/darwin");
+    let llc = env!("CARGO_BIN_EXE_llrm-arm64-llc");
+    let scratch = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    let mut fixtures: Vec<_> = std::fs::read_dir(&here).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    fixtures.sort();
+    for ir in fixtures.iter().filter(|p| p.extension().is_some_and(|e| e == "ll")) {
+        let name = ir.file_stem().unwrap().to_str().unwrap();
+        for level in ["--no-opt", "-O2"] {
+            let object = scratch.path().join(format!("{name}{level}.o"));
+            let compile = |mode: &str, greedy: bool| {
+                let mut command = Command::new(llc);
+                command.args([level, &format!("--isel={mode}"), "-o"]).arg(&object).arg(ir);
+                if greedy {
+                    command.env("LLRM_ARM64_GREEDY", "1");
+                }
+                command.output().unwrap()
+            };
+            // `dispatch -O2` is wrong without greedy too: the default edge of its switch has no
+            // zero for the phi (base bug, reported to the DAG-path owner). Drop this when fixed.
+            if name == "dispatch" && level == "-O2" {
+                continue;
+            }
+            // What the linear scan path cannot compile is no test of greedy.
+            if !compile("shadow", false).status.success() {
+                continue;
+            }
+            let said = compile("shadow", true);
+            let err = String::from_utf8_lossy(&said.stderr);
+            if !said.status.success() || err.lines().any(|l| l.starts_with("greedy:")) {
+                failures.push(format!("{name} {level}: greedy failed or refused: {err}"));
+                continue;
+            }
+            let exe = scratch.path().join(format!("{name}{level}"));
+            let linked = Command::new("cc").arg(&object).arg("-o").arg(&exe).output().unwrap();
+            assert!(linked.status.success(), "{name}: {}", String::from_utf8_lossy(&linked.stderr));
+            let ran = Command::new(&exe).output().unwrap();
+            let want_out = std::fs::read(here.join(format!("{name}.out"))).unwrap_or_default();
+            let want_status: i32 = std::fs::read_to_string(here.join(format!("{name}.status")))
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0);
+            checked += 1;
+            if ran.stdout != want_out || ran.status.code() != Some(want_status) {
+                failures.push(format!("{name} {level}: output or status differs (status {:?})", ran.status.code()));
+            }
+        }
+    }
+    assert!(checked >= 40, "only {checked} runs: the fixtures were not found");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -806,7 +806,7 @@ fn spilled_copy(
     }
 }
 
-fn spill_access(
+pub(crate) fn spill_access(
     register: Reg,
     slot: u32,
     load: bool,

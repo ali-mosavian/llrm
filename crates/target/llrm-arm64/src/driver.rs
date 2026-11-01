@@ -299,7 +299,23 @@ pub fn functions_with(
                 Err(why) => eprintln!("greedy-shadow: @{name}: {why}"),
             }
         }
-        let allocation = crate::regalloc::allocate(&mut machine);
+        // Greedy is opt-in; a function it refuses goes to the linear scan, reported.
+        let greedy = llrm_support::env_flag!("LLRM_ARM64_GREEDY").then(|| {
+            let mut copy = machine.clone();
+            crate::greedy::allocate(&mut copy).map(|allocation| (copy, allocation))
+        });
+        let allocation = match greedy {
+            Some(Ok((allocated, allocation))) => {
+                machine = allocated;
+                allocation
+            }
+            refused => {
+                if let Some(Err(why)) = refused {
+                    eprintln!("greedy: @{name}: {why}");
+                }
+                crate::regalloc::allocate(&mut machine)
+            }
+        };
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
