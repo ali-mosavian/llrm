@@ -1028,7 +1028,8 @@ pub(crate) fn x87_values<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>) -> Hash
         .collect()
 }
 
-/// The registers of the x87 stack the allocator hands out (`FP0`-`FP6`, the pin's `RFP` class).
+/// The registers of the x87 stack the allocator hands out (`FP0`-`FP6`, the
+/// pin's `RFP` class).
 const X87_STACK_LIMIT: u32 = 7;
 
 /// `body` with each region reordered; a region of more than `limit / 2`
@@ -1040,8 +1041,9 @@ pub fn scheduled(
     model: impl FnOnce(&LirBody, &dyn Fn(u32) -> bool) -> Model,
 ) -> LirBody {
     let (regs, bits) = (body.regs(), body.bits);
-    // The x87 stack is its own register set with its own limit: its values (those of
-    // the float operations) are not counted against the general registers.
+    // The x87 stack is its own register set with its own limit: its values
+    // (those of the float operations) are not counted against the general
+    // registers.
     let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
@@ -1073,8 +1075,9 @@ pub fn scheduled(
                     && let Some(make) = model.take()
                 {
                     let mut model = make(body, &counted);
-                    // The x87 stack is the pin's `RFP` register class: a set of its own
-                    // with the seven registers `FP0`-`FP6`.
+                    // The x87 stack is the pin's `RFP` register class: a set of
+                    // its own with the seven registers
+                    // `FP0`-`FP6`.
                     let set: Rc<[usize]> = Rc::from(vec![model.limits.len()]);
                     model.limits.push(X87_STACK_LIMIT);
                     for &value in &stack {
