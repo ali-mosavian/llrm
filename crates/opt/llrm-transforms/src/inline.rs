@@ -390,7 +390,7 @@ pub fn gcc_insns_in(
 
 /// The most a block counts in a function's time: the trips gcc's loop
 /// estimates stop at (ipacp's `MAX_FREQUENCY`).
-const LOOP_TRIPS: i64 = 10;
+pub(crate) const LOOP_TRIPS: i64 = 10;
 
 /// What one call of `body` runs, in `gcc_insns`: the size, with the
 /// instructions inside a loop counted at its trips. A copy of the body in
@@ -632,15 +632,6 @@ pub fn size_of(
         .sum::<i64>()
         * costs.store;
     work(module, body, callees, costs).map(|work| work + calls + kept)
-}
-
-/// What a call costs beyond its own instruction, which inlining saves: the
-/// return, and each argument pushed by the caller and read back by the callee.
-pub fn call_overhead(
-    costs: &OperationCosts,
-    arguments: usize,
-) -> i64 {
-    costs.call + costs.return_ + arguments as i64 * costs.argument
 }
 
 /// Surviving direct call counts.

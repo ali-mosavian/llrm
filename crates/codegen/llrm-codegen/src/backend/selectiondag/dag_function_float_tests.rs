@@ -562,6 +562,24 @@ fn an_lrint_of_a_double_is_a_fist_and_a_load() {
     assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
 }
 
+const LLRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(double %x) {
+entry:
+  %r = call i64 @llvm.llrint.i64.f64(double %x)
+  ret i64 %r
+}
+declare i64 @llvm.llrint.i64.f64(double)
+";
+
+/// `llvm.llrint` was no operation and stayed a call to a function of that
+/// name; on x86 it is `fist` like `lrint`, with an `i64` result.
+#[test]
+fn an_llrint_of_a_double_is_a_fist_like_lrint() {
+    let made = names(LLRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
+    assert!(!made.iter().any(|name| name.contains("llrint")), "{made:?}");
+}
+
 const FLOAT_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
 declare void @g()
 define double @f(double %a, double %b) {

@@ -1014,10 +1014,21 @@ pub fn _encoded(
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
+        // Static code at 64 bits: a symbol beside a register is the absolute
+        // sign-extended `disp32`; alone it is `[rip + disp32]`.
+        let based = match one {
+            Loc::Mem(ir::Mem { through, index_through, .. })
+            | Loc::Address(ir::AddressRef { through, index_through, .. }) => {
+                *through != llrm_lir::registers::RegId::None || *index_through != llrm_lir::registers::RegId::None
+            }
+            _ => false,
+        };
         // Long mode reaches a symbol from the instruction pointer: the field is
         // relative to the instruction's end, and an address loaded for
         // a symbol defined elsewhere is its table entry's.
-        let loc = if model == CodeModel::Flat64 {
+        let loc = if model == CodeModel::Flat64 && based {
+            llrm_x86::mc::fixup::abs_signed_4()
+        } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
             if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
                 llrm_x86::mc::fixup::got_pc_rel(from)
