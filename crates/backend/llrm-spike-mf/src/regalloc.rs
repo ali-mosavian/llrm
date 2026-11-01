@@ -167,6 +167,15 @@ pub trait Target {
         None
     }
 
+    /// Whether the copy `from` into `to` lowers to an instruction that
+    /// overwrites the condition codes (a `move` into an m68k data register).
+    fn copy_sets_flags(
+        _to: RegId,
+        _from: RegId,
+    ) -> bool {
+        false
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.
