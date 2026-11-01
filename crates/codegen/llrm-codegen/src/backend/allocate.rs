@@ -309,6 +309,7 @@ pub fn greedy_rewritten(
         saved,
         tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
+        lane_pins: false,
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);

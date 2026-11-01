@@ -42,6 +42,13 @@ impl Target for Two {
     fn caller_saved() -> Vec<RegId> {
         vec![]
     }
+
+    fn copy_sets_flags(
+        to: RegId,
+        from: RegId,
+    ) -> bool {
+        to != from
+    }
 }
 
 impl Jump for Two {

@@ -19,9 +19,11 @@
 //!   result     c1=copy v ... use ... c0=copy c1     the rest stays on the stack
 //! ```
 //!
-//! DEVIATE D-RS1: no register classes: `RegClassInfo.isProperSubClass` is
-//! false, so `SingleInstrs` is false and `tryInstructionSplit` is not
-//! translated; a value is one class here (the shadow allocator's whole root).
+//! DEVIATE D-RS1: `RegClassInfo.isProperSubClass` is false unless the target
+//! says a value's order has a larger one (`TargetInstrInfo::larger_order`), so
+//! `SingleInstrs` is false for the shadow allocator's roots and
+//! `tryInstructionSplit` returns at once; a value is one class here (no
+//! subranges).
 //!
 //! DEVIATE D-RS2: no `IMPLICIT_DEF`: `addSplitConstraints`' test of the last
 //! instruction for an implicit def is dropped, LIR has none.
@@ -218,8 +220,7 @@ impl Splitter<'_, '_> {
             if phys.is_some() || !new_vregs.is_empty() {
                 return phys;
             }
-            // tryInstructionSplit: not translated (D-RS1).
-            return None;
+            return self.try_instruction_split(virt, new_vregs);
         }
 
         self.analyze(virt);
@@ -640,8 +641,8 @@ impl Splitter<'_, '_> {
         assert!(num_global_intvs != 0, "No global intervals configured");
 
         // Isolate even single instructions when dealing with a proper
-        // sub-class: none here (D-RS1).
-        let single_instrs = false;
+        // sub-class.
+        let single_instrs = self.env.is_proper_subclass(se.edit().parent());
 
         // First handle all the blocks with uses.
         let use_blocks = self.ss.sa.get_use_blocks().to_vec();
@@ -1092,8 +1093,7 @@ impl Splitter<'_, '_> {
         virt: &Rc<LiveInterval>,
         new_vregs: &mut Vec<u32>,
     ) -> Option<RegId> {
-        // D-RS1: no proper sub-classes.
-        let single_instrs = false;
+        let single_instrs = self.env.is_proper_subclass(virt.reg());
         let mut delegate = NoDelegate;
         let mut se = SplitEditor::new();
         se.reset(self.lis, LiveRangeEdit::new(virt.reg(), &mut delegate), SPLIT_SPILL_MODE);
@@ -1215,6 +1215,60 @@ impl Splitter<'_, '_> {
             }
         }
         gap_weight
+    }
+
+    /// `tryInstructionSplit`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1584>):
+    /// split a live range around individual instructions. Normally not
+    /// worthwhile, since the spiller does the same; but when the range is in a
+    /// constrained class, the pieces can move to a larger one.
+    fn try_instruction_split(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        new_vregs: &mut Vec<u32>,
+    ) -> Option<RegId> {
+        // There is no point to this if there are no larger sub-classes.
+        // DEVIATE: no subranges (D-RS1), so that is the only way in.
+        if !self.env.is_proper_subclass(virt.reg()) {
+            return None;
+        }
+        let mut delegate = NoDelegate;
+        let mut se = SplitEditor::new();
+        se.reset(self.lis, LiveRangeEdit::new(virt.reg(), &mut delegate), ComplementSpillMode::Size);
+
+        let uses = self.ss.sa.get_use_slots().to_vec();
+        if uses.len() <= 1 {
+            return None;
+        }
+
+        // Split around every non-copy instruction if this split will relax the
+        // constraints on the virtual register. Otherwise, splitting just
+        // inserts uncoalescable copies that do not help the allocation.
+        for &slot in &uses {
+            if let Some(key) = self.lis.indexes.get_instruction_from_index(&slot) {
+                let insn = self.lis.instr(key);
+                if insn.copy_of().is_some() || !self.env.constrains(insn, virt.reg()) {
+                    continue;
+                }
+            }
+            let mut cx = self.cx();
+            se.open_intv(&mut cx);
+            let seg_start = se.enter_intv_before(&mut cx, slot);
+            let seg_stop = se.leave_intv_after(&mut cx, slot);
+            se.use_intv(seg_start, seg_stop);
+        }
+
+        if se.edit().empty() {
+            return None;
+        }
+
+        self.finish_editor(&mut se);
+        self.collect_new_regs(&se, new_vregs);
+        // Assign all new registers to RS_Spill. This was the last chance.
+        for i in 0..se.edit().size() {
+            self.extra.set_stage(se.edit().get(i), LiveRangeStage::Spill);
+        }
+        None
     }
 
     /// `tryLocalSplit`
