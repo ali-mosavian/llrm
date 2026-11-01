@@ -44,18 +44,21 @@ pub struct Options {
     /// Push and pop the saved registers where that is no larger and no
     /// slower than the pin's `suba.l` and `movem` into slots.
     pub push_frame: bool,
+    /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
+    /// instruction for.
+    pub quick: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options =
-        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false };
+        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, quick: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true }
+        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, quick: true }
     }
 }
 
@@ -88,7 +91,7 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed)?;
+    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.quick)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);

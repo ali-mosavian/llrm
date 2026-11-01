@@ -3,8 +3,6 @@
 //! join read the arms', not the compare's; the expansion refused the function
 //! ("a branch reads the flags of a compare past the select that follows it").
 
-use std::path::PathBuf;
-
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::object::{executable, start, write_executable};
@@ -28,16 +26,12 @@ fn module(ir: &str) -> llrm_mir::module::Module {
     llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses")
 }
 
-fn qemu() -> Option<PathBuf> {
-    ["/usr/bin/qemu-m68k", "/usr/local/bin/qemu-m68k"].iter().map(PathBuf::from).find(|path| path.exists())
-}
-
 fn status(
     ir: &str,
     args: &[i64],
     options: Options,
 ) -> Option<i32> {
-    let qemu = qemu()?;
+    let qemu = support::qemu()?;
     let mut all = start("f", args);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, options).expect("compiles"));
     let path = support::unique_path("select-flags");
