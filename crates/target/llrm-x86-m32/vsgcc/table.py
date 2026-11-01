@@ -54,11 +54,12 @@ def grouped(P):
 if __name__ == '__main__':
     WORK=Path(os.environ.get('VSGCC_WORK', Path.home()/'scratch/vsgcc-work'))
     rows=[json.loads(l) for l in open(WORK/'results.jsonl') if l.startswith('{')]
+    for r in rows: r['code'] += r.get('data', 0)   # bytes are .text plus data, the order's measure
     P={}
     for r in rows: P.setdefault(r['prog'],{})[r['variant']]=r
     complete(P)
     assert all(r['ok'] for r in rows), [(r['prog'], r['variant']) for r in rows if not r['ok']]
-    print("| program | compiler | instr | mem ops | misaligned | 486 clk | nops | code B | llrm/gcc clk | llrm/gcc ins | llrm/clang clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+    print("| program | compiler | instr | mem ops | misaligned | 486 clk | nops | text+data B | llrm/gcc clk | llrm/gcc ins | llrm/clang clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
     for p,d in P.items():
         for lvl in LEVELS:
             L, G, C = llrm(lvl), 'gcc'+lvl, 'clang'+lvl

@@ -159,6 +159,8 @@ pub struct MulPricing<'a> {
     pub freq: f64,
     /// `Tti::speed_milliclocks_per_byte`.
     pub milliclocks_per_byte: i64,
+    /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
+    pub by_clocks: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
@@ -2021,8 +2023,13 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte } = pricing;
-    let chain = arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte).ok()??;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
+    let chain = if by_clocks {
+        arithmetic::chain_by_clocks(c, width, cpu)
+    } else {
+        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
+    }
+    .ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
