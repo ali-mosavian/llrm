@@ -183,6 +183,7 @@ impl Machine for Dos {
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
             recursive_inlining: (!self.pin_tuning).then_some((2, 14)),
+            priced_self_inlining: (!self.pin_tuning).then_some((4, 150)),
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
