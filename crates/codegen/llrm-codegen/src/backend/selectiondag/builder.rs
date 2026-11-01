@@ -1129,11 +1129,11 @@ impl Builder<'_> {
     }
 
     /// X86's `LowerFormalArguments` for a SysV x86-64 variadic function: the
-    /// argument registers the named parameters did not take are stored in the
-    /// register save area (one 8-byte slot each, in order) that `va_start`
-    /// names. The vector registers' half of the area (48..176) is left
-    /// unwritten until floating point is selected at m64 (DEVIATE SD238: a
-    /// `double` passed to such a function is not read back).
+    /// integer argument registers the named parameters did not take are stored
+    /// in the register save area (one 8-byte slot each, in order) that
+    /// `va_start` names. The vector registers' half of the area (48..176)
+    /// is left unwritten until floating point is selected at m64 (DEVIATE
+    /// SD238: a `double` passed to such a function is not read back).
     fn save_variadic_registers(&mut self) -> Result<(), Refused> {
         let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
@@ -1144,7 +1144,7 @@ impl Builder<'_> {
             .parameters
             .iter()
             .map(|parameter| match parameter {
-                Parameter::Registers(regs) => regs.len(),
+                Parameter::Registers(regs) => regs.iter().filter(|reg| !reg.is_xmm()).count(),
                 _ => 0,
             })
             .sum();
@@ -1206,7 +1206,8 @@ impl Builder<'_> {
             let saved = self.dag.get_node(super::x86isd::VASTART_SAVE_XMM_REGS, EVT::OTHER, &[root, al, frame, first]);
             self.dag.set_root(saved);
         }
-        self.dag.var_args_save = Some((save, named as u32 * 8));
+        let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
+        self.dag.var_args_save = Some((save, named as u32 * 8, fp_offset));
         Ok(())
     }
 

@@ -1113,3 +1113,47 @@ entry:
         .count();
     assert_eq!(stores, 2, "a dword and a word");
 }
+
+/// `va_start` wrote `gp_offset = 8 * (named registers of both kinds)` and a
+/// fixed `fp_offset` of 48. gcc.c-torture va-arg-26 (six named floats, then a
+/// `double`) read the `double` from the area's slot 0 and aborted; va-arg-12,
+/// -16 and -18 (named doubles past xmm7, or mixed with integers) the same.
+/// The list starts at the first unnamed register of each kind: `gp_offset`
+/// counts the named integers, `fp_offset` is 48 plus 16 per named vector
+/// register, at most 176.
+#[test]
+fn va_start_counts_named_integer_and_vector_registers_apart() {
+    use crate::model::ir::{Loc, Operation};
+    let offsets = |params: &str| -> Vec<i64> {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f({params}, ...) {{
+  %ap = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 0
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+        let mut found: Vec<i64> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.op == Operation::Move)
+            .filter_map(|w| match (&w.dests[..], &w.sources[..]) {
+                ([Loc::Mem(cell)], [Loc::Imm(imm)]) if cell.width == 4 && imm.address.is_none() => Some(imm.value),
+                _ => None,
+            })
+            .collect();
+        found.sort_unstable();
+        found
+    };
+    assert_eq!(offsets("float %a, float %b, float %c, float %d, float %e, float %g"), [0, 144]);
+    assert_eq!(offsets("i32 %n, double %x, i64 %m"), [16, 64]);
+    let nine = "double %a, double %b, double %c, double %d, double %e, double %g, double %h, double %i, double %j";
+    assert_eq!(offsets(nine), [0, 176]);
+}
