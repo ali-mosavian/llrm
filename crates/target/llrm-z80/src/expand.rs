@@ -75,6 +75,11 @@ fn lanes(pair: RegId) -> Result<(RegId, RegId), String> {
     }
 }
 
+/// `hl`, `bc` or `de` as the pointer of an `ld a,(rr)`.
+fn pointer(register: RegId) -> Result<&'static str, String> {
+    if is_pair(register) { Ok(name(register)) } else { Err(format!("{} is no pointer pair", name(register))) }
+}
+
 fn is_pair(register: RegId) -> bool {
     register == reg::BC || register == reg::DE || register == reg::HL
 }
@@ -304,6 +309,14 @@ impl Printer<'_> {
             "LD8rm" => {
                 let to = name_of(self, 0)?;
                 self.push(format!("ld {to}, (hl)"));
+            }
+            "LD8Arp" => {
+                let p = self.register(inst, 1)?;
+                self.push(format!("ld a, ({})", pointer(p)?));
+            }
+            "LD8prA" => {
+                let p = self.register(inst, 1)?;
+                self.push(format!("ld ({}), a", pointer(p)?));
             }
             "LD8mr" => {
                 let from = name_of(self, 0)?;

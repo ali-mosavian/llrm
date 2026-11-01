@@ -60,6 +60,9 @@ def Z80stsp : SDNode<"Z80ISD::STSP", SDT_Z80StSP, [SDNPHasChain, SDNPMayStore]>;
 // The sign of a byte or word as the Z flag: bit 7 of the byte, or of the high byte. Z is set when the sign bit is clear.
 def SDTZ80Tsts : SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisInt<1>]>;
 def Z80tsts : SDNode<"Z80ISD::TSTS", SDTZ80Tsts>;
+// Nothing lowers to these two: they exist so the A-based byte forms below are in the instruction tables the emitter uses.
+def Z80ld8a : SDNode<"Z80ISD::LD8A", SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayLoad]>;
+def Z80st8a : SDNode<"Z80ISD::ST8A", SDTypeProfile<0, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayStore]>;
 def Z80wrapper : SDNode<"Z80ISD::WRAPPER", SDTIntUnaryOp>;
 def Z80retglue : SDNode<"Z80ISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
@@ -150,6 +153,12 @@ def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d,
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
   def LD8rm : Z80Inst<(outs GR8:$d), (ins HLR:$p), "ld $d, ($p)", [(set i8:$d, (load i16:$p))]>;
+// The same through any pair, with the byte in A: `ld a,(bc)`, `ld (de),a`. No pattern: the emitter picks these over the
+// HL forms when the byte is going to or coming from A anyway, which frees the pointer from HL.
+let mayLoad = 1 in
+  def LD8Arp : Z80Inst<(outs ACC:$d), (ins GR16:$p), "ld a, ($p)", [(set i8:$d, (Z80ld8a i16:$p))]>;
+let mayStore = 1 in
+  def LD8prA : Z80Inst<(outs), (ins ACC:$s, GR16:$p), "ld ($p), a", [(Z80st8a i8:$s, i16:$p)]>;
 // A word through a pointer in HL: two byte loads or stores with an `inc hl` between, expanded when emitted.
 let mayLoad = 1, Defs = [A] in
   def LD16rm : Z80Inst<(outs GR16:$d), (ins HLR:$p), "ld16 $d, ($p)", [(set i16:$d, (load i16:$p))]>;

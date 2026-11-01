@@ -125,6 +125,10 @@ struct Emitter<'a> {
     builder: HashMap<u32, Reg>,
     /// The argument register each virtual register is a copy of.
     arrives_in: HashMap<Reg, llrm_lir::registers::RegId>,
+    /// For the block being emitted: the nodes that read each value.
+    users: HashMap<(u32, u8), Vec<u32>>,
+    /// The values known to be in `a` when they are made.
+    in_acc: std::collections::HashSet<(u32, u8)>,
 }
 
 impl Emitter<'_> {
@@ -264,6 +268,7 @@ impl Emitter<'_> {
                     "REG_SEQUENCE" => return self.reg_sequence(node, into),
                     _ => {}
                 }
+                let (name, code) = self.byte_form(node, name, code);
                 let desc = instrinfo::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
                 let mut operands = Vec::new();
                 let mut defines_flags = false;
@@ -277,6 +282,9 @@ impl Emitter<'_> {
                         self.new_reg(class)
                     };
                     self.values.insert((node, at as u8), reg);
+                    if wanted.is_some_and(|one| fixed_register(one.reg_class) == Some(crate::reg::A)) {
+                        self.in_acc.insert((node, at as u8));
+                    }
                     operands.push(Operand::Def(reg));
                 }
                 let mut reads_flags = false;
@@ -368,6 +376,50 @@ impl Emitter<'_> {
         }
     }
 
+    /// `LD8rm` and `LD8mr` become `LD8Arp` and `LD8prA` when the byte is read in
+    /// `a` anyway (an ALU operand, a compare, a return) or made there: the pointer
+    /// may then be any pair and need not be `hl`.
+    fn byte_form(
+        &self,
+        node: u32,
+        name: &'static str,
+        code: u32,
+    ) -> (&'static str, u32) {
+        use crate::dagisel::generated::ids::opcode;
+        let n = self.dag.node(SDValue { node, res: 0 });
+        match name {
+            "LD8rm" => {
+                let readers = self.users.get(&(node, 0)).map(Vec::as_slice).unwrap_or(&[]);
+                let in_a = |user: u32| {
+                    let user = self.dag.node(SDValue { node: user, res: 0 });
+                    let position = user.ops.iter().position(|op| op.node == node && op.res == 0);
+                    match user.opcode {
+                        // a byte stored: the store reads it in `a` too
+                        ISD::Machine(code) if opcode_name(code) == Some("LD8mr") && position == Some(0) => true,
+                        ISD::Machine(code) => instrinfo::desc(code as u16)
+                            .zip(position)
+                            .and_then(|(desc, at)| desc.operands.get(at + usize::from(desc.num_defs)))
+                            .is_some_and(|one| fixed_register(one.reg_class) == Some(crate::reg::A)),
+                        ISD::CopyToReg => matches!(
+                            self.dag.node(user.ops[1]).data,
+                            NodeData::PhysReg(id) if id == crate::reg::A
+                        ),
+                        _ => false,
+                    }
+                };
+                if !readers.is_empty() && readers.iter().all(|&user| in_a(user)) {
+                    ("LD8Arp", u32::from(opcode::LD8Arp))
+                } else {
+                    (name, code)
+                }
+            }
+            "LD8mr" if n.ops.get(1).is_some_and(|value| self.in_acc.contains(&(value.node, value.res))) => {
+                ("LD8prA", u32::from(opcode::LD8prA))
+            }
+            _ => (name, code),
+        }
+    }
+
     /// The constant of a `TargetConstant` operand.
     fn constant(
         &self,
@@ -439,6 +491,8 @@ pub fn emit(
         values: HashMap::new(),
         builder: HashMap::new(),
         arrives_in: HashMap::new(),
+        users: HashMap::new(),
+        in_acc: Default::default(),
     };
     // the frame objects the selector made; the allocas came first, at their index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
@@ -446,6 +500,13 @@ pub fn emit(
     for one in &selection.blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
+        emitter.in_acc.clear();
+        emitter.users.clear();
+        for (at, node) in one.dag.nodes().iter().enumerate() {
+            for op in &node.ops {
+                emitter.users.entry((op.node, op.res)).or_default().push(at as u32);
+            }
+        }
         let mut insts = Vec::new();
         // the registers the block is entered with, read before anything runs
         for &(register, number) in &one.live_ins {
