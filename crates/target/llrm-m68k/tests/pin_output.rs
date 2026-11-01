@@ -639,7 +639,7 @@ fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
 fn run_reading_zero(ir: &str) -> Option<i32> {
     use llrm_m68k::kernels::{Arg, program};
     use llrm_m68k::object::{executable, write_executable};
-    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+    if support::qemu().is_none() {
         return None;
     }
     let ir = ir.replace("ptr @zero", "ptr %z").replace("define i16 @f()", "define i16 @k(ptr %z)");
