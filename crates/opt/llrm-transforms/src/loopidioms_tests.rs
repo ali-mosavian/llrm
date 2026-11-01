@@ -4,7 +4,7 @@
 use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::passes::{Declared, Outer};
 
-use super::{LoopIdioms, Merge, filled};
+use super::{LoopIdioms, Merge, fill_clocks, filled};
 use crate::testing::{managed, parsed, printed, results};
 
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\n";
@@ -1113,4 +1113,15 @@ b2:
     let after = managed_fill(text, &[&[]]);
     assert!(after.contains("llvm.memset"), "{after}");
     assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
+}
+
+/// A fill's clocks charged `fill_cell`, the price of a dword, once for every
+/// byte: 100 byte stores cost 4x what a fill of them does (`fills_pay` kept a
+/// loop a fill beats).
+#[test]
+fn a_fills_cells_are_priced_by_the_dword_not_the_byte() {
+    let clocks = llrm_mir::target::OperationCosts { fill: 5, fill_cell: 2, ..Default::default() };
+    assert_eq!(fill_clocks(&clocks, 1, 100, 1), 5 + 25 * 2);
+    assert_eq!(fill_clocks(&clocks, 1, 10, 2), 5 + 5 * 2);
+    assert_eq!(fill_clocks(&clocks, 2, 3, 1), 10 + 2);
 }

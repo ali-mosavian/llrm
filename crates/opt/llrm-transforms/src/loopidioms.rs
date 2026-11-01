@@ -840,10 +840,21 @@ pub(crate) fn fills_pay(
             // stays when its extra bytes buy fewer clocks than that.
             let (Some(trips), Some(width)) = (trips, width) else { return true };
             let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
-            let fill = fills * clocks.fill + trips * width * clocks.fill_cell;
+            let fill = fill_clocks(clocks, fills, trips, width);
             let saved = loop_bytes - 3 * fills * costs.fill / 4;
             clocks_pay(saved, rate, fill, trips * each)
         })
+}
+
+/// The clocks of `fills` fills over `trips` stores of `width` bytes: `fill_cell`
+/// is the price of a dword, not of a byte.
+pub(crate) fn fill_clocks(
+    clocks: &OperationCosts,
+    fills: i64,
+    trips: i64,
+    width: i64,
+) -> i64 {
+    fills * clocks.fill + (trips * width + 3) / 4 * clocks.fill_cell
 }
 
 /// Whether the `saved` bytes of the fill are worth the clocks it adds over
