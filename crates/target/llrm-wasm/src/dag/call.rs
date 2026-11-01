@@ -23,7 +23,9 @@
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::target_calling::{FixedObject, In, LiveIn, Out, Site, TargetCalling};
+use llrm_codegen::backend::selectiondag::target_calling::{
+    FixedObject, In, LiveIn, Out, Site, TargetCalling, TargetIntrinsic,
+};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 
 use crate::dagisel::generated::ids::isd;
@@ -48,7 +50,28 @@ fn is_value(vt: EVT) -> bool {
     matches!(vt, EVT::I32 | EVT::I64 | EVT::Simple(MVT::F32 | MVT::F64))
 }
 
+/// The `llvm.wasm.*` intrinsics of exception handling, numbered in this order
+/// (`Intrinsic::wasm_*`); the second is whether the intrinsic has side effects
+/// (`IntrNoMem` ones have none: `INTRINSIC_WO_CHAIN`).
+pub const EH_INTRINSICS: [(&str, bool); 7] = [
+    ("llvm.wasm.throw", true),
+    ("llvm.wasm.rethrow", true),
+    ("llvm.wasm.catch", true),
+    ("llvm.wasm.get.exception", true),
+    ("llvm.wasm.get.ehselector", true),
+    ("llvm.wasm.landingpad.index", false),
+    ("llvm.wasm.lsda", false),
+];
+
 impl TargetCalling for WasmCalling {
+    fn intrinsic(
+        &self,
+        name: &str,
+    ) -> Option<TargetIntrinsic> {
+        let id = EH_INTRINSICS.iter().position(|(known, _)| *known == name)?;
+        Some(TargetIntrinsic { id: id as u32, chained: EH_INTRINSICS[id].1 })
+    }
+
     fn accepts(
         &self,
         dag: &SelectionDAG,

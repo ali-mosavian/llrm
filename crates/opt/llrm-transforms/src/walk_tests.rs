@@ -1453,6 +1453,178 @@ b0:
     assert!(!m16.contains("call i32 @callee"), "the folding call stayed:\n{m16}");
 }
 
+/// qmove c at m16 -O2: `pl_ground_accel` writes `.x` and `.y` of a vector whose
+/// `.z` the caller set and reads back through `(long)`. Inlined (the pin does,
+/// cost 5 of 225) the read folds to a constant and the call goes: the code
+/// grows 30 -> 42 but 43 clocks go (`fld`+`fistp`), worth it at 1 clock = 2
+/// bytes. Held to bytes alone it stayed a call: +41 clk against 854.
+#[test]
+fn test_an_o2_call_that_grows_the_code_but_saves_clocks_is_inlined_at_m16() {
+    let text = "@g = global float 3.0
+
+define void @callee(ptr %v, ptr %w, float %s, float %dt) {
+b0:
+  %x = load float, ptr %v
+  %wx = load float, ptr %w
+  %vy.p = getelementptr i8, ptr %v, i32 4
+  %y = load float, ptr %vy.p
+  %wy.p = getelementptr i8, ptr %w, i32 4
+  %wy = load float, ptr %wy.p
+  %a = fmul float %x, %wx
+  %b = fmul float %y, %wy
+  %c = fadd float %a, %b
+  %add = fsub float %s, %c
+  %le = fcmp ole float %add, 0.0
+  br i1 %le, label %out, label %go
+go:
+  %acc = fmul float %s, %dt
+  %big = fcmp ogt float %acc, %add
+  %use = select i1 %big, float %add, float %acc
+  %dx = fmul float %use, %wx
+  %nx = fadd float %x, %dx
+  store float %nx, ptr %v
+  %dy = fmul float %use, %wy
+  %ny = fadd float %y, %dy
+  store float %ny, ptr %vy.p
+  %e1 = fmul float %nx, %ny
+  %e2 = fadd float %e1, %dx
+  store float %e2, ptr %w
+  br label %out
+out:
+  ret void
+}
+
+define i32 @top(float %g0, float %g1, float %s) {
+b0:
+  %vel = alloca [12 x i8]
+  %wish = alloca [12 x i8]
+  store float %g0, ptr %vel
+  store float %g1, ptr %wish
+  %wy.s = getelementptr i8, ptr %wish, i32 4
+  store float %g1, ptr %wy.s
+  %vy.s = getelementptr i8, ptr %vel, i32 4
+  store float %g0, ptr %vy.s
+  %vz = getelementptr i8, ptr %vel, i32 8
+  store float 5.0, ptr %vz
+  call void @callee(ptr %vel, ptr %wish, float %s, float %g1)
+  %z = load float, ptr %vz
+  %i = fptosi float %z to i32
+  %vx = load float, ptr %vel
+  %j = fptosi float %vx to i32
+  %k = add i32 %i, %j
+  %vy.q = getelementptr i8, ptr %vel, i32 4
+  %vy = load float, ptr %vy.q
+  %l = fptosi float %vy to i32
+  %m = add i32 %k, %l
+  ret i32 %m
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call void @callee"), "the call stayed:\n{m16}");
+}
+
+/// qlight c at m16 -O2: `ls_scale_byte` (a clamped multiply and a divide by
+/// 255, the multiply-high sequence in the code) inlined four times is 191
+/// bytes more for 91 clocks less: the `CodeSize` units said +8 a site where the
+/// code grows by ~50 bytes, and priced in clocks that took the copy. The byte
+/// prices of the opcode table see the sequence, and the call stays.
+#[test]
+fn test_an_o2_call_of_a_clamped_divide_by_a_constant_stays_a_call_at_m16() {
+    let text = "@raw = global i16 200
+@low = global i16 -20
+@s1 = global i16 120
+@s2 = global i16 60
+@s3 = global i16 30
+
+define i16 @scale(i16 %raw, i16 %s) {
+b0:
+  %a = sext i16 %raw to i32
+  %b = sext i16 %s to i32
+  %m = mul i32 %a, %b
+  %d = sdiv i32 %m, 255
+  %hi = icmp sgt i32 %d, 255
+  %c1 = select i1 %hi, i32 255, i32 %d
+  %lo = icmp slt i32 %c1, 0
+  %c2 = select i1 %lo, i32 0, i32 %c1
+  %r = trunc i32 %c2 to i16
+  ret i16 %r
+}
+
+define i32 @top() {
+b0:
+  %x = load volatile i16, ptr @raw
+  %y = load volatile i16, ptr @s1
+  %p = call i16 @scale(i16 %x, i16 %y)
+  %x2 = load volatile i16, ptr @raw
+  %z = load volatile i16, ptr @s2
+  %q = call i16 @scale(i16 %x2, i16 %z)
+  %x3 = load volatile i16, ptr @raw
+  %w = load volatile i16, ptr @s3
+  %r = call i16 @scale(i16 %x3, i16 %w)
+  %x4 = load volatile i16, ptr @low
+  %y4 = load volatile i16, ptr @s1
+  %t = call i16 @scale(i16 %x4, i16 %y4)
+  %a = sext i16 %p to i32
+  %b = sext i16 %q to i32
+  %c = sext i16 %r to i32
+  %d = sext i16 %t to i32
+  %am = mul i32 %a, 1000000
+  %bm = mul i32 %b, 1000
+  %ab = add i32 %am, %bm
+  %cd = add i32 %c, %d
+  %s = add i32 %ab, %cd
+  ret i32 %s
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert_eq!(m16.matches("call i16 @scale").count(), 4, "a copy was made:\n{m16}");
+}
+
+/// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
+/// grows the code a few bytes was refused (+126 B for -298 clk against 854),
+/// for its saving was counted once where the site runs per trip. The same
+/// callee as the qlight test, called from a loop, is inlined.
+#[test]
+fn test_an_o2_call_in_a_loop_saves_its_clocks_per_trip_at_m16() {
+    let text = "@raw = global i16 200
+@s1 = global i16 120
+
+define i16 @scale(i16 %raw, i16 %s) {
+b0:
+  %a = sext i16 %raw to i32
+  %b = sext i16 %s to i32
+  %m = mul i32 %a, %b
+  %d = sdiv i32 %m, 255
+  %hi = icmp sgt i32 %d, 255
+  %c1 = select i1 %hi, i32 255, i32 %d
+  %lo = icmp slt i32 %c1, 0
+  %c2 = select i1 %lo, i32 0, i32 %c1
+  %r = trunc i32 %c2 to i16
+  ret i16 %r
+}
+
+define i32 @top(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc1, %h ]
+  %x = load volatile i16, ptr @raw
+  %y = load volatile i16, ptr @s1
+  %p = call i16 @scale(i16 %x, i16 %y)
+  %e = sext i16 %p to i32
+  %acc1 = add i32 %acc, %e
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %out
+out:
+  ret i32 %acc1
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i16 @scale"), "the call stayed:\n{m16}");
+}
+
 /// A call that folds once inlined stays a call with inlining off
 /// (`-fno-inline-functions`): the trial of a blocked site at a speed caller
 /// ignored the switch, and 6 llrm-nib tests lost their out-of-line callees

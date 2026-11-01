@@ -23,7 +23,7 @@ use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit}
 use llrm_dagisel::interp::Selector;
 
 use super::generated::ids::reg as pin;
-use super::generated::instrinfo::{self, flag};
+use super::generated::instrinfo::flag;
 use super::generated::{m68k_m68000, m68k_m68020};
 use super::hooks::{Cpu, M68kHooks};
 use super::lowering::{M68kLowering, target_lowering};
@@ -122,21 +122,21 @@ impl SchedInfo for M68kSched {
         &self,
         opcode: u32,
     ) -> usize {
-        instrinfo::desc(opcode as u16).map_or(0, |desc| usize::from(desc.num_defs))
+        super::indexed::desc(opcode as u16).map_or(0, |desc| usize::from(desc.num_defs))
     }
 
     fn implicit_defs(
         &self,
         opcode: u32,
     ) -> &[u16] {
-        instrinfo::desc(opcode as u16).map_or(&[], |desc| desc.implicit_defs)
+        super::indexed::desc(opcode as u16).map_or(&[], |desc| desc.implicit_defs)
     }
 
     fn is_call(
         &self,
         opcode: u32,
     ) -> bool {
-        instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
+        super::indexed::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
     fn call_frame_setup(&self) -> Option<u32> {
@@ -170,19 +170,20 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
-/// `source_order`.
+/// `source_order`, and `(An)+` and `-(An)` accesses where `indexed`.
 pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     source_order: bool,
+    indexed: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering;
+    let mut lowering = M68kLowering { indexed };
     let selector = Selector::new(match cpu {
         Cpu::M68000 => m68k_m68000::TABLE,
         Cpu::M68020 => m68k_m68020::TABLE,
@@ -215,7 +216,7 @@ impl Select for M68kChooser<'_> {
         adapter: &mut llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter<'_>,
         node: u32,
     ) -> llrm_dagisel::interp::Outcome {
-        self.selector.select(adapter, &mut self.hooks, node)
+        super::indexed::select(adapter, node).unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }
 

@@ -31,7 +31,7 @@ fn norm(text: &str) -> String {
 #[test]
 fn the_four_functions_print_as_llc_does() {
     let wanted: String = ["ld", "st", "addr", "sum3"].iter().map(|name| golden(name)).collect();
-    assert_eq!(norm(&four(Options { stackify: false })), norm(&wanted));
+    assert_eq!(norm(&four(Options { stackify: false, ..Options::default() })), norm(&wanted));
 }
 
 /// No golden (the pin's -O0 order has no oracle here): the stackified functions

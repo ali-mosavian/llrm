@@ -1,6 +1,7 @@
 //! The ELF32 relocatable object, against the pin's `llvm-mc -filetype=obj` on
-//! the compiler's own asm (`~/scratch/llvm-build-m68k/bin`, LLVM d1106deb71cc
-//! with M68k): the same header, `.text` bytes and relocations.
+//! the compiler's own asm (the `bin` directory of an LLVM d1106deb71cc build
+//! with M68k, named by `LLRM_M68K_LLVM_BIN`; the tests skip without it): the
+//! same header, `.text` bytes and relocations.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -21,7 +22,7 @@ define i32 @callee(i32 %a, i8 %b) {\n  %z = zext i8 %b to i32\n  %r = add i32 %a
 define i32 @caller(i32 %a, i8 %b) {\n  %r = call i32 @callee(i32 %a, i8 %b)\n  ret i32 %r\n}";
 
 fn bin() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("HOME")?).join("scratch/llvm-build-m68k/bin");
+    let dir = PathBuf::from(std::env::var_os("LLRM_M68K_LLVM_BIN")?);
     dir.join("llvm-mc").exists().then_some(dir)
 }
 

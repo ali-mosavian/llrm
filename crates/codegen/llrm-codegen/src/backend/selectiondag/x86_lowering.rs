@@ -421,6 +421,17 @@ fn translate_cc(
                 return cond::NS;
             }
             CondCode::SetLt if bits == 0 => return cond::S,
+            // The pin gets this from `x <= C` -> `x < C + 1` ([L5358][pin]);
+            // x86's
+            // `canonicalize_ge_le` is off (DEVIATE in `dag_combiner`), so this
+            // is that rewrite's sign-test case. Exit: that hook on.
+            //
+            // [pin]:
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5358
+            CondCode::SetLe if all_ones => {
+                *rhs = dag.get_constant(0, vt);
+                return cond::S;
+            }
             CondCode::SetGe if bits == 0 => return cond::NS,
             CondCode::SetLt if bits == 1 => {
                 *rhs = dag.get_constant(0, vt);
