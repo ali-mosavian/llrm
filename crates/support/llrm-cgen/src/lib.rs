@@ -60,11 +60,15 @@ pub struct Options {
     /// read (`*w++`): what a backend turns into post-increment loads. Off,
     /// the programs are the ones generated before the option existed.
     pub walks: bool,
+    /// Copies of one array's first elements over another of the same type
+    /// (`__builtin_memcpy` of a constant size): what a backend turns into a
+    /// run of `(An)+` moves. Needs `walks`.
+    pub copies: bool,
 }
 
 impl Options {
     pub const fn new(model: DataModel) -> Options {
-        Options { model, opaque: false, signed: true, limit: None, walks: false }
+        Options { model, opaque: false, signed: true, limit: None, walks: false, copies: false }
     }
 }
 
@@ -395,7 +399,13 @@ impl Gen {
     ) {
         let pad = "  ".repeat(indent);
         for _ in 0..count {
-            match self.rng.below(if self.options.walks { 13 } else { 12 }) {
+            match self.rng.below(if self.options.copies {
+                15
+            } else if self.options.walks {
+                13
+            } else {
+                12
+            }) {
                 0..=4 => {
                     if let Some(v) = self.assign_target(scope) {
                         let e = self.expr(v.ty, 3, scope);
@@ -482,6 +492,21 @@ impl Gen {
                             self.c(ty)
                         )
                         .unwrap();
+                    }
+                }
+                13 | 14 => {
+                    let n = scope.arrays.len();
+                    let from = self.rng.below(n.max(1));
+                    let start = self.rng.below(n.max(1));
+                    // the next array of the same type, which is never the
+                    // source
+                    let to = (0..n)
+                        .map(|k| (start + k) % n)
+                        .find(|&k| k != from && scope.arrays[k].ty == scope.arrays[from].ty);
+                    if let (Some(src), Some(dst)) = (scope.arrays.get(from), to.map(|k| &scope.arrays[k])) {
+                        let count = 1 + self.rng.below(src.len.min(dst.len).min(6));
+                        writeln!(out, "{pad}__builtin_memcpy({0}, {1}, {count} * sizeof({0}[0]));", dst.name, src.name)
+                            .unwrap();
                     }
                 }
                 9 if scope.has_struct => {

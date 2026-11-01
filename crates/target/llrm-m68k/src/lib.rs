@@ -6,6 +6,7 @@ pub mod addrarith;
 pub mod amiga;
 pub mod atari;
 pub mod ccr;
+pub mod chain;
 pub mod cmpelim;
 pub mod compile;
 pub mod dagisel;
