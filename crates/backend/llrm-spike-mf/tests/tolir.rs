@@ -1,6 +1,7 @@
 //! `MFunction` -> `LirBody`: what greedy reads of a spike function.
 
 use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
+use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Loc, Operation};
 use llrm_spike_mf::regalloc::{Join, Side, Target, eliminate_phis, two_address};
@@ -1362,6 +1363,110 @@ fn test_a_value_whose_every_use_is_narrow_is_split_around_each_instruction_in_on
     let inputs = converted.inputs(regs(), &order);
     let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
     assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// Two registers are all a narrow class allows; the wide class prefers a third.
+struct Bundled;
+
+impl Target for Bundled {
+    type Class = bool;
+
+    fn meet(
+        a: bool,
+        b: bool,
+    ) -> Option<bool> {
+        Some(a || b)
+    }
+
+    fn any() -> bool {
+        false
+    }
+
+    fn candidates(narrow: bool) -> Vec<RegId> {
+        if narrow { vec![RegId::EBX, RegId::ECX] } else { vec![RegId::EDX, RegId::EBX, RegId::ECX] }
+    }
+
+    fn view(
+        root: RegId,
+        _: bool,
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+        (order.len() < 3).then(|| vec![RegId::EDX, RegId::EBX, RegId::ECX])
+    }
+
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags
+    }
+
+    fn spill_store(
+        _: bool,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+    }
+
+    fn spill_load(
+        _: bool,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// The compare and the instruction that reads its flags are one instruction to
+/// greedy, and it names the reader's operands too. It named the compare's
+/// alone, so a piece only the bundle names was widened to the larger class and
+/// the reader read a register its class does not allow (6502 seed 116: `lda
+/// #1` held in `a` across the compare's own `lda`, 157 for 19).
+#[test]
+fn test_a_bundle_names_the_operands_of_the_instruction_that_reads_its_flags() {
+    let mut f = MFunction::<bool>::new("bundled");
+    f.classes = vec![false, true, false, false];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("load", vec![Operand::Def(v(2))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    let mut compare = op("cmp", vec![Operand::Use(v(2))]);
+    compare.sets_flags = true;
+    block.insts.push(compare);
+    let mut select = op("cmov", vec![Operand::Def(v(3)), Operand::Use(v(1))]);
+    select.reads_flags = true;
+    block.insts.push(select);
+    block.insts.push(op("store", vec![Operand::Use(v(3))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Bundled>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let bundle = converted
+        .body
+        .blocks
+        .iter()
+        .flat_map(|b| b.insns.iter())
+        .find(|i| i.what.as_ref().and_then(|w| w.name.as_deref()) == Some("BUNDLE"))
+        .expect("the compare and its reader are one instruction");
+    // the reader's operand is the value coalesced from v0 and v1 (narrow), and
+    // the bundle says so
+    let narrow = converted.tii.operand_orders(bundle).into_iter().filter(|(_, order)| order.len() == 2).count();
+    assert_eq!(narrow, 1, "{:?}", converted.tii.operand_orders(bundle));
 }
 
 /// A counter `dec`ed in place and compared: the compare copy would join it
