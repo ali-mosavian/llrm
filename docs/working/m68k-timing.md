@@ -33,12 +33,12 @@ typed into the code. A cell test cites the table and page.
 - 68040: two independent transcriptions agree on all 2,387 cells. The second
   reading found a row the first lost to a repeated page header: `nop` (8,
   1L + 7). `nop` was priced as an error until then.
-- 68020: the address tables (8.2.1 to 8.2.5) and the cache-case move matrix
-  were read twice; they agree except three cells of memory-indirect rows,
-  which are not priced. The marks (`*`, `**`, `†`, `‡`, `%`) were checked
-  against the legends on pages 8-30, 8-33 and 8-34. The hand-coded model it
-  replaced was wrong for `mulu.l`, `clr` to memory, `cmpi`, `dbt` and
-  `move to sr`.
+- 68020: every table was read twice (the instruction tables 8.2.7 to 8.2.16:
+  704 cells and marks, no difference). The address tables and the cache-case
+  move matrix differ in three cells of memory-indirect rows only, which are
+  not priced. The marks (`*`, `**`, `†`, `‡`, `%`) were checked against the
+  legends on pages 8-30, 8-33 and 8-34. The hand-coded model it replaced was
+  wrong for `mulu.l`, `clr` to memory, `cmpi`, `dbt` and `move to sr`.
 
 ## Limits
 
