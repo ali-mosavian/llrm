@@ -433,7 +433,7 @@ fn writes_register(
 /// `bmi`) and the test (`ldx m`, `txa`, ...) goes, when the register it set is
 /// written again before anything reads it.
 ///
-/// DEVIATE: neither LLVM's pin nor llvm-mos folds a sign test of a value into
+/// DEVIATE (6502-8): neither LLVM's pin nor llvm-mos folds a sign test of a value into
 /// the carry of its own shift (the pin has ARM Thumb1's `LSLS` compare and
 /// x86's carry of `add x,-1`, both narrower). Exit: a target-independent
 /// shift-with-carry-out in the MIR, so the select that tests bit 15 before
