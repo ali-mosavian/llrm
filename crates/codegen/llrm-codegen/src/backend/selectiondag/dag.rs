@@ -334,8 +334,9 @@ pub struct SelectionDAG {
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
     /// The SysV x86-64 `va_list`'s other fields: the register save area's
-    /// frame index and `gp_offset`, the bytes of it the named arguments took.
-    pub var_args_save: Option<(i32, u32)>,
+    /// frame index, `gp_offset` (the bytes of it the named integer arguments
+    /// took) and `fp_offset` (48 plus 16 a named vector argument).
+    pub var_args_save: Option<(i32, u32, u32)>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a

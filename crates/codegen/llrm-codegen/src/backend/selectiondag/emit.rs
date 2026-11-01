@@ -1229,6 +1229,15 @@ impl Emitter<'_, '_> {
                     }
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
+                        // A read the chain orders (`stacksave`) is the pointer
+                        // now, not where its value is used.
+                        if self.dag.has_users(SDValue { node: n, res: 1 }) {
+                            let width = width_of(self.ctx.map.scalar_sse(), self.dag, result);
+                            let held = self.fresh(width);
+                            let sp = Reg { register, width };
+                            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(sp)]);
+                            self.values.insert(result, held.value);
+                        }
                     }
                     // The x87 result of a call: the stack's top (`FP0`), which
                     // the stackifier reads as an unnamed load of no cell
@@ -3975,7 +3984,7 @@ impl Emitter<'_, '_> {
         }
         // The stack pointer itself as a value (`mov edi, esp`, the first byval
         // argument's address): a copy of the register.
-        if self.sp_values.contains(&value) {
+        if self.sp_values.contains(&value) && !self.values.contains_key(&value) {
             let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
             let held = self.fresh(width);
             let sp = Reg { register: self.ctx.stack_pointer, width };
