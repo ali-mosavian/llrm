@@ -15,6 +15,11 @@
 //! then the module in memory. The conventions (`cc 10NN`) and 16-bit offsets of
 //! the 32-bit mid-end are no longer rewritten: the offset is as wide as the
 //! near pointer and the wasm backend has one convention.
+//!
+//! LIMIT W17: wasm32 has no extended float, so `x ^ y` is the runtime's `pow`
+//! in doubles (`B$LPOW`, keyed on a datalayout with no `f80`), not the x87
+//! sequence in 80 bits. Its digits differ from BC's in the last place, three
+//! ulp at most on the programs of tests/run/qb that print them; no exit.
 
 use std::path::Path;
 
@@ -24,7 +29,8 @@ use llrm_wasm::dag::Options as WasmOptions;
 use llrm_wasm::driver;
 
 use super::arm64::{
-    EXPORTS, block_entry, framed, host_module, renamed, signext_i16_arguments, without_results_on_void,
+    EXPORTS, block_entry, framed, host_module, renamed, signext_i16_arguments, without_llrm_attributes,
+    without_results_on_void,
 };
 use super::compile::CompileError;
 
@@ -40,6 +46,7 @@ fn wasm32_text(
             continue;
         }
         let mut line = line.replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
+        line = without_llrm_attributes(&line);
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = signext_i16_arguments(&block_entry(&line));
         for (from, to) in EXPORTS {
@@ -83,6 +90,17 @@ pub fn object_bytes(
 #[cfg(test)]
 mod tests {
     use super::wasm32_text;
+
+    /// `-fsanitize=stack` marks a routine `stackcheck`, twice in a row; the
+    /// reader refused the text ("expected `{`, found `stackcheck`") and every
+    /// stack-checked program failed to build for wasm32. Facts only llrm reads
+    /// are not handed over, as for arm64.
+    #[test]
+    fn attributes_only_llrm_reads_are_not_handed_over() {
+        let mir = "define cc 1000 i16 @\"DEEP%\"(ptr %0) stackcheck stackcheck nounwind {\nb1:\n  ret i16 0\n}\n";
+        let text = wasm32_text(mir, &[]);
+        assert!(!text.contains("stackcheck") && text.contains("nounwind {"), "{text}");
+    }
 
     /// `PRINT "hello"` through the 32-bit mid-end: the module's names are the
     /// runtime's and its exports the host's; the text keeps the mid-end's

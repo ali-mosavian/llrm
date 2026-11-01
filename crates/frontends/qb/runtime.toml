@@ -1618,6 +1618,21 @@ established = true
 inputs = []
 evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: the handler of that number has returned. Pascal, far, the arguments popped by the callee."
 
+# `^` on a target without an extended float (a description with no `f80`): the runtime's own pow, which QB's counterpart
+# (87btran.asm B$POW4, x87 operands) cannot be on such a target. Only a flat target defines it (runtime/qb/posix/mathops.c).
+["B$LPOW"]
+cleanup = 16
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/posix/mathops.c, written for the llrm runtime; QB's counterpart is 87btran.asm B$POW4, which takes x87 operands: x then y as DOUBLEs, the address of the DOUBLE result in AX; error 5 for 0 ^ negative and a negative base with a fractional exponent, error 6 for y * log2|x| of 32767.5 or more, as B$POW4's. Pascal, far, the arguments popped by the callee."
+
 ["B$FPLY"]
 cleanup = 2
 control = "returns"

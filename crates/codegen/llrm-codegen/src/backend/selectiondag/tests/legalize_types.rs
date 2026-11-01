@@ -95,6 +95,26 @@ fn a_narrow_lrint_rounds_to_the_promoted_type() {
     assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::LRint, EVT::I16));
 }
 
+/// `shl i16 8; ashr i16 8` is `SIGN_EXTEND_INREG i16` of an `i8`; the type
+/// legalizer had no `PromoteIntRes_SIGN_EXTEND_INREG`, so llrm-qb --wasm32
+/// refused bench/nibbles ("Unsupported SignExtendInReg, promote result").
+/// After: the same extension of the promoted operand, from the same type.
+#[test]
+fn a_narrow_sign_extend_in_reg_extends_the_promoted_operand() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = dag();
+    let i12 = EVT::Int(12);
+    let value = load(&mut dag, i12, 1);
+    let from = dag.get_value_type_node(EVT::I8);
+    let extended = dag.get_node(ISD::SignExtendInReg, i12, &[value, from]);
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[extended]);
+    dag.set_root(byte);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let wide = dag.operand(dag.get_root(), 0);
+    assert_eq!((dag.opcode(wide), dag.value_type(wide)), (ISD::SignExtendInReg, EVT::I16));
+    assert_eq!(dag.operand(wide, 1), from, "the extension is from the same type");
+}
+
 /// `trunc(load i12 + load i12)` to a byte: before legalization the root
 /// reads an `i12`, which no register holds. After it the add is an `i16`
 /// add of extending loads, and the root is rewritten to read it.

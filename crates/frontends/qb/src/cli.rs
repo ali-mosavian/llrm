@@ -146,6 +146,14 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
+    // `--arm64` and `--wasm32` lower through an x86 target's mid-end, but the
+    // object is the host target's: its datalayout says whether it has `f80`.
+    let object_layout = match (arm64, wasm32) {
+        (Some(platform), _) => platform.datalayout().to_owned(),
+        (None, true) => llrm_wasm::driver::datalayout(llrm_wasm::Width::W32),
+        (None, false) => bound.target.layout().datalayout.clone(),
+    };
+    frontend.pow_libcall = !llrm_target::layout::states_extended_float(&object_layout);
     let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
