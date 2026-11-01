@@ -802,4 +802,47 @@ fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
     let ir = module("define i16 @shr3(i16 %x) {\n  %r = lshr i16 %x, 3\n  ret i16 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
+/// gcd's `if (a > b) a -= b; else b -= a;` was folded into two selects
+/// (`a -= a > b ? b : 0`), each a branch here after all: 47 bytes, 239 clocks
+/// a call where llvm-mos and SDCC have 36 to 37 bytes and 127 to 140 clocks.
+/// The 6502 has no conditional move, so the fold prices its selects.
+#[test]
+fn an_if_else_of_two_subtracts_stays_a_branch() {
+    let ir = module(
+        "define i8 @gcd(i8 %a0, i8 %b0) {
+entry:
+  %e = icmp eq i8 %a0, %b0
+  br i1 %e, label %done, label %loop
+loop:
+  %b = phi i8 [ %b2, %latch ], [ %b0, %entry ]
+  %a = phi i8 [ %a2, %latch ], [ %a0, %entry ]
+  %gt = icmp ugt i8 %a, %b
+  br i1 %gt, label %then, label %else
+then:
+  %s = sub nuw i8 %a, %b
+  br label %latch
+else:
+  %u = sub nuw i8 %b, %a
+  br label %latch
+latch:
+  %a2 = phi i8 [ %s, %then ], [ %a, %else ]
+  %b2 = phi i8 [ %b, %then ], [ %u, %else ]
+  %same = icmp eq i8 %a2, %b2
+  br i1 %same, label %done, label %loop
+done:
+  %r = phi i8 [ %a0, %entry ], [ %a2, %latch ]
+  ret i8 %r
+}",
+    );
+    let request = Request::new(Level::O2);
+    let text = assembly(&ir, &request).unwrap();
+    let priced = llrm_6502::timing::estimate(request.cpu, &text).unwrap();
+    assert!(priced.bytes <= 42, "{} bytes, the two-select form is 47:\n{text}", priced.bytes);
+    // the equates are the platform's, `run_with` states them
+    let function: String =
+        text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
+    for (a, b, want) in [(48, 18, 6), (7, 13, 1), (9, 9, 9)] {
+        let setup = format!("  lda #{a}\n  sta rc2\n  lda #{b}\n  sta rc3\n  jsr gcd\n");
+        assert_eq!(common::run_with(&format!("driver-gcd-{a}"), &setup, &function), want);
+    }
 }
