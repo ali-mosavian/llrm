@@ -2050,6 +2050,11 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                     continue
                 before = git("rev-parse", "HEAD", cwd=work).strip()
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
+                if not merge.returncode and (orphans := manifestless_crate_dirs(git("diff", "--name-only", before, "HEAD", cwd=work).split(), "HEAD", work)):
+                    git("reset", "-q", "--hard", before, cwd=work)
+                    waits[number] = f"REFUSED: crate-manifest: {', '.join(sorted(orphans))} has no Cargo.toml, which fails the workspace glob for every batch holding it"
+                    progress(number, "waits (crate without a manifest)")
+                    continue
                 if not merge.returncode and (driven := needs_the_merge_driver(before, heads[number], work)):
                     git("reset", "-q", "--hard", before, cwd=work)
                     waits[number] = "needs owner parity merge: it conflicts without the tests-append driver in " + ", ".join(driven[:4])
