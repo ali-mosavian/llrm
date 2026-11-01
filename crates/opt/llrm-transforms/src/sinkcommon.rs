@@ -103,7 +103,10 @@ fn replacing_operand_is_cheap(
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => index != 1,
         Opcode::GetElementPtr { .. }
             if index >= 1
-                && matches!(function.instruction(inst).operands[index], Operand::Constant(_))
+                && matches!(
+                    function.instruction(inst).operands[index],
+                    Operand::Constant(_)
+                )
                 && !spec.tti.constant_offset_phi_is_cheap() =>
         {
             false
