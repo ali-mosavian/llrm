@@ -218,3 +218,11 @@ fn a_widened_load_goes_to_the_pairs_low_half() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
 }
+
+/// `digits` kept its counter across the divide call in a frame slot (`ld -1(ix), b` / `ld b, -1(ix)`) with 13 bytes of
+/// frame setup and teardown: 89 B at -Oz against SDCC's 76. As `push bc` / `pop bc` it needs no frame.
+#[test]
+fn a_spill_slot_that_is_a_stack_is_push_and_pop() {
+    let out = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(out.contains("push bc") && out.contains("pop bc") && !out.contains("(ix)") && !out.contains("push ix"), "{out}");
+}

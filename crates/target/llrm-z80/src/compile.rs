@@ -10,7 +10,7 @@ use crate::driver::{Request, selections};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
 use crate::regalloc::Z80Registers;
-use crate::REGISTER_INFO;
+use crate::{REGISTER_INFO, reg};
 
 /// The machine function after selection and emission, before allocation.
 pub fn machine_function(
@@ -141,7 +141,115 @@ fn allocate(
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
-    Ok((function, assignment, slots.into_iter().map(|(slot, class)| (slot, size(class))).collect(), reads))
+    let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
+    if slots_are_a_stack(&mut function, &assignment) {
+        slots.clear();
+    }
+    Ok((function, assignment, slots, reads))
+}
+
+/// The pair `register` is, or is half of, if `push` and `pop` can move it: not `a`, whose pair holds the flags.
+fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
+    [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
+}
+
+/// Spill slots that nothing else needs a frame for become `push` and `pop`, and the frame goes: `digits` kept a counter
+/// across a call with `ld -1(ix), b` / `ld b, -1(ix)` and the 13 bytes of frame setup and teardown SDCC does without.
+///
+/// Every path must treat the slots as a stack: a store with the slot empty, a load of the slot on top, an empty stack at
+/// each return, one stack where paths meet. A byte slot saves its pair, so the other half must not be live after the
+/// `pop` (`PhysLiveness`). `a` is not saved this way: its pair is the flags.
+pub fn slots_are_a_stack(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    use llrm_spike_mf::livephys::PhysLiveness;
+    if !function.locals.is_empty() || !function.fixed.is_empty() {
+        return false;
+    }
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let spill = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
+        (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(reg)]) => Some((true, *slot, register(*reg))),
+        (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => Some((false, *slot, register(*reg))),
+        _ => None,
+    };
+    let mut any = false;
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if inst.operands.iter().any(|one| matches!(one, Operand::Frame(_))) {
+            match spill(inst) {
+                Some((_, _, register)) if stack_pair(register).is_some() => any = true,
+                _ => return false,
+            }
+        }
+    }
+    if !any {
+        return false;
+    }
+    let succs = llrm_spike_mf::regalloc::successors(function);
+    let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
+    entry[0] = Some(Vec::new());
+    let mut work = vec![0usize];
+    while let Some(b) = work.pop() {
+        let mut stack = entry[b].clone().expect("a block on the list has a stack");
+        for inst in &function.blocks[b].insts {
+            match spill(inst) {
+                Some((true, slot, _)) if !stack.contains(&slot) => stack.push(slot),
+                Some((false, slot, _)) if stack.last() == Some(&slot) => {
+                    stack.pop();
+                }
+                Some(_) => return false,
+                None => {}
+            }
+        }
+        if succs[b].is_empty() && !stack.is_empty() {
+            return false;
+        }
+        for &next in &succs[b] {
+            match &entry[next] {
+                Some(seen) if *seen != stack => return false,
+                Some(_) => {}
+                None => {
+                    entry[next] = Some(stack.clone());
+                    work.push(next);
+                }
+            }
+        }
+    }
+    // the other half of a pair a byte slot saves is dead once the pair is restored
+    let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+    for (b, block) in function.blocks.iter().enumerate() {
+        for (at, inst) in block.insts.iter().enumerate() {
+            let Some((false, _, register)) = spill(inst) else { continue };
+            let pair = stack_pair(register).expect("checked above");
+            if register != pair {
+                let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, at + 1);
+                let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                let mate = if register == lo { hi } else { lo };
+                if after.is_live(&REGISTER_INFO, mate) {
+                    return false;
+                }
+            }
+        }
+    }
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        match inst.kind {
+            Kind::Op("SPILL8" | "SPILL16") => {
+                inst.kind = Kind::Op("PUSHP");
+                inst.operands.remove(0);
+                inst.may_store = false;
+            }
+            Kind::Op("RELOAD8" | "RELOAD16") => {
+                inst.kind = Kind::Op("POPP");
+                inst.operands.remove(1);
+                inst.may_load = false;
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting of a trivially rematerializable

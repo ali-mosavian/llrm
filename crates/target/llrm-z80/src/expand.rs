@@ -520,6 +520,14 @@ impl Printer<'_> {
                     }
                 }
             }
+            "PUSHP" | "POPP" => {
+                let register = self.register(inst, 0)?;
+                let pair = [reg::BC, reg::DE, reg::HL]
+                    .into_iter()
+                    .find(|pair| REGISTER_INFO.root(register) == *pair)
+                    .ok_or("a push of something that is no pair")?;
+                self.push(format!("{} {}", if op == "PUSHP" { "push" } else { "pop" }, name(pair)));
+            }
             "SPILL8" | "RELOAD8" => {
                 let (index, register) = if op == "SPILL8" {
                     (self.frame_index(inst, 0)?, 1)
