@@ -1157,3 +1157,39 @@ define i32 @f({params}, ...) {{
     let nine = "double %a, double %b, double %c, double %d, double %e, double %g, double %h, double %i, double %j";
     assert_eq!(offsets(nine), [0, 176]);
 }
+
+/// `stacksave` was read where its value was used: the copy of the stack
+/// pointer came after the `alloca` it should have preceded, so the
+/// `stackrestore` that followed restored the already lowered pointer and never
+/// freed the array. gcc.c-torture vla-dealloc-1, 20040811-1 and pr43220
+/// (a `goto` back before a variable-length array) ran out of stack at -O1.
+#[test]
+fn a_stacksave_is_read_before_the_alloca_it_precedes() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare ptr @llvm.stacksave.p0()
+declare void @llvm.stackrestore.p0(ptr)
+@p = global ptr null
+define void @f(i64 %n) {
+  %s = call ptr @llvm.stacksave.p0()
+  %a = alloca i32, i64 %n, align 16
+  store volatile ptr %a, ptr @p
+  call void @llvm.stackrestore.p0(ptr %s)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let sp = llrm_lir::registers::RegId::RSP;
+    let insns = done.body.insns();
+    let moves: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == Operation::Move).collect();
+    let reads: Vec<usize> =
+        (0..moves.len()).filter(|&at| matches!(&moves[at].sources[..], [Loc::Reg(r)] if r.register == sp)).collect();
+    let writes: Vec<usize> =
+        (0..moves.len()).filter(|&at| matches!(&moves[at].dests[..], [Loc::Reg(r)] if r.register == sp)).collect();
+    assert_eq!((reads.len(), writes.len()), (2, 2), "the save, the alloca's read; the alloca's write, the restore");
+    assert!(reads.iter().all(|read| *read < writes[0]), "both reads precede the first write: {reads:?} {writes:?}");
+}
