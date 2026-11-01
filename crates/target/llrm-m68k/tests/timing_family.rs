@@ -432,3 +432,63 @@ fn m68030_tas_and_moves() {
     assert_eq!(m68030("moves.l (%a0), %d0"), 9);
     assert_eq!(m68030("moves.l %d0, (4,%a0)"), 9);
 }
+
+fn m68000(text: &str) -> u32 {
+    clocks(Cpu::M68000, text)
+}
+
+/// MC68000UM Table 8-4 (p. 8-4): CMP long is `6(1/0)+` with no `**` footnote,
+/// so `cmp.l Dn,Dn` is 6, not the 8 of ADD, AND, OR and SUB (`6(1/0)+**`,
+/// footnote: eight for a register or immediate source). The hand-coded 68000
+/// model priced it 8.
+#[test]
+fn m68000_cmp_long_register_is_six_and_add_long_register_is_eight() {
+    assert_eq!(m68000("cmp.l %d1, %d0"), 6);
+    assert_eq!(m68000("add.l %d1, %d0"), 8);
+    assert_eq!(m68000("sub.l (%a0), %d0"), 6 + 8);
+    assert_eq!(m68000("adda.l #4, %a0"), 8 + 8);
+}
+
+/// Table 8-11 (p. 8-9): ABCD Dy,Dx 6(1/0), -(Ay),-(Ax) 18(3/1); ADDX.L Dy,Dx 8,
+/// M,M 30; CMPM.W 12. Table 8-13 (p. 8-10): MOVEP.W 16, MOVEP.L 24. Table 8-14
+/// (p. 8-11): TRAP 34.
+#[test]
+fn m68000_multiprecision_movep_and_trap() {
+    assert_eq!(m68000("abcd %d0, %d1"), 6);
+    assert_eq!(m68000("sbcd -(%a0), -(%a1)"), 18);
+    assert_eq!(m68000("addx.l %d0, %d1"), 8);
+    assert_eq!(m68000("subx.l -(%a0), -(%a1)"), 30);
+    assert_eq!(m68000("cmpm.w (%a0)+, (%a1)+"), 12);
+    assert_eq!(m68000("movep.w %d0, (4,%a0)"), 16);
+    assert_eq!(m68000("movep.l (4,%a0), %d0"), 24);
+    assert_eq!(m68000("trap #1"), 34);
+}
+
+/// Table 8-8 (p. 8-7): BTST.L Dn,Dn 6, BSET.L Dn,Dn 8, BCLR.L Dn,Dn 10; BTST.B
+/// Dn,M 4+ea, BSET.B #,M 12+ea. Table 8-6 (p. 8-6): TAS Dn 4, TAS M 14+ea.
+/// Table 8-12 (p. 8-10): CHK 10+ea, RTE 20, RESET 132, STOP 4, ANDI to CCR 20.
+#[test]
+fn m68000_bit_operations_and_miscellaneous() {
+    assert_eq!(m68000("btst %d1, %d0"), 6);
+    assert_eq!(m68000("bset %d1, %d0"), 8);
+    assert_eq!(m68000("bclr %d1, %d0"), 10);
+    assert_eq!(m68000("btst %d1, (%a0)"), 4 + 4);
+    assert_eq!(m68000("bset #3, (%a0)"), 12 + 4);
+    assert_eq!(m68000("tas %d0"), 4);
+    assert_eq!(m68000("tas (%a0)"), 14 + 4);
+    assert_eq!(m68000("chk.w (%a0), %d0"), 10 + 4);
+    assert_eq!(m68000("rte"), 20);
+    assert_eq!(m68000("reset"), 132);
+    assert_eq!(m68000("stop #0"), 4);
+    assert_eq!(m68000("andi.b #1, %ccr"), 20);
+}
+
+/// The 68010 prices what its manual lists next to the 68000's: ABCD, ADDX,
+/// CMPM, MOVEP (Table 9-17, 9-18).
+#[test]
+fn m68010_multiprecision_and_movep() {
+    assert!(cost_on(Cpu::M68010, "abcd %d0, %d1", 2, true).is_ok());
+    assert!(cost_on(Cpu::M68010, "addx.l -(%a0), -(%a1)", 2, true).is_ok());
+    assert!(cost_on(Cpu::M68010, "cmpm.l (%a0)+, (%a1)+", 2, true).is_ok());
+    assert!(cost_on(Cpu::M68010, "movep.w %d0, (4,%a0)", 4, true).is_ok());
+}

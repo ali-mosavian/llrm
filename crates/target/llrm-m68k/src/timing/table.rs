@@ -47,7 +47,7 @@ pub(super) fn split_csv(line: &str) -> Vec<String> {
 pub fn key(label: &str) -> String {
     label
         .chars()
-        .filter(|c| !c.is_whitespace() && *c != '*')
+        .filter(|c| !c.is_whitespace() && !matches!(*c, '*' | '\u{2020}'))
         .map(|c| if matches!(c, '\u{2013}' | '\u{2212}' | '\u{2014}') { '-' } else { c.to_ascii_lowercase() })
         .collect()
 }
