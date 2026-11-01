@@ -255,13 +255,17 @@ impl AllocationOrder {
         vrm: &VirtRegMap,
         order: Vec<RegId>,
         hints: &BTreeMap<u32, Vec<Hint>>,
+        target_hints: &[RegId],
         root: &dyn Fn(RegId) -> RegId,
     ) -> Self {
         let mut found: Vec<RegId> = Vec::new();
-        for hint in hints.get(&virt).into_iter().flatten() {
+        let copy_hints = hints.get(&virt).into_iter().flatten().copied();
+        // the target's hints come after the copies' (`getRegAllocationHints`
+        // of Thumb2 appends to the default ones)
+        for hint in copy_hints.chain(target_hints.iter().map(|r| Hint::Phys(*r))) {
             let phys = match hint {
-                Hint::Virt(v) => vrm.get_phys(*v),
-                Hint::Phys(r) => Some(*r),
+                Hint::Virt(v) => vrm.get_phys(v),
+                Hint::Phys(r) => Some(r),
             };
             // Don't add the same reg twice; check Phys is in the allocation
             // order.
@@ -349,6 +353,14 @@ pub trait GreedyEnv: SpillWeightEnv {
         _phys: RegId,
     ) -> Option<RegId> {
         None
+    }
+    /// `getRegAllocationHints`' target part: the registers `insn` is cheaper
+    /// with, as (value, register).
+    fn preferred_registers(
+        &self,
+        _insn: &crate::model::lir::Insn,
+    ) -> Vec<(u32, RegId)> {
+        Vec::new()
     }
     /// `RegCosts[phys]` (`TargetRegisterInfo::getRegisterCosts`, the
     /// registers' `CostPerUse`): X86 sets none (D133902 dropped R8-R15's).
@@ -914,8 +926,34 @@ impl<'a> RAGreedy<'a> {
             &self.matrix.vrm,
             self.env.allocation_order(self.class_reg(virt)),
             &self.hints,
+            &self.target_hints(virt),
             &|reg| self.matrix.root(reg),
         )
+    }
+
+    /// The target's hints for `virt`: the register each instruction naming it
+    /// is cheaper with, the one the busiest uses want first.
+    fn target_hints(
+        &self,
+        virt: u32,
+    ) -> Vec<RegId> {
+        let original = self.matrix.vrm.get_original(virt);
+        let mut wanted: Vec<(RegId, f32)> = Vec::new();
+        for operand in self.lis.operands(virt) {
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
+            for (value, reg) in self.env.preferred_registers(self.lis.instr(operand.instr)) {
+                if value != original {
+                    continue;
+                }
+                match wanted.iter_mut().find(|(one, _)| *one == reg) {
+                    Some((_, weight)) => *weight += freq,
+                    None => wanted.push((reg, freq)),
+                }
+            }
+        }
+        wanted.sort_by(|a, b| b.1.total_cmp(&a.1));
+        wanted.into_iter().map(|(reg, _)| reg).collect()
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.

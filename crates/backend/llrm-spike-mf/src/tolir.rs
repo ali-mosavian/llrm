@@ -155,6 +155,7 @@ pub fn to_lir<T: Target>(
         }
     }
     let mut foldable: Vec<Option<(&'static str, usize)>> = Vec::new();
+    let mut hints: Vec<(&'static str, Vec<(u32, RegId)>)> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
@@ -166,6 +167,7 @@ pub fn to_lir<T: Target>(
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
+            hints.push(operand_hints::<T>(inst));
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
             // instruction that reads its flags are one instruction to it.
@@ -183,6 +185,11 @@ pub fn to_lir<T: Target>(
                 Some(next) if made.independent(inst, next) => {
                     made.origin.push((at, position + 1));
                     foldable.push(None);
+                    // the bundle is one instruction to greedy: both ask for it
+                    let mut both = operand_hints::<T>(inst);
+                    both.1.extend(operand_hints::<T>(next).1);
+                    *hints.last_mut().expect("the compare's own") = both;
+                    hints.push(("", Vec::new()));
                     insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
                     position += 2;
                 }
@@ -229,7 +236,7 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
-        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, marker: PhantomData },
+        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, hints, marker: PhantomData },
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
@@ -513,6 +520,22 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
     None
 }
 
+/// The name of `inst` and the registers it is cheaper with, by value.
+fn operand_hints<T: Target>(inst: &Inst) -> (&'static str, Vec<(u32, RegId)>) {
+    let Kind::Op(name) = inst.kind else { return ("", Vec::new()) };
+    let hinted = inst
+        .operands
+        .iter()
+        .enumerate()
+        .filter_map(
+            |(at, operand)| match operand {
+                Operand::Use(Reg::Virt(v)) | Operand::Def(Reg::Virt(v)) => Some((*v + 1, T::operand_hint(inst, at)?)),
+                _ => None,
+            },
+        );
+    (name, hinted.collect())
+}
+
 /// What greedy asks of the spike target's instructions, answered from the
 /// instruction itself: its name and operands, and the target's own spill forms.
 pub struct SpikeInstrInfo<T: Target> {
@@ -521,6 +544,9 @@ pub struct SpikeInstrInfo<T: Target> {
     /// For the instruction numbered `at / 2`: its name and which of its
     /// sources the target can read from memory (`Target::fold_spill`).
     foldable: Vec<Option<(&'static str, usize)>>,
+    /// For the instruction numbered `at / 2`: its name and the registers it is
+    /// cheaper with (`Target::operand_hint`), by value.
+    hints: Vec<(&'static str, Vec<(u32, RegId)>)>,
     marker: PhantomData<T>,
 }
 
@@ -658,6 +684,18 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
     /// memory source; `from_lir` writes it as the target's own form.
+    fn preferred_registers(
+        &self,
+        one: &Insn,
+    ) -> Vec<(u32, RegId)> {
+        let Some((name, hints)) = self.hints.get((one.at / 2) as usize) else { return Vec::new() };
+        // an instruction greedy made (a copy, a spill) carries no hint
+        match one.what.as_ref().and_then(|what| what.name.as_deref()) {
+            Some(made) if made == *name => hints.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     fn fold_memory_operand(
         &self,
         one: &Arc<Insn>,

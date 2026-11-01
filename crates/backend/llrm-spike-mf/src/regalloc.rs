@@ -102,6 +102,16 @@ pub trait Target {
         0
     }
 
+    /// `getRegAllocationHints` for one operand (ARM's Thumb2 hints the low
+    /// registers its 16-bit encodings need): the register `inst` is cheaper
+    /// with at operand `operand`, if there is one.
+    fn operand_hint(
+        _inst: &Inst,
+        _operand: usize,
+    ) -> Option<RegId> {
+        None
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.

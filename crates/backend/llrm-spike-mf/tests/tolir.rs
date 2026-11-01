@@ -1110,3 +1110,71 @@ fn test_a_loop_body_runs_many_times_per_entry() {
     let loop_body = freq.get_block_freq_relative_to_entry_block(1);
     assert!(loop_body >= 8.0, "the loop body runs {loop_body} times per entry");
 }
+
+/// Three registers, and an `inc` that encodes shorter in the last.
+struct IncInLast;
+
+impl Target for IncInLast {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn operand_hint(
+        inst: &Inst,
+        _: usize,
+    ) -> Option<RegId> {
+        (inst.kind == Kind::Op("inc")).then_some(RegId::EDX)
+    }
+}
+
+/// A target says an instruction is cheaper in one register (the 6502's `inc`
+/// is `inx` in `x` and `clc; adc #1` in `a`); greedy took the first register
+/// of the class (`ebx` here) and never asked, as `getRegAllocationHints` of
+/// Thumb2 does for its 16-bit encodings.
+#[test]
+fn test_a_value_an_instruction_is_cheaper_with_takes_that_register() {
+    let mut f = MFunction::<()>::new("inc");
+    f.classes = vec![(); 1];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("inc", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
+    assert_eq!(held, Some(RegId::EDX), "{:?}", decided.placed);
+}
