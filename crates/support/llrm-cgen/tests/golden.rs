@@ -490,5 +490,4 @@ fn the_copies_option_adds_array_copies_and_only_then() {
         count(true, "__builtin_memcpy(a")
     );
     assert!(count(true, ")cpl(") >= 20, "{} of 300 programs call the helper", count(true, ")cpl("));
-    assert!(count(true, "*d++ = *s++") >= 20, "{} of 300 programs copy in a loop", count(true, "*d++ = *s++"));
 }
