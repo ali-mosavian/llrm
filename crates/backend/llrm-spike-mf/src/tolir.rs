@@ -851,6 +851,13 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         self.operands_of(one).into_iter().map(|(value, info)| (value, info.order.clone())).collect()
     }
 
+    fn spill_weight_scale(
+        &self,
+        order: &[RegId],
+    ) -> f32 {
+        T::spill_weight_scale(order)
+    }
+
     fn larger_order(
         &self,
         order: &[RegId],
