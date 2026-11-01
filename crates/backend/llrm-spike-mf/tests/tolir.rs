@@ -1029,7 +1029,8 @@ fn test_nothing_stands_between_a_compare_and_the_instruction_that_reads_its_flag
 /// A literal made again stands beside whatever instruction needs it, and
 /// carries that instruction's position. Beside another literal, the way back
 /// took the neighbour for its source and wrote the neighbour's immediate:
-/// `ldi 0` came back as `ldi 3` (seed 850269 of the 6502 difftest: 171 for 129).
+/// `ldi 0` came back as `ldi 3` (seed 850269 of the 6502 difftest: 171 for
+/// 129).
 #[test]
 fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
     use llrm_codegen::model::ir::Held;
@@ -1051,21 +1052,26 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
     let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
     let mut decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
     let edited = decided.edited.as_mut().expect("an edited body");
-    edited.blocks[0].insns.edit(|insns| {
-    let nine = insns.iter().position(|one| one.defines == [2]).expect("the second literal");
-    let seven = insns.iter().position(|one| one.defines == [1]).expect("the first literal");
-    let mut again = (*insns[seven]).clone();
-    again.at = insns[nine].at;
-    again.covers = Some((again.at, again.at));
-    again.defines = vec![3];
-    again.spill_reload = true;
-    again.rematerialized = true;
-    let what = again.what.as_mut().expect("semantics");
-    what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
-    let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
-    insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
-    insns.insert(nine + 1, std::sync::Arc::new(again));
-    });
+    edited
+        .blocks[0]
+        .insns
+        .edit(
+            |insns| {
+                let nine = insns.iter().position(|one| one.defines == [2]).expect("the second literal");
+                let seven = insns.iter().position(|one| one.defines == [1]).expect("the first literal");
+                let mut again = (*insns[seven]).clone();
+                again.at = insns[nine].at;
+                again.covers = Some((again.at, again.at));
+                again.defines = vec![3];
+                again.spill_reload = true;
+                again.rematerialized = true;
+                let what = again.what.as_mut().expect("semantics");
+                what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
+                insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
+                insns.insert(nine + 1, std::sync::Arc::new(again));
+            },
+        );
     let back = from_lir::<Flat>(&f, &converted, &decided, regs()).expect("writes back");
     let literals: Vec<i64> = back
         .function
@@ -1079,9 +1085,10 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
 }
 
 /// A function states no branch odds, so greedy's block frequencies took every
-/// edge as 1 in 2 and a loop body ran 1.0 times per entry: spill weights treated
-/// loop code as cold (6502 `lz4` grew cycles by 545 over the spike allocator).
-/// The edge that stays in a loop is 31 in 32, as LLVM's loop branch heuristic.
+/// edge as 1 in 2 and a loop body ran 1.0 times per entry: spill weights
+/// treated loop code as cold (6502 `lz4` grew cycles by 545 over the spike
+/// allocator). The edge that stays in a loop is 31 in 32, as LLVM's loop branch
+/// heuristic.
 #[test]
 fn test_a_loop_body_runs_many_times_per_entry() {
     let mut f = MFunction::<()>::new("counted");

@@ -2838,7 +2838,13 @@ fn allocate<const STACK: bool>(
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
-                eprintln!("in bb{at}.{i}: {:?} {:?}{}{}", inst.kind, inst.operands, if inst.sets_flags { " SF" } else { "" }, if inst.reads_flags { " RF" } else { "" });
+                eprintln!(
+                    "in bb{at}.{i}: {:?} {:?}{}{}",
+                    inst.kind,
+                    inst.operands,
+                    if inst.sets_flags { " SF" } else { "" },
+                    if inst.reads_flags { " RF" } else { "" }
+                );
             }
         }
     }
@@ -2873,7 +2879,13 @@ fn allocate_greedy<T: Target<Class = Class>>(
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
-                eprintln!("bb{at}.{i}: {:?} {:?}{}{}", inst.kind, inst.operands, if inst.sets_flags { " SF" } else { "" }, if inst.reads_flags { " RF" } else { "" });
+                eprintln!(
+                    "bb{at}.{i}: {:?} {:?}{}{}",
+                    inst.kind,
+                    inst.operands,
+                    if inst.sets_flags { " SF" } else { "" },
+                    if inst.reads_flags { " RF" } else { "" }
+                );
             }
         }
     }

@@ -363,7 +363,8 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
-    /// `TRI->getCSRCostScale(MF)`: the percentage of the first-use cost charged.
+    /// `TRI->getCSRCostScale(MF)`: the percentage of the first-use cost
+    /// charged.
     fn csr_cost_scale(&self) -> u32 {
         DEFAULT_CSR_COST_SCALE
     }
@@ -404,11 +405,7 @@ fn csr_cost_of(
     entry: u64,
 ) -> BlockFrequency {
     let cost = BlockFrequency(u64::from(first_use) * entry);
-    if scale < 100 {
-        cost * BranchProbability::new(scale, 100)
-    } else {
-        cost / BranchProbability::new(100, scale)
-    }
+    if scale < 100 { cost * BranchProbability::new(scale, 100) } else { cost / BranchProbability::new(100, scale) }
 }
 
 /// What `RAGreedy` gives a spiller to work with (`LiveRangeEdit`'s world).
@@ -782,9 +779,11 @@ impl<'a> RAGreedy<'a> {
                 let split = self.lis.interval_rc(reg);
                 assert!(!self.matrix.vrm.has_phys(reg), "Register already assigned");
                 if self.lis.reg_nodbg_empty(reg) {
-                    // LLVM asserts `split.empty()` here, with assertions on only; a
-                    // release build removes the interval. A region split can leave the
-                    // complement a phi-only range around a loop, with nothing to hold.
+                    // LLVM asserts `split.empty()` here, with assertions on
+                    // only; a release build removes the
+                    // interval. A region split can leave the
+                    // complement a phi-only range around a loop, with nothing
+                    // to hold.
                     self.lis.remove_interval(reg);
                     continue;
                 }

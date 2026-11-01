@@ -167,9 +167,16 @@ pub fn to_lir<T: Target>(
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
             // instruction that reads its flags are one instruction to it.
-            let reader = block.insts.get(position + 1).filter(|next| {
-                inst.sets_flags && !inst.terminator && !inst.call && next.reads_flags && T::reads_flags_set_just_before(next)
-            });
+            let reader = block
+                .insts
+                .get(position + 1)
+                .filter(
+                    |next| inst.sets_flags
+                        && !inst.terminator
+                        && !inst.call
+                        && next.reads_flags
+                        && T::reads_flags_set_just_before(next),
+                );
             match reader {
                 Some(next) if made.independent(inst, next) => {
                     made.origin.push((at, position + 1));
@@ -230,9 +237,9 @@ pub fn to_lir<T: Target>(
 }
 
 /// The edge odds of a branch with one edge that stays in its innermost loop
-/// and one that leaves it: 31 in 32 to stay (`calcLoopBranchHeuristics`, weights
-/// 124 and 4). The `MFunction` states no odds, so the other branches keep
-/// greedy's even split.
+/// and one that leaves it: 31 in 32 to stay (`calcLoopBranchHeuristics`,
+/// weights 124 and 4). The `MFunction` states no odds, so the other branches
+/// keep greedy's even split.
 fn loop_branch_odds(body: &mut LirBody) {
     use llrm_codegen::model::lir::BlockOdds;
     let loops = llrm_codegen::analysis::loops::loops(&body.blocks, Some(body.entry));
@@ -307,9 +314,15 @@ impl<T: Target> Made<'_, T> {
         first: &Inst,
         next: &Inst,
     ) -> bool {
-        !first.operands.iter().any(|set| {
-            matches!(set, Operand::Def(register @ Reg::Virt(_)) if next.operands.iter().any(|read| *read == Operand::Use(*register)))
-        })
+        !first
+            .operands
+            .iter()
+            .any(
+                |set| matches!(
+                    set,
+                    Operand::Def(register @ Reg::Virt(_)) if next.operands.iter().any(|read| *read == Operand::Use(*register))
+                ),
+            )
     }
 
     /// `first` and `next` as one instruction: the operands of the two, in
@@ -936,7 +949,9 @@ pub fn from_lir<T: Target>(
     let mut definitions: IndexMap<String, (usize, usize)> = IndexMap::default();
     for block in &converted.body.blocks {
         for insn in block.insns.iter() {
-            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else { continue };
+            let (Some(what), Some(origin)) = (&insn.what, converted.origin.get((insn.at / 2) as usize)) else {
+                continue;
+            };
             if insn.defines.len() == 1 && insn.uses.is_empty() {
                 definitions.entry(format!("{:?}{:?}", what.name, what.sources)).or_insert(*origin);
             }
@@ -998,8 +1013,8 @@ pub fn from_lir<T: Target>(
                 Kind::Copy => name == Some(COPY),
                 Kind::Op(op) => name == Some(op),
             };
-            // a literal made again stands beside any instruction: its position says
-            // nothing about which literal it is
+            // a literal made again stands beside any instruction: its position
+            // says nothing about which literal it is
             if (insn.rematerialized || !agrees) && name != Some(COPY) {
                 (from, inst) = *definitions
                     .get(&format!("{:?}{:?}", what.name, what.sources))

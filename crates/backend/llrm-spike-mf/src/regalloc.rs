@@ -630,7 +630,8 @@ impl<T: Target> GraphColoring<T> {
         assignment: &Assignment,
     ) -> Result<(), String> {
         let (count, nodes, total, edges) = self.interference(function);
-        // a virtual register live into the entry is read before anything sets it
+        // a virtual register live into the entry is read before anything sets
+        // it
         let mut scratch = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
             .blocks
@@ -672,10 +673,17 @@ impl<T: Target> GraphColoring<T> {
                     let mut mentions = String::new();
                     for (at, block) in function.blocks.iter().enumerate() {
                         for (i, inst) in block.insts.iter().enumerate() {
-                            let mentioned = inst.operands.iter().any(|operand| match operand {
-                                Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => *v as usize == a || *v as usize == *b,
-                                _ => false,
-                            });
+                            let mentioned = inst
+                                .operands
+                                .iter()
+                                .any(
+                                    |operand| match operand {
+                                        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => {
+                                            *v as usize == a || *v as usize == *b
+                                        }
+                                        _ => false,
+                                    },
+                                );
                             if mentioned {
                                 mentions.push_str(&format!("\n  bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands));
                             }
