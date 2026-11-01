@@ -352,9 +352,15 @@ impl FunctionCompiler<'_> {
                     self.emit("store", Vec::new(), vec![place, value], None);
                 }
                 Store::Bytes { destination, source, count } => {
+                    // Typed no wider than the bytes copied: a projection may not pass its place.
+                    let reach = match count {
+                        0 | 1 => TypeName::U8,
+                        2 | 3 => TypeName::U16,
+                        _ => self.word(),
+                    };
                     let (to, from) = (
-                        self.projected_place(&destination, 0, self.word()),
-                        self.projected_place(&source, 0, self.word()),
+                        self.projected_place(&destination, 0, reach),
+                        self.projected_place(&source, 0, reach),
                     );
                     self.emit(
                         "copy_bytes",
