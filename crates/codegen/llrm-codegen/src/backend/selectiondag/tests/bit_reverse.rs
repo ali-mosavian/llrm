@@ -77,7 +77,7 @@ fn the_expansion_reverses_the_bits() {
         DagLegalizer::new(
             &mut dag,
             &tli,
-            &mut X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false },
+            &mut X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
         )
         .run()
         .expect("legalizes");

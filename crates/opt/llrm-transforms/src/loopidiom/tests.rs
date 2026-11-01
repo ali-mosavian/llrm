@@ -239,6 +239,7 @@ fn run_on_loop(
     let mut run = Run {
         bytes: None,
         clocks: None,
+        speed: None,
         name,
         env: &env,
         context: &mut context,

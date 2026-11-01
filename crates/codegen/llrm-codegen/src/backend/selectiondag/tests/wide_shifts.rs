@@ -120,7 +120,7 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .unwrap();

@@ -18,7 +18,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
         DagLegalizer::new(
             &mut dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
         )
         .run()
         .unwrap();
