@@ -465,7 +465,8 @@ impl ProgramPass for Walk {
                                         0
                                     };
                                     // A site run per trip of a loop saves its
-                                    // clocks that often; a cold one saves them once.
+                                    // clocks that often; a cold one saves them
+                                    // once.
                                     let trips = calls
                                         .iter()
                                         .map(|one| site_frequencies.get(one).copied().unwrap_or(1.0).max(1.0))

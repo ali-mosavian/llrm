@@ -11,7 +11,8 @@ use std::process::Command;
 
 fn run(contract: Option<&str>) -> (String, String) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let work = std::env::temp_dir().join(format!("llrm-cc-contract-{}-{}", contract.unwrap_or("default"), std::process::id()));
+    let work =
+        std::env::temp_dir().join(format!("llrm-cc-contract-{}-{}", contract.unwrap_or("default"), std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
     let source = root.join("tests/cc/fp_contract/contract.c");
     let compile = |extra: &[&str], output: &Path, listing: bool| {
@@ -37,8 +38,12 @@ fn run(contract: Option<&str>) -> (String, String) {
     (listing, String::from_utf8_lossy(&printed.stdout).trim().to_owned())
 }
 
-/// The instructions of the function `name`, constant labels (numbered by how many the module made) left out.
-fn body(listing: &str, name: &str) -> Vec<String> {
+/// The instructions of the function `name`, constant labels (numbered by how
+/// many the module made) left out.
+fn body(
+    listing: &str,
+    name: &str,
+) -> Vec<String> {
     listing
         .lines()
         .skip_while(|line| !line.starts_with(&format!("{name} proc")))

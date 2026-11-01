@@ -152,8 +152,9 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// Whether the description's machine has a fused multiply-add: the one reason to turn off clang's default
-/// contraction (`-ffp-contract=on`), which changes results only where an instruction rounds once for two operations.
+/// Whether the description's machine has a fused multiply-add: the one reason
+/// to turn off clang's default contraction (`-ffp-contract=on`), which changes
+/// results only where an instruction rounds once for two operations.
 fn has_fused_multiply_add(target: &Target) -> Result<bool, String> {
     let Some(name) = &target.description else { return Ok(false) };
     let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
