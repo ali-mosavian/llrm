@@ -58,3 +58,8 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
   palette_using_pds71 (`Target(24586)` legalize). None touches EH.
 
 The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).
+
+## Open items
+
+1. `unwinding()` (crates/frontends/qb/src/wasm32.rs) rewrites QB's IR text. Plan, due 2026-11-04: an IR pass `eh_reentry` in llrm-wasm on the parsed module, between the reader and selection, for `ExceptionModel::Wasm`. For each function with a `landingpad`, it wraps the body in the dispatch loop (`resume` slot, one re-entry block per pad successor that lies in the invoking region) on the module's blocks, not text. The pass keys on the CFG (a pad successor dominated by an invoke that unwinds to it), not on QB names. Then the text transform and W16's EH part go. Test: pad fixtures vs the pin's accepted forms plus the 22 ON ERROR programs and the 693-file md5 sweep. O(n).
+2. `fixCallUnwindMismatches` port (removes W2 and W19). Due 2026-11-07, after item 1.
