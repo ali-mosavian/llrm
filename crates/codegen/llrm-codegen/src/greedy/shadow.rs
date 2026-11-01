@@ -151,9 +151,9 @@ impl SpillWeightEnv for BodyEnv<'_> {
 
     fn spill_weight_scale(
         &self,
-        _reg: u32,
+        reg: u32,
     ) -> f32 {
-        1.0
+        self.orders.orders.borrow().get(&reg).map_or(1.0, |order| self.tii.spill_weight_scale(order))
     }
 
     fn is_allocatable(
@@ -2387,7 +2387,7 @@ mod tests {
             &tables,
             &Default::default(),
             Some(&sets),
-            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes },
+            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes, basic_semantics: false },
             classes.registers,
             &lis,
             &[word, base],

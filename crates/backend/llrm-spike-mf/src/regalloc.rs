@@ -176,6 +176,14 @@ pub trait Target {
         false
     }
 
+    /// `TargetRegisterInfo::getSpillWeightScaleFactor` of the class whose
+    /// registers are `order`: what spilling a value of that class costs next
+    /// to a unit class (a pair of bytes takes two stores and two loads).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CalcSpillWeights.cpp#L398
+    fn spill_weight_scale(_order: &[RegId]) -> f32 {
+        1.0
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.

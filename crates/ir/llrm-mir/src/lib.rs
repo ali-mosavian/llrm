@@ -14,6 +14,7 @@ pub mod blocklist;
 pub mod blockorder;
 pub mod build;
 pub mod callgraph;
+pub mod callprice;
 pub mod codemetrics;
 pub mod constantfolding;
 pub mod constantfolding_dump;

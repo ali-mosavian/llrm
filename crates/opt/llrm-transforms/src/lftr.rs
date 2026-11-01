@@ -10,9 +10,10 @@
 //!   loop-invariant value.
 //! - The block's exact exit count is known, is not zero, is cheap to expand
 //!   (`isHighCostExpansion`, budget 4) and is safe to expand.
-//! - `FindLoopCounter` picks a header phi that is a unit-stride counter at
-//!   least as wide as the count, with a concrete start, preferring one that
-//!   counts from zero or is wider, and not one that only this test keeps alive.
+//! - `FindLoopCounter` picks a header phi that is a counter (a unit stride, or
+//!   a constant one that cannot wrap: DEVIATE LFTR1) at least as wide as the
+//!   count, with a concrete start, preferring one that counts from zero or is
+//!   wider, and not one that only this test keeps alive.
 //! - `genLoopLimit` writes the counter's value after the count (a post-inc
 //!   value where the test is in the latch) before the branch, and the branch
 //!   tests `counter != limit` (`==` where the loop is left on true). A counter
@@ -20,6 +21,15 @@
 //!   (`wide.trip.count`) where that equals it.
 //!
 //! The test it replaces is left to `dead`.
+//!
+//! DEVIATE LFTR1 (owner llrm-w12-lsr; exit: the pin's `isLoopCounter`
+//! (IndVarSimplify.cpp#L913, `m_scev_One`) takes any constant step): a loop
+//! that steps by two, `for (o = 0; o <= 3998; o += 2)`, kept `ult` for the
+//! pin's LSR, which turns only equality tests into zero-ending counters; main's
+//! earlier LSR made it `ne`. A step that cannot wrap reaches `start + count *
+//! step` exactly, so `!=` holds on the trip the original test ended (gcc's
+//! `iv_elimination_compare` relies on the same). Fail-first tests: strides
+//! 2, 3, 4, 8 and -2 in `lftr_tests.rs`.
 //!
 //! # Example
 //! `for (i = 0; i < n; i++)` with `n` an `i32`: the test `i slt n` becomes
@@ -313,6 +323,11 @@ impl Lftr<'_> {
             let Some(ind_var) = self.find_loop_counter(header, exiting, exit_count) else { continue };
             // Avoid high cost expansions. Note: This heuristic is questionable
             // in that our definition of "high cost" is not exactly principled.
+            // DEVIATE LFTR1: a stride other than one pays for its limit only if
+            // that costs one operation at most; a unit stride keeps the pin's
+            // budget (shellsort's `at / gap` trips took four more per entry).
+            let ind_value = Operand::Value(self.function.instruction(ind_var).result.expect("a phi value"));
+            let budget = if self.has_unit_step(ind_value) { CHEAP_EXPANSION_BUDGET } else { 1 };
             let (high_cost, safe) = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 (
@@ -321,7 +336,7 @@ impl Lftr<'_> {
                         self.se,
                         &[exit_count],
                         header,
-                        CHEAP_EXPANSION_BUDGET,
+                        budget,
                         self.tti,
                         preheader_term,
                     ),
@@ -352,13 +367,24 @@ impl Lftr<'_> {
             return false;
         }
         let s = self.se.get_scev(&cx, result);
-        let is_unit_stride = match self.se.node(s).kind.clone() {
+        let is_counter = match self.se.node(s).kind.clone() {
             Kind::AddRec(ops, one) if ops.len() == 2 && one == header => {
-                self.se.as_constant(ops[1].scev).is_some_and(|step| step.is_one())
+                self.se.as_constant(ops[1].scev).is_some_and(|step| !step.is_zero())
             }
             _ => false,
         };
-        if !is_unit_stride {
+        if !is_counter {
+            return false;
+        }
+        // DEVIATE LFTR1: the pin wants a step of one. A constant step that
+        // cannot wrap reaches the limit `start + count * step` exactly,
+        // as gcc's `iv_elimination_compare` relies on.
+        let unit = matches!(
+            self.se.node(s).kind.clone(),
+            Kind::AddRec(ops, _) if self.se.as_constant(ops[1].scev).is_some_and(|step| step.is_one())
+        );
+        let wrap = llrm_analysis::scev::expr::flags::NUW | llrm_analysis::scev::expr::flags::NSW;
+        if !unit && self.se.get_no_wrap_flags(s, wrap) == 0 {
             return false;
         }
         let Some(&(inc, _)) = arms(cx.function, phi).iter().find(|(_, from)| *from == latch) else { return false };
@@ -367,6 +393,19 @@ impl Lftr<'_> {
         }
         let inc_scev = self.se.get_scev(&cx, inc);
         matches!(self.se.node(inc_scev).kind, Kind::AddRec(..))
+    }
+
+    /// Whether `value` is an add recurrence of step one.
+    fn has_unit_step(
+        &mut self,
+        value: Operand,
+    ) -> bool {
+        let cx = self.env.cx(&*self.context, &*self.function);
+        let s = self.se.get_scev(&cx, value);
+        matches!(
+            self.se.node(s).kind.clone(),
+            Kind::AddRec(ops, _) if self.se.as_constant(ops[1].scev).is_some_and(|step| step.is_one())
+        )
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L871
