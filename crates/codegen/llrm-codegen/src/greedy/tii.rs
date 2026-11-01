@@ -88,6 +88,48 @@ pub trait TargetInstrInfo {
         body: &crate::model::lir::LirBody,
     ) -> BTreeSet<u32>;
 
+    /// The registers each value `one` names may take there (the class of the
+    /// operand, `MCInstrDesc`'s `RegClass`), as (value, registers in order). A
+    /// target whose classes live on its virtual registers says it here, so a
+    /// register a split made takes the class its own instructions give
+    /// (`recomputeRegClass`) once a join has narrowed its parent's.
+    fn operand_orders(
+        &self,
+        _one: &Insn,
+    ) -> Vec<(u32, Vec<RegId>)> {
+        Vec::new()
+    }
+
+    /// The registers of the smallest class that holds `order` and has more
+    /// (`getLargestLegalSuperClass`), or none when `order` is the largest: a
+    /// register narrowed by a join is a proper subclass (`isProperSubClass`),
+    /// and `recomputeRegClass` starts from the larger class.
+    fn larger_order(
+        &self,
+        _order: &[RegId],
+    ) -> Option<Vec<RegId>> {
+        None
+    }
+
+    /// What one reference to `value` in `one` adds to its spill weight, as a
+    /// multiple of LLVM's one (see `SpillWeightEnv::reference_weight`).
+    fn reference_weight(
+        &self,
+        _one: &Insn,
+        _value: u32,
+    ) -> f32 {
+        1.0
+    }
+
+    /// The registers `one` is cheaper with, as (value, register): the target's
+    /// `getRegAllocationHints` for the values `one` names.
+    fn preferred_registers(
+        &self,
+        _one: &Insn,
+    ) -> Vec<(u32, RegId)> {
+        Vec::new()
+    }
+
     /// `foldMemoryOperand`.
     fn fold_memory_operand(
         &self,

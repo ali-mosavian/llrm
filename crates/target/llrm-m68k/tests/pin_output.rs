@@ -825,7 +825,7 @@ fn a_loaded_value_compared_with_a_register_is_loaded_first_as_the_pin_does() {
 /// maximum of a max loop takes a third register move per iteration (arrmax:
 /// +2 B, +24 executed insns over eight elements). The bar was 2 moves, which
 /// the spike allocator met through `split_flag_edges` and its own join order.
-/// The pin's `llc` (LLVM 24.0.0git, `~/scratch/llvm-build-m68k/bin/llc
+/// The pin's `llc` (LLVM 24.0.0git, `llc
 /// -mtriple=m68k -mcpu=M68000 -O2 -disable-lsr` on tests/data/max-loop.ll)
 /// leaves 3 data-register moves in the loop (the index scaling, the else-path
 /// copy of the maximum, the latch copy). Greedy leaves 3 too; the bar is the
