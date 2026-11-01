@@ -840,7 +840,10 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
             isd::SUB => {
                 let backup = *am;
-                if self.match_address_recursively(self.operand(n, 0), am, depth + 1) || am.index_reg.is_some() {
+                if self.match_address_recursively(self.operand(n, 0), am, depth + 1)
+                    || am.index_reg.is_some()
+                    || self.is_rip_relative(am)
+                {
                     *am = backup;
                 } else if !self.fold_sub_rhs(n, am, &backup) {
                     return false;

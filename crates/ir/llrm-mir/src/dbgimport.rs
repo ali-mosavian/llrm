@@ -152,10 +152,34 @@ fn language(module: &Module) -> Option<Language> {
     }
 }
 
-/// A 16-bit target's pointers are near at 16 bits, far at 32.
+/// Bits of a near pointer: the datalayout's `p:` (default address space)
+/// size, 64 where it names none (LLVM's default), 32 with no datalayout.
 fn near_pointers(module: &Module) -> u32 {
-    let sixteen = module.datalayout.as_deref().is_some_and(|text| text.split('-').any(|one| one.starts_with("p:16")));
-    if sixteen { 16 } else { 32 }
+    near_bits(module.datalayout.as_deref())
+}
+
+fn near_bits(datalayout: Option<&str>) -> u32 {
+    let Some(text) = datalayout else { return 32 };
+    text.split('-')
+        .find_map(|one| one.strip_prefix("p:").or_else(|| one.strip_prefix("p0:")))
+        .and_then(|rest| rest.split(':').next()?.parse().ok())
+        .unwrap_or(64)
+}
+
+#[cfg(test)]
+mod near_tests {
+    use super::near_bits;
+
+    /// At m64 (`p270:32:32` only, no `p:`) every 64-bit pointer was read as a
+    /// 10-byte far pointer and `-g` refused: "a 10-byte Far pointer has no
+    /// address class".
+    #[test]
+    fn a_datalayout_without_a_default_pointer_size_has_64_bit_near_pointers() {
+        assert_eq!(near_bits(Some("e-m:e-p270:32:32-p272:64:64-i64:64-n8:16:32:64-S128")), 64);
+        assert_eq!(near_bits(Some("e-p:32:32-i8:8")), 32);
+        assert_eq!(near_bits(Some("e-p:16:16-i8:8")), 16);
+        assert_eq!(near_bits(None), 32);
+    }
 }
 
 fn operand<'m>(
