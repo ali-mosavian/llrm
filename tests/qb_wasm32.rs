@@ -28,6 +28,15 @@ fn built(
     name: &str,
     source: &str,
 ) -> PathBuf {
+    built_with(name, source, "")
+}
+
+/// `built`, with `flags` for llrm-qb.
+fn built_with(
+    name: &str,
+    source: &str,
+    flags: &str,
+) -> PathBuf {
     for tool in ["clang", "wasm-ld", "node"] {
         need(tool);
     }
@@ -40,6 +49,7 @@ fn built(
         .arg(dir.join(format!("{name}.wasm")))
         .arg(dir.join("obj"))
         .env("LLRM_QB", env!("CARGO_BIN_EXE_llrm-qb"))
+        .env("LLRM_QB_FLAGS", flags)
         .env("LLRM_WASM_LLC", llc())
         .output()
         .expect("runtime/wasm/build.sh runs");
@@ -179,6 +189,27 @@ fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
     assert!(!out.contains("went on") && !out.contains("handled"), "{out:?}");
     assert!(err.contains("ON ERROR landed: longjmp is not supported on wasm32"), "{err}");
     assert_ne!(ran.status.code(), Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// Unbounded recursion under `-fsanitize=stack`: the text handed to the wasm
+/// backend carried the attribute twice and the reader refused it, so the
+/// program did not build; and once built, the engine's own stack overflow
+/// ended the harness with a JS RangeError instead of QB's "Out of stack
+/// space".
+#[test]
+fn unbounded_recursion_ends_with_out_of_stack_space() {
+    let dir = built_with(
+        "deep",
+        "DECLARE FUNCTION Deep% (n AS INTEGER)\nPRINT \"start\"\nPRINT Deep%(30000)\nPRINT \"unreachable\"\n\
+         FUNCTION Deep% (n AS INTEGER)\n    Deep% = Deep%(n + 1) + 1\nEND FUNCTION\n",
+        "-O2 -fsanitize=stack",
+    );
+    let (text, code) = run(&dir, "deep", &[]);
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some("start"));
+    assert!(lines.next().is_some_and(|line| line.starts_with("Out of stack space in line")), "{text}");
+    assert_eq!(code, Some(255));
     std::fs::remove_dir_all(dir).ok();
 }
 

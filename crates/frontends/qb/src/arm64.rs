@@ -246,7 +246,7 @@ fn framed_function(lines: &[&str]) -> String {
 /// The attributes only llrm reads (its facts about a routine or a pointer),
 /// which the pinned LLVM's parser refuses; the optimizer has used them by the
 /// time the text is handed over.
-fn without_llrm_attributes(line: &str) -> String {
+pub(super) fn without_llrm_attributes(line: &str) -> String {
     const ONLY_LLRM: [&str; 6] = ["noretain", "releases", "threeway", "flagsresult", "stackcheck", "noipa"];
     let mut line = line.to_owned();
     for name in ONLY_LLRM {
