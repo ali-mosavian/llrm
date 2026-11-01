@@ -143,9 +143,7 @@ fn operand_value(
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     let (width, pieces) = match crate::divide::encoding(inst.opcode) {
         Some(row) => row,
-        None => {
-            local::bits(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?
-        }
+        None => local::bits(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?,
     };
     if width == 0 {
         return Err(format!("{} is a pseudo-instruction: it has no encoding", inst.opcode));

@@ -248,6 +248,5 @@ fn flags_read(
     node: u32,
     desc: &InstrDesc,
 ) -> bool {
-    !desc.implicit_defs.is_empty()
-        && !adapter.has_n_uses_of_value(SDValue { node, res: desc.num_defs }, 0)
+    !desc.implicit_defs.is_empty() && !adapter.has_n_uses_of_value(SDValue { node, res: desc.num_defs }, 0)
 }

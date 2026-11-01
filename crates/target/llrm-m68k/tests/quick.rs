@@ -135,17 +135,26 @@ fn memory_and_narrow_forms_are_quick_too() {
 /// register), so this pins the values; it fails if one starts to.
 #[test]
 fn the_carry_and_overflow_of_an_add_of_a_negative_immediate_are_read_right() {
-    let unsigned = String::from("declare { i8, i1 } @llvm.uadd.with.overflow.i8(i8, i8)
+    let unsigned = String::from(
+        "declare { i8, i1 } @llvm.uadd.with.overflow.i8(i8, i8)
 define i8 @f(i8 %x) {
   %p = call { i8, i1 } @llvm.uadd.with.overflow.i8(i8 %x, i8 -5)
   %c = extractvalue { i8, i1 } %p, 1
   %v = extractvalue { i8, i1 } %p, 0
   %r = select i1 %c, i8 %v, i8 7
   ret i8 %r
-}");
+}",
+    );
     let signed = unsigned.replace("uadd", "sadd");
     // the sum where it carries (x >= 5) or overflows (x - 5 < -128), else 7
-    for (ir, x, want) in [(&unsigned, 10, 5), (&unsigned, 3, 7), (&unsigned, 5, 0), (&signed, 10, 7), (&signed, -124, 127), (&signed, -123, 7)] {
+    for (ir, x, want) in [
+        (&unsigned, 10, 5),
+        (&unsigned, 3, 7),
+        (&unsigned, 5, 0),
+        (&signed, 10, 7),
+        (&signed, -124, 127),
+        (&signed, -123, 7),
+    ] {
         if let Some(code) = status(ir, &[x]) {
             assert_eq!(code, want, "f({x})");
         }

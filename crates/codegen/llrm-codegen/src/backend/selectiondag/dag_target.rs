@@ -6,8 +6,8 @@
 //! scratch frame objects they asked for, the target's rewrites that need no
 //! matcher ([`DagTarget::preprocess`]), `DoInstructionSelection` through
 //! [`DagTarget::select`], the target's rewrites of what it selected
-//! ([`DagTarget::postprocess`]), then schedule. What follows is the target's: x86
-//! emits LIR from the units ([`super::dag_select::select_block`]), another
+//! ([`DagTarget::postprocess`]), then schedule. What follows is the target's:
+//! x86 emits LIR from the units ([`super::dag_select::select_block`]), another
 //! target emits into its own machine function.
 //!
 //! # See also

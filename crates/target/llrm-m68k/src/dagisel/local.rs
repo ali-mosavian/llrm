@@ -1,5 +1,6 @@
 //! The instructions this target has above the pin's table, by code and name:
-//! the writebacks of [`super::indexed`] and the quick forms of [`super::quick`].
+//! the writebacks of [`super::indexed`] and the quick forms of
+//! [`super::quick`].
 
 use llrm_dagisel::instr::InstrDesc;
 

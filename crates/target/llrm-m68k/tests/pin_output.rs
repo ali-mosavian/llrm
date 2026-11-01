@@ -61,7 +61,8 @@ fn compiled(
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, quick: false, ..options }).expect("compiles")
+    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, quick: false, ..options })
+        .expect("compiles")
 }
 
 fn branches(body: &str) -> String {
