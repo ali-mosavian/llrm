@@ -18,7 +18,7 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
-    Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
+    Block, Inst, Join, Jump, Kind, MFunction, Operand, Reg, Side, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
@@ -181,6 +181,30 @@ impl<const STACK: bool> Target for Mos<STACK> {
         }
         let any = Self::candidates(Class::ANY);
         (any.len() > order.len()).then_some(any)
+    }
+
+    /// `dec` and `inc` on a cell are one instruction; on a register value that
+    /// lives in a cell, `ldy; dey; sty`.
+    fn memory_saving(
+        inst: &Inst,
+        operand: usize,
+    ) -> u32 {
+        match (inst.kind, inst.operands.get(operand)) {
+            (Kind::Op("INC" | "DEC"), Some(Operand::Use(_))) => 2,
+            _ => 0,
+        }
+    }
+
+    /// A join into the compare class takes the memory form from a value the
+    /// join saves one copy for: decline it when what the value's other
+    /// instructions save in memory is more than that copy.
+    fn should_coalesce(join: &Join) -> bool {
+        let loses = |side: &Side| {
+            side.registers.iter().any(|register| is_cell(*register))
+                && !join.joined.iter().any(|register| is_cell(*register))
+                && side.memory_saving > 1
+        };
+        !(loses(&join.source) || loses(&join.destination))
     }
 
     type Class = Class;
