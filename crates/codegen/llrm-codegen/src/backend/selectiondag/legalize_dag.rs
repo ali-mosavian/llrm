@@ -657,7 +657,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let high = self.dag.get_node(ISD::AnyExtend, vt, &[hi]);
                 let half = self.dag.get_constant(u128::from(vt.size_in_bits() / 2), EVT::I8);
                 let high = self.dag.get_node(ISD::Shl, vt, &[high, half]);
-                Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
+                // The pair's kind goes on the `or` (DEVIATE PAIR1).
+                let kind = self
+                    .dag
+                    .node(node)
+                    .flags
+                    .intersect(super::dag::SDNodeFlags::PAIR_FAR.union(super::dag::SDNodeFlags::PAIR_LONG));
+                Some(vec![self.dag.get_node_flags(ISD::Or, vt, &[low, high], kind)])
             }
             ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
             ISD::ExtractElement => {
