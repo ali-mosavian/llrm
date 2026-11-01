@@ -51,6 +51,12 @@ pub struct Tuning {
     /// The same bound holds a caller optimized for size (`-Os`), whatever the
     /// target's real-mode description says; false: the pin's threshold alone.
     pub inline_size_guard_at_size: bool,
+    /// Pricing of the inline of a callee that stays, for a caller optimized
+    /// for speed: (thousandths of a clock a byte of growth costs, clocks one
+    /// inlined call saves, the most a site's frequency counts for; 0: no
+    /// cap). The inline is kept where the clocks saved at the site's
+    /// frequency pay for the bytes; (0, 0, 0): the guard's bound alone.
+    pub inline_growth_price: (i64, i64, i64),
 }
 
 impl Tuning {
@@ -72,6 +78,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,
         inline_size_guard_at_size: false,
+        inline_growth_price: (0, 0, 0),
     };
 }
 

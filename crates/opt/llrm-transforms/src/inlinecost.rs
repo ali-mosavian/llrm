@@ -1997,6 +1997,21 @@ impl<'a> Analyzer<'a> {
         (size * tti.call_code_size_percent() + 50) / 100
     }
 
+    /// Whether the bytes an inline grows the code are not paid for at speed:
+    /// the target's price per byte against the clocks saved at the site's
+    /// frequency (`Tuning::inline_growth_price`). Unpriced: always unpaid.
+    fn growth_unpaid(&self) -> bool {
+        let Some(tti) = self.site.tti else { return true };
+        let (per_byte, saved, cap) = tti.inline_growth_price();
+        if self.site.caller_size != CallerSize::Speed || per_byte == 0 {
+            return true;
+        }
+        let growth = (self.size_units - self.call_size()) as f64;
+        let frequency = self.site.relative_frequency.unwrap_or(1.0);
+        let frequency = if cap > 0 { frequency.min(cap as f64) } else { frequency };
+        growth * per_byte as f64 / 1000.0 > saved as f64 * frequency
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -2018,7 +2033,8 @@ impl<'a> Analyzer<'a> {
                     tti.opt_size_inline_by_code_size()
                 }
             })
-            && self.size_units > self.call_size();
+            && self.size_units > self.call_size()
+            && self.growth_unpaid();
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
             // The verdict is `cost < threshold`: the call stays.

@@ -562,6 +562,10 @@ impl Tti for X86 {
         self.tuning.inline_size_guard_at_size || self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
+    fn inline_growth_price(&self) -> (i64, i64, i64) {
+        self.tuning.inline_growth_price
+    }
+
     fn speed_inline_by_code_size(&self) -> bool {
         self.tuning.inline_size_guard_at_speed
     }

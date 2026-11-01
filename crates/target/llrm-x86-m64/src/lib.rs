@@ -25,8 +25,16 @@ pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
 /// DEVIATE G1 (m64): a callee that stays is inlined into an `-Os` caller only
 /// if its code does not outgrow the call. The pin's `OptSizeThreshold` 50
 /// counts instructions; gcc -Os calls where the copy would grow (recsum).
-const TUNING: llrm_mir::target::Tuning =
-    llrm_mir::target::Tuning { inline_size_guard_at_size: true, ..llrm_mir::target::Tuning::PIN };
+/// DEVIATE G2 (m64): at speed the same bound holds unless the clocks saved pay
+/// for the bytes: 2 clocks per byte against 8 clocks a call, a site counting
+/// for at most 4 executions of the entry (jpeg_fixed -O1/-O2 8676/9609 B ->
+/// 4948/5871, gcc 4905/5037; its cycles stay under gcc's).
+const TUNING: llrm_mir::target::Tuning = llrm_mir::target::Tuning {
+    inline_size_guard_at_size: true,
+    inline_size_guard_at_speed: true,
+    inline_growth_price: (2000, 8, 4),
+    ..llrm_mir::target::Tuning::PIN
+};
 
 static LAYOUT: LazyLock<llrm_target::layout::Layout> =
     LazyLock::new(|| llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("x86-64 datalayout.toml parses"));

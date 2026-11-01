@@ -353,6 +353,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_growth_price` at speed; (0, 0, 0): not priced.
+    fn inline_growth_price(&self) -> (i64, i64, i64) {
+        (0, 0, 0)
+    }
+
     /// How many percent of its `CodeSize` units a call and the pushes of its
     /// arguments take in code, where they are bigger than the average
     /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to

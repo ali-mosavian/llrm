@@ -40,6 +40,17 @@ fn priced_with(
     size: CallerSize,
     tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> (i64, i64) {
+    priced_at(text, at, sole, size, tti, None)
+}
+
+fn priced_at(
+    text: &str,
+    at: usize,
+    sole: bool,
+    size: CallerSize,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    frequency: Option<f64>,
+) -> (i64, i64) {
     let module: Module = parsed(text);
     let layout = DataLayout::default();
     let (caller_id, _, caller) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
@@ -62,7 +73,7 @@ fn priced_with(
         sole_call_to_local: sole,
         caller_recursive: false,
         caller_size: size,
-        relative_frequency: None,
+        relative_frequency: frequency,
         tti,
     };
     let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
@@ -741,4 +752,56 @@ b0:
     let flat = llrm_x86::tti::X86::of_cpu("i486").unwrap();
     let (cost, _) = priced_with(text, 0, true, CallerSize::Speed, Some(&flat));
     assert_eq!(cost, -15025, "the pin prices this callee at -15025");
+}
+
+/// jpeg_fixed -O1/-O2 inlined its large helpers at hot sites and came out 1.8x
+/// gcc's bytes. At speed a callee that stays grows the code unless the clocks
+/// saved at the site's frequency (capped) pay for the bytes.
+#[test]
+fn a_speed_caller_inlines_growth_only_where_the_saved_clocks_pay_for_it() {
+    let text = "@arr = global [64 x i32] zeroinitializer
+
+define i32 @callee(i32 %x) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %n, %h ]
+  %s = phi i32 [ %x, %b0 ], [ %t, %h ]
+  %p = getelementptr i32, ptr @arr, i32 %i
+  %v = load i32, ptr %p
+  %v1 = mul i32 %v, %s
+  %v2 = add i32 %v1, %i
+  %v3 = mul i32 %v2, %v
+  %v4 = xor i32 %v3, %s
+  %v5 = mul i32 %v4, 7
+  %t = add i32 %s, %v5
+  %n = add i32 %i, 1
+  %c = icmp ne i32 %n, 64
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %t
+}
+
+define i32 @f(i32 %y) {
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}
+";
+    let priced = |cap: i64, frequency: f64| {
+        let tti = llrm_x86::tti::X86::of_cpu("i486")
+            .unwrap()
+            .with_tuning(
+                llrm_mir::target::Tuning {
+                    inline_size_guard_at_speed: true,
+                    inline_growth_price: (8000, 8, cap),
+                    ..llrm_mir::target::Tuning::PIN
+                },
+            );
+        let (cost, threshold) = priced_at(text, 0, false, CallerSize::Speed, Some(&tti), Some(frequency));
+        cost < threshold
+    };
+    assert!(!priced(4, 1.0), "a cold site paid for the growth");
+    assert!(!priced(4, 1000.0), "the cap did not hold the frequency down");
+    assert!(priced(0, 1000.0), "a hot site, uncapped, did not pay for it");
 }
