@@ -1566,3 +1566,27 @@ fn test_the_frequency_of_the_blocks_decides_a_join_that_takes_a_memory_form() {
 fn test_a_join_that_takes_no_memory_form_goes_ahead() {
     assert_eq!(counter(false), 0, "the copy was kept");
 }
+
+/// A copy a split puts at the top of a block stands beside no instruction, so
+/// it was numbered 0 and written back from the function's first instruction:
+/// when that was the copy out of an argument register, the new value was
+/// copied out of the register too, `Copy [clone <- ebx]` (6502 lz4: a byte
+/// copied from a pair, `Symbol rc35 is undefined`).
+#[test]
+fn test_a_copy_a_split_makes_at_a_block_top_does_not_copy_the_argument_register() {
+    let mut f = across_a_call(4);
+    f.blocks[0].insts[0] = Inst::new(Kind::Copy, vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]);
+    // an empty block on the loop's exit edge, where a split puts its copy
+    f.blocks.insert(2, Block { id: 3, ..Block::default() });
+    let mut f = lowered(f);
+    llrm_spike_mf::tolir::allocate_greedy::<Flat>(&mut f, regs(), false).expect("allocates");
+    let reads_argument = f
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| {
+            inst.kind == Kind::Copy && inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(RegId::EBX))))
+        })
+        .count();
+    assert_eq!(reads_argument, 1, "{f:#?}");
+}

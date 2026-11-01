@@ -548,7 +548,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         let Loc::Held(defined) = what.dests[0] else { return None };
         self.tables.widths.borrow_mut().insert(to, defined.width);
         self.tables.remat.borrow_mut().insert(to);
-        let (at, covers) = beside.map_or((0, None), |b| {
+        let (at, covers) = beside.map_or((0, Some((0, 0))), |b| {
             let start = b.covers.map_or(b.at, |c| c.0);
             (b.at, Some((start, start)))
         });
@@ -582,7 +582,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         }
         let what = self.tii.copy_semantics(to, from, width);
         // Beside another instruction, claiming none of its bytes.
-        let (at, covers) = beside.map_or((0, None), |b| {
+        let (at, covers) = beside.map_or((0, Some((0, 0))), |b| {
             let start = b.covers.map_or(b.at, |c| c.0);
             (b.at, Some((start, start)))
         });
