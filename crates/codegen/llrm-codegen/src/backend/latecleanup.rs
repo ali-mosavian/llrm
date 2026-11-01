@@ -29,7 +29,8 @@
 //!
 //! # Segment registers
 //! DEVIATE LC2 (real mode): the pin has no segment registers to load. A load of
-//! a segment constant (`mov es, DGROUP`) into `ES`, `FS` or `GS` is a candidate
+//! a segment constant (`mov es, DGROUP`) or a general register (`mov es, di`,
+//! stale once the register is written) into `ES`, `FS` or `GS` is a candidate
 //! too, and the entries of the segment registers are taken to a fixed point
 //! over the whole graph, so a load a loop's back edge repeats goes as well
 //! (scroll.c: a `pushw DGROUP; pop es` before every string move). Owner w12.
@@ -59,6 +60,9 @@ use crate::support::hash::{HashMap, HashSet};
 struct Held {
     insn: Arc<Insn>,
     lanes: Lanes,
+    /// The lanes the load reads (a segment loaded from a register): a write
+    /// to one of them makes the entry stale.
+    reads: Lanes,
 }
 
 /// The phase.
@@ -127,10 +131,15 @@ fn segment_candidate(
     one: &Insn,
 ) -> Option<Loc> {
     let what: &Semantics = one.what.as_ref()?;
-    let ([dest @ Loc::Reg(reg)], [Loc::Imm(imm)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    let ([dest @ Loc::Reg(reg)], [source]) = (&what.dests[..], &what.sources[..]) else { return None };
+    let loads_a_value = match source {
+        Loc::Imm(imm) => imm.address.is_some(),
+        Loc::Reg(from) => !regs.is_segment(from.register),
+        _ => false,
+    };
     (what.op == Operation::Move
         && what.name.as_deref() == Some("mov")
-        && imm.address.is_some()
+        && loads_a_value
         && is_segment(regs, reg.register)
         && what.target.is_none()
         && !what.indirect
@@ -251,12 +260,17 @@ pub fn cleaned(body: LirBody) -> LirBody {
                 match liveness::effect(regs, bits, one) {
                     None => mine.clear(),
                     Some(effect) => {
-                        mine.retain(|_, held| held.lanes.is_disjoint(&effect.writes));
+                        mine.retain(|_, held| {
+                            held.lanes.is_disjoint(&effect.writes) && held.reads.is_disjoint(&effect.writes)
+                        });
                         if writes_a_segment(regs, one) {
                             mine.retain(|register, _| !is_segment_loc(regs, register));
                         }
                         if let Some(register) = found {
-                            mine.insert(register, Held { insn: Arc::clone(one), lanes: effect.writes });
+                            mine.insert(
+                                register,
+                                Held { insn: Arc::clone(one), lanes: effect.writes, reads: effect.reads },
+                            );
                         }
                     }
                 }
@@ -368,6 +382,25 @@ mod tests {
         ))
     }
 
+    fn load_segment_from(
+        at: i64,
+        register: RegId,
+        from: RegId,
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at + 2)),
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Reg(Reg { register, width: 2 })],
+                sources: vec![Loc::Reg(Reg { register: from, width: 2 })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![],
+            vec![],
+        ))
+    }
+
     fn block(
         at: i64,
         insns: Vec<Arc<Insn>>,
@@ -457,5 +490,29 @@ mod tests {
             block(30, vec![load_segment(30, RegId::ES)], vec![]),
         ]));
         assert!(!gone(&one_path, 30, 0), "ES is DGROUP on one path only");
+    }
+
+    /// QCport sprite.c m16 -Os: five `mov es, di` in a chain of single-
+    /// predecessor blocks (a header check `if (h->a != 1) goto bad; ...`), 2 B
+    /// and 3 clk each. A load of a segment from a register nothing wrote since
+    /// goes; one after the register changed, or on a path where it differs,
+    /// stays.
+    #[test]
+    fn a_segment_load_from_a_register_the_path_kept_goes() {
+        let chain = |write: Arc<Insn>| {
+            body(vec![
+                block(0, vec![load_segment_from(0, RegId::ES, RegId::DI)], vec![10]),
+                block(10, vec![write, load_segment_from(12, RegId::ES, RegId::DI)], vec![]),
+            ])
+        };
+        assert!(gone(&cleaned(chain(mov(10, 1, RegId::BX))), 10, 1), "di was not written");
+        assert!(!gone(&cleaned(chain(mov(10, 1, RegId::DI))), 10, 1), "di was written");
+        let one_path = cleaned(body(vec![
+            block(0, vec![], vec![10, 20]),
+            block(10, vec![load_segment_from(10, RegId::ES, RegId::DI)], vec![30]),
+            block(20, vec![load_segment_from(20, RegId::ES, RegId::SI)], vec![30]),
+            block(30, vec![load_segment_from(30, RegId::ES, RegId::DI)], vec![]),
+        ]));
+        assert!(!gone(&one_path, 30, 0), "ES is di on one path, si on the other");
     }
 }

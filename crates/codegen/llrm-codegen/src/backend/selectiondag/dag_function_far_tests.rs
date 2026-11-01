@@ -1172,3 +1172,72 @@ fn a_long_returned_in_dx_ax_is_packed_by_a_shrd() {
     let count = |n: &str| names.iter().filter(|x| x.as_str() == n).count();
     assert_eq!((count("shrd"), count("movzx"), count("or")), (1, 0, 0), "{names:?}");
 }
+
+fn pack_names(source: &str) -> Vec<String> {
+    let module = llrm_mir::parse::module(m16_ir(source)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+}
+
+/// A far pointer taken as an integer and computed with was packed by the
+/// `shrd` form too, and its halves were taken apart again (the first A built
+/// that: bintree and grep red). Its pair is marked, so it keeps the `or`.
+#[test]
+fn a_far_pointer_taken_as_an_integer_is_not_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i32 @f(ptr addrspace(1) %p) {
+entry:
+  %i = ptrtoint ptr addrspace(1) %p to i32
+  %s = add i32 %i, 1
+  ret i32 %s
+}
+",
+    );
+    assert!(!names.iter().any(|n| n == "shrd"), "{names:?}");
+}
+
+/// A LONG returned by a call and compared, or divided, is the same dword as one
+/// added to: one `shrd` at each call, not `movzx`, `shl`, `or`.
+#[test]
+fn a_long_returned_and_compared_is_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 1000
+  ret i1 %c
+}
+",
+    );
+    assert_eq!(
+        (names.iter().filter(|n| *n == "shrd").count(), names.iter().filter(|n| *n == "or").count()),
+        (1, 0),
+        "{names:?}"
+    );
+}
+
+/// A LONG returned and tested against zero kept `movzx`, `shl`, `or` (the `or`
+/// sets the flags); the `shrd` pack cost Nib's grep a `test` and 3 bytes.
+#[test]
+fn a_long_returned_and_tested_against_zero_is_not_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 0
+  ret i1 %c
+}
+",
+    );
+    assert_eq!(
+        (names.iter().filter(|n| *n == "shrd").count(), names.iter().filter(|n| *n == "or").count()),
+        (0, 1),
+        "{names:?}"
+    );
+}
