@@ -1499,6 +1499,32 @@ pub fn analyze(
     Some(builder.finish())
 }
 
+/// `AssignmentTrackingPass` over a module: each function with
+/// `#dbg_assign` records has them replaced by the records its analysis
+/// states. O(n) in the module's instructions and records, plus the
+/// dataflow's own bound per function (`MAX_BLOCKS`).
+pub fn module_rewritten(module: &mut Module) -> Result<(), String> {
+    let Some(text) = module.datalayout.clone() else { return Ok(()) };
+    let layout = llrm_mir::datalayout::DataLayout::parse(&text)?;
+    let wanted: Vec<llrm_mir::GlobalId> = module
+        .functions()
+        .filter(|(_, _, function)| {
+            function.debug_records().iter().any(|one| matches!(one.what, llrm_mir::DebugWhat::Assign { .. }))
+        })
+        .map(|(id, ..)| id)
+        .collect();
+    for id in wanted {
+        let locs = {
+            let function = module.global(id).function().expect("a function");
+            analyze(module, &Query::new(module, function, &layout), false)
+        };
+        if let Some(locs) = locs {
+            rewrite(module, id, &locs);
+        }
+    }
+    Ok(())
+}
+
 /// The operations of an expression as LLVM prints them.
 pub fn expression_text(ops: &[DwOp]) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -2035,7 +2061,8 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
     fn rewritten(text: &str) -> Module {
         let mut module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
         let locs = run(text);
-        assert!(rewrite(&mut module, "f", &locs));
+        let f = module.named("f").unwrap();
+        assert!(rewrite(&mut module, f, &locs));
         module
     }
 
@@ -2083,5 +2110,16 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
         assert_eq!(seen, [(at("br"), 1), (at("add"), 1)]);
         assert_eq!(locs.locs_before(at("br"))[0].expression, [DwOp::Deref]);
         assert_eq!(locs.locs_before(at("add"))[0].expression, []);
+    }
+
+    /// A module read with `#dbg_assign`s leaves the pass with none: the
+    /// selector skips them, so each one left a variable without a place.
+    #[test]
+    fn a_module_leaves_the_pass_without_dbg_assigns() {
+        let mut module = llrm_mir::parse::module(LOOP).unwrap();
+        module_rewritten(&mut module).unwrap();
+        let records = function_f(&module).debug_records();
+        assert!(!records.is_empty());
+        assert!(records.iter().all(|one| !matches!(one.what, DebugWhat::Assign { .. })), "{records:?}");
     }
 }

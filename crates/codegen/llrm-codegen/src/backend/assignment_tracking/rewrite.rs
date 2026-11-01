@@ -8,16 +8,20 @@
 
 use std::collections::HashMap;
 
-use llrm_mir::{DebugRecord, DebugWhat, InstId, MetadataId, MetadataNode, MetadataOperand, Module, module::Special};
+use llrm_mir::{
+    DebugRecord, DebugWhat, GlobalId, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module,
+    module::Special,
+};
 
 use super::{FunctionVarLocs, VarLocInfo, expression_text, op_words};
 
-/// Replaces the records of `name` with those of `locs`. Nothing changes, and
-/// `false` comes back, when an expression has an operation the table does not
-/// keep (`DwOp::Other`): the records would say less than they did.
+/// Replaces the records of the function `at` with those of `locs`. Nothing
+/// changes, and `false` comes back, when an expression has an operation the
+/// table does not keep (`DwOp::Other`): the records would say less than they
+/// did.
 pub fn rewrite(
     module: &mut Module,
-    name: &str,
+    at: GlobalId,
     locs: &FunctionVarLocs,
 ) -> bool {
     let all: Vec<&VarLocInfo> =
@@ -44,7 +48,7 @@ pub fn rewrite(
             id
         }))
     };
-    let Some((_, function)) = module.function_mut(name) else { return false };
+    let Some(function) = module.global(at).function() else { return false };
     let first = function.walk().next().map(|(_, inst)| inst);
     let mut wanted: Vec<(InstId, bool, &VarLocInfo)> = Vec::new();
     if let Some(first) = first {
@@ -54,7 +58,7 @@ pub fn rewrite(
         wanted.extend(locs.locs_before(inst).iter().map(|one| (inst, false, one)));
     }
     let expressions: Vec<Option<MetadataId>> = wanted.iter().map(|&(_, _, one)| expression(module, one)).collect();
-    let (_, function) = module.function_mut(name).expect("the function the table is of");
+    let GlobalKind::Function(function) = &mut module.globals[at.0 as usize].kind else { unreachable!("checked above") };
     let mut records = Vec::with_capacity(wanted.len());
     for ((before, single, one), expression) in wanted.into_iter().zip(expressions) {
         let what = match (&one.values[..], single) {

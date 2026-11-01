@@ -641,6 +641,9 @@ pub fn optimized(
             })
         })?;
     }
+    timed("mir assignment tracking", || {
+        program.modules.iter_mut().try_for_each(crate::backend::assignment_tracking::module_rewritten)
+    })?;
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
     }
