@@ -219,8 +219,9 @@ fn _memory_operation_bytes(
     cell: &Mem,
     bits: u32,
 ) -> i64 {
+    let model = llrm_target::object::CodeModel::of(bits);
     let register = cell.base.is_some() || cell.index.is_some();
-    let wide = if bits >= 32 { 4 } else { 2 };
+    let wide = model.displacement_bytes() as i64;
     let displacement = match cell.addr {
         Some(addr) if addr.space == crate::model::ir::Space::Frame => 1,
         Some(_) => wide,
@@ -228,7 +229,7 @@ fn _memory_operation_bytes(
         None if (-128..128).contains(&cell.offset) => 1,
         None => wide,
     };
-    2 + displacement + i64::from(bits >= 32 && cell.index.is_some()) + i64::from(cell.selector.is_some())
+    2 + displacement + i64::from(model.flat() && cell.index.is_some()) + i64::from(cell.selector.is_some())
 }
 
 /// A load that arithmetic instructions read, each taking the cell as its
