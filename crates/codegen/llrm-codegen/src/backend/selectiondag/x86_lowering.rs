@@ -1632,6 +1632,19 @@ fn lower_int_to_fp(
             return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
         }
     }
+    // DEVIATE SD332 (exit: the pin gains it; re-check at each pin bump): a
+    // plain one-use load of an `i16` or `i32` is `fild`ed from its own
+    // address, as combineSIntToFP does for `i64` only. The stack slot's store
+    // and reload are gone and `fimul`/`fiadd` read the operand in place.
+    if signed && matches!(src_vt, EVT::I16 | EVT::I32) && is_non_ext_load(dag, src) && dag.users(src).count() == 1 {
+        let NodeData::Mem(info) = dag.node(src).data else { return None };
+        if !info.volatile && info.ordering.is_none() && info.mem_vt == src_vt {
+            let (load_chain, address) = (dag.operand(src, 0), dag.operand(src, 1));
+            let fild = build_fild(dag, dst, src_vt, load_chain, address, info);
+            dag.replace_all_uses_with(SDValue { node: src.node, res: 1 }, SDValue { node: fild.node, res: 1 });
+            return Some(fild);
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
