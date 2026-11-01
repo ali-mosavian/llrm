@@ -999,7 +999,11 @@ impl<'a> RAGreedy<'a> {
             original: &self.original,
             hints: &mut self.hints,
         };
-        splitter.split_around_hint_reg(hint, virt, &blocks, new_vregs)
+        let split = splitter.split_around_hint_reg(hint, virt, &blocks, new_vregs);
+        if split && llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("dec v{} hint-split around {hint:?} in {} blocks -> {new_vregs:?}", virt.reg(), blocks.len());
+        }
+        split
     }
 
     /// `isUrgentEviction` (RegAllocEvictionAdvisor.cpp#L146): an unspillable
