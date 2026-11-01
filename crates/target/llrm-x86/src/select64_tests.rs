@@ -344,3 +344,11 @@ fn a_quadword_bit_change_of_a_constant_bit_encodes() {
         assert_eq!(bytes(&what), expected, "{name}");
     }
 }
+
+/// A `movd` of a register to itself (a bitcast the allocator coalesced) was
+/// refused, and qmove at -Os m64 failed to compile.
+#[test]
+fn movd_of_a_register_to_itself_is_no_instruction() {
+    let copy = sem(Operation::Extend, Some("movd"), vec![rg(RegId::XMM3, 4)], vec![rg(RegId::XMM3, 4)], None, false);
+    assert!(bytes(&copy).is_empty());
+}

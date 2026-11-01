@@ -2272,6 +2272,10 @@ fn scalar_sse(
     let xmm = |one: &Loc| reg_of(one).is_some_and(RegId::is_xmm);
     let upper = Upper(name);
     match (first, second) {
+        // The same register on both sides is a copy that went nowhere.
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "movq" | "movd") && into.register == outof.register => {
+            Some(Emitted::new(Vec::new()))
+        }
         (Loc::Reg(into), Loc::Reg(outof)) if xmm(first) && xmm(second) => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
