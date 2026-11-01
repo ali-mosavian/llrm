@@ -115,7 +115,7 @@ mod tests {
     fn port_intrinsics_are_calls_of_the_runtimes_port_routines() {
         let mir = "declare void @llrm.ia16.out.i8(i16, i8)\ndeclare i8 @llrm.ia16.in.i8(i16)\n\
             define internal void @__main() {\nb1:\n  call void @llrm.ia16.out.i8(i16 968, i8 7)\n  %v = call i8 @llrm.ia16.in.i8(i16 969)\n  ret void\n}\n";
-        let text = wasm32_text(mir, &[], false).unwrap();
+        let text = wasm32_text(mir, &[]).unwrap();
         assert!(!text.contains("llrm.ia16"), "{text}");
         assert!(
             text.contains("declare void @qb_port_out(i16, i8)") && text.contains("call i8 @qb_port_in(i16 969)"),
