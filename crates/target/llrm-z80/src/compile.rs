@@ -35,6 +35,7 @@ fn machine_function_with(
     if duplicate {
         tail_duplicate_returns(&mut function);
     }
+    eliminate_tests(&mut function);
     Ok(function)
 }
 
@@ -123,6 +124,7 @@ pub fn lines(
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }
+    .map(expand::relax)
 }
 
 /// The function as text: its label, then one line per instruction.
@@ -356,5 +358,67 @@ fn return_conditionally(function: &mut MFunction) {
             }
         }
         i += 1;
+    }
+}
+
+/// Whether `inst` leaves the Z flag set by its 8-bit result.
+fn sets_zero_by_result(inst: &Inst) -> bool {
+    matches!(
+        inst.kind,
+        Kind::Op(
+            "INC8" | "DEC8" | "SHL8" | "SRL8" | "SRA8" | "ADD8r" | "ADD8i" | "SUB8r" | "SUB8i" | "AND8r" | "AND8i" | "OR8r" | "OR8i" | "XOR8r"
+                | "XOR8i"
+        )
+    )
+}
+
+/// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
+/// instruction that made the byte and set the flags by it is dropped when only
+/// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`. Every
+/// `ld` between leaves the flags alone.
+fn eliminate_tests(function: &mut MFunction) {
+    for block in &mut function.blocks {
+        let mut at = 1;
+        while at < block.insts.len() {
+            let compare = &block.insts[at];
+            let is_test = compare.kind == Kind::Op("CP8i")
+                && matches!(compare.operands[..], [_, Operand::Use(Reg::Phys(a)), Operand::Imm(0)] if a == crate::reg::A);
+            let copy = &block.insts[at - 1];
+            let tested = match (&copy.kind, &copy.operands[..]) {
+                (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(v)]) if *a == crate::reg::A => Some(*v),
+                _ => None,
+            };
+            let (true, Some(value)) = (is_test, tested) else {
+                at += 1;
+                continue;
+            };
+            // the instruction that made `value`: it defines it, or copies it out of `a`
+            let defines = |inst: &Inst, reg: Reg| inst.operands.contains(&Operand::Def(reg));
+            let Some(made) = block.insts[..at - 1].iter().rposition(|inst| defines(inst, value)) else {
+                at += 1;
+                continue;
+            };
+            let setter = if block.insts[made].kind == Kind::Copy {
+                // `v = COPY a` after an instruction that defines `a` as its result
+                made.checked_sub(1).filter(|&before| defines(&block.insts[before], Reg::Phys(crate::reg::A)))
+            } else {
+                Some(made)
+            };
+            let Some(setter) = setter.filter(|&one| sets_zero_by_result(&block.insts[one])) else {
+                at += 1;
+                continue;
+            };
+            let flags_kept = block.insts[setter + 1..at - 1].iter().all(|inst| !inst.sets_flags && !inst.call);
+            let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags);
+            let only_zero = readers
+                .filter(|inst| inst.reads_flags)
+                .all(|inst| matches!(inst.kind, Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ")));
+            if flags_kept && only_zero {
+                block.insts.drain(at - 1..=at);
+                at -= 1;
+            } else {
+                at += 1;
+            }
+        }
     }
 }

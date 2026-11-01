@@ -668,7 +668,9 @@ fn form(text: &str) -> String {
             _ if one.ends_with("(ix)") || one.ends_with("(iy)") => "(ix+d)".to_owned(),
             _ if one.starts_with('(') => "(nn)".to_owned(),
             _ if one.starts_with('#') => if wide || matches!(mnemonic, "jp" | "call") { "nn".to_owned() } else { "n".to_owned() },
-            other => if matches!(mnemonic, "jp" | "call" | "jr") || other.starts_with('L') { "nn".to_owned() } else { other.to_owned() },
+            other if mnemonic == "jr" && other.starts_with('L') => "e".to_owned(),
+            other if mnemonic == "djnz" => { let _ = other; "e".to_owned() }
+            other => if matches!(mnemonic, "jp" | "call") || other.starts_with('L') { "nn".to_owned() } else { other.to_owned() },
         }
     };
     let kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
@@ -705,4 +707,78 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
         }
     }
     (bytes, clocks)
+}
+
+/// The bytes of one printed line, jumps being the three-byte form.
+fn bytes_of(line: &Line) -> u32 {
+    let Line::Inst(text) = line else { return 0 };
+    let key = form(text);
+    crate::timing::cost(&key)
+        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+        // a form the table lacks: longer than any estimate
+        .map_or(4, |cost| cost.bytes)
+}
+
+/// The label a `jp` names, and its condition if it has one.
+fn jump_of(text: &str) -> Option<(Option<&str>, &str)> {
+    let rest = text.strip_prefix("jp ")?;
+    match rest.split_once(", ") {
+        Some((cc, label)) => Some((Some(cc), label)),
+        None => Some((None, rest)),
+    }
+}
+
+/// Branch relaxation: a `jp` whose target is within reach of `jr` (two bytes)
+/// becomes one, and `dec b; jr nz` becomes `djnz`. Reach is judged with every
+/// jump at its long size, so it only shrinks; a margin covers a form the table
+/// does not price.
+///
+/// DEVIATE: `jr` is slower taken (12 T against 10) and faster not taken (7
+/// against 10); SDCC's choice, kept for the byte. Exit: block frequencies at
+/// this stage.
+pub fn relax(lines: Vec<Line>) -> Vec<Line> {
+    const REACH: i64 = 100;
+    let mut at = 0;
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut labels = std::collections::HashMap::new();
+    for line in &lines {
+        starts.push(at);
+        if let Line::Label(name) = line {
+            labels.insert(name.clone(), at);
+        }
+        at += i64::from(bytes_of(line));
+    }
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else {
+            out.push(line.clone());
+            continue;
+        };
+        let relaxed = jump_of(text).and_then(|(cc, label)| {
+            let reach = |name: &str| matches!(name, "nz" | "z" | "nc" | "c");
+            if cc.is_some_and(|cc| !reach(cc)) {
+                return None;
+            }
+            let distance = labels.get(label)? - (starts[index] + 2);
+            (distance.abs() <= REACH).then(|| (cc, label))
+        });
+        match relaxed {
+            Some((cc, label)) => {
+                // `dec b; jr nz, L` is `djnz L`
+                let counted = cc == Some("nz") && matches!(out.last(), Some(Line::Inst(last)) if last == "dec b");
+                if counted {
+                    out.pop();
+                    out.push(Line::Inst(format!("djnz {label}")));
+                } else {
+                    out.push(Line::Inst(match cc {
+                        Some(cc) => format!("jr {cc}, {label}"),
+                        None => format!("jr {label}"),
+                    }));
+                }
+            }
+            None => out.push(line.clone()),
+        }
+    }
+    out
 }
