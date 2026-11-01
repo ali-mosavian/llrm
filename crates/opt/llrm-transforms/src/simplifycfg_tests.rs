@@ -627,6 +627,57 @@ b0:
     );
 }
 
+/// Where a select is a branch (no cmov, the i486) the triangle's `add` is not
+/// run early and a diamond's arms are not hoisted: m32 -O2 made x_isqrt's loop
+/// 11.7 instructions against gcc's 7.1, x_mergesort 1.63x gcc's clocks, and
+/// x_crc32 1179 B against gcc's 161.
+#[test]
+fn test_where_a_select_is_a_branch_an_arm_with_code_keeps_its_branch() {
+    let flagged = crate::testing::Flagged { select_is_branch: true, ..Default::default() };
+    let keep = |text: &str| {
+        let mut module = parsed(text);
+        let outer = Outer::of(&module, None);
+        let layout = DataLayout::default();
+        let spec = Speculation { tti: &flagged, layout: &layout, outer: &outer };
+        let mut declared = Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        super::simplified(context, &spec, &mut declared, function);
+        printed(&module)
+    };
+    let triangle = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %p
+}
+";
+    assert_eq!(keep(triangle), triangle);
+    let diamond = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = add i16 %x, 1
+  br label %b3
+
+b2:
+  %z = sub i16 %x, 1
+  br label %b3
+
+b3:
+  %p = phi i16 [ %y, %b1 ], [ %z, %b2 ]
+  ret i16 %p
+}
+";
+    assert_eq!(keep(diamond), diamond);
+}
+
 /// Five instructions cost more than the budget (4): the branch stays.
 #[test]
 fn test_an_arm_dearer_than_the_budget_keeps_its_branch() {

@@ -76,6 +76,10 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 fn tuning() -> llrm_mir::target::Tuning {
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE (SimplifyCFG D5): the i486 has no cmov, so a select is a
+        // branch; folding a diamond into one only runs both arms. x_isqrt,
+        // x_mergesort -18..20% clocks, x_crc32 -1020 B at -O2.
+        select_is_branch: true,
         // DEVIATE (full unroll): the pin's -O2/-O3 thresholds unroll the 8-trip
         // loops of matmul, tile, fpbench and nbody to 2188, 489, 1724 and 827 B
         // where gcc -O2, which does not unroll, has 382, 161, 503 and 394 B.

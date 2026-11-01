@@ -538,6 +538,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn select_is_branch(&self) -> bool {
+        self.tuning.select_is_branch
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
