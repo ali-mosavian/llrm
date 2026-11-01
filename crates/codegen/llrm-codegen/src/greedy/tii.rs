@@ -176,7 +176,9 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         &self,
         body: &crate::model::lir::LirBody,
     ) -> BTreeSet<u32> {
-        super::remat::argument_loads(body)
+        let mut loads = super::remat::argument_loads(body);
+        loads.extend(x87_stable_loads(body));
+        loads
     }
 
     fn fold_memory_operand(
@@ -510,6 +512,34 @@ pub(crate) fn is_encodable(
     Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
 }
 
+/// DEVIATE D-RFP4 (beyond LLVM: gcc's `REG_EQUIV`, 854's `floatassign`): the
+/// x87 `fld` of a global, or of an incoming argument's cell, that nothing may
+/// write while the value lives is made again where it is read, as the pin does
+/// for an invariant load. The pin takes only a load marked invariant, so it
+/// spills the rest: nbody_single -O3 m32 spills 9 loaded globals (clang 50017
+/// frame stores against gcc's 17011).
+///
+/// Left out where a `wait` is present: a BASIC module wraps its conversions in
+/// `wait` so a handler sees the fault in the statement that raised it, and
+/// reading the cell later moves where a signalling NaN raises.
+/// Complexity: one scan of the body (`_stable_loads_through`).
+fn x87_stable_loads(body: &crate::model::lir::LirBody) -> BTreeSet<u32> {
+    let mut loads = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(what) = one.what.as_ref() else { continue };
+        if what.op == Operation::Nothing && what.name.as_deref() == Some("wait") {
+            return BTreeSet::new();
+        }
+        if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
+            loads.extend(one.defines.iter().copied());
+        }
+    }
+    if loads.is_empty() {
+        return loads;
+    }
+    crate::backend::bodyfacts::_stable_loads_through(body, &loads, &IndexMap::default()).into_keys().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +562,100 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, -2)), 2);
         let folded = fold_memory_operand(&Arc::new(add), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
         assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
+    }
+
+    fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
+        crate::model::lir::LirBody::new(
+            "x87",
+            0,
+            vec![crate::model::lir::Block::from(crate::model::lir::LirBlock::new(0, insns))],
+            Default::default(),
+            Default::default(),
+        )
+    }
+
+    fn fld(
+        at: i64,
+        value: u32,
+        cell: Mem,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("fld".into()),
+            dests: vec![Loc::Held(Held { value, width: 10 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::FloatLoad)
+        };
+        Arc::new(Insn::new(at, None, Some(what), vec![value], vec![]))
+    }
+
+    fn fstp(
+        at: i64,
+        value: u32,
+        cell: Mem,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("fstp".into()),
+            dests: vec![Loc::Mem(cell)],
+            sources: vec![Loc::Held(Held { value, width: 10 })],
+            ..Semantics::new(Operation::FloatStore)
+        };
+        Arc::new(Insn::new(at, None, Some(what), vec![], vec![value]))
+    }
+
+    fn global(
+        symbol: i64,
+        disp: i64,
+    ) -> Mem {
+        Mem::new(Some(Addr { index: symbol, ..Addr::new(Space::External, disp) }), 4)
+    }
+
+    fn frame(disp: i64) -> Mem {
+        Mem::new(Some(Addr::new(Space::Frame, disp)), 4)
+    }
+
+    /// nbody_single -O3 m32 stored 9 loaded globals to the frame and loaded
+    /// them again (`fld _vel_y+8; fstp [esp+244]` ... `fld [esp+244]`); gcc
+    /// reads the global again. A global nothing writes while the value
+    /// lives is a load the allocator makes again.
+    #[test]
+    fn test_an_x87_load_of_a_global_nothing_writes_is_made_again() {
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16() };
+        let body = x87_body(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 2, global(1, 0)),
+            fstp(2, 2, frame(-8)),
+            fstp(3, 1, frame(-4)),
+        ]);
+        assert_eq!(tii.argument_loads(&body), BTreeSet::from([1, 2]));
+    }
+
+    /// A store to the cell between the load and the last reader changes the
+    /// value: the load stays.
+    #[test]
+    fn test_an_x87_load_of_a_global_written_while_it_lives_is_kept() {
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16() };
+        let body = x87_body(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 2, global(1, 0)),
+            fstp(2, 2, global(0, 0)),
+            fstp(3, 1, frame(-4)),
+        ]);
+        assert_eq!(tii.argument_loads(&body), BTreeSet::from([2]));
+    }
+
+    /// A BASIC module's `wait` marks bodies whose fault order is observed:
+    /// reading the cell later would move where a signalling NaN raises.
+    #[test]
+    fn test_a_body_with_a_wait_keeps_its_x87_loads() {
+        let tii = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() };
+        let wait = Arc::new(Insn::new(
+            1,
+            None,
+            Some(Semantics { name: Some("wait".into()), ..Semantics::new(Operation::Nothing) }),
+            vec![],
+            vec![],
+        ));
+        let body = x87_body(vec![fld(0, 1, global(0, 0)), wait, fstp(2, 1, frame(-4))]);
+        assert!(tii.argument_loads(&body).is_empty());
     }
 }
