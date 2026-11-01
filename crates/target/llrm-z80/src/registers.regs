@@ -1,0 +1,24 @@
+# Z80 registers, in the format of x86-m32's registers.regs.
+# A, B C D E H L are the 8-bit registers; BC, DE and HL are the 16-bit pairs (B, D, H the high bytes, so a
+# byte lane 8 is the high one). IX is the frame register, SP the stack pointer; the flags are F. The shadow set
+# (AF' BC' DE' HL') and IY's halves are not described: compiled code leaves them alone.
+#
+# @bytes: the 8-bit allocation order. A comes last: the 8-bit ALU works on A only, so a value that does not need it
+# should not hold it.
+@bytes b c d e h l a
+#
+# name bits root lane classes dwarf codeview
+a      8   a    0   gpr,int        - -
+flags  8   flags 0  reserved       - -
+bc     16  bc   0   gpr,int,base   - -
+de     16  de   0   gpr,int,base   - -
+hl     16  hl   0   gpr,int,base,index  - -
+iy     16  iy   0   gpr,int,base,index  - -
+ix     16  ix   0   reserved,frame,int,base,index  - -
+sp     16  sp   0   reserved,stack,int  - -
+c      8   bc   0   int            - -
+b      8   bc   8   int            - -
+e      8   de   0   int            - -
+d      8   de   8   int            - -
+l      8   hl   0   int            - -
+h      8   hl   8   int            - -

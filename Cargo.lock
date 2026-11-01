@@ -832,7 +832,13 @@ dependencies = [
 name = "llrm-z80"
 version = "0.1.0"
 dependencies = [
+ "llrm-codegen",
  "llrm-dagisel",
+ "llrm-debug",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-target",
 ]
 
 [[package]]
