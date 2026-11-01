@@ -11,8 +11,8 @@
 //! its address as one more argument; a callee that is variadic gets that
 //! pointer as its last parameter.
 //!
-//! DEVIATE W3: integers and floats only, one returned part, no byval, tail
-//! call, swift or funcref call, and no variadic function body (`va_start`);
+//! DEVIATE W3: integers and floats only, one returned part, no tail call, swift
+//! or funcref call, and no variadic function body (`va_start`);
 //! `accepts` refuses what it can see. Reason: the callers the runtime needs.
 //! Exit: the varargs definition step.
 //!
@@ -90,13 +90,20 @@ impl TargetCalling for WasmCalling {
         }
     }
 
-    /// An `sret` pointer is an ordinary first argument; `byval` is not
-    /// translated.
+    /// An `sret` pointer is an ordinary first argument, and so is a `byval`
+    /// one: the callee reads through the pointer (`LowerFormalArguments` keeps
+    /// no byval flag).
     fn passes_in_place(
         &self,
         attribute: &str,
     ) -> bool {
-        attribute == "sret"
+        matches!(attribute, "sret" | "byval")
+    }
+
+    /// `LowerCall` copies a `byval` argument to a frame object of its own and
+    /// passes the object's address (WebAssemblyISelLowering.cpp L1391).
+    fn byval_by_reference(&self) -> bool {
+        true
     }
 
     fn lower_call(

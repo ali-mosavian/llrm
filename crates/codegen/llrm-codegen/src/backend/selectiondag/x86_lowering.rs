@@ -159,6 +159,8 @@ pub struct MulPricing<'a> {
     pub freq: f64,
     /// `Tti::speed_milliclocks_per_byte`.
     pub milliclocks_per_byte: i64,
+    /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
+    pub by_clocks: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
@@ -421,7 +423,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
-            ISD::LRint => lower_lrint(dag, node),
+            ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
@@ -1413,10 +1415,14 @@ fn combine_cmov(
     None
 }
 
-/// `getGlobalWrapperKind`: every symbol is addressed from `%rip` in 64-bit
-/// mode (small code model), the absolute `Wrapper` elsewhere.
-fn wrapper_kind(vt: EVT) -> ISD {
-    if vt == EVT::I64 { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
+/// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
+/// position-independent code (small code model), the absolute `Wrapper`
+/// elsewhere.
+fn wrapper_kind(
+    dag: &SelectionDAG,
+    vt: EVT,
+) -> ISD {
+    if vt == EVT::I64 && !dag.config().absolute_symbols { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
@@ -1436,7 +1442,7 @@ fn lower_global_address(
         SDNodeFlags::default(),
         NodeData::Global { symbol, offset: folded },
     );
-    let wrapped = dag.get_node(wrapper_kind(vt), vt, &[target]);
+    let wrapped = dag.get_node(wrapper_kind(dag, vt), vt, &[target]);
     Some(if rest == 0 {
         wrapped
     } else {
@@ -1454,7 +1460,7 @@ fn lower_constant_pool(
     let vt = dag.value_type(node);
     let target =
         dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, offset));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
@@ -1465,7 +1471,7 @@ fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerXALUO`: the flags of `X86ISD::ADD`/`SUB`/`UMUL`/`SMUL`, and the
@@ -2021,8 +2027,13 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte } = pricing;
-    let chain = arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte).ok()??;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
+    let chain = if by_clocks {
+        arithmetic::chain_by_clocks(c, width, cpu)
+    } else {
+        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
+    }
+    .ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
@@ -2216,7 +2227,7 @@ fn mask_address(
     let splat = (0..128 / lane).fold(0u128, |all, at| all | mask << (at * lane));
     let pointer = dag.config().pointer;
     let pool = dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
-    dag.get_node(wrapper_kind(pointer), pointer, &[pool])
+    dag.get_node(wrapper_kind(dag, pointer), pointer, &[pool])
 }
 
 /// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign

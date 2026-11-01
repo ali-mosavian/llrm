@@ -489,6 +489,40 @@ static void load_real(double value, int is_double)
     number.integers = d.count + exponent;
 }
 
+/* A CURRENCY, in ten-thousandths: its digits exactly, which a double cannot hold. */
+static void load_currency(long long value)
+{
+    unsigned long long magnitude = value < 0 ? 0ULL - (unsigned long long)value : (unsigned long long)value;
+    char reversed[24];
+    int count = 0, i, first = 0;
+
+    if (value == 0) {
+        load_integer(0);
+        return;
+    }
+    number.negative = value < 0;
+    number.scientific = 0;
+    do {
+        reversed[count++] = '0' + (int)(magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude);
+    while (count < 5)
+        reversed[count++] = '0';
+    /* value = 0.d1d2... * 10^integers, d1 not zero, no trailing zeros */
+    number.integers = count - 4;
+    for (i = 0; i < count; i++)
+        number.text[i] = reversed[count - 1 - i];
+    while (number.text[first] == '0') {
+        first++;
+        number.integers--;
+    }
+    while (count > first && number.text[count - 1] == '0')
+        count--;
+    for (i = first; i < count; i++)
+        number.text[i - first] = number.text[i];
+    number.count = count - first;
+}
+
 /* The numeric field the next item goes to. */
 static void number_item(void)
 {
@@ -510,6 +544,12 @@ static void using_integer(long value)
 static void using_real(double value, int is_double)
 {
     load_real(value, is_double);
+    number_item();
+}
+
+static void using_currency(long long value)
+{
+    load_currency(value);
     number_item();
 }
 
@@ -536,7 +576,7 @@ static void using_string(SD *item)
     str_tmp_free(item);
 }
 
-static const UsingOps ops = {using_integer, using_real, using_string, using_end};
+static const UsingOps ops = {using_integer, using_real, using_currency, using_string, using_end};
 
 #pragma aux B_USNG "B$USNG"
 
