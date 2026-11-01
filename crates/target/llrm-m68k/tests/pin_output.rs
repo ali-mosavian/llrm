@@ -53,14 +53,14 @@ fn not_and_swap_encode_as_binutils_does() {
 /// `flags.rs`, which only a schedule that separates a compare from its uses
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
-const SOURCE_ORDER: Options = Options { mid_end: true, size: false, source_order: true };
+const SOURCE_ORDER: Options = Options { mid_end: true, size: false, source_order: true, indexed: false };
 
 fn compiled(
     ir: &str,
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, options).expect("compiles")
+    text_with(&module, "f", Cpu::M68000, Options { indexed: false, ..options }).expect("compiles")
 }
 
 fn branches(body: &str) -> String {

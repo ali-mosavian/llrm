@@ -536,6 +536,14 @@ fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
     }
 }
 
+/// `^` is the library call only where the target states no `f80`: an x86
+/// target, which states one, keeps the x87 sequence.
+#[test]
+fn test_power_stays_the_x87_sequence_where_the_target_states_f80() {
+    let text = listing_of("power_x87", "INPUT a#, b#\r\nPRINT a# ^ b#\r\nEND\r\n");
+    assert!(!text.contains("B$LPOW") && text.contains("db 0d9h,0e8h,0d9h,0c9h,0d9h,0f1h"), "{text}");
+}
+
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
 /// the raise ran outside its statement, so the runtime found no statement
 /// to resume after.
@@ -668,10 +676,12 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // ERL is 100 at the only error site, so its check folds away: only the
-    // ERR mismatch still reports, and the landing resumes into `recovered`.
-    let reports: Vec<&str> = procedure.lines().filter(|line| line.contains("@REPORTFAIL(")).collect();
-    assert_eq!(reports.len(), 1, "{procedure}");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
+    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
+    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    let entries = table.matches("i16 ").count();
+    assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
+    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))

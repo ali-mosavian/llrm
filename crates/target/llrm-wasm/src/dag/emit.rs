@@ -26,7 +26,7 @@ use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 
 use super::function::{PhiCopy, Selected};
 use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};
-use crate::mir::{Function, Inst, Mem, Operand, PHI, VReg, ValType};
+use crate::mir::{EH_LABEL, Function, IMPLICIT_DEF, Inst, Mem, Operand, PHI, VReg, ValType};
 
 /// The register class of a value type, `None` for a chain or glue.
 fn class(vt: EVT) -> Option<ValType> {
@@ -58,6 +58,8 @@ struct Emitter<'a> {
     names: &'a dyn Fn(u32) -> String,
     /// The position of each IR block.
     position: HashMap<u32, usize>,
+    /// The `.Ltmp` labels made so far.
+    labels: i64,
 }
 
 impl Emitter<'_> {
@@ -166,7 +168,13 @@ impl Emitter<'_> {
                     }
                 }
                 ISD::Machine(code) => {
-                    let code = code as u16;
+                    // `TargetOpcode::IMPLICIT_DEF` is the generic opcode the
+                    // matcher selects for `undef`; the wasm
+                    // passes know it by `mir::IMPLICIT_DEF`.
+                    let code = match code as u16 {
+                        llrm_dagisel::generated::ids::target_opcode::IMPLICIT_DEF => IMPLICIT_DEF,
+                        code => code,
+                    };
                     let mut operands = Vec::new();
                     for res in 0..data.values.len() {
                         if let Some(ty) = class(data.values[res]) {
@@ -243,6 +251,11 @@ impl Emitter<'_> {
             }
         }
         let at = self.position[&selected.id];
+        if selected.landing {
+            // `SelectAllBasicBlocks`: a label at the head of every EH pad.
+            out.insert(0, Inst::new(EH_LABEL, &[Operand::Imm(self.labels)]));
+            self.labels += 1;
+        }
         self.f.blocks[at].extend(out);
         // The machine CFG: the blocks the terminators name, then the next block
         // when control falls into it. An `invoke`'s unwind edge is none
@@ -261,6 +274,13 @@ impl Emitter<'_> {
         }
         if falls && at + 1 < self.f.blocks.len() {
             succs.push(at + 1);
+        }
+        // `visitInvoke`: the normal edge, then the pad's.
+        if let Some(pad) = selected.unwind {
+            let pad = self.position[&pad];
+            if !succs.contains(&pad) {
+                succs.push(pad);
+            }
         }
         self.f.succs[at] = succs;
     }
@@ -283,7 +303,7 @@ pub fn emit(
     f.blocks = vec![Vec::new(); layout.len().max(1)];
     f.succs = vec![Vec::new(); f.blocks.len()];
     let position = layout.iter().enumerate().map(|(at, &id)| (id, at)).collect();
-    let mut emitter = Emitter { f, results: HashMap::new(), builder: BTreeMap::new(), names, position };
+    let mut emitter = Emitter { f, results: HashMap::new(), builder: BTreeMap::new(), names, position, labels: 0 };
     for selected in blocks {
         emitter.block(selected);
     }

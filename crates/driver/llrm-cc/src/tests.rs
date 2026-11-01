@@ -260,3 +260,13 @@ fn the_6502_rows_select_their_own_backend_and_cpu() {
     }
     assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
 }
+
+#[test]
+fn contraction_is_off_only_where_the_machine_fuses() {
+    let table = targets(TARGETS).unwrap();
+    let off = |name: &str| table[name].clang.iter().any(|flag| flag == "-ffp-contract=off");
+    assert!(off("arm64-linux"), "arm64 has fmadd: contraction changes its results");
+    for name in ["x86_16-wat", "x86_32-wat", "x86_64-linux"] {
+        assert!(!off(name), "{name} has no fused multiply-add: clang's default contraction keeps results");
+    }
+}

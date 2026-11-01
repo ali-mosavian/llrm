@@ -150,3 +150,11 @@ pub fn update_terminator(
         insert(code, taken, Some(previous), Some((when, reg)));
     }
 }
+
+/// `MachineInstr::isCall`: a call, joined or not.
+pub fn is_call(inst: &Inst) -> bool {
+    use crate::dagisel::generated::instrinfo::{desc, flag};
+    use crate::dagisel::post_ids::{CALL, CALL_INDIRECT};
+
+    matches!(inst.opcode, CALL | CALL_INDIRECT) || desc(inst.opcode).is_some_and(|desc| desc.has(flag::CALL))
+}

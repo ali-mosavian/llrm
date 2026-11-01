@@ -557,6 +557,9 @@ pub struct Options {
     /// one as wide as the near one is the same space: a flat target.
     pub near_bytes: usize,
     pub far_bytes: usize,
+    /// `x ^ y` that squaring does not reach is a call to the runtime's `pow`
+    /// (`B$LPOW`): the target has no extended float to run the x87 sequence on.
+    pub pow_libcall: bool,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
@@ -9338,6 +9341,10 @@ impl Compiler {
             }
         }
 
+        if self.options.pow_libcall {
+            return self.library_power(left, right);
+        }
+
         // x87 has no single POW instruction. Keep the mathematical structure
         // visible as log2(base), exponent multiply, exp2. That identity holds
         // for a positive base, which a constant one proves here.
@@ -9374,6 +9381,35 @@ impl Compiler {
         let result = self.value(common);
         self.emit("fexp2", vec![result], vec![product]);
         Ok((Operand::Value(result), common))
+    }
+
+    /// `x ^ y` as a call to the runtime's `pow` (`B$LPOW`), which raises the
+    /// errors of B$POW4 itself. Each operand goes through a DOUBLE cell as it
+    /// is evaluated, so none crosses the other's blocks.
+    fn library_power(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(Operand, u32), SemanticError> {
+        let (base, base_type) = self.expression(left)?;
+        let base = self.convert(base, base_type, DOUBLE)?;
+        let x = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(x), base]);
+        let (exponent, exponent_type) = self.expression(right)?;
+        let common = common_type(base_type, exponent_type, Binary::Power)?;
+        let exponent = self.convert(exponent, exponent_type, DOUBLE)?;
+        let y = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(y), exponent]);
+        let pointer_type = self.pointer_type(DOUBLE);
+        let pointer = self.value(pointer_type);
+        self.emit_runtime_call("B$LPOW", vec![pointer], vec![Operand::Place(x), Operand::Place(y)]);
+        let power = self.value(DOUBLE);
+        self.emit(
+            "load",
+            vec![power],
+            vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
+        );
+        Ok((self.convert(Operand::Value(power), DOUBLE, common)?, common))
     }
 
     /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is

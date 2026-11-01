@@ -137,9 +137,44 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct M68kLowering;
+#[derive(Default)]
+pub struct M68kLowering {
+    /// Form `(An)+` and `-(An)` accesses; the pin sets no indexed action.
+    pub indexed: bool,
+}
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    fn is_indexed_legal(
+        &self,
+        _is_load: bool,
+        vt: EVT,
+        _post: bool,
+    ) -> bool {
+        self.indexed && super::indexed::is_indexed_legal(vt)
+    }
+
+    /// `isLegalAddressingMode`: `(d16,An)` and `(An,Xn)`, as the target's cost
+    /// model answers.
+    fn is_legal_addressing_mode(
+        &self,
+        _vt: EVT,
+        base_offs: i64,
+        scale: i64,
+    ) -> bool {
+        use llrm_mir::tti::Tti;
+        crate::machine::M68k::default().is_legal_addressing_mode(false, base_offs, true, scale)
+    }
+
+    fn indexed_address_parts(
+        &self,
+        dag: &SelectionDAG,
+        access: SDValue,
+        address: SDValue,
+        post: bool,
+    ) -> Option<(SDValue, i64)> {
+        super::indexed::indexed_address_parts(dag, access, address, post)
+    }
+
     /// The pin canonicalizes `x >= c` to `x > c - 1`; `slt 0` then folds to
     /// `bmi`.
     fn canonicalize_ge_le(&self) -> bool {

@@ -28,6 +28,15 @@ fn built(
     name: &str,
     source: &str,
 ) -> PathBuf {
+    built_with(name, source, "")
+}
+
+/// `built`, with `flags` for llrm-qb.
+fn built_with(
+    name: &str,
+    source: &str,
+    flags: &str,
+) -> PathBuf {
     for tool in ["clang", "wasm-ld", "node"] {
         need(tool);
     }
@@ -40,6 +49,7 @@ fn built(
         .arg(dir.join(format!("{name}.wasm")))
         .arg(dir.join("obj"))
         .env("LLRM_QB", env!("CARGO_BIN_EXE_llrm-qb"))
+        .env("LLRM_QB_FLAGS", flags)
         .env("LLRM_WASM_LLC", llc())
         .output()
         .expect("runtime/wasm/build.sh runs");
@@ -62,6 +72,7 @@ fn run_raw(
         .args(["--limit-ms", "30000", "--out"])
         .arg(dir.join("frames"))
         .args(flags)
+        .current_dir(dir)
         .output()
         .expect("node runs")
 }
@@ -85,6 +96,36 @@ fn print_hello_runs_on_wasm32() {
     let dir = built("hello", "PRINT \"hello\"\nEND\n");
     let (text, code) = run(&dir, "hello", &[]);
     assert_eq!(text.trim_end(), "hello");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// OPEN, PRINT#, LINE INPUT#, NAME and KILL: the OS layer denied every file
+/// (and left `llrm_os_open` and fifteen more unresolved), so grep, jpeg, stft,
+/// fieldbuf and open_modes could not instantiate.
+#[test]
+fn files_are_written_read_renamed_and_killed() {
+    let dir = built(
+        "files",
+        "OPEN \"t.dat\" FOR OUTPUT AS #1\nPRINT #1, \"hello\"; 42\nCLOSE #1\n\
+         NAME \"t.dat\" AS \"u.dat\"\nOPEN \"u.dat\" FOR INPUT AS #1\nLINE INPUT #1, a$\nCLOSE #1\n\
+         PRINT a$\nOPEN \"v.dat\" FOR OUTPUT AS #2\nPRINT #2, 1\nCLOSE #2\nKILL \"u.dat\"\nEND\n",
+    );
+    let (text, code) = run(&dir, "files", &[]);
+    assert_eq!(text.trim_end(), "hello 42");
+    assert_eq!(code, Some(0));
+    assert!(!dir.join("u.dat").exists() && !dir.join("t.dat").exists(), "KILL and NAME left files");
+    assert_eq!(std::fs::read_to_string(dir.join("v.dat")).unwrap(), " 1 \r\n");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// COMMAND$ is the arguments after the program's name, a blank apart, upper
+/// case; the harness gives them with `--arg`.
+#[test]
+fn the_command_line_is_the_harness_arguments() {
+    let dir = built("cmdline", "PRINT COMMAND$\nEND\n");
+    let (text, code) = run(&dir, "cmdline", &["--arg", "ab", "--arg", "cd"]);
+    assert_eq!(text.trim_end(), "AB CD");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
@@ -151,6 +192,27 @@ fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// Unbounded recursion under `-fsanitize=stack`: the text handed to the wasm
+/// backend carried the attribute twice and the reader refused it, so the
+/// program did not build; and once built, the engine's own stack overflow
+/// ended the harness with a JS RangeError instead of QB's "Out of stack
+/// space".
+#[test]
+fn unbounded_recursion_ends_with_out_of_stack_space() {
+    let dir = built_with(
+        "deep",
+        "DECLARE FUNCTION Deep% (n AS INTEGER)\nPRINT \"start\"\nPRINT Deep%(30000)\nPRINT \"unreachable\"\n\
+         FUNCTION Deep% (n AS INTEGER)\n    Deep% = Deep%(n + 1) + 1\nEND FUNCTION\n",
+        "-O2 -fsanitize=stack",
+    );
+    let (text, code) = run(&dir, "deep", &[]);
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some("start"));
+    assert!(lines.next().is_some_and(|line| line.starts_with("Out of stack space in line")), "{text}");
+    assert_eq!(code, Some(255));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// The host sounds what PLAY plays, from the tones the module hands its host
 /// (`llrm_host_tone`, a wrap of `dev_tone`). Without the wrap the host heard
 /// nothing. The sequence is the x86-32 host build's own for this tune.
@@ -167,6 +229,24 @@ fn play_hands_its_tones_to_the_host() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// The MID$ statement has a C runtime entry (`B$SMID`): its call was left
+/// unresolved on every flat target, so a module using it did not instantiate
+/// (jpeg, stft). Over a variable string, a fixed one, and from an
+/// overlapping source (rt/mid.asm copies forward, a byte at a time: the first
+/// byte spreads).
+#[test]
+fn the_mid_statement_overwrites_in_place() {
+    let dir = built(
+        "midstmt",
+        "a$ = \"hello world\"\nMID$(a$, 7, 3) = \"WORLD\"\nMID$(a$, 1) = \"J\"\nDIM f AS STRING * 5\nf = \"abcde\"\n\
+         MID$(f, 4, 9) = \"XYZ\"\nb$ = \"abcdef\"\nMID$(b$, 2) = b$\nPRINT a$; \"|\"; f; \"|\"; b$\nEND\n",
+    );
+    let (text, code) = run(&dir, "midstmt", &[]);
+    assert_eq!(text.trim_end(), "Jello WORld|abcXY|aaaaaa");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// `READ` into a `STRING * 5` called B$RDSD, which wrote a descriptor over the
 /// fixed buffer (garbage on screen); a fixed string is read by B$RDFS now.
 #[test]
@@ -179,4 +259,134 @@ fn read_fills_a_fixed_length_string_padded_and_cut() {
     assert_eq!(text.trim_end(), "[ab   ][xy]");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// EXP, LOG and `^` compile to calls of `exp`, `log` and `log2`/`pow`; the host
+/// supplied only sin, cos, atan and lrint, so the module did not instantiate
+/// ("function import requires a callable": data_after_checked, log_exp_digits,
+/// range_power).
+#[test]
+fn exp_log_and_power_run_on_wasm32() {
+    let dir =
+        built("mathfns", "DIM x AS DOUBLE\nx = 3\nPRINT EXP(x - 3); LOG(x - 2); 2# ^ x; x ^ 2#; SQR(x + 1)\nEND\n");
+    let (text, code) = run(&dir, "mathfns", &[]);
+    assert_eq!(text.trim_end(), " 1  0  8  9  2");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// `^` was the x87 sequence (`log2`, a multiply, `exp2`) on wasm32, which has
+/// no extended float: the product lost its low bits. It is a call of the
+/// runtime's `pow` now, with the errors of B$POW4: 5 for 0 to a negative power
+/// and a negative base with a fractional exponent, 6 past 2^32767.5, none for a
+/// result only past a DOUBLE (range_power).
+#[test]
+fn power_is_a_library_call_that_raises_the_errors_of_b_pow4() {
+    for (name, body, message) in [
+        ("powzero", "x# = 0: y# = -1: PRINT x# ^ y#", "Illegal function call"),
+        ("powroot", "x# = -8: y# = 1 / 3: PRINT x# ^ y#", "Illegal function call"),
+        ("powbig", "x# = 2: y# = 32768: PRINT x# ^ y#", "Overflow"),
+    ] {
+        let dir = built(name, &format!("{body}\nEND\n"));
+        let (text, code) = run(&dir, name, &[]);
+        assert!(text.starts_with(message), "{name}: {text:?}");
+        assert_eq!(code, Some(255), "{name}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+    let dir = built("powdouble", "x# = 10: y# = 500: z# = x# ^ y#\nPRINT \"ok\"\nEND\n");
+    let (text, code) = run(&dir, "powdouble", &[]);
+    assert_eq!((text.trim_end(), code), ("ok", Some(0)));
+    std::fs::remove_dir_all(dir).ok();
+    let dir = built("powsign", "x# = -2: y# = 3: z# = 0: PRINT x# ^ y#; z# ^ y#; z# ^ z#; 2# ^ -y#\nEND\n");
+    let (text, code) = run(&dir, "powsign", &[]);
+    assert_eq!(text.trim_end(), "-8  0  1  .125");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The words of `text`, each a number where it reads as one: `D` is QB's
+/// exponent letter for a DOUBLE.
+fn words(text: &str) -> Vec<(String, Option<f64>)> {
+    text.split_whitespace().map(|word| (word.to_owned(), word.replace('D', "E").parse().ok())).collect()
+}
+
+/// LIMIT W17: a target without an extended float computes `^` in doubles, so
+/// its digits differ from the x87 programs' in the last place. The four
+/// programs below printed those digits and failed on them; they stay within
+/// `RELATIVE_BOUND` (measured: 6.5e-16, three ulp, printing included) of the
+/// x87 outputs, the numbers compared and not the text, and `^` is the
+/// library call, not the sequence.
+#[test]
+fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
+    const RELATIVE_BOUND: f64 = 1e-15;
+    for name in ["range_power_digits", "pow_unrolled", "pow_stack_depth", "log_exp_digits"] {
+        let source_path = root().join(format!("tests/run/qb/{name}.bas"));
+        let source = std::fs::read_to_string(&source_path).unwrap();
+        // The first alternative of `' flags:`, without the x86 options.
+        let flags = source
+            .lines()
+            .find_map(|line| line.strip_prefix("' flags:"))
+            .map(|line| line.split('|').next().unwrap().split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        let dir = built_with(name, &source, &flags);
+        let (text, code) = run(&dir, name, &[]);
+        assert_eq!(code, Some(0), "{name}: {text}");
+        let expected = std::fs::read_to_string(source_path.with_extension("out")).unwrap();
+        // The harness keeps the last rows of the screen.
+        let kept: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+        let rows: Vec<&str> = expected.lines().filter(|line| !line.trim().is_empty()).collect();
+        let tail = &rows[rows.len() - kept.len()..];
+        let (got, want) = (words(&kept.join(" ")), words(&tail.join(" ")));
+        assert_eq!(got.len(), want.len(), "{name}:\n{text}");
+        for ((got_text, got), (want_text, want)) in got.iter().zip(&want) {
+            match (got, want) {
+                (Some(got), Some(want)) => {
+                    assert!((got - want).abs() <= RELATIVE_BOUND * want.abs(), "{name}: {got} for {want}")
+                }
+                _ => assert_eq!(got_text, want_text, "{name}"),
+            }
+        }
+        let ir = dir.join("module.ll");
+        let made = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .arg(&source_path)
+            .args(["--wasm32", "-o"])
+            .arg(dir.join("module.o"))
+            .args(flags.split_whitespace())
+            .env("LLRM_WASM32_TEXT", &ir)
+            .output()
+            .expect("llrm-qb runs");
+        assert!(made.status.success(), "{name}: {}", String::from_utf8_lossy(&made.stderr));
+        let text = std::fs::read_to_string(&ir).unwrap();
+        if name != "log_exp_digits" {
+            assert!(text.contains("@B_LPOW(") && !text.contains("llvm.exp2"), "{name}: the sequence, not the call");
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+/// ON ERROR lands on wasm32 with exception handling: the runtime throws and the
+/// function's `catch_all` takes it. With the `setjmp` stub the program ended at
+/// the first error with "ON ERROR landed: longjmp is not supported". The pad
+/// branches back into the function (RESUME NEXT, RESUME 0), which a `catch`
+/// cannot do, so the function runs inside a dispatch loop.
+#[test]
+fn on_error_lands_with_wasm_exceptions() {
+    let source = "ON ERROR GOTO h\nPRINT \"a\"\nERROR 5\nPRINT \"b\"\nERROR 6\nPRINT \"c\"\nEND\n\
+        h:\nPRINT \"err\"; ERR\nRESUME NEXT\n";
+    let dir = built_with("eh_land", source, "--wasm-exceptions");
+    let (text, code) = run(&dir, "eh_land", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["a", "err", "5", "b", "err", "6", "c"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A module's `catch_all` catches what an import throws, so the host's
+/// endings (`END`, a fatal error) are traps: thrown, `END` inside a function
+/// with a handler landed in the handler and the program went on.
+#[test]
+fn a_host_ending_gets_through_a_catch_all() {
+    need("node");
+    let probe = root().join("runtime/wasm/probe_end.mjs");
+    let out = Command::new("node").arg(&probe).output().expect("node");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "escaped", "{}", String::from_utf8_lossy(&out.stderr));
 }
