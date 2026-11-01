@@ -104,3 +104,12 @@ fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
     let (test, xor) = (out.find("bit 7, d").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
     assert!(test < xor, "{out}");
 }
+
+/// A spilled byte was reloaded into a register just to be compared
+/// (`ld c, -1(ix)` / `cp a, c`): a byte more and 4 T-states than `cp a, -1(ix)`.
+#[test]
+fn a_reloaded_operand_is_read_from_the_frame() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.lines().any(|line| line.trim().starts_with("cp a, ") && line.ends_with("(ix)")), "{out}");
+}

@@ -56,6 +56,11 @@ struct Printer<'a> {
     frame: Frame,
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
+    /// The virtual registers read exactly once.
+    read_once: std::collections::HashSet<u32>,
+    /// A reload the next instruction reads from the frame itself: the register
+    /// it would have gone to, and the cell.
+    folded: Option<(RegId, String)>,
 }
 
 fn name(register: RegId) -> &'static str {
@@ -230,7 +235,7 @@ impl Printer<'_> {
             }
             "ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" => {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
-                let source = name_of(self, 2)?;
+                let source = self.source(inst, 2)?;
                 self.push(format!("{mnemonic} a, {source}"));
             }
             "ADD8i" | "SUB8i" | "AND8i" | "OR8i" | "XOR8i" => {
@@ -370,7 +375,7 @@ impl Printer<'_> {
                 self.push(format!("bit 7, {}", name(hi)));
             }
             "CP8r" => {
-                let source = name_of(self, 2)?;
+                let source = self.source(inst, 2)?;
                 self.push(format!("cp a, {source}"));
             }
             "CP8i" => {
@@ -458,6 +463,10 @@ impl Printer<'_> {
                     (self.frame_index(inst, 1)?, 0)
                 };
                 let (register, slot) = (name_of(self, register)?, self.slot(index, 0)?);
+                if op == "RELOAD8" && self.reload_is_operand(inst, rest) {
+                    self.folded = Some((self.register(inst, 0)?, slot));
+                    return Ok(());
+                }
                 self.push(if op == "SPILL8" { format!("ld {slot}, {register}") } else { format!("ld {register}, {slot}") });
             }
             "SPILL16" | "RELOAD16" => {
@@ -584,6 +593,37 @@ impl Printer<'_> {
         Ok(())
     }
 
+    /// The byte operand `at` of an ALU or compare as printed: the frame cell a
+    /// reload was folded into, or the register.
+    fn source(
+        &mut self,
+        inst: &Inst,
+        at: usize,
+    ) -> Result<String, String> {
+        let register = self.register(inst, at)?;
+        match self.folded.take() {
+            Some((one, slot)) if one == register => Ok(slot),
+            _ => Ok(name(register).to_owned()),
+        }
+    }
+
+    /// Whether the instruction after a `RELOAD8` is an ALU op or compare that
+    /// reads the reloaded byte, which nothing else reads: it may take the frame
+    /// cell as its operand (`sub a, d(ix)`) and the reload goes.
+    fn reload_is_operand(
+        &self,
+        reload: &Inst,
+        rest: &[Inst],
+    ) -> bool {
+        let (Some(Operand::Def(Reg::Virt(loaded))), Some(next)) = (reload.operands.first(), rest.first()) else {
+            return false;
+        };
+        matches!(next.kind, Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r"))
+            && matches!(next.operands.get(2), Some(Operand::Use(Reg::Virt(v))) if v == loaded)
+            && self.read_once.contains(loaded)
+            && !matches!(next.operands.get(1), Some(Operand::Use(Reg::Virt(v))) if v == loaded)
+    }
+
     /// `d(ix)` for byte `extra` of frame object `index`.
     fn slot(
         &self,
@@ -692,7 +732,16 @@ pub fn finish(
         .filter(|block| matches!(&block.insts[..], [one] if one.kind == Kind::Op("RET")))
         .map(|block| block.id)
         .collect();
-    let mut printer = Printer { assignment, number, out: Vec::new(), frame, returns_bare };
+    let mut reads: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Use(Reg::Virt(v)) = operand {
+                *reads.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    let read_once = reads.into_iter().filter(|&(_, count)| count == 1).map(|(v, _)| v).collect();
+    let mut printer = Printer { assignment, number, out: Vec::new(), frame, returns_bare, read_once, folded: None };
     if printer.frame.active {
         for line in prologue(&printer.frame) {
             printer.push(line);

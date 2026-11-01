@@ -49,6 +49,11 @@ xor n,2,7,,z80
 cp b,1,4,,z80
 cp n,2,7,,z80
 cp (hl),1,7,,z80
+sub (ix+d),3,19,,z80
+and (ix+d),3,19,,z80
+or (ix+d),3,19,,z80
+xor (ix+d),3,19,,z80
+cp (ix+d),3,19,,z80
 inc b,1,4,,z80
 dec b,1,4,,z80
 inc (hl),1,11,,z80
