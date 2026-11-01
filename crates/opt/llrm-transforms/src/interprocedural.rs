@@ -669,7 +669,7 @@ pub fn optimized_with<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
         }
     }
-    // DEVIATE: the pin's IPSCCP runs once, before the CGSCC walk
+    // DEVIATE SD443: the pin's IPSCCP runs once, before the CGSCC walk
     // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1228),
     // and its ArgumentPromotion leaves a recursive function's descriptor alone
     // when it holds a pointer
@@ -679,7 +679,10 @@ pub fn optimized_with<E: From<String>>(
     // by-value slice parameters (#6140) pass the length as a
     // scalar the pin's own pipeline folds, promotion follows the pin's
     // conditions, and a sweep shows this call does nothing; then it goes.
-    // Owner w2.
+    // Owner w2, fix-by 2026-11-07: #6140 lands, then #6159 (the promotion
+    // refuses this descriptor) merges and this call goes; if #6140 cannot
+    // land by 2026-11-05 the alternative exit is reported on the 5th.
+    // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
     if promoted_any {
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, modules) {
             edited(&mut modules[at], &[id]);

@@ -1333,8 +1333,8 @@ fn the_debug_flavor_asked_for_reaches_the_object() {
         let (built, _) = compiled(&flags(&["-m32", flag, "-fobject-format=omf"]), &text, "dbgfix").unwrap();
         built.debug.expect("debug info").format
     };
-    assert_eq!(asked("-gdwarf-2"), llrm_object::debug::Format::Dwarf { version: 2 });
-    assert_eq!(asked("-gcodeview"), llrm_object::debug::Format::CodeView);
+    assert_eq!(asked("-gdwarf-2"), llrm_debug::Format::Dwarf { version: 2 });
+    assert_eq!(asked("-gcodeview"), llrm_debug::Format::CodeView);
 }
 
 /// Clang's file MD5 reached a `-gdwarf-2` object and the writer refused it
@@ -1359,8 +1359,41 @@ fn a_dwarf_2_object_from_clang_leaves_out_the_files_md5() {
         "dbgfix.ll",
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
+}
+
+/// A 16-bit object with debug information asked of the ELF writer said "DWARF:
+/// a segmented address needs the target's segment fixup", because the debug
+/// information named no target kinds unless an OMF writer added them. It
+/// carries the target's now, so the ELF writer refuses the object itself
+/// ("no elf writer for a 16-bit object yet"); the OMF object is written.
+#[test]
+fn a_16_bit_object_with_debug_info_is_refused_by_the_elf_writer_not_by_dwarf() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") { "target datalayout = \"@m16-datalayout@-ni:2:3\"" } else { line }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, _) = compiled(&flags(&["-m16", "-g"]), &text, "dbgfix").unwrap();
+    assert!(built.debug.is_some(), "premise: debug information");
+    let write = |format| {
+        llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "dbgfix.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m16::M16),
+        )
+    };
+    assert!(write(llrm_target::object::Format::Omf).is_ok());
+    for format in [llrm_target::object::Format::Elf, llrm_target::object::Format::MachO] {
+        let why = write(format).unwrap_err().to_string();
+        assert!(why.contains("a 16-bit object yet"), "{why}");
+    }
 }
 
 /// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
@@ -1385,6 +1418,7 @@ fn a_variable_in_two_registers_is_written_to_coff_as_subfields() {
         "dbgpieces.ll",
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
 }
@@ -1571,29 +1605,49 @@ fn a_variable_bit_clear_of_a_quadword_is_btr() {
 
 /// The `.eh_frame` of `text` (an x86-64 module) written as ELF.
 fn eh_frame_of(text: &str) -> Vec<u8> {
-    let (built, format) = compiled(&flags(&["-m64", "-O2"]), text, "f").unwrap();
+    eh_frame_in(&["-m64", "-O2"], text)
+}
+
+/// The `.eh_frame` of `text` compiled with `arguments`, written as ELF (32 or
+/// 64 bit, as its class byte says).
+fn eh_frame_in(
+    arguments: &[&str],
+    text: &str,
+) -> Vec<u8> {
+    let (built, format) = compiled(&flags(arguments), text, "f").unwrap();
     let bytes = llrm_codegen::backend::objbuild::written_in(
         &built,
         "f.ll",
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
+    let wide = bytes[4] == 2;
     let (u16_at, u32_at, u64_at) = (
         |at: usize| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) as usize,
         |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize,
         |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()) as usize,
     );
-    let (headers, count, names) = (u64_at(0x28), u16_at(0x3C), u16_at(0x3E));
-    let header = |index: usize| headers + index * u16_at(0x3A);
-    let strings = u64_at(header(names) + 0x18);
+    // `e_shoff`, `e_shentsize`, `e_shnum` and `e_shstrndx`; `sh_offset` and
+    // `sh_size` of a header.
+    let (headers, size, count, names) = if wide {
+        (u64_at(0x28), u16_at(0x3A), u16_at(0x3C), u16_at(0x3E))
+    } else {
+        (u32_at(0x20), u16_at(0x2E), u16_at(0x30), u16_at(0x32))
+    };
+    let field = |at: usize, (wide_at, narrow_at): (usize, usize)| {
+        if wide { u64_at(at + wide_at) } else { u32_at(at + narrow_at) }
+    };
+    let header = |index: usize| headers + index * size;
+    let strings = field(header(names), (0x18, 0x10));
     (0..count)
         .map(header)
         .find(|&at| {
             let from = strings + u32_at(at);
             bytes[from..].starts_with(b".eh_frame\0")
         })
-        .map(|at| bytes[u64_at(at + 0x18)..u64_at(at + 0x18) + u64_at(at + 0x20)].to_vec())
+        .map(|at| bytes[field(at, (0x18, 0x10))..field(at, (0x18, 0x10)) + field(at, (0x20, 0x14))].to_vec())
         .unwrap_or_default()
 }
 
@@ -1686,6 +1740,80 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
+}
+
+/// A 20 KB frame written as COFF allocated with a plain `sub rsp, N`: Windows
+/// grows the stack a page at a time, so `__chkstk` must touch it first (the
+/// pin: `mov eax, N; call __chkstk; sub rsp, rax; .seh_stackalloc N`). The
+/// program faulted past the guard page.
+#[test]
+fn a_big_coff_frame_is_probed_before_it_is_allocated() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr)\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %a = alloca [20040 x i8]\n  %r = call i32 @g(ptr %a)\n  ret i32 %r\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let frame_of = |format| {
+        let object = llrm_codegen::backend::objbuild::built_in(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
+        )
+        .unwrap();
+        let frame = object.frames.first().expect("a declared frame").clone();
+        let image = object.sections[frame.section].image.clone();
+        (image[frame.offset..frame.offset + frame.length].to_vec(), frame.seh)
+    };
+    let (body, seh) = frame_of(llrm_target::object::Format::Coff);
+    let Some((_, llrm_object::Seh::StackAlloc(size))) = seh.first().copied() else { panic!("{seh:?}") };
+    assert!(size >= 20040, "{seh:?}");
+    // `mov eax, N; call __chkstk; sub rsp, rax` (the form of the `sub` is the
+    // encoder's `2B`, the pin's `29`: every register-register ALU op differs).
+    assert_eq!(body[..5], [&[0xB8][..], &(size as u32).to_le_bytes()].concat()[..], "{body:02x?}");
+    assert_eq!(body[5], 0xE8, "call __chkstk: {body:02x?}");
+    assert!(body[10..13] == [0x48, 0x29, 0xC4] || body[10..13] == [0x48, 0x2B, 0xE0], "{body:02x?}");
+    let (elf, _) = frame_of(llrm_target::object::Format::Elf);
+    assert!(!elf.windows(3).any(|bytes| bytes == [0x48, 0x29, 0xC4]), "ELF is not probed: {elf:02x?}");
+}
+
+/// A probed frame that ends in a sibling call gives its stack back before the
+/// `jmp`: the probe and the omitted-frame exit must agree on the size.
+#[test]
+fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %x) {{\n  %a = alloca [20040 x i8]\n  %q = getelementptr i8, ptr %a, i64 20000\n  store volatile i8 1, ptr %q\n  %r = tail call i32 @g(i32 %x)\n  ret i32 %r\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O0"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let jmp = lines.iter().position(|line| line.starts_with("jmp ")).unwrap_or_else(|| panic!("{listing}"));
+    assert!(lines[jmp - 1].starts_with("add rsp, 20") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
+}
+
+/// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
+/// layout: the frames the compiler declared (`.seh_*`) against the bytes read
+/// back from the same code agree.
+#[test]
+fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @g(i32 %b)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %a\n  ret i32 %t\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let frame = object.frames.first().expect("a declared frame");
+    assert!(!frame.seh.is_empty(), "no .seh_* directive reached the frame");
+    let section = &object.sections[frame.section];
+    let body = &section.image[frame.offset..frame.offset + frame.length];
+    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
+    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
+    assert_eq!(declared, read, "{:?}", frame.seh);
 }
 
 /// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
@@ -1806,6 +1934,41 @@ fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_add
     );
 }
 
+const SYSV32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                      target triple = \"i386-unknown-linux-gnu\"\n";
+
+/// An x86 32-bit ELF object had no `.eh_frame`. The CIE is the pin's
+/// (`clang -target i386-linux-gnu`: 4-byte slots, `esp+4`, return column 8),
+/// and `push esi` declares `esi` at `cfa-8` after the prologue and the
+/// frame address 4 again at the `pop`.
+#[test]
+fn a_32_bit_function_with_a_pushed_register_has_the_pins_eh_frame() {
+    let text = format!(
+        "{SYSV32}declare i32 @g()\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g()\n  %s = add i32 %r, %a\n  %t = call i32 @g()\n  %u = add i32 %s, %t\n  ret i32 %u\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_in(&["-m32", "-mabi=sysv", "-fobject-format=elf", "-O2"], &text),
+        hex(
+            "1400000000000000017a5200017c08011b0c040488010000180000001c000000000000001500000000410e08860253 0e04000000"
+                .replace(' ', "")
+                .as_str()
+        )
+    );
+}
+
+/// The frame address stayed 4 higher after a call whose pushed argument was
+/// cleaned up with `add esp, 4`: the `add` was matched against the pseudo stack
+/// pointer at another width and never seen, so an unwinder in the rest of the
+/// function (and at `ret`) read the wrong return address.
+#[test]
+fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
+    let text = format!(
+        "{SYSV32}declare i32 @g(i32)\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g(i32 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}}\n"
+    );
+    let frame = eh_frame_in(&["-m32", "-mabi=sysv", "-fobject-format=elf", "-O2"], &text);
+    assert_eq!(frame[frame.len() - 7..], hex("440e08480e0400"));
+}
+
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
@@ -1887,23 +2050,153 @@ fn a_variable_alloca_at_m64_names_the_quadword_stack_pointer() {
     compiled(&flags(&["-O1", "--isel=dag", "-fverify-ir"]), text, "f").unwrap();
 }
 
-/// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
-/// layout: the frames the compiler declared (`.seh_*`) against the bytes read
-/// back from the same code agree.
+/// `!DIArgList` records (a variable made of several values) were read by no
+/// pass: `sum` in `bench_recgcd` had no location over the code that follows
+/// the record, and gdb printed `<optimized out>`.
 #[test]
-fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
+fn a_variable_made_of_several_values_has_an_expression_location() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/arglist_sum.ll")
+        .lines()
+        .map(
+            |line| {
+                if line.starts_with("target datalayout") { "target datalayout = \"@m32-datalayout@\"" } else { line }
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) = compiled(&flags(&["-m32", "-g", "-fobject-format=elf"]), &text, "arglist").unwrap();
+    let object = llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "arglist.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let debug = object.debug.expect("debug info");
+    let made = |location: &llrm_debug::Location| match location {
+        llrm_debug::Location::Expression { .. } => true,
+        llrm_debug::Location::List(entries) => {
+            entries.iter().any(|(_, one)| matches!(one, llrm_debug::Location::Expression { .. }))
+        }
+        _ => false,
+    };
+    let variables: Vec<_> = debug.functions.iter().flat_map(|function| function.variables.iter()).collect();
+    for name in ["d", "e"] {
+        assert!(
+            variables.iter().any(|variable| variable.name == name && made(&variable.location)),
+            "{name}: {variables:#?}"
+        );
+    }
+    // `d` is `%mul + %xor`: DW_OP_breg0 0, DW_OP_breg2 0, DW_OP_plus,
+    // DW_OP_stack_value.
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "arglist.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let sum = [0x70, 0x00, 0x72, 0x00, 0x22, 0x9f];
+    assert!(bytes.windows(sum.len()).any(|window| window == sum), "the sum's expression is in the object");
+}
+
+/// An x86-64 parameter whose register the body reuses had no location past the
+/// copy (`a` after the call in `f`): gdb printed `<optimized out>` where the
+/// pin's object says `DW_OP_entry_value(DW_OP_reg5 RDI), DW_OP_stack_value`.
+#[test]
+fn a_parameter_whose_register_was_reused_is_told_by_its_entry_value() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/entry_value.ll")
+        .lines()
+        .map(
+            |line| {
+                if line.starts_with("target datalayout") { "target datalayout = \"@m64-datalayout@\"" } else { line }
+            },
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) = compiled(&flags(&["-m64", "-g", "-fobject-format=elf"]), &text, "entryvalue").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "entry_value.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    // DW_OP_entry_value (DWARF 5) or DW_OP_GNU_entry_value, 1, DW_OP_reg5,
+    // DW_OP_stack_value.
+    let found = |op: u8| bytes.windows(4).any(|window| window == [op, 0x01, 0x55, 0x9f]);
+    assert!(found(0xa3) || found(0xf3), "the entry value of rdi is in the object");
+}
+
+/// The listing of `@f` at m32 -O2, a function with a local array it passes on
+/// (so its cells are reached through a frame or the stack pointer), with
+/// `attrs` and, if `calls` is false, no call besides the leaf's own work.
+fn frame_listing(
+    attrs: &str,
+    calls: bool,
+    extra: &[&str],
+) -> String {
+    let (group, definition) =
+        if attrs.is_empty() { ("", String::new()) } else { ("#0", format!("attributes #0 = {{ {attrs} }}\n")) };
+    let body = if calls {
+        "%a = alloca [16 x i32]\n  call void @g(ptr %a)\n  ret void"
+    } else {
+        "%a = alloca [16 x i32]\n  store i32 1, ptr %a\n  %v = load volatile i32, ptr %a\n  ret void"
+    };
     let text = format!(
-        "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @g(i32 %b)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %a\n  ret i32 %t\n}}\n"
+        "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i386-unknown-linux-gnu\"\n\
+         declare void @g(ptr)\n\
+         define void @f() {group} {{\n  {body}\n}}\n{definition}"
     );
-    let (built, _) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
-    let object =
-        llrm_codegen::backend::objbuild::built(&built, "f.ll", llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
-            .unwrap();
-    let frame = object.frames.first().expect("a declared frame");
-    assert!(!frame.seh.is_empty(), "no .seh_* directive reached the frame");
-    let section = &object.sections[frame.section];
-    let body = &section.image[frame.offset..frame.offset + frame.length];
-    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
-    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
-    assert_eq!(declared, read, "{:?}", frame.seh);
+    let mut arguments = vec!["-m32", "-O2"];
+    arguments.extend_from_slice(extra);
+    let (built, _) = compiled(&flags(&arguments), &text, "f").unwrap();
+    llrm_codegen::backend::masm::text(&built).unwrap()
+}
+
+/// `"frame-pointer"="all"` was ignored: the function's cells were reached
+/// through `esp`, `ebp` was a value register, and llc's bar for a
+/// six-register comparison could not be made.
+#[test]
+fn the_frame_pointer_all_attribute_keeps_the_frame_register() {
+    let framed = frame_listing("\"frame-pointer\"=\"all\"", true, &[]);
+    assert!(framed.contains("mov ebp, esp"), "{framed}");
+    let plain = frame_listing("", true, &[]);
+    assert!(!plain.contains("mov ebp, esp"), "{plain}");
+}
+
+/// `non-leaf` keeps it where the function calls, and only there.
+#[test]
+fn the_non_leaf_frame_pointer_policy_frames_a_caller_and_not_a_leaf() {
+    assert!(frame_listing("\"frame-pointer\"=\"non-leaf\"", true, &[]).contains("mov ebp, esp"));
+    assert!(!frame_listing("\"frame-pointer\"=\"non-leaf\"", false, &[]).contains("mov ebp, esp"));
+}
+
+/// The pin's `-frame-pointer=all` gives the attribute to each function that
+/// has none; a function's own attribute wins.
+#[test]
+fn the_frame_pointer_option_gives_the_attribute_to_functions_without_one() {
+    assert!(frame_listing("", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
+    assert!(!frame_listing("\"frame-pointer\"=\"none\"", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
+}
+
+/// A loop with a `srem` and a 64-bit sum, called with a constant, asked SCEV
+/// to udiv a 128-bit value: the zero-extension to 132 bits made an `Ap::new`
+/// of width 132 (debug builds aborted in simplifyindvar).
+#[test]
+fn an_srem_loop_with_a_constant_trip_count_compiles_in_a_debug_build() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+        target triple = \"x86_64-unknown-linux-gnu\"\n\
+        define i64 @f(i32 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n  %i = phi i32 [ %n, %entry ], [ %next, %loop ]\n  %acc = phi i64 [ 0, %entry ], [ %sum, %loop ]\n  \
+        %m = mul i32 %i, 3\n  %r = srem i32 %m, 11\n  %w = sext i32 %r to i64\n  %sum = add i64 %acc, %w\n  \
+        %next = sub i32 %i, 1\n  %done = icmp eq i32 %next, 0\n  br i1 %done, label %out, label %loop\n\
+        out:\n  ret i64 %sum\n}\n\
+        declare void @report(i64)\n\
+        define i32 @main() {\n  %v = call i64 @f(i32 2000)\n  call void @report(i64 %v)\n  ret i32 0\n}\n";
+    let _ = compiled(&flags(&["-O2"]), text, "main");
 }

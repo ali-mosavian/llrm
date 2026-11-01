@@ -2226,6 +2226,12 @@ fn _affine_address(
         widths,
         requires: deduped(replaced.iter().flat_map(|one| one.requires.iter().copied())),
         delivers: deduped(replaced.iter().flat_map(|one| one.delivers.iter().copied())),
+        // What `-g` says: the values the last part made (an intermediate
+        // value is gone), and every note that stood before a part.
+        debug: lir::DebugTags {
+            defines: result.debug.defines.clone(),
+            before: deduped(replaced.iter().flat_map(|one| one.debug.before.iter().copied())),
+        },
         ..(**owner).clone()
     });
     let others: Vec<Arc<Insn>> =
@@ -2745,6 +2751,33 @@ pub fn _flags_live_out(body: &LirBody) -> std::rc::Rc<crate::backend::incrementa
         );
     }
     solved
+}
+
+/// Whether any flag is live on entering the block at `at`: read by it before it
+/// writes the flag, or passed on to a block that reads it. O(block) after the
+/// solved liveness.
+pub(crate) fn flags_live_in(
+    body: &LirBody,
+    at: i64,
+) -> bool {
+    let solved = _flags_live_out(body);
+    let Some(block) = body.blocks.iter().find(|block| block.at == at) else { return false };
+    let live = solved.entering.get(&at).cloned().unwrap_or_default();
+    let live = block
+        .insns
+        .iter()
+        .rev()
+        .fold(
+            live,
+            |live, one| {
+                let (reads, writes) = _flag_effect(body.regs(), body.bits, one);
+                live.minus(&writes).or(&reads)
+            },
+        );
+    // `sub esp` writes the arithmetic flags and leaves the direction flag (a
+    // string instruction reads it) alone.
+    let arithmetic = _flag_lanes(_ARITHMETIC);
+    !live.minus(&live.minus(&arithmetic)).is_empty()
 }
 
 /// Flag liveness as a [`Problem`](crate::backend::incremental::Problem): the

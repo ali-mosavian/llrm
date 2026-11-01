@@ -1,0 +1,47 @@
+# m68k registers, in the format of x86-m32's registers.regs. Ids are numbered by line from 1.
+# The file is M68kRegisterInfo.td at the pin: bd/wd/d are the 8/16/32-bit views of a data register, wa/a of an
+# address register; a6 is the frame register (M68kRegisterInfo FramePtr) and sp (a7) the stack.
+#
+# name bits root lane classes dwarf codeview
+@scratch d0 d1 a0 a1
+d0 32 d0 0 gpr,int,index 0 -
+d1 32 d1 0 gpr,int,index 1 -
+d2 32 d2 0 gpr,int,index 2 -
+d3 32 d3 0 gpr,int,index 3 -
+d4 32 d4 0 gpr,int,index 4 -
+d5 32 d5 0 gpr,int,index 5 -
+d6 32 d6 0 gpr,int,index 6 -
+d7 32 d7 0 gpr,int,index 7 -
+a0 32 a0 0 gpr,int,base 8 -
+a1 32 a1 0 gpr,int,base 9 -
+a2 32 a2 0 gpr,int,base 10 -
+a3 32 a3 0 gpr,int,base 11 -
+a4 32 a4 0 gpr,int,base 12 -
+a5 32 a5 0 gpr,int,base 13 -
+a6 32 a6 0 reserved,frame,int,base 14 -
+sp 32 sp 0 reserved,stack,int,base 15 -
+wd0 16 d0 0 int 0 -
+wd1 16 d1 0 int 1 -
+wd2 16 d2 0 int 2 -
+wd3 16 d3 0 int 3 -
+wd4 16 d4 0 int 4 -
+wd5 16 d5 0 int 5 -
+wd6 16 d6 0 int 6 -
+wd7 16 d7 0 int 7 -
+bd0 8 d0 0 int,byte 0 -
+bd1 8 d1 0 int,byte 1 -
+bd2 8 d2 0 int,byte 2 -
+bd3 8 d3 0 int,byte 3 -
+bd4 8 d4 0 int,byte 4 -
+bd5 8 d5 0 int,byte 5 -
+bd6 8 d6 0 int,byte 6 -
+bd7 8 d7 0 int,byte 7 -
+wa0 16 a0 0 int 8 -
+wa1 16 a1 0 int 9 -
+wa2 16 a2 0 int 10 -
+wa3 16 a3 0 int 11 -
+wa4 16 a4 0 int 12 -
+wa5 16 a5 0 int 13 -
+wa6 16 a6 0 int 14 -
+wsp 16 sp 0 int 15 -
+ccr 8 ccr 0 reserved - -

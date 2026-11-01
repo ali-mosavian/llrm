@@ -240,11 +240,17 @@ pub enum Effect {
 /// What a language says an access reaches, for the alias analysis: the
 /// descriptor that describes an array, or an element of the array's own
 /// allocation. The two never overlap, whatever pointer reaches either.
+/// `Absolute` is memory the program owns nothing in (a literal DEF SEG's
+/// segment), apart from everything else; `Referent` is what a reference
+/// parameter points at, a variable or an element of the program: it may be
+/// either of the first two and is never `Absolute`.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum Region {
     #[default]
     Descriptor,
     Element,
+    Absolute,
+    Referent,
 }
 
 impl Wire for Region {
@@ -256,7 +262,9 @@ impl Wire for Region {
         value: i64,
         second: Option<i64>,
     ) -> Option<Region> {
-        [Region::Descriptor, Region::Element].into_iter().find(|one| *one as i64 == value && second.is_none())
+        [Region::Descriptor, Region::Element, Region::Absolute, Region::Referent]
+            .into_iter()
+            .find(|one| *one as i64 == value && second.is_none())
     }
 }
 

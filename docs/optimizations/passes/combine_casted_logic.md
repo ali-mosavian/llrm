@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_casted_logic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_casted_logic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_casted_logic.rs sha256:c3a16b235660e12ab17f5a92bc480dacf5a05a1ecbf314eca1510451eb9d428a -->
+<!-- src: crates/opt/llrm-transforms/src/combine_casted_logic.rs sha256:37fe75b264dd2cd6829265171a1e99a3e0516fa51d8617926ea2e573f9f50659 -->
 
 # combine_casted_logic
 
@@ -12,8 +12,7 @@ and `shouldOptimizeCast` (:1764).
 
 MIRROR: the C++ order and its one-use conditions.
 
-DEVIATE 1: `foldLogicCastConstant` (a cast and a constant) and the
-`(A >> BW-1)` with `zext(icmp)` fold are left out.
+DEVIATE 1: the `(A >> BW-1)` with `zext(icmp)` fold is left out.
 
 DEVIATE 2: ours runs it from `visitAnd` ahead of the folds of a bool
 extension, where the C++ reaches it after `reassociateBooleanAndOr`.

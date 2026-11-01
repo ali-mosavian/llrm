@@ -18,6 +18,7 @@ fn hooks() -> X86Hooks {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
     })
 }
@@ -227,6 +228,52 @@ fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
     assert!(adapter.refusal().is_some_and(|why| why.contains("pin register 7")));
 }
 
+/// m68k's `PC` is a register of the pin's that no instruction names: it has no
+/// id of ours, so a matcher read it as a virtual register and the pc-relative
+/// load of a global addressed from an unset `An`. A target says which numbers
+/// are fixed and `register_of` answers them; others stay virtual.
+#[test]
+fn a_fixed_register_with_no_id_is_a_register_of_the_pin_not_a_virtual_one() {
+    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::generated::ids::mvt;
+    use llrm_lir::registers::RegId;
+
+    use super::dagisel_adapter::PinRegisters;
+
+    struct WithPc;
+    impl PinRegisters for WithPc {
+        fn phys_reg(
+            &self,
+            _pin: u16,
+        ) -> Option<RegId> {
+            None
+        }
+        fn pin_register(
+            &self,
+            _id: RegId,
+        ) -> Option<u16> {
+            None
+        }
+        fn is_fixed(
+            &self,
+            register: u16,
+        ) -> bool {
+            register == 9
+        }
+    }
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut adapter = DagisAdapter::with_registers(&mut dag, &WithPc);
+    let (pc, other) = (adapter.register(9, mvt::i32), adapter.register(10, mvt::i32));
+    assert_eq!(adapter.register_of(pc.node), Some(9));
+    assert_eq!(adapter.register_of(other.node), None, "any other number is virtual");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut x86 = DagisAdapter::new(&mut dag);
+    let nine = x86.register(9, mvt::i32);
+    assert_eq!(x86.register_of(nine.node), None, "a target that says nothing has no fixed register");
+}
+
 /// The adapter said no store truncates, so a narrow store of a wide value
 /// matched the plain store patterns (and `ST_Fp64m32`'s truncating pattern
 /// never could).
@@ -301,6 +348,21 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
     }
     assert_eq!(machine_name(&dag, zero.node), "LD_Fp080");
     assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
+}
+
+/// A pattern that takes a float as an immediate (`fpimm`, wasm's `f64.const`)
+/// asks for the constant as a target constant; a `ConstantFP` stayed a
+/// `ConstantFP`, which no machine instruction's pattern accepts.
+#[test]
+fn a_float_constant_converts_to_a_target_constant() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let value = dag.get_constant_fp(2.5f64.to_bits().into(), EVT::Simple(super::mvt::MVT::F64));
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let target = adapter.convert_to_target(PinValue::new(value.node, value.res));
+    let target = SDValue { node: target.node, res: target.res };
+    assert_eq!(dag.opcode(target), ISD::TargetConstantFP);
+    assert_eq!(dag.value_type(target), EVT::Simple(super::mvt::MVT::F64));
 }
 
 /// Every node of ours that the matcher passes through has an id in

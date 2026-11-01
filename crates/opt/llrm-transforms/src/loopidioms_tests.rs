@@ -106,7 +106,7 @@ fn a_byte_loop_is_one_memset() {
     assert!(changed);
     assert!(text.contains("b1:\n  %c = icmp slt i16 0, %n\n  br i1 %c, label %b2, label %b3\n"), "{text}");
     assert!(
-        text.contains("  call void @llvm.memset.p0.i16(ptr %p, i8 65, i16 %1, i1 false)\n")
+        text.contains("  call void @llvm.memset.p0.i16(ptr align 1 %p, i8 65, i16 %1, i1 false)\n")
             && text.contains("  br label %b3\n\nb3:\n  %e = phi i16 [ 0, %b1 ], [ %2, %b2 ]\n"),
         "{text}"
     );
@@ -134,7 +134,7 @@ fn a_counted_word_loop_is_one_memset_of_its_bytes() {
         assert!(changed);
         assert!(text.contains(&format!("b1:\n  %c = icmp slt i16 0, 10\n  br label %b2\n")), "{text}");
         assert!(
-            text.contains(&format!("call void @llvm.memset.p0.i16(ptr %p, i8 {byte}, i16 20, i1 false)")),
+            text.contains(&format!("call void @llvm.memset.p0.i16(ptr align 2 %p, i8 {byte}, i16 20, i1 false)")),
             "{text}"
         );
     }
@@ -169,7 +169,9 @@ fn a_word_of_two_bytes_is_one_pattern_fill() {
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
     let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
     assert!(
-        after.contains("call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 10, i1 false)"),
+        after.contains(
+            "call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr align 2 %p, i16 4660, i16 10, i1 false)"
+        ),
         "{after}"
     );
 }
@@ -181,7 +183,9 @@ fn an_invariant_word_is_one_pattern_fill() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 %q, ptr %p\n";
     let after = managed_fill(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
     assert!(
-        after.contains("call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 %q, i16 %1, i1 false)"),
+        after.contains(
+            "call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr align 2 %p, i16 %q, i16 %1, i1 false)"
+        ),
         "{after}"
     );
 }
@@ -203,7 +207,7 @@ fn an_undeclared_memset_is_declared() {
     let text = managed(&mut module, LoopIdioms { size: false });
     assert!(
         text.contains("declare void @llvm.memset.p0.i16(ptr")
-            && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65"),
+            && text.contains("call void @llvm.memset.p0.i16(ptr align 1 %p, i8 65"),
         "{text}"
     );
     assert_eq!(results(&module, TRIPS), results(&before, TRIPS));
@@ -221,7 +225,10 @@ fn a_word_count_that_may_wrap_is_kept() {
     let trips: &[&[i128]] = &[&[0, 0], &[1, 0], &[1, 1], &[40, 39], &[40, 40]];
     kept(&unsigned(looped("i16", "%n", &body(""), "%e")), trips);
     let (text, changed) = fill(&unsigned(looped("i16", "%n", &body("inbounds "), "%e")), trips);
-    assert!(changed && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %2, i1 false)"), "{text}");
+    assert!(
+        changed && text.contains("call void @llvm.memset.p0.i16(ptr align 2 %p, i8 0, i16 %2, i1 false)"),
+        "{text}"
+    );
     assert!(fill(&looped("i16", "%n", &body(""), "%e"), TRIPS).1);
 }
 
@@ -359,10 +366,11 @@ fn a_fill_is_priced_against_its_loop() {
 /// A fill through a huge pointer is one fill in the pointer's space, with a
 /// count of 32 bits: the intrinsic carries the address space, and isel splits
 /// it at each 64K segment (`isel/huge.rs`). It was left a loop, ten
-/// instructions to a byte. A word of two different bytes is a pattern; a byte
-/// is a memset.
+/// instructions to a byte. A byte is a memset. A word of two different bytes
+/// would be a pattern, but its index is wider than space 0's, which the pattern
+/// fill cannot count: it stays a loop (huge fillw, 4 rows, #6195).
 #[test]
-fn a_fill_through_a_huge_pointer_is_one_fill_in_its_space() {
+fn a_byte_fill_through_a_huge_pointer_is_one_fill_in_its_space_and_a_word_fill_stays_a_loop() {
     let text = "@big = addrspace(3) global [40000 x i16] zeroinitializer
 
 define i16 @f(i32 %n) {
@@ -386,7 +394,8 @@ b3:
 ";
     assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
     let after = managed_fill(text, &[&[0], &[1], &[300]]);
-    assert!(after.contains("call void @llvm.experimental.memset.pattern.p3.i16.i32(ptr addrspace(3) "), "{after}");
+    assert!(!after.contains("memset.pattern"), "{after}");
+    assert!(after.contains("store i16 4660"), "{after}");
     let bytes =
         text.replace("[40000 x i16]", "[40000 x i8]").replace("i16 4660", "i8 65").replace("store i16", "store i8");
     let after = managed_fill(&bytes, &[&[0], &[1], &[300]]);
@@ -737,7 +746,7 @@ fn a_guarded_byte_loop_is_one_memset() {
     let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
     let (text, changed) = fill(&guarded("i8", "%n", body), TRIPS);
     assert!(changed, "{text}");
-    assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65, i16 %"), "{text}");
+    assert!(text.contains("call void @llvm.memset.p0.i16(ptr align 1 %p, i8 65, i16 %"), "{text}");
 }
 
 /// Constants that are not a memset, being less than the stores they would make,
@@ -830,8 +839,8 @@ fn a_loop_of_two_fills_to_apart_bytes_is_a_memset_each() {
     let (text, changed) = fill(&two_fills(30, "-1", "-1", "%i"), CELLS);
     assert!(changed);
     assert!(
-        text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 -1, i16 60, i1 false)")
-            && text.contains("call void @llvm.memset.p0.i16(ptr %r, i8 -1, i16 60, i1 false)")
+        text.contains("call void @llvm.memset.p0.i16(ptr align 2 %p, i8 -1, i16 60, i1 false)")
+            && text.contains("call void @llvm.memset.p0.i16(ptr align 2 %r, i8 -1, i16 60, i1 false)")
             && !text.contains("store"),
         "{text}"
     );
@@ -954,7 +963,7 @@ fn a_loop_of_undef_bytes_is_a_memset_of_undef() {
     let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 undef, ptr %p\n";
     let (text, changed) = fill(&looped("i8", "%n", body, "%e"), TRIPS);
     assert!(changed);
-    assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 undef, i16 %1, i1 false)"), "{text}");
+    assert!(text.contains("call void @llvm.memset.p0.i16(ptr align 1 %p, i8 undef, i16 %1, i1 false)"), "{text}");
 }
 
 /// `buf[i + 7] = buf[i]` for `i` falling from `n - 1` (idiom_edges.c's
@@ -1075,4 +1084,33 @@ fn a_fill_is_priced_at_three_quarters_of_the_table() {
 fn a_fill_that_saves_five_bytes_for_87_clocks_is_not_worth_it() {
     assert!(!super::clocks_pay(5, 10_000, 129, 42));
     assert!(super::clocks_pay(5, 10_000, 90, 42), "48 clocks for 5 bytes pay");
+}
+
+/// A word fill made by this module carries the stores' alignment (the ABI one
+/// where a store states none) on the memset's destination: without it the
+/// backend filled by bytes (`rep stosb` of 202, particle nib -O2, +2424 clocks
+/// over `rep stosw`).
+#[test]
+fn a_word_fill_keeps_the_alignment_of_its_stores() {
+    let text = "@z = global [101 x i16] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr [101 x i16], ptr @z, i16 0, i16 %i
+  store i16 0, ptr %p
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 101
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+    let after = managed_fill(text, &[&[]]);
+    assert!(after.contains("llvm.memset"), "{after}");
+    assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
 }

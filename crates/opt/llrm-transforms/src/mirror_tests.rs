@@ -124,3 +124,19 @@ fn test_an_address_that_takes_the_scale_is_left() {
         assert!(!changed && !after.contains("phi ptr"), "{after}");
     }
 }
+
+/// deedlines' `SPHEREMAPLASMA` (`SP%(k + 1)` read where `k` is stepped): the
+/// pointer's step was put after the load that reads the stepped pointer, and
+/// the verifier failed ("load uses a value whose definition does not dominate
+/// it").
+#[test]
+fn test_a_load_through_the_stepped_counter_follows_the_pointer_step() {
+    let body = typed()
+        .replace(
+            "  %pi = getelementptr inbounds [2 x i8], ptr @a, i16 %i\n",
+            "  %i1 = add nsw i16 %i, 1\n  %pi = getelementptr inbounds [2 x i8], ptr @a, i16 %i1\n",
+        )
+        .replace("  %i1 = add nsw i16 %i, 1\n  %sum", "  %sum");
+    let (changed, after) = through(&body, &bare());
+    assert!(changed, "{after}");
+}

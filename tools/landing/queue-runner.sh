@@ -11,7 +11,7 @@ export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
@@ -53,10 +53,14 @@ while true; do
     # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
     tooling_current "$HERE/.." 2>>"${LAND_TMP:-/tmp/landing}/assemble.log" || echo "tooling not refreshed" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
     cand=($(alone_filter "${cand[@]:0:BATCH_CAP}"))
+    # aging: a PR left out of STARVE_K (default 6) consecutive batches is a batch of its own, as an urgent one is (O(queue) per cycle)
+    SF="${LAND_TMP:-/tmp/landing}/starved.txt"; seen=("${cand[@]}"); aged_one=$([ -z "$solo" ] && [ ${#urgent[@]} -eq 0 ] && starved_next "$SF" "${cand[@]}")
+    [ -n "$aged_one" ] && { echo "NOTE: #$aged_one was left out of $STARVE_K batches; it is a batch of its own" | tee -a "${LAND_TMP:-/tmp/landing}/assemble.log"; cand=("$aged_one"); }
     asm_start=$(date +%s)
     if [ -n "$solo" ]; then batch=("${cand[@]}"); else
     batch=($(python3 "$HERE/../parity_squash.py" assemble $BATCH_CAP "${cand[@]:0:BATCH_CAP + 24}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:BATCH_CAP}"); fi
     asm_s=$(( $(date +%s) - asm_start ))
+    [ ${#seen[@]} -gt 0 ] && starved_record "$SF" "${batch[*]}" "${seen[@]}"
   else
     cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
     batch=($(pick_disjoint 8 "${cand[@]}"))

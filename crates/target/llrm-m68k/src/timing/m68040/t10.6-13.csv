@@ -1,0 +1,19 @@
+#title,10.6 INTEGER UNIT INSTRUCTION TIMINGS: MULS.W/L* | MULU.W/L * | NBCD,page,10-25,notes,*Multiply <ea> calculate and execute times; T1/T2 apply to word/long-word operand size.
+Addressing Mode,MULS.W/L* <ea> Calculate,MULS.W/L* Execute,MULU.W/L * <ea> Calculate,MULU.W/L * Execute,NBCD <ea> Calculate,NBCD Execute
+Dn,1,16/20,1,14/20,1,3
+An,—,—,—,—,—,—
+(An),1,16/20,1,14/20,1,2
+(An)+,1,16/20,1,14/20,1,2
+–(An),1,16/20,1,14/20,1,2
+"(d 16,An)",1/2,16/20,1/2,14/20,1,2
+"(d 16,PC)",3,2L + 16/2L + 20,3,14/20,—,—
+"(xxx).W, (xxx).L",1/2,16/20,1/2,14/20,1,2
+#<xxx>,1,16/20,1,14/20,—,—
+"(d 8,An,Xn)",3,18/22,3,16/22,3,4
+"(d 8,PC,Xn)",5,1L + 19/1L + 23,5,1L + 17/1L + 23,—,—
+"(BR,Xn)",6,1L + 20/1L + 24,6,1L + 18/1L + 24,6,1L + 6
+"(bd,BR,Xn)",7,1L + 21/1L + 25,7,1L + 19/1L + 25,7,1L + 7
+"([bd,BR,Xn])",9,1L + 23/1L + 27,9,1L + 21/1L + 27,9,1L + 9
+"([bd,BR,Xn],od)",10,1L + 24/1L + 28,10,1L + 22/1L + 28,10,1L + 10
+"([bd,BR],Xn)",10,3L + 22/3L + 26,10,3L + 20/3L + 26,10,3L + 8
+"([bd,BR],Xn,od)",11,3L + 23/3L + 27,11,3L + 21/3L + 27,11,3L + 9

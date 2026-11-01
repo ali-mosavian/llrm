@@ -1,6 +1,6 @@
 //! x86's fixup kinds (`X86FixupKinds.h`), numbered from `FIRST_TARGET`.
 
-use llrm_object::debug::DebugTarget;
+use llrm_debug::DebugTarget;
 use llrm_object::{Fix, FixupKind, FixupKindInfo};
 
 /// A call or jump's target, relative to the field's end: the formats that tell
@@ -20,7 +20,23 @@ pub const FAR_POINTER: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 5);
 /// What a debug writer needs of the machine: its width and the kinds that name
 /// a segment (OMF's, which 32-bit objects also carry).
 pub fn debug_target(bits: u8) -> DebugTarget {
-    DebugTarget { segment_base: Some(SEGMENT_BASE), far_pointer: Some(FAR_POINTER), ..DebugTarget::of(bits) }
+    DebugTarget {
+        segment_base: Some(SEGMENT_BASE),
+        far_pointer: Some(FAR_POINTER),
+        entry_values: bits == 64,
+        // System V: the ABI of the objects that carry DWARF.
+        call_arguments: if bits == 64 {
+            ["rdi", "rsi", "rdx", "rcx", "r8", "r9"].map(str::to_owned).to_vec()
+        } else {
+            Vec::new()
+        },
+        call_preserved: if bits == 64 {
+            ["rbx", "rbp", "r12", "r13", "r14", "r15"].map(str::to_owned).to_vec()
+        } else {
+            Vec::new()
+        },
+        ..DebugTarget::of(bits)
+    }
 }
 
 /// A call or jump's target, `width` bytes relative to the field's end.

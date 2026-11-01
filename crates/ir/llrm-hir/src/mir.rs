@@ -296,10 +296,14 @@ fn stored_type(
 }
 
 /// The `!tbaa` access tags that mark a frontend's promise that a far
-/// allocation is disjoint from every place: two siblings under one root.
+/// allocation is disjoint from every place: two siblings, both under
+/// `referent`, which is apart from `absolute`, memory the program owns nothing
+/// in.
 pub struct Tags {
     pub place: MetadataId,
     pub allocation: MetadataId,
+    pub absolute: MetadataId,
+    pub referent: MetadataId,
     /// The `!tbaa` access tag of each array allocation a function reaches
     /// through its descriptor, by function and descriptor place: a type of
     /// its own under `allocation`, so two arrays are apart and the generic
@@ -316,11 +320,19 @@ impl Tags {
             MetadataId(module.metadata.len() as u32 - 1)
         };
         let root = node(vec![MetadataOperand::String("llrm hir".to_owned())]);
-        let mut tag = |name: &str| {
-            let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(root), zero.clone()]);
-            node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()])
+        let mut tag = |name: &str, parent: MetadataId| {
+            let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(parent), zero.clone()]);
+            (ty, node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()]))
         };
-        Tags { place: tag("place"), allocation: tag("allocation"), arrays: HashMap::default() }
+        // `place` and `allocation` come first, naming the `referent` type that
+        // follows them as their parent.
+        let referent_type = MetadataId(root.0 + 5);
+        let (_, place) = tag("place", referent_type);
+        let (_, allocation) = tag("allocation", referent_type);
+        let (program, referent) = tag("referent", root);
+        assert_eq!(program, referent_type);
+        let (_, absolute) = tag("absolute", root);
+        Tags { place, allocation, absolute, referent, arrays: HashMap::default() }
     }
 
     /// A tag for each array a function of `hir` reaches through a descriptor
@@ -1201,7 +1213,10 @@ fn data_initializer(
         let mut address = target;
         if relocation.addend != 0 {
             let ty = context.types.ptr(space);
-            let index = context.int(i16, i128::from(relocation.addend));
+            // The offset is as wide as the near pointer (the datalayout's), as
+            // an address is.
+            let offset = context.types.int(8 * widths.near as u32);
+            let index = context.int(offset, i128::from(relocation.addend));
             let operands = vec![target, index];
             address = context.constant(Constant {
                 ty,
@@ -2955,7 +2970,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     .addresses
                     .get(&one.base)
                     .is_some_and(|&size| one.offset >= 0 && one.offset + self.tables.types[&one.r#type].width <= size);
+                let region = self.tables.regions.get(&(self.function.id, self.at_instruction));
                 let tag = match one.allocation {
+                    _ if region == Some(&Region::Absolute) => Some(self.tables.tags.absolute),
+                    _ if region == Some(&Region::Referent) => Some(self.tables.tags.referent),
                     Some(descriptor) => Some(
                         self.tables
                             .tags
@@ -2969,6 +2987,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         // generic tag covers it.
                         Some(Region::Element) => Some(self.tables.tags.allocation),
                         Some(Region::Descriptor) => Some(self.tables.tags.place),
+                        Some(Region::Absolute | Region::Referent) => None,
                         None => inside.then_some(self.tables.tags.place),
                     },
                 };

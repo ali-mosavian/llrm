@@ -18,14 +18,17 @@ impl Machine for I386 {
     const NUMBER: u16 = 0x14C;
     const SAFE_SEH: bool = true;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, width, from, baked) = match (reloc.kind, reloc.pc_rel) {
-            (FixupKind::DATA_4, false) => (DIR32, 4, 0, 0),
-            (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
-            (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
-            (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
-            (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
+        let (kind, baked) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_4, false) => (DIR32, 0),
+            (FixupKind::DATA_4, true) => (REL32, 4),
+            (fixup::BRANCH_4, true) => (REL32, 4),
+            (FixupKind::SECREL_2, _) => (SECTION, 0),
+            (FixupKind::SECREL_4, _) => (SECREL, 0),
             (fixup::SEGMENT_BASE, _) => {
                 return Err(Unsupported("a segment selector has no COFF relocation".into()));
             }
@@ -34,7 +37,7 @@ impl Machine for I386 {
             }
             other => return Err(Unsupported(format!("COFF i386 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from, baked })
+        Ok(Relocation { kind, baked })
     }
 }
 
@@ -147,7 +150,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 

@@ -205,7 +205,7 @@ fn defines_flags(
 }
 
 /// The part of a condition name after the `j`, `set` or `cmov`.
-fn condition_of(name: &str) -> Option<&str> {
+pub(crate) fn condition_of(name: &str) -> Option<&str> {
     ["cmov", "set", "j"].iter().find_map(|prefix| name.strip_prefix(prefix))
 }
 
