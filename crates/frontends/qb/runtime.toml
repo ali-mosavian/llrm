@@ -1165,6 +1165,7 @@ check = { when = "$1 < 1 or $2 < 0", raise = 5 }
 [semantics."B$FCHR"]
 evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the value is not a byte; otherwise a one-byte temporary string holds it."
 parameters = ["int"]
+inline = "always"
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 
