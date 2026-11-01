@@ -109,7 +109,16 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         tl.set_libcall_name(LRint, vt, if vt == MVT::F32 { "lrintf" } else { "lrint" });
         // `TargetLoweringBase`: the transcendentals default to `Expand`, a call
         // to the C routine of that type.
-        for (op, name) in [(FSin, "sin"), (FCos, "cos"), (FAtan, "atan"), (FLog, "log"), (FExp, "exp"), (FRem, "fmod")]
+        for (op, name) in [
+            (FSin, "sin"),
+            (FCos, "cos"),
+            (FAtan, "atan"),
+            (FLog, "log"),
+            (FLog2, "log2"),
+            (FExp, "exp"),
+            (FExp2, "exp2"),
+            (FRem, "fmod"),
+        ]
         {
             tl.set_operation_action(op, vt, if op == FRem { Action::LibCall } else { Action::Expand });
             let name = if vt == MVT::F32 { f32_name(name) } else { name };
@@ -129,7 +138,9 @@ fn f32_name(name: &'static str) -> &'static str {
         "cos" => "cosf",
         "atan" => "atanf",
         "log" => "logf",
+        "log2" => "log2f",
         "exp" => "expf",
+        "exp2" => "exp2f",
         "fmod" => "fmodf",
         other => unreachable!("no single-precision name for {other}"),
     }
