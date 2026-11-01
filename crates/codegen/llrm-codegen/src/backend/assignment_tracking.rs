@@ -33,6 +33,8 @@
 //! # See also
 //! `llvm/lib/CodeGen/AssignmentTrackingAnalysis.cpp`, pin d1106deb71cc.
 
+mod fill;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
@@ -1317,7 +1319,7 @@ impl<'a> Lowering<'a> {
     /// state changes, a state only moves up its lattice (a variable's kind
     /// and assignments), so O(blocks x variables) passes of O(instructions),
     /// cut off at [`MAX_BLOCKS`] blocks.
-    pub fn run(mut self) -> Option<FunctionVarLocs> {
+    pub fn run(mut self) -> Option<(FunctionVarLocsBuilder, bool)> {
         use std::collections::BTreeSet;
         let function = self.q.function;
         if function.layout().len() > MAX_BLOCKS {
@@ -1390,7 +1392,8 @@ impl<'a> Lowering<'a> {
     }
 
     /// The table from what the dataflow made.
-    fn finish(mut self) -> FunctionVarLocs {
+    fn finish(mut self) -> (FunctionVarLocsBuilder, bool) {
+        let mut inserted = false;
         let mut always: HashSet<MetadataId> = HashSet::new();
         for locs in self.insert_before.values() {
             for loc in locs {
@@ -1405,6 +1408,7 @@ impl<'a> Lowering<'a> {
                     continue;
                 }
                 if always.insert(aggregate) {
+                    inserted = true;
                     let variable = *self.builder.variable(loc.variable);
                     self.builder.add_single_loc_var(variable, Vec::new(), loc.location, loc.values.clone());
                 }
@@ -1416,15 +1420,17 @@ impl<'a> Lowering<'a> {
                 .into_iter()
                 .filter(|loc| !always.contains(&self.builder.variable(loc.variable).variable))
                 .collect();
+            inserted |= !kept.is_empty();
             self.builder.set_wedge(at, kept);
         }
-        self.emit_promoted();
-        self.builder.finish()
+        inserted |= self.emit_promoted();
+        (self.builder, inserted)
     }
 
     /// `emitPromotedVarLocs`: a record of a variable with no stack slot is
     /// a location where it stands.
-    fn emit_promoted(&mut self) {
+    fn emit_promoted(&mut self) -> bool {
+        let mut any = false;
         let function = self.q.function;
         for record in function.debug_records() {
             if matches!(record.what, DebugWhat::Declare(_)) || self.with_slot.contains(&record.variable) {
@@ -1444,7 +1450,9 @@ impl<'a> Lowering<'a> {
                 .and_then(|list| list.iter().position(|&at| std::ptr::eq(&function.debug_records()[at], record)));
             let at = (record.before, slot.map_or(0, |one| one as u32));
             self.builder.add_var_loc(at, variable, ops, record.location, values);
+            any = true;
         }
+        any
     }
 
     /// The end of a frame: a variable that is not in memory now cannot be
@@ -1459,6 +1467,32 @@ impl<'a> Lowering<'a> {
             }
         }
     }
+}
+
+/// `analyzeFunction`: the locations of `function`'s variables. `coalesce`
+/// is whether adjacent fragments in memory are stated as one
+/// (`shouldCoalesceFragments`: the target uses instruction referencing).
+pub fn analyze(
+    module: &Module,
+    q: &Query,
+    coalesce: bool,
+) -> Option<FunctionVarLocs> {
+    let function = q.function;
+    let markers = AssignmentMarkers::new(function);
+    let with_slot = vars_with_stack_slot(function, &markers);
+    let mut builder = FunctionVarLocsBuilder::default();
+    let callees = llrm_mir::memory::callees(module);
+    let prepared = build_overlap_map(module, q, &mut builder, &markers, &with_slot, &callees);
+    let (mut builder, changed) = Lowering::new(module, q, &markers, &with_slot, prepared, builder).run()?;
+    if changed {
+        let mut count: HashMap<InstId, u32> = HashMap::new();
+        for record in function.debug_records() {
+            *count.entry(record.before).or_default() += 1;
+        }
+        let slots = |inst: InstId| count.get(&inst).copied().unwrap_or(0);
+        fill::run(module, function, &mut builder, &with_slot, &slots, coalesce);
+    }
+    Some(builder.finish())
 }
 
 /// The operations of an expression as LLVM prints them.
@@ -1849,13 +1883,7 @@ done:\n  ret i32 %j\n}\n\
         let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
         let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
         let function = function_f(&module);
-        let q = Query::new(&module, function, &layout);
-        let markers = AssignmentMarkers::new(function);
-        let with_slot = vars_with_stack_slot(function, &markers);
-        let mut builder = FunctionVarLocsBuilder::default();
-        let callees = llrm_mir::memory::callees(&module);
-        let prepared = build_overlap_map(&module, &q, &mut builder, &markers, &with_slot, &callees);
-        Lowering::new(&module, &q, &markers, &with_slot, prepared, builder).run().expect("few blocks")
+        analyze(&module, &Query::new(&module, function, &layout), true).expect("few blocks")
     }
 
     #[test]
@@ -1875,5 +1903,33 @@ done:\n  ret i32 %j\n}\n\
         let locs = run(&text);
         assert!(locs.single_locs().is_empty());
         assert!(locs.instructions().count() > 0);
+    }
+
+    const WIDE: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID !24\n\
+    #dbg_assign(i1 poison, !20, !DIExpression(), !24, ptr %x, !DIExpression(), !25)\n\
+  store i64 %w, ptr %x, align 8, !DIAssignID !28\n\
+    #dbg_assign(i64 %w, !20, !DIExpression(), !28, ptr %x, !DIExpression(), !25)\n\
+    #dbg_value(i32 %n, !20, !DIExpression(DW_OP_LLVM_fragment, 0, 32), !25)\n\
+  ret i64 %w\n}\n\
+!17 = !DIBasicType(name: \"long\", size: 64, encoding: DW_ATE_signed)\n\
+!20 = !DILocalVariable(name: \"x\", scope: !14, type: !17)\n\
+!24 = distinct !DIAssignID()\n!28 = distinct !DIAssignID()\n\
+!14 = distinct !DISubprogram(name: \"f\")\n!25 = !DILocation(line: 0, scope: !14)\n";
+
+    /// A 64-bit variable in memory whose low half then gets a value: the
+    /// debugger takes the high half to have no location from there on, so the
+    /// pass states it again as memory (`x[32, 64)` at `alloca + 4`). Without
+    /// it the table ended the high half's location at the value.
+    #[test]
+    fn the_bits_a_value_does_not_cover_are_stated_in_memory_again() {
+        let locs = run(WIDE);
+        let all: Vec<&VarLocInfo> = locs.instructions().flat_map(|inst| locs.locs_before(inst)).collect();
+        let high = all.iter().find(|one| {
+            expression_text(&one.expression) == "DW_OP_plus_uconst, 4, DW_OP_deref, DW_OP_LLVM_fragment, 32, 32"
+        });
+        assert!(high.is_some(), "{:?}", all.iter().map(|one| expression_text(&one.expression)).collect::<Vec<_>>());
+        assert_eq!(high.unwrap().values.len(), 1, "at the alloca");
+        assert!(locs.variable(high.unwrap().variable).fragment == Some(Fragment { offset: 32, size: 32 }));
     }
 }
