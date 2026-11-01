@@ -532,6 +532,54 @@ fn the_on_local_error_programs_print_their_expected_output_on_wasm32() {
     }
 }
 
+/// A DOUBLE converted to CURRENCY ran the x87 sequence in 80 bits: wasm32 has
+/// no `f80`, so a program that did it at run time did not build
+/// (`CannotSelect(LRint)`: currency_arith_pds71). The runtime's `B$LFPC` scales
+/// and rounds as the x87 does: the product to 64 bits, then to the nearest
+/// integer, ties to even, an overflow the integer indefinite. The expected
+/// values are the x87's (`llrintl` of the `long double` product).
+#[test]
+fn a_double_converted_to_currency_rounds_as_the_x87_does_on_wasm32() {
+    let dir = built(
+        "cyscale",
+        "' dialect: pds71\nDIM c AS CURRENCY, x AS DOUBLE\nFOR n = 1 TO 10\n  READ x\n  c = x\n  PRINT c\nNEXT\n\
+         DATA .00005, .00015, .00025, .00035, -.00005, -.00015, 1D+30, 922337203685477, 922337203685478, -922337203685477.5\nEND\n",
+    );
+    let (text, code) = run(&dir, "cyscale", &[]);
+    assert_eq!(
+        text.split_whitespace().collect::<Vec<_>>(),
+        [
+            ".0001",
+            ".0001",
+            ".0003",
+            ".0003",
+            "-.0001",
+            "-.0001",
+            "-922337203685477.5808",
+            "922337203685477",
+            "-922337203685477.5808",
+            "-922337203685477.5"
+        ]
+    );
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// currency_arith_pds71 converts DOUBLEs and SINGLEs to CURRENCY at run time
+/// and did not build; it prints what BC's build prints.
+#[test]
+fn currency_arithmetic_prints_the_bc_output_on_wasm32() {
+    let path = root().join("tests/run/qb/currency_arith_pds71.bas");
+    let dir = built("curarith", &std::fs::read_to_string(&path).unwrap());
+    let (text, code) = run(&dir, "curarith", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// A fixed-length string and the fields of a TYPE variable are zero after
 /// CLEAR.
 #[test]

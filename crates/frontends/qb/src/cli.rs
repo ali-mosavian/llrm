@@ -153,7 +153,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         (None, true) => llrm_wasm::driver::datalayout(llrm_wasm::Width::W32),
         (None, false) => bound.target.layout().datalayout.clone(),
     };
-    frontend.pow_libcall = !llrm_target::layout::states_extended_float(&object_layout);
+    frontend.without_extended_float = !llrm_target::layout::states_extended_float(&object_layout);
     let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
         wasm_exceptions: wasm32,
