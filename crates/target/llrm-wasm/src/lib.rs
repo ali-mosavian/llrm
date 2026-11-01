@@ -10,6 +10,7 @@ pub mod custom_inserter;
 pub mod dag;
 pub mod dagisel;
 pub mod driver;
+pub mod eh_reentry;
 pub mod exception_info;
 pub mod explicit_locals;
 pub mod fix_br_table_defaults;

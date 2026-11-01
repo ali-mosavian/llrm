@@ -2,8 +2,6 @@
 //! opens the frame with `suba.l #n, %sp` and `movem`s them into slots, which
 //! for one register is 24 bytes against 4.
 
-use std::path::PathBuf;
-
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::encode::encode;
@@ -19,21 +17,19 @@ fn module(ir: &str) -> llrm_mir::module::Module {
     llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses")
 }
 
-fn qemu() -> Option<PathBuf> {
-    ["/usr/bin/qemu-m68k", "/usr/local/bin/qemu-m68k"].iter().map(PathBuf::from).find(|path| path.exists())
-}
-
 fn status(
     ir: &str,
     args: &[i64],
 ) -> Option<i32> {
-    let qemu = qemu()?;
+    let qemu = support::qemu()?;
     let mut all = start("f", args);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, Options::default()).expect("compiles"));
     let path = support::unique_path("frame-push");
     write_executable(&path, &executable(&all).unwrap()).unwrap();
     let code = support::run(&qemu, &[], &path);
     std::fs::remove_file(&path).ok();
+    // a run that ends on a signal is a failure, not a skipped check
+    assert!(code.is_some(), "f({args:?}) ended on a signal");
     code
 }
 
