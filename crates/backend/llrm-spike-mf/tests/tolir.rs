@@ -1216,3 +1216,70 @@ fn test_a_hint_names_a_value_its_instruction_holds_after_the_coalescer() {
     }
     assert!(named > 0, "no hint reached an instruction");
 }
+
+/// One register is all a narrow class allows; a wide class has three.
+struct Narrowing;
+
+impl Target for Narrowing {
+    type Class = bool;
+
+    fn meet(
+        a: bool,
+        b: bool,
+    ) -> Option<bool> {
+        Some(a || b)
+    }
+
+    fn any() -> bool {
+        false
+    }
+
+    fn candidates(narrow: bool) -> Vec<RegId> {
+        if narrow { vec![RegId::EBX] } else { REGISTERS.to_vec() }
+    }
+
+    fn view(
+        root: RegId,
+        _: bool,
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+}
+
+/// A copy of a wide value into a narrow class (the 6502's compare takes `a`,
+/// `x` or `y`) joined the two, and the joined value took the narrow class for
+/// its whole range: it could not sit in the register the code after the
+/// compare keeps busy and went to a slot (6502 strrchr: `tay; sty s_...`,
+/// +52 cycles; LLVM's `isWinToJoinCrossClass` declines such a join).
+#[test]
+fn test_a_copy_into_a_narrow_class_does_not_narrow_the_value_that_lives_past_it() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}

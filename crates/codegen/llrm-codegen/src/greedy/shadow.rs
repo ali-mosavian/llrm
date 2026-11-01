@@ -303,12 +303,16 @@ fn reclass_orders(
     tables: &Tables,
     pinned: &crate::support::hash::HashSet<u32>,
     sets: Option<&crate::backend::regclass::Sets>,
+    tii: &dyn super::tii::TargetInstrInfo,
     registers: Regs,
     lis: &LiveIntervals,
     regs: &[u32],
 ) {
     use crate::backend::regclass::{Confinement, confinement_of};
-    let Some(sets) = sets else { return };
+    let Some(sets) = sets else {
+        reclass_by_operands(tables, pinned, tii, lis, regs);
+        return;
+    };
     for &reg in regs {
         let Some(current) = tables.orders.borrow().get(&reg).cloned() else { continue };
         if pinned.contains(&reg) || !current.iter().all(|one| sets.available.contains(one)) {
@@ -331,6 +335,47 @@ fn reclass_orders(
         };
         if !order.is_empty() {
             tables.orders.borrow_mut().insert(reg, order);
+        }
+    }
+}
+
+/// `recomputeRegClass` for a target whose operands carry their own classes
+/// (`TargetInstrInfo::operand_orders`): the registers every instruction naming
+/// the value allows. A copy, or an instruction the target does not describe (a
+/// spill the allocator wrote), asks nothing; a value only such instructions
+/// name keeps its parent's order, as does one no register would satisfy.
+fn reclass_by_operands(
+    tables: &Tables,
+    pinned: &crate::support::hash::HashSet<u32>,
+    tii: &dyn super::tii::TargetInstrInfo,
+    lis: &LiveIntervals,
+    regs: &[u32],
+) {
+    for &reg in regs {
+        if pinned.contains(&reg) {
+            continue;
+        }
+        let mut seen = crate::support::hash::HashSet::default();
+        let mut allowed: Option<Vec<RegId>> = None;
+        for op in lis.operands(reg) {
+            if !seen.insert(op.instr) {
+                continue;
+            }
+            for (value, order) in tii.operand_orders(lis.instr(op.instr)) {
+                if value != reg {
+                    continue;
+                }
+                allowed = Some(match allowed {
+                    None => order,
+                    Some(so_far) => so_far.into_iter().filter(|one| order.contains(one)).collect(),
+                });
+            }
+        }
+        match allowed {
+            Some(order) if !order.is_empty() => {
+                tables.orders.borrow_mut().insert(reg, order);
+            }
+            _ => {}
         }
     }
 }
@@ -387,7 +432,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
         lis: &LiveIntervals,
         regs: &[u32],
     ) {
-        reclass_orders(&self.tables, &self.pinned.borrow(), self.sets.as_deref(), self.registers, lis, regs);
+        reclass_orders(&self.tables, &self.pinned.borrow(), self.sets.as_deref(), self.tii, self.registers, lis, regs);
     }
 
     fn is_rematerializable(
@@ -1326,6 +1371,7 @@ pub fn decide_with_split(
         Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
         Mode::Simple => Box::new(SimpleSpiller::default()),
         Mode::Inline { frame } => {
+            let tii = inputs.tii;
             let (made, sets, pins, registers) = (
                 Rc::clone(&tables),
                 inputs.sets.map(|sets| Rc::new(sets.clone())),
@@ -1334,7 +1380,7 @@ pub fn decide_with_split(
             );
             Box::new(
                 InlineSpiller::new(frame, inputs.tii, inputs.registers, inputs.order, Rc::clone(&tables)).with_reclass(
-                    Box::new(move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), registers, lis, regs)),
+                    Box::new(move |lis, regs| reclass_orders(&made, &pins, sets.as_deref(), tii, registers, lis, regs)),
                 ),
             )
         }
@@ -2273,7 +2319,15 @@ mod tests {
         let tables = Tables::default();
         tables.orders.borrow_mut().insert(word, vec![RegId::EBX]);
         tables.orders.borrow_mut().insert(base, vec![RegId::EBX]);
-        reclass_orders(&tables, &Default::default(), Some(&sets), classes.registers, &lis, &[word, base]);
+        reclass_orders(
+            &tables,
+            &Default::default(),
+            Some(&sets),
+            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes },
+            classes.registers,
+            &lis,
+            &[word, base],
+        );
         assert_eq!(tables.orders.borrow()[&word], sets.available, "the stored word may take any register");
         assert_eq!(
             tables.orders.borrow()[&base],
