@@ -3,7 +3,7 @@
 use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Loc, Operation};
-use llrm_spike_mf::regalloc::{Target, eliminate_phis, two_address};
+use llrm_spike_mf::regalloc::{Join, Side, Target, eliminate_phis, two_address};
 use llrm_spike_mf::tolir::{from_lir, to_lir};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg};
 
@@ -1262,12 +1262,22 @@ impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
         (order.len() < REGISTERS.len()).then(|| REGISTERS.to_vec())
     }
 
-    fn should_coalesce(
-        one: &[RegId],
-        other: &[RegId],
-        joined: &[RegId],
-    ) -> bool {
-        !DECLINE || joined.len() == 1 || (joined.len() == one.len() && joined.len() == other.len())
+    fn memory_saving(
+        inst: &Inst,
+        operand: usize,
+    ) -> u32 {
+        // `dec` in memory is one instruction; in a register it is three
+        match (inst.kind, inst.operands.get(operand)) {
+            (Kind::Op("dec"), Some(Operand::Use(_))) => 2,
+            _ => 0,
+        }
+    }
+
+    /// A join that takes the memory form from a value is worth less than the
+    /// copy it saves: it saves one.
+    fn should_coalesce(join: &Join) -> bool {
+        let loses = |side: &Side| side.registers.len() > join.joined.len() && side.memory_saving > 1;
+        !DECLINE || !(loses(&join.source) || loses(&join.destination))
     }
 }
 
@@ -1354,15 +1364,19 @@ fn test_a_value_whose_every_use_is_narrow_is_split_around_each_instruction_in_on
     assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
 }
 
-/// A target that says a join must not narrow a class keeps the copy (and its
-/// hint): the two values stay apart, as `TargetRegisterInfo::shouldCoalesce`
-/// lets a target decline.
-#[test]
-fn test_a_target_can_decline_a_join_that_narrows_a_class() {
-    let mut f = MFunction::<bool>::new("narrowing");
+/// A counter `dec`ed in place and compared: the compare copy would join it
+/// into the narrow class, which has no memory, and the `dec` loses its memory
+/// form (6502 fib: `dec rc2` became `ldy rc5; dey; sty rc5; cpy #0`, +5 B).
+/// A target whose rule weighs what the narrowed value's other instructions
+/// save (`TargetRegisterInfo::shouldCoalesce`) keeps the copy.
+fn counter(narrows: bool) -> usize {
+    let mut f = MFunction::<bool>::new("counter");
     f.classes = vec![false, true];
     let mut block = Block { id: 0, ..Block::default() };
     block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    if narrows {
+        block.insts.push(op("dec", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    }
     block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
     block.insts.push(op("compare", vec![Operand::Use(v(1))]));
     block.insts.push(op("store", vec![Operand::Use(v(0))]));
@@ -1370,6 +1384,16 @@ fn test_a_target_can_decline_a_join_that_narrows_a_class() {
     f.blocks = vec![block];
     let mut converted = to_lir::<Narrowing<true>>(&f, regs()).expect("converts");
     converted.coalesce(regs(), false);
-    let copies = converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count();
-    assert_eq!(copies, 1, "the copy into the narrow class was joined");
+    converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count()
+}
+
+#[test]
+fn test_a_target_can_decline_a_join_that_takes_a_memory_form_from_a_value() {
+    assert_eq!(counter(true), 1, "the copy into the narrow class was joined");
+}
+
+/// The same rule joins where the value has no memory form to lose.
+#[test]
+fn test_a_join_that_takes_no_memory_form_goes_ahead() {
+    assert_eq!(counter(false), 0, "the copy was kept");
 }

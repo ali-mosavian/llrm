@@ -43,7 +43,7 @@ use llrm_lir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
 
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
-use crate::regalloc::{Assignment, Target, successors};
+use crate::regalloc::{Assignment, Join, Side, Target, successors};
 
 /// The name of a copy: `COPY dst, src`.
 const COPY: &str = "COPY";
@@ -77,6 +77,7 @@ impl<T: Target> Converted<T> {
         registers: Regs,
         size: bool,
     ) {
+        let infos = self.tii.infos.clone();
         let palettes = self
             .orders
             .iter()
@@ -88,10 +89,24 @@ impl<T: Target> Converted<T> {
             self.body.pins.clone(),
             size,
             registers,
-            Box::new(|one, other, joined| {
-                let (one, other, joined): (Vec<RegId>, Vec<RegId>, Vec<RegId>) =
-                    (one.iter().copied().collect(), other.iter().copied().collect(), joined.iter().copied().collect());
-                T::should_coalesce(&one, &other, &joined)
+            Box::new(move |join| {
+                let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
+                    let saving = side
+                        .uses
+                        .iter()
+                        .flat_map(|one| operands_in(&infos, one))
+                        .filter(|(value, _)| *value == side.value)
+                        .map(|(_, info)| info.saving)
+                        .sum();
+                    (side.palette.iter().copied().collect::<Vec<RegId>>(), saving)
+                };
+                let ((source, source_saving), (destination, destination_saving)) = (side(&join.one), side(&join.other));
+                let joined: Vec<RegId> = join.joined.iter().copied().collect();
+                T::should_coalesce(&Join {
+                    source: Side { registers: &source, memory_saving: source_saving },
+                    destination: Side { registers: &destination, memory_saving: destination_saving },
+                    joined: &joined,
+                })
             }),
         );
         for (value, order) in self.orders.iter_mut() {
@@ -539,13 +554,42 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
 /// What the target says of one virtual-register operand of an instruction:
 /// the `index`th source (or destination, where `def`) the converter gave it.
 /// Named by position, not by value, because the coalescer renames values.
+#[derive(Clone)]
 struct OperandInfo {
     def: bool,
     index: usize,
+    /// What its instruction saves while the value may sit in memory
+    /// (`Target::memory_saving`).
+    saving: u32,
     /// The register it is cheaper with (`Target::operand_hint`).
     hint: Option<RegId>,
     /// The registers its class allows, in order.
     order: Vec<RegId>,
+}
+
+/// The virtual operands the target described for `one` in `infos` (indexed by
+/// the instruction's number), with the value each holds now (the coalescer
+/// renames values, not positions). An instruction greedy made (a copy, a
+/// spill) has none.
+fn operands_in<'a>(
+    infos: &'a [(&'static str, Vec<OperandInfo>)],
+    one: &Insn,
+) -> Vec<(u32, &'a OperandInfo)> {
+    let Some((name, infos)) = infos.get((one.at / 2) as usize) else { return Vec::new() };
+    let Some(what) = one.what.as_ref() else { return Vec::new() };
+    if what.name.as_deref() != Some(name) {
+        return Vec::new();
+    }
+    infos
+        .iter()
+        .filter_map(|info| {
+            let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
+            match loc {
+                Some(Loc::Held(held)) => Some((held.value, info)),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// The name of `inst` and what the target says of its virtual operands.
@@ -568,6 +612,7 @@ fn operand_infos<T: Target>(
                 infos.push(OperandInfo {
                     def: false,
                     index: sources,
+                    saving: T::memory_saving(inst, at),
                     hint: T::operand_hint(inst, at),
                     order: order_of(*v),
                 });
@@ -579,6 +624,7 @@ fn operand_infos<T: Target>(
                 infos.push(OperandInfo {
                     def: true,
                     index: dests,
+                    saving: T::memory_saving(inst, at),
                     hint: T::operand_hint(inst, at),
                     order: order_of(*v),
                 });
@@ -608,28 +654,11 @@ pub struct SpikeInstrInfo<T: Target> {
 }
 
 impl<T: Target> SpikeInstrInfo<T> {
-    /// The virtual operands the target described for `one`, with the value
-    /// each holds now (the coalescer renames values, not positions). An
-    /// instruction greedy made (a copy, a spill) has none.
     fn operands_of(
         &self,
         one: &Insn,
     ) -> Vec<(u32, &OperandInfo)> {
-        let Some((name, infos)) = self.infos.get((one.at / 2) as usize) else { return Vec::new() };
-        let Some(what) = one.what.as_ref() else { return Vec::new() };
-        if what.name.as_deref() != Some(name) {
-            return Vec::new();
-        }
-        infos
-            .iter()
-            .filter_map(|info| {
-                let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
-                match loc {
-                    Some(Loc::Held(held)) => Some((held.value, info)),
-                    _ => None,
-                }
-            })
-            .collect()
+        operands_in(&self.infos, one)
     }
 
     /// The class of `value`, a register of the function or one a split made.

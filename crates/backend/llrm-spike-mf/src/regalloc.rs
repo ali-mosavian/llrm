@@ -15,6 +15,23 @@ use llrm_support::hash::{HashMap, HashSet};
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::sink::{Jump, split_critical_edge};
 
+/// A copy about to be joined, as [`Target::should_coalesce`] sees it.
+pub struct Join<'a> {
+    /// The registers the source value may take, and what its other
+    /// instructions save while it may sit in memory
+    /// ([`Target::memory_saving`]).
+    pub source: Side<'a>,
+    pub destination: Side<'a>,
+    /// The registers the joined value may take.
+    pub joined: &'a [RegId],
+}
+
+/// One side of a [`Join`].
+pub struct Side<'a> {
+    pub registers: &'a [RegId],
+    pub memory_saving: u32,
+}
+
 /// What the allocator needs to know of a register file.
 pub trait Target {
     /// A virtual register's class (`TargetRegisterClass`).
@@ -102,16 +119,22 @@ pub trait Target {
         0
     }
 
-    /// `TargetRegisterInfo::shouldCoalesce`: whether a copy between values that
-    /// may take `one` and `other` registers is joined into one value that may
-    /// take `joined` (their common ones). A join narrows both for good, and
-    /// the allocator cannot widen the survivor again.
-    fn should_coalesce(
-        _one: &[RegId],
-        _other: &[RegId],
-        _joined: &[RegId],
-    ) -> bool {
+    /// `TargetRegisterInfo::shouldCoalesce`: whether a copy between two values
+    /// is joined into one that may take only the registers both could. A join
+    /// narrows both for good, and the allocator cannot widen the survivor.
+    fn should_coalesce(_join: &Join) -> bool {
         true
+    }
+
+    /// What the instruction `inst` saves on its operand `operand` while the
+    /// value may sit in memory: the instructions the register form needs to
+    /// get it there and back (the 6502's `dec cell` is one instruction;
+    /// `ldy; dey; sty` is three).
+    fn memory_saving(
+        _inst: &Inst,
+        _operand: usize,
+    ) -> u32 {
+        0
     }
 
     /// The registers of the next larger class that holds `order`

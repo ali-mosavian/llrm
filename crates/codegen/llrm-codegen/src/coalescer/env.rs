@@ -26,13 +26,15 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
 use super::driver;
 use super::pair::CoalescerEnv;
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::model::lir::LirBody;
+use crate::liveness::slotindex::InstrKey;
+use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
@@ -46,9 +48,26 @@ pub struct TargetEnv {
     pub keep_pinned: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
-    /// `TargetRegisterInfo::shouldCoalesce`: whether a join of values with
-    /// these palettes, into the third, goes ahead.
-    pub should_join: Box<dyn Fn(&BTreeSet<RegId>, &BTreeSet<RegId>, &BTreeSet<RegId>) -> bool>,
+    /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
+    pub should_join: Box<dyn Fn(&Join) -> bool>,
+}
+
+/// One side of a copy about to be joined.
+pub struct JoinSide {
+    pub value: u32,
+    /// The registers it may take.
+    pub palette: BTreeSet<RegId>,
+    /// The instructions that name it, the copy apart: what the join would
+    /// leave a narrower class to serve.
+    pub uses: Vec<Arc<Insn>>,
+}
+
+/// What `shouldCoalesce` is asked: the two sides of the copy and the
+/// registers the joined value may take (the palettes' common ones).
+pub struct Join {
+    pub one: JoinSide,
+    pub other: JoinSide,
+    pub joined: BTreeSet<RegId>,
 }
 
 impl CoalescerEnv for TargetEnv {
@@ -82,12 +101,32 @@ impl CoalescerEnv for TargetEnv {
         }
         let palettes = self.palettes.borrow();
         match (palettes.get(&a), palettes.get(&b)) {
-            (Some(x), Some(y)) => {
-                let joined: BTreeSet<RegId> = x.intersection(y).copied().collect();
-                !joined.is_empty() && (self.should_join)(x, y, &joined)
-            }
+            (Some(x), Some(y)) => x.intersection(y).next().is_some(),
             _ => true,
         }
+    }
+
+    fn should_coalesce(
+        &self,
+        lis: &LiveIntervals,
+        copy: InstrKey,
+        src: u32,
+        dst: u32,
+    ) -> bool {
+        let palettes = self.palettes.borrow();
+        let (Some(x), Some(y)) = (palettes.get(&src), palettes.get(&dst)) else { return true };
+        let side = |value: u32, palette: &BTreeSet<RegId>| {
+            let mut seen = crate::support::hash::HashSet::default();
+            let uses = lis
+                .operands(value)
+                .iter()
+                .filter(|op| op.instr != copy && seen.insert(op.instr))
+                .map(|op| Arc::clone(lis.instr(op.instr)))
+                .collect();
+            JoinSide { value, palette: palette.clone(), uses }
+        };
+        let joined = x.intersection(y).copied().collect();
+        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined })
     }
 
     fn narrow(
@@ -140,7 +179,7 @@ pub fn coalesce(
     pins: IndexMap<u32, RegId>,
     size: bool,
     regs: llrm_lir::registers::Regs,
-    should_join: Box<dyn Fn(&BTreeSet<RegId>, &BTreeSet<RegId>, &BTreeSet<RegId>) -> bool>,
+    should_join: Box<dyn Fn(&Join) -> bool>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
     let aliases = pins
         .iter()
