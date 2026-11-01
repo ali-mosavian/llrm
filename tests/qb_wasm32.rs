@@ -364,6 +364,21 @@ fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
     }
 }
 
+/// CURRENCY as text (currency_text_pds71) did not instantiate: B$PECY, B$PSCY,
+/// B$STCY, B$RDCY, B$FMKC and B$FCVC had no flat definition.
+#[test]
+fn currency_text_matches_the_microsoft_output_on_wasm32() {
+    let source = std::fs::read_to_string(root().join("tests/run/qb/currency_text_pds71.bas")).unwrap();
+    let dir = built("curtext", &source);
+    let (text, code) =
+        run(&dir, "curtext", &["--script", "12.5\\r-0.0001, 922337203685477.5807\\r3\\r", "--gap", "30"]);
+    let want = std::fs::read_to_string(root().join("tests/run/qb/currency_text_pds71.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&text), trimmed(&want));
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// CLEAR called B$SCLR, which no flat runtime defined: a program with CLEAR did
 /// not instantiate. It zeroes the module's variables, from a table the compiler
 /// lists them in, and accepts a stack size it cannot change.
@@ -411,6 +426,29 @@ fn on_error_lands_with_wasm_exceptions() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// A currency read from text is exact (a double holds 16 digits, not 19), the
+/// fifth place rounds half away from zero, and a magnitude past the type is
+/// Overflow.
+#[test]
+fn currency_reads_exactly_and_overflows_past_the_type_on_wasm32() {
+    let dir = built(
+        "cyexact",
+        "DIM c AS CURRENCY, d AS CURRENCY, e AS CURRENCY\nREAD c, d, e\nPRINT c; d; e\nDATA 922337203685477.5807, -922337203685477.5808, 1.00005\nEND\n",
+    );
+    let (text, code) = run(&dir, "cyexact", &[]);
+    assert_eq!(
+        text.split_whitespace().collect::<Vec<_>>(),
+        ["922337203685477.5807", "-922337203685477.5808", "1.0001"]
+    );
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+    let dir = built("cyover", "DIM c AS CURRENCY\nREAD c\nPRINT c\nDATA 922337203685477.5808\nEND\n");
+    let (text, code) = run(&dir, "cyover", &[]);
+    assert!(text.starts_with("Overflow"), "{text:?}");
+    assert_eq!(code, Some(255));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// CLEAR in a SUB is Illegal function call, as in QB.
 #[test]
 fn clear_in_a_procedure_is_an_illegal_function_call_on_wasm32() {
@@ -418,6 +456,20 @@ fn clear_in_a_procedure_is_an_illegal_function_call_on_wasm32() {
     let (text, code) = run(&dir, "clearsub", &[]);
     assert!(text.starts_with("Illegal function call"), "{text:?}");
     assert_eq!(code, Some(255));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// DATESERIAL did not instantiate (B$DTSR). A month or day out of range
+/// carries, and a year of 0 to 99 is 19xx.
+#[test]
+fn dateserial_counts_days_from_1899_12_30_and_carries_on_wasm32() {
+    let dir = built(
+        "dateser",
+        "' dialect: vbdos\nPRINT DATESERIAL(1992, 2, 29); DATESERIAL(1992, 14, 1); DATESERIAL(1992, 3, 0); DATESERIAL(95, 1, 1); DATESERIAL(1900, 1, 1)\nEND\n",
+    );
+    let (text, code) = run(&dir, "dateser", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["33663", "34001", "33663", "34700", "2"]);
+    assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -430,6 +482,36 @@ fn a_dynamic_array_can_be_redimensioned_after_clear_on_wasm32() {
     );
     let (text, code) = run(&dir, "cleararr", &[]);
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["0", "3"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// ON LOCAL ERROR did not instantiate (B$OEGP). A handler that is never needed
+/// is registered and the program runs on.
+#[test]
+fn on_local_error_registers_and_the_program_runs_on_wasm32() {
+    let dir = built(
+        "localreg",
+        "' dialect: pds71\nDECLARE SUB top ()\ntop\nPRINT \"done\"\nEND\nSUB top\nON LOCAL ERROR GOTO th\nPRINT \"in\"\nEXIT SUB\nth:\nRESUME NEXT\nEND SUB\n",
+    );
+    let (text, code) = run(&dir, "localreg", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "done"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A procedure's ON LOCAL ERROR handler takes the error and resumes: the
+/// ownf_local and resumelocals_local programs did not link (B$OEGP) and then
+/// ended at the first error.
+#[test]
+fn on_local_error_lands_in_its_handler_on_wasm32() {
+    let dir = built_with(
+        "locland",
+        "' dialect: pds71\nDECLARE SUB top ()\ntop\nPRINT \"done\"\nEND\nSUB top\nON LOCAL ERROR GOTO th\nPRINT \"in\"\nERROR 5\nPRINT \"after\"\nEXIT SUB\nth:\nPRINT \"err\"; ERR\nRESUME NEXT\nEND SUB\n",
+        "--wasm-exceptions",
+    );
+    let (text, code) = run(&dir, "locland", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "err", "5", "after", "done"], "{text}");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
