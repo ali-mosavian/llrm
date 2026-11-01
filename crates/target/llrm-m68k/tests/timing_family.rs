@@ -267,10 +267,12 @@ fn m68040_movem_counts_its_registers() {
     assert_eq!(m68040("movem.l %d2-%d4, -(%sp)"), 5);
 }
 
-/// The 68040 tables have no NOP row; it is an error, not zero clocks.
+/// MC68040UM 10.5 (pp. 10-11, 10-12): NOP is 8, 1L + 7. The first transcription
+/// lost the row to a repeated page header, so `nop` was priced as an error; the
+/// second reading found it.
 #[test]
-fn m68040_nop_is_not_in_the_tables() {
-    assert!(cost_on(Cpu::M68040, "nop", 2, true).is_err());
+fn m68040_nop_is_in_the_miscellaneous_table() {
+    assert_eq!(m68040("nop"), 8);
 }
 
 fn m68060(text: &str) -> u32 {

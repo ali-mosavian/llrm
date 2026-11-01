@@ -42,7 +42,7 @@ MOVEP [c],"MOVEP.W Dn,d16(An)",11,2L + 9
 ,"MOVEP.W d16(An),Dn",4,2L + 5
 ,"MOVEP.L d16(An),Dn",8,2L + 8
 MOVEQ,—,1,1
-Instruction,Condition,<ea> Calculate,Execute
+NOP [a],—,8,1L + 7
 "ORI #<xxx>,CCR",—,1,4
 "ORI #<xxx>,SR [a]",—,9,1L + 8
 PACK,"Dx,Dy,#<xxx>",1,3
