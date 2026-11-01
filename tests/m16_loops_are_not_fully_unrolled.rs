@@ -117,3 +117,45 @@ fn at_os_an_aligned_fill_is_words_and_at_o2_dwords() {
     assert!(size.contains("rep stosw") && !size.contains("stosd"), "{size}");
     assert!(listing("-O2").contains("rep stosd"));
 }
+
+/// -O3 unroll-and-jam (partial and runtime unrolling on, partial threshold
+/// 150) copied matmul's outer body: 9 `imul` against 2 at -O2, 455 code bytes
+/// against 297 (Borland C's 298): the m16 bar is bytes at every level.
+#[test]
+fn at_o3_a_nest_of_eight_trip_loops_is_not_jammed() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    let source = format!("{}/bench/matmul/matmul.c", env!("CARGO_MANIFEST_DIR"));
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O3", "-m16", "-march=i486", "-S", "-o", "a.s", &source])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
+    let multiplies = text.matches("imul").count();
+    assert!(multiplies <= 2, "{multiplies} multiplies\n{text}");
+}
+
+/// -O3's non-trivial unswitch copied a loop on a loop-invariant condition:
+/// two loops, two `add` bodies, +51 code bytes on queens (178 -> 229 against
+/// Borland C's 172). The byte bar holds at -O3.
+#[test]
+fn at_o3_a_loop_on_an_invariant_condition_is_not_copied() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(
+        directory.join("u.c"),
+        "void f(int *a, int n, int flag)\n{\n    int i;\n    for (i = 0; i < n; i++) {\n        if (flag) a[i] += 3;\n        else a[i] -= 5;\n    }\n}\n",
+    )
+    .unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O3", "-m16", "-march=i486", "-S", "-o", "u.s", "u.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("u.s")).unwrap();
+    let bodies = text.matches("add word ptr [bx]").count();
+    assert!(bodies <= 1, "{bodies} loop bodies\n{text}");
+}

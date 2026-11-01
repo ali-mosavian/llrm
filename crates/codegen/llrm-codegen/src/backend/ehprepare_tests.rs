@@ -64,6 +64,19 @@ fn the_handler_registered_is_the_landing_and_err_is_what_it_kept() {
     assert!(text.contains("load i16, ptr @$QB$LANDED"), "{text}");
 }
 
+/// The registration replaces `onerror`, which cannot throw. Declared without
+/// `nounwind`, a backend that delegates a throwing call out of a `try` wrapped
+/// it in a `try` / `delegate` of its own.
+#[test]
+fn the_registrations_are_declared_nounwind_like_the_calls_they_replace() {
+    let mut module = parsed(HANDLED);
+    prepared(&mut module, &llrm_x86_m16::layout()).expect("prepared");
+    let text = printed(&module);
+    let declared =
+        text.lines().find(|line| line.starts_with("declare") && line.contains("@llrm.qb.B$OEGA")).expect("declared");
+    assert!(declared.contains("nounwind"), "{declared}");
+}
+
 /// With the host throwing to the pad nothing runs the landing function, so
 /// `$QB$LANDED` held 0 and the handler saw ERR 0; the pad asks the runtime.
 #[test]

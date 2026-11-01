@@ -4,6 +4,8 @@
 pub mod abi;
 pub mod amiga;
 pub mod atari;
+pub mod ccr;
+pub mod cmpelim;
 pub mod compile;
 pub mod dagisel;
 pub mod divide;
