@@ -27,6 +27,14 @@ fn check(name: &str) {
     assert_eq!(norm(&got), norm(&golden), "{name}");
 }
 
+/// `llvm.log2` and `llvm.exp2` selected `CannotSelect(FLog2)`: llrm-qb --wasm32
+/// refused `2 ^ x` programs (range_power, pow_unrolled). The pin calls
+/// `log2`/`exp2` (and `log2f`/`exp2f`).
+#[test]
+fn log2_exp2() {
+    check("log2_exp2");
+}
+
 /// Every shift selected `CannotSelect(Shl)`: the legalizer wanted an `i8`
 /// amount, wasm's is the type shifted.
 #[test]
