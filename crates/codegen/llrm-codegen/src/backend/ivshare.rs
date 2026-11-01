@@ -20,6 +20,21 @@
 //! them. The index has no other reader than the streams and its step; or it
 //! is doubled for two-byte elements, and the double has no other reader.
 //!
+//! # Example
+//! A loop reading `[b0 + i]`, `[b1 + i]`, `[b2 + i]`; the difference is made
+//! once, ahead of the loop, and the streams share one pointer:
+//!
+//! ```text
+//!   pre:                              pre:
+//!     jmp loop                          d1 := sub b1, b0
+//!   loop:                       =>      p := add i, b0
+//!     x0 := [b0 + i]                    jmp loop
+//!     x1 := [b1 + i]                  loop:
+//!     x2 := [b2 + i]                    x0 := [p]
+//!     i := add i, 1                     x1 := [p + d1]
+//!                                       p := add p, 1
+//! ```
+//!
 //! O(instructions) per loop.
 
 use std::rc::Rc;
