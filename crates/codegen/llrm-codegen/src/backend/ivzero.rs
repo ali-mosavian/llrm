@@ -604,7 +604,10 @@ mod tests {
     /// An index read as a value (not an address) cannot become `i - K`.
     #[test]
     fn test_an_index_read_as_a_value_is_left_alone() {
-        let reader = insn(15, Operation::Binary, "add", vec![held(6)], vec![held(3), held(2)], vec![6], vec![3, 2]);
+        // Addressed and used as a value in one instruction: only the value
+        // use can refuse it.
+        let both = Loc::Mem(Mem { base: Some(Held { value: 2, width: 2 }), offset: 100, ..Mem::new(None, 1) });
+        let reader = insn(15, Operation::Binary, "add", vec![held(6)], vec![held(2), both], vec![6], vec![2]);
         let done = zeroed(&counted(100, false, inc(), "jne", Some(reader)));
         assert_eq!(names(&done, 1), ["movzx", "add", "inc", "sub", "jne", "jmp"]);
     }
