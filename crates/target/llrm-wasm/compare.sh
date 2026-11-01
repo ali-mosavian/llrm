@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Compares llrm-wasm-llc with llc-20 -O0 -fast-isel=false on each given .ll file, function by function.
 #   crates/target/llrm-wasm/compare.sh FILE.ll...      (WRITE=1: store the oracle's function text as FILE.s, the goldens of tests/ir.rs)
+# LLCFLAGS adds flags to the oracle (EH: -exception-model=wasm -mattr=+exception-handling; OURS="-exception-model=wasm -mattr=+exception-handling").
 # The oracle is the pin's llc (d1106deb71cc, WebAssembly only). LLC=llc-20 OURS=-no-stackify compares with LLVM 20,
 # which does not run RegStackify at -O0.
 set -uo pipefail
@@ -15,7 +16,7 @@ norm() { sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//; /^\.LBB[0-9_]+:$/d; /^
 bodies() { awk '/^\t\.section\t\.text\./{buf=$0; p=1; next} p{buf=buf "\n" $0} /# -- End function/{if(p){print buf; p=0}}' "$1"; }
 ok=0; bad=0
 for f in "$@"; do
-  "$LLC" -mtriple=wasm32 -O0 -fast-isel=false "$f" -o "$W/ref.s" 2>"$W/ref.err" || { echo "REF-FAIL $f: $(head -1 "$W/ref.err")"; bad=$((bad+1)); continue; }
+  "$LLC" -mtriple=wasm32 -O0 -fast-isel=false ${LLCFLAGS:-} "$f" -o "$W/ref.s" 2>"$W/ref.err" || { echo "REF-FAIL $f: $(head -1 "$W/ref.err")"; bad=$((bad+1)); continue; }
   "$BIN" -S $OURS "$f" -o "$W/got.s" 2>"$W/got.err" || { echo "FAIL $f: $(head -1 "$W/got.err")"; bad=$((bad+1)); continue; }
   bodies "$W/ref.s" | norm > "$W/ref.txt"
   norm < "$W/got.s" > "$W/got.n"
