@@ -429,8 +429,9 @@ fn declare(
     let nothing = types.intern(llrm_mir::Type::Function { returns: void, parameters: Vec::new(), variadic: false });
     let mut routines = vec![(ERR, asked, &["nounwind"][..]), (RESUME, nothing, &["noreturn", "nounwind"][..])];
     let (onerror, onlocal) = (module.named(ONERROR), module.named(ONLOCALERROR));
-    routines.extend(onerror.map(|_| (REGISTER, register, &[][..])));
-    routines.extend(onlocal.map(|_| (REGISTER_LOCAL, local, &[][..])));
+    // They replace `onerror` and `onlocalerror`, which are `nounwind`.
+    routines.extend(onerror.map(|_| (REGISTER, register, &["nounwind"][..])));
+    routines.extend(onlocal.map(|_| (REGISTER_LOCAL, local, &["nounwind"][..])));
     for (name, ty, attrs) in routines {
         if let Some(one) = module.named(name) {
             let declared = module.global(one).function().map(|function| function.ty);

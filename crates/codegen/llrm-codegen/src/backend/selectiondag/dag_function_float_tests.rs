@@ -869,3 +869,69 @@ fn an_integer_feeding_a_multiplication_is_not_rounded_under_float_store() {
     };
     assert_eq!(stores(true), stores(false));
 }
+
+fn stored_conversion(
+    to: &str,
+    store: &str,
+) -> Vec<(String, String)> {
+    use crate::model::ir::Operation;
+    let source = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@g = global {to} 0
+@h = global {to} 0
+define void @f(double %x) {{
+entry:
+  %r = fptosi double %x to {to}
+  {store}
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&source).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op != Operation::Nothing)
+        .map(|w| (format!("{:?}", w.op), w.name.as_deref().unwrap_or("").to_owned()))
+        .collect()
+}
+
+fn movers(made: &[(String, String)]) -> usize {
+    made.iter().filter(|(_, name)| name == "mov").count()
+}
+
+/// `store i32 (fptosi x), @g` converted through a scratch slot: `fistt` to the
+/// slot, `mov eax, [slot]`, `mov [g], eax` (QB's CINT stored to a scalar, +3 B
+/// and 2 instructions a conversion). The `fistt` goes to `@g`.
+#[test]
+fn a_converted_value_stored_is_a_fist_to_the_destination() {
+    for to in ["i16", "i32"] {
+        let made = stored_conversion(to, &format!("store {to} %r, ptr @g"));
+        assert_eq!(movers(&made), 0, "{to}: {made:?}");
+        assert!(made.iter().any(|(_, name)| name.starts_with("fist")), "{to}: {made:?}");
+    }
+}
+
+/// The cases that keep the slot: a volatile store, a store of a different
+/// width than the conversion, and a value with another reader.
+#[test]
+fn a_converted_value_with_another_reader_or_a_volatile_store_keeps_its_slot() {
+    let volatile = stored_conversion("i32", "store volatile i32 %r, ptr @g");
+    assert!(movers(&volatile) > 0, "{volatile:?}");
+    let twice = stored_conversion("i32", "store i32 %r, ptr @g\n  store i32 %r, ptr @h");
+    assert!(movers(&twice) > 0, "{twice:?}");
+}
+
+/// A store to the same cell before the conversion's store stays before it:
+/// the `fist` takes the conversion store's place, not the scratch slot's.
+#[test]
+fn a_converted_store_stays_after_an_earlier_store_to_its_cell() {
+    let made = stored_conversion("i32", "store i32 7, ptr @g\n  store i32 %r, ptr @g");
+    let first_mov = made.iter().position(|(_, name)| name == "mov").expect("the store of 7");
+    let fist = made.iter().position(|(_, name)| name.starts_with("fist")).expect("a fist");
+    assert!(first_mov < fist, "{made:?}");
+    assert_eq!(movers(&made), 1, "{made:?}");
+}
