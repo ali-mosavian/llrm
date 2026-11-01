@@ -569,3 +569,36 @@ fn clear_then_a_closed_channel_lands_in_the_handler_on_wasm32() {
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// OUT and INP reached the DAC's ports as x86 `in`/`out` nodes the wasm
+/// backend cannot select (`OUT &H3C8, 7` alone: `Legalize(Unsupported { op:
+/// Target(24586) })`). They are calls of the runtime's `qb_port_out` and
+/// `qb_port_in`, which keep the DAC's index and component protocol: three
+/// 6-bit components a colour, the index moving on after the third.
+#[test]
+fn the_dac_ports_read_back_what_was_written_on_wasm32() {
+    let dir = built(
+        "dacports",
+        "OUT &H3C8, 7\nOUT &H3C9, 1: OUT &H3C9, 2: OUT &H3C9, 3\nOUT &H3C9, 70\nOUT &H3C9, 5: OUT &H3C9, 6\n\
+         OUT &H3C7, 7\nPRINT INP(&H3C9); INP(&H3C9); INP(&H3C9); INP(&H3C9); INP(&H3C9); INP(&H3C9)\nPRINT INP(&H3C7); INP(&H1234)\nEND\n",
+    );
+    let (text, code) = run(&dir, "dacports", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["1", "2", "3", "6", "5", "6", "3", "255"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// palette_using_pds71 sets and reads the DAC through ports and PALETTE USING;
+/// it did not build.
+#[test]
+fn palette_using_prints_the_bc_output_on_wasm32() {
+    let path = root().join("tests/run/qb/palette_using_pds71.bas");
+    let dir = built_with("paluse", &std::fs::read_to_string(&path).unwrap(), "--wasm-exceptions");
+    let (text, code) = run(&dir, "paluse", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}

@@ -4289,4 +4289,14 @@ fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
     assert_eq!(quiet_loops(false, &closing), 1, "CLOSE does not move a far array");
     let near = closing.replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
     assert_eq!(quiet_loops(false, &near), 0, "CLOSE slides the local heap, where a string array lives");
+    // FRE compacts the local heap as CLOSE does; the table names each routine
+    // that does.
+    for call in ["f& = FRE(\"\")", "f& = FRE(0)"] {
+        let freeing = SORTING
+            .replace("a(i) = hi - i", &format!("a(i) = hi - i: {call}"))
+            .replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
+        assert_eq!(quiet_loops(false, &freeing), 0, "{call} slides the local heap");
+        let far = SORTING.replace("a(i) = hi - i", &format!("a(i) = hi - i: {call}"));
+        assert_eq!(quiet_loops(false, &far), 1, "{call} does not move a far array");
+    }
 }

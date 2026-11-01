@@ -633,39 +633,39 @@ impl<'a> TypeLegalizer<'a> {
                 let NodeData::Mem(info) = self.dag.node(value).data else {
                     unreachable!("a load has a memory operand")
                 };
-                if let Some((round, extra)) = odd_memory(info.mem_vt) {
+                if let Some(pieces) = odd_memory(info.mem_vt) {
                     // `PromoteIntRes_LOAD` of memory that is not a power of
-                    // two wide (`{ i64, i48 }`) is `ExpandLoad`: the low part
-                    // zero-extended, the rest above it.
-                    let low = self
-                        .dag
-                        .get_ext_load(
-                            super::actions::LoadExt::ZExtLoad,
-                            to,
-                            chain,
-                            ptr,
-                            super::dag::MemInfo { mem_vt: round, ..info },
-                        );
-                    let high_ptr = self.address_plus(ptr, u128::from(round.size_in_bits() / 8));
-                    let high_ptr_load = self.dag.get_ext_load(
-                        super::actions::LoadExt::ZExtLoad,
-                        to,
-                        chain,
-                        high_ptr,
-                        super::dag::MemInfo { mem_vt: extra, align: info.align.min(round.size_in_bits() / 8), ..info },
-                    );
-                    let by = self.shift_const(u128::from(round.size_in_bits()), to);
-                    let high = self.dag.get_node(ISD::Shl, to, &[high_ptr_load, by]);
-                    let chains = self
-                        .dag
-                        .get_token_factor(
-                            &[
-                                SDValue { node: low.node, res: 1 },
-                                SDValue { node: high_ptr_load.node, res: 1 },
-                            ],
-                        );
+                    // two wide (`{ i64, i48 }`, a seven byte bit-field) is
+                    // `ExpandLoad`: the low part zero-extended, the rest
+                    // above it, piece by piece.
+                    let mut joined: Option<SDValue> = None;
+                    let mut chains = Vec::new();
+                    let mut at = 0u32;
+                    for piece in pieces {
+                        let piece_ptr = if at == 0 { ptr } else { self.address_plus(ptr, u128::from(at / 8)) };
+                        let piece_info = super::dag::MemInfo {
+                            mem_vt: piece,
+                            align: if at == 0 { info.align } else { info.align.min(at / 8) },
+                            ..info
+                        };
+                        let part =
+                            self.dag.get_ext_load(super::actions::LoadExt::ZExtLoad, to, chain, piece_ptr, piece_info);
+                        chains.push(SDValue { node: part.node, res: 1 });
+                        let part = if at == 0 {
+                            part
+                        } else {
+                            let by = self.shift_const(u128::from(at), to);
+                            self.dag.get_node(ISD::Shl, to, &[part, by])
+                        };
+                        joined = Some(match joined {
+                            Some(low) => self.dag.get_node(ISD::Or, to, &[low, part]),
+                            None => part,
+                        });
+                        at += piece.size_in_bits();
+                    }
+                    let chains = self.dag.get_token_factor(&chains);
                     self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
-                    let joined = self.dag.get_node(ISD::Or, to, &[low, high]);
+                    let joined = joined.expect("a piece");
                     self.set_promoted_integer(value, joined);
                     return Ok(());
                 }
@@ -698,10 +698,10 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
-            ISD::LRint => {
+            ISD::LRint | ISD::LLRint => {
                 // `PromoteIntRes_XRINT`: the same rounding to the wider type.
                 let input = self.dag.operand(value, 0);
-                self.dag.get_node(ISD::LRint, to, &[input])
+                self.dag.get_node(self.dag.opcode(value), to, &[input])
             }
             ISD::SignExtendInReg => {
                 // `PromoteIntRes_SIGN_EXTEND_INREG`: the promoted operand,
@@ -811,19 +811,29 @@ impl<'a> TypeLegalizer<'a> {
                 let NodeData::Mem(info) = self.dag.node(node).data else {
                     unreachable!("a store has a memory operand")
                 };
-                let (round, extra) = odd_memory(info.mem_vt).unwrap_or((info.mem_vt, info.mem_vt));
+                let pieces = odd_memory(info.mem_vt).unwrap_or_else(|| vec![info.mem_vt]);
                 let promoted = self.promoted_integer(self.dag.operand(node, 1));
                 let wide = self.dag.value_type(promoted);
-                let low = self.dag.get_node(ISD::Truncate, round, &[promoted]);
-                let by = self.shift_const(u128::from(round.size_in_bits()), wide);
-                let upper = self.dag.get_node(ISD::Srl, wide, &[promoted, by]);
-                let upper = self.dag.get_node(ISD::Truncate, extra, &[upper]);
-                let high_ptr = self.address_plus(ptr, u128::from(round.size_in_bits() / 8));
-                let low_store = self.dag.get_store(chain, low, ptr, super::dag::MemInfo { mem_vt: round, ..info });
-                let high_info =
-                    super::dag::MemInfo { mem_vt: extra, align: info.align.min(round.size_in_bits() / 8), ..info };
-                let high_store = self.dag.get_store(chain, upper, high_ptr, high_info);
-                self.dag.get_token_factor(&[low_store, high_store])
+                let mut stores = Vec::new();
+                let mut at = 0u32;
+                for piece in pieces {
+                    let part = if at == 0 {
+                        promoted
+                    } else {
+                        let by = self.shift_const(u128::from(at), wide);
+                        self.dag.get_node(ISD::Srl, wide, &[promoted, by])
+                    };
+                    let part = self.dag.get_node(ISD::Truncate, piece, &[part]);
+                    let piece_ptr = if at == 0 { ptr } else { self.address_plus(ptr, u128::from(at / 8)) };
+                    let piece_info = super::dag::MemInfo {
+                        mem_vt: piece,
+                        align: if at == 0 { info.align } else { info.align.min(at / 8) },
+                        ..info
+                    };
+                    stores.push(self.dag.get_store(chain, part, piece_ptr, piece_info));
+                    at += piece.size_in_bits();
+                }
+                self.dag.get_token_factor(&stores)
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
@@ -1142,6 +1152,7 @@ impl<'a> TypeLegalizer<'a> {
                 let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
                 (self.dag.get_node(ISD::Freeze, half, &[lo]), self.dag.get_node(ISD::Freeze, half, &[hi]))
             }
+            ISD::Abs | ISD::AbsMinPoison => self.expand_abs(value, half),
             ISD::CtPop => self.expand_ctpop(value, half),
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
             ISD::BitReverse => {
@@ -1403,6 +1414,48 @@ impl<'a> TypeLegalizer<'a> {
                 }
             }
         }
+    }
+
+    /// `ExpandIntRes_ABS`: the low half's own abs when the high half is all
+    /// sign bits; else the sra+xor+sub sequence on the halves with a borrow
+    /// chain; else the negation selected by the sign of the high half.
+    fn expand_abs(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let operand = self.dag.operand(value, 0);
+        let (lo, hi) = self.expanded_integer(operand);
+        let half_bits = half.size_in_bits();
+        let sign_bits = super::known_bits::num_sign_bits(self.dag, operand);
+        if sign_bits > half_bits {
+            let abs = if sign_bits > half_bits + 1 { ISD::AbsMinPoison } else { ISD::Abs };
+            return (self.dag.get_node(abs, half, &[lo]), self.dag.get_constant(0, half));
+        }
+        // `getTypeToExpandTo(NVT)`
+        let mut expands_to = half;
+        while !self.tli.types.is_type_legal(expands_to) {
+            expands_to = self.tli.types.type_conversion(expands_to).1;
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::USubOCarry, expands_to) {
+            let sign_shift = self.shift_const(u128::from(half_bits - 1), half);
+            let sign = self.dag.get_node(ISD::Sra, half, &[hi, sign_shift]);
+            let overflow_vt = self.tli.types.set_cc_result_type(half);
+            let lo = self.dag.get_node(ISD::Xor, half, &[lo, sign]);
+            let hi = self.dag.get_node(ISD::Xor, half, &[hi, sign]);
+            let lo = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[lo, sign]);
+            let borrow = SDValue { node: lo.node, res: 1 };
+            let hi = self.dag.get_node_multi(ISD::USubOCarry, &[half, overflow_vt], &[hi, sign, borrow]);
+            return (lo, hi);
+        }
+        let vt = self.dag.value_type(value);
+        let zero = self.dag.get_constant(0, vt);
+        let neg = self.dag.get_node(ISD::Sub, vt, &[zero, operand]);
+        let (neg_lo, neg_hi) = self.split_integer(neg, half);
+        let cc_vt = self.tli.types.set_cc_result_type(half);
+        let zero_half = self.dag.get_constant(0, half);
+        let negative = self.dag.get_setcc(cc_vt, hi, zero_half, CondCode::SetLt);
+        (self.dag.get_select(half, negative, neg_lo, lo), self.dag.get_select(half, negative, neg_hi, hi))
     }
 
     /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow
@@ -2105,7 +2158,9 @@ impl<'a> TypeLegalizer<'a> {
             let word = self.dag.value_type(offset);
             let delta = self.dag.get_constant(step, word);
             let moved = self.dag.get_node(ISD::Add, word, &[offset, delta]);
-            return self.dag.get_node(ISD::BuildPair, pointer, &[moved, selector]);
+            return self
+                .dag
+                .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
         let offset = self.dag.get_constant(step, pointer);
         self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
@@ -2505,7 +2560,8 @@ impl<'a> TypeLegalizer<'a> {
                 // (a return or an argument in `dx:ax`): the halves joined into
                 // that dword.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 2));
-                let dword = self.dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
+                let dword =
+                    self.dag.get_node_flags(ISD::BuildPair, EVT::I32, &[lo, hi], super::dag::SDNodeFlags::PAIR_FAR);
                 let mut ops = self.dag.node(node).ops.clone();
                 ops[2] = dword;
                 let updated = self.dag.update_node_operands(n, &ops);
@@ -2548,7 +2604,10 @@ impl<'a> TypeLegalizer<'a> {
                 // `ExpandOp_BITCAST` to a same-size integer: the halves
                 // joined.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
-                self.dag.get_node(ISD::BuildPair, self.dag.value_type(node), &[lo, hi])
+                let vt = self.dag.value_type(node);
+                let kind =
+                    if vt == EVT::Simple(MVT::Far) { super::dag::SDNodeFlags::PAIR_FAR } else { Default::default() };
+                self.dag.get_node_flags(ISD::BuildPair, vt, &[lo, hi], kind)
             }
             ISD::SetCC
                 if matches!(self.setcc_code(node), Some(CondCode::SetLt | CondCode::SetGe))
@@ -2605,14 +2664,13 @@ impl<'a> TypeLegalizer<'a> {
     }
 }
 
-/// A memory type that is not a power of two wide, as the power of two below it
-/// and what is left (`i48`: `i32` and `i16`); none if the rest is no type.
-fn odd_memory(mem: EVT) -> Option<(EVT, EVT)> {
+/// A memory type that is not a power of two wide, as the powers of two it is
+/// the sum of, widest first (`i48`: `i32` and `i16`; `i56`: `i32`, `i16` and
+/// `i8`); none if it is a power of two or has a bit left over a byte.
+pub(super) fn odd_memory(mem: EVT) -> Option<Vec<EVT>> {
     let bits = mem.size_in_bits();
-    if bits.is_power_of_two() {
+    if bits.is_power_of_two() || bits % 8 != 0 {
         return None;
     }
-    let round = bits.next_power_of_two() / 2;
-    let extra = bits - round;
-    (extra.is_power_of_two() && extra >= 8).then(|| (EVT::integer(round), EVT::integer(extra)))
+    Some((3..32).rev().map(|bit| 1u32 << bit).filter(|part| bits & part != 0).map(EVT::integer).collect())
 }

@@ -29,7 +29,8 @@ use llrm_wasm::dag::{ExceptionModel, Options as WasmOptions};
 use llrm_wasm::driver;
 
 use super::arm64::{
-    EXPORTS, block_entry, host_module, renamed, signext_i16_arguments, without_llrm_attributes, without_results_on_void,
+    EXPORTS, block_entry, host_module, ports_as_calls, renamed, signext_i16_arguments, without_llrm_attributes,
+    without_results_on_void,
 };
 use super::compile::CompileError;
 
@@ -45,7 +46,7 @@ fn wasm32_text(
             continue;
         }
         let mut line = line.replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
-        line = without_llrm_attributes(&line);
+        line = ports_as_calls(&without_llrm_attributes(&line));
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = signext_i16_arguments(&block_entry(&line));
         for (from, to) in EXPORTS {
@@ -105,6 +106,21 @@ mod tests {
         let mir = "define cc 1000 i16 @\"DEEP%\"(ptr %0) stackcheck stackcheck nounwind {\nb1:\n  ret i16 0\n}\n";
         let text = wasm32_text(mir, &[]).unwrap();
         assert!(!text.contains("stackcheck") && text.contains("nounwind {"), "{text}");
+    }
+
+    /// `OUT` and `INP` stayed `llrm.ia16.out.i8` and `llrm.ia16.in.i8`: wasm
+    /// selects no port node, and arm64 linked an undefined symbol. The text
+    /// calls the runtime's `qb_port_out` and `qb_port_in`.
+    #[test]
+    fn port_intrinsics_are_calls_of_the_runtimes_port_routines() {
+        let mir = "declare void @llrm.ia16.out.i8(i16, i8)\ndeclare i8 @llrm.ia16.in.i8(i16)\n\
+            define internal void @__main() {\nb1:\n  call void @llrm.ia16.out.i8(i16 968, i8 7)\n  %v = call i8 @llrm.ia16.in.i8(i16 969)\n  ret void\n}\n";
+        let text = wasm32_text(mir, &[], false).unwrap();
+        assert!(!text.contains("llrm.ia16"), "{text}");
+        assert!(
+            text.contains("declare void @qb_port_out(i16, i8)") && text.contains("call i8 @qb_port_in(i16 969)"),
+            "{text}"
+        );
     }
 
     /// `PRINT "hello"` through the 32-bit mid-end: the module's names are the
