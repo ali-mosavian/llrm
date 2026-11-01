@@ -139,6 +139,9 @@ struct Folder<'a> {
     /// The value an instruction of the other way, hoisted away, defined or
     /// read, to the hoisted instruction's (as in `tailmerge`).
     rename: IndexMap<u32, u32>,
+    /// Blocks that lost flow when a branch was decided (`knownflags`): their
+    /// recorded frequencies are stale, as are those of what they lead to.
+    stale: BTreeSet<i64>,
 }
 
 /// `body` with its branches folded; `protected` blocks are never bypassed.
@@ -160,6 +163,12 @@ pub fn folded(
     done.odds = folder.odds;
     super::_prune(&mut done);
     super::_forget_moved_inflow(body, &mut done);
+    if !folder.stale.is_empty()
+        && let Some(kept) = done.frequencies.as_ref()
+    {
+        let table = kept.0.iter().filter(|(at, _)| !folder.stale.contains(at)).map(|(at, runs)| (*at, *runs)).collect();
+        done.frequencies = Some(Arc::new(lir::BlockFrequencies(table)));
+    }
     done
 }
 
@@ -240,6 +249,7 @@ impl<'a> Folder<'a> {
             protected,
             regs: body.registers.map(|regs| (regs, body.bits)),
             rename: IndexMap::default(),
+            stale: BTreeSet::new(),
         }
     }
 

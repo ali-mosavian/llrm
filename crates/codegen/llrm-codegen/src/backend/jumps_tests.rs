@@ -2509,3 +2509,19 @@ fn test_a_branch_after_the_constant_is_changed_keeps_its_compare() {
     let got = names(&threaded(&source));
     assert!(got.iter().any(|one| one == "test"), "{got:?}");
 }
+
+/// Deciding a branch removed the flow into a block, and the blocks it led to
+/// kept their recorded runs: the verifier read "block 0x78 runs 0.009 times,
+/// its predecessors 0.001" and llrm-nib failed on jpeg_single at -Os.
+#[test]
+fn test_a_decided_branch_leaves_no_stale_frequency_downstream() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    source.blocks[2] = block(2, vec![_move(2, imm(0)), _jump(2, 4)], vec![4]).into();
+    source.blocks.push(block(4, vec![_return(4)], vec![]).into());
+    let table = [(0, 1.0), (1, 0.5), (2, 1.0), (3, 1.0), (4, 3.0)].into_iter().collect();
+    source.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+
+    let result = threaded(&source);
+
+    assert_eq!(Frequency::violations(&result), Vec::<String>::new());
+}

@@ -186,6 +186,15 @@ impl Folder<'_> {
             entering.remove(&block.at);
         }
         self.set(index, LirBlock { succ: std::iter::once(kept).collect(), ..block.with_insns(insns).into_inner() });
+        // The flow the dropped edge carried is gone from everything it led to.
+        let mut work = vec![dropped];
+        while let Some(at) = work.pop() {
+            if self.stale.insert(at)
+                && let Some(&one) = self.pos.get(&at)
+            {
+                work.extend(self.blocks[one].succ.iter().copied());
+            }
+        }
         true
     }
 }
