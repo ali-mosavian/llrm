@@ -113,3 +113,49 @@ fn a_reloaded_operand_is_read_from_the_frame() {
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.lines().any(|line| line.trim().starts_with("cp a, ") && line.ends_with("(ix)")), "{out}");
 }
+
+/// A spilled byte stepped by one was reloaded, stepped and stored back
+/// (`ld b, -1(ix)` / `inc b` / `ld -1(ix), b`): 7 bytes and 42 T-states for
+/// `inc -1(ix)`'s 3 and 23.
+#[test]
+fn a_reloaded_byte_stepped_and_spilled_back_is_stepped_in_the_frame() {
+    use llrm_spike_mf::regalloc::Assignment;
+    use llrm_z80::expand::{Line, finish, reads};
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::regalloc::Class;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8, Class::Gr8];
+    let (loaded, stepped) = (Reg::Virt(0), Reg::Virt(1));
+    let insts = vec![
+        Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(loaded), Operand::Frame(0)]),
+        Inst::new(Kind::Op("INC8"), vec![Operand::Def(stepped), Operand::Use(loaded)]),
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(0), Operand::Use(stepped)]),
+        Inst::new(Kind::Op("RET"), vec![]),
+    ];
+    function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+    let assignment = Assignment(vec![llrm_z80::reg::B, llrm_z80::reg::B]);
+    let lines = finish(&function, &assignment, 0, &[(0, 1)], reads(&function)).unwrap_or_else(|why| panic!("{why}"));
+    let insts: Vec<&str> = lines.iter().filter_map(|line| match line { Line::Inst(text) => Some(text.as_str()), _ => None }).collect();
+    assert!(insts.iter().any(|text| text.starts_with("inc ") && text.ends_with("(ix)")), "{insts:?}");
+    assert!(!insts.iter().any(|text| text.starts_with("ld b")), "{insts:?}");
+}
+
+/// The divisor 10 was kept in `de` across the call, so it was spilled to the
+/// frame and loaded back for the compare (`ld -3(ix), e` / `ld c, -3(ix)`); a
+/// constant is loaded again where it is wanted.
+#[test]
+fn a_constant_is_loaded_again_rather_than_spilled() {
+    let ir = include_str!("kernels/ir/digits.ll");
+    let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("ld -3(ix)") && !out.contains("ld -2(ix)"), "{out}");
+}
+
+/// A word compared with a constant loaded the constant into a pair first
+/// (`ld bc, #10` / `sub a, c` / `sbc a, b`): the bytes of the constant are
+/// operands (`sub a, #10` / `sbc a, #0`).
+#[test]
+fn a_word_compared_with_a_constant_takes_its_bytes_as_operands() {
+    let ir = include_str!("kernels/ir/digits.ll");
+    let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("sub a, #10") && out.contains("sbc a, #0"), "{out}");
+}

@@ -147,8 +147,11 @@ multiclass Shift<string n, RegisterClass rc, ValueType vt> {
 defm "" : Shift<"8", GR8, i8>;
 defm "" : Shift<"16", GR16, i16>;
 
+// A constant is loaded again where it is wanted rather than kept or spilled.
+let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
 def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm:$v)]>;
 def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d, imm:$v)]>;
+}
 
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
@@ -187,8 +190,10 @@ def CP8r : Z80Inst<(outs Flags:$f), (ins ACC:$a, GR8:$b), "cp $b", [(set i8:$f, 
 def CP8i : Z80Inst<(outs Flags:$f), (ins ACC:$a, i8imm:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, (i8 imm:$b)))]>;
 // The flags of a - b over a word, through A: sub/sbc of the two byte pairs for the carry, sub and a skip for Z.
 // A is clobbered, as the pseudo says.
-let Defs = [A] in
+let Defs = [A] in {
   def CP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
+  def CP16i : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, (i16 imm:$b)))]>;
+}
 def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
 def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
 let isBranch = 1, isTerminator = 1 in {

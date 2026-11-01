@@ -56,11 +56,13 @@ struct Printer<'a> {
     frame: Frame,
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
-    /// The virtual registers read exactly once.
-    read_once: std::collections::HashSet<u32>,
+    /// How many times each virtual register is read.
+    reads: std::collections::HashMap<u32, usize>,
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
+    /// Instructions after the current one that were printed with it.
+    skip: usize,
 }
 
 fn name(register: RegId) -> &'static str {
@@ -384,7 +386,7 @@ impl Printer<'_> {
                 // the parity/overflow and half-carry flags, which no branch here reads.
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
-            "CP16" => self.compare16(inst, rest)?,
+            "CP16" | "CP16i" => self.compare16(inst, rest)?,
             "AND16i" | "OR16i" | "XOR16i" => {
                 let mnemonic = op[..op.len() - 3].to_lowercase();
                 let (to, a) = (self.register(inst, 0)?, self.register(inst, 1)?);
@@ -463,6 +465,9 @@ impl Printer<'_> {
                     (self.frame_index(inst, 1)?, 0)
                 };
                 let (register, slot) = (name_of(self, register)?, self.slot(index, 0)?);
+                if op == "RELOAD8" && self.updated_in_place(inst, rest)? {
+                    return Ok(());
+                }
                 if op == "RELOAD8" && self.reload_is_operand(inst, rest) {
                     self.folded = Some((self.register(inst, 0)?, slot));
                     return Ok(());
@@ -567,7 +572,16 @@ impl Printer<'_> {
         inst: &Inst,
         rest: &[Inst],
     ) -> Result<(), String> {
-        let ((al, ah), (bl, bh)) = (lanes(self.register(inst, 1)?)?, lanes(self.register(inst, 2)?)?);
+        let (al, ah) = lanes(self.register(inst, 1)?)?;
+        // the other word: a pair, or two immediate bytes
+        let (bl, bh) = match inst.operands.get(2) {
+            Some(Operand::Imm(value)) => (format!("#{}", value & 0xFF), format!("#{}", (value >> 8) & 0xFF)),
+            Some(Operand::Use(_)) => {
+                let (lo, hi) = lanes(self.register(inst, 2)?)?;
+                (name(lo).to_owned(), name(hi).to_owned())
+            }
+            other => return Err(format!("CP16 against {other:?}")),
+        };
         let reader = rest.iter().find(|one| one.reads_flags).and_then(|one| match one.kind {
             Kind::Op(name) => Some(name),
             Kind::Copy => None,
@@ -575,17 +589,17 @@ impl Printer<'_> {
         match reader {
             Some("JPC" | "JPNC" | "RETC" | "RETNC") => {
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {}", name(bl)));
+                self.push(format!("sub a, {bl}"));
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sbc a, {}", name(bh)));
+                self.push(format!("sbc a, {bh}"));
             }
             Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") => {
                 let skip = format!("{}$", self.out.len());
                 self.push(format!("ld a, {}", name(al)));
-                self.push(format!("sub a, {}", name(bl)));
+                self.push(format!("sub a, {bl}"));
                 self.push(format!("jr nz, {skip}"));
                 self.push(format!("ld a, {}", name(ah)));
-                self.push(format!("sub a, {}", name(bh)));
+                self.push(format!("sub a, {bh}"));
                 self.out.push(Line::Label(skip));
             }
             other => return Err(format!("CP16 read by {other:?}")),
@@ -607,6 +621,65 @@ impl Printer<'_> {
         }
     }
 
+    /// A byte reloaded, optionally stepped by one, and spilled back to the same
+    /// cell, with nothing else reading it, is `inc d(ix)` / `dec d(ix)` or no
+    /// instruction at all (`foldMemoryOperand` of the frame cell). Prints it and
+    /// reports whether it did.
+    fn updated_in_place(
+        &mut self,
+        reload: &Inst,
+        rest: &[Inst],
+    ) -> Result<bool, String> {
+        let (Some(Operand::Def(loaded @ Reg::Virt(_))), Some(Operand::Frame(cell))) = (reload.operands.first(), reload.operands.get(1)) else {
+            return Ok(false);
+        };
+        let register = self.physical(*loaded);
+        // `inst` spills `register` back to the cell
+        let spills = |inst: &Inst| {
+            inst.kind == Kind::Op("SPILL8")
+                && matches!(&inst.operands[..], [Operand::Frame(one), Operand::Use(r)] if one == cell && self.physical(*r) == register)
+        };
+        let steps = |inst: &Inst| {
+            matches!(inst.kind, Kind::Op("INC8" | "DEC8"))
+                && matches!(&inst.operands[..], [Operand::Def(d), Operand::Use(u)] if self.physical(*d) == register && self.physical(*u) == register)
+        };
+        let (taken, step) = match rest {
+            [back, ..] if spills(back) => (1, None),
+            [step, back, ..] if steps(step) && spills(back) => (2, Some(step)),
+            _ => return Ok(false),
+        };
+        // nothing but these reads the registers' virtual values
+        let mut inside: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        for inst in &rest[..taken] {
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand {
+                    *inside.entry(*v).or_default() += 1;
+                }
+            }
+        }
+        // the reload feeds one read (a copy to the stepped register that the
+        // allocator dropped, or the step), and the stepped value only the spill
+        let loaded_reads = match loaded {
+            Reg::Virt(v) => self.reads.get(v).copied().unwrap_or(0),
+            Reg::Phys(_) => 2,
+        };
+        let step_made = step.and_then(|one| match one.operands.first() {
+            Some(Operand::Def(Reg::Virt(d))) => Some(*d),
+            _ => None,
+        });
+        let others = inside.keys().chain(step_made.as_ref());
+        if loaded_reads > 1 || others.into_iter().any(|v| self.reads.get(v).copied().unwrap_or(0) != inside.get(v).copied().unwrap_or(0)) {
+            return Ok(false);
+        }
+        if let Some(step) = step {
+            let Kind::Op(op) = step.kind else { return Ok(false) };
+            let slot = self.slot(*cell, 0)?;
+            self.push(format!("{} {slot}", op[..3].to_lowercase()));
+        }
+        self.skip = taken;
+        Ok(true)
+    }
+
     /// Whether the instruction after a `RELOAD8` is an ALU op or compare that
     /// reads the reloaded byte, which nothing else reads: it may take the frame
     /// cell as its operand (`sub a, d(ix)`) and the reload goes.
@@ -620,7 +693,7 @@ impl Printer<'_> {
         };
         matches!(next.kind, Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r"))
             && matches!(next.operands.get(2), Some(Operand::Use(Reg::Virt(v))) if v == loaded)
-            && self.read_once.contains(loaded)
+            && self.reads.get(loaded) == Some(&1)
             && !matches!(next.operands.get(1), Some(Operand::Use(Reg::Virt(v))) if v == loaded)
     }
 
@@ -718,11 +791,27 @@ fn prologue(frame: &Frame) -> Vec<String> {
 
 /// The instructions of `function` with the registers `assignment` gave them.
 /// `slots` are the spill slots and their sizes in bytes.
+/// How many times each virtual register is read, copies included.
+pub fn reads(function: &MFunction) -> std::collections::HashMap<u32, usize> {
+    let mut reads = std::collections::HashMap::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Use(Reg::Virt(v)) = operand {
+                *reads.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    reads
+}
+
+/// `reads` is [`reads`] of the function as the allocator left it: the copies
+/// it dropped as identities were reads too.
 pub fn finish(
     function: &MFunction,
     assignment: &Assignment,
     number: usize,
     slots: &[(i32, usize)],
+    reads: std::collections::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let function = &tail_calls(function);
     let frame = layout(function, slots);
@@ -732,16 +821,7 @@ pub fn finish(
         .filter(|block| matches!(&block.insts[..], [one] if one.kind == Kind::Op("RET")))
         .map(|block| block.id)
         .collect();
-    let mut reads: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        for operand in &inst.operands {
-            if let Operand::Use(Reg::Virt(v)) = operand {
-                *reads.entry(*v).or_default() += 1;
-            }
-        }
-    }
-    let read_once = reads.into_iter().filter(|&(_, count)| count == 1).map(|(v, _)| v).collect();
-    let mut printer = Printer { assignment, number, out: Vec::new(), frame, returns_bare, read_once, folded: None };
+    let mut printer = Printer { assignment, number, out: Vec::new(), frame, returns_bare, reads, folded: None, skip: 0 };
     if printer.frame.active {
         for line in prologue(&printer.frame) {
             printer.push(line);
@@ -751,6 +831,10 @@ pub fn finish(
         printer.out.push(Line::Label(label(number, block.id)));
         let next = function.blocks.get(at + 1).map(|block| block.id);
         for (index, inst) in block.insts.iter().enumerate() {
+            if printer.skip > 0 {
+                printer.skip -= 1;
+                continue;
+            }
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }

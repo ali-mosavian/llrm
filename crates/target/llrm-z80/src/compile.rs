@@ -47,15 +47,17 @@ pub fn allocated(
     name: &str,
     request: &Request,
 ) -> Result<(MFunction, Assignment, Vec<(i32, usize)>), String> {
-    allocated_with(ir, name, request, true)
+    allocated_with(ir, name, request, true).map(|(function, assignment, slots, _)| (function, assignment, slots))
 }
+
+type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, std::collections::HashMap<u32, usize>);
 
 fn allocated_with(
     ir: &str,
     name: &str,
     request: &Request,
     duplicate: bool,
-) -> Result<(MFunction, Assignment, Vec<(i32, usize)>), String> {
+) -> Result<Allocated, String> {
     let mut function = machine_function_with(ir, name, request, duplicate)?;
     eliminate_phis_with(&mut function, false);
     two_address(&mut function);
@@ -63,12 +65,16 @@ fn allocated_with(
         dump(&function);
     }
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
+    let reads = expand::reads(&function);
+    if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
+        dump(&function);
+    }
     remove_identity_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
-    Ok((function, assignment, slots.into_iter().map(|(slot, class)| (slot, size(class))).collect()))
+    Ok((function, assignment, slots.into_iter().map(|(slot, class)| (slot, size(class))).collect(), reads))
 }
 
 /// Drops the copies the allocation gave one register.
@@ -183,8 +189,8 @@ pub fn lines(
     request: &Request,
 ) -> Result<Vec<Line>, String> {
     let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
-        let (function, assignment, slots) = allocated_with(ir, name, request, duplicate)?;
-        finish(&function, &assignment, number, &slots)
+        let (function, assignment, slots, reads) = allocated_with(ir, name, request, duplicate)?;
+        finish(&function, &assignment, number, &slots, reads)
     };
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,

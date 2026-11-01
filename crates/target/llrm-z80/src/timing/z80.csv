@@ -59,6 +59,7 @@ dec b,1,4,,z80
 inc (hl),1,11,,z80
 dec (hl),1,11,,z80
 inc (ix+d),3,23,,z80
+dec (ix+d),3,23,,z80
 inc bc,1,6,,z80
 dec bc,1,6,,z80
 inc ix,2,10,,z80
