@@ -751,6 +751,14 @@ impl<'a> TypeLegalizer<'a> {
                     &[converted, ty],
                 )
             }
+            op @ (ISD::BitReverse | ISD::BSwap) => {
+                // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
+                // wider reversal, shifted down by the bits added.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let reversed = self.dag.get_node(op, to, &[promoted]);
+                let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
+                self.dag.get_node(ISD::Srl, to, &[reversed, added])
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
