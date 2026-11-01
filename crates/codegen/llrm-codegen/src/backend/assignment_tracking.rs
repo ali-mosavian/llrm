@@ -735,6 +735,10 @@ pub struct Prepared {
     pub contains: HashMap<VariableId, Vec<VariableId>>,
     /// Per untagged store the variables it writes (`UntaggedStoreVars`).
     pub untagged_stores: HashMap<InstId, Vec<(VariableId, AssignmentInfo)>>,
+    /// Per call that may write through a pointer to a tracked alloca, the
+    /// variables of it, with the address and address expression of the
+    /// record that names the alloca (`EscapingCallVars`).
+    pub escaping_calls: HashMap<InstId, Vec<(VariableId, Operand, MetadataId)>>,
     /// One more than the last variable the dataflow tracks
     /// (`TrackedVariablesVectorSize`).
     pub tracked_variables: usize,
@@ -757,10 +761,80 @@ pub fn debug_variable_of(
     DebugVariable { variable: record.variable, fragment: fragment_of(&ops), inlined_at: None }
 }
 
-/// `buildOverlapMapAndRecordDeclares` without escaping calls and unknown
-/// stores: the variables the dataflow tracks, which contain which, and which
-/// untagged stores write them; each `#dbg_declare` becomes a location valid
-/// for the variable's whole scope.
+/// The escaping-call part of `buildOverlapMapAndRecordDeclares`: a call
+/// that is no intrinsic, may write memory, and passes a pointer into a tracked
+/// alloca the callee may write through (not `readonly`, `readnone` or
+/// `byval`) may change the variables of that alloca, whole: which part is not
+/// known.
+#[allow(clippy::too_many_arguments)]
+fn escaping_call(
+    q: &Query,
+    callees: &llrm_mir::memory::Callees,
+    markers: &AssignmentMarkers,
+    with_stack_slot: &HashSet<MetadataId>,
+    builder: &mut FunctionVarLocsBuilder,
+    inst: InstId,
+    prepared: &mut Prepared,
+) {
+    use llrm_mir::valuetracking::pattern::{call_info, called_function};
+    let function = q.function;
+    let instruction = function.instruction(inst);
+    let Some(info) = call_info(instruction) else { return };
+    if let Some(callee) = llrm_mir::memory::callee(q.context, function, inst)
+        && q.globals
+            .get(callee.0 as usize)
+            .is_some_and(|one| one.name.as_ref().is_some_and(|name| name.starts_with("llvm.")))
+    {
+        return;
+    }
+    if !llrm_mir::memory::of(q.context, callees, function, inst).writes {
+        return;
+    }
+    let callee = called_function(q, instruction);
+    let has_flag = |attrs: Option<&Vec<llrm_mir::Attribute>>, flag: &str| {
+        attrs.is_some_and(|attrs| llrm_mir::memory::has(attrs, flag))
+    };
+    let mut seen: HashSet<VariableId> = HashSet::new();
+    for (arg, &operand) in instruction.operands[..instruction.operands.len() - 1].iter().enumerate() {
+        if !q.is_pointer(operand) {
+            continue;
+        }
+        let site = info.argument_attrs.get(arg);
+        let declared = callee.and_then(|callee| callee.parameter_attrs.get(arg));
+        if [site, declared].into_iter().any(|attrs| has_flag(attrs, "readonly") || has_flag(attrs, "readnone")) {
+            continue;
+        }
+        if site.is_some_and(|attrs| {
+            attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Type(key, _) if key == "byval"))
+        }) {
+            continue;
+        }
+        let Operand::Value(object) = llrm_mir::valuetracking::underlying::get_underlying_object(q, operand, 6) else {
+            continue;
+        };
+        let llrm_mir::ValueDef::Instruction(alloca) = function.value(object).def else { continue };
+        if !matches!(function.instruction(alloca).opcode, Opcode::Alloca { .. }) {
+            continue;
+        }
+        for &at in markers.of(function, alloca) {
+            let record = &function.debug_records()[at];
+            let DebugWhat::Assign { address: Some(address), address_expression, .. } = record.what else { continue };
+            if !with_stack_slot.contains(&record.variable) {
+                continue;
+            }
+            let variable =
+                builder.insert_variable(DebugVariable { variable: record.variable, fragment: None, inlined_at: None });
+            if seen.insert(variable) {
+                prepared.escaping_calls.entry(inst).or_default().push((variable, address, address_expression));
+            }
+        }
+    }
+}
+
+/// `buildOverlapMapAndRecordDeclares` without unknown stores (the IR has no
+/// masked or vector store to make one): the variables the dataflow tracks,
+/// which contain which, and which untagged stores write them; each
+/// `#dbg_declare` becomes a location valid for the variable's whole scope.
 ///
 /// O(n log n) in the records, for the fragments' sort, and quadratic in the
 /// fragments of one variable, as the pin is. The pin numbers the variables
@@ -773,6 +847,7 @@ pub fn build_overlap_map(
     builder: &mut FunctionVarLocsBuilder,
     markers: &AssignmentMarkers,
     with_stack_slot: &HashSet<MetadataId>,
+    callees: &llrm_mir::memory::Callees,
 ) -> Prepared {
     let function = q.function;
     let mut before: HashMap<InstId, Vec<usize>> = HashMap::new();
@@ -797,6 +872,7 @@ pub fn build_overlap_map(
                 note(debug_variable_of(module, record));
             }
         }
+        escaping_call(q, callees, markers, with_stack_slot, builder, inst, &mut prepared);
         let Some(info) = assignment_info(q, inst) else { continue };
         for &at in markers.of(function, info.alloca) {
             let record = &function.debug_records()[at];
@@ -1098,6 +1174,28 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    /// `processEscapingCall`: a call that may write a tracked variable is
+    /// taken to leave the value now in memory as the variable's.
+    fn process_escaping_call(
+        &mut self,
+        live: &mut BlockInfo,
+        inst: InstId,
+        after: InsertPt,
+    ) {
+        let Some(variables) = self.prepared.escaping_calls.get(&inst).cloned() else { return };
+        for (variable, address, address_expression) in variables {
+            self.add_def(live, AssignmentKind::Stack, variable, Assignment::NoneOrPhi);
+            self.add_def(live, AssignmentKind::Debug, variable, Assignment::NoneOrPhi);
+            self.set_loc_kind(live, variable, LocKind::Mem);
+            let mut ops = self.ops_of(Some(address_expression));
+            if let Some(fragment) = self.builder.variable(variable).fragment {
+                ops.push(DwOp::Fragment { offset: fragment.offset, size: fragment.size });
+            }
+            let (base, ops) = alloca_and_deref(self.q, address, ops);
+            self.emit(after, variable, ops, None, vec![base]);
+        }
+    }
+
     /// `processDbgAssign`.
     fn process_dbg_assign(
         &mut self,
@@ -1178,6 +1276,7 @@ impl<'a> Lowering<'a> {
             } else {
                 self.process_untagged(live, inst, after);
             }
+            self.process_escaping_call(live, inst, after);
         }
     }
 
@@ -1317,6 +1416,15 @@ mod tests {
         first: &str,
         second: &str,
     ) -> Module {
+        array_calling(first, second, "")
+    }
+
+    /// As [`array`], with `call` (a line of the block) before the `ret`.
+    fn array_calling(
+        first: &str,
+        second: &str,
+        call: &str,
+    ) -> Module {
         let text = format!(
             "target datalayout = \"{DATALAYOUT}\"\n\
 define i32 @f(i32 %n) {{\nentry:\n\
@@ -1327,7 +1435,8 @@ define i32 @f(i32 %n) {{\nentry:\n\
   %p = getelementptr inbounds i8, ptr %a, i64 4\n\
   store i32 %n, ptr %p, align 4{second}\n\
     #dbg_assign(i32 %n, !20, !DIExpression(DW_OP_LLVM_fragment, 32, 32), !29, ptr %a, !DIExpression(DW_OP_plus_uconst, 4), !25)\n\
-  ret i32 %n\n}}\n\
+  {call}\n  ret i32 %n\n}}\n\
+declare void @g(ptr)\ndeclare void @h(ptr readonly)\n\
 !17 = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n\
 !20 = !DILocalVariable(name: \"a\", scope: !14, type: !21)\n\
 !21 = !DICompositeType(tag: DW_TAG_array_type, baseType: !17, size: 96)\n\
@@ -1349,7 +1458,8 @@ define i32 @f(i32 %n) {{\nentry:\n\
         let markers = AssignmentMarkers::new(function);
         let with_slot = vars_with_stack_slot(function, &markers);
         let mut builder = FunctionVarLocsBuilder::default();
-        let prepared = build_overlap_map(module, &q, &mut builder, &markers, &with_slot);
+        let prepared =
+            build_overlap_map(module, &q, &mut builder, &markers, &with_slot, &llrm_mir::memory::callees(module));
         (prepared, builder)
     }
 
@@ -1467,7 +1577,8 @@ define i32 @f(i32 %n) {{\nentry:\n\
         let markers = AssignmentMarkers::new(function);
         let with_slot = vars_with_stack_slot(function, &markers);
         let mut builder = FunctionVarLocsBuilder::default();
-        let prepared = build_overlap_map(module, &q, &mut builder, &markers, &with_slot);
+        let prepared =
+            build_overlap_map(module, &q, &mut builder, &markers, &with_slot, &llrm_mir::memory::callees(module));
         let size = prepared.tracked_variables;
         let mut lowering = Lowering::new(module, &q, &markers, &with_slot, prepared, builder);
         let mut live = BlockInfo::new(size);
@@ -1517,6 +1628,19 @@ define i32 @f(i32 %n) {{\nentry:\n\
                 ),
             ]
         );
+    }
+
+    /// A call that may write through a pointer to the variable's alloca leaves
+    /// whatever it wrote as the variable: memory, whole, from the call on. The
+    /// same call with the parameter `readonly` leaves it as it was; before this
+    /// the analysis took the call for no write and kept an old value.
+    #[test]
+    fn a_call_through_the_allocas_pointer_makes_it_a_memory_location() {
+        let whole = ("ret".to_owned(), 0, None, "DW_OP_deref".to_owned(), 1);
+        let writes = lowered(&array_calling(TAGGED_1, TAGGED_2, "call void @g(ptr %a)"));
+        assert!(writes.contains(&whole), "{writes:?}");
+        let reads = lowered(&array_calling(TAGGED_1, TAGGED_2, "call void @h(ptr %a)"));
+        assert!(!reads.contains(&whole), "{reads:?}");
     }
 
     /// A store without an id is taken to write its variable's stack home: the
