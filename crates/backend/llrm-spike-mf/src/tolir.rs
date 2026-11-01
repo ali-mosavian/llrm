@@ -90,24 +90,30 @@ impl<T: Target> Converted<T> {
             size,
             registers,
             Box::new(move |join| {
+                let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
-                    let saving = side
+                    let before: Vec<RegId> = side.palette.iter().copied().collect();
+                    let extra = side
                         .uses
                         .iter()
                         .flat_map(|(one, freq)| {
                             operands_in(&infos, one)
                                 .into_iter()
                                 .filter(|(value, _)| *value == side.value)
-                                .map(move |(_, info)| *freq * info.saving as f32)
+                                .filter_map(
+                                    |(_, info)| {
+                                        let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
+                                        Some(*freq * will.saturating_sub(was) as f32)
+                                    },
+                                )
                         })
                         .sum::<f32>();
-                    (side.palette.iter().copied().collect::<Vec<RegId>>(), saving)
+                    (before, extra)
                 };
-                let ((source, source_saving), (destination, destination_saving)) = (side(&join.one), side(&join.other));
-                let joined: Vec<RegId> = join.joined.iter().copied().collect();
+                let ((source, source_extra), (destination, destination_extra)) = (side(&join.one), side(&join.other));
                 T::should_coalesce(&Join {
-                    source: Side { registers: &source, memory_saving: source_saving },
-                    destination: Side { registers: &destination, memory_saving: destination_saving },
+                    source: Side { registers: &source, extra_cost: source_extra },
+                    destination: Side { registers: &destination, extra_cost: destination_extra },
                     joined: &joined,
                     copy_frequency: join.copy_frequency,
                 })
@@ -574,13 +580,46 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
 struct OperandInfo {
     def: bool,
     index: usize,
-    /// What its instruction saves while the value may sit in memory
-    /// (`Target::memory_saving`).
-    saving: u32,
-    /// The register it is cheaper with (`Target::operand_hint`).
+    /// The register it is cheaper with: the first of the cheapest in `order`
+    /// when they differ (`getRegAllocationHints`).
     hint: Option<RegId>,
     /// The registers its class allows, in order.
     order: Vec<RegId>,
+    /// What the instruction costs in each, aligned with `order`
+    /// (`Target::operand_cost`).
+    costs: Vec<u32>,
+}
+
+impl OperandInfo {
+    fn new<T: Target>(
+        inst: &Inst,
+        at: usize,
+        def: bool,
+        index: usize,
+        order: Vec<RegId>,
+    ) -> Self {
+        let costs: Vec<u32> = order.iter().map(|register| T::operand_cost(inst, at, *register)).collect();
+        let (least, most) = (costs.iter().min().copied(), costs.iter().max().copied());
+        let hint = match (least, most) {
+            (Some(least), Some(most)) if least < most => {
+                costs.iter().position(|cost| *cost == least).map(|at| order[at])
+            }
+            _ => None,
+        };
+        Self { def, index, hint, order, costs }
+    }
+
+    /// The cheapest this instruction is in any of `registers` it prices.
+    fn cheapest(
+        &self,
+        registers: &[RegId],
+    ) -> Option<u32> {
+        registers
+            .iter()
+            .filter_map(|register| self.order.iter().position(|one| one == register))
+            .map(|at| self.costs[at])
+            .min()
+    }
 }
 
 /// The virtual operands the target described for `one` in `infos` (indexed by
@@ -625,25 +664,13 @@ fn operand_infos<T: Target>(
     for (at, operand) in inst.operands.iter().enumerate() {
         match operand {
             Operand::Use(Reg::Virt(v)) => {
-                infos.push(OperandInfo {
-                    def: false,
-                    index: sources,
-                    saving: T::memory_saving(inst, at),
-                    hint: T::operand_hint(inst, at),
-                    order: order_of(*v),
-                });
+                infos.push(OperandInfo::new::<T>(inst, at, false, sources, order_of(*v)));
                 sources += 1;
             }
             Operand::Use(Reg::Phys(register)) if !T::reserved(T::root(*register)) => sources += 1,
             Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => sources += 1,
             Operand::Def(Reg::Virt(v)) => {
-                infos.push(OperandInfo {
-                    def: true,
-                    index: dests,
-                    saving: T::memory_saving(inst, at),
-                    hint: T::operand_hint(inst, at),
-                    order: order_of(*v),
-                });
+                infos.push(OperandInfo::new::<T>(inst, at, true, dests, order_of(*v)));
                 dests += 1;
             }
             Operand::Def(Reg::Phys(register)) if !T::reserved(T::root(*register)) => dests += 1,

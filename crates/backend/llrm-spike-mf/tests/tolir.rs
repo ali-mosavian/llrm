@@ -4,7 +4,7 @@ use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
 use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Loc, Operation};
-use llrm_spike_mf::regalloc::{Join, Side, Target, eliminate_phis, two_address};
+use llrm_spike_mf::regalloc::{Target, eliminate_phis, two_address};
 use llrm_spike_mf::tolir::{from_lir, to_lir};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Reg};
 
@@ -1150,11 +1150,18 @@ impl Target for IncInLast {
         vec![]
     }
 
-    fn operand_hint(
+    fn operand_cost(
         inst: &Inst,
         _: usize,
-    ) -> Option<RegId> {
-        (inst.kind == Kind::Op("inc")).then_some(RegId::EDX)
+        register: RegId,
+    ) -> u32 {
+        // `inc` is cheapest in the last register, `neg` in the middle one
+        let cheapest = match inst.kind {
+            Kind::Op("inc") => RegId::EDX,
+            Kind::Op("neg") => RegId::ECX,
+            _ => return 0,
+        };
+        u32::from(register != cheapest)
     }
 }
 
@@ -1178,6 +1185,26 @@ fn test_a_value_an_instruction_is_cheaper_with_takes_that_register() {
     let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
     let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
     assert_eq!(held, Some(RegId::EDX), "{:?}", decided.placed);
+}
+
+/// The register an instruction prices lowest is the hint, whatever the
+/// instruction is called: `neg` is cheapest in `ecx`, not in the last register.
+#[test]
+fn test_the_hint_is_the_register_the_instruction_costs_least_in() {
+    let mut f = MFunction::<()>::new("neg");
+    f.classes = vec![(); 1];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("neg", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
+    assert_eq!(held, Some(RegId::ECX), "{:?}", decided.placed);
 }
 
 /// The coalescer joins the values of a loop's phi copies and renames the
@@ -1263,22 +1290,23 @@ impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
         (order.len() < REGISTERS.len()).then(|| REGISTERS.to_vec())
     }
 
-    fn memory_saving(
+    fn operand_cost(
         inst: &Inst,
         operand: usize,
+        register: RegId,
     ) -> u32 {
-        // `dec` in memory is one instruction; in a register it is three
-        match (inst.kind, inst.operands.get(operand)) {
-            (Kind::Op("dec"), Some(Operand::Use(_))) => 2,
+        // `dec` is cheapest in the register the narrow class lacks, as the
+        // 6502's is on a zero-page cell
+        match (DECLINE, inst.kind, inst.operands.get(operand)) {
+            (true, Kind::Op("dec"), Some(Operand::Use(_))) => {
+                if register == RegId::EDX {
+                    1
+                } else {
+                    3
+                }
+            }
             _ => 0,
         }
-    }
-
-    /// A join that takes the memory form from a value is worth less than the
-    /// copy it saves, each weighed by the frequency of its block.
-    fn should_coalesce(join: &Join) -> bool {
-        let loses = |side: &Side| side.registers.len() > join.joined.len() && side.memory_saving > join.copy_frequency;
-        !DECLINE || !(loses(&join.source) || loses(&join.destination))
     }
 }
 
