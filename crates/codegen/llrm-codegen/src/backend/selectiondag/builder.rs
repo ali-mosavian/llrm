@@ -553,7 +553,7 @@ impl<'a> Builder<'a> {
                         if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
                 ),
             );
-        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag });
+        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
         let tables = info
             .tables
             .get_or_insert_with(|| {
