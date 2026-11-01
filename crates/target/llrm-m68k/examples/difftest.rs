@@ -400,6 +400,11 @@ fn check_text(
     for item in &items {
         let Item::Inst(inst) = item else { continue };
         let Ok(text) = llrm_m68k::mc::print(inst) else { continue };
+        let mnemonic = text.split_whitespace().next().unwrap_or("");
+        if mnemonic.starts_with("addq") || mnemonic.starts_with("subq") {
+            *INDEXED_FORMS.lock().unwrap().entry(mnemonic.to_owned()).or_insert(0usize) += 1;
+            continue;
+        }
         let direction = if text.contains(")+") {
             "(An)+"
         } else if text.contains("-(%a") {
@@ -410,6 +415,16 @@ fn check_text(
         let width = text.split_whitespace().next().unwrap_or("").trim_start_matches("move");
         *INDEXED_FORMS.lock().unwrap().entry(format!("move{width} {direction}")).or_insert(0usize) += 1;
         forms += 1;
+    }
+    if std::env::var_os("DIFF_STATIC").is_some() {
+        let total: usize = items
+            .iter()
+            .map(|item| match item {
+                Item::Inst(inst) => llrm_m68k::encode::encode(inst).map_or(0, |one| one.bytes.len()),
+                _ => 0,
+            })
+            .sum();
+        eprintln!("STATIC {name} {total}");
     }
     if forms > 0 {
         INDEXED_PROGRAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

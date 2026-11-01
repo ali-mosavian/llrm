@@ -20,7 +20,8 @@
 use llrm_lir::registers::RegId;
 
 use crate::REGISTER_INFO;
-use crate::dagisel::enc::{Enc, Piece, encoding};
+use crate::dagisel::enc::{Enc, Piece};
+use crate::dagisel::local;
 use crate::mc::{Inst, Operand};
 
 /// A field of the bytes that waits for a symbol's address (`MCFixup`).
@@ -142,11 +143,7 @@ fn operand_value(
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     let (width, pieces) = match crate::divide::encoding(inst.opcode) {
         Some(row) => row,
-        None => {
-            let &(_, width, pieces) =
-                encoding(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?;
-            (width, pieces)
-        }
+        None => local::bits(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?,
     };
     if width == 0 {
         return Err(format!("{} is a pseudo-instruction: it has no encoding", inst.opcode));
