@@ -123,6 +123,8 @@ struct Emitter<'a> {
     values: HashMap<(u32, u8), Reg>,
     /// The builder's virtual registers, by number.
     builder: HashMap<u32, Reg>,
+    /// The argument register each virtual register is a copy of.
+    arrives_in: HashMap<Reg, llrm_lir::registers::RegId>,
 }
 
 impl Emitter<'_> {
@@ -250,6 +252,9 @@ impl Emitter<'_> {
                 let src = self.register(n.ops[1]).ok_or("CopyFromReg of no register")?;
                 let dst = self.new_reg(Class::of_type(n.values[0]));
                 self.values.insert((node, 0), dst);
+                if let Some(&register) = self.arrives_in.get(&src) {
+                    self.arrives_in.insert(dst, register);
+                }
                 into.push(Inst::copy(dst, src));
             }
             ISD::Machine(code) => {
@@ -287,6 +292,7 @@ impl Emitter<'_> {
                         operands.push(operand);
                     }
                 }
+                self.commute_into_fixed(desc, &mut operands);
                 // a register the instruction overwrites besides its results (`Defs = [A]`)
                 // is a def no one reads: the allocator keeps nothing else in it
                 operands.extend(
@@ -337,6 +343,29 @@ impl Emitter<'_> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// A commutable instruction whose result is tied to a fixed register (`add a, r`)
+    /// takes as that operand the value that arrives in the register, if only
+    /// the other one does not: the copy into the register is then the identity
+    /// (`TwoAddressInstructionPass::tryInstructionCommute`, steered by the
+    /// argument copies it would otherwise leave).
+    fn commute_into_fixed(
+        &self,
+        desc: &llrm_dagisel::instr::InstrDesc,
+        operands: &mut [Operand],
+    ) {
+        if !desc.has(flag::COMMUTABLE) || operands.len() < 3 {
+            return;
+        }
+        let Some(fixed) = desc.operands.get(1).and_then(|one| fixed_register(one.reg_class)) else { return };
+        let arrives = |operand: &Operand| match operand {
+            Operand::Use(reg) => self.arrives_in.get(reg).copied(),
+            _ => None,
+        };
+        if arrives(&operands[2]) == Some(fixed) && arrives(&operands[1]) != Some(fixed) {
+            operands.swap(1, 2);
+        }
     }
 
     /// The constant of a `TargetConstant` operand.
@@ -409,6 +438,7 @@ pub fn emit(
         function: MFunction::new(name),
         values: HashMap::new(),
         builder: HashMap::new(),
+        arrives_in: HashMap::new(),
     };
     // the frame objects the selector made; the allocas came first, at their index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
@@ -421,6 +451,7 @@ pub fn emit(
         for &(register, number) in &one.live_ins {
             let class = if crate::REGISTER_INFO.bytes(register) == Some(2) { Class::Gr16 } else { Class::Gr8 };
             let into = emitter.numbered(number, class);
+            emitter.arrives_in.insert(into, register);
             insts.push(Inst::copy(into, Reg::Phys(register)));
         }
         // A unit lists its glued nodes last first.

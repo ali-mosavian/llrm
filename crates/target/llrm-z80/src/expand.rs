@@ -136,10 +136,15 @@ impl Printer<'_> {
         &mut self,
         to: RegId,
         from: RegId,
+        rest: &[Inst],
     ) -> Result<(), String> {
         match (is_pair(to), is_pair(from)) {
             (false, false) => self.byte_move(to, from),
             (true, true) if to == from => {}
+            // `de` and `hl` trade places in one byte; the source is dead, so what lands in it is too
+            (true, true) if to != reg::BC && from != reg::BC && self.pair_dead_after(from, rest) => {
+                self.push("ex de, hl");
+            }
             (true, true) => {
                 let ((dl, dh), (sl, sh)) = (lanes(to)?, lanes(from)?);
                 self.byte_move(dl, sl);
@@ -189,7 +194,7 @@ impl Printer<'_> {
         let name_of = |this: &Self, at| this.register(inst, at).map(name);
         let Kind::Op(op) = inst.kind else {
             let (to, from) = (self.register(inst, 0)?, self.register(inst, 1)?);
-            return self.copy(to, from);
+            return self.copy(to, from, rest);
         };
         match op {
             "LO" | "HI" => {
@@ -407,6 +412,33 @@ impl Printer<'_> {
             other => return Err(format!("{other} is not expanded yet")),
         }
         Ok(())
+    }
+
+    /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
+    fn pair_dead_after(
+        &self,
+        pair: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        let Ok((lo, hi)) = lanes(pair) else { return false };
+        for inst in rest {
+            let named = |r: &Reg| {
+                let r = self.physical(*r);
+                r == pair || r == lo || r == hi
+            };
+            let reads = inst.operands.iter().any(|o| matches!(o, Operand::Use(r) if named(r)));
+            if reads {
+                return false;
+            }
+            // a def of the whole pair ends it; one lane alone does not
+            if inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if self.physical(*r) == pair)) {
+                return true;
+            }
+            if inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if named(r))) {
+                return false;
+            }
+        }
+        matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
     }
 
     /// Whether the byte register `register` holds nothing a later instruction of

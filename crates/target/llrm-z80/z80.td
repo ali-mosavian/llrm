@@ -77,6 +77,7 @@ def calltarget : Operand<i16>;
 // A op r and A op n: ADD, SUB, AND, OR, XOR. Every one writes the flags and leaves the result in A.
 multiclass ALU8<string n, SDPatternOperator op> {
   let Defs = [F], Constraints = "$d = $a" in {
+    let isCommutable = !if(!eq(n, "sub"), 0, 1) in
     def NAME#"8r" : Z80Inst<(outs ACC:$d), (ins ACC:$a, GR8:$b), n#" a, $b", [(set i8:$d, (op i8:$a, i8:$b))]>;
     def NAME#"8i" : Z80Inst<(outs ACC:$d), (ins ACC:$a, i8imm:$b), n#" a, $b", [(set i8:$d, (op i8:$a, (i8 imm:$b)))]>;
   }
@@ -94,7 +95,7 @@ let Defs = [F], Constraints = "$d = $a" in {
 }
 
 // add hl,rr: the one 16-bit add. inc rr / dec rr leave the flags alone.
-let Defs = [F], Constraints = "$d = $a" in
+let Defs = [F], Constraints = "$d = $a", isCommutable = 1 in
   def ADD16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "add hl, $b", [(set i16:$d, (add i16:$a, i16:$b))]>;
 let Constraints = "$d = $a" in {
   def INC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "inc $d", [(set i16:$d, (add i16:$a, (i16 1)))]>;
