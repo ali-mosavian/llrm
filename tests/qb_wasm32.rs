@@ -28,6 +28,15 @@ fn built(
     name: &str,
     source: &str,
 ) -> PathBuf {
+    built_with(name, source, "")
+}
+
+/// `built`, with `flags` for llrm-qb.
+fn built_with(
+    name: &str,
+    source: &str,
+    flags: &str,
+) -> PathBuf {
     for tool in ["clang", "wasm-ld", "node"] {
         need(tool);
     }
@@ -40,6 +49,7 @@ fn built(
         .arg(dir.join(format!("{name}.wasm")))
         .arg(dir.join("obj"))
         .env("LLRM_QB", env!("CARGO_BIN_EXE_llrm-qb"))
+        .env("LLRM_QB_FLAGS", flags)
         .env("LLRM_WASM_LLC", llc())
         .output()
         .expect("runtime/wasm/build.sh runs");
@@ -62,6 +72,7 @@ fn run_raw(
         .args(["--limit-ms", "30000", "--out"])
         .arg(dir.join("frames"))
         .args(flags)
+        .current_dir(dir)
         .output()
         .expect("node runs")
 }
@@ -85,6 +96,36 @@ fn print_hello_runs_on_wasm32() {
     let dir = built("hello", "PRINT \"hello\"\nEND\n");
     let (text, code) = run(&dir, "hello", &[]);
     assert_eq!(text.trim_end(), "hello");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// OPEN, PRINT#, LINE INPUT#, NAME and KILL: the OS layer denied every file
+/// (and left `llrm_os_open` and fifteen more unresolved), so grep, jpeg, stft,
+/// fieldbuf and open_modes could not instantiate.
+#[test]
+fn files_are_written_read_renamed_and_killed() {
+    let dir = built(
+        "files",
+        "OPEN \"t.dat\" FOR OUTPUT AS #1\nPRINT #1, \"hello\"; 42\nCLOSE #1\n\
+         NAME \"t.dat\" AS \"u.dat\"\nOPEN \"u.dat\" FOR INPUT AS #1\nLINE INPUT #1, a$\nCLOSE #1\n\
+         PRINT a$\nOPEN \"v.dat\" FOR OUTPUT AS #2\nPRINT #2, 1\nCLOSE #2\nKILL \"u.dat\"\nEND\n",
+    );
+    let (text, code) = run(&dir, "files", &[]);
+    assert_eq!(text.trim_end(), "hello 42");
+    assert_eq!(code, Some(0));
+    assert!(!dir.join("u.dat").exists() && !dir.join("t.dat").exists(), "KILL and NAME left files");
+    assert_eq!(std::fs::read_to_string(dir.join("v.dat")).unwrap(), " 1 \r\n");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// COMMAND$ is the arguments after the program's name, a blank apart, upper
+/// case; the harness gives them with `--arg`.
+#[test]
+fn the_command_line_is_the_harness_arguments() {
+    let dir = built("cmdline", "PRINT COMMAND$\nEND\n");
+    let (text, code) = run(&dir, "cmdline", &["--arg", "ab", "--arg", "cd"]);
+    assert_eq!(text.trim_end(), "AB CD");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
@@ -151,6 +192,27 @@ fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// Unbounded recursion under `-fsanitize=stack`: the text handed to the wasm
+/// backend carried the attribute twice and the reader refused it, so the
+/// program did not build; and once built, the engine's own stack overflow
+/// ended the harness with a JS RangeError instead of QB's "Out of stack
+/// space".
+#[test]
+fn unbounded_recursion_ends_with_out_of_stack_space() {
+    let dir = built_with(
+        "deep",
+        "DECLARE FUNCTION Deep% (n AS INTEGER)\nPRINT \"start\"\nPRINT Deep%(30000)\nPRINT \"unreachable\"\n\
+         FUNCTION Deep% (n AS INTEGER)\n    Deep% = Deep%(n + 1) + 1\nEND FUNCTION\n",
+        "-O2 -fsanitize=stack",
+    );
+    let (text, code) = run(&dir, "deep", &[]);
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some("start"));
+    assert!(lines.next().is_some_and(|line| line.starts_with("Out of stack space in line")), "{text}");
+    assert_eq!(code, Some(255));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// The host sounds what PLAY plays, from the tones the module hands its host
 /// (`llrm_host_tone`, a wrap of `dev_tone`). Without the wrap the host heard
 /// nothing. The sequence is the x86-32 host build's own for this tune.
@@ -177,6 +239,20 @@ fn read_fills_a_fixed_length_string_padded_and_cut() {
     );
     let (text, code) = run(&dir, "fixed", &[]);
     assert_eq!(text.trim_end(), "[ab   ][xy]");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// EXP, LOG and `^` compile to calls of `exp`, `log` and `log2`/`pow`; the host
+/// supplied only sin, cos, atan and lrint, so the module did not instantiate
+/// ("function import requires a callable": data_after_checked, log_exp_digits,
+/// range_power).
+#[test]
+fn exp_log_and_power_run_on_wasm32() {
+    let dir =
+        built("mathfns", "DIM x AS DOUBLE\nx = 3\nPRINT EXP(x - 3); LOG(x - 2); 2# ^ x; x ^ 2#; SQR(x + 1)\nEND\n");
+    let (text, code) = run(&dir, "mathfns", &[]);
+    assert_eq!(text.trim_end(), " 1  0  8  9  2");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }

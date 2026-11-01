@@ -1,15 +1,17 @@
 // Runs a QB program built by build.sh on the headless device in node: `node headless.mjs PROGRAM.wasm [--keys TEXT@MS ...]
-// [--dump-at MS=NAME ...] [--out DIR] [--virtual]`. The clock is real, as on DOS: a program that times its own loops
+// [--dump-at MS=NAME ...] [--arg WORD ...] [--env NAME=VALUE ...] [--out DIR] [--virtual]`. The clock is real, as on DOS: a program that times its own loops
 // (Gorillas' CalcDelay) ends. With `--virtual` it moves by `--step-us` on each poll of the program's clock or keyboard
 // instead, so a run is the same every time: for a program whose timing loops were taken out. Keys and frame dumps are
 // scheduled on the clock, in milliseconds since the start. Frames are written as PPM files.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { Exit, instantiate } from './host.mjs';
+import { nodeFiles } from './nodefs.mjs';
 
 const args = process.argv.slice(2);
 const wasmPath = args.shift();
 const keys = [], dumps = [];
 let script = '', gap = 700, onWait = false, settle = 300;
+const programArgs = [], environment = [];
 let out = '.', stepUs = 100, limitMs = 600000, wallMs = 0, virtual = false;
 while (args.length) {
   const flag = args.shift();
@@ -24,6 +26,8 @@ while (args.length) {
   else if (flag === '--dump-after') { const [spec, name] = args.shift().split('='); const [n, dwell] = spec.split('+'); dumps.push({ afterKeys: Number(n), dwell: Number(dwell || 0), name }); }
   else if (flag === '--on-wait') onWait = true;
   else if (flag === '--settle-ms') settle = Number(args.shift());
+  else if (flag === '--arg') programArgs.push(args.shift());
+  else if (flag === '--env') environment.push(args.shift());
   else if (flag === '--wall-ms') wallMs = Number(args.shift());
   else throw new Error(`unknown argument ${flag}`);
 }
@@ -83,6 +87,9 @@ host = await instantiate(readFileSync(wasmPath), {
   clock: () => (now = virtual ? now + stepUs / 1000 : Date.now() - started),
   poll: () => { calls.poll = (calls.poll || 0) + 1; due(); },
   keyPoll,
+  fs: nodeFiles(),
+  args: programArgs.join(' '),
+  env: environment,
   write: (chunk) => text.push(chunk),
   tone: (hertz, at) => tones.push({ at, hertz }),
 });
