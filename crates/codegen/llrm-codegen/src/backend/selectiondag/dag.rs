@@ -157,7 +157,7 @@ pub enum BooleanContents {
 /// or replaced by: the divide's own price, and the multiply-high sequence's
 /// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
 /// alone).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DivPrices {
     /// The target's own operand size in bytes: a value of another width runs
     /// under the prefix.
@@ -174,11 +174,39 @@ pub struct DivPrices {
     /// by: below the spread of the sheet's own prices the pin's sequence
     /// stays.
     pub margin: i64,
+    /// The same prices in code bytes, where the target states them.
+    pub bytes: Option<DivBytes>,
+    /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
+    /// the selector emits for it (`Machine::multiply_by`).
+    pub product: Option<ProductPrice>,
+}
+
+/// A price by the constant `d`.
+#[derive(Clone)]
+pub struct ProductPrice(pub std::rc::Rc<dyn Fn(i64) -> i64>);
+
+impl std::fmt::Debug for ProductPrice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProductPrice")
+    }
+}
+
+/// `DivPrices`' operation prices in code bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct DivBytes {
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub divide: i64,
+    pub divide_long: i64,
 }
 
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
