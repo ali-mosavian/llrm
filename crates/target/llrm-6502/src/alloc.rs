@@ -16,6 +16,7 @@ use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
+use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
@@ -2332,7 +2333,7 @@ fn emit_with<const STACK: bool>(
     cmos: bool,
     sink: bool,
     share: bool,
-    split: bool,
+    _split: bool,
     place: bool,
 ) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
@@ -2342,7 +2343,7 @@ fn emit_with<const STACK: bool>(
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
-    let (assignment, mut slots) = allocate::<STACK>(&mut function, split)?;
+    let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
@@ -2952,8 +2953,7 @@ pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
 /// A function greedy cannot take is an error, not a quiet fall back to the
 /// spike allocator: that hid 600 failures in 300 differential programs.
 fn allocate<const STACK: bool>(
-    function: &mut MFunction<Class>,
-    split: bool,
+    function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
     // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
     // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
@@ -2976,7 +2976,7 @@ fn allocate<const STACK: bool>(
         }
     }
     if spike_asked() || !wanted {
-        return llrm_spike_mf::spill::allocate_spilling_splitting::<Mos<STACK>>(function, 0, false, split);
+        return allocate_spilling::<Mos<STACK>>(function, 0);
     }
     allocate_greedy::<Mos<STACK>>(function)
 }
