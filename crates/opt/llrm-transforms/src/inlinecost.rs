@@ -1997,19 +1997,25 @@ impl<'a> Analyzer<'a> {
         (size * tti.call_code_size_percent() + 50) / 100
     }
 
-    /// Whether the bytes an inline grows the code are not paid for at speed:
-    /// the target's price per byte against the clocks saved at the site's
-    /// frequency (`Tuning::inline_growth_price`). Unpriced: always unpaid.
+    /// Whether the code an inline grows is more than the target allows at
+    /// speed (`Tuning::inline_growth_limits`, gcc's `max-inline-insns-auto`
+    /// and `-single`: a callee declared `inline` may grow more). Without
+    /// limits any growth is refused.
     fn growth_unpaid(&self) -> bool {
         let Some(tti) = self.site.tti else { return true };
-        let (per_byte, saved, cap) = tti.inline_growth_price();
-        if self.site.caller_size != CallerSize::Speed || per_byte == 0 {
+        if self.site.caller_size != CallerSize::Speed {
             return true;
         }
-        let growth = (self.size_units - self.call_size()) as f64;
-        let frequency = self.site.relative_frequency.unwrap_or(1.0);
-        let frequency = if cap > 0 { frequency.min(cap as f64) } else { frequency };
-        growth * per_byte as f64 / 1000.0 > saved as f64 * frequency
+        let (auto, single, auto_aggressive, single_aggressive) = tti.inline_growth_limits();
+        let aggressive = self.params.default_threshold >= OPT_AGGRESSIVE_THRESHOLD;
+        let declared = has_flag(&self.callee.attrs, "inlinehint");
+        let limit = match (aggressive, declared) {
+            (false, false) => auto,
+            (false, true) => single,
+            (true, false) => auto_aggressive,
+            (true, true) => single_aggressive,
+        };
+        self.size_units - self.call_size() > limit
     }
 
     fn finalize(&mut self) -> Result<(), String> {

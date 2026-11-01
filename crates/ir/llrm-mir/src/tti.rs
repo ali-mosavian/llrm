@@ -353,9 +353,9 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::inline_growth_price` at speed; (0, 0, 0): not priced.
-    fn inline_growth_price(&self) -> (i64, i64, i64) {
-        (0, 0, 0)
+    /// `Tuning::inline_growth_limits`; all 0: no growth at speed.
+    fn inline_growth_limits(&self) -> (i64, i64, i64, i64) {
+        (0, 0, 0, 0)
     }
 
     /// How many percent of its `CodeSize` units a call and the pushes of its

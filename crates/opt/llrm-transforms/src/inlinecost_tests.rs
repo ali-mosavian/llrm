@@ -754,14 +754,17 @@ b0:
     assert_eq!(cost, -15025, "the pin prices this callee at -15025");
 }
 
-/// jpeg_fixed -O1/-O2 inlined its large helpers at hot sites and came out 1.8x
-/// gcc's bytes. At speed a callee that stays grows the code unless the clocks
-/// saved at the site's frequency (capped) pay for the bytes.
+/// jpeg_fixed -O1/-O2 inlined its large helpers and came out 1.8x gcc's
+/// bytes. At speed a callee that stays may grow the code by what the target
+/// allows (gcc's `max-inline-insns-auto`, and `-single` for a callee declared
+/// `inline`).
 #[test]
-fn a_speed_caller_inlines_growth_only_where_the_saved_clocks_pay_for_it() {
-    let text = "@arr = global [64 x i32] zeroinitializer
+fn a_speed_caller_inlines_growth_only_up_to_the_targets_limit() {
+    let text = |attribute: &str| {
+        format!(
+            "@arr = global [64 x i32] zeroinitializer
 
-define i32 @callee(i32 %x) {
+define i32 @callee(i32 %x) {attribute} {{
 b0:
   br label %h
 h:
@@ -780,28 +783,31 @@ h:
   br i1 %c, label %h, label %e
 e:
   ret i32 %t
-}
+}}
 
-define i32 @f(i32 %y) {
+define i32 @f(i32 %y) {{
 b0:
   %r = call i32 @callee(i32 %y)
   ret i32 %r
-}
-";
-    let priced = |cap: i64, frequency: f64| {
+}}
+"
+        )
+    };
+    let kept = |attribute: &str, limits: (i64, i64, i64, i64)| {
         let tti = llrm_x86::tti::X86::of_cpu("i486")
             .unwrap()
             .with_tuning(
                 llrm_mir::target::Tuning {
                     inline_size_guard_at_speed: true,
-                    inline_growth_price: (8000, 8, cap),
+                    inline_growth_limits: limits,
                     ..llrm_mir::target::Tuning::PIN
                 },
             );
-        let (cost, threshold) = priced_at(text, 0, false, CallerSize::Speed, Some(&tti), Some(frequency));
+        let (cost, threshold) = priced_with(&text(attribute), 0, false, CallerSize::Speed, Some(&tti));
         cost < threshold
     };
-    assert!(!priced(4, 1.0), "a cold site paid for the growth");
-    assert!(!priced(4, 1000.0), "the cap did not hold the frequency down");
-    assert!(priced(0, 1000.0), "a hot site, uncapped, did not pay for it");
+    assert!(!kept("", (0, 0, 0, 0)), "a callee that stays grew the code with no limit");
+    assert!(!kept("", (5, 70, 5, 70)), "growth past the limit was inlined");
+    assert!(kept("", (15, 70, 15, 70)), "growth within the limit was refused");
+    assert!(kept("inlinehint", (5, 70, 5, 70)), "a callee declared inline has its own, larger limit");
 }

@@ -25,14 +25,13 @@ pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
 /// DEVIATE G1 (m64): a callee that stays is inlined into an `-Os` caller only
 /// if its code does not outgrow the call. The pin's `OptSizeThreshold` 50
 /// counts instructions; gcc -Os calls where the copy would grow (recsum).
-/// DEVIATE G2 (m64): at speed the same bound holds unless the clocks saved pay
-/// for the bytes: 2 clocks per byte against 8 clocks a call, a site counting
-/// for at most 4 executions of the entry (jpeg_fixed -O1/-O2 8676/9609 B ->
-/// 4948/5871, gcc 4905/5037; its cycles stay under gcc's).
+/// DEVIATE G2 (m64): at speed the same bound allows what gcc allows
+/// (`max-inline-insns-auto` 15 and `-single` 70 at -O2, 30 and 200 at -O3):
+/// jpeg_fixed -O1/-O2 8676/9609 B -> 5060/5906 (gcc 4905/5037).
 const TUNING: llrm_mir::target::Tuning = llrm_mir::target::Tuning {
     inline_size_guard_at_size: true,
     inline_size_guard_at_speed: true,
-    inline_growth_price: (2000, 8, 4),
+    inline_growth_limits: (15, 70, 30, 200),
     ..llrm_mir::target::Tuning::PIN
 };
 
