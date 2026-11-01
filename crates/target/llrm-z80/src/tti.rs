@@ -1,48 +1,71 @@
-//! The Z80's cost model: what an instruction costs in byte-wide operations.
+//! The Z80's cost model, summed from the instruction table (`timing/z80.csv`).
 //!
-//! The unit is one byte-wide ALU operation (`clc; lda; adc; sta`: 7 bytes, 11
-//! clocks). A type is `ceil(bits / native)` of them, the native width read from
-//! the data layout (`n8`) as `BasicTTIImplBase::getTypeLegalizationCost` splits
-//! a type until it is legal.
+//! Every price is the sum of the forms an operation expands to ([`sum`]): bytes
+//! for `CodeSize`, T-states for the other kinds, in units of a cheap
+//! instruction (4 T, `ld r,r`), so that `SimplifyCFG`'s speculation budget and
+//! the inliner's thresholds, which count in `TCC_Basic`, mean what they mean
+//! for the pin.
 //!
-//! DEVIATE: `BasicTTIImplBase` scales only `RecipThroughput` and prices an
-//! expanded scalar at 1; here every kind scales (as `X86TTIImpl` and
-//! `AArch64TTIImpl` do) and a multiply, divide or variable shift is the call it
-//! emits. Reason: `SimplifyCFG`'s speculation budget asks `SizeAndLatency`, and
-//! a 16-bit `add` or `icmp` is two byte operations here, not one. Exit: none;
-//! the numbers below are the target's.
+//! DEVIATE: `BasicTTIImplBase` scales only `RecipThroughput`; here `Latency`
+//! and `SizeAndLatency` scale too (as `X86TTIImpl` and `AArch64TTIImpl` do).
+//! Reason: a 16-bit `add` is one instruction and an `and` six, which the
+//! `Basic` unit price hides. Exit: none; the table is the target's.
 //!
-//! Derived by hand from the emitted code (`llrm-cc --target=Z80-sim65 -O2
-//! -S`), unit = i8 add:
+//! DEVIATE: the runtime routines (`__mulhi3`, `__udivhi3`, `__ashlhi3`, ...)
+//! are not written, so a call is priced as the restoring loop SDCC's measured
+//! `mul8` (385 T) agrees with, per bit. Reason: the cost model runs before
+//! the runtime exists. Exit: price from the routines' own T-states once
+//! `runtime/` has them (by 2026-11-06).
 //!
-//! | operation | bytes, clocks | units |
-//! |---|---|---|
-//! | add/sub/and/or/xor, i8 / i16 | 7 / 13, 11 / 22 | 1 / 2 |
-//! | icmp, i8 / i16 (`lda; cmp` / `lda; cmp; lda; sbc`) | 4 / 8 | 1 / 2 |
-//! | select, i8 / i16 (`lda #1; bcc; lda #0` per byte) | 7 / 13 | parts + 1 |
-//! | load or store through a pointer, i8 / i16 (`ldy #n; lda (rc),y` per byte, one copy) | 4 / 13, 7 / 22 | 1 / 2 (measured 1 / 3) |
-//! | shift by a constant (`asl; rol` pairs, per bit) | 4 per bit at i16 | parts |
-//! | multiply by a constant (shifts and adds), i16 | 28, 70 | 3 * parts |
-//! | `__mulqi3`, `__mulhi3` (8 / 16 iterations of about 25 / 45 clocks) | 200, 700 | 10 * parts^2 + 10 |
-//! | `__udivhi3` (16 iterations of about 60 clocks) | 960 | 22 * parts^2 + 3 |
-//! | `__ashlhi3`, `__lshrhi3`, `__ashrhi3` (a loop of about 16 clocks per bit, 8 on average) | 130 | 6 * parts |
-//! | a call as code (`jsr`, two operands in `rc2..`) | 3 + 4 * parts | 2 + parts |
+//! DEVIATE: soft float is priced as a multiply-sized call. Reason: no
+//! soft-float runtime. Exit: the same.
 //!
-//! A memory operation is `parts`, as `BasicTTIImplBase::getMemoryOpCost` prices
-//! it, not the measured 2 * parts - 1: with 3 for a word load, `SimplifyCFG`'s
-//! two-entry-phi budget (4) refused to flatten `c >= '0' && c <= '9'`
-//! (compare 2 + load 3), and `InstCombine` never saw its range check (isdigit
-//! 28 -> 50 bytes, isalpha 30 -> 74). The speed-priority form of such a limit
-//! belongs in the per-target override table.
+//! The expansions (operands already in the registers the instruction wants;
+//! placing them is the allocator's):
 //!
-//! A trunc is free (a register is a byte); a zero extension is the new high
-//! bytes cleared, a sign extension twice that.
+//! | operation | forms |
+//! |---|---|
+//! | add, sub, and, or, xor, i8 | `add a,r` |
+//! | add, i16 | `add hl,rr` |
+//! | sub, i16 | `or a; sbc hl,rr` |
+//! | and, or, xor, i16 | `ld a,l; and c; ld l,a; ld a,h; and b; ld h,a` |
+//! | icmp, i8 / i16 | `cp r` / `push hl; or a; sbc hl,rr; pop hl` |
+//! | select, i8 / i16 | `jr nz,e; ld r,r'` per byte |
+//! | load, store, i8 / i16 | `ld r,(hl)` / `ld a,(hl); inc hl; ld h,(hl); ld l,a` and its store |
+//! | shift by a constant, per bit, i8 / i16 | `sla r` / `add hl,hl` or `srl h; rr l` |
+//! | zext, sext i8 to i16 | `ld h,n` / `ld a,l; rla; sbc a,a; ld h,a` |
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::tti::*;
 use llrm_target::Target as _;
 
 use crate::target::Z80;
+use crate::timing::cost;
+
+/// The bytes and T-states of `forms`, each taken on its taken path.
+fn sum(forms: &[&str]) -> (i64, i64) {
+    forms
+        .iter()
+        .fold(
+            (0, 0),
+            |(bytes, clocks), form| {
+                let one = cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
+                (bytes + i64::from(one.bytes), clocks + i64::from(one.taken))
+            },
+        )
+}
+
+/// `forms` in the unit of `kind`.
+fn priced(
+    forms: &[&str],
+    kind: CostKind,
+) -> Cost {
+    let (bytes, clocks) = sum(forms);
+    Cost::of(match kind {
+        CostKind::CodeSize => bytes,
+        _ => (clocks + 3) / 4,
+    })
+}
 
 /// The cost model of the Z80 and Z180.
 #[derive(Clone, Copy, Debug)]
@@ -59,7 +82,8 @@ impl Z80Tti {
         Z80Tti { byte_bits: layout.largest_legal_integer(), pointer_bits: layout.pointer(0).bits }
     }
 
-    /// The byte-wide operations a value of `ty` takes.
+    /// The legal-sized pieces a value of `ty` splits into: bytes for an `i8`,
+    /// words for the rest.
     fn parts(
         &self,
         ty: Ty,
@@ -71,19 +95,30 @@ impl Z80Tti {
             Ty::Double => 64,
             Ty::X87 => 80,
         };
-        i64::from(bits.div_ceil(self.byte_bits).max(1))
+        i64::from(bits.div_ceil(16).max(1))
     }
 
-    /// A call to a runtime routine whose loop costs `clocks` units.
+    fn is_byte(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(bits) if bits <= self.byte_bits.min(8))
+    }
+
+    /// A call of a runtime loop of `bits` passes, each the forms `body`, plus
+    /// the call and the return.
     fn call(
         &self,
         parts: i64,
+        bits: i64,
+        body: &[&str],
         kind: CostKind,
-        clocks: i64,
     ) -> Cost {
+        let (bytes, clocks) = sum(body);
+        let (call_bytes, call_clocks) = sum(&["call nn", "ret"]);
         match kind {
-            CostKind::CodeSize | CostKind::SizeAndLatency => Cost::of(2 + parts),
-            CostKind::RecipThroughput | CostKind::Latency => Cost::of(clocks),
+            CostKind::CodeSize => Cost::of(call_bytes + 2 * parts),
+            _ => Cost::of((call_clocks + clocks * bits + bytes) / 4 * parts),
         }
     }
 }
@@ -107,21 +142,32 @@ impl Tti for Z80Tti {
     ) -> Cost {
         let parts = self.parts(ty);
         match op {
-            CmpSel::ICmp => Cost::of(parts),
-            CmpSel::Select => Cost::of(parts + 1),
+            CmpSel::ICmp if self.is_byte(ty) => priced(&["cp b"], kind),
+            CmpSel::ICmp => priced(&["push bc", "or b", "sbc hl;bc", "pop bc"], kind) * parts.min(2),
+            CmpSel::Select if self.is_byte(ty) => priced(&["jr nz;e", "ld b;c"], kind),
+            CmpSel::Select => priced(&["jr nz;e", "ld b;c", "ld b;c"], kind) * parts,
             // soft float: a call
-            CmpSel::FCmp => self.call(parts, kind, 10 * parts * parts + 10),
+            CmpSel::FCmp => self.call(parts, 8 * parts, &["add hl;bc", "djnz e"], kind),
         }
     }
 
     fn memory_op_cost(
         &self,
-        _: MemoryOp,
+        op: MemoryOp,
         ty: Ty,
-        _: CostKind,
+        kind: CostKind,
         _: bool,
     ) -> Cost {
-        Cost::of(self.parts(ty))
+        let load = op == MemoryOp::Load;
+        if self.is_byte(ty) {
+            return priced(&[if load { "ld b;(hl)" } else { "ld (hl);b" }], kind);
+        }
+        let word = if load {
+            ["ld b;(hl)", "inc hl", "ld b;(hl)", "ld b;c"]
+        } else {
+            ["ld (hl);b", "inc hl", "ld (hl);b", "inc hl"]
+        };
+        priced(&word, kind) * self.parts(ty)
     }
 
     fn cf_instr_cost(
@@ -137,7 +183,7 @@ impl Tti for Z80Tti {
         _: i128,
         bits: u32,
     ) -> Cost {
-        Cost::of(i64::from(bits.div_ceil(self.byte_bits).max(1)))
+        Cost::of(i64::from(bits.div_ceil(16).max(1)))
     }
 
     fn int_imm_cost_inst(
@@ -199,12 +245,17 @@ impl Tti for Z80Tti {
         kind: CostKind,
     ) -> Cost {
         let (to, from) = (self.parts(dst), self.parts(src));
+        let widen = self.is_byte(src) && !self.is_byte(dst);
         match op {
             CastKind::Trunc | CastKind::BitCast => Cost::FREE,
-            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr => Cost::of((to - from).max(0)),
-            CastKind::SExt => Cost::of(2 * (to - from).max(0)),
+            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr if widen => {
+                priced(&["ld b;n"], kind) * (to - from + 1).max(1)
+            }
+            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr => priced(&["ld b;n"], kind) * (to - from).max(0),
+            CastKind::SExt if widen => priced(&["ld b;c", "rla", "sbc a;b", "ld b;c"], kind),
+            CastKind::SExt => priced(&["rla", "sbc a;b", "ld b;c"], kind) * (to - from).max(0),
             // soft float: a call
-            _ => self.call(to.max(from), kind, 10 * to.max(from).pow(2) + 10),
+            _ => self.call(to.max(from), 8 * to.max(from), &["add hl;bc", "djnz e"], kind),
         }
     }
 
@@ -218,19 +269,38 @@ impl Tti for Z80Tti {
     ) -> Cost {
         use ArithOp::*;
         let parts = self.parts(ty);
+        let byte = self.is_byte(ty);
+        let bits = if byte { 8 } else { 16 * parts };
         let constant = first.constant || second.constant;
         match op {
-            Add | Sub | And | Or | Xor | FNeg => Cost::of(parts),
-            Shl | LShr | AShr if second.constant => Cost::of(parts),
-            Shl | LShr | AShr => self.call(parts, kind, 6 * parts),
-            Mul if second.power_of_two || first.power_of_two => Cost::of(parts),
-            Mul if constant => Cost::of(3 * parts),
-            Mul => self.call(parts, kind, 10 * parts * parts + 10),
-            UDiv if second.power_of_two => Cost::of(parts),
-            URem if second.power_of_two => Cost::of(parts),
-            UDiv | URem | SDiv | SRem => self.call(parts, kind, 22 * parts * parts + 3),
+            Add if byte => priced(&["add a;b"], kind),
+            Sub | And | Or | Xor if byte => priced(&["sub b"], kind),
+            Add => priced(&["add hl;bc"], kind) + priced(&["adc hl;bc"], kind) * (parts - 1),
+            Sub => priced(&["or b", "sbc hl;bc"], kind) + priced(&["sbc hl;bc"], kind) * (parts - 1),
+            And | Or | Xor => priced(&["ld b;c", "and b", "ld b;c", "ld b;c", "and b", "ld b;c"], kind) * parts,
+            FNeg => priced(&["xor n"], kind),
+            // one step per bit; the amount is not known here, so one step
+            // stands for a constant shift
+            Shl | LShr | AShr if second.constant && byte => priced(&["sla b"], kind),
+            Shl if second.constant => priced(&["add hl;bc"], kind) * parts,
+            Shl | LShr | AShr if second.constant => priced(&["srl b", "rr b"], kind) * parts,
+            // by a variable: a loop of one step and a `djnz`, 4 or 8 passes on
+            // average
+            Shl | LShr | AShr => self.call(parts, bits / 2, &["add hl;bc", "djnz e"], kind),
+            Mul if second.power_of_two || first.power_of_two => priced(&["add hl;bc"], kind) * parts,
+            Mul if constant => priced(&["add hl;bc", "add hl;bc", "add hl;bc"], kind) * parts,
+            // shift-and-add: add hl,hl; jr nc; add hl,de; djnz per bit
+            Mul => self.call(parts, bits, &["add hl;bc", "jr nc;e", "add hl;bc", "djnz e"], kind),
+            UDiv | URem if second.power_of_two => priced(&["srl b", "rr b"], kind) * parts,
+            // restoring division: add hl,hl; adc hl,hl; sbc hl,de; jr nc; add
+            // hl,de; djnz per bit
+            UDiv | URem | SDiv | SRem => {
+                self.call(parts, bits, &["add hl;bc", "adc hl;bc", "sbc hl;bc", "jr nc;e", "add hl;bc", "djnz e"], kind)
+            }
             // soft float: a call
-            FAdd | FSub | FMul | FDiv | FRem => self.call(parts, kind, 10 * parts * parts + 10),
+            FAdd | FSub | FMul | FDiv | FRem => {
+                self.call(parts, bits, &["add hl;bc", "jr nc;e", "add hl;bc", "djnz e"], kind)
+            }
         }
     }
 }

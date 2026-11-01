@@ -5,6 +5,7 @@ pub mod dagisel;
 pub mod driver;
 pub mod prepare;
 pub mod target;
+pub mod timing;
 pub mod tti;
 
 use llrm_lir::registers::{RegId, Row};
