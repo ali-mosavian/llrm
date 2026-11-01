@@ -591,9 +591,11 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         elif directory == STARTUP:
             plain[key] = exe  # timed, not counted
         else:
-            files = input_files(variant) if variant.emulated else ()
-            counted = not variant.timed_only or (variant.emulated and files)  # an unavailable corpus leaves it timed only
-            jobs.append((key, (stem, exe, listing, variant.region if counted else None, expected_output(directory), folder / f"{stem}.obj", files)))
+            # an emulated program is counted on the cut of its corpus the default bench times (ci_bytes), even under --time
+            fed = timing_input(variant, directory, folder / "ci-input" / stem) if variant.emulated else None
+            files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))  # an unavailable corpus leaves it timed only
+            counted = not variant.timed_only or bool(files)
+            jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
         counted = [(key, job) for key, job in jobs if job is not None]

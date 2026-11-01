@@ -1092,3 +1092,12 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     monkeypatch.setattr(bench.sizes, "code_bytes", lambda obj: 0)
     bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
     assert seen["files"] == ["PHOTO.JPG"], seen
+
+
+def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path):
+    """grep (8 m16 rows) had no instructions or clocks: it was timed only. Its m16 rows are 22 to 35 M instructions on the 1 MiB cut; the 10 MB corpus would be ~10x that."""
+    variants = bench.variants(bench.BENCH / "grep")
+    assert variants and all(v.emulated and v.ci_bytes == 1048576 for v in variants)
+    fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
+    if "files" in fed:  # else the corpus is not cached here
+        assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
