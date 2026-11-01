@@ -334,6 +334,7 @@ fn real_mode_drops_an_lsr_solution_the_model_rates_worse_and_flat_code_keeps_it(
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
         recursive_inlining: None,
+        priced_self_inlining: None,
     };
     assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).should_drop_lsr_solution_if_less_profitable());
     assert!(!X86::of_cpu("i486").unwrap().should_drop_lsr_solution_if_less_profitable());

@@ -377,6 +377,37 @@ fn parallel_moves_swap_and_keep_a() {
     assert_eq!(moved(&to_x, true, "rc2"), 5);
 }
 
+/// A move into `a` waits for the others, and the others are a swap of two
+/// cells: nothing is ready and no move reads `a`, so the loop parked `a`
+/// forever and the emitter asked for 7.7 GB (8 of 300 difftest programs).
+#[test]
+fn a_move_into_a_waits_for_a_swap_of_two_cells() {
+    let moves = [("a", "x"), ("rc2", "rc3"), ("rc3", "rc2")];
+    assert_eq!(moved(&moves, false, "a"), 5);
+    assert_eq!(moved(&moves, false, "rc2"), 2);
+    assert_eq!(moved(&moves, false, "rc3"), 1);
+}
+
+/// A pointer kept across one call on a path that may not run took two
+/// callee-saved cells, saved and restored with `pha`/`pla`: `k_memset` of the
+/// bench grew from 67 to 85 bytes. A static slot costs a store and a load.
+#[test]
+fn a_value_kept_across_one_call_does_not_take_a_callee_saved_cell() {
+    let ir = "declare ptr @memset(ptr, i16, i16)
+define ptr @keep(ptr %d, i16 %c, i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %go
+go:
+  %r = call ptr @memset(ptr %d, i16 %c, i16 %n)
+  br label %done
+done:
+  ret ptr %d
+}";
+    let code = compile(ir, "keep");
+    assert!(!code.contains("pha"), "{code}");
+}
+
 /// A byte loaded, widened and used in a word subtract was a zero-extending
 /// load no pattern selected (`CannotSelect(Load)`): scmp, crc16 and sum16 of
 /// the second bench set, and any `s += p[i]` on an `unsigned`. k = 1000, the
@@ -2481,4 +2512,112 @@ define void @fill(ptr %p, i8 %c, i16 %n) {
     let text = compile(ir, "fill");
 
     assert!(text.contains("jsr memset") || text.contains("jsr _memset"), "no call of memset in:\n{text}");
+}
+
+/// A 32-bit result computed before the frame is released is read by the
+/// return: `results` stopped at the frame release, so the copies into `rc2`
+/// and `rc3` were no result and greedy, which drops what nothing reads, left
+/// them out (differential seed 250: the high word came back as garbage).
+#[test]
+fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
+    let ir = "define i32 @widen(i16 %a) {\n  %slot = alloca i16\n  store i16 %a, ptr %slot\n  %v = load i16, ptr %slot\n  %r = zext i16 %v to i32\n  ret i32 %r\n}";
+    let text = compile(ir, "widen");
+    // rc2:rc3 hold the argument 0x1234 on entry and must hold zero on return
+    let setup = set("rc2", 0x1234) + &set("rc3", 0x1234 >> 8);
+    let run = |after: &str| common::run_with("alloc-long-result", &format!("{setup}  jsr widen\n{after}"), &text);
+    assert_eq!(run("  lda rc2\n"), 0, "{text}");
+    assert_eq!(run("  lda rc3\n"), 0, "{text}");
+    assert_eq!(run(""), 0x34, "{text}");
+}
+
+/// `lda` of a reload or a copy overwrites the zero and negative flags, so the
+/// allocator may put nothing between a compare and what reads its flags: the
+/// branches and every conditional move (`CMOV16` was missed, and a reload
+/// between its `CMP` and it chose the wrong side: differential seeds 192, 283).
+#[test]
+fn every_reader_of_the_flags_is_kept_with_the_compare_before_it() {
+    use llrm_spike_mf::regalloc::Target;
+    use llrm_spike_mf::{Inst, Kind};
+    let reader = |kind: &'static str, terminator: bool| {
+        let mut inst = Inst::new(Kind::Op(kind), vec![]);
+        inst.reads_flags = true;
+        inst.terminator = terminator;
+        inst
+    };
+    type M = llrm_6502::alloc::Mos<false>;
+    for kind in ["CMOV", "CMOV16"] {
+        assert!(M::reads_flags_set_just_before(&reader(kind, false)), "{kind}");
+    }
+    assert!(M::reads_flags_set_just_before(&reader("BEQ", true)));
+    assert!(!M::reads_flags_set_just_before(&Inst::new(Kind::Op("ADC"), vec![])));
+}
+
+/// Two counted copy loops, the second one's count loaded before the first.
+const TWO_COPIES: &str = "@io0 = global i16 0
+@io1 = global i16 0
+define ptr @two(ptr %d, ptr %s) {
+entry:
+  %m = load volatile i16, ptr @io0
+  %n = load volatile i16, ptr @io1
+  %n0 = icmp eq i16 %n, 0
+  br i1 %n0, label %mid, label %loop1
+loop1:
+  %i = phi i16 [ %n, %entry ], [ %i2, %loop1 ]
+  %p = phi ptr [ %d, %entry ], [ %p2, %loop1 ]
+  %q = phi ptr [ %s, %entry ], [ %q2, %loop1 ]
+  %i2 = sub i16 %i, 1
+  %b = load i8, ptr %q
+  store i8 %b, ptr %p
+  %p2 = getelementptr i8, ptr %p, i16 1
+  %q2 = getelementptr i8, ptr %q, i16 1
+  %c = icmp eq i16 %i2, 0
+  br i1 %c, label %mid, label %loop1
+mid:
+  %pm = phi ptr [ %d, %entry ], [ %p2, %loop1 ]
+  %qm = phi ptr [ %s, %entry ], [ %q2, %loop1 ]
+  %m0 = icmp eq i16 %m, 0
+  br i1 %m0, label %done, label %loop2
+loop2:
+  %j = phi i16 [ %m, %mid ], [ %j2, %loop2 ]
+  %pp = phi ptr [ %pm, %mid ], [ %pp2, %loop2 ]
+  %j2 = sub i16 %j, 1
+  store i8 7, ptr %pp
+  %pp2 = getelementptr i8, ptr %pp, i16 1
+  %c2 = icmp eq i16 %j2, 0
+  br i1 %c2, label %done, label %loop2
+done:
+  %r = phi ptr [ %pm, %mid ], [ %pp2, %loop2 ]
+  ret ptr %r
+}";
+
+/// The count of the first loop took a pair of zero-page bytes while `x`, with
+/// a count that is not used until after that loop, went idle through it: greedy
+/// takes the first free register and a zero-page byte cost the same as `x`.
+/// With a cost per cell it evicts the lighter holder (the lz4 kernel ran 1.5%
+/// slower in clocks than the spike's).
+#[test]
+fn a_hot_count_takes_x_from_a_count_held_for_later() {
+    let text = compile(TWO_COPIES, "two");
+    let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
+    assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
+}
+
+/// A byte stored before it is tested against zero is still the byte in `a`,
+/// and the load set the flags: the test cost a `cmp #0` (2 bytes, 2 clocks a
+/// pass of strcspn's outer loop) because the store sat between the two.
+#[test]
+fn a_store_between_a_load_and_its_zero_test_keeps_the_flags() {
+    let ir = "@g = global i8 0
+define i8 @f(ptr %p) {
+  %x = load volatile i8, ptr %p
+  store volatile i8 %x, ptr @g
+  %c = icmp eq i8 %x, 0
+  br i1 %c, label %a, label %b
+a:
+  ret i8 1
+b:
+  ret i8 2
+}";
+    let text = compile(ir, "f");
+    assert!(!text.contains("cmp #0"), "{text}");
 }

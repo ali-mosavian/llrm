@@ -341,10 +341,28 @@ impl ProgramPass for Walk {
                         // a body within the callee cap
                         // waits: one above it gets no
                         // copies, so its elimination stays at the pin's slot.
-                        let fits = recursion.is_some_and(|one| {
-                            module.global(id).function().is_some_and(|body| crate::inline::gcc_work(body) <= one.callee)
-                        });
-                        if fits && self_calls(module, &program.layout, id, self.inline.single).is_some() {
+                        let tree = self_calls(module, &program.layout, id, self.inline.single);
+                        let priced = tti.as_deref().and_then(|tti| tti.priced_self_inlining());
+                        let fits = match (&tree, priced, tti.as_deref()) {
+                            (Some(frequencies), Some(ceilings), Some(tti)) => {
+                                priced_copy_depth(
+                                    module,
+                                    &program.layout,
+                                    &*program.target,
+                                    tti,
+                                    id,
+                                    frequencies,
+                                    ceilings,
+                                ) > 0
+                            }
+                            _ => recursion.is_some_and(|one| {
+                                module
+                                    .global(id)
+                                    .function()
+                                    .is_some_and(|body| crate::inline::gcc_work(body) <= one.callee)
+                            }),
+                        };
+                        if fits && recursion.is_some() && tree.is_some() {
                             function_mut(module, id)
                                 .1
                                 .attrs
@@ -616,6 +634,65 @@ fn self_calls(
     Some(frequencies)
 }
 
+/// The gain is an estimate (`LOOP_TRIPS` assumed trips, the call's sheet
+/// price), the growth is exact bytes: the first level is made when its gain is
+/// this many times its growth in clocks (later ones, when it is one). Between
+/// the loop-bodied rows (growth/gain 0.28 or more: quicksort, bintree, recchop)
+/// and the call-bound ones (0.13 or less: fib, frames, rectwo).
+const COPY_MARGIN: f64 = 4.0;
+
+/// DEVIATE REC-1 (priced): the depth of copies of itself that `id` is given,
+/// 0 for none. A level of copies saves the calls it removes, `c` clocks each
+/// (the sheet's call, return and arguments), `LOOP_TRIPS` times for the trips
+/// a recursion is assumed to make: with `f` calls of itself per call, a
+/// body that held one level now holds `S = 1 + f + f^2 ...` and a call in `S`
+/// is gone, so `d` levels save `trips * c * (1 - 1 / S_d)`. They add, for the
+/// `k` calls of itself it has, `k^d` copies of the body less the call and the
+/// return each replaces. A level is made while its own clocks, at
+/// `speed_milliclocks_per_byte`, are worth its own bytes, up to the target's
+/// ceilings (`Tti::priced_self_inlining`). The rule is the sheet's, not a
+/// program's: it replaces the literals 14 and 2.
+pub(crate) fn priced_copy_depth(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    program_target: &dyn llrm_mir::target::Machine,
+    tti: &dyn llrm_mir::tti::Tti,
+    id: GlobalId,
+    frequencies: &llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>,
+    ceilings: (u32, i64),
+) -> usize {
+    let rate = tti.speed_milliclocks_per_byte();
+    let Some(body) = module.global(id).function() else { return 0 };
+    if rate <= 0 || crate::inline::gcc_work(body) > ceilings.1 {
+        return 0;
+    }
+    let sites: Vec<llrm_mir::module::InstId> = body
+        .walk()
+        .filter_map(|(_, inst)| (llrm_mir::memory::callee(&module.context, body, inst) == Some(id)).then_some(inst))
+        .collect();
+    let Some(&first) = sites.first() else { return 0 };
+    let arguments = body.instruction(first).operands.len().saturating_sub(1);
+    let calls: f64 = sites.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum();
+    let bytes = program_target.size_costs();
+    let price = llrm_mir::callprice::CallPrice::new(&program_target.costs(), &bytes, arguments, rate);
+    let overhead = price.clocks as f64;
+    let net = (function_bytes(module, layout, &bytes, body) - price.bytes).max(0) as f64;
+    let k = sites.len() as f64;
+    let (mut seen, mut saved_before, mut grown_before) = (1.0f64, 0.0f64, 0.0f64);
+    for level in 1..=ceilings.0 as usize {
+        seen += calls.powi(level as i32);
+        let saved = crate::inline::LOOP_TRIPS as f64 * overhead * (1.0 - 1.0 / seen);
+        let grown = (1..=level).map(|one| k.powi(one as i32)).sum::<f64>() * net;
+        let (gain, growth) = (saved - saved_before, grown - grown_before);
+        let margin = if level == 1 { COPY_MARGIN } else { 1.0 };
+        if !price.pays(gain, growth, margin) {
+            return level - 1;
+        }
+        (saved_before, grown_before) = (saved, grown);
+    }
+    ceilings.0 as usize
+}
+
 /// The flag a body that had copies of itself made (D10), or took a recursive
 /// callee's peeled copies, carries from then on:
 /// the simplifier folds the chains of tests those copies make (`n - 1 == 0`,
@@ -680,6 +757,23 @@ impl SelfInline {
                 let mut copies = 0;
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
+                    let tti = program.target.tti();
+                    let (depth, callee) =
+                        match (tti.as_deref().and_then(|tti| tti.priced_self_inlining()), tti.as_deref()) {
+                            (Some(ceilings), Some(tti)) => (
+                                priced_copy_depth(
+                                    module,
+                                    &program.layout,
+                                    &*program.target,
+                                    tti,
+                                    id,
+                                    &frequencies,
+                                    ceilings,
+                                ),
+                                ceilings.1,
+                            ),
+                            _ => (recursion.depth, recursion.callee),
+                        };
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function, metadata) = crate::interprocedural::function_and_metadata_mut(module, id);
                     let itself = crate::inline::Candidate {
@@ -697,8 +791,8 @@ impl SelfInline {
                         recursive: true,
                         self_inlining: Some(&frequencies),
                         peeling: false,
-                        depth: recursion.depth,
-                        callee: recursion.callee,
+                        depth,
+                        callee,
                     };
                     copies =
                         crate::inline::expanded_all(context, function, &by, &available, None, &mut declared, metadata)?;

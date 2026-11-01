@@ -510,23 +510,37 @@ def run(prog, variant, hot=False, limit=300_000_000):
                 hits=hits, edges=edges, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
 
 
+def omf_segments(prog, variant):
+    """(size, class name) of each segment of llrm's OMF object."""
+    data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
+    lnames, classes, sizes = [""], [], []
+    at = 0
+    while at < len(data):
+        kind, size = data[at], int.from_bytes(data[at + 1: at + 3], "little")
+        body = data[at + 3: at + 2 + size]; at += 3 + size
+        if kind == 0x96:
+            i = 0
+            while i < len(body):
+                lnames.append(body[i + 1: i + 1 + body[i]].decode("latin-1")); i += 1 + body[i]
+        elif kind == 0x99:
+            sizes.append(int.from_bytes(body[1:5], "little")); classes.append(lnames[body[6]])
+    return list(zip(sizes, classes))
+
+
+def data_bytes(prog, variant):
+    """Initialised data of the object: the DATA-class segments (OMF) or .data and .rodata* (ELF). bss, .comment, .eh_frame are not data;
+    the constants gcc puts in .rodata.cst* and llrm in _DATA are the same thing, so code_bytes alone favoured whoever keeps constants out of .text."""
+    if variant in OMF_VARIANTS:
+        return sum(s for s, c in omf_segments(prog, variant) if c.endswith("DATA"))
+    out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
+    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
+
+
 def code_bytes(prog, variant):
     """Size of the kernel's code: the CODE-class segments (OMF) or .text (ELF) of its object, like tools/sizes.py, and for
     gcc and clang the runtime members they pulled in, so that a divide they send to libgcc is counted and not left out."""
     if variant in OMF_VARIANTS:
-        data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
-        lnames, classes, sizes = [""], [], []
-        at = 0
-        while at < len(data):
-            kind, size = data[at], int.from_bytes(data[at + 1: at + 3], "little")
-            body = data[at + 3: at + 2 + size]; at += 3 + size
-            if kind == 0x96:
-                i = 0
-                while i < len(body):
-                    lnames.append(body[i + 1: i + 1 + body[i]].decode("latin-1")); i += 1 + body[i]
-            elif kind == 0x99:
-                sizes.append(int.from_bytes(body[1:5], "little")); classes.append(lnames[body[6]])
-        return sum(s for s, c in zip(sizes, classes) if c.endswith("CODE"))
+        return sum(s for s, c in omf_segments(prog, variant) if c.endswith("CODE"))
     out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
     return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".text")) + archive_code(prog, variant)
 
@@ -548,7 +562,7 @@ def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":
