@@ -722,7 +722,6 @@ pub mod x86 {
     pub const ADC8mr: u16 = 544;
     pub const ADD16mi: u16 = 573;
     pub const ADD16mr: u16 = 583;
-    pub const ADD16rr: u16 = 603;
     pub const ADD32mi: u16 = 614;
     pub const ADD32mr: u16 = 624;
     pub const ADD8mi: u16 = 696;
@@ -731,7 +730,6 @@ pub mod x86 {
     pub const AL: u16 = 2;
     pub const AND16mi: u16 = 804;
     pub const AND16mr: u16 = 814;
-    pub const AND16ri: u16 = 819;
     pub const AND32mi: u16 = 845;
     pub const AND32mr: u16 = 855;
     pub const AND8mi: u16 = 927;
@@ -820,7 +818,6 @@ pub mod x86 {
     pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
-    pub const SHL16ri: u16 = 4321;
     pub const SS: u16 = 68;
     pub const SUB16mi: u16 = 4744;
     pub const SUB16mr: u16 = 4754;
@@ -859,14 +856,12 @@ pub mod x86 {
         (544, "ADC8mr"),
         (573, "ADD16mi"),
         (583, "ADD16mr"),
-        (603, "ADD16rr"),
         (614, "ADD32mi"),
         (624, "ADD32mr"),
         (696, "ADD8mi"),
         (702, "ADD8mr"),
         (804, "AND16mi"),
         (814, "AND16mr"),
-        (819, "AND16ri"),
         (845, "AND32mi"),
         (855, "AND32mr"),
         (927, "AND8mi"),
@@ -939,7 +934,6 @@ pub mod x86 {
         (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
-        (4321, "SHL16ri"),
         (4744, "SUB16mi"),
         (4754, "SUB16mr"),
         (4785, "SUB32mi"),
