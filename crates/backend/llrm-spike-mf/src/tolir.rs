@@ -82,8 +82,18 @@ impl<T: Target> Converted<T> {
             .iter()
             .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
             .collect();
-        let (body, palettes) =
-            llrm_codegen::coalescer::env::coalesce(&self.body, palettes, self.body.pins.clone(), size, registers);
+        let (body, palettes) = llrm_codegen::coalescer::env::coalesce(
+            &self.body,
+            palettes,
+            self.body.pins.clone(),
+            size,
+            registers,
+            Box::new(|one, other, joined| {
+                let (one, other, joined): (Vec<RegId>, Vec<RegId>, Vec<RegId>) =
+                    (one.iter().copied().collect(), other.iter().copied().collect(), joined.iter().copied().collect());
+                T::should_coalesce(&one, &other, &joined)
+            }),
+        );
         for (value, order) in self.orders.iter_mut() {
             if let Some(allowed) = palettes.get(value) {
                 order.retain(|register| allowed.contains(register));
@@ -235,7 +245,14 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
-        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, infos, marker: PhantomData },
+        tii: SpikeInstrInfo {
+            classes: function.classes.clone(),
+            registers,
+            foldable,
+            infos,
+            clobbered: clobbered_by_spills,
+            marker: PhantomData,
+        },
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
@@ -585,6 +602,8 @@ pub struct SpikeInstrInfo<T: Target> {
     /// For the instruction numbered `at / 2`: its name and what the target
     /// says of its virtual operands.
     infos: Vec<(&'static str, Vec<OperandInfo>)>,
+    /// `Target::spill_clobbers`: no value is held in one.
+    clobbered: Vec<RegId>,
     marker: PhantomData<T>,
 }
 
@@ -758,6 +777,15 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         one: &Insn,
     ) -> Vec<(u32, Vec<RegId>)> {
         self.operands_of(one).into_iter().map(|(value, info)| (value, info.order.clone())).collect()
+    }
+
+    fn larger_order(
+        &self,
+        order: &[RegId],
+    ) -> Option<Vec<RegId>> {
+        let mut larger = T::larger_order(order)?;
+        larger.retain(|register| !self.clobbered.contains(register));
+        Some(larger)
     }
 
     fn fold_memory_operand(

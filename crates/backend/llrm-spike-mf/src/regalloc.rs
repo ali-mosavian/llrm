@@ -102,6 +102,27 @@ pub trait Target {
         0
     }
 
+    /// `TargetRegisterInfo::shouldCoalesce`: whether a copy between values that
+    /// may take `one` and `other` registers is joined into one value that may
+    /// take `joined` (their common ones). A join narrows both for good, and
+    /// the allocator cannot widen the survivor again.
+    fn should_coalesce(
+        _one: &[RegId],
+        _other: &[RegId],
+        _joined: &[RegId],
+    ) -> bool {
+        true
+    }
+
+    /// The registers of the next larger class that holds `order`
+    /// (`getLargestLegalSuperClass`), or none when there is none. A value a
+    /// join narrowed is a proper subclass: greedy isolates single instructions
+    /// around it, and a piece no narrowing instruction names takes the larger
+    /// class (`recomputeRegClass`).
+    fn larger_order(_order: &[RegId]) -> Option<Vec<RegId>> {
+        None
+    }
+
     /// `getRegAllocationHints` for one operand (ARM's Thumb2 hints the low
     /// registers its 16-bit encodings need): the register `inst` is cheaper
     /// with at operand `operand`, if there is one.

@@ -1217,10 +1217,11 @@ fn test_a_hint_names_a_value_its_instruction_holds_after_the_coalescer() {
     assert!(named > 0, "no hint reached an instruction");
 }
 
-/// One register is all a narrow class allows; a wide class has three.
-struct Narrowing;
+/// Two registers are all a narrow class allows; a wide class has three. A
+/// target with `DECLINE` refuses a join that narrows a class.
+struct Narrowing<const DECLINE: bool>;
 
-impl Target for Narrowing {
+impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
     type Class = bool;
 
     fn meet(
@@ -1235,7 +1236,7 @@ impl Target for Narrowing {
     }
 
     fn candidates(narrow: bool) -> Vec<RegId> {
-        if narrow { vec![RegId::EBX] } else { REGISTERS.to_vec() }
+        if narrow { vec![RegId::EBX, RegId::ECX] } else { REGISTERS.to_vec() }
     }
 
     fn view(
@@ -1256,13 +1257,25 @@ impl Target for Narrowing {
     fn caller_saved() -> Vec<RegId> {
         vec![]
     }
+
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+        (order.len() < REGISTERS.len()).then(|| REGISTERS.to_vec())
+    }
+
+    fn should_coalesce(
+        one: &[RegId],
+        other: &[RegId],
+        joined: &[RegId],
+    ) -> bool {
+        !DECLINE || joined.len() == 1 || (joined.len() == one.len() && joined.len() == other.len())
+    }
 }
 
 /// A copy of a wide value into a narrow class (the 6502's compare takes `a`,
 /// `x` or `y`) joined the two, and the joined value took the narrow class for
 /// its whole range: it could not sit in the register the code after the
 /// compare keeps busy and went to a slot (6502 strrchr: `tay; sty s_...`,
-/// +52 cycles; LLVM's `isWinToJoinCrossClass` declines such a join).
+/// +52 cycles; this pin's coalescer joins it, and greedy splits it again).
 #[test]
 fn test_a_copy_into_a_narrow_class_does_not_narrow_the_value_that_lives_past_it() {
     let mut f = MFunction::<bool>::new("narrowing");
@@ -1271,15 +1284,92 @@ fn test_a_copy_into_a_narrow_class_does_not_narrow_the_value_that_lives_past_it(
     block.insts.push(op("load", vec![Operand::Def(v(0))]));
     block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
     block.insts.push(op("compare", vec![Operand::Use(v(1))]));
-    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
-    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
     block.insts.push(op("store", vec![Operand::Use(v(0))]));
     block.insts.push(ret());
     f.blocks = vec![block];
-    let mut converted = to_lir::<Narrowing>(&f, regs()).expect("converts");
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
     converted.coalesce(regs(), false);
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs(), &order);
     let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
     assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// Every use of a value is a compare, so the joins narrow it to the compare
+/// class for its whole range; a block between the two compares keeps both
+/// narrow registers busy. Only a copy around each compare, with the stretch
+/// between them in the wide class (`recomputeRegClass` over a piece with no
+/// compare, `SingleInstrs` in the block split), keeps it out of a slot (6502
+/// strrchr: `tay; sty s_...`, +3 B and +52 cycles a trip).
+#[test]
+fn test_a_value_whose_every_use_is_narrow_lives_between_them_in_the_wide_class() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true, true];
+    let mut first = Block { id: 0, ..Block::default() };
+    first.insts.push(op("load", vec![Operand::Def(v(0))]));
+    first.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    first.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    first.insts.push(branch(1));
+    let mut middle = Block { id: 1, ..Block::default() };
+    middle.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    middle.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    middle.insts.push(branch(2));
+    let mut last = Block { id: 2, ..Block::default() };
+    last.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(0))]));
+    last.insts.push(op("compare", vec![Operand::Use(v(2))]));
+    last.insts.push(ret());
+    f.blocks = vec![first, middle, last];
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// The same value in one block: no region or block to split around, so the
+/// piece around each compare comes from `tryInstructionSplit` (6502 strrchr's
+/// loop body is one block).
+#[test]
+fn test_a_value_whose_every_use_is_narrow_is_split_around_each_instruction_in_one_block() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(2))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// A target that says a join must not narrow a class keeps the copy (and its
+/// hint): the two values stay apart, as `TargetRegisterInfo::shouldCoalesce`
+/// lets a target decline.
+#[test]
+fn test_a_target_can_decline_a_join_that_narrows_a_class() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing<true>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let copies = converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count();
+    assert_eq!(copies, 1, "the copy into the narrow class was joined");
 }
