@@ -39,17 +39,19 @@ pub struct Options {
     /// Schedule in source order (`-pre-RA-sched=source`) rather than with the
     /// ILP list scheduler `llc` defaults to.
     pub source_order: bool,
+    /// Form `(An)+` and `-(An)` accesses, which gcc does and the pin does not.
+    pub indexed: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options = Options { mid_end: false, size: false, source_order: false };
+    pub const PINNED: Options = Options { mid_end: false, size: false, source_order: false, indexed: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false }
+        Options { mid_end: true, size: false, source_order: false, indexed: true }
     }
 }
 
@@ -82,7 +84,7 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order)?;
+    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed)?;
     let mut function = emit(name, &blocks)?;
     expand_cmov(&mut function)?;
     machine_sink(&mut function);

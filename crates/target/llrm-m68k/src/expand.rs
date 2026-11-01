@@ -359,6 +359,12 @@ pub fn finish(
             Kind::Op(name) if extension(name).is_some() => {
                 out.extend(expand_extension(name, &operands)?);
             }
+            Kind::Op(name) if crate::dagisel::indexed::printed_as(name).is_some() => {
+                let (opcode, def) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
+                let mut operands = operands;
+                operands.remove(def);
+                out.push(mc::Inst { opcode, operands });
+            }
             Kind::Op(name) => out.push(mc::Inst { opcode: name, operands }),
         }
     }
