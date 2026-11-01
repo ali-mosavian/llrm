@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_16, Uc, UcError
 from unicorn.x86_const import (
     UC_X86_REG_AX, UC_X86_REG_BX, UC_X86_REG_CS, UC_X86_REG_CX, UC_X86_REG_DS, UC_X86_REG_DX, UC_X86_REG_EFLAGS, UC_X86_REG_SI,
-    UC_X86_REG_ES, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
+    UC_X86_REG_ES, UC_X86_REG_FPCW, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
 )
 from iced_x86 import Decoder, Mnemonic, OpKind
 
@@ -115,6 +115,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     for register, value in ((UC_X86_REG_DS, PSP), (UC_X86_REG_ES, PSP), (UC_X86_REG_SS, LOAD + ss), (UC_X86_REG_SP, sp), (UC_X86_REG_CS, LOAD + cs), (UC_X86_REG_IP, ip)):
         uc.reg_write(register, value)
 
+    uc.reg_write(UC_X86_REG_FPCW, 0x037F)  # DOS's FPU state; Unicorn's own is 0 (single precision)
     result = Run()
     state = {"active": whole, "done": False, "entry_sp": -1 if whole else 0, "files": {0: io.BytesIO(stdin)} if stdin is not None else {}, "next": 5, "vectors": {}}
     counts = Counts()
