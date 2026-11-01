@@ -333,6 +333,17 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> bool {
         false
     }
+    /// Whether `insn` narrows `virt` below the larger class its own has
+    /// (`getNumAllocatableRegsForConstraints` against the super class's
+    /// count): an instruction that does not has nothing to gain from a piece
+    /// of its own.
+    fn constrains(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> bool {
+        true
+    }
     /// `RegClassInfo.getNumAllocatableRegs(RC)`.
     fn num_allocatable_regs(
         &self,

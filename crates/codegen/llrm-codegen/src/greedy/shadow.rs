@@ -178,6 +178,23 @@ impl GreedyEnv for BodyEnv<'_> {
         self.orders.orders.borrow().get(&virt).map_or(0, Vec::len)
     }
 
+    fn constrains(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+    ) -> bool {
+        let Some(larger) = self.orders.orders.borrow().get(&virt).and_then(|order| self.tii.larger_order(order)) else {
+            return false;
+        };
+        let mut left = larger.clone();
+        for (value, allowed) in self.tii.operand_orders(insn) {
+            if value == virt {
+                left.retain(|one| allowed.contains(one));
+            }
+        }
+        left.len() != larger.len()
+    }
+
     fn is_proper_subclass(
         &self,
         virt: u32,

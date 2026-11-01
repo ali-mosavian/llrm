@@ -1275,7 +1275,7 @@ impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
 /// `x` or `y`) joined the two, and the joined value took the narrow class for
 /// its whole range: it could not sit in the register the code after the
 /// compare keeps busy and went to a slot (6502 strrchr: `tay; sty s_...`,
-/// +52 cycles; LLVM's `isWinToJoinCrossClass` declines such a join).
+/// +52 cycles; this pin's coalescer joins it, and greedy splits it again).
 #[test]
 fn test_a_copy_into_a_narrow_class_does_not_narrow_the_value_that_lives_past_it() {
     let mut f = MFunction::<bool>::new("narrowing");
@@ -1321,6 +1321,31 @@ fn test_a_value_whose_every_use_is_narrow_lives_between_them_in_the_wide_class()
     last.insts.push(op("compare", vec![Operand::Use(v(2))]));
     last.insts.push(ret());
     f.blocks = vec![first, middle, last];
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// The same value in one block: no region or block to split around, so the
+/// piece around each compare comes from `tryInstructionSplit` (6502 strrchr's
+/// loop body is one block).
+#[test]
+fn test_a_value_whose_every_use_is_narrow_is_split_around_each_instruction_in_one_block() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(2))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
     let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
     converted.coalesce(regs(), false);
     let order = |value: u32| converted.order(value);
