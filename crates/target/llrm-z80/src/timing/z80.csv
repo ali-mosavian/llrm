@@ -64,6 +64,7 @@ inc bc,1,6,,z80
 dec bc,1,6,,z80
 inc ix,2,10,,z80
 add hl;bc,1,11,,z80
+add hl;sp,1,11,,z80
 adc hl;bc,2,15,,z80
 sbc hl;bc,2,15,,z80
 add ix;bc,2,15,,z80

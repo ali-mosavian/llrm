@@ -681,7 +681,7 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 688] = [
     RecordNode,
     CheckType(Vt(6)),
     EmitNodeXForm { xform: 0, record: 0 },
-    MorphNodeTo(Emit { opcode: 377, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 1, len: 1 } }),
+    MorphNodeTo(Emit { opcode: 377, flags: 0, vts: [Vt(6), Vt(5)], num_vts: 2, operands: Slice { start: 1, len: 1 } }),
     OpcodeCase { size: 4, opcode: 28672 },
     RecordNode,
     CaptureGlueInput,

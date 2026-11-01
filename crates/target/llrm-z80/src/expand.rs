@@ -45,6 +45,14 @@ struct Frame {
     active: bool,
 }
 
+impl Frame {
+    /// How far the prologue leaves SP below IX.
+    fn below_ix(&self) -> i64 {
+        let pushes = (self.size + 1) / 2;
+        if pushes <= 3 { 2 * pushes } else { self.size }
+    }
+}
+
 /// Bytes of return address and saved IX before the first argument
 /// (`calling.toml`'s `first_argument_offset`).
 const FIRST_ARGUMENT: i64 = 4;
@@ -457,6 +465,12 @@ impl Printer<'_> {
                 if matches!(inst.operands.first(), Some(Operand::Imm(bytes)) if *bytes != 0) {
                     return Err("stack arguments are not expanded yet".to_owned());
                 }
+            }
+            "LEAFI" => {
+                // the stack pointer sits at the bottom of the frame the prologue made
+                let offset = self.frame.offsets.get(&self.frame_index(inst, 1)?).copied().ok_or("a frame object with no place")?;
+                self.push(format!("ld hl, #{}", offset + self.frame.below_ix()));
+                self.push("add hl, sp");
             }
             "SPILL8" | "RELOAD8" => {
                 let (index, register) = if op == "SPILL8" {

@@ -233,7 +233,9 @@ let mayStore = 1, Uses = [SP] in {
 
 // The address of a frame object: IX + displacement, resolved when the frame is laid out. The (ix+d) loads and
 // stores take the object without the address (row 6).
-def LEAFI : Z80Inst<(outs GR16:$d), (ins i16imm:$fi), "leafi $d, $fi", []>;
+// It is `ld hl, off; add hl, sp`: nothing is pushed between the prologue and the return.
+let Defs = [F], Uses = [SP] in
+  def LEAFI : Z80Inst<(outs HLR:$d), (ins i16imm:$fi), "leafi $d, $fi", []>;
 def : Pat<(i16 frameindex:$fi), (LEAFI (to_tframeindex $fi))>;
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
