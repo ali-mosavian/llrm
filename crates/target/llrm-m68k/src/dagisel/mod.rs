@@ -16,5 +16,7 @@ pub mod function;
 pub mod hooks;
 pub mod indexed;
 pub mod lowering;
+pub mod local;
 pub mod pipeline;
+pub mod quick;
 pub mod predicates;

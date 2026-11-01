@@ -54,14 +54,14 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options =
-    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false };
+    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, quick: false };
 
 fn compiled(
     ir: &str,
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, ..options }).expect("compiles")
+    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, quick: false, ..options }).expect("compiles")
 }
 
 fn branches(body: &str) -> String {

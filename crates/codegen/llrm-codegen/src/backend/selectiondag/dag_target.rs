@@ -5,7 +5,8 @@
 //! scheduling: combine and legalize through the target's hooks, make the
 //! scratch frame objects they asked for, the target's rewrites that need no
 //! matcher ([`DagTarget::preprocess`]), `DoInstructionSelection` through
-//! [`DagTarget::select`], then schedule. What follows is the target's: x86
+//! [`DagTarget::select`], the target's rewrites of what it selected
+//! ([`DagTarget::postprocess`]), then schedule. What follows is the target's: x86
 //! emits LIR from the units ([`super::dag_select::select_block`]), another
 //! target emits into its own machine function.
 //!
@@ -77,6 +78,13 @@ pub trait DagTarget {
         _temporaries: &mut dyn FrameObjects,
     ) {
     }
+
+    /// `PostprocessISelDAG`: the rewrites of the selected machine nodes.
+    fn postprocess(
+        &mut self,
+        _dag: &mut SelectionDAG,
+    ) {
+    }
 }
 
 /// One block's DAG through the pin's pipeline, to the scheduled units.
@@ -101,6 +109,7 @@ pub fn select_units<T: DagTarget>(
     remove_assertions(dag);
     let (registers, select) = target.selection();
     do_instruction_selection_with(dag, registers, |adapter, node| select.select(adapter, node))?;
+    target.postprocess(dag);
     let root = dag.get_root();
     Ok(schedule(dag, root, info))
 }

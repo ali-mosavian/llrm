@@ -32,7 +32,7 @@ pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::reg as pin;
 use crate::dagisel::generated::instrinfo::flag;
-use crate::dagisel::indexed;
+use crate::dagisel::local;
 
 /// The register class a virtual register is allocated from
 /// (`M68kRegisterInfo`).
@@ -86,7 +86,7 @@ pub type MFunction = mf::MFunction<Class>;
 
 /// Whether the pin marks the instruction `name` `isCommutable`.
 pub fn pin_commutable(name: &str) -> bool {
-    indexed::code_of(name).and_then(indexed::desc).is_some_and(|desc| desc.has(flag::COMMUTABLE))
+    local::code_of(name).and_then(local::desc).is_some_and(|desc| desc.has(flag::COMMUTABLE))
 }
 
 /// The class the pin's description of `name` gives operand `index`.
@@ -94,7 +94,7 @@ pub fn operand_class(
     name: &str,
     index: usize,
 ) -> Option<Class> {
-    let desc = indexed::desc(indexed::code_of(name)?)?;
+    let desc = local::desc(local::code_of(name)?)?;
     Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, class))
 }
 
@@ -113,7 +113,7 @@ fn extension_result(
 }
 
 fn opcode_name(code: u32) -> Option<&'static str> {
-    indexed::name_of(code)
+    local::name_of(code)
 }
 
 /// Whether a result type carries a value (not a chain, glue or flags register).
@@ -288,7 +288,7 @@ impl Emitter<'_> {
                 let value = SDValue { node, res: 0 };
                 match self.dag.opcode(value) {
                     ISD::Machine(code) => {
-                        let Some(desc) = indexed::desc(code as u16) else { continue };
+                        let Some(desc) = local::desc(code as u16) else { continue };
                         let sets = desc.implicit_defs.contains(&pin::CCR);
                         if sets || desc.has(flag::CALL) {
                             flags_from = (sets && !desc.has(flag::CALL)).then_some(node);
@@ -405,7 +405,7 @@ impl Emitter<'_> {
                 if name == "SUBREG_TO_REG" {
                     return self.subreg_to_reg(node, into);
                 }
-                let desc = indexed::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
+                let desc = local::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
                 let mut operands = Vec::new();
                 for (at, vt) in n.values.iter().enumerate().take(usize::from(desc.num_defs)) {
                     let class = desc
