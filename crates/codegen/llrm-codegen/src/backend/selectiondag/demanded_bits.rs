@@ -480,6 +480,29 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let k = self.sdb(src, swap(demanded), depth + 1, false, tlo)?;
                 KnownBits { zero: swap(k.zero), one: swap(k.one), width }
             }
+            // `SimplifyDemandedBits` of `ADD`, `SUB` and `MUL`: they demand
+            // nothing above their highest demanded bit; a constant addend whose
+            // low bits are all ones becomes -1.
+            ISD::Add | ISD::Sub | ISD::Mul if self.hooks.simplify_demanded_add_sub_mul() => {
+                let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
+                let length = 128 - demanded.leading_zeros();
+                let low = mask(length);
+                let k1 = self.sdb(op1, low, depth + 1, false, tlo)?;
+                let lhs_demanded =
+                    if opcode == ISD::Mul { low & mask(width - k1.zero.trailing_ones().min(width)) } else { low };
+                self.sdb(op0, lhs_demanded, depth + 1, false, tlo)?;
+                if opcode != ISD::Mul && !self.dag.is_opaque(op1) {
+                    if let Some(c) = self.dag.constant(op1) {
+                        let high = all & !low;
+                        if c != all && c != 1 && (c | high) == all {
+                            let minus_one = self.dag.get_constant(all, vt);
+                            let new = self.dag.get_node(opcode, vt, &[op0, minus_one]);
+                            return Self::combine_to(tlo, op, new);
+                        }
+                    }
+                }
+                known_bits(self.dag, op)
+            }
             _ => known_bits(self.dag, op),
         };
         known.width = width;

@@ -718,7 +718,7 @@ fn evaluate_in_different_type(
 
 /// `InstCombinerImpl::isEliminableCastPair` (:198): the one cast that is the
 /// pair `first`, `second`, if there is one.
-fn is_eliminable_cast_pair(
+pub(crate) fn is_eliminable_cast_pair(
     c: &Combiner,
     first: InstId,
     second: InstId,

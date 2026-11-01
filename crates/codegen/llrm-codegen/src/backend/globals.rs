@@ -236,23 +236,16 @@ pub fn datums(
     Ok(out)
 }
 
-/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function,
-/// ptr data }` entries, lowest priority first and in order within one, as
-/// `AsmPrinter::emitXXStructorList` sorts them; an entry without a function is
-/// dropped.
-fn constructors(
+/// The functions of `llvm.global_ctors`' `{ i32 priority, ptr function, ptr
+/// data }` entries with their priority and offset, lowest priority first and in
+/// order within one, as `AsmPrinter::emitXXStructorList` sorts them; an entry
+/// without a function is dropped.
+pub fn constructor_entries(
     module: &Module,
     layout: &DataLayout,
     list: ConstantId,
-    names: &IndexMap<(Space, i64), String>,
-    out: &mut Vec<Datum>,
-) -> Result<(), String> {
+) -> Result<Vec<(i128, GlobalId, i64)>, String> {
     let context = &module.context;
-    let bytes = layout.pointer(0).bits / 8;
-    if bytes < 4 {
-        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
-    }
-    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
     let entries = match &context.get(list).kind {
         ConstantKind::Aggregate(entries) => entries.clone(),
         _ => Vec::new(),
@@ -268,10 +261,27 @@ fn constructors(
             continue;
         }
         let (global, offset) = target(module, layout, function)?;
-        found.push((priority, global, offset));
+        found.push((priority as i128, global, offset));
     }
     found.sort_by_key(|(priority, ..)| *priority);
-    for (_, global, offset) in found {
+    Ok(found)
+}
+
+/// The function pointers of `llvm.global_ctors`, in `constructor_entries`
+/// order.
+fn constructors(
+    module: &Module,
+    layout: &DataLayout,
+    list: ConstantId,
+    names: &IndexMap<(Space, i64), String>,
+    out: &mut Vec<Datum>,
+) -> Result<(), String> {
+    let bytes = layout.pointer(0).bits / 8;
+    if bytes < 4 {
+        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
+    }
+    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
+    for (_, global, offset) in constructor_entries(module, layout, list)? {
         let name = names[&(space(module, global), i64::from(global.0))].clone();
         out.push(Datum::Pointer(Pointer { name, offset, far: false, bytes }));
     }

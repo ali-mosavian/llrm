@@ -31,6 +31,13 @@ impl SDNodeFlags {
     pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
     pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
     pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
+    /// DEVIATE PAIR1 (no pin counterpart: the pin's pointers are one word
+    /// wide): a `BUILD_PAIR` of a far pointer's offset and selector, and the
+    /// `or` its expansion makes. Exit: none; the pin has no far pointer.
+    pub const PAIR_FAR: SDNodeFlags = SDNodeFlags(8192);
+    /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
+    /// convention returns or passes in two registers (`dx:ax`).
+    pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
 
     pub fn union(
         self,
@@ -153,9 +160,48 @@ pub enum BooleanContents {
     Undefined,
 }
 
+/// What a target charges for the operations a divide by a constant is made of
+/// or replaced by: the divide's own price, and the multiply-high sequence's
+/// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
+/// alone).
+#[derive(Clone, Debug)]
+pub struct DivPrices {
+    /// The target's own operand size in bytes: a value of another width runs
+    /// under the prefix.
+    pub operand: i64,
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    /// Percent of the divide's price the multiply-high sequence must exceed it
+    /// by: below the spread of the sheet's own prices the pin's sequence
+    /// stays.
+    pub margin: i64,
+    /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
+    /// the selector emits for it (`Machine::multiply_by`).
+    pub product: Option<ProductPrice>,
+}
+
+/// A price by the constant `d`.
+#[derive(Clone)]
+pub struct ProductPrice(pub std::rc::Rc<dyn Fn(i64) -> i64>);
+
+impl std::fmt::Debug for ProductPrice {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("ProductPrice")
+    }
+}
+
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
@@ -168,14 +214,28 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// Prices that decide `isIntDivCheap` per divisor and width; see
+    /// [`DivPrices`].
+    pub div_prices: Option<DivPrices>,
+    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
+    /// `sdiv` by a power of two stays an `sdiv`.
+    pub sdiv_pow2_stays: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// `computeKnownBitsForTargetNode`: what the target knows of one of its
+    /// nodes, given the known bits of operand `n`; `None` for a node it
+    /// says nothing about.
+    pub known_bits_for_target_node: Option<TargetKnownBits>,
     /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
     /// other end.
     pub big_endian: bool,
 }
+
+/// See [`DagConfig::known_bits_for_target_node`].
+pub type TargetKnownBits =
+    fn(&SelectionDAG, SDValue, &dyn Fn(usize) -> super::known_bits::KnownBits) -> Option<super::known_bits::KnownBits>;
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
@@ -187,7 +247,10 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_prices: None,
+            sdiv_pow2_stays: false,
             fp_extended: false,
+            known_bits_for_target_node: None,
             big_endian: false,
         }
     }
@@ -287,8 +350,9 @@ pub struct SelectionDAG {
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
     /// The SysV x86-64 `va_list`'s other fields: the register save area's
-    /// frame index and `gp_offset`, the bytes of it the named arguments took.
-    pub var_args_save: Option<(i32, u32)>,
+    /// frame index, `gp_offset` (the bytes of it the named integer arguments
+    /// took) and `fp_offset` (48 plus 16 a named vector argument).
+    pub var_args_save: Option<(i32, u32, u32)>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -936,7 +1000,7 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode {
-            order: self.cur_order,
+            order: if has_no_ir_order(opcode) { 0 } else { self.cur_order },
             opcode,
             values: values.to_vec(),
             ops: ops.to_vec(),
@@ -996,6 +1060,15 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(vt.is_floating_point(), "FP constant of {vt:?}");
         self.intern(ISD::ConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
+    }
+
+    /// `getTargetConstantFP`: a float constant a pattern takes as an immediate.
+    pub fn get_target_constant_fp(
+        &mut self,
+        bits: u128,
+        vt: EVT,
+    ) -> SDValue {
+        self.intern(ISD::TargetConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
     pub fn get_all_ones_constant(
@@ -1157,6 +1230,55 @@ impl SelectionDAG {
         store
     }
 
+    /// `getIndexedLoad`: `load` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the loaded value, the new base and the chain.
+    pub fn get_indexed_load(
+        &mut self,
+        load: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(load).data else { panic!("an indexed load of a load") };
+        let vt = self.value_type(load);
+        let chain = self.operand(load, 0);
+        let result = self.intern(
+            if post { ISD::LoadPost } else { ISD::LoadPre },
+            &[vt, self.value_type(base), EVT::OTHER],
+            &[chain, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
+    /// `getIndexedStore`: `store` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the new base and the chain.
+    pub fn get_indexed_store(
+        &mut self,
+        store: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(store).data else { panic!("an indexed store of a store") };
+        let (chain, value) = (self.operand(store, 0), self.operand(store, 1));
+        let result = self.intern(
+            if post { ISD::StorePost } else { ISD::StorePre },
+            &[self.value_type(base), EVT::OTHER],
+            &[chain, value, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
     /// `getAtomic` of `ATOMIC_SWAP`: the old value at `ptr` and a chain,
     /// `value` stored.
     pub fn get_atomic_swap(
@@ -1215,7 +1337,7 @@ impl SelectionDAG {
                 &[low, step],
                 SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
             );
-            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
+            return self.get_node_flags(ISD::BuildPair, vt, &[moved, high], SDNodeFlags::PAIR_FAR);
         }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
@@ -1233,6 +1355,21 @@ impl SelectionDAG {
             self.get_node(ISD::Truncate, vt, &[value])
         } else {
             self.get_node(ISD::ZeroExtend, vt, &[value])
+        }
+    }
+
+    pub fn get_any_ext_or_trunc(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::AnyExtend, vt, &[value])
         }
     }
 
@@ -1610,4 +1747,36 @@ impl Iterator for LiveUsers<'_> {
             }
         }
     }
+}
+
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being
+/// visited (`ConstantSDNode`, `FrameIndexSDNode`, `RegisterSDNode`,
+/// `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an
+/// empty one). The scheduler reads 0 as "no order" and ranks such a node
+/// differently from an ordered one.
+fn has_no_ir_order(opcode: ISD) -> bool {
+    use ISD::*;
+    matches!(
+        opcode,
+        Constant
+            | TargetConstant
+            | ConstantFP
+            | TargetConstantFP
+            | Register
+            | RegisterMask
+            | JumpTable
+            | TargetJumpTable
+            | SrcValue
+            | ExternalSymbol
+            | TargetExternalSymbolNode
+            | FrameIndex
+            | TargetFrameIndex
+            | ConstantPool
+            | TargetConstantPool
+            | BasicBlock
+            | ValueType
+            | CondCodeNode
+            | Undef
+            | Poison
+    )
 }

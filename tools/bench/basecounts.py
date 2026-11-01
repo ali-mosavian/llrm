@@ -98,6 +98,17 @@ def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
     return out
 
 
+def rebased(base: dict, overlay: dict, was: dict[str, str], now: dict[str, str]) -> dict:
+    """`base` (bench.py's --json rows) with the rows of every program edited since the base replaced by `overlay`, the base compiler's rows
+    on the head's sources. Refuses an edited program the overlay lacks: parity/qlight c read 15 clocks on main against 460 now because main
+    was measured on its own, constant-argument qlight.c, and the list called that a regression."""
+    edited = {name for name in now if name in was and was[name] != now[name]}
+    missing = sorted(edited - {key.rsplit("/", 2)[0] for key in overlay})
+    if missing:
+        raise SystemExit("the base ran other sources than the head's: no rows of the base compiler on the head's " + ", ".join(missing))
+    return {key: value for key, value in base.items() if key.rsplit("/", 2)[0] not in edited} | overlay
+
+
 def rows_of(raw: dict) -> dict[tuple[str, str, str], dict]:
     """bench.py's --json keys, "name/language/opt" (the name may hold a slash), as (name, language, opt)."""
     out = {}
@@ -137,6 +148,20 @@ def base_counts(
     part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION}))
     os.replace(part, path)
     return have, hashes
+
+
+def unstable_cells(first: dict, second: dict) -> list[str]:
+    """The cells of ours that two runs of one compiler disagree on, one line each. A baseline is trusted only when a second run of the same
+    tree reproduces it: code and data bytes do not move with timing, so a difference is another build, a stale cache or another program."""
+    problems = []
+    for key in sorted(first.keys() & second.keys()):
+        if key[1] not in OURS:
+            continue
+        a, b = first[key], second[key]
+        moved = [f"{counter} {a.get(counter)} vs {b.get(counter)}" for counter in sorted(a.keys() | b.keys()) if a.get(counter) != b.get(counter)]
+        if moved:
+            problems.append(f"UNSTABLE {label(key)}: {', '.join(moved)}")
+    return problems
 
 
 def waivers(root: Path = ROOT) -> list[dict]:

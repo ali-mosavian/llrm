@@ -124,6 +124,13 @@ is known, else the generic one) for an element. QB states `element` for every
 access to a named or described array, since a parameter may be bound to any of
 them; REDIM, ERASE and DIM stay calls, which clobber what they may move.
 
+Two more regions are apart from each other: `absolute` (memory the program
+owns nothing in: QB's POKE through a literal DEF SEG) and `referent` (what a
+reference parameter points at, which may be a place or an array element). In
+`!tbaa`, `place` and `allocation` sit under a `referent` type and `absolute`
+beside it, so a `referent` access may alias either of the first two and never
+an `absolute` one.
+
 ### `nofarallocation`
 
 A loop's back-edge terminator may state that nothing the loop reaches, in its

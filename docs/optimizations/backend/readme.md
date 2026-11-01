@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 138 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -35,7 +35,8 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | cpu | One immutable description of a code-generation tuning target: a CPU's prices and a target's registers, address forms and cost model. | The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's | [cpu](cpu.md) |
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
 | deadmi | An instruction nothing reads is gone: `DeadMachineInstructionElim` after selection. | Named by `flow`. | [deadmi](deadmi.md) |
-| debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
+| deadspills | Drops a spill store no later read of its slot can see. | Named by `peephole`. | [deadspills](deadspills.md) |
+| debuginfo | `-g`: build a module's debug information as [`llrm_debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
 | division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
 | earlytaildup | Which blocks early tail duplication may copy, and into which predecessors: `shouldTailDuplicate`, `isSimpleBB`, `canCompletelyDuplicateBB` and `canTailDuplicate` of [TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp) with `PreRegAlloc` set and `LayoutMode` clear. | `flow::machine_with`, first of the machine phases. | [earlytaildup](earlytaildup.md) |
 | edges | Breaks one edge of a body: a block of its own that jumps on. | `machinesink`. | [edges](edges.md) |
@@ -67,6 +68,8 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
 | intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
+| ivshare | Streams that walk the same index share one pointer (DEVIATE LSR2). | Named by `flow`. | [ivshare](ivshare.md) |
+| ivzero | A loop's index ends at zero (DEVIATE LSR3). | A machine phase after `IvShare`, at every -O level but -O0. | [ivzero](ivzero.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | latecleanup | Removes an immediate load to a register that an identical, earlier load in every path to it already left there: LLVM's `MachineLateInstrsCleanup` ([MachineLateInstrsCleanup.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp)). | After `prologue`, before `peephole`: where rematerialization and the | [latecleanup](latecleanup.md) |

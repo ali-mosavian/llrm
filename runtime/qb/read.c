@@ -110,8 +110,9 @@ static void read_number(byte type, qb_data_ptr destination)
         *(double QB_FAR *)destination = value.real;
 }
 
-/* B$RDSD: the item as a string, assigned to the descriptor `destination`. */
-void B_RDSD(qb_data_ptr destination)
+/* B$RDSD: the item as a string, assigned to the descriptor `destination`. The compiler passes a second word, the
+   length of a fixed string (B$RDFS reads those; 0 here), which the caller removes. */
+void B_RDSD(qb_data_ptr destination, short width)
 {
     ModuleData *data;
     const char *cursor = item_start(&data), *start;

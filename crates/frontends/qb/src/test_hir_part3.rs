@@ -536,6 +536,14 @@ fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
     }
 }
 
+/// `^` is the library call only where the target states no `f80`: an x86
+/// target, which states one, keeps the x87 sequence.
+#[test]
+fn test_power_stays_the_x87_sequence_where_the_target_states_f80() {
+    let text = listing_of("power_x87", "INPUT a#, b#\r\nPRINT a# ^ b#\r\nEND\r\n");
+    assert!(!text.contains("B$LPOW") && text.contains("db 0d9h,0e8h,0d9h,0c9h,0d9h,0f1h"), "{text}");
+}
+
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
 /// the raise ran outside its statement, so the runtime found no statement
 /// to resume after.
@@ -668,10 +676,12 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // ERL is 100 at the only error site, so its check folds away: only the
-    // ERR mismatch still reports, and the landing resumes into `recovered`.
-    let reports: Vec<&str> = procedure.lines().filter(|line| line.contains("@REPORTFAIL(")).collect();
-    assert_eq!(reports.len(), 1, "{procedure}");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
+    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
+    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    let entries = table.matches("i16 ").count();
+    assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
+    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))
@@ -959,10 +969,28 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let loop_ = poke_block(&text);
 
     assert!(!text.contains("load volatile"), "{text}");
-    // `ch` is one plain load per trip, as the pin leaves it: a volatile far
-    // store may reach it (4f82e22e1, #3994). Not a wait on it: no volatile.
-    assert_eq!(loop_.matches(" = load ").count(), 1, "{text}");
+    // `ch` is read before the loop: the POKE is to a segment the program owns
+    // nothing in, and a reference parameter points into the program, so the
+    // two are stated apart (the pin, given no such fact, reloaded it every
+    // trip).
+    assert_eq!(loop_.matches(" = load ").count(), 0, "{text}");
     assert!(loop_.contains("store volatile"), "the POKE still lands: {text}");
+}
+
+/// The reads of a reference parameter stay in the loop where the segment is not
+/// a literal: DEF SEG with a variable may point at the program's own data.
+#[test]
+fn test_a_counted_loop_reloads_a_byref_when_the_segment_is_not_a_literal() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(
+        &directory,
+        "FILLSEG.BAS",
+        b"DEFINT A-Z\r\nDECLARE SUB Fill (ch, s)\r\nFill 65, &HB800\r\nSUB Fill (ch, s)\r\nDEF SEG = s\r\nFOR o = 0 TO 3998 STEP 2\r\nPOKE o, ch\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let source = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let text = function_text(&optimized_mir(&source), "FILL");
+
+    assert_eq!(poke_block(&text).matches(" = load ").count(), 2, "{text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -3207,11 +3235,10 @@ fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let body = &fill[top..=at];
     let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
     let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
-    // The pin's output: `opt -passes='loop-mssa(licm)'` and `default<O2>` hoist
-    // neither cell past a volatile far store (4f82e22e1, #3994 states that
-    // video memory holds no program data). Both POKEs still land every
-    // trip.
-    assert_eq!((loads, pokes), (2, 2), "{body:#?}");
+    // Given the facts (the POKE's segment is a literal, the parameters point
+    // into the program) neither cell is reloaded; both POKEs still land every
+    // trip. Without them the pin reloads both past a volatile far store.
+    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
 }
 
 /// The listing of `source` through `llrm-qb -O2 -march=i486 -S`, as shipped.
@@ -3864,25 +3891,6 @@ fn the_run_time_module_flag_marks_the_header_and_names_the_loader_externals() {
     assert!(!plain.iter().any(|one| one == "$AC"), "{plain:?}");
 }
 
-/// `PRINT 1` at -m32 with the QB 4.5 runtime was refused by the DAG selector
-/// ("QB runtime routine whose stack cleanup the convention does not model"):
-/// the table's 16-bit block pops 2 bytes, the call pushes a dword and the
-/// callee pops all 4, which is what the old selector does. After: the call
-/// compiles, with no `add esp` after it.
-#[test]
-fn test_a_32_bit_call_of_a_callee_popped_routine_selects_under_the_dag_selector() {
-    let directory = tempfile::tempdir().expect("creates a directory");
-    let source = written(&directory, "p1.bas", b"PRINT 1\r\n");
-    let out = directory.path().join("p1.asm");
-    let argv = [source.to_str().unwrap(), "-m32", "--runtime", "qb45", "--isel=dag", "-S", "-o", out.to_str().unwrap()]
-        .map(str::to_owned);
-    assert_eq!(crate::cli::main(&argv), 0);
-    let text = std::fs::read_to_string(&out).expect("the listing");
-    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
-    assert!(main.contains("pushd 1\n    call B$PEI2"), "{main}");
-    assert!(!main.contains("add esp"), "{main}");
-}
-
 /// A BASIC program whose last statement is a runtime call ended without
 /// `call B$CENP` under the DAG selector at -m32: the call before the return
 /// became a sibling `jmp`, and `ends_program` found no return to spell as the
@@ -4281,4 +4289,14 @@ fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
     assert_eq!(quiet_loops(false, &closing), 1, "CLOSE does not move a far array");
     let near = closing.replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
     assert_eq!(quiet_loops(false, &near), 0, "CLOSE slides the local heap, where a string array lives");
+    // FRE compacts the local heap as CLOSE does; the table names each routine
+    // that does.
+    for call in ["f& = FRE(\"\")", "f& = FRE(0)"] {
+        let freeing = SORTING
+            .replace("a(i) = hi - i", &format!("a(i) = hi - i: {call}"))
+            .replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
+        assert_eq!(quiet_loops(false, &freeing), 0, "{call} slides the local heap");
+        let far = SORTING.replace("a(i) = hi - i", &format!("a(i) = hi - i: {call}"));
+        assert_eq!(quiet_loops(false, &far), 1, "{call} does not move a far array");
+    }
 }

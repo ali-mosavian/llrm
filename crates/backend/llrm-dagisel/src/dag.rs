@@ -219,6 +219,14 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after
+    /// the access.
+    fn is_post_indexed(
+        &self,
+        _node: u32,
+    ) -> bool {
+        false
+    }
     fn is_truncating_store(
         &self,
         node: u32,
@@ -248,8 +256,21 @@ pub trait Dag {
         &self,
         value: SDValue,
     ) -> Option<FpClass>;
+    /// The bit pattern of a `ConstantFPSDNode`
+    /// (`getValueAPF().bitcastToAPInt()`); `None` for any other node.
+    fn fp_bits(
+        &self,
+        _value: SDValue,
+    ) -> Option<u128> {
+        None
+    }
     /// `SDNodeFlags::hasDisjoint`.
     fn has_disjoint_flag(
+        &self,
+        node: u32,
+    ) -> bool;
+    /// `SDNodeFlags::hasNoUnsignedWrap`.
+    fn has_no_unsigned_wrap(
         &self,
         node: u32,
     ) -> bool;
@@ -406,6 +427,16 @@ pub trait Hooks<D: Dag> {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool;
+    /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the
+    /// 8-bit code of an `fmov` immediate, `None` if there is none. A target
+    /// without the form never has one.
+    fn fp_imm_code(
+        &self,
+        _bits: u128,
+        _double: bool,
+    ) -> Option<u8> {
+        None
+    }
     /// The generated `RunSDNodeXForm`.
     fn run_xform(
         &mut self,
@@ -443,6 +474,18 @@ pub trait Hooks<D: Dag> {
         rhs: i64,
         desired: i64,
     ) -> bool;
+    /// `MCInstrDesc::mayLoad` and `mayStore` of a machine opcode.
+    fn may_load_store(
+        &self,
+        opcode: u16,
+    ) -> (bool, bool);
+}
+
+/// What the x86 PatFrags ask of the target beyond [`Hooks`]: the bodies in
+/// `X86InstrFragments.td`, `X86InstrCompiler.td` and `X86InstrInfo.td` that
+/// read the subtarget or a node's users. The x86 tables' `node_predicate` takes
+/// a `Hooks` that also has these; another target's table does not.
+pub trait X86Predicates<D: Dag>: Hooks<D> {
     /// `Subtarget->hasSSEUnalignedMem()`.
     fn has_sse_unaligned_mem(&self) -> bool;
     /// `shouldAvoidImmediateInstFormsForSize(N)`.
@@ -483,11 +526,6 @@ pub trait Hooks<D: Dag> {
         dag: &D,
         node: u32,
     ) -> bool;
-    /// `MCInstrDesc::mayLoad` and `mayStore` of a machine opcode.
-    fn may_load_store(
-        &self,
-        opcode: u16,
-    ) -> (bool, bool);
 }
 
 /// The pattern predicates that are decided when a function is selected, as

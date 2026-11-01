@@ -13,6 +13,7 @@ llrm-sdag = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
