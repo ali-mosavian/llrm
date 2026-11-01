@@ -1277,7 +1277,14 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
+        // LSR runs on LCSSA, as in the pin's loop pipeline: InstSimplify above
+        // stripped the exit phis, and an exit value read straight off the
+        // loop's phi kept a second counter (z80 `slen`).
+        passes.push(Box::new(crate::lcssa::LoopClosedSSA));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
+        // The pin's closing InstSimplify: the exit phis LSR left are
+        // single-incoming.
+        passes.push(Box::new(crate::instsimplify::InstSimplify));
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.

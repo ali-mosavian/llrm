@@ -2650,8 +2650,49 @@ fn lsr_runs_on_simplified_loops_after_the_closing_instsimplify() {
         let applied = Applied { options, ..Applied::default() };
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
-        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "instsimplify", "canonfreeze"], "{names:?}");
+        assert_eq!(
+            &names[at.saturating_sub(4)..at],
+            ["loopsimplify", "instsimplify", "canonfreeze", "lcssa"],
+            "{names:?}"
+        );
     }
+}
+
+/// z80 `slen` at -Os: LSR was handed the exit value straight off the loop's phi
+/// (InstSimplify had stripped the LCSSA phi) and kept a second pointer counter
+/// beside the first (`LD16ri` and a second `INC16` in the loop). The passes
+/// before LSR must leave the exit value behind an LCSSA phi, as the pin's do.
+#[test]
+fn lsr_is_handed_the_exit_value_through_an_lcssa_phi() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}define i16 @f(ptr %s) {{
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ %s, %b0 ], [ %n, %b1 ]
+  %c = load i8, ptr %p
+  %n = getelementptr inbounds i8, ptr %p, i16 1
+  %z = icmp eq i8 %c, 0
+  br i1 %z, label %b2, label %b1
+
+b2:
+  %a = ptrtoint ptr %p to i16
+  %e = ptrtoint ptr %s to i16
+  %d = sub i16 %a, %e
+  ret i16 %d
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let applied = Applied::default();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for pass in pipeline::strength_slot(&applied).into_iter().take_while(|one| one.name() != "lsr") {
+        manager.add_boxed(pass);
+    }
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains(".lcssa = phi"), "{text}");
 }
 
 /// x_strlen at -O2: the end of a scan was read through an exit phi, which
