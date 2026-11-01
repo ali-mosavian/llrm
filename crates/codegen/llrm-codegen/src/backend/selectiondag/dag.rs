@@ -31,6 +31,13 @@ impl SDNodeFlags {
     pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
     pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
     pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
+    /// DEVIATE PAIR1 (no pin counterpart: the pin's pointers are one word
+    /// wide): a `BUILD_PAIR` of a far pointer's offset and selector, and the
+    /// `or` its expansion makes. Exit: none; the pin has no far pointer.
+    pub const PAIR_FAR: SDNodeFlags = SDNodeFlags(8192);
+    /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
+    /// convention returns or passes in two registers (`dx:ax`).
+    pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
 
     pub fn union(
         self,
@@ -1313,7 +1320,7 @@ impl SelectionDAG {
                 &[low, step],
                 SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
             );
-            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
+            return self.get_node_flags(ISD::BuildPair, vt, &[moved, high], SDNodeFlags::PAIR_FAR);
         }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))

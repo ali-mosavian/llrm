@@ -2105,7 +2105,9 @@ impl<'a> TypeLegalizer<'a> {
             let word = self.dag.value_type(offset);
             let delta = self.dag.get_constant(step, word);
             let moved = self.dag.get_node(ISD::Add, word, &[offset, delta]);
-            return self.dag.get_node(ISD::BuildPair, pointer, &[moved, selector]);
+            return self
+                .dag
+                .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
         let offset = self.dag.get_constant(step, pointer);
         self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
@@ -2505,7 +2507,8 @@ impl<'a> TypeLegalizer<'a> {
                 // (a return or an argument in `dx:ax`): the halves joined into
                 // that dword.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 2));
-                let dword = self.dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
+                let dword =
+                    self.dag.get_node_flags(ISD::BuildPair, EVT::I32, &[lo, hi], super::dag::SDNodeFlags::PAIR_FAR);
                 let mut ops = self.dag.node(node).ops.clone();
                 ops[2] = dword;
                 let updated = self.dag.update_node_operands(n, &ops);
@@ -2548,7 +2551,10 @@ impl<'a> TypeLegalizer<'a> {
                 // `ExpandOp_BITCAST` to a same-size integer: the halves
                 // joined.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
-                self.dag.get_node(ISD::BuildPair, self.dag.value_type(node), &[lo, hi])
+                let vt = self.dag.value_type(node);
+                let kind =
+                    if vt == EVT::Simple(MVT::Far) { super::dag::SDNodeFlags::PAIR_FAR } else { Default::default() };
+                self.dag.get_node_flags(ISD::BuildPair, vt, &[lo, hi], kind)
             }
             ISD::SetCC
                 if matches!(self.setcc_code(node), Some(CondCode::SetLt | CondCode::SetGe))
