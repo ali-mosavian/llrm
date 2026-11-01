@@ -1946,6 +1946,65 @@ fn remove_dead(function: &mut MFunction<Class>) {
 }
 
 /// The ca65 name of an allocated register.
+/// The assembly of an instruction whose form depends only on the registers it
+/// reads and writes: `inc`/`dec` (one byte in `x` or `y`, a cell in place, two
+/// instructions in `a`), an ALU op with its second operand, and a compare,
+/// whose opcode follows the register the left side is in. `None` for any other.
+fn form_text(
+    kind: Kind,
+    operands: &[Operand],
+    regs: &[RegId],
+    cmos: bool,
+    slot_name: &dyn Fn(i32) -> String,
+) -> Option<String> {
+    let second = |at: usize| match &operands[at] {
+        Operand::Imm(value) => format!("#{value}"),
+        Operand::Symbol(symbol, _) => symbol.clone(),
+        Operand::Frame(slot) => slot_name(*slot),
+        _ => register_name(regs[at.min(regs.len() - 1)]),
+    };
+    Some(match kind {
+        Kind::Op(step @ ("INC" | "DEC")) => {
+            let (inc, r) = (step == "INC", regs[0]);
+            let (short, long) = if inc { ("in", "adc #1") } else { ("de", "sbc #1") };
+            if r == reg::X || r == reg::Y {
+                format!("  {short}{}\n", register_name(r))
+            } else if r != reg::A {
+                format!("  {short}c {}\n", register_name(r))
+            } else if cmos {
+                format!("  {short}c a\n")
+            } else {
+                format!("  {}\n  {long}\n", if inc { "clc" } else { "sec" })
+            }
+        }
+        Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")) if operands.len() >= 3 => {
+            format!("  {} {}\n", mnemonic.to_lowercase(), second(2))
+        }
+        Kind::Op("CMP") if operands.len() == 3 => {
+            let compare = match regs[1] {
+                r if r == reg::X => "cpx",
+                r if r == reg::Y => "cpy",
+                _ => "cmp",
+            };
+            format!("  {compare} {}\n", second(2))
+        }
+        _ => return None,
+    })
+}
+
+/// What `kind` costs on `cpu` with `operands` in `regs`, from the timing
+/// tables: the data a hint or a join weighs (an `inc` is 1 byte and 2 clocks in
+/// `x`, 2 and 5 in a cell, 3 and 4 in `a`).
+pub fn form_cost(
+    cpu: Cpu,
+    kind: Kind,
+    operands: &[Operand],
+    regs: &[RegId],
+) -> Option<crate::timing::Estimate> {
+    let text = form_text(kind, operands, regs, cpu == Cpu::W65c02, &|slot| format!("s_{slot}"))?;
+    crate::timing::estimate(cpu, &text).ok()
+}
+
 fn register_name(register: RegId) -> String {
     if register == reg::A {
         "a".into()
@@ -2666,29 +2725,13 @@ fn emit_with<const STACK: bool>(
                         }
                     }
                 }
-                (Kind::Op(step @ ("INC" | "DEC")), _) => {
-                    let (inc, r) = (step == "INC", regs[0]);
-                    let (short, long) = if inc { ("in", "adc #1") } else { ("de", "sbc #1") };
-                    if r == reg::X || r == reg::Y {
-                        writeln!(out, "  {short}{}", register_name(r)).unwrap();
-                    } else if r != reg::A {
-                        writeln!(out, "  {short}c {}", register_name(r)).unwrap();
-                    } else if cmos {
-                        writeln!(out, "  {short}c a").unwrap();
-                    } else {
-                        writeln!(out, "  {}\n  {long}", if inc { "clc" } else { "sec" }).unwrap();
-                    }
+                (Kind::Op("INC" | "DEC"), _) => {
+                    out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),
-                (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second, ..]) => {
-                    let text = match second {
-                        Operand::Imm(value) => format!("#{value}"),
-                        Operand::Symbol(symbol, _) => symbol.clone(),
-                        Operand::Frame(slot) => slot_name(*slot),
-                        _ => register_name(regs[2]),
-                    };
-                    writeln!(out, "  {} {text}", mnemonic.to_lowercase()).unwrap();
+                (Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR"), [_, _, _, ..]) => {
+                    out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op("RTS"), _) => {
                     // on the stack the frame is released last: the result
@@ -2749,18 +2792,8 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 // the register the left side is in decides the opcode
-                (Kind::Op("CMP"), [_, _, second]) => {
-                    let text = match second {
-                        Operand::Imm(value) => format!("#{value}"),
-                        Operand::Frame(slot) => slot_name(*slot),
-                        _ => register_name(regs[2]),
-                    };
-                    let compare = match regs[1] {
-                        r if r == reg::X => "cpx",
-                        r if r == reg::Y => "cpy",
-                        _ => "cmp",
-                    };
-                    writeln!(out, "  {compare} {text}").unwrap();
+                (Kind::Op("CMP"), [_, _, _]) => {
+                    out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
                     writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();

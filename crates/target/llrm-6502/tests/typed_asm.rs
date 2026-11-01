@@ -53,3 +53,42 @@ fn an_instruction_is_as_long_as_its_addressing_form() {
         assert_eq!(bytes(line), want, "{line}");
     }
 }
+
+/// The cost of a form comes from the timing tables, not from a list of
+/// opcodes: a step is 1 byte and 2 clocks in `x` or `y`, 2 and 5 on a cell, 3
+/// and 4 in `a` (`clc; adc #1`; one byte less on the 65C02's `inc a`), and a
+/// compare costs the same in any of the three registers.
+#[test]
+fn a_form_is_priced_from_the_timing_tables_by_its_register() {
+    use llrm_6502::alloc::form_cost;
+    use llrm_6502::dagisel::hooks::Cpu;
+    use llrm_6502::reg;
+    use llrm_spike_mf::{Kind, Operand, Reg};
+
+    let cell = llrm_lir::registers::RegId::from_raw(reg::RC0.index() as u8 + 3);
+    let step = |cpu, kind, register| {
+        let use_ = Operand::Use(Reg::Phys(register));
+        let priced = form_cost(cpu, kind, &[Operand::Def(Reg::Phys(register)), use_], &[register, register]).unwrap();
+        (priced.bytes, priced.cycles)
+    };
+    for kind in [Kind::Op("INC"), Kind::Op("DEC")] {
+        assert_eq!(step(Cpu::Mos6502, kind, reg::X), (1, 2));
+        assert_eq!(step(Cpu::Mos6502, kind, reg::Y), (1, 2));
+        assert_eq!(step(Cpu::Mos6502, kind, cell), (2, 5));
+        assert_eq!(step(Cpu::Mos6502, kind, reg::A), (3, 4));
+        assert_eq!(step(Cpu::W65c02, kind, reg::A), (1, 2));
+    }
+    let compare = |register| {
+        let flags = Operand::Def(Reg::Phys(reg::FLAGS));
+        let priced = form_cost(
+            Cpu::Mos6502,
+            Kind::Op("CMP"),
+            &[flags, Operand::Use(Reg::Phys(register)), Operand::Imm(7)],
+            &[reg::FLAGS, register],
+        )
+        .unwrap();
+        (priced.bytes, priced.cycles)
+    };
+    assert_eq!(compare(reg::A), compare(reg::X));
+    assert_eq!(compare(reg::A), compare(reg::Y));
+}
