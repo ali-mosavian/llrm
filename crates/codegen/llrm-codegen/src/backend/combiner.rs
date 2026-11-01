@@ -41,11 +41,11 @@
 //! not X86's. Optimizing for size does not take the pin's shortcut.
 //!
 //! DEVIATE MC1 (owner funcattrs-port, exit 2026-11-13): the trace is the
-//! block alone (`MachineTraceMetrics` `TS_MinInstrCount` also follows the
-//! predecessors and the physical registers: the stack pointer around calls
-//! orders two calls there, and here nothing does); a value made outside the
-//! block has depth 0 and the latency of its definition. Exit: a trace analysis
-//! on LIR.
+//! block alone. `MachineTraceMetrics` ([updatePhysDepsDownwards](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineTraceMetrics.cpp#L745))
+//! also follows predecessors and every physical register; here only the stack
+//! pointer around calls does, as a chain of `CALL_FRAME_LATENCY` per call, so
+//! two calls arrive in order (still O(n)). A value made outside the block has
+//! depth 0 and the latency of its definition. Exit: a trace analysis on LIR.
 //!
 //! DEVIATE MC2 (owner funcattrs-port, exit 2026-11-13): the latency table is
 //! the default one written above, read from the operands (a memory source is a
@@ -368,6 +368,8 @@ fn combine_block(
     let mut here: HashSet<u32> = block.phis.iter().map(|phi| phi.result).collect();
     // Depth of the instruction defining each value of the block made so far.
     let mut depth: HashMap<u32, u32> = HashMap::default();
+    // Where the stack pointer's last call-frame definition is ready.
+    let mut frame = 0u32;
     let mut changed = false;
     let mut at = 0;
     while at < insns.len() {
@@ -407,7 +409,11 @@ fn combine_block(
             None
         };
         let Some((index, made, new_value)) = found else {
-            let new_depth = depth_of(facts, &depth, &insns[at].uses);
+            let mut new_depth = depth_of(facts, &depth, &insns[at].uses);
+            if insns[at].call.is_some() {
+                new_depth = new_depth.max(frame);
+                frame = new_depth + CALL_FRAME_LATENCY;
+            }
             for &value in &insns[at].defines {
                 depth.insert(value, new_depth);
                 here.insert(value);
@@ -433,6 +439,10 @@ fn combine_block(
     }
     changed.then_some(insns)
 }
+
+/// Frame setup, the call and frame teardown: each reads and writes the stack
+/// pointer, one cycle apiece.
+const CALL_FRAME_LATENCY: u32 = 3;
 
 /// `areOpcodesEqualOrInverse` and the same width: the same instruction form.
 fn same_operation(
@@ -668,6 +678,38 @@ mod tests {
         insns.push(binary("xor", 13, 10, 4));
         let shared = with_leaves(insns);
         assert!(result(&combined(shared.clone())) == result(&shared), "left alone");
+    }
+
+    /// `value := call`: reads the stack pointer like every call.
+    fn call(value: u32) -> Arc<Insn> {
+        let mut one = Arc::try_unwrap(copy(value, 1)).ok().expect("fresh");
+        one.call = Some(Arc::new(crate::model::lir::CallMemory {
+            effects: llrm_mir::memory::Effects { reads: true, writes: true },
+            private: vec![],
+            disturbs: Default::default(),
+        }));
+        Arc::new(one)
+    }
+
+    /// `(t + c) + d` with `c`, `d` the results of two calls in a row and `t`
+    /// ready before the first: with calls ordered through the stack pointer
+    /// `d` arrives last, so the root already waits on the right operand. A
+    /// combiner that read both results as ready at once rebuilt it as
+    /// `(d + c) + t`, which holds `t` live across the second call (qlight -Os:
+    /// a second frame slot, +1 instruction, 534 clk).
+    #[test]
+    fn a_sum_with_the_second_call_result_last_is_left() {
+        let before = body(vec![
+            constant(1),
+            constant(2),
+            binary("add", 10, 1, 2),
+            call(11),
+            call(12),
+            binary("add", 13, 10, 11),
+            binary("add", 14, 13, 12),
+            copy(50, 14),
+        ]);
+        assert!(result(&combined(before.clone())) == result(&before), "left alone");
     }
 
     /// `sub` is no associative and commutative operation.
