@@ -390,6 +390,19 @@ impl Lftr<'_> {
         matches!(self.se.node(inc_scev).kind, Kind::AddRec(..))
     }
 
+    /// Whether `value` is an add recurrence of step one.
+    fn has_unit_step(
+        &mut self,
+        value: Operand,
+    ) -> bool {
+        let cx = self.env.cx(&*self.context, &*self.function);
+        let s = self.se.get_scev(&cx, value);
+        matches!(
+            self.se.node(s).kind.clone(),
+            Kind::AddRec(ops, _) if self.se.as_constant(ops[1].scev).is_some_and(|step| step.is_one())
+        )
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L871
     /// `hasConcreteDefImpl`: every operand reached within six levels is a
     /// constant that is not `undef`, through instructions that read no memory
@@ -497,6 +510,12 @@ impl Lftr<'_> {
                 continue;
             }
             let phi_value = Operand::Value(self.function.instruction(phi).result.expect("a phi value"));
+            // DEVIATE LFTR1 only where the limit is a constant: a stride other
+            // than one whose limit takes code (shellsort's `at / gap` trips)
+            // trades a compare for a counter and its limit.
+            if self.se.as_constant(be_count).is_none() && !self.has_unit_step(phi_value) {
+                continue;
+            }
             let (ar, phi_width, init) = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 let ar = self.se.get_scev(&cx, phi_value);

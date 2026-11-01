@@ -135,3 +135,13 @@ exit:
     assert!(changed, "{after}");
     assert!(after.contains("%exitcond = icmp ne i16 %inc, 0"), "{after}");
 }
+
+/// shellsort's inner loop (`at -= gap` while `at >= gap`) trips `at / gap`
+/// times: its limit takes a division. A stride of two over a bound only known
+/// at run time kept `cmp; jae` before this gate; with it the counter and the
+/// limit cost +26..44 instructions on three targets.
+#[test]
+fn test_a_stride_whose_limit_needs_code_is_left_alone() {
+    let (changed, after) = replaced(&counted("icmp ult i16 %inc, %n", 2).replace("add i16 %i,", "add nuw i16 %i,"));
+    assert!(!changed, "{after}");
+}
