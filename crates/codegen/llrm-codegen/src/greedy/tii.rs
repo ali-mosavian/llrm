@@ -133,6 +133,8 @@ pub trait TargetInstrInfo {
 pub struct X86InstrInfo<'a> {
     pub bits: u32,
     pub classes: &'a RegisterClasses,
+    /// The module is BASIC's (`Target::basic`).
+    pub basic_semantics: bool,
 }
 
 impl TargetInstrInfo for X86InstrInfo<'_> {
@@ -177,7 +179,9 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         body: &crate::model::lir::LirBody,
     ) -> BTreeSet<u32> {
         let mut loads = super::remat::argument_loads(body);
-        loads.extend(x87_stable_loads(body));
+        if !self.basic_semantics {
+            loads.extend(x87_stable_loads(body));
+        }
         loads
     }
 
@@ -519,17 +523,14 @@ pub(crate) fn is_encodable(
 /// spills the rest: nbody_single -O3 m32 spills 9 loaded globals (clang 50017
 /// frame stores against gcc's 17011).
 ///
-/// Left out where a `wait` is present: a BASIC module wraps its conversions in
-/// `wait` so a handler sees the fault in the statement that raised it, and
-/// reading the cell later moves where a signalling NaN raises.
+/// Left out of a BASIC module (`basic_semantics`): its handler sees a fault in
+/// the statement that raised it, and reading the cell later moves where a
+/// signalling NaN raises.
 /// Complexity: one scan of the body (`_stable_loads_through`).
 fn x87_stable_loads(body: &crate::model::lir::LirBody) -> BTreeSet<u32> {
     let mut loads = BTreeSet::new();
     for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
         let Some(what) = one.what.as_ref() else { continue };
-        if what.op == Operation::Nothing && what.name.as_deref() == Some("wait") {
-            return BTreeSet::new();
-        }
         if what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld") {
             loads.extend(one.defines.iter().copied());
         }
@@ -619,7 +620,7 @@ mod tests {
     /// lives is a load the allocator makes again.
     #[test]
     fn test_an_x87_load_of_a_global_nothing_writes_is_made_again() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16() };
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -633,7 +634,7 @@ mod tests {
     /// value: the load stays.
     #[test]
     fn test_an_x87_load_of_a_global_written_while_it_lives_is_kept() {
-        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16() };
+        let tii = X86InstrInfo { bits: 32, classes: &RegisterClasses::m16(), basic_semantics: false };
         let body = x87_body(vec![
             fld(0, 1, global(0, 0)),
             fld(1, 2, global(1, 0)),
@@ -643,19 +644,14 @@ mod tests {
         assert_eq!(tii.argument_loads(&body), BTreeSet::from([2]));
     }
 
-    /// A BASIC module's `wait` marks bodies whose fault order is observed:
-    /// reading the cell later would move where a signalling NaN raises.
+    /// A BASIC module observes fault order: reading the cell later would move
+    /// where a signalling NaN raises. Without the flag the same body re-reads.
     #[test]
-    fn test_a_body_with_a_wait_keeps_its_x87_loads() {
-        let tii = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() };
-        let wait = Arc::new(Insn::new(
-            1,
-            None,
-            Some(Semantics { name: Some("wait".into()), ..Semantics::new(Operation::Nothing) }),
-            vec![],
-            vec![],
-        ));
-        let body = x87_body(vec![fld(0, 1, global(0, 0)), wait, fstp(2, 1, frame(-4))]);
-        assert!(tii.argument_loads(&body).is_empty());
+    fn test_a_basic_module_keeps_its_x87_loads() {
+        let body = x87_body(vec![fld(0, 1, global(0, 0)), fstp(2, 1, frame(-4))]);
+        let plain = X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false };
+        let basic = X86InstrInfo { basic_semantics: true, ..plain };
+        assert_eq!(plain.argument_loads(&body), BTreeSet::from([1]));
+        assert!(basic.argument_loads(&body).is_empty());
     }
 }
