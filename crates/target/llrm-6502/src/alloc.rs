@@ -2888,7 +2888,9 @@ fn allocate_greedy<T: Target<Class = Class>>(
     if decided.spill_failed || decided.report.stats.failed > 0 {
         return Err(format!("{}: greedy could not allocate", function.name));
     }
-    let back = llrm_spike_mf::tolir::from_lir::<T>(function, &converted, &decided, regs)?;
+    let mut back = llrm_spike_mf::tolir::from_lir::<T>(function, &converted, &decided, regs)?;
+    // `StackSlotColoring`: greedy gave each spilled value a slot of its own
+    llrm_spike_mf::spill::share_slots(&mut back.function, &mut back.slots);
     *function = back.function;
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {

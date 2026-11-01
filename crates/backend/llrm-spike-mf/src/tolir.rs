@@ -154,6 +154,7 @@ pub fn to_lir<T: Target>(
             made.pinned(register);
         }
     }
+    let mut foldable: Vec<Option<(&'static str, usize)>> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
@@ -164,6 +165,7 @@ pub fn to_lir<T: Target>(
             let inst = &block.insts[position];
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
+            foldable.push(foldable_source::<T>(inst));
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
             // instruction that reads its flags are one instruction to it.
@@ -180,6 +182,7 @@ pub fn to_lir<T: Target>(
             match reader {
                 Some(next) if made.independent(inst, next) => {
                     made.origin.push((at, position + 1));
+                    foldable.push(None);
                     insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
                     position += 2;
                 }
@@ -226,7 +229,7 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
-        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, marker: PhantomData },
+        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, marker: PhantomData },
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
@@ -489,11 +492,35 @@ impl<T: Target> Made<'_, T> {
     }
 }
 
+/// The name of `inst` and the index, among the sources the converter gives it,
+/// of the read the target can take from a frame slot.
+fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
+    let Kind::Op(name) = inst.kind else { return None };
+    let mut source = 0;
+    for operand in &inst.operands {
+        match operand {
+            Operand::Use(Reg::Virt(v)) => {
+                if T::fold_spill(inst, Reg::Virt(*v), 0).is_some() {
+                    return Some((name, source));
+                }
+                source += 1;
+            }
+            Operand::Use(Reg::Phys(r)) if !T::reserved(T::root(*r)) => source += 1,
+            Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => source += 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// What greedy asks of the spike target's instructions, answered from the
 /// instruction itself: its name and operands, and the target's own spill forms.
 pub struct SpikeInstrInfo<T: Target> {
     classes: Vec<T::Class>,
     registers: Regs,
+    /// For the instruction numbered `at / 2`: its name and which of its
+    /// sources the target can read from memory (`Target::fold_spill`).
+    foldable: Vec<Option<(&'static str, usize)>>,
     marker: PhantomData<T>,
 }
 
@@ -629,15 +656,31 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         BTreeSet::new()
     }
 
-    /// DEVIATE 3: no memory operand folds; `Target::fold_spill` is read by the
-    /// spike allocator only. Exit: D-6502, which writes them as this hook.
+    /// The read the target takes from memory (`Target::fold_spill`) becomes a
+    /// memory source; `from_lir` writes it as the target's own form.
     fn fold_memory_operand(
         &self,
-        _one: &Arc<Insn>,
-        _reg: u32,
-        _cell: &Mem,
+        one: &Arc<Insn>,
+        reg: u32,
+        cell: &Mem,
     ) -> Option<Arc<Insn>> {
-        None
+        let what = one.what.as_ref()?;
+        let (name, at) = self.foldable.get((one.at / 2) as usize).copied().flatten()?;
+        if what.name.as_deref() != Some(name) || one.group.is_some() {
+            return None;
+        }
+        let read = |loc: &Loc| matches!(loc, Loc::Held(held) if held.value == reg);
+        let named = what.dests.iter().chain(&what.sources).filter(|loc| read(loc)).count();
+        let Some(Loc::Held(held)) = what.sources.get(at).filter(|loc| read(loc)) else { return None };
+        if named != 1 || held.width as u32 > cell.width {
+            return None;
+        }
+        let mut sources = what.sources.clone();
+        sources[at] = Loc::Mem(Mem { width: held.width as u32, ..cell.clone() });
+        let mut out = (**one).clone();
+        out.what = Some(Semantics { sources, ..what.clone() });
+        out.uses.retain(|value| *value != reg);
+        Some(Arc::new(out))
     }
 
     fn fold_copy_member(
@@ -873,6 +916,7 @@ fn substitute<'a, T: Target>(
     dests: &mut impl Iterator<Item = &'a Loc>,
     sources: &mut impl Iterator<Item = &'a Loc>,
     number: &mut dyn FnMut(u32) -> Reg,
+    folds: &mut Vec<(Reg, i32)>,
 ) -> Result<Inst, String> {
     let mut made = source.clone();
     for operand in &mut made.operands {
@@ -889,6 +933,13 @@ fn substitute<'a, T: Target>(
             }
             Operand::Use(Reg::Virt(_)) => match sources.next() {
                 Some(Loc::Held(held)) => Operand::Use(number(held.value)),
+                // a read taken from its frame slot: a register stands in for
+                // it until the target writes the folded form
+                Some(Loc::Mem(cell)) => {
+                    let stand_in = number(u32::MAX - folds.len() as u32);
+                    folds.push((stand_in, slot_of(cell)));
+                    Operand::Use(stand_in)
+                }
                 _ => return Err("a use that is not a register".into()),
             },
             Operand::Use(Reg::Phys(r)) => {
@@ -1013,9 +1064,17 @@ pub fn from_lir<T: Target>(
                 for ordinal in [(insn.at / 2) as usize, (insn.at / 2) as usize + 1] {
                     let (from, inst) = *converted.origin.get(ordinal).ok_or("a bundle from nowhere")?;
                     let source = &original.blocks[from].insts[inst];
-                    insts.push(substitute::<T>(source, &mut dests, &mut sources, &mut |value| {
-                        number(value, &mut classes)
-                    })?);
+                    let mut folds = Vec::new();
+                    insts.push(substitute::<T>(
+                        source,
+                        &mut dests,
+                        &mut sources,
+                        &mut |value| number(value, &mut classes),
+                        &mut folds,
+                    )?);
+                    if !folds.is_empty() {
+                        return Err("a bundle with a memory source".into());
+                    }
                 }
                 continue;
             }
@@ -1049,7 +1108,18 @@ pub fn from_lir<T: Target>(
                 continue;
             }
             let (mut dests, mut sources) = (what.dests.iter(), what.sources.iter());
-            insts.push(substitute::<T>(source, &mut dests, &mut sources, &mut |value| number(value, &mut classes))?);
+            let mut folds = Vec::new();
+            let mut made = substitute::<T>(
+                source,
+                &mut dests,
+                &mut sources,
+                &mut |value| number(value, &mut classes),
+                &mut folds,
+            )?;
+            for (stand_in, slot) in folds {
+                made = T::fold_spill(&made, stand_in, slot).ok_or("a memory source the target has no form for")?;
+            }
+            insts.push(made);
         }
         blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });
     }
