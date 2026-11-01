@@ -131,3 +131,17 @@ fn inserting_a_byte_into_a_word_is_a_bitfield_move() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("bfm w0, w1, #0, #7"), "{asm}");
 }
+
+/// The DAG path leaves a copy per loop-carried value and one per float zero
+/// (`sub w9, w0, #1; orr x0, xzr, x9`; `fmov d16, xzr; fmov d0, d16`) where the
+/// hand selector writes in place: the arm64 linear scan does not coalesce, and
+/// the shared PHIElimination/RegisterCoalescer do not run on arm64 yet. +6.7%
+/// static instructions over the corpus at -O2.
+#[test]
+#[ignore = "needs the shared RegisterCoalescer on arm64 (spike step 6)"]
+fn the_dag_path_leaves_no_register_copy_in_a_float_loop() {
+    let asm = full(include_str!("data/float_loop_copies.ll")).unwrap_or_else(|why| panic!("{why}"));
+    let copies =
+        asm.lines().filter(|l| l.trim().starts_with("orr x0, xzr, x") || l.trim().starts_with("fmov d0, d")).count();
+    assert_eq!(copies, 0, "{asm}");
+}
