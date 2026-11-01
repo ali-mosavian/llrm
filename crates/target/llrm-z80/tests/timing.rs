@@ -1,7 +1,7 @@
 //! The T-state table: a few rows worked out by hand from the manual's machine
 //! cycles, and its shape.
 
-use llrm_z80::timing::{cost, forms};
+use llrm_z80::timing::{cost, cost_z180, forms, forms_z180};
 
 /// A register load is one M1 cycle; `(hl)` adds a 3 T read; `(ix+d)` adds the
 /// prefix, the displacement and 5 T of address arithmetic.
@@ -34,8 +34,12 @@ fn a_word_add_is_cheaper_than_its_bytes() {
     assert!(word.bytes < bytes.iter().map(|c| c.bytes).sum::<u32>());
 }
 
+/// `mlt bc` was a row of the Z80 table, priced from memory, and `cost` returned it for a plain Z80. It is the
+/// Z180 set's, with its own source note, until the Z180 manual is fetched.
 #[test]
-fn only_the_z180_has_mlt() {
-    assert_eq!(cost("mlt bc").map(|c| c.cpu), Some("z180"));
-    assert!(forms().filter(|(form, _)| *form != "mlt bc").all(|(_, c)| c.cpu == "z80"));
+fn the_z80_table_has_no_z180_form() {
+    assert_eq!(cost("mlt bc"), None);
+    assert!(forms().all(|(_, c)| c.cpu == "z80"));
+    assert_eq!(cost_z180("mlt bc").map(|c| (c.bytes, c.taken, c.cpu)), Some((2, 17, "z180")));
+    assert!(forms_z180().all(|(_, c)| c.cpu == "z180"));
 }

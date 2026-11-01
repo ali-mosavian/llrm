@@ -2,8 +2,8 @@
 //!
 //! The CSV is transcribed from Zilog's UM0080 instruction tables and checked
 //! cell by cell against two assemblers (bytes) and `ucsim_z80` (T-states) by
-//! `tests/timing/probe.py`; the four cells where the simulator is the
-//! instrument in error are named there. No number lives in code.
+//! `tests/timing/probe.py`; the cells where the simulator is the
+//! instrument in error are named there; the Z180's forms are in `timing/z180.csv`, unsourced. No number lives in code.
 //!
 //! DEVIATE: no wait states and no memory contention (Spectrum, MSX). Reason:
 //! they belong to the machine, not the CPU. Exit: a per-machine surcharge when
@@ -25,13 +25,12 @@ pub struct Cost {
     pub cpu: &'static str,
 }
 
-static TABLE: LazyLock<HashMap<&'static str, Cost>> = LazyLock::new(|| {
-    include_str!("timing/z80.csv")
-        .lines()
+fn parse(text: &'static str) -> HashMap<&'static str, Cost> {
+    text.lines()
         .filter(|line| !line.starts_with('#') && !line.is_empty())
         .map(|line| {
             let cells: Vec<&'static str> = line.split(',').collect();
-            let number = |cell: &str| cell.parse::<u32>().unwrap_or_else(|_| panic!("z80.csv: `{cell}` in `{line}`"));
+            let number = |cell: &str| cell.parse::<u32>().unwrap_or_else(|_| panic!("timing csv: `{cell}` in `{line}`"));
             let cost = Cost {
                 bytes: number(cells[1]),
                 taken: number(cells[2]),
@@ -41,15 +40,29 @@ static TABLE: LazyLock<HashMap<&'static str, Cost>> = LazyLock::new(|| {
             (cells[0], cost)
         })
         .collect()
-});
+}
 
-/// The cost of `form`, written as in the CSV (`ld b;(hl)`: `;` stands for the
-/// operand comma).
+static TABLE: LazyLock<HashMap<&'static str, Cost>> = LazyLock::new(|| parse(include_str!("timing/z80.csv")));
+
+/// The forms the Z180 adds, from their own file and source note.
+static TABLE_Z180: LazyLock<HashMap<&'static str, Cost>> = LazyLock::new(|| parse(include_str!("timing/z180.csv")));
+
+/// The cost of `form` on a plain Z80, written as in the CSV (`ld b;(hl)`: `;` stands for the operand comma).
 pub fn cost(form: &str) -> Option<Cost> {
     TABLE.get(form).copied()
 }
 
-/// Every form in the table.
+/// Every form of the Z80 table.
 pub fn forms() -> impl Iterator<Item = (&'static str, Cost)> {
     TABLE.iter().map(|(form, cost)| (*form, *cost))
+}
+
+/// The cost of a form only the Z180 (and later) has.
+pub fn cost_z180(form: &str) -> Option<Cost> {
+    TABLE_Z180.get(form).copied()
+}
+
+/// Every form the Z180 adds.
+pub fn forms_z180() -> impl Iterator<Item = (&'static str, Cost)> {
+    TABLE_Z180.iter().map(|(form, cost)| (*form, *cost))
 }

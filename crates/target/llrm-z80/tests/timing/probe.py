@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check src/timing/z80.csv against two oracles, instruction by instruction.
+"""Check src/timing/z80.csv and z180.csv against two oracles, instruction by instruction.
 
 Bytes: sdasz80 (SDCC 4.5.0) and z80-unknown-coff-as (binutils 2.43.50) must agree with the CSV.
 T-states: ucsim_z80 (sz80 0.8.15) runs prefix + instruction + HALT and prefix + HALT; the difference is the
@@ -10,7 +10,7 @@ Prints one line per disagreement and exits 1 if there is any. The CSV's first co
 import csv, os, re, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CSV = os.path.join(HERE, "..", "..", "src", "timing", "z80.csv")
+CSVS = [os.path.join(HERE, "..", "..", "src", "timing", f) for f in ("z80.csv", "z180.csv")]
 CODE = {"_CODE"}
 
 
@@ -123,7 +123,7 @@ def main():
     print("# oracles:", run(["sdcc", "--version"], ".").stdout.split("TD-")[-1].strip()[:30], "|", ver[0], "|",
           run(["ucsim_z80", "-v"], ".").stdout.strip())
     d = tempfile.mkdtemp(prefix="z80timing-")
-    rows = [r for r in csv.reader(l for l in open(CSV) if not l.startswith("#"))]
+    rows = [r for f in CSVS for r in csv.reader(l for l in open(f) if not l.startswith("#"))]
     for form, nbytes, taken, not_taken, cpu in rows:
         form = form.replace(";", ",") if False else form
         nbytes, taken = int(nbytes), int(taken)

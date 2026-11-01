@@ -4,7 +4,7 @@
 # 2026-11-01, sha256 e3c83da5a5d8e372364c20fa53665e6fbb165ec6ac38c8c1eebc359603447b5e (kept in ~/scratch/refs, not in
 # the repo). Checked by tests/timing/manual_check.py (90 forms against the manual's rows), and by tests/timing/probe.py
 # (bytes against two assemblers, T-states against ucsim_z80, which is wrong on inc/dec (hl) and bit n,(hl)).
-# mlt is a Z180 instruction, not in this manual: its row is from memory of the Z180 manual (UM0050) and unarbitrated.
+# Z180-only forms are in z180.csv.
 # t_not_taken is blank for an instruction with one timing. ldir/cpir: t_taken is a repeating pass, t_not_taken the last.
 ld b;c,1,4,,z80
 ld b;n,2,7,,z80
@@ -94,6 +94,5 @@ ret,1,10,,z80
 ret nz,1,11,5,z80
 ldir,2,21,16,z80
 cpir,2,21,16,z80
-mlt bc,2,17,,z180
 inc hl,1,6,,z80
 jr nc;e,2,12,7,z80
