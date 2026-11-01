@@ -1148,3 +1148,27 @@ define void @f() {
         "each store is an immediate's: {stores:?}"
     );
 }
+
+const LONG_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i32 @f() {
+entry:
+  %r = call i32 @g()
+  %s = add i32 %r, 1
+  ret i32 %s
+}
+";
+
+/// A LONG returned in `dx:ax` was packed as `movzx`, `shl`, `or`, a byte longer
+/// per call than the `shl`, `shrd` pair (+2 B at every call of a LONG function:
+/// parity/branch, qlight, qmove, loop).
+#[test]
+fn a_long_returned_in_dx_ax_is_packed_by_a_shrd() {
+    let module = llrm_mir::parse::module(m16_ir(LONG_RESULT)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    let count = |n: &str| names.iter().filter(|x| x.as_str() == n).count();
+    assert_eq!((count("shrd"), count("movzx"), count("or")), (1, 0, 0), "{names:?}");
+}

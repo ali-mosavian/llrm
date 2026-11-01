@@ -418,8 +418,24 @@ pub enum FpConvert {
     Bits { to_fp: bool },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameMark {
+    PrologueEnd,
+    EpilogueBegin,
+}
+
+impl Inst {
+    /// A pseudo-instruction: it encodes to no word.
+    pub fn is_directive(&self) -> bool {
+        matches!(self, Inst::Cfi(_) | Inst::Mark(_))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Inst {
+    /// Where the prologue ends or an epilogue begins: no bytes, it tells the
+    /// line table (`prologue_end`, `epilogue_begin`).
+    Mark(FrameMark),
     /// A `.cfi_*` directive (`CFI_INSTRUCTION`): no bytes, it states what the
     /// instructions before it did to the frame.
     Cfi(llrm_object::assembler::Cfi),

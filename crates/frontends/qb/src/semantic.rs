@@ -301,6 +301,9 @@ struct Function {
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
+    // The POKE pointers among them whose segment is a literal: memory no
+    // variable of the program lives in (`Region::Absolute`).
+    unowned: BTreeSet<u32>,
 }
 
 struct Compiler {
@@ -1957,6 +1960,7 @@ impl Compiler {
             no_alias: BTreeSet::new(),
             quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
+            unowned: BTreeSet::new(),
         });
     }
 
@@ -4105,7 +4109,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -4150,7 +4154,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -5954,6 +5958,18 @@ impl Compiler {
         let pointer = self.value(pointer_type);
         self.emit("address", vec![pointer], vec![Operand::Place(place)]);
         Ok(pointer)
+    }
+
+    /// The runtime entry that reads a string item into a string of `width`
+    /// bytes (0: a variable one). The Microsoft runtimes' B$RDSD takes
+    /// both; the llrm C runtime keeps B$RDSD for the variable string, so a
+    /// program without a fixed-string READ links nothing more, and reads a
+    /// fixed one with B$RDFS.
+    fn read_string_entry(
+        &self,
+        width: usize,
+    ) -> &'static str {
+        if width > 0 && self.runtime == "llrm" { "B$RDFS" } else { "B$RDSD" }
     }
 
     fn string_width(
@@ -11535,6 +11551,18 @@ fn region(
     }
     if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
         return Some(Region::Descriptor);
+    }
+    // A literal segment is memory the program owns nothing in; a reference
+    // parameter points at a variable (a near pointer into DS) or an element of
+    // an array of the program, so a routine that writes such memory states the
+    // two apart.
+    if let [Operand::Indirect { base, .. }, ..] = instruction.operands.as_slice() {
+        if function.unowned.contains(base) {
+            return Some(Region::Absolute);
+        }
+        if !function.unowned.is_empty() && function.promises.iter().any(|&(value, _)| value == *base) {
+            return Some(Region::Referent);
+        }
     }
     instruction
         .operands

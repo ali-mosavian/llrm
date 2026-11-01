@@ -124,6 +124,7 @@ fn mark(
             }
         }
     }
+    function.unowned.extend(marked.iter().copied());
     function.absolute.extend(marked.into_iter().map(|base| (base, segment)));
 }
 

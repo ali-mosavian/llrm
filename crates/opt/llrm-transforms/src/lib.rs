@@ -293,6 +293,7 @@ pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
+pub mod maskscale;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;

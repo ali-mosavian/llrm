@@ -19,6 +19,7 @@ fn main() {
 
 fn run() -> i32 {
     let mut assembly = false;
+    let mut debug = false;
     let mut level = driver::Level::O2;
     let mut output = None;
     let mut input = None;
@@ -26,6 +27,7 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
+            "-g" => debug = true,
             "-debug-only=inline-cost" => {
                 llrm_env::preset("LLRM_INLINE_REMARKS");
                 llrm_env::preset("LLRM_EXP_INLINETRACE");
@@ -47,7 +49,7 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input else {
-        eprintln!("usage: llrm-arm64-llc [-S] [-O0|-O1|-O2|-O3|-Os|-Oz] [--no-opt] [-o OUT] FILE.ll");
+        eprintln!("usage: llrm-arm64-llc [-S] [-g] [-O0|-O1|-O2|-O3|-Os|-Oz] [--no-opt] [-o OUT] FILE.ll");
         return 2;
     };
     let text = match std::fs::read_to_string(&input) {
@@ -66,7 +68,7 @@ fn run() -> i32 {
     let result = if assembly {
         driver::assembly(&text, platform, level).map(String::into_bytes)
     } else {
-        driver::object_file(&text, platform, &name, level)
+        driver::object_file_with(&text, platform, &name, level, debug)
     };
     match result {
         Ok(bytes) => {

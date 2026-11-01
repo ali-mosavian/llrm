@@ -34,9 +34,57 @@ impl Mos {
     }
 }
 
+/// The 6502 writes assembly for ca65, not objects: every format is
+/// unsupported.
+struct MosObjects;
+
+impl llrm_object::ObjectTarget for MosObjects {
+    fn write_object(
+        &self,
+        format: &str,
+        _object: &llrm_object::Object,
+    ) -> Result<Vec<u8>, llrm_object::Unsupported> {
+        Err(llrm_object::Unsupported(format!("the 6502 writes assembly, not a {format} object")))
+    }
+
+    fn asm_info(
+        &self,
+        _format: &str,
+    ) -> Option<llrm_object::AsmInfo> {
+        None
+    }
+}
+
+impl llrm_debug::DebugObjectTarget for MosObjects {
+    fn write_described(
+        &self,
+        format: &str,
+        _object: &llrm_object::Object,
+        _debug: Option<&llrm_debug::Info>,
+    ) -> Result<Vec<u8>, llrm_object::Unsupported> {
+        Err(llrm_object::Unsupported(format!("the 6502 writes assembly, not a {format} object")))
+    }
+
+    fn debug_caps(
+        &self,
+        _format: &str,
+        _asked: llrm_debug::Format,
+    ) -> llrm_debug::DebugCaps {
+        llrm_debug::DebugCaps::default()
+    }
+}
+
 impl Target for Mos {
     fn name(&self) -> &'static str {
         "mos"
+    }
+
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &MosObjects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_debug::DebugTarget { segmented: false, ..llrm_debug::DebugTarget::of(16) }
     }
 
     fn machine(&self) -> Machine {

@@ -55,14 +55,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 use super::greedy::{SpillContext, Spiller};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
 use super::matrix::LiveRegMatrix;
-use super::tii::fold_memory_operand;
-use crate::backend::classes::RegisterClasses;
-use crate::backend::frame::{Frame, SlotKey};
+use super::tii::TargetInstrInfo;
+use crate::backend::frame::FrameInfo;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::{LiveRange, Vn};
 use crate::liveness::slotindex::InstrKey;
@@ -152,28 +151,11 @@ pub fn remat_shape(one: &Insn) -> bool {
         })
 }
 
-/// The register a plain `mov` copies, when `one` is nothing else.
-fn plain_copy_source(one: &Insn) -> Option<u32> {
-    let w = one.what.as_ref()?;
-    match (w.op, w.name.as_deref(), w.dests.as_slice(), w.sources.as_slice()) {
-        (Operation::Move, Some("mov"), [Loc::Held(_)], [Loc::Held(from)])
-            if one.uses == [from.value]
-                && one.group.is_none()
-                && one.requires.is_empty()
-                && one.delivers.is_empty()
-                && one.clobbers.is_empty() =>
-        {
-            Some(from.value)
-        }
-        _ => None,
-    }
-}
-
 /// `InlineSpiller`.
 pub struct InlineSpiller<'a> {
-    template: &'a LirBody,
-    frame: &'a mut Frame,
-    classes: &'a RegisterClasses,
+    frame: &'a mut dyn FrameInfo,
+    tii: &'a dyn TargetInstrInfo,
+    regs: Regs,
     order_of: &'a dyn Fn(u32) -> Vec<RegId>,
     tables: Rc<Tables>,
     /// `recomputeRegClass` of the registers an edit made
@@ -238,16 +220,16 @@ impl<'a> InlineSpiller<'a> {
     }
 
     pub fn new(
-        template: &'a LirBody,
-        frame: &'a mut Frame,
-        classes: &'a RegisterClasses,
+        frame: &'a mut dyn FrameInfo,
+        tii: &'a dyn TargetInstrInfo,
+        regs: Regs,
         order_of: &'a dyn Fn(u32) -> Vec<RegId>,
         tables: Rc<Tables>,
     ) -> Self {
         Self {
-            template,
             frame,
-            classes,
+            tii,
+            regs,
             order_of,
             tables,
             reclass: None,
@@ -276,7 +258,7 @@ impl<'a> InlineSpiller<'a> {
         &mut self,
         range: &LiveRange,
     ) {
-        let Some(&home) = self.frame.slots.get(&SlotKey::from(self.key)) else { return };
+        let Some(home) = self.frame.home(self.key) else { return };
         let stack = self.stacks.entry(home).or_insert_with(LiveRange::new);
         let value = if stack.get_num_val_nums() > 0 {
             stack.get_val_num_info(0)
@@ -370,15 +352,15 @@ impl<'a> InlineSpiller<'a> {
             // be available at the use.
             // A piece the split made around the definition itself is defined by
             // it already.
-            if !(remat_shape(&own) && own.uses.is_empty()) {
+            if !(self.tii.remat_shape(&own) && own.uses.is_empty()) {
                 let root = Arc::clone(self.tables.remat_roots.borrow().get(&self.original)?);
-                if plain_copy_source(&own).is_none() || !root.uses.is_empty() {
+                if self.tii.copy_source(&own).is_none() || !root.uses.is_empty() {
                     return None;
                 }
                 def = root;
             }
         }
-        if !remat_shape(&def) || def.uses.contains(&reg) {
+        if !self.tii.remat_shape(&def) || def.uses.contains(&reg) {
             return None;
         }
         let what = def.what.clone()?;
@@ -406,7 +388,7 @@ impl<'a> InlineSpiller<'a> {
                         return Some(Arc::clone(one));
                     }
                     let w = one.what.as_ref()?;
-                    let plain = w.op == Operation::Move && w.name.as_deref() == Some("mov");
+                    let plain = self.tii.is_plain_move(w);
                     let [Loc::Held(dest)] = w.dests.as_slice() else { return None };
                     let ok = plain
                         && one.uses == [reg]
@@ -445,10 +427,8 @@ impl<'a> InlineSpiller<'a> {
             // (`canFoldAsLoad`, `foldMemoryOperand` with the load as LoadMI),
             // which asks for no register.
             if let ([key], [Loc::Mem(cell)]) = (members.as_slice(), what.sources.as_slice())
-                && what.op == Operation::Move
-                && what.name.as_deref() == Some("mov")
-                && let Some(mut folded) =
-                    fold_memory_operand(&Arc::clone(lis.instr(*key)), reg, cell, self.template.bits, self.classes)
+                && self.tii.is_plain_move(&what)
+                && let Some(mut folded) = self.tii.fold_memory_operand(&Arc::clone(lis.instr(*key)), reg, cell)
             {
                 let reads = Arc::make_mut(&mut folded);
                 for read in &def.uses {
@@ -536,7 +516,7 @@ impl<'a> InlineSpiller<'a> {
                 changed.push(Arc::clone(one));
                 continue;
             }
-            let plain = what.op == Operation::Move && what.name.as_deref() == Some("mov");
+            let plain = self.tii.is_plain_move(what);
             let [Loc::Held(source)] = what.sources.as_slice() else { return None };
             if !plain || source.value != reg || one.defines.contains(&reg) {
                 return None;
@@ -597,13 +577,14 @@ impl<'a> InlineSpiller<'a> {
                     // A parallel copy's member folds to memory on either side,
                     // memory to memory included: `parcopy` sequences it.
                     let values = std::iter::once(reg).collect();
-                    crate::greedy::tii::fold_copy_member(one, &values, self.frame, &|value| {
-                        if value == reg { home_key } else { value }
-                    })
-                    .ok()
-                    .flatten()
+                    self.tii
+                        .fold_copy_member(one, &values, self.frame, &|value| {
+                            if value == reg { home_key } else { value }
+                        })
+                        .ok()
+                        .flatten()
                 } else {
-                    fold_memory_operand(one, reg, &cell, self.template.bits, self.classes)
+                    self.tii.fold_memory_operand(one, reg, &cell)
                 }
             })
             .collect();
@@ -614,9 +595,7 @@ impl<'a> InlineSpiller<'a> {
                 // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1058-L1066>
                 let was_copy = before.defines.contains(&reg)
                     && before.what.as_ref().is_some_and(|what| {
-                        what.op == Operation::Move
-                            && what.name.as_deref() == Some("mov")
-                            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+                        self.tii.is_plain_move(what) && matches!(what.sources.as_slice(), [Loc::Held(_)])
                     });
                 lis.rewrite_instr(block, *key, Arc::clone(&one));
                 if was_copy && one.id() != before.id() {
@@ -639,13 +618,13 @@ impl<'a> InlineSpiller<'a> {
             lis.rewrite_instr(block, *key, Arc::clone(one));
         }
         if reads {
-            let reload = crate::greedy::tii::load_reg_from_stack_slot(&old[0], new, &cell);
+            let reload = self.tii.load_reg_from_stack_slot(&old[0], new, &cell);
             lis.insert_instr_before(block, Some(renamed[0].id()), reload);
             self.reloads += 1;
         }
         if writes {
             let last = renamed.last().expect("a unit has members");
-            let store = crate::greedy::tii::store_reg_to_stack_slot(&old[old.len() - 1], new, &cell);
+            let store = self.tii.store_reg_to_stack_slot(&old[old.len() - 1], new, &cell);
             lis.insert_instr_after(block, last.id(), Arc::clone(&store));
             self.stores += 1;
             self.note_store(lis, &store, &cell, &old[old.len() - 1]);
@@ -656,11 +635,11 @@ impl<'a> InlineSpiller<'a> {
             .iter()
             .flat_map(|one| one.requires.iter().chain(&one.delivers))
             .find(|(held, _)| held.value == new)
-            .map(|(_, register)| crate::model::ir::root(*register));
+            .map(|(_, register)| self.regs.root(*register));
         // The class of the value it stands for, which a split may have changed.
         let held = self.tables.orders.borrow().get(&reg).cloned();
         let mut order: Vec<RegId> = held.unwrap_or_else(|| {
-            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
+            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(|one| self.regs.root(one)).collect();
             order.dedup();
             order
         });
@@ -1104,7 +1083,7 @@ impl InlineSpiller<'_> {
         key: InstrKey,
         block: usize,
     ) -> bool {
-        let Some(&home) = self.frame.slots.get(&SlotKey::from(self.key)) else { return false };
+        let Some(home) = self.frame.home(self.key) else { return false };
         let one = lis.instr(key);
         let Some(what) = one.what.as_ref() else { return false };
         let in_home = |place: &Loc| {
@@ -1214,7 +1193,7 @@ impl InlineSpiller<'_> {
             let at = def.covers.map_or(def.at, |covers| covers.0);
             crate::backend::floatassign::_stored(src, &cell, at)
         } else {
-            crate::greedy::tii::store_reg_to_stack_slot(&def, src, &cell)
+            self.tii.store_reg_to_stack_slot(&def, src, &cell)
         };
         lis.insert_instr_after(block, def_key, Arc::clone(&store));
         self.stores += 1;
@@ -1285,7 +1264,7 @@ impl InlineSpiller<'_> {
         &self,
         one: &Insn,
     ) -> bool {
-        let Some(&home) = self.frame.slots.get(&SlotKey::from(self.key)) else { return false };
+        let Some(home) = self.frame.home(self.key) else { return false };
         one.what
             .as_ref()
             .is_some_and(
@@ -1305,7 +1284,7 @@ impl InlineSpiller<'_> {
         cell: &crate::model::ir::Mem,
         template: &Arc<Insn>,
     ) {
-        let Some(&home) = self.frame.slots.get(&SlotKey::from(self.key)) else { return };
+        let Some(home) = self.frame.home(self.key) else { return };
         if !lis.has_interval(self.original) {
             return;
         }
@@ -1437,7 +1416,7 @@ impl InlineSpiller<'_> {
             let (cell, template) = (records[members[0]].cell.clone(), Arc::clone(&records[members[0]].template));
             for (block, live) in &decided.insert {
                 let before = terminator(lis, *block).map(|one| one.id());
-                let store = crate::greedy::tii::store_reg_to_stack_slot(&template, *live, &cell);
+                let store = self.tii.store_reg_to_stack_slot(&template, *live, &cell);
                 lis.insert_instr_before(*block, before, store);
                 self.stores += 1;
             }
@@ -1458,7 +1437,9 @@ impl InlineSpiller<'_> {
                 }
                 for def in lis.erase_dead_defs(&round) {
                     let one = lis.instr(def);
-                    if one.covers.is_none_or(|(from, to)| from == to) && (one.copy_of().is_some() || remat_shape(one)) {
+                    if one.covers.is_none_or(|(from, to)| from == to)
+                        && (one.copy_of().is_some() || self.tii.remat_shape(one))
+                    {
                         dead.push(def);
                     }
                 }
@@ -1477,7 +1458,7 @@ impl InlineSpiller<'_> {
         range: &LiveRange,
         vni: &Vn,
     ) {
-        let Some(&home) = self.frame.slots.get(&SlotKey::from(self.key)) else { return };
+        let Some(home) = self.frame.home(self.key) else { return };
         let stack = self.stacks.entry(home).or_insert_with(LiveRange::new);
         let value =
             if stack.get_num_val_nums() > 0 { stack.get_val_num_info(0) } else { stack.get_next_value(vni.def()) };
@@ -1511,7 +1492,9 @@ impl InlineSpiller<'_> {
                 let one = lis.instr(def);
                 // An instruction of the program owns bytes of the object that
                 // an erased one would leave unclaimed.
-                if one.covers.is_none_or(|(from, to)| from == to) && (one.copy_of().is_some() || remat_shape(one)) {
+                if one.covers.is_none_or(|(from, to)| from == to)
+                    && (one.copy_of().is_some() || self.tii.remat_shape(one))
+                {
                     dead.push(def);
                 }
             }
@@ -1711,7 +1694,7 @@ impl Spiller for InlineSpiller<'_> {
             })
             .collect();
         found.sort_by_key(|one| one.0);
-        self.frame.stacks = found.into_iter().collect();
+        self.frame.set_stacks(found.into_iter().collect());
     }
 
     fn recorded(&self) -> Vec<u32> {
@@ -1721,9 +1704,10 @@ impl Spiller for InlineSpiller<'_> {
 
 #[cfg(test)]
 mod tests {
-    use llrm_lir::registers::Regs;
 
     use super::*;
+    use crate::backend::classes::RegisterClasses;
+    use crate::backend::frame::{Frame, FrameInfo};
     use crate::greedy::matrix::NoFixed;
     use crate::greedy::virtregmap::RegisterInfo;
     use crate::liveness::calcspillweights::{SpillWeightEnv, VirtRegAuxInfo};
@@ -1808,6 +1792,175 @@ mod tests {
         Loc::Held(Held { value, width: 10 })
     }
 
+    /// An ISA whose spill, reload and copy forms are not x86's `mov`: the
+    /// rest is x86's, which this test does not exercise.
+    struct Renamed<'a>(crate::greedy::tii::X86InstrInfo<'a>);
+
+    fn renamed(
+        beside: &Insn,
+        made: Arc<Insn>,
+        name: &str,
+    ) -> Arc<Insn> {
+        let _ = beside;
+        crate::greedy::tii::_with(&made, |one| {
+            if let Some(what) = one.what.as_mut() {
+                what.name = Some(name.into());
+            }
+        })
+    }
+
+    impl TargetInstrInfo for Renamed<'_> {
+        fn is_plain_move(
+            &self,
+            what: &Semantics,
+        ) -> bool {
+            what.op == Operation::Move && what.name.as_deref() == Some("cp")
+        }
+
+        fn copy_semantics(
+            &self,
+            to: u32,
+            from: u32,
+            width: u32,
+        ) -> Semantics {
+            Semantics { name: Some("cp".into()), ..self.0.copy_semantics(to, from, width) }
+        }
+
+        fn remat_shape(
+            &self,
+            one: &Insn,
+        ) -> bool {
+            self.0.remat_shape(one)
+        }
+
+        fn is_trivially_re_materializable(
+            &self,
+            def: &Insn,
+            invariant: bool,
+        ) -> bool {
+            self.0.is_trivially_re_materializable(def, invariant)
+        }
+
+        fn argument_loads(
+            &self,
+            body: &LirBody,
+        ) -> std::collections::BTreeSet<u32> {
+            self.0.argument_loads(body)
+        }
+
+        fn fold_memory_operand(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &Mem,
+        ) -> Option<Arc<Insn>> {
+            self.0.fold_memory_operand(one, reg, cell)
+        }
+
+        fn fold_copy_member(
+            &self,
+            one: &Insn,
+            values: &std::collections::BTreeSet<u32>,
+            frame: &mut dyn FrameInfo,
+            home: &dyn Fn(u32) -> u32,
+        ) -> Result<Option<Arc<Insn>>, crate::backend::allocresult::Error> {
+            self.0.fold_copy_member(one, values, frame, home)
+        }
+
+        fn load_reg_from_stack_slot(
+            &self,
+            beside: &Insn,
+            into: u32,
+            cell: &Mem,
+        ) -> Arc<Insn> {
+            renamed(beside, self.0.load_reg_from_stack_slot(beside, into, cell), "ld.slot")
+        }
+
+        fn store_reg_to_stack_slot(
+            &self,
+            beside: &Insn,
+            out_of: u32,
+            cell: &Mem,
+        ) -> Arc<Insn> {
+            renamed(beside, self.0.store_reg_to_stack_slot(beside, out_of, cell), "st.slot")
+        }
+
+        fn needs_data_group(
+            &self,
+            one: &Insn,
+        ) -> bool {
+            self.0.needs_data_group(one)
+        }
+    }
+
+    /// The spiller wrote `mov` for every spill and reload whatever the target
+    /// was: an ISA with other forms got x86's. The allocator must ask the
+    /// target's instruction info for them.
+    #[test]
+    fn test_a_spill_and_a_reload_are_the_targets_forms() {
+        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
+        let based = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) });
+        let op = |at, op, name, dests, sources, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics { name: Some(name).map(Into::into), dests, sources, ..Semantics::new(op) };
+            Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
+        };
+        // `v1` is read as an address base, which refuses a fold: it must
+        // reload.
+        let insns = vec![
+            op(0, Operation::Binary, "add", vec![word(1)], vec![imm(1)], vec![1], vec![]),
+            op(1, Operation::Binary, "add", vec![word(3)], vec![imm(2)], vec![3], vec![]),
+            op(2, Operation::Move, "mov", vec![word(2)], vec![based], vec![2], vec![1]),
+            op(3, Operation::Binary, "add", vec![word(4)], vec![word(2), word(3)], vec![4], vec![2, 3]),
+        ];
+        let body =
+            LirBody::new("forms", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=4 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes });
+        let tables = Rc::new(Tables::default());
+        for value in 1..=4 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::EBX, RegId::ESI]);
+            tables.widths.borrow_mut().insert(value, 2);
+        }
+        let order_of = |_: u32| vec![RegId::EBX, RegId::ESI];
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 1, &mut made);
+        let after: Vec<_> = lis
+            .block_insns(0)
+            .iter()
+            .map(|one| (one.what.as_ref().and_then(|w| w.name.clone()), one.spill_store, one.spill_reload))
+            .collect();
+        let slot = |flag: fn(&Insn) -> bool, name: &str| {
+            lis.block_insns(0)
+                .iter()
+                .any(|one| flag(one) && one.what.as_ref().and_then(|w| w.name.as_deref()) == Some(name))
+        };
+        assert!(slot(|one| one.spill_store, "st.slot"), "the spill is the target's store: {after:?}");
+        assert!(slot(|one| one.spill_reload, "ld.slot"), "the reload is the target's load: {after:?}");
+    }
+
+    /// `plain_copy_source` read the name `mov`, so a target's own copy was
+    /// no copy to the spiller.
+    #[test]
+    fn test_a_copy_is_what_the_target_says() {
+        let classes = RegisterClasses::m16();
+        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes });
+        let copy = |name: &str| x87(0, Operation::Move, name, vec![held(2)], vec![held(1)], vec![2], vec![1]);
+        assert_eq!(tii.copy_source(&copy("cp")), Some(1));
+        assert_eq!(tii.copy_source(&copy("mov")), None, "x86's name is not this target's copy");
+    }
+
     /// `%2` is a copy of `%1`, which dies there, and `%2` is spilled:
     /// `hoistSpillInsideBB` stores `%1` where it is defined and the copy goes.
     /// The spill stored `%2` after the copy into a home of its own, so every
@@ -1833,6 +1986,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(2, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let tables = Rc::new(Tables::default());
         for value in 1..=3 {
             tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
@@ -1840,7 +1994,7 @@ mod tests {
             tables.widths.borrow_mut().insert(value, 10);
         }
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -1889,6 +2043,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(3, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let tables = Rc::new(Tables::default());
         for value in 1..=5 {
             tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
@@ -1896,7 +2051,7 @@ mod tests {
             tables.widths.borrow_mut().insert(value, 10);
         }
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());
@@ -1966,8 +2121,15 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(2, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, Rc::new(Tables::default()));
+        let mut spiller = InlineSpiller::new(
+            &mut frame,
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            &order_of,
+            Rc::new(Tables::default()),
+        );
         spiller.originals.insert(7, lis.get_interval(1).range.clone());
         for store in [&left, &right] {
             spiller
@@ -2049,8 +2211,15 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(3, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, Rc::new(Tables::default()));
+        let mut spiller = InlineSpiller::new(
+            &mut frame,
+            &tii,
+            Regs(&llrm_x86_m16::REGISTER_INFO),
+            &order_of,
+            Rc::new(Tables::default()),
+        );
         spiller.original = 1;
         spiller.reg = 3;
         let (two, three) = (lis.get_interval(2).range.clone(), lis.get_interval(3).range.clone());
@@ -2137,13 +2306,14 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(2, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
         let tables = Rc::new(Tables::default());
         for value in 1..=2 {
             tables.orders.borrow_mut().insert(value, vec![RegId::AX]);
             tables.widths.borrow_mut().insert(value, 2);
         }
         let order_of = |_: u32| Vec::new();
-        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, tables);
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
         let (env, original) = (Env, Default::default());
         let mut vrai = VirtRegAuxInfo::new(&env, &original);
         let (mut shrunk, mut made) = (Vec::new(), Vec::new());

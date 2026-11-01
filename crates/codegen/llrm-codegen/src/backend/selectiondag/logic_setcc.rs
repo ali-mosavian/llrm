@@ -224,6 +224,61 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `visitOR`, the compare folds.
+    /// DEVIATE: a dword from two words (`BUILD_PAIR` expanded to `zext lo |
+    /// (aext hi << 16)`, a LONG in `dx:ax`) is `fshr (hi, lo << 16, 16)`, a
+    /// `shl` and a `shrd`: a byte and a clock under the pin's `movzx`,
+    /// `shl`, `or` on the 486. Only once legal, and only when every user
+    /// computes with the whole dword: a far pointer's halves are taken
+    /// apart again, which the `or` form folds away. O(users).
+    fn pack_words_by_shrd(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if self.level != CombineLevel::AfterLegalizeDag || vt != EVT::I32 {
+            return None;
+        }
+        let (a, b) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (low, high) = if self.dag.opcode(a) == ISD::ZeroExtend { (a, b) } else { (b, a) };
+        if self.dag.opcode(low) != ISD::ZeroExtend || self.dag.opcode(high) != ISD::Shl {
+            return None;
+        }
+        let (lo, shifted) = (self.dag.operand(low, 0), self.dag.operand(high, 0));
+        if self.dag.constant(self.dag.operand(high, 1)) != Some(16)
+            || self.dag.opcode(shifted) != ISD::AnyExtend
+            || self.dag.value_type(lo) != EVT::I16
+        {
+            return None;
+        }
+        // Only a value that is computed with stays whole; one that is stored,
+        // passed on or taken apart (a far pointer's halves) is not packed.
+        let computed = self
+            .dag
+            .users(node)
+            .all(
+                |user| matches!(
+                    self.dag.opcode(SDValue { node: user, res: 0 }),
+                    ISD::Add
+                        | ISD::Sub
+                        | ISD::Mul
+                        | ISD::SDiv
+                        | ISD::UDiv
+                        | ISD::SRem
+                        | ISD::URem
+                        | ISD::Xor
+                        | ISD::SetCC
+                        | ISD::SIntToFp
+                ),
+            );
+        if !computed {
+            return None;
+        }
+        let sixteen = self.dag.get_constant(16, EVT::I8);
+        let lo_wide = self.dag.get_node(ISD::AnyExtend, vt, &[lo]);
+        let lo_high = self.dag.get_node(ISD::Shl, vt, &[lo_wide, sixteen]);
+        Some(self.dag.get_node(ISD::FShr, vt, &[shifted, lo_high, sixteen]))
+    }
+
     pub(super) fn visit_or(
         &mut self,
         node: SDValue,
@@ -258,6 +313,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         if let Some(rotated) = self.match_rotate(n0, n1) {
             return Some(rotated);
+        }
+        if let Some(packed) = self.pack_words_by_shrd(node) {
+            return Some(packed);
         }
         if let Some(c1) = c1 {
             if let Some(folded) = self.or_with_shared_mask(n0, c1, vt) {

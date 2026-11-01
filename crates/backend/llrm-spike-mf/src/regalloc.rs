@@ -6,11 +6,11 @@
 //! joins registers that interfere), greedy colouring, no spilling. The emitter
 //! and expander read only [`Assignment`].
 
-use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use llrm_lir::registers::RegId;
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::sink::{Jump, split_critical_edge};
@@ -302,7 +302,7 @@ pub fn fold_reserved_copies<T: Target>(function: &mut MFunction<T::Class>) {
             defs[*v as usize] += 1;
         }
     }
-    let mut replace: HashMap<u32, RegId> = HashMap::new();
+    let mut replace: HashMap<u32, RegId> = HashMap::default();
     for block in &mut function.blocks {
         block
             .insts
@@ -388,8 +388,8 @@ fn liveness<C>(
     effects_of: &[Vec<(Vec<usize>, Vec<usize>)>],
 ) -> (Vec<HashSet<usize>>, Vec<HashSet<usize>>) {
     let blocks = function.blocks.len();
-    let mut reads = vec![HashSet::new(); blocks];
-    let mut writes = vec![HashSet::new(); blocks];
+    let mut reads = vec![HashSet::default(); blocks];
+    let mut writes = vec![HashSet::default(); blocks];
     for (at, block) in effects_of.iter().enumerate() {
         for (defs, uses) in block {
             for u in uses {
@@ -402,7 +402,7 @@ fn liveness<C>(
     }
     let successors = successors(function);
     let mut live_in = reads.clone();
-    let mut live_out = vec![HashSet::new(); blocks];
+    let mut live_out = vec![HashSet::default(); blocks];
     loop {
         let mut changed = false;
         for at in (0..blocks).rev() {
@@ -462,7 +462,7 @@ pub struct GraphColoring<T> {
 
 impl<T> Default for GraphColoring<T> {
     fn default() -> Self {
-        GraphColoring { by_frequency: false, unspillable: HashSet::new(), marker: PhantomData }
+        GraphColoring { by_frequency: false, unspillable: HashSet::default(), marker: PhantomData }
     }
 }
 
@@ -485,7 +485,7 @@ impl<T: Target> GraphColoring<T> {
     /// A colourer that joins in the order [`GraphColoring::colour`] describes
     /// where `by_frequency`.
     pub fn by_frequency(by_frequency: bool) -> Self {
-        GraphColoring { by_frequency, unspillable: HashSet::new(), marker: PhantomData }
+        GraphColoring { by_frequency, unspillable: HashSet::default(), marker: PhantomData }
     }
 
     /// The same, where the registers in `unspillable` take any colour that
@@ -549,7 +549,7 @@ impl<T: Target> GraphColoring<T> {
             .collect();
         let total = count + nodes.physical.len();
         let (_, live_out) = liveness(function, &effects_of);
-        let mut edges: Vec<HashSet<usize>> = vec![HashSet::new(); total];
+        let mut edges: Vec<HashSet<usize>> = vec![HashSet::default(); total];
         let connect = |a: usize, b: usize, edges: &mut Vec<HashSet<usize>>| {
             if a != b {
                 edges[a].insert(b);
@@ -562,7 +562,7 @@ impl<T: Target> GraphColoring<T> {
         // written in the block holds its own entry value.
         let mut fresh = total as u32;
         for (at, block) in function.blocks.iter().enumerate() {
-            let mut current: HashMap<usize, u32> = HashMap::new();
+            let mut current: HashMap<usize, u32> = HashMap::default();
             let mut before = Vec::with_capacity(block.insts.len());
             let mut made: Vec<Vec<u32>> = Vec::with_capacity(block.insts.len());
             for (inst, (defs, uses)) in block.insts.iter().zip(&effects_of[at]) {
@@ -672,7 +672,7 @@ impl<T: Target> GraphColoring<T> {
                 }
             }
         }
-        let mut colour: HashMap<usize, RegId> = HashMap::new();
+        let mut colour: HashMap<usize, RegId> = HashMap::default();
         for (at, root) in nodes.physical.iter().enumerate() {
             colour.insert(count + at, *root);
         }
@@ -684,7 +684,7 @@ impl<T: Target> GraphColoring<T> {
         }
         let mut taken_roots: Vec<RegId> = Vec::new();
         let mut failures: Vec<Uncolourable> = Vec::new();
-        let mut failed_nodes: HashSet<usize> = HashSet::new();
+        let mut failed_nodes: HashSet<usize> = HashSet::default();
         // the most constrained class first, so a word is not left with what
         // the bytes took
         let minimal = crate::spill::minimal_vregs(function);

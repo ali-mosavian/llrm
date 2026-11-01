@@ -1,0 +1,14 @@
+	.section	.text.f,"",@
+	.globl	f                               # -- Begin function f
+	.type	f,@function
+f:                                      # @f
+	.functype	f (i32) -> (i32)
+# %bb.0:
+	local.get	0
+	call	g
+	i32.const	1
+	return
+	i32.const	2
+	return
+	end_function
+                                        # -- End function
