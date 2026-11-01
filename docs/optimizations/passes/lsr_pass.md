@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_pass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_pass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:4d820b14dbf7db97f5832d220d04b059f7135554edce2d33374b682b6d328a15 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_pass.rs sha256:78f7154e5a62f1d86102961d400a0a2ef6c615f918a6455e10c3c69221d86d33 -->
 
 # lsr_pass
 
@@ -14,7 +14,7 @@ first formula ([`crate::lsr_collect`](lsr_collect.md)), the formulae are generat
 narrowed ([`crate::lsr_generate`](lsr_generate.md), [`crate::lsr_narrow`](lsr_narrow.md)), and the solver
 picks one per use ([`crate::lsr_solve`](lsr_solve.md)). If it picks, the code is expanded
 ([`crate::lsr_implement`](lsr_implement.md)) and what the replaced operands leave unread goes.
-The costs are the target's ([`llrm_mir::tti::Tti`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/tti.rs)).
+The costs are the target's (`llrm_mir::tti::Tti`).
 
 ## Example
 A local array filled and summed in a loop, exit `i + 1 == n`, becomes a

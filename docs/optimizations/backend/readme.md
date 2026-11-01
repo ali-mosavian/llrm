@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 138 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -69,6 +69,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documen
 | intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
 | ivshare | Streams that walk the same index share one pointer (DEVIATE LSR2). | Named by `flow`. | [ivshare](ivshare.md) |
+| ivzero | A loop's index ends at zero (DEVIATE LSR3). | A machine phase after `IvShare`, at every -O level but -O0. | [ivzero](ivzero.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | latecleanup | Removes an immediate load to a register that an identical, earlier load in every path to it already left there: LLVM's `MachineLateInstrsCleanup` ([MachineLateInstrsCleanup.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp)). | After `prologue`, before `peephole`: where rematerialization and the | [latecleanup](latecleanup.md) |

@@ -1,0 +1,76 @@
+// What a wasm32 QB module needs of its host, for the node harness (headless.mjs):
+// the `env` imports, the clock tick, and the page of memory the host keeps for itself. The caller says what time it is and
+// what to do on a poll, a key look, output, exit and a tone.
+export const TICK_MS = 54.9254; // 18.2 a second: the timer interrupt that takes PLAY's notes off its queue
+
+export class Exit extends Error {
+  constructor(code) { super(`exit ${code}`); this.code = code; }
+}
+
+// C's lrint: ties to even.
+export const lrint = (x) => { const r = Math.round(x); return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r; };
+
+/**
+ * hooks: clock() the time in ms; poll(now) after each look at the clock or keyboard; keyPoll(ready, now) when the program
+ * looks for a key; write(text) output; tone(hertz, now); fail(message) a named failure of the host.
+ */
+export async function instantiate(bytes, hooks) {
+  const host = { exports: null, scratch: 0, now: 0 };
+  const mem = () => new Uint8Array(host.exports.memory.buffer);
+  host.mem = mem;
+  host.cstring = (at) => { const m = mem(); let end = at; while (m[end]) end++; return Buffer_latin1(m.subarray(at, end)); };
+  let nextTick = TICK_MS, inTick = false;
+
+  // Runs the ticks that have come due. A host that stalls does not owe the program all it missed.
+  host.tick = (now) => {
+    if (inTick) return;
+    inTick = true;
+    for (let fired = 0; now >= nextTick && fired < 4; fired++) { nextTick += TICK_MS; host.exports.host_tick_fire(); }
+    if (now >= nextTick) nextTick = now + TICK_MS;
+    inTick = false;
+  };
+  const look = () => { host.now = hooks.clock(); hooks.poll?.(host.now); host.tick(host.now); return host.now; };
+
+  const imports = { env: {
+    llrm_host_write: (fd, ptr, n) => hooks.write?.(Buffer_latin1(mem().subarray(ptr, ptr + n))),
+    llrm_host_exit: (code) => { throw new Exit(code); },
+    llrm_host_fail: (msg) => { throw new Error(host.cstring(msg)); },
+    llrm_host_now: look,
+    llrm_host_key_poll: (ready) => hooks.keyPoll?.(ready, host.now),
+    llrm_host_poll: () => { look(); },
+    llrm_host_tone: (hertz) => hooks.tone?.(hertz, host.now),
+    sin: Math.sin, cos: Math.cos, atan: Math.atan, lrint, lrintf: lrint,
+  } };
+  const { instance } = await WebAssembly.instantiate(bytes, imports);
+  host.exports = instance.exports;
+  // The host's own memory: a page after the program's. `__heap_base` is the top of the program's stack, whose outermost
+  // frames anything written below it would overwrite.
+  host.scratch = host.exports.memory.grow(1) * 65536;
+  host.run = () => { host.exports.__wasm_call_ctors(); return host.exports.llrm_wasm_start(); };
+
+  // The screen: its size, the palette (8 bits a channel, 256 entries) and the pixels as palette indices; copies.
+  host.frame = () => {
+    const w = host.exports.host_width(), h = host.exports.host_height();
+    host.exports.host_colors(host.scratch);
+    const colors = mem().slice(host.scratch, host.scratch + 768);
+    const at = host.exports.host_pixels();
+    return { w, h, colors, pixels: mem().slice(at, at + w * h) };
+  };
+
+  // A typed key, as `headless_type` takes it: a character, or the scan code of an extended key.
+  host.type = (code) => {
+    if (code >= 256) return host.exports.headless_type_extended(code & 255);
+    if (code === 0) return;
+    mem()[host.scratch] = code;
+    mem()[host.scratch + 1] = 0;
+    host.exports.headless_type(host.scratch);
+  };
+  return host;
+}
+
+// Bytes as a latin1 string, in node and in a browser.
+function Buffer_latin1(bytes) {
+  let text = '';
+  for (let at = 0; at < bytes.length; at += 8192) text += String.fromCharCode.apply(null, bytes.subarray(at, at + 8192));
+  return text;
+}

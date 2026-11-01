@@ -1,0 +1,2569 @@
+# Opcode table of the 68k family, lines 0-F (binutils objdump per CPU; the manual for cpid 2-7). Limits: see isa.rs.
+# mnemonic	operands	first-word cubes	extension-word cubes	formats	CPUs	CPUs that trap it to software
+abcd	-(An),-(An)	f1f8/c108	-	-	000,010,020,030,040,060	-
+abcd	Dn,Dn	f1f8/c100	-	-	000,010,020,030,040,060	-
+addal	#imm,An	f1ff/d1fc	-	-	000,010,020,030,040,060	-
+addal	(An)+,An	f1f8/d1d8	-	-	000,010,020,030,040,060	-
+addal	(An),An	f1f8/d1d0	-	-	000,010,020,030,040,060	-
+addal	(d16,An),An	f1f8/d1e8	-	-	000,010,020,030,040,060	-
+addal	(d16,PC),An	f1ff/d1fa	-	-	000,010,020,030,040,060	-
+addal	(d8,An,Xn),An	f1f8/d1f0	-	-	000,010,020,030,040,060	-
+addal	(d8,PC,Xn),An	f1ff/d1fb	-	-	000,010,020,030,040,060	-
+addal	-(An),An	f1f8/d1e0	-	-	000,010,020,030,040,060	-
+addal	An,An	f1f8/d1c8	-	-	000,010,020,030,040,060	-
+addal	Dn,An	f1f8/d1c0	-	-	000,010,020,030,040,060	-
+addal	abs,An	f1fe/d1f8	-	-	000,010,020,030,040,060	-
+addaw	#imm,An	f1ff/d0fc	-	-	000,010,020,030,040,060	-
+addaw	(An)+,An	f1f8/d0d8	-	-	000,010,020,030,040,060	-
+addaw	(An),An	f1f8/d0d0	-	-	000,010,020,030,040,060	-
+addaw	(d16,An),An	f1f8/d0e8	-	-	000,010,020,030,040,060	-
+addaw	(d16,PC),An	f1ff/d0fa	-	-	000,010,020,030,040,060	-
+addaw	(d8,An,Xn),An	f1f8/d0f0	-	-	000,010,020,030,040,060	-
+addaw	(d8,PC,Xn),An	f1ff/d0fb	-	-	000,010,020,030,040,060	-
+addaw	-(An),An	f1f8/d0e0	-	-	000,010,020,030,040,060	-
+addaw	An,An	f1f8/d0c8	-	-	000,010,020,030,040,060	-
+addaw	Dn,An	f1f8/d0c0	-	-	000,010,020,030,040,060	-
+addaw	abs,An	f1fe/d0f8	-	-	000,010,020,030,040,060	-
+addb	#imm,Dn	f1ff/d03c	-	-	000,010,020,030,040,060	-
+addb	(An)+,Dn	f1f8/d018	-	-	000,010,020,030,040,060	-
+addb	(An),Dn	f1f8/d010	-	-	000,010,020,030,040,060	-
+addb	(d16,An),Dn	f1f8/d028	-	-	000,010,020,030,040,060	-
+addb	(d16,PC),Dn	f1ff/d03a	-	-	000,010,020,030,040,060	-
+addb	(d8,An,Xn),Dn	f1f8/d030	-	-	000,010,020,030,040,060	-
+addb	(d8,PC,Xn),Dn	f1ff/d03b	-	-	000,010,020,030,040,060	-
+addb	-(An),Dn	f1f8/d020	-	-	000,010,020,030,040,060	-
+addb	Dn,(An)	f1f8/d110	-	-	000,010,020,030,040,060	-
+addb	Dn,(An)+	f1f8/d118	-	-	000,010,020,030,040,060	-
+addb	Dn,(d16,An)	f1f8/d128	-	-	000,010,020,030,040,060	-
+addb	Dn,(d8,An,Xn)	f1f8/d130	-	-	000,010,020,030,040,060	-
+addb	Dn,-(An)	f1f8/d120	-	-	000,010,020,030,040,060	-
+addb	Dn,Dn	f1f8/d000	-	-	000,010,020,030,040,060	-
+addb	Dn,abs	f1fe/d138	-	-	000,010,020,030,040,060	-
+addb	abs,Dn	f1fe/d038	-	-	000,010,020,030,040,060	-
+addib	#imm,(An)	fff8/0610	-	-	000,010,020,030,040,060	-
+addib	#imm,(An)+	fff8/0618	-	-	000,010,020,030,040,060	-
+addib	#imm,(d16,An)	fff8/0628	-	-	000,010,020,030,040,060	-
+addib	#imm,(d8,An,Xn)	fff8/0630	-	-	000,010,020,030,040,060	-
+addib	#imm,-(An)	fff8/0620	-	-	000,010,020,030,040,060	-
+addib	#imm,Dn	fff8/0600	-	-	000,010,020,030,040,060	-
+addib	#imm,abs	fffe/0638	-	-	000,010,020,030,040,060	-
+addil	#imm,(An)	fff8/0690	-	-	000,010,020,030,040,060	-
+addil	#imm,(An)+	fff8/0698	-	-	000,010,020,030,040,060	-
+addil	#imm,(d16,An)	fff8/06a8	-	-	000,010,020,030,040,060	-
+addil	#imm,(d8,An,Xn)	fff8/06b0	-	-	000,010,020,030,040,060	-
+addil	#imm,-(An)	fff8/06a0	-	-	000,010,020,030,040,060	-
+addil	#imm,Dn	fff8/0680	-	-	000,010,020,030,040,060	-
+addil	#imm,abs	fffe/06b8	-	-	000,010,020,030,040,060	-
+addiw	#imm,(An)	fff8/0650	-	-	000,010,020,030,040,060	-
+addiw	#imm,(An)+	fff8/0658	-	-	000,010,020,030,040,060	-
+addiw	#imm,(d16,An)	fff8/0668	-	-	000,010,020,030,040,060	-
+addiw	#imm,(d8,An,Xn)	fff8/0670	-	-	000,010,020,030,040,060	-
+addiw	#imm,-(An)	fff8/0660	-	-	000,010,020,030,040,060	-
+addiw	#imm,Dn	fff8/0640	-	-	000,010,020,030,040,060	-
+addiw	#imm,abs	fffe/0678	-	-	000,010,020,030,040,060	-
+addl	#imm,Dn	f1ff/d0bc	-	-	000,010,020,030,040,060	-
+addl	(An)+,Dn	f1f8/d098	-	-	000,010,020,030,040,060	-
+addl	(An),Dn	f1f8/d090	-	-	000,010,020,030,040,060	-
+addl	(d16,An),Dn	f1f8/d0a8	-	-	000,010,020,030,040,060	-
+addl	(d16,PC),Dn	f1ff/d0ba	-	-	000,010,020,030,040,060	-
+addl	(d8,An,Xn),Dn	f1f8/d0b0	-	-	000,010,020,030,040,060	-
+addl	(d8,PC,Xn),Dn	f1ff/d0bb	-	-	000,010,020,030,040,060	-
+addl	-(An),Dn	f1f8/d0a0	-	-	000,010,020,030,040,060	-
+addl	An,Dn	f1f8/d088	-	-	000,010,020,030,040,060	-
+addl	Dn,(An)	f1f8/d190	-	-	000,010,020,030,040,060	-
+addl	Dn,(An)+	f1f8/d198	-	-	000,010,020,030,040,060	-
+addl	Dn,(d16,An)	f1f8/d1a8	-	-	000,010,020,030,040,060	-
+addl	Dn,(d8,An,Xn)	f1f8/d1b0	-	-	000,010,020,030,040,060	-
+addl	Dn,-(An)	f1f8/d1a0	-	-	000,010,020,030,040,060	-
+addl	Dn,Dn	f1f8/d080	-	-	000,010,020,030,040,060	-
+addl	Dn,abs	f1fe/d1b8	-	-	000,010,020,030,040,060	-
+addl	abs,Dn	f1fe/d0b8	-	-	000,010,020,030,040,060	-
+addqb	#imm,(An)	f1f8/5010	-	-	000,010,020,030,040,060	-
+addqb	#imm,(An)+	f1f8/5018	-	-	000,010,020,030,040,060	-
+addqb	#imm,(d16,An)	f1f8/5028	-	-	000,010,020,030,040,060	-
+addqb	#imm,(d8,An,Xn)	f1f8/5030	-	-	000,010,020,030,040,060	-
+addqb	#imm,-(An)	f1f8/5020	-	-	000,010,020,030,040,060	-
+addqb	#imm,Dn	f1f8/5000	-	-	000,010,020,030,040,060	-
+addqb	#imm,abs	f1fe/5038	-	-	000,010,020,030,040,060	-
+addql	#imm,(An)	f1f8/5090	-	-	000,010,020,030,040,060	-
+addql	#imm,(An)+	f1f8/5098	-	-	000,010,020,030,040,060	-
+addql	#imm,(d16,An)	f1f8/50a8	-	-	000,010,020,030,040,060	-
+addql	#imm,(d8,An,Xn)	f1f8/50b0	-	-	000,010,020,030,040,060	-
+addql	#imm,-(An)	f1f8/50a0	-	-	000,010,020,030,040,060	-
+addql	#imm,An	f1f8/5088	-	-	000,010,020,030,040,060	-
+addql	#imm,Dn	f1f8/5080	-	-	000,010,020,030,040,060	-
+addql	#imm,abs	f1fe/50b8	-	-	000,010,020,030,040,060	-
+addqw	#imm,(An)	f1f8/5050	-	-	000,010,020,030,040,060	-
+addqw	#imm,(An)+	f1f8/5058	-	-	000,010,020,030,040,060	-
+addqw	#imm,(d16,An)	f1f8/5068	-	-	000,010,020,030,040,060	-
+addqw	#imm,(d8,An,Xn)	f1f8/5070	-	-	000,010,020,030,040,060	-
+addqw	#imm,-(An)	f1f8/5060	-	-	000,010,020,030,040,060	-
+addqw	#imm,An	f1f8/5048	-	-	000,010,020,030,040,060	-
+addqw	#imm,Dn	f1f8/5040	-	-	000,010,020,030,040,060	-
+addqw	#imm,abs	f1fe/5078	-	-	000,010,020,030,040,060	-
+addw	#imm,Dn	f1ff/d07c	-	-	000,010,020,030,040,060	-
+addw	(An)+,Dn	f1f8/d058	-	-	000,010,020,030,040,060	-
+addw	(An),Dn	f1f8/d050	-	-	000,010,020,030,040,060	-
+addw	(d16,An),Dn	f1f8/d068	-	-	000,010,020,030,040,060	-
+addw	(d16,PC),Dn	f1ff/d07a	-	-	000,010,020,030,040,060	-
+addw	(d8,An,Xn),Dn	f1f8/d070	-	-	000,010,020,030,040,060	-
+addw	(d8,PC,Xn),Dn	f1ff/d07b	-	-	000,010,020,030,040,060	-
+addw	-(An),Dn	f1f8/d060	-	-	000,010,020,030,040,060	-
+addw	An,Dn	f1f8/d048	-	-	000,010,020,030,040,060	-
+addw	Dn,(An)	f1f8/d150	-	-	000,010,020,030,040,060	-
+addw	Dn,(An)+	f1f8/d158	-	-	000,010,020,030,040,060	-
+addw	Dn,(d16,An)	f1f8/d168	-	-	000,010,020,030,040,060	-
+addw	Dn,(d8,An,Xn)	f1f8/d170	-	-	000,010,020,030,040,060	-
+addw	Dn,-(An)	f1f8/d160	-	-	000,010,020,030,040,060	-
+addw	Dn,Dn	f1f8/d040	-	-	000,010,020,030,040,060	-
+addw	Dn,abs	f1fe/d178	-	-	000,010,020,030,040,060	-
+addw	abs,Dn	f1fe/d078	-	-	000,010,020,030,040,060	-
+addxb	-(An),-(An)	f1f8/d108	-	-	000,010,020,030,040,060	-
+addxb	Dn,Dn	f1f8/d100	-	-	000,010,020,030,040,060	-
+addxl	-(An),-(An)	f1f8/d188	-	-	000,010,020,030,040,060	-
+addxl	Dn,Dn	f1f8/d180	-	-	000,010,020,030,040,060	-
+addxw	-(An),-(An)	f1f8/d148	-	-	000,010,020,030,040,060	-
+addxw	Dn,Dn	f1f8/d140	-	-	000,010,020,030,040,060	-
+andb	#imm,Dn	f1ff/c03c	-	-	000,010,020,030,040,060	-
+andb	(An)+,Dn	f1f8/c018	-	-	000,010,020,030,040,060	-
+andb	(An),Dn	f1f8/c010	-	-	000,010,020,030,040,060	-
+andb	(d16,An),Dn	f1f8/c028	-	-	000,010,020,030,040,060	-
+andb	(d16,PC),Dn	f1ff/c03a	-	-	000,010,020,030,040,060	-
+andb	(d8,An,Xn),Dn	f1f8/c030	-	-	000,010,020,030,040,060	-
+andb	(d8,PC,Xn),Dn	f1ff/c03b	-	-	000,010,020,030,040,060	-
+andb	-(An),Dn	f1f8/c020	-	-	000,010,020,030,040,060	-
+andb	Dn,(An)	f1f8/c110	-	-	000,010,020,030,040,060	-
+andb	Dn,(An)+	f1f8/c118	-	-	000,010,020,030,040,060	-
+andb	Dn,(d16,An)	f1f8/c128	-	-	000,010,020,030,040,060	-
+andb	Dn,(d8,An,Xn)	f1f8/c130	-	-	000,010,020,030,040,060	-
+andb	Dn,-(An)	f1f8/c120	-	-	000,010,020,030,040,060	-
+andb	Dn,Dn	f1f8/c000	-	-	000,010,020,030,040,060	-
+andb	Dn,abs	f1fe/c138	-	-	000,010,020,030,040,060	-
+andb	abs,Dn	f1fe/c038	-	-	000,010,020,030,040,060	-
+andib	#imm,(An)	fff8/0210	-	-	000,010,020,030,040,060	-
+andib	#imm,(An)+	fff8/0218	-	-	000,010,020,030,040,060	-
+andib	#imm,(d16,An)	fff8/0228	-	-	000,010,020,030,040,060	-
+andib	#imm,(d8,An,Xn)	fff8/0230	-	-	000,010,020,030,040,060	-
+andib	#imm,-(An)	fff8/0220	-	-	000,010,020,030,040,060	-
+andib	#imm,Dn	fff8/0200	-	-	000,010,020,030,040,060	-
+andib	#imm,abs	fffe/0238	-	-	000,010,020,030,040,060	-
+andib	#imm,reg	ffff/023c	-	-	000,010,020,030,040,060	-
+andil	#imm,(An)	fff8/0290	-	-	000,010,020,030,040,060	-
+andil	#imm,(An)+	fff8/0298	-	-	000,010,020,030,040,060	-
+andil	#imm,(d16,An)	fff8/02a8	-	-	000,010,020,030,040,060	-
+andil	#imm,(d8,An,Xn)	fff8/02b0	-	-	000,010,020,030,040,060	-
+andil	#imm,-(An)	fff8/02a0	-	-	000,010,020,030,040,060	-
+andil	#imm,Dn	fff8/0280	-	-	000,010,020,030,040,060	-
+andil	#imm,abs	fffe/02b8	-	-	000,010,020,030,040,060	-
+andiw	#imm,(An)	fff8/0250	-	-	000,010,020,030,040,060	-
+andiw	#imm,(An)+	fff8/0258	-	-	000,010,020,030,040,060	-
+andiw	#imm,(d16,An)	fff8/0268	-	-	000,010,020,030,040,060	-
+andiw	#imm,(d8,An,Xn)	fff8/0270	-	-	000,010,020,030,040,060	-
+andiw	#imm,-(An)	fff8/0260	-	-	000,010,020,030,040,060	-
+andiw	#imm,Dn	fff8/0240	-	-	000,010,020,030,040,060	-
+andiw	#imm,abs	fffe/0278	-	-	000,010,020,030,040,060	-
+andiw	#imm,reg	ffff/027c	-	-	000,010,020,030,040,060	-
+andl	#imm,Dn	f1ff/c0bc	-	-	000,010,020,030,040,060	-
+andl	(An)+,Dn	f1f8/c098	-	-	000,010,020,030,040,060	-
+andl	(An),Dn	f1f8/c090	-	-	000,010,020,030,040,060	-
+andl	(d16,An),Dn	f1f8/c0a8	-	-	000,010,020,030,040,060	-
+andl	(d16,PC),Dn	f1ff/c0ba	-	-	000,010,020,030,040,060	-
+andl	(d8,An,Xn),Dn	f1f8/c0b0	-	-	000,010,020,030,040,060	-
+andl	(d8,PC,Xn),Dn	f1ff/c0bb	-	-	000,010,020,030,040,060	-
+andl	-(An),Dn	f1f8/c0a0	-	-	000,010,020,030,040,060	-
+andl	Dn,(An)	f1f8/c190	-	-	000,010,020,030,040,060	-
+andl	Dn,(An)+	f1f8/c198	-	-	000,010,020,030,040,060	-
+andl	Dn,(d16,An)	f1f8/c1a8	-	-	000,010,020,030,040,060	-
+andl	Dn,(d8,An,Xn)	f1f8/c1b0	-	-	000,010,020,030,040,060	-
+andl	Dn,-(An)	f1f8/c1a0	-	-	000,010,020,030,040,060	-
+andl	Dn,Dn	f1f8/c080	-	-	000,010,020,030,040,060	-
+andl	Dn,abs	f1fe/c1b8	-	-	000,010,020,030,040,060	-
+andl	abs,Dn	f1fe/c0b8	-	-	000,010,020,030,040,060	-
+andw	#imm,Dn	f1ff/c07c	-	-	000,010,020,030,040,060	-
+andw	(An)+,Dn	f1f8/c058	-	-	000,010,020,030,040,060	-
+andw	(An),Dn	f1f8/c050	-	-	000,010,020,030,040,060	-
+andw	(d16,An),Dn	f1f8/c068	-	-	000,010,020,030,040,060	-
+andw	(d16,PC),Dn	f1ff/c07a	-	-	000,010,020,030,040,060	-
+andw	(d8,An,Xn),Dn	f1f8/c070	-	-	000,010,020,030,040,060	-
+andw	(d8,PC,Xn),Dn	f1ff/c07b	-	-	000,010,020,030,040,060	-
+andw	-(An),Dn	f1f8/c060	-	-	000,010,020,030,040,060	-
+andw	Dn,(An)	f1f8/c150	-	-	000,010,020,030,040,060	-
+andw	Dn,(An)+	f1f8/c158	-	-	000,010,020,030,040,060	-
+andw	Dn,(d16,An)	f1f8/c168	-	-	000,010,020,030,040,060	-
+andw	Dn,(d8,An,Xn)	f1f8/c170	-	-	000,010,020,030,040,060	-
+andw	Dn,-(An)	f1f8/c160	-	-	000,010,020,030,040,060	-
+andw	Dn,Dn	f1f8/c040	-	-	000,010,020,030,040,060	-
+andw	Dn,abs	f1fe/c178	-	-	000,010,020,030,040,060	-
+andw	abs,Dn	f1fe/c078	-	-	000,010,020,030,040,060	-
+aslb	#imm,Dn	f1f8/e100	-	-	000,010,020,030,040,060	-
+aslb	Dn,Dn	f1f8/e120	-	-	000,010,020,030,040,060	-
+asll	#imm,Dn	f1f8/e180	-	-	000,010,020,030,040,060	-
+asll	Dn,Dn	f1f8/e1a0	-	-	000,010,020,030,040,060	-
+aslw	#imm,Dn	f1f8/e140	-	-	000,010,020,030,040,060	-
+aslw	(An)	fff8/e1d0	-	-	000,010,020,030,040,060	-
+aslw	(An)+	fff8/e1d8	-	-	000,010,020,030,040,060	-
+aslw	(d16,An)	fff8/e1e8	-	-	000,010,020,030,040,060	-
+aslw	(d8,An,Xn)	fff8/e1f0	-	-	000,010,020,030,040,060	-
+aslw	-(An)	fff8/e1e0	-	-	000,010,020,030,040,060	-
+aslw	Dn,Dn	f1f8/e160	-	-	000,010,020,030,040,060	-
+aslw	abs	fffe/e1f8	-	-	000,010,020,030,040,060	-
+asrb	#imm,Dn	f1f8/e000	-	-	000,010,020,030,040,060	-
+asrb	Dn,Dn	f1f8/e020	-	-	000,010,020,030,040,060	-
+asrl	#imm,Dn	f1f8/e080	-	-	000,010,020,030,040,060	-
+asrl	Dn,Dn	f1f8/e0a0	-	-	000,010,020,030,040,060	-
+asrw	#imm,Dn	f1f8/e040	-	-	000,010,020,030,040,060	-
+asrw	(An)	fff8/e0d0	-	-	000,010,020,030,040,060	-
+asrw	(An)+	fff8/e0d8	-	-	000,010,020,030,040,060	-
+asrw	(d16,An)	fff8/e0e8	-	-	000,010,020,030,040,060	-
+asrw	(d8,An,Xn)	fff8/e0f0	-	-	000,010,020,030,040,060	-
+asrw	-(An)	fff8/e0e0	-	-	000,010,020,030,040,060	-
+asrw	Dn,Dn	f1f8/e060	-	-	000,010,020,030,040,060	-
+asrw	abs	fffe/e0f8	-	-	000,010,020,030,040,060	-
+bccl	abs	ffff/64ff	-	-	020,030,040,060	-
+bccs	abs	ff01/6401 ff02/6402 ff04/6404 ff08/6408 ff10/6410 ff20/6420 ff40/6440 ff80/6480	-	-	000,010	-
+bccs	abs	ff03/6402 ff06/6402 ff0a/6408 ff12/6410 ff14/6404 ff21/6401 ff30/6420 ff48/6440 ff84/6404 ff88/6408 ffc0/6480	-	-	020,030,040,060	-
+bccw	abs	ffff/6400	-	-	000,010,020,030,040,060	-
+bchg	#imm,(An)	fff8/0850	-	-	000,010,020,030,040,060	-
+bchg	#imm,(An)+	fff8/0858	-	-	000,010,020,030,040,060	-
+bchg	#imm,(d16,An)	fff8/0868	-	-	000,010,020,030,040,060	-
+bchg	#imm,(d8,An,Xn)	fff8/0870	-	-	000,010,020,030,040,060	-
+bchg	#imm,-(An)	fff8/0860	-	-	000,010,020,030,040,060	-
+bchg	#imm,Dn	fff8/0840	-	-	000,010,020,030,040,060	-
+bchg	#imm,abs	fffe/0878	-	-	000,010,020,030,040,060	-
+bchg	Dn,(An)	f1f8/0150	-	-	000,010,020,030,040,060	-
+bchg	Dn,(An)+	f1f8/0158	-	-	000,010,020,030,040,060	-
+bchg	Dn,(d16,An)	f1f8/0168	-	-	000,010,020,030,040,060	-
+bchg	Dn,(d8,An,Xn)	f1f8/0170	-	-	000,010,020,030,040,060	-
+bchg	Dn,-(An)	f1f8/0160	-	-	000,010,020,030,040,060	-
+bchg	Dn,Dn	f1f8/0140	-	-	000,010,020,030,040,060	-
+bchg	Dn,abs	f1fe/0178	-	-	000,010,020,030,040,060	-
+bclr	#imm,(An)	fff8/0890	-	-	000,010,020,030,040,060	-
+bclr	#imm,(An)+	fff8/0898	-	-	000,010,020,030,040,060	-
+bclr	#imm,(d16,An)	fff8/08a8	-	-	000,010,020,030,040,060	-
+bclr	#imm,(d8,An,Xn)	fff8/08b0	-	-	000,010,020,030,040,060	-
+bclr	#imm,-(An)	fff8/08a0	-	-	000,010,020,030,040,060	-
+bclr	#imm,Dn	fff8/0880	-	-	000,010,020,030,040,060	-
+bclr	#imm,abs	fffe/08b8	-	-	000,010,020,030,040,060	-
+bclr	Dn,(An)	f1f8/0190	-	-	000,010,020,030,040,060	-
+bclr	Dn,(An)+	f1f8/0198	-	-	000,010,020,030,040,060	-
+bclr	Dn,(d16,An)	f1f8/01a8	-	-	000,010,020,030,040,060	-
+bclr	Dn,(d8,An,Xn)	f1f8/01b0	-	-	000,010,020,030,040,060	-
+bclr	Dn,-(An)	f1f8/01a0	-	-	000,010,020,030,040,060	-
+bclr	Dn,Dn	f1f8/0180	-	-	000,010,020,030,040,060	-
+bclr	Dn,abs	f1fe/01b8	-	-	000,010,020,030,040,060	-
+bcsl	abs	ffff/65ff	-	-	020,030,040,060	-
+bcss	abs	ff01/6501 ff02/6502 ff04/6504 ff08/6508 ff10/6510 ff20/6520 ff40/6540 ff80/6580	-	-	000,010	-
+bcss	abs	ff06/6502 ff09/6501 ff0a/6502 ff12/6510 ff18/6508 ff21/6501 ff21/6520 ff41/6540 ff48/6508 ff84/6504 ff90/6580	-	-	020,030,040,060	-
+bcsw	abs	ffff/6500	-	-	000,010,020,030,040,060	-
+beql	abs	ffff/67ff	-	-	020,030,040,060	-
+beqs	abs	ff01/6701 ff02/6702 ff04/6704 ff08/6708 ff10/6710 ff20/6720 ff40/6740 ff80/6780	-	-	000,010	-
+beqs	abs	ff03/6701 ff05/6701 ff09/6701 ff12/6710 ff18/6708 ff21/6720 ff24/6704 ff41/6740 ff42/6702 ff81/6780 ff88/6708	-	-	020,030,040,060	-
+beqw	abs	ffff/6700	-	-	000,010,020,030,040,060	-
+bfchg	(An),{off:wid}	fff8/ead0	-	-	020,030,040,060	-
+bfchg	(d16,An),{off:wid}	fff8/eae8	-	-	020,030,040,060	-
+bfchg	(d8,An,Xn),{off:wid}	fff8/eaf0	-	-	020,030,040,060	-
+bfchg	Dn,{off:wid}	fff8/eac0	-	-	020,030,040,060	-
+bfchg	abs,{off:wid}	fffe/eaf8	-	-	020,030,040,060	-
+bfclr	(An),{off:wid}	fff8/ecd0	-	-	020,030,040,060	-
+bfclr	(d16,An),{off:wid}	fff8/ece8	-	-	020,030,040,060	-
+bfclr	(d8,An,Xn),{off:wid}	fff8/ecf0	-	-	020,030,040,060	-
+bfclr	Dn,{off:wid}	fff8/ecc0	-	-	020,030,040,060	-
+bfclr	abs,{off:wid}	fffe/ecf8	-	-	020,030,040,060	-
+bfexts	(An),{off:wid},Dn	fff8/ebd0	-	-	020,030,040,060	-
+bfexts	(d16,An),{off:wid},Dn	fff8/ebe8	-	-	020,030,040,060	-
+bfexts	(d16,PC),{off:wid},Dn	ffff/ebfa	-	-	020,030,040,060	-
+bfexts	(d8,An,Xn),{off:wid},Dn	fff8/ebf0	-	-	020,030,040,060	-
+bfexts	(d8,PC,Xn),{off:wid},Dn	ffff/ebfb	-	-	020,030,040,060	-
+bfexts	Dn,{off:wid},Dn	fff8/ebc0	-	-	020,030,040,060	-
+bfexts	abs,{off:wid},Dn	fffe/ebf8	-	-	020,030,040,060	-
+bfextu	(An),{off:wid},Dn	fff8/e9d0	-	-	020,030,040,060	-
+bfextu	(d16,An),{off:wid},Dn	fff8/e9e8	-	-	020,030,040,060	-
+bfextu	(d16,PC),{off:wid},Dn	ffff/e9fa	-	-	020,030,040,060	-
+bfextu	(d8,An,Xn),{off:wid},Dn	fff8/e9f0	-	-	020,030,040,060	-
+bfextu	(d8,PC,Xn),{off:wid},Dn	ffff/e9fb	-	-	020,030,040,060	-
+bfextu	Dn,{off:wid},Dn	fff8/e9c0	-	-	020,030,040,060	-
+bfextu	abs,{off:wid},Dn	fffe/e9f8	-	-	020,030,040,060	-
+bfffo	(An),{off:wid},Dn	fff8/edd0	-	-	020,030,040,060	-
+bfffo	(d16,An),{off:wid},Dn	fff8/ede8	-	-	020,030,040,060	-
+bfffo	(d16,PC),{off:wid},Dn	ffff/edfa	-	-	020,030,040,060	-
+bfffo	(d8,An,Xn),{off:wid},Dn	fff8/edf0	-	-	020,030,040,060	-
+bfffo	(d8,PC,Xn),{off:wid},Dn	ffff/edfb	-	-	020,030,040,060	-
+bfffo	Dn,{off:wid},Dn	fff8/edc0	-	-	020,030,040,060	-
+bfffo	abs,{off:wid},Dn	fffe/edf8	-	-	020,030,040,060	-
+bfins	Dn,(An),{off:wid}	fff8/efd0	-	-	020,030,040,060	-
+bfins	Dn,(d16,An),{off:wid}	fff8/efe8	-	-	020,030,040,060	-
+bfins	Dn,(d8,An,Xn),{off:wid}	fff8/eff0	-	-	020,030,040,060	-
+bfins	Dn,Dn,{off:wid}	fff8/efc0	-	-	020,030,040,060	-
+bfins	Dn,abs,{off:wid}	fffe/eff8	-	-	020,030,040,060	-
+bfset	(An),{off:wid}	fff8/eed0	-	-	020,030,040,060	-
+bfset	(d16,An),{off:wid}	fff8/eee8	-	-	020,030,040,060	-
+bfset	(d8,An,Xn),{off:wid}	fff8/eef0	-	-	020,030,040,060	-
+bfset	Dn,{off:wid}	fff8/eec0	-	-	020,030,040,060	-
+bfset	abs,{off:wid}	fffe/eef8	-	-	020,030,040,060	-
+bftst	(An),{off:wid}	fff8/e8d0	-	-	020,030,040,060	-
+bftst	(d16,An),{off:wid}	fff8/e8e8	-	-	020,030,040,060	-
+bftst	(d16,PC),{off:wid}	ffff/e8fa	-	-	020,030,040,060	-
+bftst	(d8,An,Xn),{off:wid}	fff8/e8f0	-	-	020,030,040,060	-
+bftst	(d8,PC,Xn),{off:wid}	ffff/e8fb	-	-	020,030,040,060	-
+bftst	Dn,{off:wid}	fff8/e8c0	-	-	020,030,040,060	-
+bftst	abs,{off:wid}	fffe/e8f8	-	-	020,030,040,060	-
+bgel	abs	ffff/6cff	-	-	020,030,040,060	-
+bges	abs	ff01/6c01 ff02/6c02 ff04/6c04 ff08/6c08 ff10/6c10 ff20/6c20 ff40/6c40 ff80/6c80	-	-	000,010	-
+bges	abs	ff03/6c02 ff06/6c04 ff0c/6c08 ff11/6c01 ff14/6c04 ff18/6c10 ff30/6c10 ff42/6c40 ff60/6c20 ff81/6c01 ff82/6c80	-	-	020,030,040,060	-
+bgew	abs	ffff/6c00	-	-	000,010,020,030,040,060	-
+bgtl	abs	ffff/6eff	-	-	020,030,040,060	-
+bgts	abs	ff01/6e01 ff02/6e02 ff04/6e04 ff08/6e08 ff10/6e10 ff20/6e20 ff40/6e40 ff80/6e80	-	-	000,010	-
+bgts	abs	ff03/6e02 ff0a/6e02 ff0a/6e08 ff11/6e01 ff14/6e10 ff18/6e10 ff22/6e02 ff24/6e04 ff30/6e20 ff44/6e40 ff84/6e04 ffc0/6e80	-	-	020,030,040,060	-
+bgtw	abs	ffff/6e00	-	-	000,010,020,030,040,060	-
+bhil	abs	ffff/62ff	-	-	020,030,040,060	-
+bhis	abs	ff01/6201 ff02/6202 ff04/6204 ff08/6208 ff10/6210 ff20/6220 ff40/6240 ff80/6280	-	-	000,010	-
+bhis	abs	ff03/6202 ff06/6204 ff0a/6202 ff0a/6208 ff0c/6208 ff11/6201 ff18/6210 ff22/6202 ff60/6240 ff90/6280 ffa0/6220 ffc0/6280	-	-	020,030,040,060	-
+bhiw	abs	ffff/6200	-	-	000,010,020,030,040,060	-
+bkpt	#imm	fff8/4848	-	-	010,020,030,040,060	-
+blel	abs	ffff/6fff	-	-	020,030,040,060	-
+bles	abs	ff01/6f01 ff02/6f02 ff04/6f04 ff08/6f08 ff10/6f10 ff20/6f20 ff40/6f40 ff80/6f80	-	-	000,010	-
+bles	abs	ff0a/6f02 ff0a/6f08 ff11/6f10 ff14/6f04 ff14/6f10 ff21/6f01 ff30/6f20 ff48/6f08 ff84/6f04 ff88/6f80 ff90/6f80 ffc0/6f40	-	-	020,030,040,060	-
+blew	abs	ffff/6f00	-	-	000,010,020,030,040,060	-
+blsl	abs	ffff/63ff	-	-	020,030,040,060	-
+blss	abs	ff01/6301 ff02/6302 ff04/6304 ff08/6308 ff10/6310 ff20/6320 ff40/6340 ff80/6380	-	-	000,010	-
+blss	abs	ff03/6302 ff06/6304 ff0a/6302 ff0c/6308 ff11/6301 ff14/6310 ff30/6320 ff44/6304 ff60/6340 ff84/6304 ff90/6380	-	-	020,030,040,060	-
+blsw	abs	ffff/6300	-	-	000,010,020,030,040,060	-
+bltl	abs	ffff/6dff	-	-	020,030,040,060	-
+blts	abs	ff01/6d01 ff02/6d02 ff04/6d04 ff08/6d08 ff10/6d10 ff20/6d20 ff40/6d40 ff80/6d80	-	-	000,010	-
+blts	abs	ff03/6d02 ff06/6d04 ff0a/6d02 ff0a/6d08 ff0c/6d08 ff11/6d01 ff18/6d10 ff22/6d02 ff30/6d20 ff60/6d20 ff82/6d80 ffc0/6d40	-	-	020,030,040,060	-
+bltw	abs	ffff/6d00	-	-	000,010,020,030,040,060	-
+bmil	abs	ffff/6bff	-	-	020,030,040,060	-
+bmis	abs	ff01/6b01 ff02/6b02 ff04/6b04 ff08/6b08 ff10/6b10 ff20/6b20 ff40/6b40 ff80/6b80	-	-	000,010	-
+bmis	abs	ff03/6b02 ff06/6b04 ff0c/6b04 ff11/6b01 ff21/6b01 ff28/6b08 ff42/6b02 ff44/6b40 ff60/6b20 ff82/6b80 ff90/6b10	-	-	020,030,040,060	-
+bmiw	abs	ffff/6b00	-	-	000,010,020,030,040,060	-
+bnel	abs	ffff/66ff	-	-	020,030,040,060	-
+bnes	abs	ff01/6601 ff02/6602 ff04/6604 ff08/6608 ff10/6610 ff20/6620 ff40/6640 ff80/6680	-	-	000,010	-
+bnes	abs	ff05/6604 ff06/6602 ff09/6601 ff0c/6608 ff12/6610 ff18/6608 ff21/6620 ff48/6608 ff60/6640 ff81/6680 ff90/6610	-	-	020,030,040,060	-
+bnew	abs	ffff/6600	-	-	000,010,020,030,040,060	-
+bpll	abs	ffff/6aff	-	-	020,030,040,060	-
+bpls	abs	ff01/6a01 ff02/6a02 ff04/6a04 ff08/6a08 ff10/6a10 ff20/6a20 ff40/6a40 ff80/6a80	-	-	000,010	-
+bpls	abs	ff03/6a02 ff05/6a04 ff0c/6a04 ff11/6a01 ff12/6a10 ff24/6a20 ff28/6a08 ff41/6a01 ff44/6a40 ff81/6a01 ff84/6a80	-	-	020,030,040,060	-
+bplw	abs	ffff/6a00	-	-	000,010,020,030,040,060	-
+bral	abs	ffff/60ff	-	-	020,030,040,060	-
+bras	abs	ff01/6001 ff02/6002 ff04/6004 ff08/6008 ff10/6010 ff20/6020 ff40/6040 ff80/6080	-	-	000,010	-
+bras	abs	ff03/6002 ff0c/6004 ff12/6002 ff18/6010 ff22/6020 ff30/6010 ff42/6040 ff48/6008 ff81/6001 ff82/6080 ff84/6080	-	-	020,030,040,060	-
+braw	abs	ffff/6000	-	-	000,010,020,030,040,060	-
+bset	#imm,(An)	fff8/08d0	-	-	000,010,020,030,040,060	-
+bset	#imm,(An)+	fff8/08d8	-	-	000,010,020,030,040,060	-
+bset	#imm,(d16,An)	fff8/08e8	-	-	000,010,020,030,040,060	-
+bset	#imm,(d8,An,Xn)	fff8/08f0	-	-	000,010,020,030,040,060	-
+bset	#imm,-(An)	fff8/08e0	-	-	000,010,020,030,040,060	-
+bset	#imm,Dn	fff8/08c0	-	-	000,010,020,030,040,060	-
+bset	#imm,abs	fffe/08f8	-	-	000,010,020,030,040,060	-
+bset	Dn,(An)	f1f8/01d0	-	-	000,010,020,030,040,060	-
+bset	Dn,(An)+	f1f8/01d8	-	-	000,010,020,030,040,060	-
+bset	Dn,(d16,An)	f1f8/01e8	-	-	000,010,020,030,040,060	-
+bset	Dn,(d8,An,Xn)	f1f8/01f0	-	-	000,010,020,030,040,060	-
+bset	Dn,-(An)	f1f8/01e0	-	-	000,010,020,030,040,060	-
+bset	Dn,Dn	f1f8/01c0	-	-	000,010,020,030,040,060	-
+bset	Dn,abs	f1fe/01f8	-	-	000,010,020,030,040,060	-
+bsrl	abs	ffff/61ff	-	-	020,030,040,060	-
+bsrs	abs	ff01/6101 ff02/6102 ff04/6104 ff08/6108 ff10/6110 ff20/6120 ff40/6140 ff80/6180	-	-	000,010	-
+bsrs	abs	ff03/6102 ff06/6104 ff0a/6108 ff0c/6108 ff12/6102 ff18/6110 ff30/6110 ff42/6140 ff60/6120 ff81/6101 ff82/6180	-	-	020,030,040,060	-
+bsrw	abs	ffff/6100	-	-	000,010,020,030,040,060	-
+btst	#imm,(An)	fff8/0810	-	-	000,010,020,030,040,060	-
+btst	#imm,(An)+	fff8/0818	-	-	000,010,020,030,040,060	-
+btst	#imm,(d16,An)	fff8/0828	-	-	000,010,020,030,040,060	-
+btst	#imm,(d16,PC)	ffff/083a	-	-	000,010,020,030,040,060	-
+btst	#imm,(d8,An,Xn)	fff8/0830	-	-	000,010,020,030,040,060	-
+btst	#imm,(d8,PC,Xn)	ffff/083b	-	-	000,010,020,030,040,060	-
+btst	#imm,-(An)	fff8/0820	-	-	000,010,020,030,040,060	-
+btst	#imm,Dn	fff8/0800	-	-	000,010,020,030,040,060	-
+btst	#imm,abs	fffe/0838	-	-	000,010,020,030,040,060	-
+btst	Dn,#imm	f1ff/013c	-	-	000,010,020,030,040,060	-
+btst	Dn,(An)	f1f8/0110	-	-	000,010,020,030,040,060	-
+btst	Dn,(An)+	f1f8/0118	-	-	000,010,020,030,040,060	-
+btst	Dn,(d16,An)	f1f8/0128	-	-	000,010,020,030,040,060	-
+btst	Dn,(d16,PC)	f1ff/013a	-	-	000,010,020,030,040,060	-
+btst	Dn,(d8,An,Xn)	f1f8/0130	-	-	000,010,020,030,040,060	-
+btst	Dn,(d8,PC,Xn)	f1ff/013b	-	-	000,010,020,030,040,060	-
+btst	Dn,-(An)	f1f8/0120	-	-	000,010,020,030,040,060	-
+btst	Dn,Dn	f1f8/0100	-	-	000,010,020,030,040,060	-
+btst	Dn,abs	f1fe/0138	-	-	000,010,020,030,040,060	-
+bvcl	abs	ffff/68ff	-	-	020,030,040,060	-
+bvcs	abs	ff01/6801 ff02/6802 ff04/6804 ff08/6808 ff10/6810 ff20/6820 ff40/6840 ff80/6880	-	-	000,010	-
+bvcs	abs	ff03/6801 ff05/6801 ff18/6808 ff24/6804 ff28/6820 ff41/6840 ff48/6840 ff50/6810 ff82/6802 ff88/6880 ff90/6810 ffa0/6880	-	-	020,030,040,060	-
+bvcw	abs	ffff/6800	-	-	000,010,020,030,040,060	-
+bvsl	abs	ffff/69ff	-	-	020,030,040,060	-
+bvss	abs	ff01/6901 ff02/6902 ff04/6904 ff08/6908 ff10/6910 ff20/6920 ff40/6940 ff80/6980	-	-	000,010	-
+bvss	abs	ff03/6901 ff09/6908 ff0c/6904 ff11/6910 ff24/6920 ff28/6908 ff41/6901 ff48/6940 ff50/6940 ff82/6902 ff88/6980 ff90/6910	-	-	020,030,040,060	-
+bvsw	abs	ffff/6900	-	-	000,010,020,030,040,060	-
+callm	#imm,(An)	fff8/06d0	-	-	020	-
+callm	#imm,(d16,An)	fff8/06e8	-	-	020	-
+callm	#imm,(d16,PC)	ffff/06fa	-	-	020	-
+callm	#imm,(d8,An,Xn)	fff8/06f0	-	-	020	-
+callm	#imm,(d8,PC,Xn)	ffff/06fb	-	-	020	-
+callm	#imm,abs	fffe/06f8	-	-	020	-
+cas2l	Dn,Dn,Dn,Dn,(An),(Rn)	ffff/0efc	-	-	020,030,040,060	060
+cas2l	Dn,Dn,Dn,Dn,(Rn),(Rn)	ffff/0efc	-	-	020,030,040,060	060
+cas2w	Dn,Dn,Dn,Dn,(An),(Rn)	ffff/0cfc	-	-	020,030,040,060	060
+cas2w	Dn,Dn,Dn,Dn,(Rn),(Rn)	ffff/0cfc	-	-	020,030,040,060	060
+casb	Dn,Dn,(An)	fff8/0ad0	-	-	020,030,040,060	-
+casb	Dn,Dn,(An)+	fff8/0ad8	-	-	020,030,040,060	-
+casb	Dn,Dn,(d16,An)	fff8/0ae8	-	-	020,030,040,060	-
+casb	Dn,Dn,(d8,An,Xn)	fff8/0af0	-	-	020,030,040,060	-
+casb	Dn,Dn,-(An)	fff8/0ae0	-	-	020,030,040,060	-
+casb	Dn,Dn,abs	fffe/0af8	-	-	020,030,040,060	-
+casl	Dn,Dn,(An)	fff8/0ed0	-	-	020,030,040,060	-
+casl	Dn,Dn,(An)+	fff8/0ed8	-	-	020,030,040,060	-
+casl	Dn,Dn,(d16,An)	fff8/0ee8	-	-	020,030,040,060	-
+casl	Dn,Dn,(d8,An,Xn)	fff8/0ef0	-	-	020,030,040,060	-
+casl	Dn,Dn,-(An)	fff8/0ee0	-	-	020,030,040,060	-
+casl	Dn,Dn,abs	fffe/0ef8	-	-	020,030,040,060	-
+casw	Dn,Dn,(An)	fff8/0cd0	-	-	020,030,040,060	-
+casw	Dn,Dn,(An)+	fff8/0cd8	-	-	020,030,040,060	-
+casw	Dn,Dn,(d16,An)	fff8/0ce8	-	-	020,030,040,060	-
+casw	Dn,Dn,(d8,An,Xn)	fff8/0cf0	-	-	020,030,040,060	-
+casw	Dn,Dn,-(An)	fff8/0ce0	-	-	020,030,040,060	-
+casw	Dn,Dn,abs	fffe/0cf8	-	-	020,030,040,060	-
+chk2b	(An),Dn	fff8/00d0	-	-	020,030,040,060	060
+chk2b	(d16,An),Dn	fff8/00e8	-	-	020,030,040,060	060
+chk2b	(d16,PC),Dn	ffff/00fa	-	-	020,030,040,060	060
+chk2b	(d8,An,Xn),Dn	fff8/00f0	-	-	020,030,040,060	060
+chk2b	(d8,PC,Xn),Dn	ffff/00fb	-	-	020,030,040,060	060
+chk2b	abs,Dn	fffe/00f8	-	-	020,030,040,060	060
+chk2l	(An),Dn	fff8/04d0	-	-	020,030,040,060	060
+chk2l	(d16,An),Dn	fff8/04e8	-	-	020,030,040,060	060
+chk2l	(d16,PC),Dn	ffff/04fa	-	-	020,030,040,060	060
+chk2l	(d8,An,Xn),Dn	fff8/04f0	-	-	020,030,040,060	060
+chk2l	(d8,PC,Xn),Dn	ffff/04fb	-	-	020,030,040,060	060
+chk2l	abs,Dn	fffe/04f8	-	-	020,030,040,060	060
+chk2w	(An),Dn	fff8/02d0	-	-	020,030,040,060	060
+chk2w	(d16,An),Dn	fff8/02e8	-	-	020,030,040,060	060
+chk2w	(d16,PC),Dn	ffff/02fa	-	-	020,030,040,060	060
+chk2w	(d8,An,Xn),Dn	fff8/02f0	-	-	020,030,040,060	060
+chk2w	(d8,PC,Xn),Dn	ffff/02fb	-	-	020,030,040,060	060
+chk2w	abs,Dn	fffe/02f8	-	-	020,030,040,060	060
+chkl	#imm,Dn	f1ff/413c	-	-	020,030,040,060	-
+chkl	(An)+,Dn	f1f8/4118	-	-	020,030,040,060	-
+chkl	(An),Dn	f1f8/4110	-	-	020,030,040,060	-
+chkl	(d16,An),Dn	f1f8/4128	-	-	020,030,040,060	-
+chkl	(d16,PC),Dn	f1ff/413a	-	-	020,030,040,060	-
+chkl	(d8,An,Xn),Dn	f1f8/4130	-	-	020,030,040,060	-
+chkl	(d8,PC,Xn),Dn	f1ff/413b	-	-	020,030,040,060	-
+chkl	-(An),Dn	f1f8/4120	-	-	020,030,040,060	-
+chkl	Dn,Dn	f1f8/4100	-	-	020,030,040,060	-
+chkl	abs,Dn	f1fe/4138	-	-	020,030,040,060	-
+chkw	#imm,Dn	f1ff/41bc	-	-	000,010,020,030,040,060	-
+chkw	(An)+,Dn	f1f8/4198	-	-	000,010,020,030,040,060	-
+chkw	(An),Dn	f1f8/4190	-	-	000,010,020,030,040,060	-
+chkw	(d16,An),Dn	f1f8/41a8	-	-	000,010,020,030,040,060	-
+chkw	(d16,PC),Dn	f1ff/41ba	-	-	000,010,020,030,040,060	-
+chkw	(d8,An,Xn),Dn	f1f8/41b0	-	-	000,010,020,030,040,060	-
+chkw	(d8,PC,Xn),Dn	f1ff/41bb	-	-	000,010,020,030,040,060	-
+chkw	-(An),Dn	f1f8/41a0	-	-	000,010,020,030,040,060	-
+chkw	Dn,Dn	f1f8/4180	-	-	000,010,020,030,040,060	-
+chkw	abs,Dn	f1fe/41b8	-	-	000,010,020,030,040,060	-
+cinva	cache	ff38/f418	-	-	040,060	-
+cinvl	cache,(An)	ff38/f408	-	-	040,060	-
+cinvp	cache,(An)	ff38/f410	-	-	040,060	-
+clrb	(An)	fff8/4210	-	-	000,010,020,030,040,060	-
+clrb	(An)+	fff8/4218	-	-	000,010,020,030,040,060	-
+clrb	(d16,An)	fff8/4228	-	-	000,010,020,030,040,060	-
+clrb	(d8,An,Xn)	fff8/4230	-	-	000,010,020,030,040,060	-
+clrb	-(An)	fff8/4220	-	-	000,010,020,030,040,060	-
+clrb	Dn	fff8/4200	-	-	000,010,020,030,040,060	-
+clrb	abs	fffe/4238	-	-	000,010,020,030,040,060	-
+clrl	(An)	fff8/4290	-	-	000,010,020,030,040,060	-
+clrl	(An)+	fff8/4298	-	-	000,010,020,030,040,060	-
+clrl	(d16,An)	fff8/42a8	-	-	000,010,020,030,040,060	-
+clrl	(d8,An,Xn)	fff8/42b0	-	-	000,010,020,030,040,060	-
+clrl	-(An)	fff8/42a0	-	-	000,010,020,030,040,060	-
+clrl	Dn	fff8/4280	-	-	000,010,020,030,040,060	-
+clrl	abs	fffe/42b8	-	-	000,010,020,030,040,060	-
+clrw	(An)	fff8/4250	-	-	000,010,020,030,040,060	-
+clrw	(An)+	fff8/4258	-	-	000,010,020,030,040,060	-
+clrw	(d16,An)	fff8/4268	-	-	000,010,020,030,040,060	-
+clrw	(d8,An,Xn)	fff8/4270	-	-	000,010,020,030,040,060	-
+clrw	-(An)	fff8/4260	-	-	000,010,020,030,040,060	-
+clrw	Dn	fff8/4240	-	-	000,010,020,030,040,060	-
+clrw	abs	fffe/4278	-	-	000,010,020,030,040,060	-
+cmp2b	(An),An	fff8/00d0	-	-	020,030,040,060	060
+cmp2b	(An),Dn	fff8/00d0	-	-	020,030,040,060	060
+cmp2b	(d16,An),An	fff8/00e8	-	-	020,030,040,060	060
+cmp2b	(d16,An),Dn	fff8/00e8	-	-	020,030,040,060	060
+cmp2b	(d16,PC),An	ffff/00fa	-	-	020,030,040,060	060
+cmp2b	(d16,PC),Dn	ffff/00fa	-	-	020,030,040,060	060
+cmp2b	(d8,An,Xn),An	fff8/00f0	-	-	020,030,040,060	060
+cmp2b	(d8,An,Xn),Dn	fff8/00f0	-	-	020,030,040,060	060
+cmp2b	(d8,PC,Xn),An	ffff/00fb	-	-	020,030,040,060	060
+cmp2b	(d8,PC,Xn),Dn	ffff/00fb	-	-	020,030,040,060	060
+cmp2b	abs,An	fffe/00f8	-	-	020,030,040,060	060
+cmp2b	abs,Dn	fffe/00f8	-	-	020,030,040,060	060
+cmp2l	(An),An	fff8/04d0	-	-	020,030,040,060	060
+cmp2l	(An),Dn	fff8/04d0	-	-	020,030,040,060	060
+cmp2l	(d16,An),An	fff8/04e8	-	-	020,030,040,060	060
+cmp2l	(d16,An),Dn	fff8/04e8	-	-	020,030,040,060	060
+cmp2l	(d16,PC),An	ffff/04fa	-	-	020,030,040,060	060
+cmp2l	(d16,PC),Dn	ffff/04fa	-	-	020,030,040,060	060
+cmp2l	(d8,An,Xn),An	fff8/04f0	-	-	020,030,040,060	060
+cmp2l	(d8,An,Xn),Dn	fff8/04f0	-	-	020,030,040,060	060
+cmp2l	(d8,PC,Xn),An	ffff/04fb	-	-	020,030,040,060	060
+cmp2l	(d8,PC,Xn),Dn	ffff/04fb	-	-	020,030,040,060	060
+cmp2l	abs,An	fffe/04f8	-	-	020,030,040,060	060
+cmp2l	abs,Dn	fffe/04f8	-	-	020,030,040,060	060
+cmp2w	(An),An	fff8/02d0	-	-	020,030,040,060	060
+cmp2w	(An),Dn	fff8/02d0	-	-	020,030,040,060	060
+cmp2w	(d16,An),An	fff8/02e8	-	-	020,030,040,060	060
+cmp2w	(d16,An),Dn	fff8/02e8	-	-	020,030,040,060	060
+cmp2w	(d16,PC),An	ffff/02fa	-	-	020,030,040,060	060
+cmp2w	(d16,PC),Dn	ffff/02fa	-	-	020,030,040,060	060
+cmp2w	(d8,An,Xn),An	fff8/02f0	-	-	020,030,040,060	060
+cmp2w	(d8,An,Xn),Dn	fff8/02f0	-	-	020,030,040,060	060
+cmp2w	(d8,PC,Xn),An	ffff/02fb	-	-	020,030,040,060	060
+cmp2w	(d8,PC,Xn),Dn	ffff/02fb	-	-	020,030,040,060	060
+cmp2w	abs,An	fffe/02f8	-	-	020,030,040,060	060
+cmp2w	abs,Dn	fffe/02f8	-	-	020,030,040,060	060
+cmpal	#imm,An	f1ff/b1fc	-	-	000,010,020,030,040,060	-
+cmpal	(An)+,An	f1f8/b1d8	-	-	000,010,020,030,040,060	-
+cmpal	(An),An	f1f8/b1d0	-	-	000,010,020,030,040,060	-
+cmpal	(d16,An),An	f1f8/b1e8	-	-	000,010,020,030,040,060	-
+cmpal	(d16,PC),An	f1ff/b1fa	-	-	000,010,020,030,040,060	-
+cmpal	(d8,An,Xn),An	f1f8/b1f0	-	-	000,010,020,030,040,060	-
+cmpal	(d8,PC,Xn),An	f1ff/b1fb	-	-	000,010,020,030,040,060	-
+cmpal	-(An),An	f1f8/b1e0	-	-	000,010,020,030,040,060	-
+cmpal	An,An	f1f8/b1c8	-	-	000,010,020,030,040,060	-
+cmpal	Dn,An	f1f8/b1c0	-	-	000,010,020,030,040,060	-
+cmpal	abs,An	f1fe/b1f8	-	-	000,010,020,030,040,060	-
+cmpaw	#imm,An	f1ff/b0fc	-	-	000,010,020,030,040,060	-
+cmpaw	(An)+,An	f1f8/b0d8	-	-	000,010,020,030,040,060	-
+cmpaw	(An),An	f1f8/b0d0	-	-	000,010,020,030,040,060	-
+cmpaw	(d16,An),An	f1f8/b0e8	-	-	000,010,020,030,040,060	-
+cmpaw	(d16,PC),An	f1ff/b0fa	-	-	000,010,020,030,040,060	-
+cmpaw	(d8,An,Xn),An	f1f8/b0f0	-	-	000,010,020,030,040,060	-
+cmpaw	(d8,PC,Xn),An	f1ff/b0fb	-	-	000,010,020,030,040,060	-
+cmpaw	-(An),An	f1f8/b0e0	-	-	000,010,020,030,040,060	-
+cmpaw	An,An	f1f8/b0c8	-	-	000,010,020,030,040,060	-
+cmpaw	Dn,An	f1f8/b0c0	-	-	000,010,020,030,040,060	-
+cmpaw	abs,An	f1fe/b0f8	-	-	000,010,020,030,040,060	-
+cmpb	#imm,Dn	f1ff/b03c	-	-	000,010,020,030,040,060	-
+cmpb	(An)+,Dn	f1f8/b018	-	-	000,010,020,030,040,060	-
+cmpb	(An),Dn	f1f8/b010	-	-	000,010,020,030,040,060	-
+cmpb	(d16,An),Dn	f1f8/b028	-	-	000,010,020,030,040,060	-
+cmpb	(d16,PC),Dn	f1ff/b03a	-	-	000,010,020,030,040,060	-
+cmpb	(d8,An,Xn),Dn	f1f8/b030	-	-	000,010,020,030,040,060	-
+cmpb	(d8,PC,Xn),Dn	f1ff/b03b	-	-	000,010,020,030,040,060	-
+cmpb	-(An),Dn	f1f8/b020	-	-	000,010,020,030,040,060	-
+cmpb	Dn,Dn	f1f8/b000	-	-	000,010,020,030,040,060	-
+cmpb	abs,Dn	f1fe/b038	-	-	000,010,020,030,040,060	-
+cmpib	#imm,(An)	fff8/0c10	-	-	000,010,020,030,040,060	-
+cmpib	#imm,(An)+	fff8/0c18	-	-	000,010,020,030,040,060	-
+cmpib	#imm,(d16,An)	fff8/0c28	-	-	000,010,020,030,040,060	-
+cmpib	#imm,(d16,PC)	ffff/0c3a	-	-	020,030,040,060	-
+cmpib	#imm,(d8,An,Xn)	fff8/0c30	-	-	000,010,020,030,040,060	-
+cmpib	#imm,(d8,PC,Xn)	ffff/0c3b	-	-	020,030,040,060	-
+cmpib	#imm,-(An)	fff8/0c20	-	-	000,010,020,030,040,060	-
+cmpib	#imm,Dn	fff8/0c00	-	-	000,010,020,030,040,060	-
+cmpib	#imm,abs	fffe/0c38	-	-	000,010,020,030,040,060	-
+cmpil	#imm,(An)	fff8/0c90	-	-	000,010,020,030,040,060	-
+cmpil	#imm,(An)+	fff8/0c98	-	-	000,010,020,030,040,060	-
+cmpil	#imm,(d16,An)	fff8/0ca8	-	-	000,010,020,030,040,060	-
+cmpil	#imm,(d16,PC)	ffff/0cba	-	-	020,030,040,060	-
+cmpil	#imm,(d8,An,Xn)	fff8/0cb0	-	-	000,010,020,030,040,060	-
+cmpil	#imm,(d8,PC,Xn)	ffff/0cbb	-	-	020,030,040,060	-
+cmpil	#imm,-(An)	fff8/0ca0	-	-	000,010,020,030,040,060	-
+cmpil	#imm,Dn	fff8/0c80	-	-	000,010,020,030,040,060	-
+cmpil	#imm,abs	fffe/0cb8	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,(An)	fff8/0c50	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,(An)+	fff8/0c58	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,(d16,An)	fff8/0c68	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,(d16,PC)	ffff/0c7a	-	-	020,030,040,060	-
+cmpiw	#imm,(d8,An,Xn)	fff8/0c70	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,(d8,PC,Xn)	ffff/0c7b	-	-	020,030,040,060	-
+cmpiw	#imm,-(An)	fff8/0c60	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,Dn	fff8/0c40	-	-	000,010,020,030,040,060	-
+cmpiw	#imm,abs	fffe/0c78	-	-	000,010,020,030,040,060	-
+cmpl	#imm,Dn	f1ff/b0bc	-	-	000,010,020,030,040,060	-
+cmpl	(An)+,Dn	f1f8/b098	-	-	000,010,020,030,040,060	-
+cmpl	(An),Dn	f1f8/b090	-	-	000,010,020,030,040,060	-
+cmpl	(d16,An),Dn	f1f8/b0a8	-	-	000,010,020,030,040,060	-
+cmpl	(d16,PC),Dn	f1ff/b0ba	-	-	000,010,020,030,040,060	-
+cmpl	(d8,An,Xn),Dn	f1f8/b0b0	-	-	000,010,020,030,040,060	-
+cmpl	(d8,PC,Xn),Dn	f1ff/b0bb	-	-	000,010,020,030,040,060	-
+cmpl	-(An),Dn	f1f8/b0a0	-	-	000,010,020,030,040,060	-
+cmpl	An,Dn	f1f8/b088	-	-	000,010,020,030,040,060	-
+cmpl	Dn,Dn	f1f8/b080	-	-	000,010,020,030,040,060	-
+cmpl	abs,Dn	f1fe/b0b8	-	-	000,010,020,030,040,060	-
+cmpmb	(An)+,(An)+	f1f8/b108	-	-	000,010,020,030,040,060	-
+cmpml	(An)+,(An)+	f1f8/b188	-	-	000,010,020,030,040,060	-
+cmpmw	(An)+,(An)+	f1f8/b148	-	-	000,010,020,030,040,060	-
+cmpw	#imm,Dn	f1ff/b07c	-	-	000,010,020,030,040,060	-
+cmpw	(An)+,Dn	f1f8/b058	-	-	000,010,020,030,040,060	-
+cmpw	(An),Dn	f1f8/b050	-	-	000,010,020,030,040,060	-
+cmpw	(d16,An),Dn	f1f8/b068	-	-	000,010,020,030,040,060	-
+cmpw	(d16,PC),Dn	f1ff/b07a	-	-	000,010,020,030,040,060	-
+cmpw	(d8,An,Xn),Dn	f1f8/b070	-	-	000,010,020,030,040,060	-
+cmpw	(d8,PC,Xn),Dn	f1ff/b07b	-	-	000,010,020,030,040,060	-
+cmpw	-(An),Dn	f1f8/b060	-	-	000,010,020,030,040,060	-
+cmpw	An,Dn	f1f8/b048	-	-	000,010,020,030,040,060	-
+cmpw	Dn,Dn	f1f8/b040	-	-	000,010,020,030,040,060	-
+cmpw	abs,Dn	f1fe/b078	-	-	000,010,020,030,040,060	-
+cpbcc	<label>	f180/f080	-	-	020,030	-
+cpdbcc	Dn,<label>	f1f8/f048	-	-	020,030	-
+cpgen	<parameters as defined by coprocessor>	f1c0/f000	-	-	020,030	-
+cprestore	<ea>	f1c0/f140	-	-	020,030	-
+cpsave	<ea>	f1c0/f100	-	-	020,030	-
+cpscc	<ea>	f1c0/f040	-	-	020,030	-
+cptrapcc		f1ff/f07c	-	-	020,030	-
+cptrapcc	#<data>	f1fe/f07a	-	-	020,030	-
+cpusha	cache	ff38/f438	-	-	040,060	-
+cpushl	cache,(An)	ff38/f428	-	-	040,060	-
+cpushp	cache,(An)	ff38/f430	-	-	040,060	-
+dbcc	Dn,abs	fff8/54c8	-	-	000,010,020,030,040,060	-
+dbcs	Dn,abs	fff8/55c8	-	-	000,010,020,030,040,060	-
+dbeq	Dn,abs	fff8/57c8	-	-	000,010,020,030,040,060	-
+dbf	Dn,abs	fff8/51c8	-	-	000,010,020,030,040,060	-
+dbge	Dn,abs	fff8/5cc8	-	-	000,010,020,030,040,060	-
+dbgt	Dn,abs	fff8/5ec8	-	-	000,010,020,030,040,060	-
+dbhi	Dn,abs	fff8/52c8	-	-	000,010,020,030,040,060	-
+dble	Dn,abs	fff8/5fc8	-	-	000,010,020,030,040,060	-
+dbls	Dn,abs	fff8/53c8	-	-	000,010,020,030,040,060	-
+dblt	Dn,abs	fff8/5dc8	-	-	000,010,020,030,040,060	-
+dbmi	Dn,abs	fff8/5bc8	-	-	000,010,020,030,040,060	-
+dbne	Dn,abs	fff8/56c8	-	-	000,010,020,030,040,060	-
+dbpl	Dn,abs	fff8/5ac8	-	-	000,010,020,030,040,060	-
+dbt	Dn,abs	fff8/50c8	-	-	000,010,020,030,040,060	-
+dbvc	Dn,abs	fff8/58c8	-	-	000,010,020,030,040,060	-
+dbvs	Dn,abs	fff8/59c8	-	-	000,010,020,030,040,060	-
+divsl	#imm,Dn,Dn	ffff/4c7c	-	-	020,030,040,060	-
+divsl	(An)+,Dn,Dn	fff8/4c58	-	-	020,030,040,060	-
+divsl	(An),Dn,Dn	fff8/4c50	-	-	020,030,040,060	-
+divsl	(d16,An),Dn,Dn	fff8/4c68	-	-	020,030,040,060	-
+divsl	(d16,PC),Dn,Dn	ffff/4c7a	-	-	020,030,040,060	-
+divsl	(d8,An,Xn),Dn,Dn	fff8/4c70	-	-	020,030,040,060	-
+divsl	(d8,PC,Xn),Dn,Dn	ffff/4c7b	-	-	020,030,040,060	-
+divsl	-(An),Dn,Dn	fff8/4c60	-	-	020,030,040,060	-
+divsl	Dn,Dn,Dn	fff8/4c40	-	-	020,030,040,060	-
+divsl	abs,Dn,Dn	fffe/4c78	-	-	020,030,040,060	-
+divsll	#imm,Dn,Dn	ffff/4c7c	-	-	020,030,040,060	-
+divsll	(An)+,Dn,Dn	fff8/4c58	-	-	020,030,040,060	-
+divsll	(An),Dn,Dn	fff8/4c50	-	-	020,030,040,060	-
+divsll	(d16,An),Dn,Dn	fff8/4c68	-	-	020,030,040,060	-
+divsll	(d16,PC),Dn,Dn	ffff/4c7a	-	-	020,030,040,060	-
+divsll	(d8,An,Xn),Dn,Dn	fff8/4c70	-	-	020,030,040,060	-
+divsll	(d8,PC,Xn),Dn,Dn	ffff/4c7b	-	-	020,030,040,060	-
+divsll	-(An),Dn,Dn	fff8/4c60	-	-	020,030,040,060	-
+divsll	Dn,Dn,Dn	fff8/4c40	-	-	020,030,040,060	-
+divsll	abs,Dn,Dn	fffe/4c78	-	-	020,030,040,060	-
+divsw	#imm,Dn	f1ff/81fc	-	-	000,010,020,030,040,060	-
+divsw	(An)+,Dn	f1f8/81d8	-	-	000,010,020,030,040,060	-
+divsw	(An),Dn	f1f8/81d0	-	-	000,010,020,030,040,060	-
+divsw	(d16,An),Dn	f1f8/81e8	-	-	000,010,020,030,040,060	-
+divsw	(d16,PC),Dn	f1ff/81fa	-	-	000,010,020,030,040,060	-
+divsw	(d8,An,Xn),Dn	f1f8/81f0	-	-	000,010,020,030,040,060	-
+divsw	(d8,PC,Xn),Dn	f1ff/81fb	-	-	000,010,020,030,040,060	-
+divsw	-(An),Dn	f1f8/81e0	-	-	000,010,020,030,040,060	-
+divsw	Dn,Dn	f1f8/81c0	-	-	000,010,020,030,040,060	-
+divsw	abs,Dn	f1fe/81f8	-	-	000,010,020,030,040,060	-
+divul	#imm,Dn,Dn	ffff/4c7c	-	-	020,030,040,060	-
+divul	(An)+,Dn,Dn	fff8/4c58	-	-	020,030,040,060	-
+divul	(An),Dn,Dn	fff8/4c50	-	-	020,030,040,060	-
+divul	(d16,An),Dn,Dn	fff8/4c68	-	-	020,030,040,060	-
+divul	(d16,PC),Dn,Dn	ffff/4c7a	-	-	020,030,040,060	-
+divul	(d8,An,Xn),Dn,Dn	fff8/4c70	-	-	020,030,040,060	-
+divul	(d8,PC,Xn),Dn,Dn	ffff/4c7b	-	-	020,030,040,060	-
+divul	-(An),Dn,Dn	fff8/4c60	-	-	020,030,040,060	-
+divul	Dn,Dn,Dn	fff8/4c40	-	-	020,030,040,060	-
+divul	abs,Dn,Dn	fffe/4c78	-	-	020,030,040,060	-
+divull	#imm,Dn,Dn	ffff/4c7c	-	-	020,030,040,060	-
+divull	(An)+,Dn,Dn	fff8/4c58	-	-	020,030,040,060	-
+divull	(An),Dn,Dn	fff8/4c50	-	-	020,030,040,060	-
+divull	(d16,An),Dn,Dn	fff8/4c68	-	-	020,030,040,060	-
+divull	(d16,PC),Dn,Dn	ffff/4c7a	-	-	020,030,040,060	-
+divull	(d8,An,Xn),Dn,Dn	fff8/4c70	-	-	020,030,040,060	-
+divull	(d8,PC,Xn),Dn,Dn	ffff/4c7b	-	-	020,030,040,060	-
+divull	-(An),Dn,Dn	fff8/4c60	-	-	020,030,040,060	-
+divull	Dn,Dn,Dn	fff8/4c40	-	-	020,030,040,060	-
+divull	abs,Dn,Dn	fffe/4c78	-	-	020,030,040,060	-
+divuw	#imm,Dn	f1ff/80fc	-	-	000,010,020,030,040,060	-
+divuw	(An)+,Dn	f1f8/80d8	-	-	000,010,020,030,040,060	-
+divuw	(An),Dn	f1f8/80d0	-	-	000,010,020,030,040,060	-
+divuw	(d16,An),Dn	f1f8/80e8	-	-	000,010,020,030,040,060	-
+divuw	(d16,PC),Dn	f1ff/80fa	-	-	000,010,020,030,040,060	-
+divuw	(d8,An,Xn),Dn	f1f8/80f0	-	-	000,010,020,030,040,060	-
+divuw	(d8,PC,Xn),Dn	f1ff/80fb	-	-	000,010,020,030,040,060	-
+divuw	-(An),Dn	f1f8/80e0	-	-	000,010,020,030,040,060	-
+divuw	Dn,Dn	f1f8/80c0	-	-	000,010,020,030,040,060	-
+divuw	abs,Dn	f1fe/80f8	-	-	000,010,020,030,040,060	-
+eorb	Dn,(An)	f1f8/b110	-	-	000,010,020,030,040,060	-
+eorb	Dn,(An)+	f1f8/b118	-	-	000,010,020,030,040,060	-
+eorb	Dn,(d16,An)	f1f8/b128	-	-	000,010,020,030,040,060	-
+eorb	Dn,(d8,An,Xn)	f1f8/b130	-	-	000,010,020,030,040,060	-
+eorb	Dn,-(An)	f1f8/b120	-	-	000,010,020,030,040,060	-
+eorb	Dn,Dn	f1f8/b100	-	-	000,010,020,030,040,060	-
+eorb	Dn,abs	f1fe/b138	-	-	000,010,020,030,040,060	-
+eorib	#imm,(An)	fff8/0a10	-	-	000,010,020,030,040,060	-
+eorib	#imm,(An)+	fff8/0a18	-	-	000,010,020,030,040,060	-
+eorib	#imm,(d16,An)	fff8/0a28	-	-	000,010,020,030,040,060	-
+eorib	#imm,(d8,An,Xn)	fff8/0a30	-	-	000,010,020,030,040,060	-
+eorib	#imm,-(An)	fff8/0a20	-	-	000,010,020,030,040,060	-
+eorib	#imm,Dn	fff8/0a00	-	-	000,010,020,030,040,060	-
+eorib	#imm,abs	fffe/0a38	-	-	000,010,020,030,040,060	-
+eorib	#imm,reg	ffff/0a3c	-	-	000,010,020,030,040,060	-
+eoril	#imm,(An)	fff8/0a90	-	-	000,010,020,030,040,060	-
+eoril	#imm,(An)+	fff8/0a98	-	-	000,010,020,030,040,060	-
+eoril	#imm,(d16,An)	fff8/0aa8	-	-	000,010,020,030,040,060	-
+eoril	#imm,(d8,An,Xn)	fff8/0ab0	-	-	000,010,020,030,040,060	-
+eoril	#imm,-(An)	fff8/0aa0	-	-	000,010,020,030,040,060	-
+eoril	#imm,Dn	fff8/0a80	-	-	000,010,020,030,040,060	-
+eoril	#imm,abs	fffe/0ab8	-	-	000,010,020,030,040,060	-
+eoriw	#imm,(An)	fff8/0a50	-	-	000,010,020,030,040,060	-
+eoriw	#imm,(An)+	fff8/0a58	-	-	000,010,020,030,040,060	-
+eoriw	#imm,(d16,An)	fff8/0a68	-	-	000,010,020,030,040,060	-
+eoriw	#imm,(d8,An,Xn)	fff8/0a70	-	-	000,010,020,030,040,060	-
+eoriw	#imm,-(An)	fff8/0a60	-	-	000,010,020,030,040,060	-
+eoriw	#imm,Dn	fff8/0a40	-	-	000,010,020,030,040,060	-
+eoriw	#imm,abs	fffe/0a78	-	-	000,010,020,030,040,060	-
+eoriw	#imm,reg	ffff/0a7c	-	-	000,010,020,030,040,060	-
+eorl	Dn,(An)	f1f8/b190	-	-	000,010,020,030,040,060	-
+eorl	Dn,(An)+	f1f8/b198	-	-	000,010,020,030,040,060	-
+eorl	Dn,(d16,An)	f1f8/b1a8	-	-	000,010,020,030,040,060	-
+eorl	Dn,(d8,An,Xn)	f1f8/b1b0	-	-	000,010,020,030,040,060	-
+eorl	Dn,-(An)	f1f8/b1a0	-	-	000,010,020,030,040,060	-
+eorl	Dn,Dn	f1f8/b180	-	-	000,010,020,030,040,060	-
+eorl	Dn,abs	f1fe/b1b8	-	-	000,010,020,030,040,060	-
+eorw	Dn,(An)	f1f8/b150	-	-	000,010,020,030,040,060	-
+eorw	Dn,(An)+	f1f8/b158	-	-	000,010,020,030,040,060	-
+eorw	Dn,(d16,An)	f1f8/b168	-	-	000,010,020,030,040,060	-
+eorw	Dn,(d8,An,Xn)	f1f8/b170	-	-	000,010,020,030,040,060	-
+eorw	Dn,-(An)	f1f8/b160	-	-	000,010,020,030,040,060	-
+eorw	Dn,Dn	f1f8/b140	-	-	000,010,020,030,040,060	-
+eorw	Dn,abs	f1fe/b178	-	-	000,010,020,030,040,060	-
+exg	An,An	f1f8/c148	-	-	000,010,020,030,040,060	-
+exg	Dn,An	f1f8/c188	-	-	000,010,020,030,040,060	-
+exg	Dn,Dn	f1f8/c140	-	-	000,010,020,030,040,060	-
+extbl	Dn	fff8/49c0	-	-	020,030,040,060	-
+extl	Dn	fff8/48c0	-	-	000,010,020,030,040,060	-
+extw	Dn	fff8/4880	-	-	000,010,020,030,040,060	-
+fabs	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0018	x	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4018	l	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4418	s	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4818	x	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c18	p	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5018	w	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5418	d	020,030,040,060	-
+fabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5818	b	020,030,040,060	-
+facos	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/001c	x	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/401c	l	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/441c	s	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/481c	x	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c1c	p	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/501c	w	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/541c	d	020,030,040,060	040,060
+facos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/581c	b	020,030,040,060	040,060
+fadd	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0022	x	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4022	l	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4422	s	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4822	x	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c22	p	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5022	w	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5422	d	020,030,040,060	-
+fadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5822	b	020,030,040,060	-
+fasin	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/000c	x	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/400c	l	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/440c	s	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/480c	x	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c0c	p	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/500c	w	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/540c	d	020,030,040,060	040,060
+fasin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/580c	b	020,030,040,060	040,060
+fatan	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/000a	x	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/400a	l	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/440a	s	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/480a	x	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c0a	p	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/500a	w	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/540a	d	020,030,040,060	040,060
+fatan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/580a	b	020,030,040,060	040,060
+fatanh	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/000d	x	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/400d	l	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/440d	s	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/480d	x	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c0d	p	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/500d	w	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/540d	d	020,030,040,060	040,060
+fatanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/580d	b	020,030,040,060	040,060
+fbfl	abs	ffff/f2c0	ffff/0000	-	020,030,040,060	-
+fbge	abs	ffff/f293	ffff/0000	-	020,030,040,060	-
+fbgel	abs	ffff/f2d3	ffff/0000	-	020,030,040,060	-
+fbngle	abs	ffff/f298	ffff/0000	-	020,030,040,060	-
+fbnglel	abs	ffff/f2d8	ffff/0000	-	020,030,040,060	-
+fbnlt	abs	ffff/f29b	ffff/0000	-	020,030,040,060	-
+fbnltl	abs	ffff/f2db	ffff/0000	-	020,030,040,060	-
+fboge	abs	ffff/f283	ffff/0000	-	020,030,040,060	-
+fbogel	abs	ffff/f2c3	ffff/0000	-	020,030,040,060	-
+fbsf	abs	ffff/f290	ffff/0000	-	020,030,040,060	-
+fbsfl	abs	ffff/f2d0	ffff/0000	-	020,030,040,060	-
+fbuge	abs	ffff/f28b	ffff/0000	-	020,030,040,060	-
+fbugel	abs	ffff/f2cb	ffff/0000	-	020,030,040,060	-
+fbun	abs	ffff/f288	ffff/0000	-	020,030,040,060	-
+fbunl	abs	ffff/f2c8	ffff/0000	-	020,030,040,060	-
+fcmp	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0038	x	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4038	l	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4438	s	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4838	x	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c38	p	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5038	w	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5438	d	020,030,040,060	-
+fcmp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5838	b	020,030,040,060	-
+fcos	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/001d	x	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/401d	l	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/441d	s	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/481d	x	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c1d	p	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/501d	w	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/541d	d	020,030,040,060	040,060
+fcos	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/581d	b	020,030,040,060	040,060
+fcosh	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0019	x	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4019	l	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4419	s	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4819	x	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c19	p	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5019	w	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5419	d	020,030,040,060	040,060
+fcosh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5819	b	020,030,040,060	040,060
+fdabs	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/005c	x	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/405c	l	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/445c	s	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/485c	x	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c5c	p	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/505c	w	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/545c	d	040,060	-
+fdabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/585c	b	040,060	-
+fdadd	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0066	x	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4066	l	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4466	s	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4866	x	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c66	p	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5066	w	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5466	d	040,060	-
+fdadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5866	b	040,060	-
+fdbeq	Dn,abs	fff8/f248	ffff/0001	-	020,030,040,060	060
+fdbf	Dn,abs	fff8/f248	ffff/0000	-	020,030,040,060	060
+fdbge	Dn,abs	fff8/f248	ffff/0013	-	020,030,040,060	060
+fdbgl	Dn,abs	fff8/f248	ffff/0016	-	020,030,040,060	060
+fdbgle	Dn,abs	fff8/f248	ffff/0017	-	020,030,040,060	060
+fdbgt	Dn,abs	fff8/f248	ffff/0012	-	020,030,040,060	060
+fdble	Dn,abs	fff8/f248	ffff/0015	-	020,030,040,060	060
+fdblt	Dn,abs	fff8/f248	ffff/0014	-	020,030,040,060	060
+fdbne	Dn,abs	fff8/f248	ffff/000e	-	020,030,040,060	060
+fdbnge	Dn,abs	fff8/f248	ffff/001c	-	020,030,040,060	060
+fdbngl	Dn,abs	fff8/f248	ffff/0019	-	020,030,040,060	060
+fdbngle	Dn,abs	fff8/f248	ffff/0018	-	020,030,040,060	060
+fdbngt	Dn,abs	fff8/f248	ffff/001d	-	020,030,040,060	060
+fdbnle	Dn,abs	fff8/f248	ffff/001a	-	020,030,040,060	060
+fdbnlt	Dn,abs	fff8/f248	ffff/001b	-	020,030,040,060	060
+fdboge	Dn,abs	fff8/f248	ffff/0003	-	020,030,040,060	060
+fdbogl	Dn,abs	fff8/f248	ffff/0006	-	020,030,040,060	060
+fdbogt	Dn,abs	fff8/f248	ffff/0002	-	020,030,040,060	060
+fdbole	Dn,abs	fff8/f248	ffff/0005	-	020,030,040,060	060
+fdbolt	Dn,abs	fff8/f248	ffff/0004	-	020,030,040,060	060
+fdbor	Dn,abs	fff8/f248	ffff/0007	-	020,030,040,060	060
+fdbseq	Dn,abs	fff8/f248	ffff/0011	-	020,030,040,060	060
+fdbsf	Dn,abs	fff8/f248	ffff/0010	-	020,030,040,060	060
+fdbsne	Dn,abs	fff8/f248	ffff/001e	-	020,030,040,060	060
+fdbst	Dn,abs	fff8/f248	ffff/001f	-	020,030,040,060	060
+fdbt	Dn,abs	fff8/f248	ffff/000f	-	020,030,040,060	060
+fdbueq	Dn,abs	fff8/f248	ffff/0009	-	020,030,040,060	060
+fdbuge	Dn,abs	fff8/f248	ffff/000b	-	020,030,040,060	060
+fdbugt	Dn,abs	fff8/f248	ffff/000a	-	020,030,040,060	060
+fdbule	Dn,abs	fff8/f248	ffff/000d	-	020,030,040,060	060
+fdbult	Dn,abs	fff8/f248	ffff/000c	-	020,030,040,060	060
+fdbun	Dn,abs	fff8/f248	ffff/0008	-	020,030,040,060	060
+fddiv	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0064	x	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4064	l	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4464	s	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4864	x	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c64	p	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5064	w	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5464	d	040,060	-
+fddiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5864	b	040,060	-
+fdiv	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0020	x	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4020	l	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4420	s	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4820	x	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c20	p	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5020	w	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5420	d	020,030,040,060	-
+fdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5820	b	020,030,040,060	-
+fdmove	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0044	x	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4044	l	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4444	s	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4844	x	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c44	p	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5044	w	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5444	d	040,060	-
+fdmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5844	b	040,060	-
+fdmul	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0067	x	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4067	l	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4467	s	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4867	x	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c67	p	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5067	w	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5467	d	040,060	-
+fdmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5867	b	040,060	-
+fdneg	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/005e	x	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/405e	l	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/445e	s	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/485e	x	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c5e	p	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/505e	w	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/545e	d	040,060	-
+fdneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/585e	b	040,060	-
+fdsqrt	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0045	x	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4045	l	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4445	s	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4845	x	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c45	p	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5045	w	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5445	d	040,060	-
+fdsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5845	b	040,060	-
+fdsub	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/006c	x	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/406c	l	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/446c	s	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/486c	x	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c6c	p	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/506c	w	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/546c	d	040,060	-
+fdsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/586c	b	040,060	-
+fetox	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0010	x	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4010	l	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4410	s	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4810	x	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c10	p	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5010	w	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5410	d	020,030,040,060	040,060
+fetox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5810	b	020,030,040,060	040,060
+fetoxm1	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0008	x	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4008	l	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4408	s	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4808	x	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c08	p	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5008	w	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5408	d	020,030,040,060	040,060
+fetoxm1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5808	b	020,030,040,060	040,060
+fgetexp	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/001e	x	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/401e	l	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/441e	s	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/481e	x	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c1e	p	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/501e	w	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/541e	d	020,030,040,060	040,060
+fgetexp	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/581e	b	020,030,040,060	040,060
+fgetman	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/001f	x	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/401f	l	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/441f	s	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/481f	x	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c1f	p	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/501f	w	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/541f	d	020,030,040,060	040,060
+fgetman	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/581f	b	020,030,040,060	040,060
+fint	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0001	x	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4001	l	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4401	s	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4801	x	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c01	p	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5001	w	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5401	d	020,030,040,060	040,060
+fint	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5801	b	020,030,040,060	040,060
+fintrz	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0003	x	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4003	l	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4403	s	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4803	x	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c03	p	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5003	w	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5403	d	020,030,040,060	040,060
+fintrz	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5803	b	020,030,040,060	040,060
+flog10	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0015	x	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4015	l	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4415	s	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4815	x	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c15	p	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5015	w	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5415	d	020,030,040,060	040,060
+flog10	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5815	b	020,030,040,060	040,060
+flog2	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0016	x	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4016	l	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4416	s	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4816	x	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c16	p	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5016	w	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5416	d	020,030,040,060	040,060
+flog2	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5816	b	020,030,040,060	040,060
+flogn	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0014	x	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4014	l	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4414	s	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4814	x	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c14	p	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5014	w	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5414	d	020,030,040,060	040,060
+flogn	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5814	b	020,030,040,060	040,060
+flognp1	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0006	x	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4006	l	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4406	s	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4806	x	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c06	p	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5006	w	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5406	d	020,030,040,060	040,060
+flognp1	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5806	b	020,030,040,060	040,060
+fmod	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0021	x	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4021	l	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4421	s	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4821	x	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c21	p	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5021	w	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5421	d	020,030,040,060	040,060
+fmod	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5821	b	020,030,040,060	040,060
+fmove	FPn,FPn	ffff/f200	e07f/0000	x	020,030,040,060	-
+fmove	FPn,ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc7f/6000	l	020,030,040,060	-
+fmove	FPn,ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc7f/6400	s	020,030,040,060	-
+fmove	FPn,ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc7f/7000	w	020,030,040,060	-
+fmove	FPn,ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc7f/7800	b	020,030,040,060	-
+fmove	FPn,ea	fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc7f/6800	x	020,030,040,060	-
+fmove	FPn,ea	fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc7f/7400	d	020,030,040,060	-
+fmove	FPn,ea,Dn	fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc0f/7c00	p	020,030,040,060	-
+fmove	FPn,ea{k}	fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	fc00/6c00	p	020,030,040,060	-
+fmove	ea	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	ffff/8000	l	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4000	l	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4400	s	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4800	x	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c00	p	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5000	w	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5400	d	020,030,040,060	-
+fmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5800	b	020,030,040,060	-
+fmove	ea,reg	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	ffff/8400 ffff/8800 ffff/9000	l	020,030,040,060	-
+fmove	none,ea	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ffff/a000	l	020,030,040,060	-
+fmove	reg,ea	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ffff/a400 ffff/a800 ffff/b000	l	020,030,040,060	-
+fmovecrx	#imm,FPn	ffff/f200	fc00/5c00	-	020,030,040,060	-
+fmoveml	ea,fpcrlist	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	efff/8c00 f7ff/9400 fbff/9800	-	020,030,040,060	-
+fmoveml	fpcrlist,ea	fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239	efff/ac00 f7ff/b400 fbff/b800	-	020,030,040,060	-
+fmovemx	#imm,ea	fff8/f210 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ffff/f000	-	020,030,040,060	-
+fmovemx	#imm,ea	fff8/f220	ffff/e000	-	020,030,040,060	-
+fmovemx	Dn,ea	fff8/f210 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ff8f/f800	-	020,030,040,060	-
+fmovemx	Dn,ea	fff8/f220	ff8f/e800	-	020,030,040,060	-
+fmovemx	FPn,ea	fff8/f210 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ffff/f001 ffff/f002 ffff/f004 ffff/f008 ffff/f010 ffff/f020 ffff/f040	-	020,030,040,060	-
+fmovemx	FPn,ea	fff8/f220	ffff/e001 ffff/e002 ffff/e004 ffff/e008 ffff/e010 ffff/e020 ffff/e040	-	020,030,040,060	-
+fmovemx	ea,#imm	fff8/f210 fff8/f218 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ffff/d000	-	020,030,040,060	-
+fmovemx	ea,Dn	fff8/f210 fff8/f218 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ff8f/d800	-	020,030,040,060	-
+fmovemx	ea,FPn	fff8/f210 fff8/f218 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ffff/d001 ffff/d002 ffff/d004 ffff/d008 ffff/d010 ffff/d020 ffff/d040	-	020,030,040,060	-
+fmovemx	ea,fplist	fff8/f210 fff8/f218 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ff83/d003 ff85/d005 ff86/d006 ff89/d009 ff8a/d00a ff8c/d00c ff91/d011 ff92/d012 ff94/d014 ff98/d018 ffa1/d021 ffa2/d022 ffa4/d024 ffa8/d028 ffb0/d030 ffc1/d041 ffc2/d042 ffc4/d044 ffc8/d048 ffd0/d050 ffe0/d060	-	020,030,040,060	-
+fmovemx	fplist,ea	fff8/f210 fff8/f228 fff8/f230 ffff/f238 ffff/f239	ff83/f003 ff85/f005 ff86/f006 ff89/f009 ff8a/f00a ff8c/f00c ff91/f011 ff92/f012 ff94/f014 ff98/f018 ffa1/f021 ffa2/f022 ffa4/f024 ffa8/f028 ffb0/f030 ffc1/f041 ffc2/f042 ffc4/f044 ffc8/f048 ffd0/f050 ffe0/f060	-	020,030,040,060	-
+fmovemx	fplist,ea	fff8/f220	ff83/e003 ff85/e005 ff86/e006 ff89/e009 ff8a/e00a ff8c/e00c ff91/e011 ff92/e012 ff94/e014 ff98/e018 ffa1/e021 ffa2/e022 ffa4/e024 ffa8/e028 ffb0/e030 ffc1/e041 ffc2/e042 ffc4/e044 ffc8/e048 ffd0/e050 ffe0/e060	-	020,030,040,060	-
+fmul	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0023	x	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4023	l	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4423	s	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4823	x	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c23	p	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5023	w	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5423	d	020,030,040,060	-
+fmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5823	b	020,030,040,060	-
+fneg	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/001a	x	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/401a	l	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/441a	s	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/481a	x	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c1a	p	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/501a	w	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/541a	d	020,030,040,060	-
+fneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/581a	b	020,030,040,060	-
+fnop		ffff/f280	ffff/0000	-	020,030,040,060	-
+frem	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0025	x	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4025	l	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4425	s	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4825	x	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c25	p	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5025	w	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5425	d	020,030,040,060	040,060
+frem	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5825	b	020,030,040,060	040,060
+frestore	ea	fff8/f350 fff8/f358 fff8/f368 fff8/f370 ffff/f378 ffff/f379 ffff/f37a ffff/f37b	ffff/0000	-	020,030,040,060	-
+fsabs	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0058	x	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4058	l	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4458	s	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4858	x	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c58	p	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5058	w	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5458	d	040,060	-
+fsabs	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5858	b	040,060	-
+fsadd	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0062	x	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4062	l	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4462	s	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4862	x	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c62	p	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5062	w	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5462	d	040,060	-
+fsadd	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5862	b	040,060	-
+fsave	ea	fff8/f310 fff8/f320 fff8/f328 fff8/f330 ffff/f338 ffff/f339	ffff/0000	-	020,030,040,060	-
+fscale	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0026	x	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4026	l	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4426	s	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4826	x	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c26	p	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5026	w	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5426	d	020,030,040,060	040,060
+fscale	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5826	b	020,030,040,060	040,060
+fsdiv	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0060	x	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4060	l	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4460	s	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4860	x	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c60	p	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5060	w	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5460	d	040,060	-
+fsdiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5860	b	040,060	-
+fseq	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0001	-	020,030,040,060	060
+fsf	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0000	-	020,030,040,060	060
+fsge	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0013	-	020,030,040,060	060
+fsgl	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0016	-	020,030,040,060	060
+fsgldiv	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0024	x	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4024	l	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4424	s	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4824	x	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c24	p	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5024	w	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5424	d	020,030,040,060	060
+fsgldiv	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5824	b	020,030,040,060	060
+fsgle	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0017	-	020,030,040,060	060
+fsglmul	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0027	x	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4027	l	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4427	s	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4827	x	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c27	p	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5027	w	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5427	d	020,030,040,060	060
+fsglmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5827	b	020,030,040,060	060
+fsgt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0012	-	020,030,040,060	060
+fsin	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/000e	x	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/400e	l	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/440e	s	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/480e	x	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c0e	p	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/500e	w	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/540e	d	020,030,040,060	040,060
+fsin	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/580e	b	020,030,040,060	040,060
+fsincos	FPn,FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e078/0030	x	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/4030	l	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/4430	s	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/4830	x	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/4c30	p	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/5030	w	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/5430	d	020,030,040,060	040,060
+fsincos	ea,FPn,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc78/5830	b	020,030,040,060	040,060
+fsinh	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0002	x	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4002	l	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4402	s	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4802	x	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c02	p	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5002	w	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5402	d	020,030,040,060	040,060
+fsinh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5802	b	020,030,040,060	040,060
+fsle	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0015	-	020,030,040,060	060
+fslt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0014	-	020,030,040,060	060
+fsmove	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0040	x	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4040	l	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4440	s	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4840	x	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c40	p	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5040	w	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5440	d	040,060	-
+fsmove	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5840	b	040,060	-
+fsmul	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0063	x	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4063	l	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4463	s	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4863	x	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c63	p	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5063	w	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5463	d	040,060	-
+fsmul	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5863	b	040,060	-
+fsne	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/000e	-	020,030,040,060	060
+fsneg	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/005a	x	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/405a	l	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/445a	s	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/485a	x	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c5a	p	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/505a	w	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/545a	d	040,060	-
+fsneg	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/585a	b	040,060	-
+fsnge	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/001c	-	020,030,040,060	060
+fsngl	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0019	-	020,030,040,060	060
+fsngle	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0018	-	020,030,040,060	060
+fsngt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/001d	-	020,030,040,060	060
+fsnle	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/001a	-	020,030,040,060	060
+fsnlt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/001b	-	020,030,040,060	060
+fsoge	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0003	-	020,030,040,060	060
+fsogl	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0006	-	020,030,040,060	060
+fsogt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0002	-	020,030,040,060	060
+fsole	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0005	-	020,030,040,060	060
+fsolt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0004	-	020,030,040,060	060
+fsor	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0007	-	020,030,040,060	060
+fsqrt	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0004	x	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4004	l	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4404	s	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4804	x	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c04	p	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5004	w	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5404	d	020,030,040,060	-
+fsqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5804	b	020,030,040,060	-
+fsseq	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0011	-	020,030,040,060	060
+fssf	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0010	-	020,030,040,060	060
+fssne	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/001e	-	020,030,040,060	060
+fssqrt	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0041	x	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4041	l	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4441	s	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4841	x	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c41	p	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5041	w	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5441	d	040,060	-
+fssqrt	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5841	b	040,060	-
+fsst	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/001f	-	020,030,040,060	060
+fssub	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0068	x	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4068	l	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4468	s	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4868	x	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c68	p	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5068	w	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5468	d	040,060	-
+fssub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5868	b	040,060	-
+fst	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/000f	-	020,030,040,060	060
+fsub	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0028	x	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4028	l	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4428	s	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4828	x	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c28	p	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5028	w	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5428	d	020,030,040,060	-
+fsub	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5828	b	020,030,040,060	-
+fsueq	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0009	-	020,030,040,060	060
+fsuge	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/000b	-	020,030,040,060	060
+fsugt	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/000a	-	020,030,040,060	060
+fsule	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/000d	-	020,030,040,060	060
+fsult	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/000c	-	020,030,040,060	060
+fsun	ea	fff8/f240 fff8/f250 fff8/f258 fff8/f260 fff8/f268 fff8/f270 ffff/f278 ffff/f279	ffff/0008	-	020,030,040,060	060
+ftan	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/000f	x	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/400f	l	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/440f	s	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/480f	x	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c0f	p	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/500f	w	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/540f	d	020,030,040,060	040,060
+ftan	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/580f	b	020,030,040,060	040,060
+ftanh	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0009	x	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4009	l	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4409	s	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4809	x	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c09	p	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5009	w	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5409	d	020,030,040,060	040,060
+ftanh	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5809	b	020,030,040,060	040,060
+ftentox	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0012	x	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4012	l	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4412	s	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4812	x	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c12	p	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5012	w	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5412	d	020,030,040,060	040,060
+ftentox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5812	b	020,030,040,060	040,060
+ftrapeq		ffff/f27c	ffff/0001	-	020,030,040,060	060
+ftrapeql	#imm	ffff/f27b	ffff/0001	-	020,030,040,060	060
+ftrapeqw	#imm	ffff/f27a	ffff/0001	-	020,030,040,060	060
+ftrapf		ffff/f27c	ffff/0000	-	020,030,040,060	060
+ftrapfl	#imm	ffff/f27b	ffff/0000	-	020,030,040,060	060
+ftrapfw	#imm	ffff/f27a	ffff/0000	-	020,030,040,060	060
+ftrapge		ffff/f27c	ffff/0013	-	020,030,040,060	060
+ftrapgel	#imm	ffff/f27b	ffff/0013	-	020,030,040,060	060
+ftrapgew	#imm	ffff/f27a	ffff/0013	-	020,030,040,060	060
+ftrapgl		ffff/f27c	ffff/0016	-	020,030,040,060	060
+ftrapgle		ffff/f27c	ffff/0017	-	020,030,040,060	060
+ftrapglel	#imm	ffff/f27b	ffff/0017	-	020,030,040,060	060
+ftrapglew	#imm	ffff/f27a	ffff/0017	-	020,030,040,060	060
+ftrapgll	#imm	ffff/f27b	ffff/0016	-	020,030,040,060	060
+ftrapglw	#imm	ffff/f27a	ffff/0016	-	020,030,040,060	060
+ftrapgt		ffff/f27c	ffff/0012	-	020,030,040,060	060
+ftrapgtl	#imm	ffff/f27b	ffff/0012	-	020,030,040,060	060
+ftrapgtw	#imm	ffff/f27a	ffff/0012	-	020,030,040,060	060
+ftraple		ffff/f27c	ffff/0015	-	020,030,040,060	060
+ftraplel	#imm	ffff/f27b	ffff/0015	-	020,030,040,060	060
+ftraplew	#imm	ffff/f27a	ffff/0015	-	020,030,040,060	060
+ftraplt		ffff/f27c	ffff/0014	-	020,030,040,060	060
+ftrapltl	#imm	ffff/f27b	ffff/0014	-	020,030,040,060	060
+ftrapltw	#imm	ffff/f27a	ffff/0014	-	020,030,040,060	060
+ftrapne		ffff/f27c	ffff/000e	-	020,030,040,060	060
+ftrapnel	#imm	ffff/f27b	ffff/000e	-	020,030,040,060	060
+ftrapnew	#imm	ffff/f27a	ffff/000e	-	020,030,040,060	060
+ftrapnge		ffff/f27c	ffff/001c	-	020,030,040,060	060
+ftrapngel	#imm	ffff/f27b	ffff/001c	-	020,030,040,060	060
+ftrapngew	#imm	ffff/f27a	ffff/001c	-	020,030,040,060	060
+ftrapngl		ffff/f27c	ffff/0019	-	020,030,040,060	060
+ftrapngle		ffff/f27c	ffff/0018	-	020,030,040,060	060
+ftrapnglel	#imm	ffff/f27b	ffff/0018	-	020,030,040,060	060
+ftrapnglew	#imm	ffff/f27a	ffff/0018	-	020,030,040,060	060
+ftrapngll	#imm	ffff/f27b	ffff/0019	-	020,030,040,060	060
+ftrapnglw	#imm	ffff/f27a	ffff/0019	-	020,030,040,060	060
+ftrapngt		ffff/f27c	ffff/001d	-	020,030,040,060	060
+ftrapngtl	#imm	ffff/f27b	ffff/001d	-	020,030,040,060	060
+ftrapngtw	#imm	ffff/f27a	ffff/001d	-	020,030,040,060	060
+ftrapnle		ffff/f27c	ffff/001a	-	020,030,040,060	060
+ftrapnlel	#imm	ffff/f27b	ffff/001a	-	020,030,040,060	060
+ftrapnlew	#imm	ffff/f27a	ffff/001a	-	020,030,040,060	060
+ftrapnlt		ffff/f27c	ffff/001b	-	020,030,040,060	060
+ftrapnltl	#imm	ffff/f27b	ffff/001b	-	020,030,040,060	060
+ftrapnltw	#imm	ffff/f27a	ffff/001b	-	020,030,040,060	060
+ftrapoge		ffff/f27c	ffff/0003	-	020,030,040,060	060
+ftrapogel	#imm	ffff/f27b	ffff/0003	-	020,030,040,060	060
+ftrapogew	#imm	ffff/f27a	ffff/0003	-	020,030,040,060	060
+ftrapogl		ffff/f27c	ffff/0006	-	020,030,040,060	060
+ftrapogll	#imm	ffff/f27b	ffff/0006	-	020,030,040,060	060
+ftrapoglw	#imm	ffff/f27a	ffff/0006	-	020,030,040,060	060
+ftrapogt		ffff/f27c	ffff/0002	-	020,030,040,060	060
+ftrapogtl	#imm	ffff/f27b	ffff/0002	-	020,030,040,060	060
+ftrapogtw	#imm	ffff/f27a	ffff/0002	-	020,030,040,060	060
+ftrapole		ffff/f27c	ffff/0005	-	020,030,040,060	060
+ftrapolel	#imm	ffff/f27b	ffff/0005	-	020,030,040,060	060
+ftrapolew	#imm	ffff/f27a	ffff/0005	-	020,030,040,060	060
+ftrapolt		ffff/f27c	ffff/0004	-	020,030,040,060	060
+ftrapoltl	#imm	ffff/f27b	ffff/0004	-	020,030,040,060	060
+ftrapoltw	#imm	ffff/f27a	ffff/0004	-	020,030,040,060	060
+ftrapor		ffff/f27c	ffff/0007	-	020,030,040,060	060
+ftraporl	#imm	ffff/f27b	ffff/0007	-	020,030,040,060	060
+ftraporw	#imm	ffff/f27a	ffff/0007	-	020,030,040,060	060
+ftrapseq		ffff/f27c	ffff/0011	-	020,030,040,060	060
+ftrapseql	#imm	ffff/f27b	ffff/0011	-	020,030,040,060	060
+ftrapseqw	#imm	ffff/f27a	ffff/0011	-	020,030,040,060	060
+ftrapsf		ffff/f27c	ffff/0010	-	020,030,040,060	060
+ftrapsfl	#imm	ffff/f27b	ffff/0010	-	020,030,040,060	060
+ftrapsfw	#imm	ffff/f27a	ffff/0010	-	020,030,040,060	060
+ftrapsne		ffff/f27c	ffff/001e	-	020,030,040,060	060
+ftrapsnel	#imm	ffff/f27b	ffff/001e	-	020,030,040,060	060
+ftrapsnew	#imm	ffff/f27a	ffff/001e	-	020,030,040,060	060
+ftrapst		ffff/f27c	ffff/001f	-	020,030,040,060	060
+ftrapstl	#imm	ffff/f27b	ffff/001f	-	020,030,040,060	060
+ftrapstw	#imm	ffff/f27a	ffff/001f	-	020,030,040,060	060
+ftrapt		ffff/f27c	ffff/000f	-	020,030,040,060	060
+ftraptl	#imm	ffff/f27b	ffff/000f	-	020,030,040,060	060
+ftraptw	#imm	ffff/f27a	ffff/000f	-	020,030,040,060	060
+ftrapueq		ffff/f27c	ffff/0009	-	020,030,040,060	060
+ftrapueql	#imm	ffff/f27b	ffff/0009	-	020,030,040,060	060
+ftrapueqw	#imm	ffff/f27a	ffff/0009	-	020,030,040,060	060
+ftrapuge		ffff/f27c	ffff/000b	-	020,030,040,060	060
+ftrapugel	#imm	ffff/f27b	ffff/000b	-	020,030,040,060	060
+ftrapugew	#imm	ffff/f27a	ffff/000b	-	020,030,040,060	060
+ftrapugt		ffff/f27c	ffff/000a	-	020,030,040,060	060
+ftrapugtl	#imm	ffff/f27b	ffff/000a	-	020,030,040,060	060
+ftrapugtw	#imm	ffff/f27a	ffff/000a	-	020,030,040,060	060
+ftrapule		ffff/f27c	ffff/000d	-	020,030,040,060	060
+ftrapulel	#imm	ffff/f27b	ffff/000d	-	020,030,040,060	060
+ftrapulew	#imm	ffff/f27a	ffff/000d	-	020,030,040,060	060
+ftrapult		ffff/f27c	ffff/000c	-	020,030,040,060	060
+ftrapultl	#imm	ffff/f27b	ffff/000c	-	020,030,040,060	060
+ftrapultw	#imm	ffff/f27a	ffff/000c	-	020,030,040,060	060
+ftrapun		ffff/f27c	ffff/0008	-	020,030,040,060	060
+ftrapunl	#imm	ffff/f27b	ffff/0008	-	020,030,040,060	060
+ftrapunw	#imm	ffff/f27a	ffff/0008	-	020,030,040,060	060
+ftst	FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/003a	x	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/403a	l	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/443a	s	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/483a	x	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c3a	p	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/503a	w	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/543a	d	020,030,040,060	-
+ftst	ea	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/583a	b	020,030,040,060	-
+ftwotox	FPn,FPn	fff8/f200 fff8/f208 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	e07f/0011	x	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4011	l	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4411	s	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4811	x	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/4c11	p	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5011	w	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5411	d	020,030,040,060	040,060
+ftwotox	ea,FPn	fff8/f200 fff8/f210 fff8/f218 fff8/f220 fff8/f228 fff8/f230 ffff/f238 ffff/f239 ffff/f23a ffff/f23b ffff/f23c	fc7f/5811	b	020,030,040,060	040,060
+halt		ffff/4ac8	-	-	060	-
+illegal		ffff/4afc	-	-	000,010,020,030,040,060	-
+jmp	(An)	fff8/4ed0	-	-	000,010,020,030,040,060	-
+jmp	(d16,An)	fff8/4ee8	-	-	000,010,020,030,040,060	-
+jmp	(d16,PC)	ffff/4efa	-	-	000,010,020,030,040,060	-
+jmp	(d8,An,Xn)	fff8/4ef0	-	-	000,010,020,030,040,060	-
+jmp	(d8,PC,Xn)	ffff/4efb	-	-	000,010,020,030,040,060	-
+jmp	abs	fffe/4ef8	-	-	000,010,020,030,040,060	-
+jsr	(An)	fff8/4e90	-	-	000,010,020,030,040,060	-
+jsr	(d16,An)	fff8/4ea8	-	-	000,010,020,030,040,060	-
+jsr	(d16,PC)	ffff/4eba	-	-	000,010,020,030,040,060	-
+jsr	(d8,An,Xn)	fff8/4eb0	-	-	000,010,020,030,040,060	-
+jsr	(d8,PC,Xn)	ffff/4ebb	-	-	000,010,020,030,040,060	-
+jsr	abs	fffe/4eb8	-	-	000,010,020,030,040,060	-
+lea	(An),An	f1f8/41d0	-	-	000,010,020,030,040,060	-
+lea	(d16,An),An	f1f8/41e8	-	-	000,010,020,030,040,060	-
+lea	(d16,PC),An	f1ff/41fa	-	-	000,010,020,030,040,060	-
+lea	(d8,An,Xn),An	f1f8/41f0	-	-	000,010,020,030,040,060	-
+lea	(d8,PC,Xn),An	f1ff/41fb	-	-	000,010,020,030,040,060	-
+lea	abs,An	f1fe/41f8	-	-	000,010,020,030,040,060	-
+linkl	An,#imm	fff8/4808	-	-	020,030,040,060	-
+linkw	An,#imm	fff8/4e50	-	-	000,010,020,030,040,060	-
+lpstop	#imm	ffff/f800	-	-	060	-
+lslb	#imm,Dn	f1f8/e108	-	-	000,010,020,030,040,060	-
+lslb	Dn,Dn	f1f8/e128	-	-	000,010,020,030,040,060	-
+lsll	#imm,Dn	f1f8/e188	-	-	000,010,020,030,040,060	-
+lsll	Dn,Dn	f1f8/e1a8	-	-	000,010,020,030,040,060	-
+lslw	#imm,Dn	f1f8/e148	-	-	000,010,020,030,040,060	-
+lslw	(An)	fff8/e3d0	-	-	000,010,020,030,040,060	-
+lslw	(An)+	fff8/e3d8	-	-	000,010,020,030,040,060	-
+lslw	(d16,An)	fff8/e3e8	-	-	000,010,020,030,040,060	-
+lslw	(d8,An,Xn)	fff8/e3f0	-	-	000,010,020,030,040,060	-
+lslw	-(An)	fff8/e3e0	-	-	000,010,020,030,040,060	-
+lslw	Dn,Dn	f1f8/e168	-	-	000,010,020,030,040,060	-
+lslw	abs	fffe/e3f8	-	-	000,010,020,030,040,060	-
+lsrb	#imm,Dn	f1f8/e008	-	-	000,010,020,030,040,060	-
+lsrb	Dn,Dn	f1f8/e028	-	-	000,010,020,030,040,060	-
+lsrl	#imm,Dn	f1f8/e088	-	-	000,010,020,030,040,060	-
+lsrl	Dn,Dn	f1f8/e0a8	-	-	000,010,020,030,040,060	-
+lsrw	#imm,Dn	f1f8/e048	-	-	000,010,020,030,040,060	-
+lsrw	(An)	fff8/e2d0	-	-	000,010,020,030,040,060	-
+lsrw	(An)+	fff8/e2d8	-	-	000,010,020,030,040,060	-
+lsrw	(d16,An)	fff8/e2e8	-	-	000,010,020,030,040,060	-
+lsrw	(d8,An,Xn)	fff8/e2f0	-	-	000,010,020,030,040,060	-
+lsrw	-(An)	fff8/e2e0	-	-	000,010,020,030,040,060	-
+lsrw	Dn,Dn	f1f8/e068	-	-	000,010,020,030,040,060	-
+lsrw	abs	fffe/e2f8	-	-	000,010,020,030,040,060	-
+move16	(An)+,abs	fff8/f600	-	-	040,060	-
+move16	(An),abs	fff8/f610	-	-	040,060	-
+move16	abs,(An)	fff8/f618	-	-	040,060	-
+move16	abs,(An)+	fff8/f608	-	-	040,060	-
+moveal	#imm,An	f1ff/207c	-	-	000,010,020,030,040,060	-
+moveal	(An)+,An	f1f8/2058	-	-	000,010,020,030,040,060	-
+moveal	(An),An	f1f8/2050	-	-	000,010,020,030,040,060	-
+moveal	(d16,An),An	f1f8/2068	-	-	000,010,020,030,040,060	-
+moveal	(d16,PC),An	f1ff/207a	-	-	000,010,020,030,040,060	-
+moveal	(d8,An,Xn),An	f1f8/2070	-	-	000,010,020,030,040,060	-
+moveal	(d8,PC,Xn),An	f1ff/207b	-	-	000,010,020,030,040,060	-
+moveal	-(An),An	f1f8/2060	-	-	000,010,020,030,040,060	-
+moveal	An,An	f1f8/2048	-	-	000,010,020,030,040,060	-
+moveal	Dn,An	f1f8/2040	-	-	000,010,020,030,040,060	-
+moveal	abs,An	f1fe/2078	-	-	000,010,020,030,040,060	-
+moveaw	#imm,An	f1ff/307c	-	-	000,010,020,030,040,060	-
+moveaw	(An)+,An	f1f8/3058	-	-	000,010,020,030,040,060	-
+moveaw	(An),An	f1f8/3050	-	-	000,010,020,030,040,060	-
+moveaw	(d16,An),An	f1f8/3068	-	-	000,010,020,030,040,060	-
+moveaw	(d16,PC),An	f1ff/307a	-	-	000,010,020,030,040,060	-
+moveaw	(d8,An,Xn),An	f1f8/3070	-	-	000,010,020,030,040,060	-
+moveaw	(d8,PC,Xn),An	f1ff/307b	-	-	000,010,020,030,040,060	-
+moveaw	-(An),An	f1f8/3060	-	-	000,010,020,030,040,060	-
+moveaw	An,An	f1f8/3048	-	-	000,010,020,030,040,060	-
+moveaw	Dn,An	f1f8/3040	-	-	000,010,020,030,040,060	-
+moveaw	abs,An	f1fe/3078	-	-	000,010,020,030,040,060	-
+moveb	#imm,(An)	f1ff/10bc	-	-	000,010,020,030,040,060	-
+moveb	#imm,(An)+	f1ff/10fc	-	-	000,010,020,030,040,060	-
+moveb	#imm,(d16,An)	f1ff/117c	-	-	000,010,020,030,040,060	-
+moveb	#imm,(d8,An,Xn)	f1ff/11bc	-	-	000,010,020,030,040,060	-
+moveb	#imm,-(An)	f1ff/113c	-	-	000,010,020,030,040,060	-
+moveb	#imm,Dn	f1ff/103c	-	-	000,010,020,030,040,060	-
+moveb	#imm,abs	fdff/11fc	-	-	000,010,020,030,040,060	-
+moveb	(An)+,(An)	f1f8/1098	-	-	000,010,020,030,040,060	-
+moveb	(An)+,(An)+	f1f8/10d8	-	-	000,010,020,030,040,060	-
+moveb	(An)+,(d16,An)	f1f8/1158	-	-	000,010,020,030,040,060	-
+moveb	(An)+,(d8,An,Xn)	f1f8/1198	-	-	000,010,020,030,040,060	-
+moveb	(An)+,-(An)	f1f8/1118	-	-	000,010,020,030,040,060	-
+moveb	(An)+,Dn	f1f8/1018	-	-	000,010,020,030,040,060	-
+moveb	(An)+,abs	fdf8/11d8	-	-	000,010,020,030,040,060	-
+moveb	(An),(An)	f1f8/1090	-	-	000,010,020,030,040,060	-
+moveb	(An),(An)+	f1f8/10d0	-	-	000,010,020,030,040,060	-
+moveb	(An),(d16,An)	f1f8/1150	-	-	000,010,020,030,040,060	-
+moveb	(An),(d8,An,Xn)	f1f8/1190	-	-	000,010,020,030,040,060	-
+moveb	(An),-(An)	f1f8/1110	-	-	000,010,020,030,040,060	-
+moveb	(An),Dn	f1f8/1010	-	-	000,010,020,030,040,060	-
+moveb	(An),abs	fdf8/11d0	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),(An)	f1f8/10a8	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),(An)+	f1f8/10e8	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),(d16,An)	f1f8/1168	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),(d8,An,Xn)	f1f8/11a8	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),-(An)	f1f8/1128	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),Dn	f1f8/1028	-	-	000,010,020,030,040,060	-
+moveb	(d16,An),abs	fdf8/11e8	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),(An)	f1ff/10ba	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),(An)+	f1ff/10fa	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),(d16,An)	f1ff/117a	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),(d8,An,Xn)	f1ff/11ba	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),-(An)	f1ff/113a	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),Dn	f1ff/103a	-	-	000,010,020,030,040,060	-
+moveb	(d16,PC),abs	fdff/11fa	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),(An)	f1f8/10b0	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),(An)+	f1f8/10f0	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),(d16,An)	f1f8/1170	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),(d8,An,Xn)	f1f8/11b0	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),-(An)	f1f8/1130	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),Dn	f1f8/1030	-	-	000,010,020,030,040,060	-
+moveb	(d8,An,Xn),abs	fdf8/11f0	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),(An)	f1ff/10bb	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),(An)+	f1ff/10fb	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),(d16,An)	f1ff/117b	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),(d8,An,Xn)	f1ff/11bb	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),-(An)	f1ff/113b	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),Dn	f1ff/103b	-	-	000,010,020,030,040,060	-
+moveb	(d8,PC,Xn),abs	fdff/11fb	-	-	000,010,020,030,040,060	-
+moveb	-(An),(An)	f1f8/10a0	-	-	000,010,020,030,040,060	-
+moveb	-(An),(An)+	f1f8/10e0	-	-	000,010,020,030,040,060	-
+moveb	-(An),(d16,An)	f1f8/1160	-	-	000,010,020,030,040,060	-
+moveb	-(An),(d8,An,Xn)	f1f8/11a0	-	-	000,010,020,030,040,060	-
+moveb	-(An),-(An)	f1f8/1120	-	-	000,010,020,030,040,060	-
+moveb	-(An),Dn	f1f8/1020	-	-	000,010,020,030,040,060	-
+moveb	-(An),abs	fdf8/11e0	-	-	000,010,020,030,040,060	-
+moveb	Dn,(An)	f1f8/1080	-	-	000,010,020,030,040,060	-
+moveb	Dn,(An)+	f1f8/10c0	-	-	000,010,020,030,040,060	-
+moveb	Dn,(d16,An)	f1f8/1140	-	-	000,010,020,030,040,060	-
+moveb	Dn,(d8,An,Xn)	f1f8/1180	-	-	000,010,020,030,040,060	-
+moveb	Dn,-(An)	f1f8/1100	-	-	000,010,020,030,040,060	-
+moveb	Dn,Dn	f1f8/1000	-	-	000,010,020,030,040,060	-
+moveb	Dn,abs	fdf8/11c0	-	-	000,010,020,030,040,060	-
+moveb	abs,(An)	f1fe/10b8	-	-	000,010,020,030,040,060	-
+moveb	abs,(An)+	f1fe/10f8	-	-	000,010,020,030,040,060	-
+moveb	abs,(d16,An)	f1fe/1178	-	-	000,010,020,030,040,060	-
+moveb	abs,(d8,An,Xn)	f1fe/11b8	-	-	000,010,020,030,040,060	-
+moveb	abs,-(An)	f1fe/1138	-	-	000,010,020,030,040,060	-
+moveb	abs,Dn	f1fe/1038	-	-	000,010,020,030,040,060	-
+moveb	abs,abs	fdfe/11f8	-	-	000,010,020,030,040,060	-
+movec	An,reg	ffff/4e7b	-	-	010,020,030,040,060	-
+movec	Dn,abs	ffff/4e7b	-	-	010,020,030,040,060	-
+movec	Dn,reg	ffff/4e7b	-	-	010,020,030,040,060	-
+movec	abs,Dn	ffff/4e7a	-	-	010,020,030,040,060	-
+movec	reg,An	ffff/4e7a	-	-	010,020,030,040,060	-
+movec	reg,Dn	ffff/4e7a	-	-	010,020,030,040,060	-
+movel	#imm,(An)	f1ff/20bc	-	-	000,010,020,030,040,060	-
+movel	#imm,(An)+	f1ff/20fc	-	-	000,010,020,030,040,060	-
+movel	#imm,(d16,An)	f1ff/217c	-	-	000,010,020,030,040,060	-
+movel	#imm,(d8,An,Xn)	f1ff/21bc	-	-	000,010,020,030,040,060	-
+movel	#imm,-(An)	f1ff/213c	-	-	000,010,020,030,040,060	-
+movel	#imm,Dn	f1ff/203c	-	-	000,010,020,030,040,060	-
+movel	#imm,abs	fdff/21fc	-	-	000,010,020,030,040,060	-
+movel	(An)+,(An)	f1f8/2098	-	-	000,010,020,030,040,060	-
+movel	(An)+,(An)+	f1f8/20d8	-	-	000,010,020,030,040,060	-
+movel	(An)+,(d16,An)	f1f8/2158	-	-	000,010,020,030,040,060	-
+movel	(An)+,(d8,An,Xn)	f1f8/2198	-	-	000,010,020,030,040,060	-
+movel	(An)+,-(An)	f1f8/2118	-	-	000,010,020,030,040,060	-
+movel	(An)+,Dn	f1f8/2018	-	-	000,010,020,030,040,060	-
+movel	(An)+,abs	fdf8/21d8	-	-	000,010,020,030,040,060	-
+movel	(An),(An)	f1f8/2090	-	-	000,010,020,030,040,060	-
+movel	(An),(An)+	f1f8/20d0	-	-	000,010,020,030,040,060	-
+movel	(An),(d16,An)	f1f8/2150	-	-	000,010,020,030,040,060	-
+movel	(An),(d8,An,Xn)	f1f8/2190	-	-	000,010,020,030,040,060	-
+movel	(An),-(An)	f1f8/2110	-	-	000,010,020,030,040,060	-
+movel	(An),Dn	f1f8/2010	-	-	000,010,020,030,040,060	-
+movel	(An),abs	fdf8/21d0	-	-	000,010,020,030,040,060	-
+movel	(d16,An),(An)	f1f8/20a8	-	-	000,010,020,030,040,060	-
+movel	(d16,An),(An)+	f1f8/20e8	-	-	000,010,020,030,040,060	-
+movel	(d16,An),(d16,An)	f1f8/2168	-	-	000,010,020,030,040,060	-
+movel	(d16,An),(d8,An,Xn)	f1f8/21a8	-	-	000,010,020,030,040,060	-
+movel	(d16,An),-(An)	f1f8/2128	-	-	000,010,020,030,040,060	-
+movel	(d16,An),Dn	f1f8/2028	-	-	000,010,020,030,040,060	-
+movel	(d16,An),abs	fdf8/21e8	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),(An)	f1ff/20ba	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),(An)+	f1ff/20fa	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),(d16,An)	f1ff/217a	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),(d8,An,Xn)	f1ff/21ba	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),-(An)	f1ff/213a	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),Dn	f1ff/203a	-	-	000,010,020,030,040,060	-
+movel	(d16,PC),abs	fdff/21fa	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),(An)	f1f8/20b0	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),(An)+	f1f8/20f0	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),(d16,An)	f1f8/2170	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),(d8,An,Xn)	f1f8/21b0	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),-(An)	f1f8/2130	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),Dn	f1f8/2030	-	-	000,010,020,030,040,060	-
+movel	(d8,An,Xn),abs	fdf8/21f0	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),(An)	f1ff/20bb	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),(An)+	f1ff/20fb	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),(d16,An)	f1ff/217b	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),(d8,An,Xn)	f1ff/21bb	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),-(An)	f1ff/213b	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),Dn	f1ff/203b	-	-	000,010,020,030,040,060	-
+movel	(d8,PC,Xn),abs	fdff/21fb	-	-	000,010,020,030,040,060	-
+movel	-(An),(An)	f1f8/20a0	-	-	000,010,020,030,040,060	-
+movel	-(An),(An)+	f1f8/20e0	-	-	000,010,020,030,040,060	-
+movel	-(An),(d16,An)	f1f8/2160	-	-	000,010,020,030,040,060	-
+movel	-(An),(d8,An,Xn)	f1f8/21a0	-	-	000,010,020,030,040,060	-
+movel	-(An),-(An)	f1f8/2120	-	-	000,010,020,030,040,060	-
+movel	-(An),Dn	f1f8/2020	-	-	000,010,020,030,040,060	-
+movel	-(An),abs	fdf8/21e0	-	-	000,010,020,030,040,060	-
+movel	An,(An)	f1f8/2088	-	-	000,010,020,030,040,060	-
+movel	An,(An)+	f1f8/20c8	-	-	000,010,020,030,040,060	-
+movel	An,(d16,An)	f1f8/2148	-	-	000,010,020,030,040,060	-
+movel	An,(d8,An,Xn)	f1f8/2188	-	-	000,010,020,030,040,060	-
+movel	An,-(An)	f1f8/2108	-	-	000,010,020,030,040,060	-
+movel	An,Dn	f1f8/2008	-	-	000,010,020,030,040,060	-
+movel	An,abs	fdf8/21c8	-	-	000,010,020,030,040,060	-
+movel	An,reg	fff8/4e60	-	-	000,010,020,030,040,060	-
+movel	Dn,(An)	f1f8/2080	-	-	000,010,020,030,040,060	-
+movel	Dn,(An)+	f1f8/20c0	-	-	000,010,020,030,040,060	-
+movel	Dn,(d16,An)	f1f8/2140	-	-	000,010,020,030,040,060	-
+movel	Dn,(d8,An,Xn)	f1f8/2180	-	-	000,010,020,030,040,060	-
+movel	Dn,-(An)	f1f8/2100	-	-	000,010,020,030,040,060	-
+movel	Dn,Dn	f1f8/2000	-	-	000,010,020,030,040,060	-
+movel	Dn,abs	fdf8/21c0	-	-	000,010,020,030,040,060	-
+movel	abs,(An)	f1fe/20b8	-	-	000,010,020,030,040,060	-
+movel	abs,(An)+	f1fe/20f8	-	-	000,010,020,030,040,060	-
+movel	abs,(d16,An)	f1fe/2178	-	-	000,010,020,030,040,060	-
+movel	abs,(d8,An,Xn)	f1fe/21b8	-	-	000,010,020,030,040,060	-
+movel	abs,-(An)	f1fe/2138	-	-	000,010,020,030,040,060	-
+movel	abs,Dn	f1fe/2038	-	-	000,010,020,030,040,060	-
+movel	abs,abs	fdfe/21f8	-	-	000,010,020,030,040,060	-
+movel	reg,An	fff8/4e68	-	-	000,010,020,030,040,060	-
+moveml	#imm,(An)	fff8/48d0	-	-	000,010,020,030,040,060	-
+moveml	#imm,(d16,An)	fff8/48e8	-	-	000,010,020,030,040,060	-
+moveml	#imm,(d8,An,Xn)	fff8/48f0	-	-	000,010,020,030,040,060	-
+moveml	#imm,-(An)	fff8/48e0	-	-	000,010,020,030,040,060	-
+moveml	#imm,abs	fffe/48f8	-	-	000,010,020,030,040,060	-
+moveml	(An)+,#imm	fff8/4cd8	-	-	000,010,020,030,040,060	-
+moveml	(An)+,?%a2-%a3	fff8/4cd8	-	-	000,010,020,030,040,060	-
+moveml	(An)+,An	fff8/4cd8	-	-	000,010,020,030,040,060	-
+moveml	(An),#imm	fff8/4cd0	-	-	000,010,020,030,040,060	-
+moveml	(An),?%a2-%a3	fff8/4cd0	-	-	000,010,020,030,040,060	-
+moveml	(An),An	fff8/4cd0	-	-	000,010,020,030,040,060	-
+moveml	(d16,An),#imm	fff8/4ce8	-	-	000,010,020,030,040,060	-
+moveml	(d16,An),?%a2-%a3	fff8/4ce8	-	-	000,010,020,030,040,060	-
+moveml	(d16,An),An	fff8/4ce8	-	-	000,010,020,030,040,060	-
+moveml	(d16,PC),#imm	ffff/4cfa	-	-	000,010,020,030,040,060	-
+moveml	(d16,PC),?%a2-%a3	ffff/4cfa	-	-	000,010,020,030,040,060	-
+moveml	(d16,PC),An	ffff/4cfa	-	-	000,010,020,030,040,060	-
+moveml	(d8,An,Xn),#imm	fff8/4cf0	-	-	000,010,020,030,040,060	-
+moveml	(d8,An,Xn),?%a2-%a3	fff8/4cf0	-	-	000,010,020,030,040,060	-
+moveml	(d8,An,Xn),An	fff8/4cf0	-	-	000,010,020,030,040,060	-
+moveml	(d8,PC,Xn),#imm	ffff/4cfb	-	-	000,010,020,030,040,060	-
+moveml	(d8,PC,Xn),?%a2-%a3	ffff/4cfb	-	-	000,010,020,030,040,060	-
+moveml	(d8,PC,Xn),An	ffff/4cfb	-	-	000,010,020,030,040,060	-
+moveml	?%a2-%a3,(An)	fff8/48d0	-	-	000,010,020,030,040,060	-
+moveml	?%a2-%a3,(d16,An)	fff8/48e8	-	-	000,010,020,030,040,060	-
+moveml	?%a2-%a3,(d8,An,Xn)	fff8/48f0	-	-	000,010,020,030,040,060	-
+moveml	?%a2-%a3,abs	fffe/48f8	-	-	000,010,020,030,040,060	-
+moveml	?%d4-%d5,-(An)	fff8/48e0	-	-	000,010,020,030,040,060	-
+moveml	An,(An)	fff8/48d0	-	-	000,010,020,030,040,060	-
+moveml	An,(d16,An)	fff8/48e8	-	-	000,010,020,030,040,060	-
+moveml	An,(d8,An,Xn)	fff8/48f0	-	-	000,010,020,030,040,060	-
+moveml	An,abs	fffe/48f8	-	-	000,010,020,030,040,060	-
+moveml	Dn,-(An)	fff8/48e0	-	-	000,010,020,030,040,060	-
+moveml	abs,#imm	fffe/4cf8	-	-	000,010,020,030,040,060	-
+moveml	abs,?%a2-%a3	fffe/4cf8	-	-	000,010,020,030,040,060	-
+moveml	abs,An	fffe/4cf8	-	-	000,010,020,030,040,060	-
+movemw	#imm,(An)	fff8/4890	-	-	000,010,020,030,040,060	-
+movemw	#imm,(d16,An)	fff8/48a8	-	-	000,010,020,030,040,060	-
+movemw	#imm,(d8,An,Xn)	fff8/48b0	-	-	000,010,020,030,040,060	-
+movemw	#imm,-(An)	fff8/48a0	-	-	000,010,020,030,040,060	-
+movemw	#imm,abs	fffe/48b8	-	-	000,010,020,030,040,060	-
+movemw	(An)+,#imm	fff8/4c98	-	-	000,010,020,030,040,060	-
+movemw	(An)+,?%a2-%a3	fff8/4c98	-	-	000,010,020,030,040,060	-
+movemw	(An)+,An	fff8/4c98	-	-	000,010,020,030,040,060	-
+movemw	(An),#imm	fff8/4c90	-	-	000,010,020,030,040,060	-
+movemw	(An),?%a2-%a3	fff8/4c90	-	-	000,010,020,030,040,060	-
+movemw	(An),An	fff8/4c90	-	-	000,010,020,030,040,060	-
+movemw	(d16,An),#imm	fff8/4ca8	-	-	000,010,020,030,040,060	-
+movemw	(d16,An),?%a2-%a3	fff8/4ca8	-	-	000,010,020,030,040,060	-
+movemw	(d16,An),An	fff8/4ca8	-	-	000,010,020,030,040,060	-
+movemw	(d16,PC),#imm	ffff/4cba	-	-	000,010,020,030,040,060	-
+movemw	(d16,PC),?%a2-%a3	ffff/4cba	-	-	000,010,020,030,040,060	-
+movemw	(d16,PC),An	ffff/4cba	-	-	000,010,020,030,040,060	-
+movemw	(d8,An,Xn),#imm	fff8/4cb0	-	-	000,010,020,030,040,060	-
+movemw	(d8,An,Xn),?%a2-%a3	fff8/4cb0	-	-	000,010,020,030,040,060	-
+movemw	(d8,An,Xn),An	fff8/4cb0	-	-	000,010,020,030,040,060	-
+movemw	(d8,PC,Xn),#imm	ffff/4cbb	-	-	000,010,020,030,040,060	-
+movemw	(d8,PC,Xn),?%a2-%a3	ffff/4cbb	-	-	000,010,020,030,040,060	-
+movemw	(d8,PC,Xn),An	ffff/4cbb	-	-	000,010,020,030,040,060	-
+movemw	?%a2-%a3,(An)	fff8/4890	-	-	000,010,020,030,040,060	-
+movemw	?%a2-%a3,(d16,An)	fff8/48a8	-	-	000,010,020,030,040,060	-
+movemw	?%a2-%a3,(d8,An,Xn)	fff8/48b0	-	-	000,010,020,030,040,060	-
+movemw	?%a2-%a3,abs	fffe/48b8	-	-	000,010,020,030,040,060	-
+movemw	?%d4-%d5,-(An)	fff8/48a0	-	-	000,010,020,030,040,060	-
+movemw	An,(An)	fff8/4890	-	-	000,010,020,030,040,060	-
+movemw	An,(d16,An)	fff8/48a8	-	-	000,010,020,030,040,060	-
+movemw	An,(d8,An,Xn)	fff8/48b0	-	-	000,010,020,030,040,060	-
+movemw	An,abs	fffe/48b8	-	-	000,010,020,030,040,060	-
+movemw	Dn,-(An)	fff8/48a0	-	-	000,010,020,030,040,060	-
+movemw	abs,#imm	fffe/4cb8	-	-	000,010,020,030,040,060	-
+movemw	abs,?%a2-%a3	fffe/4cb8	-	-	000,010,020,030,040,060	-
+movemw	abs,An	fffe/4cb8	-	-	000,010,020,030,040,060	-
+movepl	(d16,An),Dn	f1f8/0148	-	-	000,010,020,030,040,060	060
+movepl	Dn,(d16,An)	f1f8/01c8	-	-	000,010,020,030,040,060	060
+movepw	(d16,An),Dn	f1f8/0108	-	-	000,010,020,030,040,060	060
+movepw	Dn,(d16,An)	f1f8/0188	-	-	000,010,020,030,040,060	060
+moveq	#imm,Dn	f100/7000	-	-	000,010,020,030,040,060	-
+movesb	(An)+,An	fff8/0e18	-	-	010,020,030,040,060	-
+movesb	(An)+,Dn	fff8/0e18	-	-	010,020,030,040,060	-
+movesb	(An),An	fff8/0e10	-	-	010,020,030,040,060	-
+movesb	(An),Dn	fff8/0e10	-	-	010,020,030,040,060	-
+movesb	(d16,An),An	fff8/0e28	-	-	010,020,030,040,060	-
+movesb	(d16,An),Dn	fff8/0e28	-	-	010,020,030,040,060	-
+movesb	(d8,An,Xn),An	fff8/0e30	-	-	010,020,030,040,060	-
+movesb	(d8,An,Xn),Dn	fff8/0e30	-	-	010,020,030,040,060	-
+movesb	-(An),An	fff8/0e20	-	-	010,020,030,040,060	-
+movesb	-(An),Dn	fff8/0e20	-	-	010,020,030,040,060	-
+movesb	Dn,(An)	fff8/0e10	-	-	010,020,030,040,060	-
+movesb	Dn,(An)+	fff8/0e18	-	-	010,020,030,040,060	-
+movesb	Dn,(d16,An)	fff8/0e28	-	-	010,020,030,040,060	-
+movesb	Dn,(d8,An,Xn)	fff8/0e30	-	-	010,020,030,040,060	-
+movesb	Dn,-(An)	fff8/0e20	-	-	010,020,030,040,060	-
+movesb	Dn,abs	fffe/0e38	-	-	010,020,030,040,060	-
+movesb	abs,An	fffe/0e38	-	-	010,020,030,040,060	-
+movesb	abs,Dn	fffe/0e38	-	-	010,020,030,040,060	-
+movesl	(An)+,An	fff8/0e98	-	-	010,020,030,040,060	-
+movesl	(An)+,Dn	fff8/0e98	-	-	010,020,030,040,060	-
+movesl	(An),An	fff8/0e90	-	-	010,020,030,040,060	-
+movesl	(An),Dn	fff8/0e90	-	-	010,020,030,040,060	-
+movesl	(d16,An),An	fff8/0ea8	-	-	010,020,030,040,060	-
+movesl	(d16,An),Dn	fff8/0ea8	-	-	010,020,030,040,060	-
+movesl	(d8,An,Xn),An	fff8/0eb0	-	-	010,020,030,040,060	-
+movesl	(d8,An,Xn),Dn	fff8/0eb0	-	-	010,020,030,040,060	-
+movesl	-(An),An	fff8/0ea0	-	-	010,020,030,040,060	-
+movesl	-(An),Dn	fff8/0ea0	-	-	010,020,030,040,060	-
+movesl	Dn,(An)	fff8/0e90	-	-	010,020,030,040,060	-
+movesl	Dn,(An)+	fff8/0e98	-	-	010,020,030,040,060	-
+movesl	Dn,(d16,An)	fff8/0ea8	-	-	010,020,030,040,060	-
+movesl	Dn,(d8,An,Xn)	fff8/0eb0	-	-	010,020,030,040,060	-
+movesl	Dn,-(An)	fff8/0ea0	-	-	010,020,030,040,060	-
+movesl	Dn,abs	fffe/0eb8	-	-	010,020,030,040,060	-
+movesl	abs,An	fffe/0eb8	-	-	010,020,030,040,060	-
+movesl	abs,Dn	fffe/0eb8	-	-	010,020,030,040,060	-
+movesw	(An)+,An	fff8/0e58	-	-	010,020,030,040,060	-
+movesw	(An)+,Dn	fff8/0e58	-	-	010,020,030,040,060	-
+movesw	(An),An	fff8/0e50	-	-	010,020,030,040,060	-
+movesw	(An),Dn	fff8/0e50	-	-	010,020,030,040,060	-
+movesw	(d16,An),An	fff8/0e68	-	-	010,020,030,040,060	-
+movesw	(d16,An),Dn	fff8/0e68	-	-	010,020,030,040,060	-
+movesw	(d8,An,Xn),An	fff8/0e70	-	-	010,020,030,040,060	-
+movesw	(d8,An,Xn),Dn	fff8/0e70	-	-	010,020,030,040,060	-
+movesw	-(An),An	fff8/0e60	-	-	010,020,030,040,060	-
+movesw	-(An),Dn	fff8/0e60	-	-	010,020,030,040,060	-
+movesw	Dn,(An)	fff8/0e50	-	-	010,020,030,040,060	-
+movesw	Dn,(An)+	fff8/0e58	-	-	010,020,030,040,060	-
+movesw	Dn,(d16,An)	fff8/0e68	-	-	010,020,030,040,060	-
+movesw	Dn,(d8,An,Xn)	fff8/0e70	-	-	010,020,030,040,060	-
+movesw	Dn,-(An)	fff8/0e60	-	-	010,020,030,040,060	-
+movesw	Dn,abs	fffe/0e78	-	-	010,020,030,040,060	-
+movesw	abs,An	fffe/0e78	-	-	010,020,030,040,060	-
+movesw	abs,Dn	fffe/0e78	-	-	010,020,030,040,060	-
+movew	#imm,(An)	f1ff/30bc	-	-	000,010,020,030,040,060	-
+movew	#imm,(An)+	f1ff/30fc	-	-	000,010,020,030,040,060	-
+movew	#imm,(d16,An)	f1ff/317c	-	-	000,010,020,030,040,060	-
+movew	#imm,(d8,An,Xn)	f1ff/31bc	-	-	000,010,020,030,040,060	-
+movew	#imm,-(An)	f1ff/313c	-	-	000,010,020,030,040,060	-
+movew	#imm,Dn	f1ff/303c	-	-	000,010,020,030,040,060	-
+movew	#imm,abs	fdff/31fc	-	-	000,010,020,030,040,060	-
+movew	#imm,reg	fdff/44fc	-	-	000,010,020,030,040,060	-
+movew	(An)+,(An)	f1f8/3098	-	-	000,010,020,030,040,060	-
+movew	(An)+,(An)+	f1f8/30d8	-	-	000,010,020,030,040,060	-
+movew	(An)+,(d16,An)	f1f8/3158	-	-	000,010,020,030,040,060	-
+movew	(An)+,(d8,An,Xn)	f1f8/3198	-	-	000,010,020,030,040,060	-
+movew	(An)+,-(An)	f1f8/3118	-	-	000,010,020,030,040,060	-
+movew	(An)+,Dn	f1f8/3018	-	-	000,010,020,030,040,060	-
+movew	(An)+,abs	fdf8/31d8	-	-	000,010,020,030,040,060	-
+movew	(An)+,reg	fdf8/44d8	-	-	000,010,020,030,040,060	-
+movew	(An),(An)	f1f8/3090	-	-	000,010,020,030,040,060	-
+movew	(An),(An)+	f1f8/30d0	-	-	000,010,020,030,040,060	-
+movew	(An),(d16,An)	f1f8/3150	-	-	000,010,020,030,040,060	-
+movew	(An),(d8,An,Xn)	f1f8/3190	-	-	000,010,020,030,040,060	-
+movew	(An),-(An)	f1f8/3110	-	-	000,010,020,030,040,060	-
+movew	(An),Dn	f1f8/3010	-	-	000,010,020,030,040,060	-
+movew	(An),abs	fdf8/31d0	-	-	000,010,020,030,040,060	-
+movew	(An),reg	fdf8/44d0	-	-	000,010,020,030,040,060	-
+movew	(d16,An),(An)	f1f8/30a8	-	-	000,010,020,030,040,060	-
+movew	(d16,An),(An)+	f1f8/30e8	-	-	000,010,020,030,040,060	-
+movew	(d16,An),(d16,An)	f1f8/3168	-	-	000,010,020,030,040,060	-
+movew	(d16,An),(d8,An,Xn)	f1f8/31a8	-	-	000,010,020,030,040,060	-
+movew	(d16,An),-(An)	f1f8/3128	-	-	000,010,020,030,040,060	-
+movew	(d16,An),Dn	f1f8/3028	-	-	000,010,020,030,040,060	-
+movew	(d16,An),abs	fdf8/31e8	-	-	000,010,020,030,040,060	-
+movew	(d16,An),reg	fdf8/44e8	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),(An)	f1ff/30ba	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),(An)+	f1ff/30fa	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),(d16,An)	f1ff/317a	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),(d8,An,Xn)	f1ff/31ba	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),-(An)	f1ff/313a	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),Dn	f1ff/303a	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),abs	fdff/31fa	-	-	000,010,020,030,040,060	-
+movew	(d16,PC),reg	fdff/44fa	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),(An)	f1f8/30b0	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),(An)+	f1f8/30f0	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),(d16,An)	f1f8/3170	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),(d8,An,Xn)	f1f8/31b0	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),-(An)	f1f8/3130	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),Dn	f1f8/3030	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),abs	fdf8/31f0	-	-	000,010,020,030,040,060	-
+movew	(d8,An,Xn),reg	fdf8/44f0	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),(An)	f1ff/30bb	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),(An)+	f1ff/30fb	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),(d16,An)	f1ff/317b	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),(d8,An,Xn)	f1ff/31bb	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),-(An)	f1ff/313b	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),Dn	f1ff/303b	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),abs	fdff/31fb	-	-	000,010,020,030,040,060	-
+movew	(d8,PC,Xn),reg	fdff/44fb	-	-	000,010,020,030,040,060	-
+movew	-(An),(An)	f1f8/30a0	-	-	000,010,020,030,040,060	-
+movew	-(An),(An)+	f1f8/30e0	-	-	000,010,020,030,040,060	-
+movew	-(An),(d16,An)	f1f8/3160	-	-	000,010,020,030,040,060	-
+movew	-(An),(d8,An,Xn)	f1f8/31a0	-	-	000,010,020,030,040,060	-
+movew	-(An),-(An)	f1f8/3120	-	-	000,010,020,030,040,060	-
+movew	-(An),Dn	f1f8/3020	-	-	000,010,020,030,040,060	-
+movew	-(An),abs	fdf8/31e0	-	-	000,010,020,030,040,060	-
+movew	-(An),reg	fdf8/44e0	-	-	000,010,020,030,040,060	-
+movew	An,(An)	f1f8/3088	-	-	000,010,020,030,040,060	-
+movew	An,(An)+	f1f8/30c8	-	-	000,010,020,030,040,060	-
+movew	An,(d16,An)	f1f8/3148	-	-	000,010,020,030,040,060	-
+movew	An,(d8,An,Xn)	f1f8/3188	-	-	000,010,020,030,040,060	-
+movew	An,-(An)	f1f8/3108	-	-	000,010,020,030,040,060	-
+movew	An,Dn	f1f8/3008	-	-	000,010,020,030,040,060	-
+movew	An,abs	fdf8/31c8	-	-	000,010,020,030,040,060	-
+movew	Dn,(An)	f1f8/3080	-	-	000,010,020,030,040,060	-
+movew	Dn,(An)+	f1f8/30c0	-	-	000,010,020,030,040,060	-
+movew	Dn,(d16,An)	f1f8/3140	-	-	000,010,020,030,040,060	-
+movew	Dn,(d8,An,Xn)	f1f8/3180	-	-	000,010,020,030,040,060	-
+movew	Dn,-(An)	f1f8/3100	-	-	000,010,020,030,040,060	-
+movew	Dn,Dn	f1f8/3000	-	-	000,010,020,030,040,060	-
+movew	Dn,abs	fdf8/31c0	-	-	000,010,020,030,040,060	-
+movew	Dn,reg	fdf8/44c0	-	-	000,010,020,030,040,060	-
+movew	abs,(An)	f1fe/30b8	-	-	000,010,020,030,040,060	-
+movew	abs,(An)+	f1fe/30f8	-	-	000,010,020,030,040,060	-
+movew	abs,(d16,An)	f1fe/3178	-	-	000,010,020,030,040,060	-
+movew	abs,(d8,An,Xn)	f1fe/31b8	-	-	000,010,020,030,040,060	-
+movew	abs,-(An)	f1fe/3138	-	-	000,010,020,030,040,060	-
+movew	abs,Dn	f1fe/3038	-	-	000,010,020,030,040,060	-
+movew	abs,abs	fdfe/31f8	-	-	000,010,020,030,040,060	-
+movew	abs,reg	fdfe/44f8	-	-	000,010,020,030,040,060	-
+movew	reg,(An)	fdf8/40d0	-	-	010,020,030,040,060	-
+movew	reg,(An)	fff8/40d0	-	-	000	-
+movew	reg,(An)+	fdf8/40d8	-	-	010,020,030,040,060	-
+movew	reg,(An)+	fff8/40d8	-	-	000	-
+movew	reg,(d16,An)	fdf8/40e8	-	-	010,020,030,040,060	-
+movew	reg,(d16,An)	fff8/40e8	-	-	000	-
+movew	reg,(d8,An,Xn)	fdf8/40f0	-	-	010,020,030,040,060	-
+movew	reg,(d8,An,Xn)	fff8/40f0	-	-	000	-
+movew	reg,-(An)	fdf8/40e0	-	-	010,020,030,040,060	-
+movew	reg,-(An)	fff8/40e0	-	-	000	-
+movew	reg,Dn	fdf8/40c0	-	-	010,020,030,040,060	-
+movew	reg,Dn	fff8/40c0	-	-	000	-
+movew	reg,abs	fdfe/40f8	-	-	010,020,030,040,060	-
+movew	reg,abs	fffe/40f8	-	-	000	-
+mulsl	#imm,Dn	ffff/4c3c	-	-	020,030,040,060	-
+mulsl	#imm,Dn,Dn	ffff/4c3c	-	-	020,030,040,060	-
+mulsl	(An)+,Dn	fff8/4c18	-	-	020,030,040,060	-
+mulsl	(An)+,Dn,Dn	fff8/4c18	-	-	020,030,040,060	-
+mulsl	(An),Dn	fff8/4c10	-	-	020,030,040,060	-
+mulsl	(An),Dn,Dn	fff8/4c10	-	-	020,030,040,060	-
+mulsl	(d16,An),Dn	fff8/4c28	-	-	020,030,040,060	-
+mulsl	(d16,An),Dn,Dn	fff8/4c28	-	-	020,030,040,060	-
+mulsl	(d16,PC),Dn	ffff/4c3a	-	-	020,030,040,060	-
+mulsl	(d16,PC),Dn,Dn	ffff/4c3a	-	-	020,030,040,060	-
+mulsl	(d8,An,Xn),Dn	fff8/4c30	-	-	020,030,040,060	-
+mulsl	(d8,An,Xn),Dn,Dn	fff8/4c30	-	-	020,030,040,060	-
+mulsl	(d8,PC,Xn),Dn	ffff/4c3b	-	-	020,030,040,060	-
+mulsl	(d8,PC,Xn),Dn,Dn	ffff/4c3b	-	-	020,030,040,060	-
+mulsl	-(An),Dn	fff8/4c20	-	-	020,030,040,060	-
+mulsl	-(An),Dn,Dn	fff8/4c20	-	-	020,030,040,060	-
+mulsl	Dn,Dn	fff8/4c00	-	-	020,030,040,060	-
+mulsl	Dn,Dn,Dn	fff8/4c00	-	-	020,030,040,060	-
+mulsl	abs,Dn	fffe/4c38	-	-	020,030,040,060	-
+mulsl	abs,Dn,Dn	fffe/4c38	-	-	020,030,040,060	-
+mulsw	#imm,Dn	f1ff/c1fc	-	-	000,010,020,030,040,060	-
+mulsw	(An)+,Dn	f1f8/c1d8	-	-	000,010,020,030,040,060	-
+mulsw	(An),Dn	f1f8/c1d0	-	-	000,010,020,030,040,060	-
+mulsw	(d16,An),Dn	f1f8/c1e8	-	-	000,010,020,030,040,060	-
+mulsw	(d16,PC),Dn	f1ff/c1fa	-	-	000,010,020,030,040,060	-
+mulsw	(d8,An,Xn),Dn	f1f8/c1f0	-	-	000,010,020,030,040,060	-
+mulsw	(d8,PC,Xn),Dn	f1ff/c1fb	-	-	000,010,020,030,040,060	-
+mulsw	-(An),Dn	f1f8/c1e0	-	-	000,010,020,030,040,060	-
+mulsw	Dn,Dn	f1f8/c1c0	-	-	000,010,020,030,040,060	-
+mulsw	abs,Dn	f1fe/c1f8	-	-	000,010,020,030,040,060	-
+mulul	#imm,Dn	ffff/4c3c	-	-	020,030,040,060	-
+mulul	#imm,Dn,Dn	ffff/4c3c	-	-	020,030,040,060	-
+mulul	(An)+,Dn	fff8/4c18	-	-	020,030,040,060	-
+mulul	(An)+,Dn,Dn	fff8/4c18	-	-	020,030,040,060	-
+mulul	(An),Dn	fff8/4c10	-	-	020,030,040,060	-
+mulul	(An),Dn,Dn	fff8/4c10	-	-	020,030,040,060	-
+mulul	(d16,An),Dn	fff8/4c28	-	-	020,030,040,060	-
+mulul	(d16,An),Dn,Dn	fff8/4c28	-	-	020,030,040,060	-
+mulul	(d16,PC),Dn	ffff/4c3a	-	-	020,030,040,060	-
+mulul	(d16,PC),Dn,Dn	ffff/4c3a	-	-	020,030,040,060	-
+mulul	(d8,An,Xn),Dn	fff8/4c30	-	-	020,030,040,060	-
+mulul	(d8,An,Xn),Dn,Dn	fff8/4c30	-	-	020,030,040,060	-
+mulul	(d8,PC,Xn),Dn	ffff/4c3b	-	-	020,030,040,060	-
+mulul	(d8,PC,Xn),Dn,Dn	ffff/4c3b	-	-	020,030,040,060	-
+mulul	-(An),Dn	fff8/4c20	-	-	020,030,040,060	-
+mulul	-(An),Dn,Dn	fff8/4c20	-	-	020,030,040,060	-
+mulul	Dn,Dn	fff8/4c00	-	-	020,030,040,060	-
+mulul	Dn,Dn,Dn	fff8/4c00	-	-	020,030,040,060	-
+mulul	abs,Dn	fffe/4c38	-	-	020,030,040,060	-
+mulul	abs,Dn,Dn	fffe/4c38	-	-	020,030,040,060	-
+muluw	#imm,Dn	f1ff/c0fc	-	-	000,010,020,030,040,060	-
+muluw	(An)+,Dn	f1f8/c0d8	-	-	000,010,020,030,040,060	-
+muluw	(An),Dn	f1f8/c0d0	-	-	000,010,020,030,040,060	-
+muluw	(d16,An),Dn	f1f8/c0e8	-	-	000,010,020,030,040,060	-
+muluw	(d16,PC),Dn	f1ff/c0fa	-	-	000,010,020,030,040,060	-
+muluw	(d8,An,Xn),Dn	f1f8/c0f0	-	-	000,010,020,030,040,060	-
+muluw	(d8,PC,Xn),Dn	f1ff/c0fb	-	-	000,010,020,030,040,060	-
+muluw	-(An),Dn	f1f8/c0e0	-	-	000,010,020,030,040,060	-
+muluw	Dn,Dn	f1f8/c0c0	-	-	000,010,020,030,040,060	-
+muluw	abs,Dn	f1fe/c0f8	-	-	000,010,020,030,040,060	-
+nbcd	(An)	fff8/4810	-	-	000,010,020,030,040,060	-
+nbcd	(An)+	fff8/4818	-	-	000,010,020,030,040,060	-
+nbcd	(d16,An)	fff8/4828	-	-	000,010,020,030,040,060	-
+nbcd	(d8,An,Xn)	fff8/4830	-	-	000,010,020,030,040,060	-
+nbcd	-(An)	fff8/4820	-	-	000,010,020,030,040,060	-
+nbcd	Dn	fff8/4800	-	-	000,010,020,030,040,060	-
+nbcd	abs	fffe/4838	-	-	000,010,020,030,040,060	-
+negb	(An)	fff8/4410	-	-	000,010,020,030,040,060	-
+negb	(An)+	fff8/4418	-	-	000,010,020,030,040,060	-
+negb	(d16,An)	fff8/4428	-	-	000,010,020,030,040,060	-
+negb	(d8,An,Xn)	fff8/4430	-	-	000,010,020,030,040,060	-
+negb	-(An)	fff8/4420	-	-	000,010,020,030,040,060	-
+negb	Dn	fff8/4400	-	-	000,010,020,030,040,060	-
+negb	abs	fffe/4438	-	-	000,010,020,030,040,060	-
+negl	(An)	fff8/4490	-	-	000,010,020,030,040,060	-
+negl	(An)+	fff8/4498	-	-	000,010,020,030,040,060	-
+negl	(d16,An)	fff8/44a8	-	-	000,010,020,030,040,060	-
+negl	(d8,An,Xn)	fff8/44b0	-	-	000,010,020,030,040,060	-
+negl	-(An)	fff8/44a0	-	-	000,010,020,030,040,060	-
+negl	Dn	fff8/4480	-	-	000,010,020,030,040,060	-
+negl	abs	fffe/44b8	-	-	000,010,020,030,040,060	-
+negw	(An)	fff8/4450	-	-	000,010,020,030,040,060	-
+negw	(An)+	fff8/4458	-	-	000,010,020,030,040,060	-
+negw	(d16,An)	fff8/4468	-	-	000,010,020,030,040,060	-
+negw	(d8,An,Xn)	fff8/4470	-	-	000,010,020,030,040,060	-
+negw	-(An)	fff8/4460	-	-	000,010,020,030,040,060	-
+negw	Dn	fff8/4440	-	-	000,010,020,030,040,060	-
+negw	abs	fffe/4478	-	-	000,010,020,030,040,060	-
+negxb	(An)	fff8/4010	-	-	000,010,020,030,040,060	-
+negxb	(An)+	fff8/4018	-	-	000,010,020,030,040,060	-
+negxb	(d16,An)	fff8/4028	-	-	000,010,020,030,040,060	-
+negxb	(d8,An,Xn)	fff8/4030	-	-	000,010,020,030,040,060	-
+negxb	-(An)	fff8/4020	-	-	000,010,020,030,040,060	-
+negxb	Dn	fff8/4000	-	-	000,010,020,030,040,060	-
+negxb	abs	fffe/4038	-	-	000,010,020,030,040,060	-
+negxl	(An)	fff8/4090	-	-	000,010,020,030,040,060	-
+negxl	(An)+	fff8/4098	-	-	000,010,020,030,040,060	-
+negxl	(d16,An)	fff8/40a8	-	-	000,010,020,030,040,060	-
+negxl	(d8,An,Xn)	fff8/40b0	-	-	000,010,020,030,040,060	-
+negxl	-(An)	fff8/40a0	-	-	000,010,020,030,040,060	-
+negxl	Dn	fff8/4080	-	-	000,010,020,030,040,060	-
+negxl	abs	fffe/40b8	-	-	000,010,020,030,040,060	-
+negxw	(An)	fff8/4050	-	-	000,010,020,030,040,060	-
+negxw	(An)+	fff8/4058	-	-	000,010,020,030,040,060	-
+negxw	(d16,An)	fff8/4068	-	-	000,010,020,030,040,060	-
+negxw	(d8,An,Xn)	fff8/4070	-	-	000,010,020,030,040,060	-
+negxw	-(An)	fff8/4060	-	-	000,010,020,030,040,060	-
+negxw	Dn	fff8/4040	-	-	000,010,020,030,040,060	-
+negxw	abs	fffe/4078	-	-	000,010,020,030,040,060	-
+nop		ffff/4e71	-	-	000,010,020,030,040,060	-
+notb	(An)	fff8/4610	-	-	000,010,020,030,040,060	-
+notb	(An)+	fff8/4618	-	-	000,010,020,030,040,060	-
+notb	(d16,An)	fff8/4628	-	-	000,010,020,030,040,060	-
+notb	(d8,An,Xn)	fff8/4630	-	-	000,010,020,030,040,060	-
+notb	-(An)	fff8/4620	-	-	000,010,020,030,040,060	-
+notb	Dn	fff8/4600	-	-	000,010,020,030,040,060	-
+notb	abs	fffe/4638	-	-	000,010,020,030,040,060	-
+notl	(An)	fff8/4690	-	-	000,010,020,030,040,060	-
+notl	(An)+	fff8/4698	-	-	000,010,020,030,040,060	-
+notl	(d16,An)	fff8/46a8	-	-	000,010,020,030,040,060	-
+notl	(d8,An,Xn)	fff8/46b0	-	-	000,010,020,030,040,060	-
+notl	-(An)	fff8/46a0	-	-	000,010,020,030,040,060	-
+notl	Dn	fff8/4680	-	-	000,010,020,030,040,060	-
+notl	abs	fffe/46b8	-	-	000,010,020,030,040,060	-
+notw	(An)	fff8/4650	-	-	000,010,020,030,040,060	-
+notw	(An)+	fff8/4658	-	-	000,010,020,030,040,060	-
+notw	(d16,An)	fff8/4668	-	-	000,010,020,030,040,060	-
+notw	(d8,An,Xn)	fff8/4670	-	-	000,010,020,030,040,060	-
+notw	-(An)	fff8/4660	-	-	000,010,020,030,040,060	-
+notw	Dn	fff8/4640	-	-	000,010,020,030,040,060	-
+notw	abs	fffe/4678	-	-	000,010,020,030,040,060	-
+orb	#imm,Dn	f1ff/803c	-	-	000,010,020,030,040,060	-
+orb	(An)+,Dn	f1f8/8018	-	-	000,010,020,030,040,060	-
+orb	(An),Dn	f1f8/8010	-	-	000,010,020,030,040,060	-
+orb	(d16,An),Dn	f1f8/8028	-	-	000,010,020,030,040,060	-
+orb	(d16,PC),Dn	f1ff/803a	-	-	000,010,020,030,040,060	-
+orb	(d8,An,Xn),Dn	f1f8/8030	-	-	000,010,020,030,040,060	-
+orb	(d8,PC,Xn),Dn	f1ff/803b	-	-	000,010,020,030,040,060	-
+orb	-(An),Dn	f1f8/8020	-	-	000,010,020,030,040,060	-
+orb	Dn,(An)	f1f8/8110	-	-	000,010,020,030,040,060	-
+orb	Dn,(An)+	f1f8/8118	-	-	000,010,020,030,040,060	-
+orb	Dn,(d16,An)	f1f8/8128	-	-	000,010,020,030,040,060	-
+orb	Dn,(d8,An,Xn)	f1f8/8130	-	-	000,010,020,030,040,060	-
+orb	Dn,-(An)	f1f8/8120	-	-	000,010,020,030,040,060	-
+orb	Dn,Dn	f1f8/8000	-	-	000,010,020,030,040,060	-
+orb	Dn,abs	f1fe/8138	-	-	000,010,020,030,040,060	-
+orb	abs,Dn	f1fe/8038	-	-	000,010,020,030,040,060	-
+orib	#imm,(An)	fff8/0010	-	-	000,010,020,030,040,060	-
+orib	#imm,(An)+	fff8/0018	-	-	000,010,020,030,040,060	-
+orib	#imm,(d16,An)	fff8/0028	-	-	000,010,020,030,040,060	-
+orib	#imm,(d8,An,Xn)	fff8/0030	-	-	000,010,020,030,040,060	-
+orib	#imm,-(An)	fff8/0020	-	-	000,010,020,030,040,060	-
+orib	#imm,Dn	fff8/0000	-	-	000,010,020,030,040,060	-
+orib	#imm,abs	fffe/0038	-	-	000,010,020,030,040,060	-
+orib	#imm,reg	ffff/003c	-	-	000,010,020,030,040,060	-
+oril	#imm,(An)	fff8/0090	-	-	000,010,020,030,040,060	-
+oril	#imm,(An)+	fff8/0098	-	-	000,010,020,030,040,060	-
+oril	#imm,(d16,An)	fff8/00a8	-	-	000,010,020,030,040,060	-
+oril	#imm,(d8,An,Xn)	fff8/00b0	-	-	000,010,020,030,040,060	-
+oril	#imm,-(An)	fff8/00a0	-	-	000,010,020,030,040,060	-
+oril	#imm,Dn	fff8/0080	-	-	000,010,020,030,040,060	-
+oril	#imm,abs	fffe/00b8	-	-	000,010,020,030,040,060	-
+oriw	#imm,(An)	fff8/0050	-	-	000,010,020,030,040,060	-
+oriw	#imm,(An)+	fff8/0058	-	-	000,010,020,030,040,060	-
+oriw	#imm,(d16,An)	fff8/0068	-	-	000,010,020,030,040,060	-
+oriw	#imm,(d8,An,Xn)	fff8/0070	-	-	000,010,020,030,040,060	-
+oriw	#imm,-(An)	fff8/0060	-	-	000,010,020,030,040,060	-
+oriw	#imm,Dn	fff8/0040	-	-	000,010,020,030,040,060	-
+oriw	#imm,abs	fffe/0078	-	-	000,010,020,030,040,060	-
+oriw	#imm,reg	ffff/007c	-	-	000,010,020,030,040,060	-
+orl	#imm,Dn	f1ff/80bc	-	-	000,010,020,030,040,060	-
+orl	(An)+,Dn	f1f8/8098	-	-	000,010,020,030,040,060	-
+orl	(An),Dn	f1f8/8090	-	-	000,010,020,030,040,060	-
+orl	(d16,An),Dn	f1f8/80a8	-	-	000,010,020,030,040,060	-
+orl	(d16,PC),Dn	f1ff/80ba	-	-	000,010,020,030,040,060	-
+orl	(d8,An,Xn),Dn	f1f8/80b0	-	-	000,010,020,030,040,060	-
+orl	(d8,PC,Xn),Dn	f1ff/80bb	-	-	000,010,020,030,040,060	-
+orl	-(An),Dn	f1f8/80a0	-	-	000,010,020,030,040,060	-
+orl	Dn,(An)	f1f8/8190	-	-	000,010,020,030,040,060	-
+orl	Dn,(An)+	f1f8/8198	-	-	000,010,020,030,040,060	-
+orl	Dn,(d16,An)	f1f8/81a8	-	-	000,010,020,030,040,060	-
+orl	Dn,(d8,An,Xn)	f1f8/81b0	-	-	000,010,020,030,040,060	-
+orl	Dn,-(An)	f1f8/81a0	-	-	000,010,020,030,040,060	-
+orl	Dn,Dn	f1f8/8080	-	-	000,010,020,030,040,060	-
+orl	Dn,abs	f1fe/81b8	-	-	000,010,020,030,040,060	-
+orl	abs,Dn	f1fe/80b8	-	-	000,010,020,030,040,060	-
+orw	#imm,Dn	f1ff/807c	-	-	000,010,020,030,040,060	-
+orw	(An)+,Dn	f1f8/8058	-	-	000,010,020,030,040,060	-
+orw	(An),Dn	f1f8/8050	-	-	000,010,020,030,040,060	-
+orw	(d16,An),Dn	f1f8/8068	-	-	000,010,020,030,040,060	-
+orw	(d16,PC),Dn	f1ff/807a	-	-	000,010,020,030,040,060	-
+orw	(d8,An,Xn),Dn	f1f8/8070	-	-	000,010,020,030,040,060	-
+orw	(d8,PC,Xn),Dn	f1ff/807b	-	-	000,010,020,030,040,060	-
+orw	-(An),Dn	f1f8/8060	-	-	000,010,020,030,040,060	-
+orw	Dn,(An)	f1f8/8150	-	-	000,010,020,030,040,060	-
+orw	Dn,(An)+	f1f8/8158	-	-	000,010,020,030,040,060	-
+orw	Dn,(d16,An)	f1f8/8168	-	-	000,010,020,030,040,060	-
+orw	Dn,(d8,An,Xn)	f1f8/8170	-	-	000,010,020,030,040,060	-
+orw	Dn,-(An)	f1f8/8160	-	-	000,010,020,030,040,060	-
+orw	Dn,Dn	f1f8/8040	-	-	000,010,020,030,040,060	-
+orw	Dn,abs	f1fe/8178	-	-	000,010,020,030,040,060	-
+orw	abs,Dn	f1fe/8078	-	-	000,010,020,030,040,060	-
+pack	-(An),-(An),#imm	f1f8/8148	-	-	020,030,040,060	-
+pack	Dn,Dn,#imm	f1f8/8140	-	-	020,030,040,060	-
+pbbs	abs	ffff/f080 ffff/f0c0	ffff/0000	-	020,030,040,060	-
+pbic	abs	ffff/f08b ffff/f0cb	ffff/0000	-	020,030,040,060	-
+pblc	abs	ffff/f083 ffff/f0c3	ffff/0000	-	020,030,040,060	-
+pbws	abs	ffff/f088 ffff/f0c8	ffff/0000	-	020,030,040,060	-
+pdbac	Dn,abs	fff8/f048	ffff/0007	-	020,030,040,060	-
+pdbas	Dn,abs	fff8/f048	ffff/0006	-	020,030,040,060	-
+pdbbc	Dn,abs	fff8/f048	ffff/0001	-	020,030,040,060	-
+pdbbs	Dn,abs	fff8/f048	ffff/0000	-	020,030,040,060	-
+pdbcc	Dn,abs	fff8/f048	ffff/000f	-	020,030,040,060	-
+pdbcs	Dn,abs	fff8/f048	ffff/000e	-	020,030,040,060	-
+pdbgc	Dn,abs	fff8/f048	ffff/000d	-	020,030,040,060	-
+pdbgs	Dn,abs	fff8/f048	ffff/000c	-	020,030,040,060	-
+pdbic	Dn,abs	fff8/f048	ffff/000b	-	020,030,040,060	-
+pdbis	Dn,abs	fff8/f048	ffff/000a	-	020,030,040,060	-
+pdblc	Dn,abs	fff8/f048	ffff/0003	-	020,030,040,060	-
+pdbls	Dn,abs	fff8/f048	ffff/0002	-	020,030,040,060	-
+pdbsc	Dn,abs	fff8/f048	ffff/0005	-	020,030,040,060	-
+pdbss	Dn,abs	fff8/f048	ffff/0004	-	020,030,040,060	-
+pdbwc	Dn,abs	fff8/f048	ffff/0009	-	020,030,040,060	-
+pdbws	Dn,abs	fff8/f048	ffff/0008	-	020,030,040,060	-
+pea	(An)	fff8/4850	-	-	000,010,020,030,040,060	-
+pea	(d16,An)	fff8/4868	-	-	000,010,020,030,040,060	-
+pea	(d16,PC)	ffff/487a	-	-	000,010,020,030,040,060	-
+pea	(d8,An,Xn)	fff8/4870	-	-	000,010,020,030,040,060	-
+pea	(d8,PC,Xn)	ffff/487b	-	-	000,010,020,030,040,060	-
+pea	abs	fffe/4878	-	-	000,010,020,030,040,060	-
+pflush	#imm,#imm	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	fe10/3010	-	020,030,040,060	-
+pflush	#imm,#imm,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fe10/3810	-	020,030,040,060	-
+pflush	(An)	fff8/f508	-	-	040,060	-
+pflush	Dn,#imm	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	fe18/3008	-	020,030,040,060	-
+pflush	Dn,#imm,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fe18/3808	-	020,030,040,060	-
+pflush	reg,#imm	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	fe1e/3000	-	020,030,040,060	-
+pflush	reg,#imm,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fe1e/3800	-	020,030,040,060	-
+pflusha		fff8/f518	-	-	040,060	-
+pflusha		ffff/f000	ffff/2400	-	020,030,040,060	-
+pflushan		fff8/f510	-	-	040,060	-
+pflushn	(An)	fff8/f500	-	-	040,060	-
+pflushr	ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b	ffff/a000	-	020,030,040,060	-
+pflushs	#imm,#imm	fff8/f000	fe10/3410	-	020,030,040,060	-
+pflushs	ea,#imm	fff8/f000	fe18/3408	-	020,030,040,060	-
+pflushs	reg,#imm	fff8/f000	fe1e/3400	-	020,030,040,060	-
+ploadr	#imm,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fff0/2210	-	020,030,040,060	-
+ploadr	Dn,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fff8/2208	-	020,030,040,060	-
+ploadr	reg,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fffe/2200	-	020,030,040,060	-
+ploadw	#imm,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fff0/2010	-	020,030,040,060	-
+ploadw	Dn,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fff8/2008	-	020,030,040,060	-
+ploadw	reg,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fffe/2000	-	020,030,040,060	-
+plpar	(An)	fff8/f5c8	-	-	060	-
+plpaw	(An)	fff8/f588	-	-	060	-
+pmove	ea,mmureg	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	ebe3/6800	-	020,030,040,060	-
+pmove	ea,reg	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	bbff/0800 e3ff/4000 ebe3/6000	-	030	-
+pmove	ea,reg	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	e3ff/4000 ebe3/6000	-	020,040,060	-
+pmove	mmureg,ea	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039	ebe3/6a00	-	020,030,040,060	-
+pmove	reg,ea	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039	bbff/0a00 e3ff/4200 ebe3/6200	-	030	-
+pmove	reg,ea	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3ff/4200 ebe3/6200	-	020,040,060	-
+pmovefd	ea,reg	fff8/f000 fff8/f008 fff8/f010 fff8/f018 fff8/f020 fff8/f028 fff8/f030 ffff/f038 ffff/f039 ffff/f03a ffff/f03b ffff/f03c	bbff/0900 e3ff/4100	-	030	-
+prestore	ea	fff8/f150 fff8/f158 fff8/f168 fff8/f170 ffff/f178 ffff/f179 ffff/f17a ffff/f17b	ffff/0000	-	020,030,040,060	-
+psac	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0007	-	020,030,040,060	-
+psas	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0006	-	020,030,040,060	-
+psave	ea	fff8/f110 fff8/f120 fff8/f128 fff8/f130 ffff/f138 ffff/f139	ffff/0000	-	020,030,040,060	-
+psbc	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0001	-	020,030,040,060	-
+psbs	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0000	-	020,030,040,060	-
+pscc	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/000f	-	020,030,040,060	-
+pscs	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/000e	-	020,030,040,060	-
+psgc	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/000d	-	020,030,040,060	-
+psgs	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/000c	-	020,030,040,060	-
+psic	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/000b	-	020,030,040,060	-
+psis	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/000a	-	020,030,040,060	-
+pslc	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0003	-	020,030,040,060	-
+psls	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0002	-	020,030,040,060	-
+pssc	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0005	-	020,030,040,060	-
+psss	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0004	-	020,030,040,060	-
+pswc	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0009	-	020,030,040,060	-
+psws	ea	fff8/f040 fff8/f050 fff8/f058 fff8/f060 fff8/f068 fff8/f070 ffff/f078 ffff/f079	ffff/0008	-	020,030,040,060	-
+ptestr	#imm,ea,#imm	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3f0/8210	-	020,030,040,060	-
+ptestr	#imm,ea,#imm,An	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e310/8310	-	020,030,040,060	-
+ptestr	(An)	fff8/f568	-	-	040	-
+ptestr	Dn,ea,#imm	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3f8/8208	-	020,030,040,060	-
+ptestr	Dn,ea,#imm,An	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e318/8308	-	020,030,040,060	-
+ptestr	reg,ea,#imm	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3fe/8200	-	020,030,040,060	-
+ptestr	reg,ea,#imm,An	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e31e/8300	-	020,030,040,060	-
+ptestw	#imm,ea,#imm	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3f0/8010	-	020,030,040,060	-
+ptestw	#imm,ea,#imm,An	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e310/8110	-	020,030,040,060	-
+ptestw	(An)	fff8/f548	-	-	040	-
+ptestw	Dn,ea,#imm	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3f8/8008	-	020,030,040,060	-
+ptestw	Dn,ea,#imm,An	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e318/8108	-	020,030,040,060	-
+ptestw	reg,ea,#imm	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e3fe/8000	-	020,030,040,060	-
+ptestw	reg,ea,#imm,An	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	e31e/8100	-	020,030,040,060	-
+ptrapac		ffff/f07c	ffff/0007	-	020,030,040,060	-
+ptrapacl	#imm	ffff/f07b	ffff/0007	-	020,030,040,060	-
+ptrapacw	#imm	ffff/f07a	ffff/0007	-	020,030,040,060	-
+ptrapas		ffff/f07c	ffff/0006	-	020,030,040,060	-
+ptrapasl	#imm	ffff/f07b	ffff/0006	-	020,030,040,060	-
+ptrapasw	#imm	ffff/f07a	ffff/0006	-	020,030,040,060	-
+ptrapbc		ffff/f07c	ffff/0001	-	020,030,040,060	-
+ptrapbcl	#imm	ffff/f07b	ffff/0001	-	020,030,040,060	-
+ptrapbcw	#imm	ffff/f07a	ffff/0001	-	020,030,040,060	-
+ptrapbs		ffff/f07c	ffff/0000	-	020,030,040,060	-
+ptrapbsl	#imm	ffff/f07b	ffff/0000	-	020,030,040,060	-
+ptrapbsw	#imm	ffff/f07a	ffff/0000	-	020,030,040,060	-
+ptrapcc		ffff/f07c	ffff/000f	-	020,030,040,060	-
+ptrapccl	#imm	ffff/f07b	ffff/000f	-	020,030,040,060	-
+ptrapccw	#imm	ffff/f07a	ffff/000f	-	020,030,040,060	-
+ptrapcs		ffff/f07c	ffff/000e	-	020,030,040,060	-
+ptrapcsl	#imm	ffff/f07b	ffff/000e	-	020,030,040,060	-
+ptrapcsw	#imm	ffff/f07a	ffff/000e	-	020,030,040,060	-
+ptrapgc		ffff/f07c	ffff/000d	-	020,030,040,060	-
+ptrapgcl	#imm	ffff/f07b	ffff/000d	-	020,030,040,060	-
+ptrapgcw	#imm	ffff/f07a	ffff/000d	-	020,030,040,060	-
+ptrapgs		ffff/f07c	ffff/000c	-	020,030,040,060	-
+ptrapgsl	#imm	ffff/f07b	ffff/000c	-	020,030,040,060	-
+ptrapgsw	#imm	ffff/f07a	ffff/000c	-	020,030,040,060	-
+ptrapic		ffff/f07c	ffff/000b	-	020,030,040,060	-
+ptrapicl	#imm	ffff/f07b	ffff/000b	-	020,030,040,060	-
+ptrapicw	#imm	ffff/f07a	ffff/000b	-	020,030,040,060	-
+ptrapis		ffff/f07c	ffff/000a	-	020,030,040,060	-
+ptrapisl	#imm	ffff/f07b	ffff/000a	-	020,030,040,060	-
+ptrapisw	#imm	ffff/f07a	ffff/000a	-	020,030,040,060	-
+ptraplc		ffff/f07c	ffff/0003	-	020,030,040,060	-
+ptraplcl	#imm	ffff/f07b	ffff/0003	-	020,030,040,060	-
+ptraplcw	#imm	ffff/f07a	ffff/0003	-	020,030,040,060	-
+ptrapls		ffff/f07c	ffff/0002	-	020,030,040,060	-
+ptraplsl	#imm	ffff/f07b	ffff/0002	-	020,030,040,060	-
+ptraplsw	#imm	ffff/f07a	ffff/0002	-	020,030,040,060	-
+ptrapsc		ffff/f07c	ffff/0005	-	020,030,040,060	-
+ptrapscl	#imm	ffff/f07b	ffff/0005	-	020,030,040,060	-
+ptrapscw	#imm	ffff/f07a	ffff/0005	-	020,030,040,060	-
+ptrapss		ffff/f07c	ffff/0004	-	020,030,040,060	-
+ptrapssl	#imm	ffff/f07b	ffff/0004	-	020,030,040,060	-
+ptrapssw	#imm	ffff/f07a	ffff/0004	-	020,030,040,060	-
+ptrapwc		ffff/f07c	ffff/0009	-	020,030,040,060	-
+ptrapwcl	#imm	ffff/f07b	ffff/0009	-	020,030,040,060	-
+ptrapwcw	#imm	ffff/f07a	ffff/0009	-	020,030,040,060	-
+ptrapws		ffff/f07c	ffff/0008	-	020,030,040,060	-
+ptrapwsl	#imm	ffff/f07b	ffff/0008	-	020,030,040,060	-
+ptrapwsw	#imm	ffff/f07a	ffff/0008	-	020,030,040,060	-
+pulse		ffff/4acc	-	-	060	-
+pvalid	An,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	fff8/2c00	-	020,030,040,060	-
+pvalid	reg,ea	fff8/f010 fff8/f028 fff8/f030 ffff/f038 ffff/f039	ffff/2800	-	020,030,040,060	-
+reset		ffff/4e70	-	-	000,010,020,030,040,060	-
+rolb	#imm,Dn	f1f8/e118	-	-	000,010,020,030,040,060	-
+rolb	Dn,Dn	f1f8/e138	-	-	000,010,020,030,040,060	-
+roll	#imm,Dn	f1f8/e198	-	-	000,010,020,030,040,060	-
+roll	Dn,Dn	f1f8/e1b8	-	-	000,010,020,030,040,060	-
+rolw	#imm,Dn	f1f8/e158	-	-	000,010,020,030,040,060	-
+rolw	(An)	fff8/e7d0	-	-	000,010,020,030,040,060	-
+rolw	(An)+	fff8/e7d8	-	-	000,010,020,030,040,060	-
+rolw	(d16,An)	fff8/e7e8	-	-	000,010,020,030,040,060	-
+rolw	(d8,An,Xn)	fff8/e7f0	-	-	000,010,020,030,040,060	-
+rolw	-(An)	fff8/e7e0	-	-	000,010,020,030,040,060	-
+rolw	Dn,Dn	f1f8/e178	-	-	000,010,020,030,040,060	-
+rolw	abs	fffe/e7f8	-	-	000,010,020,030,040,060	-
+rorb	#imm,Dn	f1f8/e018	-	-	000,010,020,030,040,060	-
+rorb	Dn,Dn	f1f8/e038	-	-	000,010,020,030,040,060	-
+rorl	#imm,Dn	f1f8/e098	-	-	000,010,020,030,040,060	-
+rorl	Dn,Dn	f1f8/e0b8	-	-	000,010,020,030,040,060	-
+rorw	#imm,Dn	f1f8/e058	-	-	000,010,020,030,040,060	-
+rorw	(An)	fff8/e6d0	-	-	000,010,020,030,040,060	-
+rorw	(An)+	fff8/e6d8	-	-	000,010,020,030,040,060	-
+rorw	(d16,An)	fff8/e6e8	-	-	000,010,020,030,040,060	-
+rorw	(d8,An,Xn)	fff8/e6f0	-	-	000,010,020,030,040,060	-
+rorw	-(An)	fff8/e6e0	-	-	000,010,020,030,040,060	-
+rorw	Dn,Dn	f1f8/e078	-	-	000,010,020,030,040,060	-
+rorw	abs	fffe/e6f8	-	-	000,010,020,030,040,060	-
+roxlb	#imm,Dn	f1f8/e110	-	-	000,010,020,030,040,060	-
+roxlb	Dn,Dn	f1f8/e130	-	-	000,010,020,030,040,060	-
+roxll	#imm,Dn	f1f8/e190	-	-	000,010,020,030,040,060	-
+roxll	Dn,Dn	f1f8/e1b0	-	-	000,010,020,030,040,060	-
+roxlw	#imm,Dn	f1f8/e150	-	-	000,010,020,030,040,060	-
+roxlw	(An)	fff8/e5d0	-	-	000,010,020,030,040,060	-
+roxlw	(An)+	fff8/e5d8	-	-	000,010,020,030,040,060	-
+roxlw	(d16,An)	fff8/e5e8	-	-	000,010,020,030,040,060	-
+roxlw	(d8,An,Xn)	fff8/e5f0	-	-	000,010,020,030,040,060	-
+roxlw	-(An)	fff8/e5e0	-	-	000,010,020,030,040,060	-
+roxlw	Dn,Dn	f1f8/e170	-	-	000,010,020,030,040,060	-
+roxlw	abs	fffe/e5f8	-	-	000,010,020,030,040,060	-
+roxrb	#imm,Dn	f1f8/e010	-	-	000,010,020,030,040,060	-
+roxrb	Dn,Dn	f1f8/e030	-	-	000,010,020,030,040,060	-
+roxrl	#imm,Dn	f1f8/e090	-	-	000,010,020,030,040,060	-
+roxrl	Dn,Dn	f1f8/e0b0	-	-	000,010,020,030,040,060	-
+roxrw	#imm,Dn	f1f8/e050	-	-	000,010,020,030,040,060	-
+roxrw	(An)	fff8/e4d0	-	-	000,010,020,030,040,060	-
+roxrw	(An)+	fff8/e4d8	-	-	000,010,020,030,040,060	-
+roxrw	(d16,An)	fff8/e4e8	-	-	000,010,020,030,040,060	-
+roxrw	(d8,An,Xn)	fff8/e4f0	-	-	000,010,020,030,040,060	-
+roxrw	-(An)	fff8/e4e0	-	-	000,010,020,030,040,060	-
+roxrw	Dn,Dn	f1f8/e070	-	-	000,010,020,030,040,060	-
+roxrw	abs	fffe/e4f8	-	-	000,010,020,030,040,060	-
+rtd	#imm	ffff/4e74	-	-	010,020,030,040,060	-
+rte		ffff/4e73	-	-	000,010,020,030,040,060	-
+rtm	An	fff8/06c8	-	-	020	-
+rtm	Dn	fff8/06c0	-	-	020	-
+rtr		ffff/4e77	-	-	000,010,020,030,040,060	-
+rts		ffff/4e75	-	-	000,010,020,030,040,060	-
+sbcd	-(An),-(An)	f1f8/8108	-	-	000,010,020,030,040,060	-
+sbcd	Dn,Dn	f1f8/8100	-	-	000,010,020,030,040,060	-
+scc	(An)	fff8/54d0	-	-	000,010,020,030,040,060	-
+scc	(An)+	fff8/54d8	-	-	000,010,020,030,040,060	-
+scc	(d16,An)	fff8/54e8	-	-	000,010,020,030,040,060	-
+scc	(d8,An,Xn)	fff8/54f0	-	-	000,010,020,030,040,060	-
+scc	-(An)	fff8/54e0	-	-	000,010,020,030,040,060	-
+scc	Dn	fff8/54c0	-	-	000,010,020,030,040,060	-
+scc	abs	fffe/54f8	-	-	000,010,020,030,040,060	-
+scs	(An)	fff8/55d0	-	-	000,010,020,030,040,060	-
+scs	(An)+	fff8/55d8	-	-	000,010,020,030,040,060	-
+scs	(d16,An)	fff8/55e8	-	-	000,010,020,030,040,060	-
+scs	(d8,An,Xn)	fff8/55f0	-	-	000,010,020,030,040,060	-
+scs	-(An)	fff8/55e0	-	-	000,010,020,030,040,060	-
+scs	Dn	fff8/55c0	-	-	000,010,020,030,040,060	-
+scs	abs	fffe/55f8	-	-	000,010,020,030,040,060	-
+seq	(An)	fff8/57d0	-	-	000,010,020,030,040,060	-
+seq	(An)+	fff8/57d8	-	-	000,010,020,030,040,060	-
+seq	(d16,An)	fff8/57e8	-	-	000,010,020,030,040,060	-
+seq	(d8,An,Xn)	fff8/57f0	-	-	000,010,020,030,040,060	-
+seq	-(An)	fff8/57e0	-	-	000,010,020,030,040,060	-
+seq	Dn	fff8/57c0	-	-	000,010,020,030,040,060	-
+seq	abs	fffe/57f8	-	-	000,010,020,030,040,060	-
+sf	(An)	fff8/51d0	-	-	000,010,020,030,040,060	-
+sf	(An)+	fff8/51d8	-	-	000,010,020,030,040,060	-
+sf	(d16,An)	fff8/51e8	-	-	000,010,020,030,040,060	-
+sf	(d8,An,Xn)	fff8/51f0	-	-	000,010,020,030,040,060	-
+sf	-(An)	fff8/51e0	-	-	000,010,020,030,040,060	-
+sf	Dn	fff8/51c0	-	-	000,010,020,030,040,060	-
+sf	abs	fffe/51f8	-	-	000,010,020,030,040,060	-
+sge	(An)	fff8/5cd0	-	-	000,010,020,030,040,060	-
+sge	(An)+	fff8/5cd8	-	-	000,010,020,030,040,060	-
+sge	(d16,An)	fff8/5ce8	-	-	000,010,020,030,040,060	-
+sge	(d8,An,Xn)	fff8/5cf0	-	-	000,010,020,030,040,060	-
+sge	-(An)	fff8/5ce0	-	-	000,010,020,030,040,060	-
+sge	Dn	fff8/5cc0	-	-	000,010,020,030,040,060	-
+sge	abs	fffe/5cf8	-	-	000,010,020,030,040,060	-
+sgt	(An)	fff8/5ed0	-	-	000,010,020,030,040,060	-
+sgt	(An)+	fff8/5ed8	-	-	000,010,020,030,040,060	-
+sgt	(d16,An)	fff8/5ee8	-	-	000,010,020,030,040,060	-
+sgt	(d8,An,Xn)	fff8/5ef0	-	-	000,010,020,030,040,060	-
+sgt	-(An)	fff8/5ee0	-	-	000,010,020,030,040,060	-
+sgt	Dn	fff8/5ec0	-	-	000,010,020,030,040,060	-
+sgt	abs	fffe/5ef8	-	-	000,010,020,030,040,060	-
+shi	(An)	fff8/52d0	-	-	000,010,020,030,040,060	-
+shi	(An)+	fff8/52d8	-	-	000,010,020,030,040,060	-
+shi	(d16,An)	fff8/52e8	-	-	000,010,020,030,040,060	-
+shi	(d8,An,Xn)	fff8/52f0	-	-	000,010,020,030,040,060	-
+shi	-(An)	fff8/52e0	-	-	000,010,020,030,040,060	-
+shi	Dn	fff8/52c0	-	-	000,010,020,030,040,060	-
+shi	abs	fffe/52f8	-	-	000,010,020,030,040,060	-
+sle	(An)	fff8/5fd0	-	-	000,010,020,030,040,060	-
+sle	(An)+	fff8/5fd8	-	-	000,010,020,030,040,060	-
+sle	(d16,An)	fff8/5fe8	-	-	000,010,020,030,040,060	-
+sle	(d8,An,Xn)	fff8/5ff0	-	-	000,010,020,030,040,060	-
+sle	-(An)	fff8/5fe0	-	-	000,010,020,030,040,060	-
+sle	Dn	fff8/5fc0	-	-	000,010,020,030,040,060	-
+sle	abs	fffe/5ff8	-	-	000,010,020,030,040,060	-
+sls	(An)	fff8/53d0	-	-	000,010,020,030,040,060	-
+sls	(An)+	fff8/53d8	-	-	000,010,020,030,040,060	-
+sls	(d16,An)	fff8/53e8	-	-	000,010,020,030,040,060	-
+sls	(d8,An,Xn)	fff8/53f0	-	-	000,010,020,030,040,060	-
+sls	-(An)	fff8/53e0	-	-	000,010,020,030,040,060	-
+sls	Dn	fff8/53c0	-	-	000,010,020,030,040,060	-
+sls	abs	fffe/53f8	-	-	000,010,020,030,040,060	-
+slt	(An)	fff8/5dd0	-	-	000,010,020,030,040,060	-
+slt	(An)+	fff8/5dd8	-	-	000,010,020,030,040,060	-
+slt	(d16,An)	fff8/5de8	-	-	000,010,020,030,040,060	-
+slt	(d8,An,Xn)	fff8/5df0	-	-	000,010,020,030,040,060	-
+slt	-(An)	fff8/5de0	-	-	000,010,020,030,040,060	-
+slt	Dn	fff8/5dc0	-	-	000,010,020,030,040,060	-
+slt	abs	fffe/5df8	-	-	000,010,020,030,040,060	-
+smi	(An)	fff8/5bd0	-	-	000,010,020,030,040,060	-
+smi	(An)+	fff8/5bd8	-	-	000,010,020,030,040,060	-
+smi	(d16,An)	fff8/5be8	-	-	000,010,020,030,040,060	-
+smi	(d8,An,Xn)	fff8/5bf0	-	-	000,010,020,030,040,060	-
+smi	-(An)	fff8/5be0	-	-	000,010,020,030,040,060	-
+smi	Dn	fff8/5bc0	-	-	000,010,020,030,040,060	-
+smi	abs	fffe/5bf8	-	-	000,010,020,030,040,060	-
+sne	(An)	fff8/56d0	-	-	000,010,020,030,040,060	-
+sne	(An)+	fff8/56d8	-	-	000,010,020,030,040,060	-
+sne	(d16,An)	fff8/56e8	-	-	000,010,020,030,040,060	-
+sne	(d8,An,Xn)	fff8/56f0	-	-	000,010,020,030,040,060	-
+sne	-(An)	fff8/56e0	-	-	000,010,020,030,040,060	-
+sne	Dn	fff8/56c0	-	-	000,010,020,030,040,060	-
+sne	abs	fffe/56f8	-	-	000,010,020,030,040,060	-
+spl	(An)	fff8/5ad0	-	-	000,010,020,030,040,060	-
+spl	(An)+	fff8/5ad8	-	-	000,010,020,030,040,060	-
+spl	(d16,An)	fff8/5ae8	-	-	000,010,020,030,040,060	-
+spl	(d8,An,Xn)	fff8/5af0	-	-	000,010,020,030,040,060	-
+spl	-(An)	fff8/5ae0	-	-	000,010,020,030,040,060	-
+spl	Dn	fff8/5ac0	-	-	000,010,020,030,040,060	-
+spl	abs	fffe/5af8	-	-	000,010,020,030,040,060	-
+st	(An)	fff8/50d0	-	-	000,010,020,030,040,060	-
+st	(An)+	fff8/50d8	-	-	000,010,020,030,040,060	-
+st	(d16,An)	fff8/50e8	-	-	000,010,020,030,040,060	-
+st	(d8,An,Xn)	fff8/50f0	-	-	000,010,020,030,040,060	-
+st	-(An)	fff8/50e0	-	-	000,010,020,030,040,060	-
+st	Dn	fff8/50c0	-	-	000,010,020,030,040,060	-
+st	abs	fffe/50f8	-	-	000,010,020,030,040,060	-
+stop	#imm	ffff/4e72	-	-	000,010,020,030,040,060	-
+subal	#imm,An	f1ff/91fc	-	-	000,010,020,030,040,060	-
+subal	(An)+,An	f1f8/91d8	-	-	000,010,020,030,040,060	-
+subal	(An),An	f1f8/91d0	-	-	000,010,020,030,040,060	-
+subal	(d16,An),An	f1f8/91e8	-	-	000,010,020,030,040,060	-
+subal	(d16,PC),An	f1ff/91fa	-	-	000,010,020,030,040,060	-
+subal	(d8,An,Xn),An	f1f8/91f0	-	-	000,010,020,030,040,060	-
+subal	(d8,PC,Xn),An	f1ff/91fb	-	-	000,010,020,030,040,060	-
+subal	-(An),An	f1f8/91e0	-	-	000,010,020,030,040,060	-
+subal	An,An	f1f8/91c8	-	-	000,010,020,030,040,060	-
+subal	Dn,An	f1f8/91c0	-	-	000,010,020,030,040,060	-
+subal	abs,An	f1fe/91f8	-	-	000,010,020,030,040,060	-
+subaw	#imm,An	f1ff/90fc	-	-	000,010,020,030,040,060	-
+subaw	(An)+,An	f1f8/90d8	-	-	000,010,020,030,040,060	-
+subaw	(An),An	f1f8/90d0	-	-	000,010,020,030,040,060	-
+subaw	(d16,An),An	f1f8/90e8	-	-	000,010,020,030,040,060	-
+subaw	(d16,PC),An	f1ff/90fa	-	-	000,010,020,030,040,060	-
+subaw	(d8,An,Xn),An	f1f8/90f0	-	-	000,010,020,030,040,060	-
+subaw	(d8,PC,Xn),An	f1ff/90fb	-	-	000,010,020,030,040,060	-
+subaw	-(An),An	f1f8/90e0	-	-	000,010,020,030,040,060	-
+subaw	An,An	f1f8/90c8	-	-	000,010,020,030,040,060	-
+subaw	Dn,An	f1f8/90c0	-	-	000,010,020,030,040,060	-
+subaw	abs,An	f1fe/90f8	-	-	000,010,020,030,040,060	-
+subb	#imm,Dn	f1ff/903c	-	-	000,010,020,030,040,060	-
+subb	(An)+,Dn	f1f8/9018	-	-	000,010,020,030,040,060	-
+subb	(An),Dn	f1f8/9010	-	-	000,010,020,030,040,060	-
+subb	(d16,An),Dn	f1f8/9028	-	-	000,010,020,030,040,060	-
+subb	(d16,PC),Dn	f1ff/903a	-	-	000,010,020,030,040,060	-
+subb	(d8,An,Xn),Dn	f1f8/9030	-	-	000,010,020,030,040,060	-
+subb	(d8,PC,Xn),Dn	f1ff/903b	-	-	000,010,020,030,040,060	-
+subb	-(An),Dn	f1f8/9020	-	-	000,010,020,030,040,060	-
+subb	Dn,(An)	f1f8/9110	-	-	000,010,020,030,040,060	-
+subb	Dn,(An)+	f1f8/9118	-	-	000,010,020,030,040,060	-
+subb	Dn,(d16,An)	f1f8/9128	-	-	000,010,020,030,040,060	-
+subb	Dn,(d8,An,Xn)	f1f8/9130	-	-	000,010,020,030,040,060	-
+subb	Dn,-(An)	f1f8/9120	-	-	000,010,020,030,040,060	-
+subb	Dn,Dn	f1f8/9000	-	-	000,010,020,030,040,060	-
+subb	Dn,abs	f1fe/9138	-	-	000,010,020,030,040,060	-
+subb	abs,Dn	f1fe/9038	-	-	000,010,020,030,040,060	-
+subib	#imm,(An)	fff8/0410	-	-	000,010,020,030,040,060	-
+subib	#imm,(An)+	fff8/0418	-	-	000,010,020,030,040,060	-
+subib	#imm,(d16,An)	fff8/0428	-	-	000,010,020,030,040,060	-
+subib	#imm,(d8,An,Xn)	fff8/0430	-	-	000,010,020,030,040,060	-
+subib	#imm,-(An)	fff8/0420	-	-	000,010,020,030,040,060	-
+subib	#imm,Dn	fff8/0400	-	-	000,010,020,030,040,060	-
+subib	#imm,abs	fffe/0438	-	-	000,010,020,030,040,060	-
+subil	#imm,(An)	fff8/0490	-	-	000,010,020,030,040,060	-
+subil	#imm,(An)+	fff8/0498	-	-	000,010,020,030,040,060	-
+subil	#imm,(d16,An)	fff8/04a8	-	-	000,010,020,030,040,060	-
+subil	#imm,(d8,An,Xn)	fff8/04b0	-	-	000,010,020,030,040,060	-
+subil	#imm,-(An)	fff8/04a0	-	-	000,010,020,030,040,060	-
+subil	#imm,Dn	fff8/0480	-	-	000,010,020,030,040,060	-
+subil	#imm,abs	fffe/04b8	-	-	000,010,020,030,040,060	-
+subiw	#imm,(An)	fff8/0450	-	-	000,010,020,030,040,060	-
+subiw	#imm,(An)+	fff8/0458	-	-	000,010,020,030,040,060	-
+subiw	#imm,(d16,An)	fff8/0468	-	-	000,010,020,030,040,060	-
+subiw	#imm,(d8,An,Xn)	fff8/0470	-	-	000,010,020,030,040,060	-
+subiw	#imm,-(An)	fff8/0460	-	-	000,010,020,030,040,060	-
+subiw	#imm,Dn	fff8/0440	-	-	000,010,020,030,040,060	-
+subiw	#imm,abs	fffe/0478	-	-	000,010,020,030,040,060	-
+subl	#imm,Dn	f1ff/90bc	-	-	000,010,020,030,040,060	-
+subl	(An)+,Dn	f1f8/9098	-	-	000,010,020,030,040,060	-
+subl	(An),Dn	f1f8/9090	-	-	000,010,020,030,040,060	-
+subl	(d16,An),Dn	f1f8/90a8	-	-	000,010,020,030,040,060	-
+subl	(d16,PC),Dn	f1ff/90ba	-	-	000,010,020,030,040,060	-
+subl	(d8,An,Xn),Dn	f1f8/90b0	-	-	000,010,020,030,040,060	-
+subl	(d8,PC,Xn),Dn	f1ff/90bb	-	-	000,010,020,030,040,060	-
+subl	-(An),Dn	f1f8/90a0	-	-	000,010,020,030,040,060	-
+subl	An,Dn	f1f8/9088	-	-	000,010,020,030,040,060	-
+subl	Dn,(An)	f1f8/9190	-	-	000,010,020,030,040,060	-
+subl	Dn,(An)+	f1f8/9198	-	-	000,010,020,030,040,060	-
+subl	Dn,(d16,An)	f1f8/91a8	-	-	000,010,020,030,040,060	-
+subl	Dn,(d8,An,Xn)	f1f8/91b0	-	-	000,010,020,030,040,060	-
+subl	Dn,-(An)	f1f8/91a0	-	-	000,010,020,030,040,060	-
+subl	Dn,Dn	f1f8/9080	-	-	000,010,020,030,040,060	-
+subl	Dn,abs	f1fe/91b8	-	-	000,010,020,030,040,060	-
+subl	abs,Dn	f1fe/90b8	-	-	000,010,020,030,040,060	-
+subqb	#imm,(An)	f1f8/5110	-	-	000,010,020,030,040,060	-
+subqb	#imm,(An)+	f1f8/5118	-	-	000,010,020,030,040,060	-
+subqb	#imm,(d16,An)	f1f8/5128	-	-	000,010,020,030,040,060	-
+subqb	#imm,(d8,An,Xn)	f1f8/5130	-	-	000,010,020,030,040,060	-
+subqb	#imm,-(An)	f1f8/5120	-	-	000,010,020,030,040,060	-
+subqb	#imm,An	f1f8/5108	-	-	000,010,020,030,040,060	-
+subqb	#imm,Dn	f1f8/5100	-	-	000,010,020,030,040,060	-
+subqb	#imm,abs	f1fe/5138	-	-	000,010,020,030,040,060	-
+subql	#imm,(An)	f1f8/5190	-	-	000,010,020,030,040,060	-
+subql	#imm,(An)+	f1f8/5198	-	-	000,010,020,030,040,060	-
+subql	#imm,(d16,An)	f1f8/51a8	-	-	000,010,020,030,040,060	-
+subql	#imm,(d8,An,Xn)	f1f8/51b0	-	-	000,010,020,030,040,060	-
+subql	#imm,-(An)	f1f8/51a0	-	-	000,010,020,030,040,060	-
+subql	#imm,An	f1f8/5188	-	-	000,010,020,030,040,060	-
+subql	#imm,Dn	f1f8/5180	-	-	000,010,020,030,040,060	-
+subql	#imm,abs	f1fe/51b8	-	-	000,010,020,030,040,060	-
+subqw	#imm,(An)	f1f8/5150	-	-	000,010,020,030,040,060	-
+subqw	#imm,(An)+	f1f8/5158	-	-	000,010,020,030,040,060	-
+subqw	#imm,(d16,An)	f1f8/5168	-	-	000,010,020,030,040,060	-
+subqw	#imm,(d8,An,Xn)	f1f8/5170	-	-	000,010,020,030,040,060	-
+subqw	#imm,-(An)	f1f8/5160	-	-	000,010,020,030,040,060	-
+subqw	#imm,An	f1f8/5148	-	-	000,010,020,030,040,060	-
+subqw	#imm,Dn	f1f8/5140	-	-	000,010,020,030,040,060	-
+subqw	#imm,abs	f1fe/5178	-	-	000,010,020,030,040,060	-
+subw	#imm,Dn	f1ff/907c	-	-	000,010,020,030,040,060	-
+subw	(An)+,Dn	f1f8/9058	-	-	000,010,020,030,040,060	-
+subw	(An),Dn	f1f8/9050	-	-	000,010,020,030,040,060	-
+subw	(d16,An),Dn	f1f8/9068	-	-	000,010,020,030,040,060	-
+subw	(d16,PC),Dn	f1ff/907a	-	-	000,010,020,030,040,060	-
+subw	(d8,An,Xn),Dn	f1f8/9070	-	-	000,010,020,030,040,060	-
+subw	(d8,PC,Xn),Dn	f1ff/907b	-	-	000,010,020,030,040,060	-
+subw	-(An),Dn	f1f8/9060	-	-	000,010,020,030,040,060	-
+subw	An,Dn	f1f8/9048	-	-	000,010,020,030,040,060	-
+subw	Dn,(An)	f1f8/9150	-	-	000,010,020,030,040,060	-
+subw	Dn,(An)+	f1f8/9158	-	-	000,010,020,030,040,060	-
+subw	Dn,(d16,An)	f1f8/9168	-	-	000,010,020,030,040,060	-
+subw	Dn,(d8,An,Xn)	f1f8/9170	-	-	000,010,020,030,040,060	-
+subw	Dn,-(An)	f1f8/9160	-	-	000,010,020,030,040,060	-
+subw	Dn,Dn	f1f8/9040	-	-	000,010,020,030,040,060	-
+subw	Dn,abs	f1fe/9178	-	-	000,010,020,030,040,060	-
+subw	abs,Dn	f1fe/9078	-	-	000,010,020,030,040,060	-
+subxb	-(An),-(An)	f1f8/9108	-	-	000,010,020,030,040,060	-
+subxb	Dn,Dn	f1f8/9100	-	-	000,010,020,030,040,060	-
+subxl	-(An),-(An)	f1f8/9188	-	-	000,010,020,030,040,060	-
+subxl	Dn,Dn	f1f8/9180	-	-	000,010,020,030,040,060	-
+subxw	-(An),-(An)	f1f8/9148	-	-	000,010,020,030,040,060	-
+subxw	Dn,Dn	f1f8/9140	-	-	000,010,020,030,040,060	-
+svc	(An)	fff8/58d0	-	-	000,010,020,030,040,060	-
+svc	(An)+	fff8/58d8	-	-	000,010,020,030,040,060	-
+svc	(d16,An)	fff8/58e8	-	-	000,010,020,030,040,060	-
+svc	(d8,An,Xn)	fff8/58f0	-	-	000,010,020,030,040,060	-
+svc	-(An)	fff8/58e0	-	-	000,010,020,030,040,060	-
+svc	Dn	fff8/58c0	-	-	000,010,020,030,040,060	-
+svc	abs	fffe/58f8	-	-	000,010,020,030,040,060	-
+svs	(An)	fff8/59d0	-	-	000,010,020,030,040,060	-
+svs	(An)+	fff8/59d8	-	-	000,010,020,030,040,060	-
+svs	(d16,An)	fff8/59e8	-	-	000,010,020,030,040,060	-
+svs	(d8,An,Xn)	fff8/59f0	-	-	000,010,020,030,040,060	-
+svs	-(An)	fff8/59e0	-	-	000,010,020,030,040,060	-
+svs	Dn	fff8/59c0	-	-	000,010,020,030,040,060	-
+svs	abs	fffe/59f8	-	-	000,010,020,030,040,060	-
+swap	Dn	fff8/4840	-	-	000,010,020,030,040,060	-
+swbegl	#imm	ffff/4afd	-	-	000,010,020,030,040,060	-
+tas	(An)	fff8/4ad0	-	-	000,010,020,030,040,060	-
+tas	(An)+	fff8/4ad8	-	-	000,010,020,030,040,060	-
+tas	(d16,An)	fff8/4ae8	-	-	000,010,020,030,040,060	-
+tas	(d8,An,Xn)	fff8/4af0	-	-	000,010,020,030,040,060	-
+tas	-(An)	fff8/4ae0	-	-	000,010,020,030,040,060	-
+tas	Dn	fff8/4ac0	-	-	000,010,020,030,040,060	-
+tas	abs	fffe/4af8	-	-	000,010,020,030,040,060	-
+trap	#imm	fff0/4e40	-	-	000,010,020,030,040,060	-
+trapcc		ffff/54fc	-	-	020,030,040,060	-
+trapccl	#imm	ffff/54fb	-	-	020,030,040,060	-
+trapccw	#imm	ffff/54fa	-	-	020,030,040,060	-
+trapcs		ffff/55fc	-	-	020,030,040,060	-
+trapcsl	#imm	ffff/55fb	-	-	020,030,040,060	-
+trapcsw	#imm	ffff/55fa	-	-	020,030,040,060	-
+trapeq		ffff/57fc	-	-	020,030,040,060	-
+trapeql	#imm	ffff/57fb	-	-	020,030,040,060	-
+trapeqw	#imm	ffff/57fa	-	-	020,030,040,060	-
+trapf		ffff/51fc	-	-	020,030,040,060	-
+trapfl	#imm	ffff/51fb	-	-	020,030,040,060	-
+trapfw	#imm	ffff/51fa	-	-	020,030,040,060	-
+trapge		ffff/5cfc	-	-	020,030,040,060	-
+trapgel	#imm	ffff/5cfb	-	-	020,030,040,060	-
+trapgew	#imm	ffff/5cfa	-	-	020,030,040,060	-
+trapgt		ffff/5efc	-	-	020,030,040,060	-
+trapgtl	#imm	ffff/5efb	-	-	020,030,040,060	-
+trapgtw	#imm	ffff/5efa	-	-	020,030,040,060	-
+traphi		ffff/52fc	-	-	020,030,040,060	-
+traphil	#imm	ffff/52fb	-	-	020,030,040,060	-
+traphiw	#imm	ffff/52fa	-	-	020,030,040,060	-
+traple		ffff/5ffc	-	-	020,030,040,060	-
+traplel	#imm	ffff/5ffb	-	-	020,030,040,060	-
+traplew	#imm	ffff/5ffa	-	-	020,030,040,060	-
+trapls		ffff/53fc	-	-	020,030,040,060	-
+traplsl	#imm	ffff/53fb	-	-	020,030,040,060	-
+traplsw	#imm	ffff/53fa	-	-	020,030,040,060	-
+traplt		ffff/5dfc	-	-	020,030,040,060	-
+trapltl	#imm	ffff/5dfb	-	-	020,030,040,060	-
+trapltw	#imm	ffff/5dfa	-	-	020,030,040,060	-
+trapmi		ffff/5bfc	-	-	020,030,040,060	-
+trapmil	#imm	ffff/5bfb	-	-	020,030,040,060	-
+trapmiw	#imm	ffff/5bfa	-	-	020,030,040,060	-
+trapne		ffff/56fc	-	-	020,030,040,060	-
+trapnel	#imm	ffff/56fb	-	-	020,030,040,060	-
+trapnew	#imm	ffff/56fa	-	-	020,030,040,060	-
+trappl		ffff/5afc	-	-	020,030,040,060	-
+trappll	#imm	ffff/5afb	-	-	020,030,040,060	-
+trapplw	#imm	ffff/5afa	-	-	020,030,040,060	-
+trapt		ffff/50fc	-	-	020,030,040,060	-
+traptl	#imm	ffff/50fb	-	-	020,030,040,060	-
+traptw	#imm	ffff/50fa	-	-	020,030,040,060	-
+trapv		ffff/4e76	-	-	000,010,020,030,040,060	-
+trapvc		ffff/58fc	-	-	020,030,040,060	-
+trapvcl	#imm	ffff/58fb	-	-	020,030,040,060	-
+trapvcw	#imm	ffff/58fa	-	-	020,030,040,060	-
+trapvs		ffff/59fc	-	-	020,030,040,060	-
+trapvsl	#imm	ffff/59fb	-	-	020,030,040,060	-
+trapvsw	#imm	ffff/59fa	-	-	020,030,040,060	-
+tstb	#imm	ffff/4a3c	-	-	020,030,040,060	-
+tstb	(An)	fff8/4a10	-	-	000,010,020,030,040,060	-
+tstb	(An)+	fff8/4a18	-	-	000,010,020,030,040,060	-
+tstb	(d16,An)	fff8/4a28	-	-	000,010,020,030,040,060	-
+tstb	(d16,PC)	ffff/4a3a	-	-	020,030,040,060	-
+tstb	(d8,An,Xn)	fff8/4a30	-	-	000,010,020,030,040,060	-
+tstb	(d8,PC,Xn)	ffff/4a3b	-	-	020,030,040,060	-
+tstb	-(An)	fff8/4a20	-	-	000,010,020,030,040,060	-
+tstb	Dn	fff8/4a00	-	-	000,010,020,030,040,060	-
+tstb	abs	fffe/4a38	-	-	000,010,020,030,040,060	-
+tstl	#imm	ffff/4abc	-	-	020,030,040,060	-
+tstl	(An)	fff8/4a90	-	-	000,010,020,030,040,060	-
+tstl	(An)+	fff8/4a98	-	-	000,010,020,030,040,060	-
+tstl	(d16,An)	fff8/4aa8	-	-	000,010,020,030,040,060	-
+tstl	(d16,PC)	ffff/4aba	-	-	020,030,040,060	-
+tstl	(d8,An,Xn)	fff8/4ab0	-	-	000,010,020,030,040,060	-
+tstl	(d8,PC,Xn)	ffff/4abb	-	-	020,030,040,060	-
+tstl	-(An)	fff8/4aa0	-	-	000,010,020,030,040,060	-
+tstl	An	fff8/4a88	-	-	020,030,040,060	-
+tstl	Dn	fff8/4a80	-	-	000,010,020,030,040,060	-
+tstl	abs	fffe/4ab8	-	-	000,010,020,030,040,060	-
+tstw	#imm	ffff/4a7c	-	-	020,030,040,060	-
+tstw	(An)	fff8/4a50	-	-	000,010,020,030,040,060	-
+tstw	(An)+	fff8/4a58	-	-	000,010,020,030,040,060	-
+tstw	(d16,An)	fff8/4a68	-	-	000,010,020,030,040,060	-
+tstw	(d16,PC)	ffff/4a7a	-	-	020,030,040,060	-
+tstw	(d8,An,Xn)	fff8/4a70	-	-	000,010,020,030,040,060	-
+tstw	(d8,PC,Xn)	ffff/4a7b	-	-	020,030,040,060	-
+tstw	-(An)	fff8/4a60	-	-	000,010,020,030,040,060	-
+tstw	An	fff8/4a48	-	-	020,030,040,060	-
+tstw	Dn	fff8/4a40	-	-	000,010,020,030,040,060	-
+tstw	abs	fffe/4a78	-	-	000,010,020,030,040,060	-
+unlk	An	fff8/4e58	-	-	000,010,020,030,040,060	-
+unpk	-(An),-(An),#imm	f1f8/8188	-	-	020,030,040,060	-
+unpk	Dn,Dn,#imm	f1f8/8180	-	-	020,030,040,060	-

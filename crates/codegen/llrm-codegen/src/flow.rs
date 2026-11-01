@@ -78,6 +78,7 @@ const UNOPTIMIZED: &[&str] = &[
     "X86OptimizeLEAs",
     "MachineLICM",
     "IvShare",
+    "IvZero",
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
@@ -97,6 +98,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
     ("IvShare", "machinelicm@4"),
+    ("IvZero", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
@@ -184,6 +186,8 @@ pub fn machine_with<'a>(
         // After the loop-invariant values are in the preheader: streams that
         // share one index share one pointer (DEVIATE LSR2).
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
+        // A counted loop's index ends at zero (DEVIATE LSR3).
+        Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
