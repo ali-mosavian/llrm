@@ -26,6 +26,8 @@ const LZ: &str = "48,97,98,99,3,0,17,100,2,0,255,5,65,66,67,68,69,70,71,72,73,74
 const BUF: [u8; 16] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3];
 /// The loop's `dec cnt` (6) and taken `bne` (3).
 const LOOP_CYCLES: i64 = 9;
+/// The loop's `dec cnt` and `bne`.
+const LOOP_INSTRUCTIONS: i64 = 2;
 
 /// An argument: a byte, a word, or the address of a driver symbol plus an
 /// offset.
@@ -278,13 +280,16 @@ fn link(
     Ok(dir.join(bin))
 }
 
-fn run_sim(bin: &Path) -> Result<(i32, i64), String> {
-    let out = Command::new("sim65").args(["-c", "-x", "200000000"]).arg(bin).output().map_err(|e| e.to_string())?;
-    let cycles = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.trim().strip_suffix(" cycles").and_then(|n| n.trim().parse::<i64>().ok()))
-        .ok_or("no cycle count")?;
-    Ok((out.status.code().unwrap_or(-1), cycles))
+/// The simulator: `LLRM_SIM65`, a sim65 that also prints the instructions it
+/// executed (`tools/sim65-insns.sh` builds one), else the system's, which counts
+/// cycles only.
+fn run_sim(bin: &Path) -> Result<(i32, i64, Option<i64>), String> {
+    let sim = std::env::var("LLRM_SIM65").unwrap_or_else(|_| "sim65".to_owned());
+    let out = Command::new(sim).args(["-c", "-x", "200000000"]).arg(bin).output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let count = |unit: &str| text.lines().find_map(|l| l.trim().strip_suffix(unit).and_then(|n| n.trim().parse::<i64>().ok()));
+    let cycles = count(" cycles").ok_or("no cycle count")?;
+    Ok((out.status.code().unwrap_or(-1), cycles, count(" instructions")))
 }
 
 #[derive(Debug)]
@@ -295,6 +300,15 @@ struct Row {
     /// `bytes` when it calls none.
     body: i64,
     cycles: i64,
+    /// Executed instructions per call, when the simulator counts them.
+    instructions: Option<i64>,
+}
+
+impl Row {
+    /// `, N in` when the simulator counted instructions.
+    fn executed(&self) -> String {
+        self.instructions.map_or_else(String::new, |n| format!(", {n} in"))
+    }
 }
 
 /// The CODE segment of ca65 text `file` in `dir`, assembled alone (`od65
@@ -334,29 +348,30 @@ fn measure(
         _ => kernel.expect,
     };
     let low = link(dir, kernel, abi, kernel.name, 1, false, &format!("{tag}-lo"))?;
-    let (code, _) = run_sim(&low)?;
+    let (code, ..) = run_sim(&low)?;
     if code != i32::from(expect & 0xFF) {
         return Err(format!("wrong result: A = {code}, want {}", expect & 0xFF));
     }
     println!("check {tag:<9} {:<9} A = {code:<3} want {:<3} pass", kernel.name, expect & 0xFF);
     if kernel.wide_result {
         let high = link(dir, kernel, abi, kernel.name, 1, true, &format!("{tag}-hi"))?;
-        let (code, _) = run_sim(&high)?;
+        let (code, ..) = run_sim(&high)?;
         if code != i32::from(expect >> 8) {
             return Err(format!("wrong result: X = {code}, want {}", expect >> 8));
         }
         println!("check {tag:<9} {:<9} X = {code:<3} want {:<3} pass", kernel.name, expect >> 8);
     }
     let many = link(dir, kernel, abi, kernel.name, 101, false, &format!("{tag}-n"))?;
-    let (_, t1) = run_sim(&low)?;
-    let (_, t101) = run_sim(&many)?;
+    let (_, t1, i1) = run_sim(&low)?;
+    let (_, t101, i101) = run_sim(&many)?;
     let cycles = (t101 - t1) / 100 - LOOP_CYCLES;
+    let instructions = i1.zip(i101).map(|(one, many)| (many - one) / 100 - LOOP_INSTRUCTIONS);
     // bytes against the stub
     let stub_name = call_symbol(kernel, abi, tag);
     std::fs::write(dir.join(format!("f-{tag}stub.s")), format!(".export {stub_name}\n{stub_name}:\n  rts\n")).unwrap();
     let stub = link(dir, kernel, abi, kernel.name, 1, false, &format!("{tag}stub-lo"))?;
     let bytes = std::fs::metadata(&low).unwrap().len() as i64 - std::fs::metadata(&stub).unwrap().len() as i64 + 1;
-    Ok(Row { bytes, body: bytes, cycles })
+    Ok(Row { bytes, body: bytes, cycles, instructions })
 }
 
 /// The `-D` flag and the C file of a kernel: its `#ifdef` in `kernels.c`, or
@@ -554,7 +569,7 @@ fn hand_kernels() -> Vec<Kernel> {
 fn table4() {
     let mut out = String::from("| kernel | cc65 -O | cc65 hand | ours | ours 65C02 |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
-        Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
+        Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
         Err(why) if why.starts_with("no hand") => "-".to_owned(),
         Err(why) => format!("n/a ({why})"),
     };
@@ -610,8 +625,8 @@ fn table4() {
 fn table3() {
     let mut out = String::from("| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
-        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy", r.bytes, r.body, r.cycles),
-        Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
+        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed()),
+        Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
         Err(why) if why.starts_with("no hand") => "-".to_owned(),
         Err(why) => format!("n/a ({why})"),
     };
@@ -642,8 +657,8 @@ fn table(
         "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 |\n|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {
-        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy", r.bytes, r.body, r.cycles),
-        Ok(r) => format!("{} B, {} cy", r.bytes, r.cycles),
+        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed()),
+        Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
         Err(why) => format!("n/a ({why})"),
     };
     let only = std::env::var("BENCH_ONLY").ok();
@@ -691,4 +706,31 @@ fn the_third_table() {
 #[ignore = "needs cc65, clang and sim65"]
 fn the_hand_corpus() {
     table4();
+}
+
+/// The instruction count of `LLRM_SIM65` (`tools/sim65-insns.sh`) against a
+/// hand count: a loop of `dex; bne` that runs 10 times more adds 20
+/// instructions and 50 cycles (2 + 3 clocks a trip). A simulator that counted
+/// anything else would move every instruction column of the tables.
+#[test]
+#[ignore = "needs cc65 and LLRM_SIM65"]
+fn the_instruction_counter_counts_a_loop() {
+    if std::env::var_os("LLRM_SIM65").is_none() {
+        eprintln!("skipped: LLRM_SIM65 is unset (tools/sim65-insns.sh builds it)");
+        return;
+    }
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("insn-counter");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut counted = Vec::new();
+    for trips in [3, 13] {
+        let source = format!(".export _main\n_main:\n  ldx #{trips}\nl:\n  dex\n  bne l\n  lda #0\n  ldx #0\n  rts\n");
+        std::fs::write(dir.join(format!("l{trips}.s")), source).unwrap();
+        let bin = format!("l{trips}.bin");
+        tool(&dir, "cl65", &["-t", "sim6502", "-o", &bin, &format!("l{trips}.s")]).unwrap();
+        counted.push(run_sim(&dir.join(bin)).unwrap());
+    }
+    let (_, cycles_3, insns_3) = counted[0];
+    let (_, cycles_13, insns_13) = counted[1];
+    assert_eq!(cycles_13 - cycles_3, 50);
+    assert_eq!(insns_13.unwrap() - insns_3.expect("LLRM_SIM65 prints instructions"), 20);
 }
