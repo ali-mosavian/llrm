@@ -494,7 +494,31 @@ impl Gen {
                         .unwrap();
                     }
                 }
-                13 | 14 => {
+                14 => {
+                    // the copy of a helper whose pointers arrive as arguments:
+                    // between two long arrays, or the halves of one
+                    let longs: Vec<(&str, usize)> = scope
+                        .arrays
+                        .iter()
+                        .filter(|array| array.ty == Ty::U32 && array.len >= 3)
+                        .map(|array| (array.name.as_str(), array.len))
+                        .collect();
+                    if !longs.is_empty() {
+                        let from = self.rng.below(longs.len());
+                        let to = self.rng.below(longs.len());
+                        let (src, dst) = if from == to {
+                            // the second half is a different object as far as
+                            // the copy goes
+                            (format!("{} + 3", longs[from].0), longs[to].0.to_owned())
+                        } else {
+                            (longs[from].0.to_owned(), longs[to].0.to_owned())
+                        };
+                        if let (Some(v), true) = (self.assign_target(scope), from != to || longs[from].1 >= 6) {
+                            writeln!(out, "{pad}{} = ({})cpl({dst}, {src});", v.name, self.c(v.ty)).unwrap();
+                        }
+                    }
+                }
+                13 => {
                     let n = scope.arrays.len();
                     let from = self.rng.below(n.max(1));
                     let start = self.rng.below(n.max(1));
@@ -659,6 +683,13 @@ pub fn program(
          static void bump(struct S *p, unsigned char x) {{ p->a = (unsigned char)(p->a + x); p->b = ({u16})(p->b ^ ((unsigned)x << 3)); if (x & 1) p->c = (unsigned char)(p->c + p->a); }}\n\n"
     )
     .unwrap();
+    if options.copies {
+        // the pointers of the copy are arguments, and the reads after it follow
+        // them
+        g.text.push_str(
+            "static __attribute__((noinline)) unsigned long cpl(unsigned long *d, const unsigned long *s) { __builtin_memcpy(d, s, 12); return ((volatile unsigned long *)d)[2] + ((volatile unsigned long *)d)[1]; }\n\n",
+        );
+    }
     for n in 0..g.rng.below(4) {
         let ret = TYPES[g.rng.below(3)];
         let params: Vec<Ty> = (0..g.rng.below(4)).map(|_| TYPES[g.rng.below(3)]).collect();
