@@ -43,7 +43,7 @@ use llrm_lir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
 
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
-use crate::regalloc::{Assignment, Target, successors};
+use crate::regalloc::{Assignment, Join, Side, Target, successors};
 
 /// The name of a copy: `COPY dst, src`.
 const COPY: &str = "COPY";
@@ -77,13 +77,48 @@ impl<T: Target> Converted<T> {
         registers: Regs,
         size: bool,
     ) {
+        let infos = self.tii.infos.clone();
         let palettes = self
             .orders
             .iter()
             .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
             .collect();
-        let (body, palettes) =
-            llrm_codegen::coalescer::env::coalesce(&self.body, palettes, self.body.pins.clone(), size, registers);
+        let (body, palettes) = llrm_codegen::coalescer::env::coalesce(
+            &self.body,
+            palettes,
+            self.body.pins.clone(),
+            size,
+            registers,
+            Box::new(move |join| {
+                let joined: Vec<RegId> = join.joined.iter().copied().collect();
+                let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
+                    let before: Vec<RegId> = side.palette.iter().copied().collect();
+                    let extra = side
+                        .uses
+                        .iter()
+                        .flat_map(|(one, freq)| {
+                            operands_in(&infos, one)
+                                .into_iter()
+                                .filter(|(value, _)| *value == side.value)
+                                .filter_map(
+                                    |(_, info)| {
+                                        let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
+                                        Some(*freq * will.saturating_sub(was) as f32)
+                                    },
+                                )
+                        })
+                        .sum::<f32>();
+                    (before, extra)
+                };
+                let ((source, source_extra), (destination, destination_extra)) = (side(&join.one), side(&join.other));
+                T::should_coalesce(&Join {
+                    source: Side { registers: &source, extra_cost: source_extra },
+                    destination: Side { registers: &destination, extra_cost: destination_extra },
+                    joined: &joined,
+                    copy_frequency: join.copy_frequency,
+                })
+            }),
+        );
         for (value, order) in self.orders.iter_mut() {
             if let Some(allowed) = palettes.get(value) {
                 order.retain(|register| allowed.contains(register));
@@ -155,6 +190,8 @@ pub fn to_lir<T: Target>(
         }
     }
     let mut foldable: Vec<Option<(&'static str, usize)>> = Vec::new();
+    let clobbered_by_spills = T::spill_clobbers();
+    let mut infos: Vec<(&'static str, Vec<OperandInfo>)> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
@@ -166,6 +203,8 @@ pub fn to_lir<T: Target>(
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
+            let (name, own, sources, dests) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+            infos.push((name, own));
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
             // instruction that reads its flags are one instruction to it.
@@ -183,6 +222,21 @@ pub fn to_lir<T: Target>(
                 Some(next) if made.independent(inst, next) => {
                     made.origin.push((at, position + 1));
                     foldable.push(None);
+                    // the bundle is one instruction to greedy: both ask for it
+                    // (the compare's operands come first in it, then the
+                    // reader's, after the compare's sources and dests)
+                    let (_, read, ..) = operand_infos::<T>(next, &function.classes, &clobbered_by_spills);
+                    let compare = infos.last_mut().expect("the compare's own");
+                    compare.0 = BUNDLE;
+                    compare
+                        .1
+                        .extend(
+                            read.into_iter().map(|info| OperandInfo {
+                                index: info.index + if info.def { dests } else { sources },
+                                ..info
+                            }),
+                        );
+                    infos.push(("", Vec::new()));
                     insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
                     position += 2;
                 }
@@ -203,7 +257,6 @@ pub fn to_lir<T: Target>(
     loop_branch_odds(&mut body);
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
-    let clobbered_by_spills = T::spill_clobbers();
     for (v, class) in function.classes.iter().enumerate() {
         let mut order = T::candidates(*class);
         order.retain(|register| !clobbered_by_spills.contains(register));
@@ -229,7 +282,14 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
-        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, marker: PhantomData },
+        tii: SpikeInstrInfo {
+            classes: function.classes.clone(),
+            registers,
+            foldable,
+            infos,
+            clobbered: clobbered_by_spills,
+            marker: PhantomData,
+        },
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
@@ -513,6 +573,113 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
     None
 }
 
+/// What the target says of one virtual-register operand of an instruction:
+/// the `index`th source (or destination, where `def`) the converter gave it.
+/// Named by position, not by value, because the coalescer renames values.
+#[derive(Clone)]
+struct OperandInfo {
+    def: bool,
+    index: usize,
+    /// The register it is cheaper with: the first of the cheapest in `order`
+    /// when they differ (`getRegAllocationHints`).
+    hint: Option<RegId>,
+    /// The registers its class allows, in order.
+    order: Vec<RegId>,
+    /// What the instruction costs in each, aligned with `order`
+    /// (`Target::operand_cost`).
+    costs: Vec<u32>,
+}
+
+impl OperandInfo {
+    fn new<T: Target>(
+        inst: &Inst,
+        at: usize,
+        def: bool,
+        index: usize,
+        order: Vec<RegId>,
+    ) -> Self {
+        let costs: Vec<u32> = order.iter().map(|register| T::operand_cost(inst, at, *register)).collect();
+        let (least, most) = (costs.iter().min().copied(), costs.iter().max().copied());
+        let hint = match (least, most) {
+            (Some(least), Some(most)) if least < most => {
+                costs.iter().position(|cost| *cost == least).map(|at| order[at])
+            }
+            _ => None,
+        };
+        Self { def, index, hint, order, costs }
+    }
+
+    /// The cheapest this instruction is in any of `registers` it prices.
+    fn cheapest(
+        &self,
+        registers: &[RegId],
+    ) -> Option<u32> {
+        registers
+            .iter()
+            .filter_map(|register| self.order.iter().position(|one| one == register))
+            .map(|at| self.costs[at])
+            .min()
+    }
+}
+
+/// The virtual operands the target described for `one` in `infos` (indexed by
+/// the instruction's number), with the value each holds now (the coalescer
+/// renames values, not positions). An instruction greedy made (a copy, a
+/// spill) has none.
+fn operands_in<'a>(
+    infos: &'a [(&'static str, Vec<OperandInfo>)],
+    one: &Insn,
+) -> Vec<(u32, &'a OperandInfo)> {
+    let Some((name, infos)) = infos.get((one.at / 2) as usize) else { return Vec::new() };
+    let Some(what) = one.what.as_ref() else { return Vec::new() };
+    if what.name.as_deref() != Some(name) {
+        return Vec::new();
+    }
+    infos
+        .iter()
+        .filter_map(|info| {
+            let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
+            match loc {
+                Some(Loc::Held(held)) => Some((held.value, info)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The name of `inst` and what the target says of its virtual operands.
+fn operand_infos<T: Target>(
+    inst: &Inst,
+    classes: &[T::Class],
+    clobbered: &[RegId],
+) -> (&'static str, Vec<OperandInfo>, usize, usize) {
+    let Kind::Op(name) = inst.kind else { return ("", Vec::new(), 0, 0) };
+    let (mut sources, mut dests) = (0, 0);
+    let mut infos = Vec::new();
+    let order_of = |v: u32| {
+        let mut order = T::candidates(classes[v as usize]);
+        order.retain(|register| !clobbered.contains(register));
+        order
+    };
+    for (at, operand) in inst.operands.iter().enumerate() {
+        match operand {
+            Operand::Use(Reg::Virt(v)) => {
+                infos.push(OperandInfo::new::<T>(inst, at, false, sources, order_of(*v)));
+                sources += 1;
+            }
+            Operand::Use(Reg::Phys(register)) if !T::reserved(T::root(*register)) => sources += 1,
+            Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => sources += 1,
+            Operand::Def(Reg::Virt(v)) => {
+                infos.push(OperandInfo::new::<T>(inst, at, true, dests, order_of(*v)));
+                dests += 1;
+            }
+            Operand::Def(Reg::Phys(register)) if !T::reserved(T::root(*register)) => dests += 1,
+            _ => {}
+        }
+    }
+    (name, infos, sources, dests)
+}
+
 /// What greedy asks of the spike target's instructions, answered from the
 /// instruction itself: its name and operands, and the target's own spill forms.
 pub struct SpikeInstrInfo<T: Target> {
@@ -521,10 +688,22 @@ pub struct SpikeInstrInfo<T: Target> {
     /// For the instruction numbered `at / 2`: its name and which of its
     /// sources the target can read from memory (`Target::fold_spill`).
     foldable: Vec<Option<(&'static str, usize)>>,
+    /// For the instruction numbered `at / 2`: its name and what the target
+    /// says of its virtual operands.
+    infos: Vec<(&'static str, Vec<OperandInfo>)>,
+    /// `Target::spill_clobbers`: no value is held in one.
+    clobbered: Vec<RegId>,
     marker: PhantomData<T>,
 }
 
 impl<T: Target> SpikeInstrInfo<T> {
+    fn operands_of(
+        &self,
+        one: &Insn,
+    ) -> Vec<(u32, &OperandInfo)> {
+        operands_in(&self.infos, one)
+    }
+
     /// The class of `value`, a register of the function or one a split made.
     fn class_of(
         &self,
@@ -661,6 +840,29 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
     /// memory source; `from_lir` writes it as the target's own form.
+    fn preferred_registers(
+        &self,
+        one: &Insn,
+    ) -> Vec<(u32, RegId)> {
+        self.operands_of(one).into_iter().filter_map(|(value, info)| Some((value, info.hint?))).collect()
+    }
+
+    fn operand_orders(
+        &self,
+        one: &Insn,
+    ) -> Vec<(u32, Vec<RegId>)> {
+        self.operands_of(one).into_iter().map(|(value, info)| (value, info.order.clone())).collect()
+    }
+
+    fn larger_order(
+        &self,
+        order: &[RegId],
+    ) -> Option<Vec<RegId>> {
+        let mut larger = T::larger_order(order)?;
+        larger.retain(|register| !self.clobbered.contains(register));
+        Some(larger)
+    }
+
     fn fold_memory_operand(
         &self,
         one: &Arc<Insn>,
@@ -1161,7 +1363,7 @@ pub fn allocate_greedy<T: Target>(
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
     let mut converted = to_lir::<T>(function, registers)?;
-    if std::env::var_os("LLRM_NO_COALESCE").is_none() {
+    if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce(registers, size);
     }
     let order = |value: u32| converted.order(value);

@@ -50,21 +50,36 @@ pub fn module(
     Ok(module)
 }
 
+/// [`module`], with a landing pad that branches back into its function made
+/// enterable from a `catch` when the module unwinds.
+fn prepared(
+    text: &str,
+    width: Width,
+    options: Options,
+) -> Result<llrm_mir::module::Module, String> {
+    let mut module = module(text, width)?;
+    if options.exception_model == crate::dag::ExceptionModel::Wasm {
+        crate::eh_reentry::reentry(&mut module)?;
+    }
+    Ok(module)
+}
+
 /// Each defined function of `text`: its label and instructions.
 pub fn assembly(
     text: &str,
     width: Width,
     options: Options,
 ) -> Result<String, String> {
-    let module = module(text, width)?;
+    let module = prepared(text, width, options)?;
     let mut out = String::new();
+    let mut labels = print::Labels::default();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
-        out.push_str(&print::function(&f));
+        out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
 }
@@ -76,7 +91,7 @@ pub fn object(
     width: Width,
     options: Options,
 ) -> Result<Vec<u8>, String> {
-    let module = module(text, width)?;
+    let module = prepared(text, width, options)?;
     let mut functions = Vec::new();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
@@ -86,7 +101,11 @@ pub fn object(
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
-    Ok(crate::object::write(&functions, &data(&module, width)?))
+    Ok(crate::object::write(
+        &functions,
+        &data(&module, width)?,
+        options.exception_model == crate::dag::ExceptionModel::Wasm,
+    ))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`

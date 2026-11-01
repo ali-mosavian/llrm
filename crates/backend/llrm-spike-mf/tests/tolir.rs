@@ -1,6 +1,7 @@
 //! `MFunction` -> `LirBody`: what greedy reads of a spike function.
 
 use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
+use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_lir::registers::{RegId, Regs};
 use llrm_lir::{Loc, Operation};
 use llrm_spike_mf::regalloc::{Target, eliminate_phis, two_address};
@@ -1109,4 +1110,483 @@ fn test_a_loop_body_runs_many_times_per_entry() {
     let freq = llrm_codegen::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&converted.body);
     let loop_body = freq.get_block_freq_relative_to_entry_block(1);
     assert!(loop_body >= 8.0, "the loop body runs {loop_body} times per entry");
+}
+
+/// Three registers, and an `inc` that encodes shorter in the last.
+struct IncInLast;
+
+impl Target for IncInLast {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn operand_cost(
+        inst: &Inst,
+        _: usize,
+        register: RegId,
+    ) -> u32 {
+        // `inc` is cheapest in the last register, `neg` in the middle one
+        let cheapest = match inst.kind {
+            Kind::Op("inc") => RegId::EDX,
+            Kind::Op("neg") => RegId::ECX,
+            _ => return 0,
+        };
+        u32::from(register != cheapest)
+    }
+}
+
+/// A target says an instruction is cheaper in one register (the 6502's `inc`
+/// is `inx` in `x` and `clc; adc #1` in `a`); greedy took the first register
+/// of the class (`ebx` here) and never asked, as `getRegAllocationHints` of
+/// Thumb2 does for its 16-bit encodings.
+#[test]
+fn test_a_value_an_instruction_is_cheaper_with_takes_that_register() {
+    let mut f = MFunction::<()>::new("inc");
+    f.classes = vec![(); 1];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("inc", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
+    assert_eq!(held, Some(RegId::EDX), "{:?}", decided.placed);
+}
+
+/// The register an instruction prices lowest is the hint, whatever the
+/// instruction is called: `neg` is cheapest in `ecx`, not in the last register.
+#[test]
+fn test_the_hint_is_the_register_the_instruction_costs_least_in() {
+    let mut f = MFunction::<()>::new("neg");
+    f.classes = vec![(); 1];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("neg", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
+    assert_eq!(held, Some(RegId::ECX), "{:?}", decided.placed);
+}
+
+/// The coalescer joins the values of a loop's phi copies and renames the
+/// instructions; a hint kept by value named the value `inc` had before the
+/// join, which no instruction held any more, so it never reached the allocator
+/// (6502 corpus: the hook changed no row). Every register a hint names must be
+/// one that an instruction holds.
+#[test]
+fn test_a_hint_names_a_value_its_instruction_holds_after_the_coalescer() {
+    use llrm_codegen::greedy::tii::TargetInstrInfo;
+    let mut f = MFunction::<()>::new("counted");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(branch(1));
+    let mut body = Block { id: 1, ..Block::default() };
+    body.phis.push(llrm_spike_mf::Phi { result: v(1), incoming: vec![(0, v(0)), (1, v(2))] });
+    body.insts.push(op("inc", vec![Operand::Def(v(2)), Operand::Use(v(1))]));
+    let mut again = op("br", vec![Operand::Block(1), Operand::Block(2)]);
+    again.terminator = true;
+    body.insts.push(again);
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(2))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let mut converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let mut named = 0;
+    for block in &converted.body.blocks {
+        for insn in block.insns.iter() {
+            let held: Vec<u32> = insn.uses.iter().chain(&insn.defines).copied().collect();
+            for (value, _) in converted.tii.preferred_registers(insn) {
+                named += 1;
+                assert!(held.contains(&value), "hint names v{value}, the instruction holds {held:?}");
+            }
+        }
+    }
+    assert!(named > 0, "no hint reached an instruction");
+}
+
+/// Two registers are all a narrow class allows; a wide class has three. A
+/// target with `DECLINE` refuses a join that narrows a class.
+struct Narrowing<const DECLINE: bool>;
+
+impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
+    type Class = bool;
+
+    fn meet(
+        a: bool,
+        b: bool,
+    ) -> Option<bool> {
+        Some(a || b)
+    }
+
+    fn any() -> bool {
+        false
+    }
+
+    fn candidates(narrow: bool) -> Vec<RegId> {
+        if narrow { vec![RegId::EBX, RegId::ECX] } else { REGISTERS.to_vec() }
+    }
+
+    fn view(
+        root: RegId,
+        _: bool,
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+        (order.len() < REGISTERS.len()).then(|| REGISTERS.to_vec())
+    }
+
+    fn operand_cost(
+        inst: &Inst,
+        operand: usize,
+        register: RegId,
+    ) -> u32 {
+        // `dec` is cheapest in the register the narrow class lacks, as the
+        // 6502's is on a zero-page cell
+        match (DECLINE, inst.kind, inst.operands.get(operand)) {
+            (true, Kind::Op("dec"), Some(Operand::Use(_))) => {
+                if register == RegId::EDX {
+                    1
+                } else {
+                    3
+                }
+            }
+            _ => 0,
+        }
+    }
+}
+
+/// A copy of a wide value into a narrow class (the 6502's compare takes `a`,
+/// `x` or `y`) joined the two, and the joined value took the narrow class for
+/// its whole range: it could not sit in the register the code after the
+/// compare keeps busy and went to a slot (6502 strrchr: `tay; sty s_...`,
+/// +52 cycles; this pin's coalescer joins it, and greedy splits it again).
+#[test]
+fn test_a_copy_into_a_narrow_class_does_not_narrow_the_value_that_lives_past_it() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// Every use of a value is a compare, so the joins narrow it to the compare
+/// class for its whole range; a block between the two compares keeps both
+/// narrow registers busy. Only a copy around each compare, with the stretch
+/// between them in the wide class (`recomputeRegClass` over a piece with no
+/// compare, `SingleInstrs` in the block split), keeps it out of a slot (6502
+/// strrchr: `tay; sty s_...`, +3 B and +52 cycles a trip).
+#[test]
+fn test_a_value_whose_every_use_is_narrow_lives_between_them_in_the_wide_class() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true, true];
+    let mut first = Block { id: 0, ..Block::default() };
+    first.insts.push(op("load", vec![Operand::Def(v(0))]));
+    first.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    first.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    first.insts.push(branch(1));
+    let mut middle = Block { id: 1, ..Block::default() };
+    middle.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    middle.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    middle.insts.push(branch(2));
+    let mut last = Block { id: 2, ..Block::default() };
+    last.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(0))]));
+    last.insts.push(op("compare", vec![Operand::Use(v(2))]));
+    last.insts.push(ret());
+    f.blocks = vec![first, middle, last];
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// The same value in one block: no region or block to split around, so the
+/// piece around each compare comes from `tryInstructionSplit` (6502 strrchr's
+/// loop body is one block).
+#[test]
+fn test_a_value_whose_every_use_is_narrow_is_split_around_each_instruction_in_one_block() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(2))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
+    assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// Two registers are all a narrow class allows; the wide class prefers a third.
+struct Bundled;
+
+impl Target for Bundled {
+    type Class = bool;
+
+    fn meet(
+        a: bool,
+        b: bool,
+    ) -> Option<bool> {
+        Some(a || b)
+    }
+
+    fn any() -> bool {
+        false
+    }
+
+    fn candidates(narrow: bool) -> Vec<RegId> {
+        if narrow { vec![RegId::EBX, RegId::ECX] } else { vec![RegId::EDX, RegId::EBX, RegId::ECX] }
+    }
+
+    fn view(
+        root: RegId,
+        _: bool,
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+        (order.len() < 3).then(|| vec![RegId::EDX, RegId::EBX, RegId::ECX])
+    }
+
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags
+    }
+
+    fn spill_store(
+        _: bool,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+    }
+
+    fn spill_load(
+        _: bool,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// The compare and the instruction that reads its flags are one instruction to
+/// greedy, and it names the reader's operands too. It named the compare's
+/// alone, so a piece only the bundle names was widened to the larger class and
+/// the reader read a register its class does not allow (6502 seed 116: `lda
+/// #1` held in `a` across the compare's own `lda`, 157 for 19).
+#[test]
+fn test_a_bundle_names_the_operands_of_the_instruction_that_reads_its_flags() {
+    let mut f = MFunction::<bool>::new("bundled");
+    f.classes = vec![false, true, false, false];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("load", vec![Operand::Def(v(2))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
+    let mut compare = op("cmp", vec![Operand::Use(v(2))]);
+    compare.sets_flags = true;
+    block.insts.push(compare);
+    let mut select = op("cmov", vec![Operand::Def(v(3)), Operand::Use(v(1))]);
+    select.reads_flags = true;
+    block.insts.push(select);
+    block.insts.push(op("store", vec![Operand::Use(v(3))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Bundled>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let bundle = converted
+        .body
+        .blocks
+        .iter()
+        .flat_map(|b| b.insns.iter())
+        .find(|i| i.what.as_ref().and_then(|w| w.name.as_deref()) == Some("BUNDLE"))
+        .expect("the compare and its reader are one instruction");
+    // the reader's operand is the value coalesced from v0 and v1 (narrow), and
+    // the bundle says so
+    let narrow = converted.tii.operand_orders(bundle).into_iter().filter(|(_, order)| order.len() == 2).count();
+    assert_eq!(narrow, 1, "{:?}", converted.tii.operand_orders(bundle));
+}
+
+/// A counter `dec`ed in place and compared: the compare copy would join it
+/// into the narrow class, which has no memory, and the `dec` loses its memory
+/// form (6502 fib: `dec rc2` became `ldy rc5; dey; sty rc5; cpy #0`, +5 B).
+/// A target whose rule weighs what the narrowed value's other instructions
+/// save (`TargetRegisterInfo::shouldCoalesce`) keeps the copy.
+fn counter(narrows: bool) -> usize {
+    let mut f = MFunction::<bool>::new("counter");
+    f.classes = vec![false, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    if narrows {
+        block.insts.push(op("dec", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    }
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing<true>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count()
+}
+
+#[test]
+fn test_a_target_can_decline_a_join_that_takes_a_memory_form_from_a_value() {
+    assert_eq!(counter(true), 1, "the copy into the narrow class was joined");
+}
+
+/// The same rule joins where the value has no memory form to lose.
+/// The `dec` and the compare copy in different blocks, one of them in a loop.
+fn counter_in_a_loop(dec_in_loop: bool) -> usize {
+    let mut f = MFunction::<bool>::new("counter");
+    f.classes = vec![false, true];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    let mut body = Block { id: 1, ..Block::default() };
+    let dec = op("dec", vec![Operand::Def(v(0)), Operand::Use(v(0))]);
+    let copy =
+        [Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]), op("compare", vec![Operand::Use(v(1))])];
+    if dec_in_loop {
+        entry.insts.extend(copy);
+        body.insts.push(dec);
+    } else {
+        entry.insts.push(dec);
+        body.insts.extend(copy);
+    }
+    body.insts.push(branch(1));
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(0))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let mut converted = to_lir::<Narrowing<true>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count()
+}
+
+/// The same instructions, the same rule: only the block frequencies differ.
+/// The memory form is worth keeping where the `dec` runs more often than the
+/// copy would.
+#[test]
+fn test_the_frequency_of_the_blocks_decides_a_join_that_takes_a_memory_form() {
+    assert_eq!(counter_in_a_loop(true), 1, "the copy outside the loop was joined");
+    assert_eq!(counter_in_a_loop(false), 0, "the copy in the loop was kept");
+}
+
+#[test]
+fn test_a_join_that_takes_no_memory_form_goes_ahead() {
+    assert_eq!(counter(false), 0, "the copy was kept");
+}
+
+/// A copy a split puts at the top of a block stands beside no instruction, so
+/// it was numbered 0 and written back from the function's first instruction:
+/// when that was the copy out of an argument register, the new value was
+/// copied out of the register too, `Copy [clone <- ebx]` (6502 lz4: a byte
+/// copied from a pair, `Symbol rc35 is undefined`).
+#[test]
+fn test_a_copy_a_split_makes_at_a_block_top_does_not_copy_the_argument_register() {
+    let mut f = across_a_call(4);
+    f.blocks[0].insts[0] = Inst::new(Kind::Copy, vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::EBX))]);
+    // an empty block on the loop's exit edge, where a split puts its copy
+    f.blocks.insert(2, Block { id: 3, ..Block::default() });
+    let mut f = lowered(f);
+    llrm_spike_mf::tolir::allocate_greedy::<Flat>(&mut f, regs(), false).expect("allocates");
+    let reads_argument = f
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| {
+            inst.kind == Kind::Copy && inst.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(RegId::EBX))))
+        })
+        .count();
+    assert_eq!(reads_argument, 1, "{f:#?}");
 }

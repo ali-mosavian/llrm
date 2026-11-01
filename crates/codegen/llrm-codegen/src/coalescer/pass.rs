@@ -173,6 +173,8 @@ impl Coalescer {
                 size: self.size,
                 keep_pinned: false,
                 aliases: Default::default(),
+                should_join: Box::new(|_| true),
+                freq: Vec::new(),
             },
             depth,
         ))

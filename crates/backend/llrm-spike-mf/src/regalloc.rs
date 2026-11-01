@@ -15,6 +15,35 @@ use llrm_support::hash::{HashMap, HashSet};
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::sink::{Jump, split_critical_edge};
 
+/// A copy about to be joined, as [`Target::should_coalesce`] sees it.
+pub struct Join<'a> {
+    pub source: Side<'a>,
+    pub destination: Side<'a>,
+    /// The registers the joined value may take.
+    pub joined: &'a [RegId],
+    /// The frequency of the copy's block, relative to the entry block: how
+    /// often the copy the join removes would run.
+    pub copy_frequency: f32,
+}
+
+impl Join<'_> {
+    /// What the join costs the two values' other instructions, weighted by
+    /// their blocks' frequencies: each is priced in the cheapest register the
+    /// narrower class still has ([`Target::operand_cost`]).
+    pub fn extra_cost(&self) -> f32 {
+        self.source.extra_cost + self.destination.extra_cost
+    }
+}
+
+/// One side of a [`Join`].
+pub struct Side<'a> {
+    /// The registers the value may take before the join.
+    pub registers: &'a [RegId],
+    /// The sum over the value's other instructions of their block's frequency
+    /// times what the join adds to their cost.
+    pub extra_cost: f32,
+}
+
 /// What the allocator needs to know of a register file.
 pub trait Target {
     /// A virtual register's class (`TargetRegisterClass`).
@@ -100,6 +129,42 @@ pub trait Target {
     /// it takes a dearer one.
     fn register_cost(_register: RegId) -> u8 {
         0
+    }
+
+    /// `TargetRegisterInfo::shouldCoalesce`: whether a copy between two values
+    /// is joined into one that may take only the registers both could. A join
+    /// narrows both for good, and the allocator cannot widen the survivor.
+    fn should_coalesce(join: &Join) -> bool {
+        join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
+    }
+
+    /// What one register-to-register copy costs, in the unit of
+    /// [`Target::operand_cost`].
+    fn copy_cost() -> u32 {
+        1
+    }
+
+    /// What the instruction `inst` costs with its operand `operand` in
+    /// `register` (clocks or bytes by the target's goal, from its instruction
+    /// tables): the 6502's `dec` is one instruction on a zero-page cell and
+    /// three in a register that has to be loaded and stored back. Greedy
+    /// hints the cheapest register ([`getRegAllocationHints`] from the
+    /// descriptor), and `should_coalesce` prices a join by it.
+    fn operand_cost(
+        _inst: &Inst,
+        _operand: usize,
+        _register: RegId,
+    ) -> u32 {
+        0
+    }
+
+    /// The registers of the next larger class that holds `order`
+    /// (`getLargestLegalSuperClass`), or none when there is none. A value a
+    /// join narrowed is a proper subclass: greedy isolates single instructions
+    /// around it, and a piece no narrowing instruction names takes the larger
+    /// class (`recomputeRegClass`).
+    fn larger_order(_order: &[RegId]) -> Option<Vec<RegId>> {
+        None
     }
 
     /// Registers the code of a spill or a reload overwrites (the 6502's
@@ -696,7 +761,7 @@ impl<T: Target> GraphColoring<T> {
                             }
                         }
                     }
-                    if std::env::var_os("LLRM_SPIKE_DUMP").is_some() {
+                    if llrm_support::env_flag!("LLRM_SPIKE_DUMP") {
                         mentions.clear();
                         for (at, block) in function.blocks.iter().enumerate() {
                             for (i, inst) in block.insts.iter().enumerate() {

@@ -4,10 +4,13 @@
 pub mod abi;
 pub mod amiga;
 pub mod atari;
+pub mod ccr;
+pub mod cmpelim;
 pub mod compile;
 pub mod dagisel;
 pub mod divide;
 pub mod driver;
+pub mod elf;
 pub mod encode;
 pub mod expand;
 pub mod flags;
