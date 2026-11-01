@@ -118,8 +118,7 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
             (FExp, "exp"),
             (FExp2, "exp2"),
             (FRem, "fmod"),
-        ]
-        {
+        ] {
             tl.set_operation_action(op, vt, if op == FRem { Action::LibCall } else { Action::Expand });
             let name = if vt == MVT::F32 { f32_name(name) } else { name };
             tl.set_libcall_name(op, vt, name);

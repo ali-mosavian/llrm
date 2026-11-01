@@ -187,10 +187,8 @@ fn read_fills_a_fixed_length_string_padded_and_cut() {
 /// range_power).
 #[test]
 fn exp_log_and_power_run_on_wasm32() {
-    let dir = built(
-        "mathfns",
-        "DIM x AS DOUBLE\nx = 3\nPRINT EXP(x - 3); LOG(x - 2); 2# ^ x; x ^ 2#; SQR(x + 1)\nEND\n",
-    );
+    let dir =
+        built("mathfns", "DIM x AS DOUBLE\nx = 3\nPRINT EXP(x - 3); LOG(x - 2); 2# ^ x; x ^ 2#; SQR(x + 1)\nEND\n");
     let (text, code) = run(&dir, "mathfns", &[]);
     assert_eq!(text.trim_end(), " 1  0  8  9  2");
     assert_eq!(code, Some(0));
