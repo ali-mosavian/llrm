@@ -2002,8 +2002,24 @@ fn calls_of(
     pin: bool,
     inline: crate::inline::Threshold,
 ) -> usize {
+    calls_of_copying(name, text, pin, inline, None)
+}
+
+/// The recursion REC-1 took at m16 before the target's entry was none: depth
+/// 2, bodies of at most 14 `gcc_insns`.
+const REC_1: Option<(u32, i64)> = Some((2, 14));
+
+/// `calls_of` on a target that copies `recursion`.
+fn calls_of_copying(
+    name: &str,
+    text: &str,
+    pin: bool,
+    inline: crate::inline::Threshold,
+    recursion: Option<(u32, i64)>,
+) -> usize {
     let mut module = parsed(text);
     let target = if pin { llrm_x86_m16::Dos::pin_tuned() } else { llrm_x86_m16::Dos::default() };
+    let target = llrm_x86_m16::Dos { recursive_inlining: recursion, ..target };
     llrm_mir::program::Program::lend(
         &mut module,
         std::rc::Rc::new(target),
@@ -2019,34 +2035,15 @@ fn calls_of(
     text.lines().filter(|line| line.contains("call") && line.contains(&format!("@{name}("))).count()
 }
 
-/// bench fib, hanoi, rectwo and frames at m16 -O2 ran 356059, 199, 2382380 and
-/// 9280596 clocks against main's 298686, 107, 1765045 and 8807338, which copied
-/// a small recursion into itself. The real-mode target does so by
-/// default (depth 2, bodies of at most 15 `gcc_insns`), the pin's tuning does
-/// not.
+/// bench fib, rectwo and frames at m16 -O2 were 152, 259 and 338 bytes with a
+/// small recursion copied into itself (REC-1, depth 2), past Borland C's 83,
+/// 104 and 251: the real-mode target copies none by default,
+/// `-finline-recursive` still does.
 #[test]
-fn test_the_real_mode_target_copies_a_small_tree_recursion_by_default() {
-    assert!(calls_of_tree(0, false) > 3, "copies of a small tree recursion in itself");
-    assert!(calls_of_tree(0, true) <= 3, "the pin copies none");
-}
-
-/// bench bintree and quicksort (bodies of 16 and more) grew to 956 and 1181
-/// bytes against main's 289 and 318 with the copies: a recursive body above
-/// gcc's `max-inline-insns-auto` is not copied.
-#[test]
-fn test_the_real_mode_target_does_not_copy_a_large_tree_recursion() {
-    assert!(calls_of_tree(10, false) <= 3, "a large body was copied into itself: {} calls", calls_of_tree(10, false));
-}
-
-/// bench frames and fib (nib, `-fno-inline-functions`) at m16 -O2 grew from 186
-/// and 63 bytes to 336 and 155 with the copies, which main (no copy of a
-/// recursive body) never made: with inlining off the target's default copies
-/// nothing.
-#[test]
-fn test_the_real_mode_target_copies_no_recursion_with_inlining_off() {
-    let off = crate::inline::Threshold::new(0);
-    assert!(calls_of_tree_with(0, false, off) <= 3, "copies with inlining off: {}", calls_of_tree_with(0, false, off));
-    assert!(calls_of_tree_with(0, false, crate::inline::Threshold::new(225)) > 3, "control: the copies with it on");
+fn test_the_real_mode_target_copies_no_tree_recursion_by_default() {
+    assert!(calls_of_tree(0, false) <= 3, "copies of a tree recursion in itself: {}", calls_of_tree(0, false));
+    let flagged = crate::inline::Threshold { recursive: true, ..crate::inline::Threshold::default() };
+    assert!(calls_of_tree_with(0, false, flagged) > 3, "control: the flag copies it");
 }
 
 /// A tree recursion (`@walk`) with `work` between its entry and its two
@@ -2120,9 +2117,12 @@ b0:
 #[test]
 fn test_the_real_mode_target_does_not_copy_a_recursion_whose_work_is_a_loop() {
     let on = crate::inline::Threshold::new(225);
-    assert!(calls_of("walk", &looped_recursion("none"), false, on) > 3, "control: copied without the loop");
+    assert!(
+        calls_of_copying("walk", &looped_recursion("none"), false, on, REC_1) > 3,
+        "control: copied without the loop"
+    );
     for work in ["sum", "halve"] {
-        let calls = calls_of("walk", &looped_recursion(work), false, on);
+        let calls = calls_of_copying("walk", &looped_recursion(work), false, on, REC_1);
         assert!(calls <= 3, "{work}: a recursion with a loop was copied into itself: {calls} calls");
     }
 }
@@ -2138,7 +2138,7 @@ fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
         let mut module = parsed(&looped_recursion(work));
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
                     inline: crate::inline::Threshold::new(225),
