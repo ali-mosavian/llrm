@@ -348,6 +348,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether a constant address offset may become a phi: false where the
+    /// access folds it as a displacement and the target says to keep it. A
+    /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
+    /// register offset costs an add and a register at m16 (6 GPRs, base+index
+    /// already taken), nothing at m32.
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
+    }
+
     /// The same bound for a caller optimized for speed (its tuning table).
     fn speed_inline_by_code_size(&self) -> bool {
         false
@@ -406,6 +415,11 @@ pub trait Tti {
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
         0
+    }
+
+    /// `Tuning::multiply_by_clocks`.
+    fn multiply_by_clocks(&self) -> bool {
+        false
     }
 
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this

@@ -553,7 +553,7 @@ impl<'a> Builder<'a> {
                         if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
                 ),
             );
-        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag });
+        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
         let tables = info
             .tables
             .get_or_insert_with(|| {
@@ -1006,7 +1006,12 @@ impl Builder<'_> {
                 _ => return Err(Refused("argument passed in several places or by value")),
             }
             let value = if parts == 2 {
-                self.dag.get_node(ISD::BuildPair, vt, &pieces)
+                self.dag.get_node_flags(
+                    ISD::BuildPair,
+                    vt,
+                    &pieces,
+                    pair_kind(vt, self.is_pointer_type(self.function.value(arg).ty)),
+                )
             } else if vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
                 // a narrow argument arrives in a register-sized slot, and
                 // `zeroext`/`signext` says what is in the bits above it
@@ -1084,7 +1089,7 @@ impl Builder<'_> {
             let vt = self.type_of(ty)?;
             let pointer = self.is_pointer_type(ty);
             let parts = self.calling_parts(vt)?;
-            shapes.push((vt, parts.len()));
+            shapes.push((vt, parts.len(), pointer));
             let split = parts.len() > 1;
             ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
         }
@@ -1105,9 +1110,9 @@ impl Builder<'_> {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
         let mut next = 0;
-        for (at, (&arg, (vt, count))) in parameters.iter().zip(shapes).enumerate() {
+        for (at, (&arg, (vt, count, pointer))) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
-            let value = self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs));
+            let value = self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs), pointer);
             next += count;
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
@@ -1683,6 +1688,7 @@ impl Builder<'_> {
         parts: &[SDValue],
         vt: EVT,
         assert: Option<ISD>,
+        pointer: bool,
     ) -> SDValue {
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
@@ -1701,8 +1707,8 @@ impl Builder<'_> {
         }
         let half = EVT::integer(vt.size_in_bits() / 2);
         let (low, high) = parts.split_at(parts.len() / 2);
-        let pair = [self.join_from_calling(low, half, None), self.join_from_calling(high, half, None)];
-        self.dag.get_node(ISD::BuildPair, vt, &pair)
+        let pair = [self.join_from_calling(low, half, None, false), self.join_from_calling(high, half, None, false)];
+        self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
     }
 
     fn is_pointer_type(
@@ -1734,13 +1740,21 @@ impl Builder<'_> {
         let mut values = values.to_vec();
         for (value, byval) in values.iter_mut().zip(byvals) {
             let Some((size, align)) = *byval else { continue };
-            let index = self.info.new_stack_object(size as u32, align as u32);
+            if size == 0 {
+                continue;
+            }
+            let opt_size = self.has_opt_size();
+            let destination_align = self.copy_destination_alignment(size, align, opt_size);
+            let index = self.info.new_stack_object(size as u32, destination_align as u32);
             let copy_to = self.dag.get_frame_index(self.target.dag.pointer, index);
-            let root = self.root();
-            let copy = self
-                .inline_memcpy(root, copy_to, *value, size, usize::MAX, align, align)?
-                .ok_or(Refused("byval copy"))?;
-            self.dag.set_root(copy);
+            let size_node = self.dag.get_constant(u128::from(size), self.target.dag.pointer);
+            self.lower_hooked_mem_intrinsic(
+                calling,
+                &llrm_mir::intrinsics::Intrinsic::MemCpy,
+                [copy_to, *value, size_node],
+                [destination_align, align],
+                opt_size,
+            )?;
             *value = copy_to;
         }
         let mut outs = Vec::new();
@@ -1762,7 +1776,7 @@ impl Builder<'_> {
         let void = self.module.context.types.is_void(result_type);
         // `ComputeValueVTs`: an aggregate result is its leaves, each answered
         // like a scalar result.
-        let mut layout: Vec<(EVT, usize)> = Vec::new();
+        let mut layout: Vec<(EVT, usize, bool)> = Vec::new();
         let mut ins: Vec<In> = Vec::new();
         let aggregate = !void && self.is_aggregate(result_type);
         if !void {
@@ -1776,11 +1790,11 @@ impl Builder<'_> {
                 let pointer = self.is_pointer_type(leaf);
                 let parts = self.calling_parts(vt)?;
                 let split = parts.len() > 1;
-                layout.push((vt, parts.len()));
+                layout.push((vt, parts.len(), pointer));
                 ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
             }
         }
-        let vt = layout.first().map_or(EVT::OTHER, |(vt, _)| *vt);
+        let vt = layout.first().map_or(EVT::OTHER, |(vt, _, _)| *vt);
         calling.accepts(&self.dag, Site::Call, &outs, &ins).map_err(Refused)?;
         let root = self.root();
         // `IsTailCall`: the call in tail position, if the target takes it, ends
@@ -1810,9 +1824,9 @@ impl Builder<'_> {
         let mut rest = &parts[..];
         let mut leaves = Vec::new();
         let assert = if aggregate { None } else { std::mem::take(&mut self.call_result_assert) };
-        for (leaf_vt, count) in layout {
+        for (leaf_vt, count, pointer) in layout {
             let (mine, tail) = rest.split_at(count);
-            leaves.push(self.join_from_calling(mine, leaf_vt, assert));
+            leaves.push(self.join_from_calling(mine, leaf_vt, assert, pointer));
             rest = tail;
         }
         let _ = vt;
@@ -2108,7 +2122,11 @@ impl Builder<'_> {
             pieces.push(copy);
         }
         self.dag.set_root(chain);
-        let result = if parts == 2 { self.dag.get_node(ISD::BuildPair, vt, &pieces) } else { pieces[0] };
+        let result = if parts == 2 {
+            self.dag.get_node_flags(ISD::BuildPair, vt, &pieces, pair_kind(vt, self.is_pointer_type(result_type)))
+        } else {
+            pieces[0]
+        };
         Ok(Some(result))
     }
 
@@ -2340,11 +2358,11 @@ impl Builder<'_> {
             ConstantKind::Int(bits) if vt == MVT::Far.into() => {
                 let offset = self.dag.get_constant(*bits & 0xFFFF, EVT::I16);
                 let segment = self.dag.get_constant((*bits >> 16) & 0xFFFF, EVT::I16);
-                Ok(self.dag.get_node(ISD::BuildPair, vt, &[offset, segment]))
+                Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[offset, segment], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Null | ConstantKind::Zero if vt == MVT::Far.into() => {
                 let zero = self.dag.get_constant(0, EVT::I16);
-                Ok(self.dag.get_node(ISD::BuildPair, vt, &[zero, zero]))
+                Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[zero, zero], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
             // MIR holds an `x86_fp80` constant a double holds exactly as that
@@ -2362,7 +2380,7 @@ impl Builder<'_> {
             ConstantKind::Global(global) if vt == MVT::Far.into() => {
                 let offset = self.dag.get_global_address(EVT::I16, global.0, 0);
                 let segment = self.segment_of(Some(global.0));
-                Ok(self.dag.get_node(ISD::BuildPair, vt, &[offset, segment]))
+                Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[offset, segment], super::dag::SDNodeFlags::PAIR_FAR))
             }
             ConstantKind::Global(global) => Ok(self.dag.get_global_address(vt, global.0, 0)),
             ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr {
@@ -2426,7 +2444,7 @@ impl Builder<'_> {
                     return self.copy_aggregate_from_regs(reg, ty);
                 }
                 let vt = self.type_of(ty)?;
-                Ok(self.copy_from_reg(reg, vt)?)
+                Ok(self.copy_from_reg(reg, vt, self.is_pointer_type(ty))?)
             }
         }
     }
@@ -2441,7 +2459,7 @@ impl Builder<'_> {
             return Ok(Some(self.copy_aggregate_from_regs(reg, ty)?));
         }
         let vt = self.type_of(ty)?;
-        Ok(Some(self.copy_from_reg(reg, vt)?))
+        Ok(Some(self.copy_from_reg(reg, vt, self.is_pointer_type(ty))?))
     }
 
     /// `RegsForValue::getCopyFromRegs`: the register's type, truncated to the
@@ -2450,6 +2468,7 @@ impl Builder<'_> {
         &mut self,
         reg: u32,
         vt: EVT,
+        pointer: bool,
     ) -> Result<SDValue, Refused> {
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
@@ -2458,7 +2477,7 @@ impl Builder<'_> {
             let regs = self.info.part_regs(reg, 2);
             let low = self.dag.get_copy_from_reg(entry, regs[0], reg_vt);
             let high = self.dag.get_copy_from_reg(SDValue { node: low.node, res: 1 }, regs[1], reg_vt);
-            return Ok(self.dag.get_node(ISD::BuildPair, vt, &[low, high]));
+            return Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[low, high], pair_kind(vt, pointer)));
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
@@ -2788,9 +2807,12 @@ impl Builder<'_> {
             return match (op, to_space) {
                 (CastOp::AddrSpaceCast, Some(space)) if roles.segment == Some(space) => Ok(selector),
                 (CastOp::AddrSpaceCast, Some(_)) => Ok(offset),
-                (CastOp::PtrToInt, None) if dest == EVT::I32 => {
-                    Ok(self.dag.get_node(ISD::BuildPair, dest, &[offset, selector]))
-                }
+                (CastOp::PtrToInt, None) if dest == EVT::I32 => Ok(self.dag.get_node_flags(
+                    ISD::BuildPair,
+                    dest,
+                    &[offset, selector],
+                    super::dag::SDNodeFlags::PAIR_FAR,
+                )),
                 // truncated, as LLVM's is: segment:offset's low word
                 (CastOp::PtrToInt, None) if dest == word => Ok(offset),
                 _ => Err(Refused("cast of a far pointer")),
@@ -2800,19 +2822,39 @@ impl Builder<'_> {
             return match (op, from_space) {
                 (CastOp::IntToPtr, None) if from == EVT::I32 => {
                     let [offset, selector] = self.split_value(operand, word);
-                    Ok(self.dag.get_node(ISD::BuildPair, far, &[offset, selector]))
+                    Ok(self.dag.get_node_flags(
+                        ISD::BuildPair,
+                        far,
+                        &[offset, selector],
+                        super::dag::SDNodeFlags::PAIR_FAR,
+                    ))
                 }
                 (CastOp::AddrSpaceCast, Some(space)) if roles.segment == Some(space) => {
                     let zero = self.dag.get_constant(0, word);
-                    Ok(self.dag.get_node(ISD::BuildPair, far, &[zero, operand]))
+                    Ok(self.dag.get_node_flags(
+                        ISD::BuildPair,
+                        far,
+                        &[zero, operand],
+                        super::dag::SDNodeFlags::PAIR_FAR,
+                    ))
                 }
                 (CastOp::AddrSpaceCast, Some(space)) if space == roles.stack => {
                     let selector = self.stack_selector();
-                    Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
+                    Ok(self.dag.get_node_flags(
+                        ISD::BuildPair,
+                        far,
+                        &[operand, selector],
+                        super::dag::SDNodeFlags::PAIR_FAR,
+                    ))
                 }
                 (CastOp::AddrSpaceCast, Some(space)) if space == roles.near => {
                     let selector = self.near_selector(pointer);
-                    Ok(self.dag.get_node(ISD::BuildPair, far, &[operand, selector]))
+                    Ok(self.dag.get_node_flags(
+                        ISD::BuildPair,
+                        far,
+                        &[operand, selector],
+                        super::dag::SDNodeFlags::PAIR_FAR,
+                    ))
                 }
                 _ => Err(Refused("cast to a far pointer")),
             };
@@ -3170,7 +3212,12 @@ impl Builder<'_> {
         }
         let [offset, selector] = self.split_value(base, pointer_vt);
         let moved = self.gep_value(offset, source, nuw, nusw, inbounds, indices)?;
-        Ok(self.dag.get_node(ISD::BuildPair, MVT::Far.into(), &[moved, selector]))
+        Ok(self.dag.get_node_flags(
+            ISD::BuildPair,
+            MVT::Far.into(),
+            &[moved, selector],
+            super::dag::SDNodeFlags::PAIR_FAR,
+        ))
     }
 
     /// `visitGetElementPtr`'s walk over the indices, for an instruction or a
@@ -3830,5 +3877,18 @@ fn extension_assert(attrs: &[llrm_mir::Attribute]) -> Option<ISD> {
         Some(ISD::AssertZext)
     } else {
         None
+    }
+}
+
+/// The kind of a pair of registers (DEVIATE PAIR1): a far pointer returned or
+/// passed in two registers, or a dword in `dx:ax`.
+fn pair_kind(
+    vt: EVT,
+    pointer: bool,
+) -> super::dag::SDNodeFlags {
+    if pointer || vt == MVT::Far.into() {
+        super::dag::SDNodeFlags::PAIR_FAR
+    } else {
+        super::dag::SDNodeFlags::PAIR_LONG
     }
 }

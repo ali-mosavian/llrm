@@ -166,7 +166,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
                 _ => self.dag.value_type(node),
@@ -386,9 +386,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
             // `ExpandFPLibCall`: every operand, none signed.
             ISD::FRem => (false, 2),
-            ISD::FSin | ISD::FCos | ISD::FAtan | ISD::FLog | ISD::FLog2 | ISD::FExp | ISD::FExp2 | ISD::LRint => {
-                (false, 1)
-            }
+            ISD::FSin
+            | ISD::FCos
+            | ISD::FAtan
+            | ISD::FLog
+            | ISD::FLog2
+            | ISD::FExp
+            | ISD::FExp2
+            | ISD::LRint
+            | ISD::LLRint => (false, 1),
             _ => return Err(refused),
         };
         let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
@@ -657,7 +663,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let high = self.dag.get_node(ISD::AnyExtend, vt, &[hi]);
                 let half = self.dag.get_constant(u128::from(vt.size_in_bits() / 2), EVT::I8);
                 let high = self.dag.get_node(ISD::Shl, vt, &[high, half]);
-                Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
+                // The pair's kind goes on the `or` (DEVIATE PAIR1).
+                let kind = self
+                    .dag
+                    .node(node)
+                    .flags
+                    .intersect(super::dag::SDNodeFlags::PAIR_FAR.union(super::dag::SDNodeFlags::PAIR_LONG));
+                Some(vec![self.dag.get_node_flags(ISD::Or, vt, &[low, high], kind)])
             }
             ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
             ISD::ExtractElement => {

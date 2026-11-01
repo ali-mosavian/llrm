@@ -537,6 +537,10 @@ impl Tti for X86 {
         self.tuning.speed_milliclocks_per_byte
     }
 
+    fn multiply_by_clocks(&self) -> bool {
+        self.tuning.multiply_by_clocks
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
@@ -567,6 +571,10 @@ impl Tti for X86 {
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+    }
+
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
     }
 
     fn speed_inline_by_code_size(&self) -> bool {
