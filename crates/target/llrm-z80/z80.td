@@ -264,6 +264,14 @@ def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 GR8:$lo), (shl (ext8 GR8:$hi), (i8 8)))),
           (REG_SEQUENCE GR16, GR8:$lo, sub_lo, GR8:$hi, sub_hi)>;
 
+// A shift left by eight moves the low byte to the high half over a zero, and an exclusive-or with it changes only the
+// high half. The nested results are typed: tblgen drops, without a word, a Pat whose nested output cannot be typed.
+def : Pat<(i16 (shl GR16:$x, (i8 8))),
+          (REG_SEQUENCE GR16, (i8 (LD8ri (i8 0))), sub_lo, (i8 (EXTRACT_SUBREG GR16:$x, sub_lo)), sub_hi)>;
+def : Pat<(i16 (xor (shl GR16:$x, (i8 8)), GR16:$y)),
+          (REG_SEQUENCE GR16, (i8 (EXTRACT_SUBREG GR16:$y, sub_lo)), sub_lo,
+                        (XOR8r (i8 (EXTRACT_SUBREG GR16:$x, sub_lo)), (i8 (EXTRACT_SUBREG GR16:$y, sub_hi))), sub_hi)>;
+
 // A byte loaded and widened: the load, and a zero high byte.
 def : Pat<(i16 (zextloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
 def : Pat<(i16 (extloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;

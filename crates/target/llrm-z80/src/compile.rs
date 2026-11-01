@@ -36,7 +36,48 @@ fn machine_function_with(
         tail_duplicate_returns(&mut function);
     }
     eliminate_tests(&mut function);
+    eliminate_dead(&mut function);
     Ok(function)
+}
+
+/// Drops the instructions whose results nothing reads (`ZEXT8` of a byte whose
+/// widening an `EXTRACT_SUBREG` bypassed). Only an instruction that defines
+/// virtual registers alone, touches no memory and has no other effect goes.
+fn eliminate_dead(function: &mut MFunction) {
+    loop {
+        let mut read = std::collections::HashSet::new();
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand {
+                    read.insert(*v);
+                }
+            }
+        }
+        for block in &function.blocks {
+            for phi in &block.phis {
+                for (_, reg) in &phi.incoming {
+                    if let Reg::Virt(v) = reg {
+                        read.insert(*v);
+                    }
+                }
+            }
+        }
+        let mut removed = false;
+        for block in &mut function.blocks {
+            let before = block.insts.len();
+            block.insts.retain(|inst| {
+                let defs: Vec<&Operand> = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).collect();
+                let dead = !defs.is_empty()
+                    && defs.iter().all(|o| matches!(o, Operand::Def(Reg::Virt(v)) if !read.contains(v)))
+                    && !(inst.call || inst.terminator || inst.barrier || inst.side_effects || inst.may_store || inst.may_load);
+                !dead
+            });
+            removed |= block.insts.len() != before;
+        }
+        if !removed {
+            return;
+        }
+    }
 }
 
 /// The function after phi elimination, two-address rewriting and allocation,

@@ -127,6 +127,8 @@ struct Emitter<'a> {
     arrives_in: HashMap<Reg, llrm_lir::registers::RegId>,
     /// The results of the instructions emitted so far.
     made: HashSet<Reg>,
+    /// The byte each `ZEXT8` widened.
+    widened: HashMap<Reg, Reg>,
     /// For the block being emitted: the nodes that read each value.
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
@@ -302,6 +304,9 @@ impl Emitter<'_> {
                         };
                         operands.push(operand);
                     }
+                }
+                if let ("ZEXT8", [Operand::Def(wide), Operand::Use(byte)]) = (name, &operands[..]) {
+                    self.widened.insert(*wide, *byte);
                 }
                 self.commute_into_fixed(desc, &mut operands);
                 if desc.has(flag::CALL) {
@@ -496,7 +501,11 @@ impl Emitter<'_> {
         };
         let dst = self.new_reg(Class::Gr8);
         self.values.insert((node, 0), dst);
-        into.push(Inst::new(Kind::Op(name), vec![Operand::Def(dst), Operand::Use(src)]));
+        // the low byte of a widened byte is that byte
+        match self.widened.get(&src) {
+            Some(&byte) if name == "LO" => into.push(Inst::copy(dst, byte)),
+            _ => into.push(Inst::new(Kind::Op(name), vec![Operand::Def(dst), Operand::Use(src)])),
+        }
         Ok(())
     }
 
@@ -508,8 +517,15 @@ impl Emitter<'_> {
     ) -> Result<(), String> {
         let n = self.dag.node(SDValue { node, res: 0 });
         let (mut lo, mut hi) = (None, None);
-        // a selected load's chain result may follow the pairs
-        let pairs: Vec<SDValue> = n.ops[1..].iter().copied().filter(|op| is_value(self.dag.value_type(*op))).collect();
+        // a selected load's chain result may follow the pairs, and an ALU
+        // operand brings its flags result
+        let flags = Some(&Reg::Phys(crate::reg::FLAGS));
+        let made = |op: &SDValue| match self.values.get(&(op.node, op.res)) {
+            Some(reg) => Some(reg) != flags,
+            None => op.res == 0,
+        };
+        let pairs: Vec<SDValue> =
+            n.ops[1..].iter().copied().filter(|op| is_value(self.dag.value_type(*op)) && made(op)).collect();
         for part in pairs.chunks(2) {
             let [value, index] = part else {
                 return Err(format!("a REG_SEQUENCE with an odd operand: {:?}", n.ops.iter().map(|op| (self.dag.opcode(*op), self.dag.value_type(*op))).collect::<Vec<_>>()));
@@ -542,6 +558,7 @@ pub fn emit(
         builder: HashMap::new(),
         arrives_in: HashMap::new(),
         made: HashSet::new(),
+        widened: HashMap::new(),
         users: HashMap::new(),
         in_acc: Default::default(),
     };

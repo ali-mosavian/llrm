@@ -159,3 +159,14 @@ fn a_word_compared_with_a_constant_takes_its_bytes_as_operands() {
     let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("sub a, #10") && out.contains("sbc a, #0"), "{out}");
 }
+
+/// `x ^ (b << 8)` moved the byte to the high half over a zero and xored both
+/// halves (`ld h, l` / `ld l, #0` / `ld a, l` / `xor a, e`): the Pat for it
+/// was dropped by tblgen without a word because its nested results were
+/// untyped. The low byte is left alone and the high one xored.
+#[test]
+fn a_xor_with_a_byte_in_the_high_half_changes_only_the_high_half() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("ld l, #0") && !out.contains("xor a, e"), "{out}");
+}
