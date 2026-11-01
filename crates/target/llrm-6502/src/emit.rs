@@ -572,35 +572,6 @@ pub fn function(
     Ok(out)
 }
 
-/// `bra` reaches 127 bytes. An instruction is at most 3 bytes, so a `bra` whose
-/// target is within 40 instruction lines stays and any other becomes `jmp`.
-///
-/// DEVIATE: line counting, not sizes. Reason: the spike has no branch
-/// relaxation. Exit: the shared one.
-pub fn relax_bra(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
-    let mut out = String::new();
-    for (at, line) in lines.iter().enumerate() {
-        let Some(target) = line.strip_prefix("  bra ") else {
-            writeln!(out, "{line}").unwrap();
-            continue;
-        };
-        let label = format!("{target}:");
-        let near = lines
-            .iter()
-            .position(|l| *l == label)
-            .is_some_and(
-                |to| {
-                    let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
-                    lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
-                },
-            );
-        writeln!(out, "  {} {target}", if near { "bra" } else { "jmp" }).unwrap();
-    }
-    out
-}
-
 /// The equates for the imaginary registers on `platform`: `rc0 = $80` and so
 /// on.
 pub fn equates(platform: &Platform) -> String {

@@ -2,6 +2,7 @@
 
 pub mod abi;
 pub mod alloc;
+pub mod asm;
 pub mod dagisel;
 pub mod driver;
 pub mod emit;
@@ -9,6 +10,7 @@ pub mod frame;
 pub mod peephole;
 pub mod platform;
 pub mod prepare;
+pub mod relax;
 pub mod routines;
 pub mod select;
 pub mod sharecmp;

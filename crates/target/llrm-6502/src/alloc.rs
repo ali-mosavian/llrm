@@ -21,6 +21,7 @@ use llrm_spike_mf::{
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
+use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
 use crate::emit::{MInst, Operand as Machine, address, spill};
@@ -1888,7 +1889,7 @@ fn live_after(
 /// through `a`, bracketed by `pha`/`pla` when it is live. `body` is a plain
 /// `lda`/`sta` pair.
 fn through_a(
-    out: &mut String,
+    out: &mut Asm,
     a_live: bool,
     spare: Option<&str>,
     body: &str,
@@ -1908,7 +1909,7 @@ fn through_a(
 /// wrote, and `a` is saved around the sequence when it is live after it. A
 /// cycle (a swap of two cells) goes through the stack.
 pub fn parallel_move(
-    out: &mut String,
+    out: &mut Asm,
     moves: &[(RegId, RegId)],
     a_live: bool,
 ) {
@@ -1977,7 +1978,7 @@ pub fn parallel_move(
 }
 
 fn move_byte(
-    out: &mut String,
+    out: &mut Asm,
     to: RegId,
     from: RegId,
     a_live: bool,
@@ -2102,7 +2103,7 @@ fn emit_on(
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
 fn adjust(
-    out: &mut String,
+    out: &mut Asm,
     n: i64,
 ) {
     let n = n as u16;
@@ -2353,7 +2354,7 @@ fn emit_with<const STACK: bool>(
     };
     let after = live_after(&function, &at);
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
-    let mut out = String::new();
+    let mut out = Asm::new();
     let mut made = 0;
     let mut pending: Option<i64> = None;
     // A call that returns at once is a jump: the callee's `rts` returns from
@@ -2560,7 +2561,7 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("CMPZ"), [_, _, _, _, low, high]) => {
                     made += 1;
-                    let load = |out: &mut String, r: RegId| match r {
+                    let load = |out: &mut Asm, r: RegId| match r {
                         r if r == reg::X => out.push_str("  txa\n"),
                         r if r == reg::Y => out.push_str("  tya\n"),
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
@@ -2647,18 +2648,27 @@ fn emit_with<const STACK: bool>(
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
                     if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
-                        && out.lines().last().is_some_and(crate::peephole::sets_nz_of_a) =>
+                        && out.last_inst().is_some_and(crate::peephole::sets_nz_of_a) =>
                 {
                     // `iny; tya; bne`: the step set the flags of y itself
-                    // DEVIATE (6502-3): looks back in the printed text. Exit:
-                    // the peephole on allocated MIR (D-6502
+                    // DEVIATE (6502-3): looks back at the emitted
+                    // instructions. Exit: the peephole on allocated MIR (D-6502
                     // of #6259, see peephole.rs).
-                    let mut tail = out.lines().rev();
-                    let (last, before) = (tail.next().unwrap_or(""), tail.next().unwrap_or(""));
-                    let step = |register: &str| ["in", "de"].iter().any(|op| before == format!("  {op}{register}"));
+                    let n = out.lines.len();
+                    let stepped = n >= 2
+                        && matches!(
+                            (&out.lines[n - 2], &out.lines[n - 1]),
+                            (
+                                Line::Inst(AsmInst { op: AsmOp::Iny | AsmOp::Dey, .. }),
+                                Line::Inst(AsmInst { op: AsmOp::Tya, .. })
+                            ) | (
+                                Line::Inst(AsmInst { op: AsmOp::Inx | AsmOp::Dex, .. }),
+                                Line::Inst(AsmInst { op: AsmOp::Txa, .. })
+                            )
+                        );
                     let next_reads_a = block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("CMOV"));
-                    if !a_live && !next_reads_a && ((last == "  tya" && step("y")) || (last == "  txa" && step("x"))) {
-                        out.truncate(out.len() - last.len() - 1);
+                    if !a_live && !next_reads_a && stepped {
+                        out.pop();
                     }
                 }
                 (Kind::Op(compare @ ("CMP" | "CPX" | "CPY")), [_, _, second]) => {
@@ -2684,7 +2694,7 @@ fn emit_with<const STACK: bool>(
                     made += 1;
                     let (taken, done) = (format!("_cmt{made}"), format!("_cmd{made}"));
                     let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
-                    let load = |out: &mut String, value: &Operand, at: Option<RegId>| match (value, at) {
+                    let load = |out: &mut Asm, value: &Operand, at: Option<RegId>| match (value, at) {
                         (Operand::Imm(v), _) => writeln!(out, "  lda #{v}").unwrap(),
                         (_, Some(r)) if r == reg::X => out.push_str("  txa\n"),
                         (_, Some(r)) if r == reg::Y => out.push_str("  tya\n"),
@@ -2845,13 +2855,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((
-        own_labels(&crate::emit::relax_bra(&relax(&crate::peephole::run(&out))), &function.name),
-        slots,
-        sunk,
-        shared,
-        moved,
-    ))
+    Ok((own_labels(&finish(out), &function.name), slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -2889,47 +2893,10 @@ fn own_labels(
     out
 }
 
-/// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
-/// so one whose target is within 40 instruction lines stays and any other
-/// becomes the opposite branch over a `jmp`.
-///
-/// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
-/// branch relaxation.
-pub fn relax(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
-    let mut out = String::new();
-    let mut far = 0;
-    for (at, line) in lines.iter().enumerate() {
-        let parts: Vec<&str> = line.trim_start().split(' ').collect();
-        let opposite = match parts[..] {
-            ["beq", _] => "bne",
-            ["bne", _] => "beq",
-            ["bcc", _] => "bcs",
-            ["bcs", _] => "bcc",
-            ["bmi", _] => "bpl",
-            ["bpl", _] => "bmi",
-            _ => {
-                writeln!(out, "{line}").unwrap();
-                continue;
-            }
-        };
-        let label = format!("{}:", parts[1]);
-        let near = lines
-            .iter()
-            .position(|l| *l == label)
-            .is_some_and(
-                |to| {
-                    let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
-                    lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
-                },
-            );
-        if near {
-            writeln!(out, "{line}").unwrap();
-        } else {
-            far += 1;
-            writeln!(out, "  {opposite} _far{far}\n  jmp {}\n_far{far}:", parts[1]).unwrap();
-        }
-    }
-    out
+/// The function's text: the peepholes, then the branches out of reach made
+/// long.
+fn finish(mut code: Asm) -> String {
+    crate::peephole::run(&mut code);
+    crate::relax::relax(&mut code);
+    code.text()
 }

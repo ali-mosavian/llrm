@@ -4,9 +4,20 @@
 mod common;
 
 use llrm_6502::alloc::Tuning;
+use llrm_6502::asm::Asm;
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_text;
+
+/// The text of `code` after one pass over its instructions.
+fn pass(
+    pass: fn(&mut Asm),
+    code: &str,
+) -> String {
+    let mut asm = Asm::parse(code);
+    pass(&mut asm);
+    asm.text()
+}
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8";
 
@@ -347,9 +358,10 @@ fn moved(
         _ => llrm_6502::reg::RC3,
     };
     let moves: Vec<_> = moves.iter().map(|(d, s)| (id(d), id(s))).collect();
-    let mut code = String::from("pmove:\n");
+    let mut code = Asm::parse("pmove:\n");
     parallel_move(&mut code, &moves, a_live);
     code.push_str(&format!("  {}\n  rts\n", if read == "a" { "nop".to_owned() } else { format!("lda {read}") }));
+    let code = code.text();
     let main = "  lda #1\n  sta rc2\n  lda #2\n  sta rc3\n  lda #3\n  sta rc4\n  ldx #5\n  lda #9\n  jsr pmove\n";
     common::run_with(&format!("pm-{}", code.len()), main, &code)
 }
@@ -2226,14 +2238,14 @@ fn an_undefined_value_is_stored_as_zero() {
 fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
     use llrm_6502::peephole::drop_reloads;
     assert_eq!(
-        drop_reloads("  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"),
+        pass(drop_reloads, "  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"),
         "  lda rc4\n  sta rc2\n  ora rc3\n  rts\n"
     );
-    assert_eq!(drop_reloads("  stx s_f_3\n  ldx s_f_3\n  inx\n"), "  stx s_f_3\n  inx\n");
+    assert_eq!(pass(drop_reloads, "  stx s_f_3\n  ldx s_f_3\n  inx\n"), "  stx s_f_3\n  inx\n");
     let branch = "  sta rc2\n  lda rc2\n  bne l\n";
-    assert_eq!(drop_reloads(branch), branch, "bne reads the zero flag the load set");
+    assert_eq!(pass(drop_reloads, branch), branch, "bne reads the zero flag the load set");
     let other = "  sta rc2\n  lda rc3\n  ldx rc2\n  sta (rc2),y\n  lda (rc2),y\n  sty rc2\n  lda rc2\n  rts\n";
-    assert_eq!(drop_reloads(other), other, "only the same register and cell");
+    assert_eq!(pass(drop_reloads, other), other, "only the same register and cell");
 }
 
 /// `ldx #0` twice, or after `lda #0; tax`, loaded what the register held; a
@@ -2242,14 +2254,14 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
 #[test]
 fn a_load_of_the_immediate_a_register_holds_goes() {
     use llrm_6502::peephole::drop_known_loads;
-    assert_eq!(drop_known_loads("  ldx #0\n  sta rc2\n  ldx #0\n  inx\n"), "  ldx #0\n  sta rc2\n  inx\n");
-    assert_eq!(drop_known_loads("  lda #0\n  tax\n  ldx #0\n  inx\n"), "  lda #0\n  tax\n  inx\n");
+    assert_eq!(pass(drop_known_loads, "  ldx #0\n  sta rc2\n  ldx #0\n  inx\n"), "  ldx #0\n  sta rc2\n  inx\n");
+    assert_eq!(pass(drop_known_loads, "  lda #0\n  tax\n  ldx #0\n  inx\n"), "  lda #0\n  tax\n  inx\n");
     let label = "  ldx #0\nl:\n  ldx #0\n  inx\n";
-    assert_eq!(drop_known_loads(label), label, "a label joins other paths");
+    assert_eq!(pass(drop_known_loads, label), label, "a label joins other paths");
     let call = "  ldx #0\n  jsr f\n  ldx #0\n  inx\n";
-    assert_eq!(drop_known_loads(call), call, "a call may change x");
+    assert_eq!(pass(drop_known_loads, call), call, "a call may change x");
     let branch = "  ldx #0\n  sta rc2\n  ldx #0\n  beq l\n";
-    assert_eq!(drop_known_loads(branch), branch, "beq reads the flags the load set");
+    assert_eq!(pass(drop_known_loads, branch), branch, "beq reads the flags the load set");
 }
 
 /// `cmp #0` after a load, an ALU op or a transfer into `a` tested what the
@@ -2258,23 +2270,141 @@ fn a_load_of_the_immediate_a_register_holds_goes() {
 #[test]
 fn a_zero_compare_after_an_op_that_set_the_flags_goes() {
     use llrm_6502::peephole::drop_zero_compares;
-    assert_eq!(drop_zero_compares("  lda rc2\n  sta rc3\n  cmp #0\n  bne l\n"), "  lda rc2\n  sta rc3\n  bne l\n");
-    assert_eq!(drop_zero_compares("  txa\n  cmp #0\n  beq l\n"), "  txa\n  beq l\n");
+    assert_eq!(
+        pass(drop_zero_compares, "  lda rc2\n  sta rc3\n  cmp #0\n  bne l\n"),
+        "  lda rc2\n  sta rc3\n  bne l\n"
+    );
+    assert_eq!(pass(drop_zero_compares, "  txa\n  cmp #0\n  beq l\n"), "  txa\n  beq l\n");
     let other = "  ldx rc2\n  cmp #0\n  bne l\n";
-    assert_eq!(drop_zero_compares(other), other, "ldx set the flags of x");
+    assert_eq!(pass(drop_zero_compares, other), other, "ldx set the flags of x");
     let carry = "  lda rc2\n  cmp #0\n  bcs l\n";
-    assert_eq!(drop_zero_compares(carry), carry, "bcs reads the carry the compare set");
+    assert_eq!(pass(drop_zero_compares, carry), carry, "bcs reads the carry the compare set");
 }
 
-/// A conditional branch more than 40 instructions away became a long
-/// `bcc` over a `jmp`; one within reach stays.
+/// `sta m; sec; lda m` reloaded what `a` held (`atoi`, 7 kernels, 2 bytes and
+/// 3 clocks each): a carry flag op or a store to another cell leaves both the
+/// register and the cell. A store to the cell itself from another register, a
+/// store through a pointer and a label do not.
 #[test]
-fn a_far_branch_is_inverted_over_a_jump_and_a_near_one_stays() {
-    use llrm_6502::alloc::relax;
-    let near = "  bne l\n  nop\nl:\n";
-    assert_eq!(relax(near), near);
-    let far = format!("  bne l\n{}l:\n", "  nop\n".repeat(41));
-    assert!(relax(&far).starts_with("  beq _far1\n  jmp l\n_far1:\n"), "{}", relax(&far));
+fn a_reload_across_a_carry_op_or_another_cells_store_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(pass(drop_reloads, "  sta rc5\n  clc\n  lda rc5\n  adc rc6\n"), "  sta rc5\n  clc\n  adc rc6\n");
+    assert_eq!(
+        pass(drop_reloads, "  sta rc5\n  stx rc6\n  sec\n  lda rc5\n  sbc rc7\n"),
+        "  sta rc5\n  stx rc6\n  sec\n  sbc rc7\n"
+    );
+    for kept in [
+        "  sta rc5\n  stx rc5\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  sta (rc2),y\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  sta rc6,y\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\nl:\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  inc rc5\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  clc\n  lda rc5\n  beq l\n",
+    ] {
+        assert_eq!(pass(drop_reloads, kept), kept);
+    }
+}
+
+/// `cmp #0` with a label between it and its branch (`lz4`, 4 sites): a path
+/// that jumps to the label brings its own flags, and this path's come from `a`.
+/// A label before the compare joins paths whose flags differ.
+#[test]
+fn a_zero_compare_goes_across_a_label_before_its_branch() {
+    use llrm_6502::peephole::drop_zero_compares;
+    assert_eq!(pass(drop_zero_compares, "  tya\n  cmp #0\nl:\n  bne x\n"), "  tya\nl:\n  bne x\n");
+    assert_eq!(pass(drop_zero_compares, "  tya\n  cmp #0\nl:\nm:\n  beq x\n"), "  tya\nl:\nm:\n  beq x\n");
+    let before = "  tya\nl:\n  cmp #0\n  bne x\n";
+    assert_eq!(pass(drop_zero_compares, before), before);
+    let carry = "  tya\n  cmp #0\nl:\n  bcs x\n";
+    assert_eq!(pass(drop_zero_compares, carry), carry);
+}
+
+/// `jmp l` to an `rts` (11 sites in 7 kernels) is the `rts`: a byte and a jump
+/// less. Only a label that is directly a return counts.
+#[test]
+fn a_jump_to_a_return_is_the_return() {
+    use llrm_6502::peephole::jump_to_return;
+    assert_eq!(pass(jump_to_return, "  jmp l\n  nop\nl:\n  rts\n"), "  rts\n  nop\nl:\n  rts\n");
+    assert_eq!(pass(jump_to_return, "f:\n  jmp m\nl:\nm:\n  rts\n"), "f:\n  rts\nl:\nm:\n  rts\n");
+    let kept = "  jmp l\nl:\n  nop\n  rts\n";
+    assert_eq!(pass(jump_to_return, kept), kept);
+    let outside = "  jmp elsewhere\n  rts\n";
+    assert_eq!(pass(jump_to_return, outside), outside);
+}
+
+/// `tya; tay` (`itoa`) moved what it had just moved.
+#[test]
+fn a_transfer_and_its_reverse_are_one_transfer() {
+    use llrm_6502::peephole::drop_cancelling_transfers;
+    assert_eq!(pass(drop_cancelling_transfers, "  tya\n  tay\n  rts\n"), "  tya\n  rts\n");
+    assert_eq!(pass(drop_cancelling_transfers, "  tax\n  txa\n  rts\n"), "  tax\n  rts\n");
+    for kept in ["  tya\n  tax\n", "  tya\nl:\n  tay\n", "  txa\n  tay\n"] {
+        assert_eq!(pass(drop_cancelling_transfers, kept), kept);
+    }
+}
+
+/// A conditional branch is long only when its target is out of reach in bytes:
+/// 127 forward, 128 back. Counting 40 instruction lines made 14 of 19 long
+/// branches in the corpus (3 bytes each) that the assembler would have reached.
+#[test]
+fn a_branch_is_long_only_when_the_bytes_between_miss_the_target() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    let pad = |bytes: usize| format!("{}{}", "  lda $1234\n".repeat(bytes / 3), "  nop\n".repeat(bytes % 3));
+    for bytes in [41, 125] {
+        let near = format!("  bne l\n{}l:\n", pad(bytes));
+        assert_eq!(relax(&near), near, "{bytes} bytes ahead is in reach");
+    }
+    let edge = format!("  bne l\n{}l:\n", pad(127));
+    assert_eq!(relax(&edge), edge, "127 bytes past the branch is the limit");
+    let past = format!("  bne l\n{}l:\n", pad(128));
+    assert!(relax(&past).starts_with("  beq _far1\n  jmp l\n_far1:\n"), "{}", relax(&past));
+    let back = format!("l:\n{}  bne l\n", pad(126));
+    assert_eq!(relax(&back), back, "126 bytes and the branch are 128 back");
+    let behind = format!("l:\n{}  bne l\n", pad(127));
+    assert!(relax(&behind).contains("  beq _far1\n  jmp l\n"), "129 back is out");
+}
+
+/// A long branch is three bytes longer and can push another out of reach: the
+/// `bne` is 127 bytes from `outer` until the `beq` behind it is long.
+#[test]
+fn a_branch_made_long_pushes_a_neighbour_out_of_reach() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    let pad = |bytes: usize| format!("{}{}", "  lda $1234\n".repeat(bytes / 3), "  nop\n".repeat(bytes % 3));
+    let held = format!("top:\n  bne outer\n{}  beq top\nouter:\n", pad(124));
+    assert_eq!(relax(&held), held, "both reach");
+    let pushed = relax(&format!("top:\n  bne outer\n{}  beq top\nouter:\n", pad(125)));
+    assert!(pushed.contains("  beq _far1\n  jmp outer\n") && pushed.contains("  bne _far2\n  jmp top\n"), "{pushed}");
+}
+
+/// Zero-page cells are two bytes, `lda m,y` has no zero-page form, and a name
+/// the assembler places is three: the bytes a branch spans add up from these.
+#[test]
+fn instruction_sizes_follow_the_addressing_form() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    // 63 ops of two bytes and the branch are 128 bytes: in reach. Of three:
+    // not.
+    let span = |op: &str| format!("  bne l\n{}l:\n", format!("  {op}\n").repeat(63));
+    for op in ["lda rc2", "lda #1", "lda (rc2),y", "ldx rc2,y", "sta rc2,x"] {
+        assert!(relax(&span(op)).starts_with("  bne l\n"), "{op} is two bytes");
+    }
+    for op in ["lda rc2,y", "lda buf", "lda s_f_1", "jsr f"] {
+        assert!(relax(&span(op)).starts_with("  beq _far1\n"), "{op} is three bytes");
+    }
+}
+
+/// A `bra` out of reach, or to a label outside the function, can only be a
+/// `jmp`.
+#[test]
+fn a_bra_out_of_reach_or_to_another_function_is_a_jump() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    assert_eq!(relax("  bra l\n  nop\nl:\n"), "  bra l\n  nop\nl:\n");
+    assert_eq!(relax("  bra elsewhere\n"), "  jmp elsewhere\n");
+    let body = "  lda $1234\n".repeat(43);
+    assert_eq!(relax(&format!("  bra l\n{body}l:\n")), format!("  jmp l\n{body}l:\n"));
 }
 
 /// A spilled byte used as the second operand of an ALU op is read from its cell
