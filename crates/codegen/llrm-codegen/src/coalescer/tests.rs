@@ -584,7 +584,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_, _, _| true),
+        should_join: Box::new(|_| true),
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving

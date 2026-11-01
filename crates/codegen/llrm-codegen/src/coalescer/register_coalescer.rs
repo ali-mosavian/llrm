@@ -151,6 +151,9 @@ pub fn join_copy(
     let Some(mut cp) = CoalescerPair::set_registers(&copy_insn, env) else {
         return JoinResult::Rejected;
     };
+    if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
     let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy));
     // Dead code elimination. This really should be handled by MachineDCE, but
     // sometimes dead copies slip through, and we can't generate invalid live

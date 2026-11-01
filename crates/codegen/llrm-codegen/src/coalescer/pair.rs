@@ -16,6 +16,8 @@
 //! # Used by
 //! `joinvals`, `register_coalescer`.
 
+use crate::liveness::liveintervals::LiveIntervals;
+use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::{Held, Loc, Operation};
 use crate::model::lir::Insn;
 
@@ -27,6 +29,18 @@ pub trait CoalescerEnv {
         a: u32,
         b: u32,
     ) -> bool;
+
+    /// `TRI->shouldCoalesce(CopyMI, SrcRC, DstRC, NewRC, LIS)`: whether the
+    /// join of `src` and `dst` across `copy` goes ahead.
+    fn should_coalesce(
+        &self,
+        _lis: &LiveIntervals,
+        _copy: InstrKey,
+        _src: u32,
+        _dst: u32,
+    ) -> bool {
+        true
+    }
 
     /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
     /// `dst`, which may now take only the registers both could.
