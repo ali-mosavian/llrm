@@ -159,3 +159,23 @@ fn at_o3_a_loop_on_an_invariant_condition_is_not_copied() {
     let bodies = text.matches("add word ptr [bx]").count();
     assert!(bodies <= 1, "{bodies} loop bodies\n{text}");
 }
+
+/// Copies of a recursive body inside itself (REC-1, depth 2) made `fib` 152
+/// bytes at -O2 against Borland C's 83 (4 calls where the loop-and-call form
+/// has 1); rectwo and frames were 259 and 338 against 104 and 251.
+#[test]
+fn at_o2_a_recursive_function_is_not_copied_into_itself() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(directory.join("fib.c"), "int fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }\n")
+        .unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O2", "-m16", "-march=i486", "-S", "-o", "fib.s", "fib.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("fib.s")).unwrap();
+    let calls = text.matches("call").count();
+    assert!(calls <= 2, "{calls} calls\n{text}");
+}
