@@ -28,7 +28,9 @@
 //! and ordered access it could pass (the pin's `AA` is null for this target's
 //! machine operands).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::cfg::Cfg;
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
@@ -119,6 +121,11 @@ struct Sink<'a, T: Target> {
     merge: HashMap<(u32, u32), u32>,
     to_split: Vec<(u32, u32)>,
     live_out: Option<Vec<HashSet<u32>>>,
+    /// Whether an edge may get a block of its own for an instruction to land
+    /// in.
+    allow_split: bool,
+    /// Whether a copy or a rematerializable instruction stays where it is.
+    keep_cheap: bool,
 }
 
 fn virt(reg: Reg) -> Option<u32> {
@@ -159,10 +166,12 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             def_is_copy: Vec::new(),
             copy_source: Vec::new(),
             uses: Vec::new(),
-            considered: HashSet::new(),
-            merge: HashMap::new(),
+            considered: HashSet::default(),
+            merge: HashMap::default(),
             to_split: Vec::new(),
             live_out: None,
+            allow_split: true,
+            keep_cheap: false,
         };
         sink.index();
         sink
@@ -303,13 +312,13 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
     /// The virtual registers live out of each block.
     fn liveness(&self) -> Vec<HashSet<u32>> {
         let count = self.function.blocks.len();
-        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::new(); count];
-        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::new(); count];
+        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::default(); count];
+        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::default(); count];
         let mut changed = true;
         while changed {
             changed = false;
             for block in (0..count).rev() {
-                let mut out: HashSet<u32> = HashSet::new();
+                let mut out: HashSet<u32> = HashSet::default();
                 for &succ in &self.cfg.succs[block] {
                     let results: HashSet<u32> =
                         self.function.blocks[succ].phis.iter().filter_map(|phi| virt(phi.result)).collect();
@@ -563,6 +572,9 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         to: usize,
         break_phi_edge: bool,
     ) -> bool {
+        if !self.allow_split {
+            return false;
+        }
         let mut deferred = None;
         if !self.worth_breaking(inst, from, to, &mut deferred) {
             return false;
@@ -651,6 +663,9 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         cache: &mut HashMap<usize, Vec<usize>>,
     ) -> bool {
         let inst = self.function.blocks[block].insts[at].clone();
+        if self.keep_cheap && (inst.kind == Kind::Copy || inst.rematerializable) {
+            return false;
+        }
         if !safe_to_move(&self.function.fixed, &inst, saw_store) {
             return false;
         }
@@ -712,7 +727,7 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
             return false;
         }
         let mut changed = false;
-        let mut cache = HashMap::new();
+        let mut cache = HashMap::default();
         let mut saw_store = false;
         let mut at = self.function.blocks[block].insts.len();
         while at > 0 {
@@ -822,4 +837,18 @@ pub fn split_critical_edge<C>(
 /// `MachineSinking`: true when anything moved.
 pub fn machine_sink<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
     Sink::<T>::new(function).run()
+}
+
+/// [`machine_sink`] where no edge is split and a copy or a rematerializable
+/// instruction stays. DEVIATE: the pin splits when `PostponeSplitCriticalEdge`
+/// finds it worth it, and sinks a copy or a constant into the one successor
+/// that reads it. Reason: on a target whose jump costs bytes (the 6502's `jmp`
+/// is three) a block made for a one-move instruction costs more than the
+/// move saves on the other path (lz4 grew 16 bytes). Exit: the neutral-LIR
+/// task, with a block-cost hook.
+pub fn machine_sink_in_place<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
+    let mut sink = Sink::<T>::new(function);
+    sink.allow_split = false;
+    sink.keep_cheap = true;
+    sink.run()
 }

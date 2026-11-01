@@ -631,6 +631,18 @@ fn fold_immediate_pushes(
 /// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
 /// from assembling).
 ///
+/// The constant a store of the minsize patterns writes: `and [m], 0` stores 0,
+/// `or [m], -1` stores -1 (the pin's `classifyInstruction` converts both).
+fn constant_store(what: &Semantics) -> Option<i64> {
+    let [Loc::Mem(_)] = &what.dests[..] else { return None };
+    let Some(Loc::Imm(imm)) = what.sources.get(1) else { return None };
+    match (what.op, what.name.as_deref()) {
+        (Operation::Binary, Some("and")) if imm.value == 0 => Some(0),
+        (Operation::Binary, Some("or")) if imm.value == -1 => Some(-1),
+        _ => None,
+    }
+}
+
 /// A floating argument cannot be pushed (`fstp` stores to memory): an area with
 /// one is stored through a register that holds the stack pointer, `mov bx, sp`
 /// and `fstp [bx+k]`, as the old selector does.
@@ -687,8 +699,14 @@ fn pushed_arguments(
         let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
             .filter(|&place| is_store(&insns[place]))
             .inspect(|&place| {
-                // Only a move of a word or a dword can be a push.
-                if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move) {
+                // Only a move of a word or a dword can be a push, or the
+                // `and`/`or` the minsize patterns store 0 and -1 with
+                // (`classifyInstruction`).
+                if insns[place]
+                    .what
+                    .as_ref()
+                    .is_some_and(|what| what.op != Operation::Move && constant_store(what).is_none())
+                {
                     // DEVIATE SD405: tuned for size, a popped x87 store is
                     // made with its own area (below); the stackifier pops it.
                     if split_wide.is_some() && is_float_store(&insns[place]) {
@@ -829,7 +847,10 @@ fn pushed_arguments(
                 pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(store), old.defines.clone(), uses)));
                 continue;
             }
-            let source = what.sources[0].clone();
+            let source = match constant_store(what) {
+                Some(value) => Loc::Imm(Imm { value, width: width as u32, address: None }),
+                None => what.sources[0].clone(),
+            };
             let uses = old.uses.clone();
             let halves = match (&source, split_wide) {
                 (Loc::Imm(imm), Some(word)) => word_halves(imm, word).map(|halves| (halves, word)),
@@ -1208,6 +1229,15 @@ impl Emitter<'_, '_> {
                     }
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
+                        // A read the chain orders (`stacksave`) is the pointer
+                        // now, not where its value is used.
+                        if self.dag.has_users(SDValue { node: n, res: 1 }) {
+                            let width = width_of(self.ctx.map.scalar_sse(), self.dag, result);
+                            let held = self.fresh(width);
+                            let sp = Reg { register, width };
+                            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(sp)]);
+                            self.values.insert(result, held.value);
+                        }
                     }
                     // The x87 result of a call: the stack's top (`FP0`), which
                     // the stackifier reads as an unnamed load of no cell
@@ -3954,7 +3984,7 @@ impl Emitter<'_, '_> {
         }
         // The stack pointer itself as a value (`mov edi, esp`, the first byval
         // argument's address): a copy of the register.
-        if self.sp_values.contains(&value) {
+        if self.sp_values.contains(&value) && !self.values.contains_key(&value) {
             let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
             let held = self.fresh(width);
             let sp = Reg { register: self.ctx.stack_pointer, width };

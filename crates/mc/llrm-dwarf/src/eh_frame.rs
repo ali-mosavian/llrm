@@ -3,7 +3,7 @@
 //! `zR`, FDE pointers pc-relative `sdata4`) and an FDE for each function of
 //! `Object::frames`.
 
-use llrm_object::debug::FrameRow;
+use llrm_debug::FrameRow;
 use llrm_object::{Fix, Object, Reloc, Role, Section, Target, Unsupported};
 
 use crate::buffer::Buf;
@@ -13,9 +13,22 @@ const DW_CFA_DEF_CFA: u8 = 0x0C;
 const DW_CFA_OFFSET: u8 = 0x80;
 /// `DW_EH_PE_pcrel | DW_EH_PE_sdata4`.
 const FDE_ENCODING: u8 = 0x1B;
+/// `DW_EH_PE_pcrel | DW_EH_PE_absptr`.
+const FDE_ENCODING_8: u8 = 0x10;
+
+/// How an FDE names its function.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pointer {
+    /// `DW_EH_PE_pcrel | DW_EH_PE_sdata4`, a relocation of the section (ELF).
+    Pcrel4,
+    /// `DW_EH_PE_pcrel | DW_EH_PE_absptr`, 8 bytes, which the container
+    /// resolves from its own section addresses (Mach-O).
+    Pcrel8,
+}
 
 /// What the target says of its frames.
 pub struct EhTarget<'a> {
+    pub pointer: Pointer,
     /// The bytes of an address, which a stack slot also is.
     pub address: usize,
     /// The column of the return address.
@@ -61,7 +74,7 @@ pub fn expanded_as(
     buf.sleb(alignment);
     buf.u8(target.return_column as u8);
     buf.uleb(1);
-    buf.u8(FDE_ENCODING);
+    buf.u8(if target.pointer == Pointer::Pcrel4 { FDE_ENCODING } else { FDE_ENCODING_8 });
     buf.u8(DW_CFA_DEF_CFA);
     buf.uleb(number(&target.entry.cfa_register)?);
     buf.uleb(target.entry.cfa_offset as u64);
@@ -79,9 +92,10 @@ pub fn expanded_as(
         buf.u32(0);
         buf.u32((buf.at() - 0) as u32);
         let field = buf.at();
-        buf.relocs.push(Reloc::new(field, Fix::pc_rel(4, 0), Target::Section(frame.section), frame.offset as i64));
-        buf.u32(0);
-        buf.u32(frame.length as u32);
+        let width = if target.pointer == Pointer::Pcrel4 { 4 } else { 8 };
+        buf.relocs.push(Reloc::new(field, Fix::pc_rel(width, 0), Target::Section(frame.section), frame.offset as i64));
+        buf.bytes.extend(std::iter::repeat_n(0, width));
+        buf.bytes.extend((frame.length as u64).to_le_bytes().iter().take(width));
         buf.uleb(0);
         let mut state = &initial;
         for row in &frame.rows {

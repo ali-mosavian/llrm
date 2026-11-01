@@ -1,0 +1,9 @@
+# cc65's `sim65`, target sim6502: 64K of RAM, cc65's own zero page is $00..$19, the program at $0200.
+# The oracle the spike checks its output against.
+# zero_page = 26: cc65's own ZP segment for this target is $0000 size $0100 (all of it; cc65 runtime keeps $00..$19, which this program does not link) (/usr/share/cc65/cfg/sim6502.cfg:6); the program must assume: only this runtime is linked; no cc65 library code runs.
+[platform]
+name = "sim65"
+load_address = 0x0200
+imag_base = 0x80
+zero_page = 26
+soft_stack = 0x8000

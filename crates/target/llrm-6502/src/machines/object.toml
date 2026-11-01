@@ -1,0 +1,5 @@
+# The spike writes raw images and PRGs itself (platform.rs), not a linker object.
+formats = ["raw"]
+default = "raw"
+bitness = 16
+header = []

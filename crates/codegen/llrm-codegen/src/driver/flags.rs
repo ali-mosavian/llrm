@@ -72,6 +72,25 @@ impl Level {
     }
 }
 
+/// `-f<pass>` or `-fno-<pass>` applied to `options`; false when `flag` names
+/// no pass.
+pub fn apply_pass_flag(
+    options: &mut pipeline::Options,
+    flag: &str,
+) -> bool {
+    let Some(name) = flag.strip_prefix("-f") else { return false };
+    let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
+    PASSES
+        .iter()
+        .find(|(one, _)| *one == name)
+        .is_some_and(
+            |(_, set)| {
+                set(options, on);
+                true
+            },
+        )
+}
+
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
@@ -205,13 +224,17 @@ pub struct Flags {
     /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
     /// is an explicit `__cdecl`.
     pub regcall_default: bool,
+    /// `-frame-pointer=<all|non-leaf|non-leaf-no-reserve|reserved|none>`, the
+    /// pin's `cl::opt` of `CommandFlags.cpp` (:204): the `"frame-pointer"`
+    /// attribute of each function that has none.
+    pub frame_pointer: Option<String>,
     /// `-mc-library`: the library's functions (`cos`, `strlen`) keep their
     /// C convention, as the Borland library the program links has them.
     pub c_library: bool,
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
-    pub debug_format: llrm_object::debug::Format,
+    pub debug_format: llrm_debug::Format,
     /// `-gdwarf` without a version: the target's default.
     dwarf_unversioned: bool,
     /// `-fobject-format=`: the object format to write, where the target has
@@ -236,6 +259,7 @@ impl Default for Flags {
             wrapv: false,
             float_store: false,
             regcall_default: false,
+            frame_pointer: None,
             c_library: false,
             level: Level::O2,
             passes: Vec::new(),
@@ -298,27 +322,36 @@ impl Flags {
             },
             "-g" => (self.debug, self.debug_format) = (true, Default::default()),
             "-g0" => self.debug = false,
-            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
+            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_debug::Format::CodeView),
             "-gdwarf" | "-gdwarf-5" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 5 });
                 self.dwarf_unversioned = flag == "-gdwarf";
             }
             "-gdwarf-4" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 4 });
                 self.dwarf_unversioned = false;
             }
             "-gdwarf-3" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 3 });
                 self.dwarf_unversioned = false;
             }
             "-gdwarf-2" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 2 });
                 self.dwarf_unversioned = false;
             }
-            "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
+            "-gtd" => (self.debug, self.debug_format) = (true, llrm_debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            _ if flag.starts_with("-frame-pointer=") => {
+                let policy = &flag["-frame-pointer=".len()..];
+                if !["all", "non-leaf", "non-leaf-no-reserve", "reserved", "none"].contains(&policy) {
+                    return Err(format!(
+                        "-frame-pointer={policy}: expected all, non-leaf, non-leaf-no-reserve, reserved or none"
+                    ));
+                }
+                self.frame_pointer = Some(policy.to_owned());
+            }
             "-mc-library" => self.c_library = true,
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
@@ -529,8 +562,8 @@ impl Flags {
         // is.
         let object_format = self.format(&*arch).map_or("omf", |format| format.name());
         let debug_format = match self.debug_format {
-            llrm_object::debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
-                llrm_object::debug::Format::Dwarf { version: arch.object().dwarf_version }
+            llrm_debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
+                llrm_debug::Format::Dwarf { version: arch.object().dwarf_version }
             }
             other => other,
         };

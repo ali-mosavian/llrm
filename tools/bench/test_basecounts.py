@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import sys
 import json
 from pathlib import Path
@@ -350,8 +351,33 @@ def test_an_exception_file_prints_its_rows_every_run_and_fails_a_row_no_longer_w
 
 
 def test_the_two_jpeg_nib_os_rows_the_loopsimplify_fix_moves_are_excused_by_their_file():
-    """release/next carried no waiver for jpeg_fixed 5366 / jpeg_single 5227 (base 5304 / 5172): the judge reported exactly these two."""
-    measured = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5366), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5227)}
-    base = {("jpeg_fixed", "nib", "Os"): row(100, code_bytes=5304), ("jpeg_single", "nib", "Os"): row(100, code_bytes=5172)}
-    assert len(bc.judge(measured, base, [])[0]) == 2
-    assert bc.judge(measured, base, bc.waivers())[0] == []
+    """release/next carried no waiver for jpeg_fixed / jpeg_single nib -Os code_bytes: the judge reported exactly these two. The file now excuses
+    each at its own ceiling and not one byte above. (It pinned the first ceilings, 5362 / 5223, and went red when d846b3d0f0 lowered them to the
+    measured 5337 / 5198.)"""
+    rows = {("jpeg_fixed", "nib", "Os"): 5304, ("jpeg_single", "nib", "Os"): 5172}
+    ceiling = {w["label"]: w["to"] for w in bc.waivers() if w["counter"] == "code_bytes"}
+    assert {"jpeg_fixed nib -Os", "jpeg_single nib -Os"} <= set(ceiling)
+    base = {key: row(100, code_bytes=size) for key, size in rows.items()}
+    at = {key: row(100, code_bytes=ceiling[bc.label(key)]) for key in rows}
+    over = {key: row(100, code_bytes=ceiling[bc.label(key)] + 1) for key in rows}
+    assert bc.judge(at, base, bc.waivers())[0] == []
+    assert len(bc.judge(over, base, bc.waivers())[0]) == 2
+
+
+def test_two_runs_of_one_compiler_that_differ_in_any_count_are_named_and_equal_runs_pass():
+    """Main read 78 instructions in one run and 2 in another (qlight c -Os, two programs); the baseline was trusted without a second look."""
+    run = {FIB: row(100), ("fib", "c", "O2"): row(50, code_bytes=80), ("fib", "ow", "O2"): row(9)}
+    assert bc.unstable_cells(run, dict(run)) == []
+    flipped = {**run, ("fib", "c", "O2"): row(50, code_bytes=82), ("fib", "ow", "O2"): row(10)}
+    assert bc.unstable_cells(run, flipped) == ["UNSTABLE fib c -O2: code_bytes 80 vs 82"], "the reference compilers do not move with ours and are left out"
+
+
+def test_a_base_measured_on_other_sources_than_the_heads_is_refused_and_rebased_with_the_overlay():
+    """The m16 list took main's counts from main's own tree: parity/qlight c read 15 clocks (constant-argument source) against 460 on the head's
+    source, and 'regression' went out. An edited program without base-compiler rows on the head's sources is refused; with them its rows replace the base's."""
+    base = {"q/c/O2": {"clocks": 15}, "s/c/O2": {"clocks": 7}}
+    was, now = {"q": "a", "s": "b"}, {"q": "z", "s": "b"}
+    with pytest.raises(SystemExit, match="q"):
+        bc.rebased(base, {}, was, now)
+    assert bc.rebased(base, {"q/c/O2": {"clocks": 460}}, was, now) == {"s/c/O2": {"clocks": 7}, "q/c/O2": {"clocks": 460}}
+    assert bc.rebased(base, {}, was, was) == base, "unchanged sources: the base stands, no overlay needed"

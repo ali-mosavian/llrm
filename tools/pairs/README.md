@@ -21,3 +21,5 @@ Pair measurements: two builds of the compiler, the same rows, objects and runs o
 A binary's md5 is not evidence that two builds are the same: embedded paths differ between worktrees. A claim that a change "cannot move" anything is made from the compared OBJECTS (`objsweep.py`); the md5 only proves that two arms are different binaries.
 
 Quote every figure with its tool (callgrind Ir, `perf stat -e instructions:u`, a rows counter) and the arms line of the report.
+
+A float-compare change needs a control that must differ on `tests/run/c/fcmp_all.c`: the corpus had an `fcmp` in 5 of 153 files, and a table that only swaps operands (one of `OGt`/`OLt` expanded) gives the same objects. Expand `OGt`, `OGe`, `OLt` and `OLe` together.

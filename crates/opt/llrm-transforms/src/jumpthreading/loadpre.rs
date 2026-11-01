@@ -293,7 +293,9 @@ impl State<'_, '_> {
     /// predecessor, or every instruction before it passes execution on.
     /// DEVIATE J15: the context instruction (`Pred->getTerminator()`) does not
     /// change `is_safe_to_speculatively_execute_in`'s answer, so it is not
-    /// passed.
+    /// passed. Reason: the pin uses it only for `llvm.assume` and the
+    /// dominator tree, which `speculatable` does not read. Exit: it takes a
+    /// context instruction when it reads assumptions.
     fn can_speculate_load(
         &self,
         load: InstId,

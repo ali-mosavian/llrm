@@ -86,6 +86,9 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -527,8 +530,24 @@ impl Tti for X86 {
         self.tuning.inline_threshold
     }
 
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_milliclocks_per_byte
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_partial_threshold
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.tuning.unswitch_threshold
+    }
+
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.recursive_inlining
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
@@ -543,6 +562,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
+    fn speed_inline_by_code_size(&self) -> bool {
+        self.tuning.inline_size_guard_at_speed
+    }
+
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
     /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
     /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
@@ -553,6 +576,18 @@ impl Tti for X86 {
 
     fn float_code_size_percent(&self) -> i64 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits))
     }
 
     fn is_type_legal(
@@ -936,6 +971,10 @@ impl Tti for X86 {
     }
 
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
     }
 

@@ -12,6 +12,7 @@ Route: parity = `llvm_order` (default; slots in `parity::REGISTRY`), legacy = `L
 | ports | 0.55 | early list of `applied`, no slot | none (x86 in/out narrowing to the port's memory; llvm has the intrinsic attrs) |
 | gepoffset | 0.30 | tail, no slot | none exact: LSR/CGP address-mode formation |
 | algebraic::Differences | 0.22 | strength slot after `lsr` | LSR's SimplifyInstructions cleanup (instsimplify) |
+| maskscale | n/a | strength slot after `differences` (real mode only) | none (DEVIATE LP-7: LSR has no masked scaled-counter formula) |
 | inferspace | 0.09 | slot inferspace@787; Old | infer-address-spaces (target pass: none on x86) |
 | fixednarrow | 0.05 | tail, no slot | none (SelectionDAG expands `smul.fix`) |
 | switchlower | 0.03 | tail, no slot | SelectionDAGBuilder switch lowering (isel), not a mid-end pass |

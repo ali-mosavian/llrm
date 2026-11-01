@@ -189,7 +189,10 @@ impl Builder<'_> {
         // MIR pass reads the same cost).
         let target = SwitchTarget {
             jump_tables: self.target.jump_tables,
+            min_jump_table_entries: self.target.min_jump_table_entries,
+            optimize: self.target.switch_optimize,
             opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),
+            min_size: self.has_min_size(),
             ..SwitchTarget::x86(self.target.dag.pointer.size_in_bits())
         };
         let plan = switchcg::plan_with(&cases, default.0, &target);
@@ -231,7 +234,7 @@ impl Builder<'_> {
             vec![WorkItem { block: start, first: 0, last: clusters.len() - 1, ge: None, lt: None, default_prob }];
         let mut clusters = clusters;
         while let Some(item) = work.pop() {
-            if item.last - item.first + 1 > 3 && self.target_optimizes() {
+            if item.last - item.first + 1 > 3 && self.target_optimizes() && !self.has_min_size() {
                 self.split_work_item(&mut work, &item, &clusters, cond)?;
                 continue;
             }
@@ -379,7 +382,7 @@ impl Builder<'_> {
     }
 
     pub(super) fn target_optimizes(&self) -> bool {
-        true
+        self.target.switch_optimize
     }
 
     /// `splitWorkItem`: a compare against the pivot, the halves new work.
@@ -482,15 +485,19 @@ impl Builder<'_> {
         }
         // Most probable first (all equal here, so by value), then a cluster
         // whose block is next moves last so it falls through.
-        clusters[item.first..=item.last].sort_by(|a, b| b.prob.cmp(&a.prob).then(a.low.cmp(&b.low)));
-        let last_prob = clusters[item.last].prob;
-        for at in (item.first..item.last).rev() {
-            if clusters[at].prob > last_prob {
-                break;
-            }
-            if clusters[at].kind == ClusterKind::Range && Some(BlockId(clusters[at].dest)) == next {
-                clusters.swap(at, item.last);
-                break;
+        // `getOptLevel() != None`: the order of the clusters stays as the case
+        // list has it at `-O0`.
+        if self.target_optimizes() {
+            clusters[item.first..=item.last].sort_by(|a, b| b.prob.cmp(&a.prob).then(a.low.cmp(&b.low)));
+            let last_prob = clusters[item.last].prob;
+            for at in (item.first..item.last).rev() {
+                if clusters[at].prob > last_prob {
+                    break;
+                }
+                if clusters[at].kind == ClusterKind::Range && Some(BlockId(clusters[at].dest)) == next {
+                    clusters.swap(at, item.last);
+                    break;
+                }
             }
         }
         let mut insert_at = item_pos + 1;

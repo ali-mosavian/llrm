@@ -532,7 +532,34 @@ pub fn holds_after(
         guarded.insert(RegId::from(addr.segment));
     }
     let guarded: Lanes = guarded.into_iter().flat_map(|one| _lanes(regs, one)).collect();
-    writes.is_disjoint(&guarded) && crate::backend::bodyfacts::_keeps(crossed, store, cell, true, cx.facts.body())
+    if !writes.is_disjoint(&guarded) {
+        return false;
+    }
+    // An SSE register has no lanes, so the check above sees none of its writes.
+    if what.dests.iter().any(|dest| {
+        matches!(
+            dest,
+            Loc::Reg(one) if ir::root(one.register) == ir::root(held.register)
+        )
+    }) {
+        return false;
+    }
+    // DEVIATE (pin: a spill slot is a FixedStack operand, alias-free against
+    // every other access; the pin's reload there is not kept either). Exit:
+    // pin-faithful spill placement leaves no such pair. ASSUMPTION: an access
+    // through an array index never reaches a spill slot unless the program is
+    // out of bounds (C: undefined; QB: bounds-checked). Inline asm and runtime
+    // frame accesses are volatile or clobbering here and stop the forwarding.
+    // A slot only the allocator's spills use is reached by no program pointer
+    // (nothing takes its address): a write through a register, a string
+    // instruction or a call cannot change it, only an access naming the slot.
+    if cell.addr.and_then(|addr| addr.slot_home()).is_some_and(|home| cx.facts.spill_homes().contains(&home)) {
+        return !crate::backend::bodyfacts::_written(crossed, cell).any(|dest| {
+            crate::backend::bodyfacts::_in_frame(dest)
+                && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
+        });
+    }
+    crate::backend::bodyfacts::_keeps(crossed, store, cell, true, cx.facts.body())
 }
 
 /// `load` may read its cell after `crossed`, which only materializes a

@@ -17,11 +17,11 @@ use llrm_codegen::hir::model;
 use super::compile::{_inline_frame, _near_procedures, _positional_data, CompileError};
 
 /// The names the host runtime links the module by.
-const EXPORTS: [(&str, &str); 2] = [("@__main", "@QB_MAIN"), ("@$qb$statementTable", "@QB_STATEMENTS")];
+pub(super) const EXPORTS: [(&str, &str); 2] = [("@__main", "@QB_MAIN"), ("@$qb$statementTable", "@QB_STATEMENTS")];
 
 /// `line` with the symbol `from` (a whole name, not the start of a longer one)
 /// written `to`.
-fn renamed(
+pub(super) fn renamed(
     line: &str,
     from: &str,
     to: &str,
@@ -44,7 +44,7 @@ fn renamed(
 /// argument narrower than 32 bits, and the clang-built runtime relies on it:
 /// `-1` passed as 0xFFFF reached `VIEW PRINT` as 65535, "Illegal function
 /// call". Linux's callee extends for itself.
-fn signext_i16_arguments(line: &str) -> String {
+pub(super) fn signext_i16_arguments(line: &str) -> String {
     let Some(name) = line.find("@B_") else { return line.to_owned() };
     let Some(open) = line[name..].find('(').map(|at| name + at) else { return line.to_owned() };
     let Some(close) = line[open..].find(')').map(|at| open + at) else { return line.to_owned() };
@@ -73,7 +73,9 @@ fn arm64_text(
             out.push_str(&format!("target datalayout = \"{}\"\n", platform.datalayout()));
             continue;
         }
-        let mut line = line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
+        let mut line =
+            line.replace(" cc 1000", "").replace(" \"llrm-fp-eval\"=\"x87-extended\"", "").replace(" frame_bound", "");
+        line = without_llrm_attributes(&line);
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = block_entry(&line);
         // a variadic call has no prototype to extend its arguments: on every
@@ -87,7 +89,7 @@ fn arm64_text(
         }
         // the module's other symbols are private to it, but for what the
         // runtime names
-        line = line.replace("@$", "@Q_").replace("i16 16)", "i64 16)");
+        line = line.replace("@$", "@Q_");
         if let Some(rest) = line.strip_prefix("define internal ").filter(|_| line.contains("@QB_MAIN")) {
             line = format!("define {rest}");
         }
@@ -114,13 +116,12 @@ fn arm64_text(
     out
 }
 
-/// The object of `program` for `platform`.
-pub fn object_bytes(
+/// The module through the shared mid-end, as MIR text, and the bytes of its
+/// READ/DATA rows.
+pub(super) fn host_module(
     program: &model::Program,
-    source: &Path,
     codegen: &Options,
-    platform: Platform,
-) -> Result<Vec<u8>, CompileError> {
+) -> Result<(String, Vec<u8>), CompileError> {
     let fail = |why: String| CompileError::Value(why);
     let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
     let program = _near_procedures(&laid_out, codegen.arch.layout().spaces.far_is_near());
@@ -137,7 +138,19 @@ pub fn object_bytes(
         read_data.push(0);
     }
     read_data.extend([0xff, 0xff, 0x01]);
-    let text = arm64_text(&llrm_mir::print::module(&mir.modules[0]), platform, &read_data);
+    Ok((llrm_mir::print::module(&mir.modules[0]), read_data))
+}
+
+/// The object of `program` for `platform`.
+pub fn object_bytes(
+    program: &model::Program,
+    source: &Path,
+    codegen: &Options,
+    platform: Platform,
+) -> Result<Vec<u8>, CompileError> {
+    let fail = |why: String| CompileError::Value(why);
+    let (mir, read_data) = host_module(program, codegen)?;
+    let text = arm64_text(&mir, platform, &read_data);
     if let Some(path) = std::env::var_os("LLRM_ARM64_TEXT") {
         std::fs::write(path, &text).map_err(|error| fail(error.to_string()))?;
     }
@@ -151,7 +164,7 @@ pub fn object_bytes(
 /// the function, which takes the branch to its pad. The function's allocas are
 /// handed to `qb_host_escape` so that no pass keeps them in registers, which
 /// the jump would restore stale.
-fn framed(text: &str) -> String {
+pub(super) fn framed(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut function: Vec<&str> = Vec::new();
     let mut inside = false;
@@ -171,7 +184,7 @@ fn framed(text: &str) -> String {
             out.push('\n');
         }
     }
-    if !text.contains("declare i16 @B_FERR()") {
+    if !text.lines().any(|line| line.starts_with("declare ") && line.contains("@B_FERR(")) {
         out.push_str("declare i16 @B_FERR()\n");
     }
     out.push_str(
@@ -227,13 +240,84 @@ fn framed_function(lines: &[&str]) -> String {
         out.push_str(&line);
         out.push('\n');
     }
+    without_unwinding(&out)
+}
+
+/// The attributes only llrm reads (its facts about a routine or a pointer),
+/// which the pinned LLVM's parser refuses; the optimizer has used them by the
+/// time the text is handed over.
+pub(super) fn without_llrm_attributes(line: &str) -> String {
+    const ONLY_LLRM: [&str; 6] = ["noretain", "releases", "threeway", "flagsresult", "stackcheck", "noipa"];
+    let mut line = line.to_owned();
+    for name in ONLY_LLRM {
+        let word = format!(" {name}");
+        let mut from = 0;
+        while let Some(at) = line[from..].find(&word).map(|at| at + from) {
+            let end = at + word.len();
+            if line[end..].starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | '$')) {
+                from = end;
+            } else {
+                line.replace_range(at..end, "");
+                from = at;
+            }
+        }
+    }
+    line
+}
+
+/// The function with no unwinding left in it: the pad is reached by the jump
+/// back, so an `invoke` is a `call` and a `br` to its normal block, and the
+/// pad's `landingpad` goes. The verifier of the pinned LLVM refuses a pad
+/// reached any other way ("Block containing LandingPadInst must be jumped to
+/// only by the unwind edge of an invoke").
+fn without_unwinding(function: &str) -> String {
+    let mut out = String::with_capacity(function.len());
+    let mut lines = function.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.contains(" = landingpad ") || line.trim_start().starts_with("landingpad ") {
+            // `catch ptr null` follows on a line of its own
+            while lines
+                .next_if(|next| next.trim_start().starts_with("catch ") || next.trim_start().starts_with("cleanup"))
+                .is_some()
+            {}
+            continue;
+        }
+        let Some(invoke) = line
+            .find("invoke ")
+            .filter(|at| line[..*at].trim_end().is_empty() || line[..*at].trim_end().ends_with('='))
+        else {
+            out.push_str(&line.replace(" personality ptr @llrm.qb.personality", ""));
+            out.push('\n');
+            continue;
+        };
+        let mut call = format!("{}call {}", &line[..invoke], &line[invoke + "invoke ".len()..]);
+        // the targets are on the line after the call, or at its end
+        let normal = match call.find(" to label %") {
+            Some(at) => {
+                let target = call[at..].to_owned();
+                call.truncate(at);
+                target
+            }
+            None => lines.next().unwrap_or_default().to_owned(),
+        };
+        let label = normal
+            .trim_start()
+            .strip_prefix("to label %")
+            .and_then(|rest| rest.split(' ').next())
+            .or_else(|| normal.split(" to label %").nth(1).and_then(|rest| rest.split(' ').next()));
+        out.push_str(&call);
+        out.push('\n');
+        if let Some(label) = label {
+            out.push_str(&format!("  br label %{label}\n"));
+        }
+    }
     out
 }
 
 /// A mid-end pass leaves a result number on a terminator or a store (`%54 = br
 /// label %b36`), which the x86 path never reads and MIR's reader refuses. Each
 /// such number is dropped and the numbers after it in the function close up.
-fn without_results_on_void(text: &str) -> String {
+pub(super) fn without_results_on_void(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut body: Vec<&str> = Vec::new();
     for line in text.lines() {
@@ -338,7 +422,7 @@ const BLOCK_ENTRIES: [(&str, &str); 7] = [
     ("B_CSCN", "i16"),
 ];
 
-fn block_entry(line: &str) -> String {
+pub(super) fn block_entry(line: &str) -> String {
     for (name, first) in BLOCK_ENTRIES {
         let symbol = format!("@{name}(");
         let Some(at) = line.find(&symbol) else { continue };
@@ -416,5 +500,16 @@ mod tests {
         let framed = framed(text);
         assert!(framed.contains("label %0, label %qb.body"), "{framed}");
         assert!(!framed.contains("%landing"), "{framed}");
+    }
+
+    /// A module that declares `B_FERR` with a calling convention got a second,
+    /// plain declaration of it appended ("@B_FERR is defined twice"): the
+    /// check was for one exact line.
+    #[test]
+    fn the_error_routine_is_declared_once_whatever_its_convention() {
+        let text = "declare cc 1000 i16 @B_FERR() nounwind\ndefine void @f() {\n  ret void\n}\n";
+        let framed = framed(text);
+        assert_eq!(framed.matches("@B_FERR()").count(), 1, "{framed}");
+        assert_eq!(super::framed("define void @f() {\n  ret void\n}\n").matches("declare i16 @B_FERR()").count(), 1);
     }
 }

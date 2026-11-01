@@ -193,6 +193,19 @@ fn test_a_tti_with_a_divrem_op_keeps_the_pair() {
     assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
 }
 
+/// x86 states its divide-remainder op on its own `Tti`, as the pin's
+/// `X86TTIImpl` does, and the pass keeps the pair through it alone. Before the
+/// exit the answer came from the `Lowering` and the `Tti` said no.
+#[test]
+fn test_x86_states_its_divrem_op_on_its_tti_and_pairs() {
+    use llrm_mir::target::Machine as _;
+    let x86 = llrm_x86_m16::Dos::default();
+    assert!(x86.tti().is_some_and(|tti| tti.has_div_rem_op(32, false)), "x86's Tti says yes");
+    let after = run(EXPANDED, true);
+    assert!(after.contains("urem i32 %a, %b"), "{after}");
+    assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
+}
+
 /// Sibling: a `Tti` that says nothing (the base class) leaves the expanded form
 /// as it was.
 #[test]

@@ -1,0 +1,739 @@
+//! An m68k machine function and `InstrEmitter`: the scheduled DAG's machine
+//! nodes as instructions on virtual registers.
+//!
+//! # How it works
+//! Each machine node becomes an instruction whose operands are its results
+//! that are defined (`MCInstrDesc::getNumDefs`) and then its value operands;
+//! a chain, glue or register-mask operand is dropped. `CopyToReg` and
+//! `CopyFromReg` become [`Kind::Copy`]. A value is a virtual register, a
+//! physical one (a `Register` node), an immediate, a frame index, a symbol or
+//! a block.
+//!
+//! A phi is the successor block's [`Phi`]: the register the phi reads, and per
+//! predecessor the register that block copied its value to.
+//!
+//! DEVIATE: spike-local, not `llrm-lir`'s function (its `RegId` is numbered by
+//! iced's x86 registers). No jump tables, switches or variadics. Reason: there
+//! is no neutral machine function yet (neutral-lir-need.md). Exit: the
+//! neutral-LIR task.
+//!
+//! # See also
+//! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
+
+use std::collections::HashMap;
+
+use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_dagisel::instr::OperandDesc;
+pub use llrm_spike_mf as mf;
+pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+
+use crate::dagisel::function::Selected;
+use crate::dagisel::generated::ids::reg as pin;
+use crate::dagisel::generated::instrinfo::flag;
+use crate::dagisel::local;
+
+/// The register class a virtual register is allocated from
+/// (`M68kRegisterInfo`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Class {
+    Dr8,
+    Dr16,
+    Dr32,
+    Ar32,
+    Xr32,
+}
+
+impl Class {
+    /// The pin's class id (`M68k::DR32RegClassID`) as a class.
+    fn of_pin(id: i16) -> Option<Class> {
+        let id = u16::try_from(id).ok()?;
+        Some(match id {
+            pin::DR8RegClassID => Class::Dr8,
+            pin::DR16RegClassID => Class::Dr16,
+            pin::DR32RegClassID => Class::Dr32,
+            pin::AR32RegClassID => Class::Ar32,
+            pin::XR32RegClassID | pin::XR16RegClassID => Class::Xr32,
+            _ => return None,
+        })
+    }
+
+    /// The class both `self` and `other` allow (`constrainRegClass`), if any.
+    pub fn meet(
+        self,
+        other: Class,
+    ) -> Option<Class> {
+        match (self, other) {
+            (one, two) if one == two => Some(one),
+            (Class::Xr32, one) | (one, Class::Xr32) => Some(one),
+            _ => None,
+        }
+    }
+
+    /// The class of a value of type `vt` that nothing constrains.
+    fn of_type(vt: EVT) -> Class {
+        match vt {
+            EVT::I8 | EVT::I1 => Class::Dr8,
+            EVT::I16 => Class::Dr16,
+            _ => Class::Xr32,
+        }
+    }
+}
+
+/// The machine function over m68k's classes.
+pub type MFunction = mf::MFunction<Class>;
+
+/// Whether the pin marks the instruction `name` `isCommutable`.
+pub fn pin_commutable(name: &str) -> bool {
+    local::code_of(name).and_then(local::desc).is_some_and(|desc| desc.has(flag::COMMUTABLE))
+}
+
+/// The class the pin's description of `name` gives operand `index`.
+pub fn operand_class(
+    name: &str,
+    index: usize,
+) -> Option<Class> {
+    let desc = local::desc(local::code_of(name)?)?;
+    Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, class))
+}
+
+/// DEVIATE from the pin, whose `MOVZXd32d16` and `MOVSXd32d16` define and read
+/// an `XR32` and so may be given an address register: `ExpandMOVSZX_RR` then
+/// does `move.w` into a cleared register (`movea.w`, which sign-extends) or
+/// `ext.l` on it (not encodable), and its `MOV16dd` encodes a source `%a0` as
+/// `%d0`. The result and the source of an extension are data registers, for the
+/// emitter and for the passes that widen a class (`widen_compare_operands` read
+/// the table's `XR32` as free).
+fn extension_result(
+    name: &str,
+    class: Class,
+) -> Class {
+    if (name.starts_with("MOVZX") || name.starts_with("MOVSX")) && class == Class::Xr32 { Class::Dr32 } else { class }
+}
+
+fn opcode_name(code: u32) -> Option<&'static str> {
+    local::name_of(code)
+}
+
+/// Whether a result type carries a value (not a chain, glue or flags register).
+fn is_value(vt: EVT) -> bool {
+    vt != EVT::OTHER && vt != EVT::GLUE
+}
+
+struct Emitter<'a> {
+    /// The block being emitted.
+    dag: &'a SelectionDAG,
+    function: MFunction,
+    /// The virtual register each defined result is in.
+    values: HashMap<(u32, u8), Reg>,
+    /// The builder's virtual registers, by number.
+    builder: HashMap<u32, Reg>,
+    /// The node whose condition codes are the ones in `CCR` now: the last
+    /// instruction emitted that sets them, none after a call.
+    flags_from: Option<u32>,
+    /// The nodes whose condition codes are read after something else set them
+    /// again, and cannot be run again (they have a result besides the
+    /// codes, or touch memory): the codes are copied to a register right
+    /// after them (`InsertCopiesAndMoveSuccs`).
+    save: std::collections::HashSet<u32>,
+    /// The register the codes of a node in `save` were copied to.
+    saved: HashMap<u32, Reg>,
+}
+
+impl Emitter<'_> {
+    fn new_reg(
+        &mut self,
+        class: Class,
+    ) -> Reg {
+        self.function.classes.push(class);
+        Reg::Virt(self.function.classes.len() as u32 - 1)
+    }
+
+    fn register(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Reg> {
+        match self.dag.node(node).data {
+            NodeData::PhysReg(id) => Some(Reg::Phys(id)),
+            NodeData::Register(number) => {
+                let class = Class::of_type(self.dag.value_type(node));
+                let made = self.builder.get(&number).copied();
+                Some(made.unwrap_or_else(|| {
+                    let made = self.new_reg(class);
+                    self.builder.insert(number, made);
+                    made
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    /// `InstrEmitter`'s `AddRegisterOperand`: a register an instruction reads
+    /// must be in the class the operand names. Where the register's class
+    /// cannot be narrowed to it (`constrainRegClass` fails), the value is
+    /// copied into a new register of that class, and that is the operand.
+    fn constrain(
+        &mut self,
+        name: &str,
+        operand: Operand,
+        wanted: Option<&OperandDesc>,
+        into: &mut Vec<Inst>,
+    ) -> Operand {
+        let (Operand::Use(Reg::Virt(v)), Some(wanted)) = (&operand, wanted) else { return operand };
+        let Some(class) = Class::of_pin(wanted.reg_class).map(|class| extension_result(name, class)) else {
+            return operand;
+        };
+        let have = self.function.classes[*v as usize];
+        match have.meet(class) {
+            Some(narrowed) => {
+                self.function.classes[*v as usize] = narrowed;
+                operand
+            }
+            None => {
+                let copy = self.new_reg(class);
+                into.push(Inst::copy(copy, Reg::Virt(*v)));
+                Operand::Use(copy)
+            }
+        }
+    }
+
+    fn operand(
+        &mut self,
+        value: SDValue,
+    ) -> Result<Option<Operand>, String> {
+        let vt = self.dag.value_type(value);
+        if !is_value(vt) && !matches!(self.dag.opcode(value), ISD::BasicBlock) {
+            return Ok(None);
+        }
+        let node = self.dag.node(value);
+        Ok(Some(match (node.opcode, node.data) {
+            (ISD::RegisterMask, _) => return Ok(None),
+            (ISD::Register, _) => Operand::Use(self.register(value).ok_or("a register node with no register")?),
+            (ISD::Constant | ISD::TargetConstant, NodeData::Const { bits, .. }) => {
+                let width = vt.size_in_bits().clamp(1, 64);
+                let shift = 64 - width;
+                Operand::Imm(((bits as u64) << shift) as i64 >> shift)
+            }
+            (ISD::FrameIndex | ISD::TargetFrameIndex, NodeData::FrameIndex(index)) => Operand::Frame(index),
+            (ISD::TargetGlobalAddress | ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+                let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
+                Operand::Symbol(name.clone(), offset)
+            }
+            (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+                let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
+                Operand::Symbol(name.clone(), 0)
+            }
+            (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
+            _ => match self.values.get(&(value.node, value.res)) {
+                Some(reg) => Operand::Use(*reg),
+                None => return Err(format!("operand {:?} before its definition", node.opcode)),
+            },
+        }))
+    }
+
+    /// `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP x)))` as `x & 0xFFFF0000`
+    /// (see [`Emitter::emit`]).
+    fn subreg_to_reg(
+        &mut self,
+        node: u32,
+        into: &mut Vec<Inst>,
+    ) -> Result<(), String> {
+        let name_of = |emitter: &Self, value: SDValue| match emitter.dag.opcode(value) {
+            ISD::Machine(code) => opcode_name(code),
+            _ => None,
+        };
+        let n = self.dag.node(SDValue { node, res: 0 });
+        let unsupported = || "SUBREG_TO_REG of anything but a cleared low word".to_owned();
+        let clear = n.ops.iter().copied().find(|op| name_of(self, *op) == Some("CLR16dd")).ok_or_else(unsupported)?;
+        let extract = *self.dag.node(clear).ops.first().ok_or_else(unsupported)?;
+        let swap = *self.dag.node(extract).ops.first().ok_or_else(unsupported)?;
+        if name_of(self, extract) != Some("EXTRACT_SUBREG") || name_of(self, swap) != Some("SWAP") {
+            return Err(unsupported());
+        }
+        let swapped = *self.values.get(&(swap.node, swap.res)).ok_or("SUBREG_TO_REG of a swap not emitted yet")?;
+        // the clear and the extract were emitted on the way here: drop them
+        let dead: Vec<Reg> =
+            [clear, extract].iter().filter_map(|v| self.values.get(&(v.node, v.res)).copied()).collect();
+        into.retain(|inst| {
+            !matches!(
+                inst.operands.first(),
+                Some(Operand::Def(reg)) if dead.contains(reg)
+            )
+        });
+        // one definition of the result: a register defined twice (the copy,
+        // then the mask) is not what `machine_sink` expects, and it
+        // sank the mask out of a loop
+        let dst = self.new_reg(Class::Dr32);
+        self.values.insert((node, 0), dst);
+        let mut mask =
+            Inst::new(Kind::Op("AND32di"), vec![Operand::Def(dst), Operand::Use(swapped), Operand::Imm(-65536)]);
+        mask.sets_flags = true;
+        mask.ties = vec![(0, 1)];
+        into.push(mask);
+        Ok(())
+    }
+
+    /// The nodes of the block (in the order they will be emitted) whose
+    /// condition codes a `CopyToReg` to `CCR` reads after another node set
+    /// them: the walk of `emit`'s `flags_from`.
+    fn nodes_to_save(
+        &self,
+        block: &Selected,
+    ) -> std::collections::HashSet<u32> {
+        let mut flags_from: Option<u32> = None;
+        let mut save = std::collections::HashSet::new();
+        for unit in &block.units {
+            for &node in unit.nodes.iter().rev() {
+                let value = SDValue { node, res: 0 };
+                match self.dag.opcode(value) {
+                    ISD::Machine(code) => {
+                        let Some(desc) = local::desc(code as u16) else { continue };
+                        let sets = desc.implicit_defs.contains(&pin::CCR);
+                        if sets || desc.has(flag::CALL) {
+                            flags_from = (sets && !desc.has(flag::CALL)).then_some(node);
+                        }
+                    }
+                    ISD::CopyToReg => {
+                        let n = self.dag.node(value);
+                        let to_ccr = matches!(
+                            self.dag.node(n.ops[1]).data,
+                            NodeData::PhysReg(id) if id == crate::reg::CCR
+                        );
+                        let source = n.ops[2];
+                        if to_ccr && matches!(self.dag.opcode(source), ISD::Machine(_)) {
+                            if flags_from != Some(source.node) && self.dag.node(source).values.len() != 1 {
+                                save.insert(source.node);
+                            }
+                            flags_from = Some(source.node);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        save
+    }
+
+    fn emit(
+        &mut self,
+        node: u32,
+        into: &mut Vec<Inst>,
+    ) -> Result<(), String> {
+        let value = SDValue { node, res: 0 };
+        let n = self.dag.node(value);
+        match n.opcode {
+            ISD::CopyToReg => {
+                let dst = self.register(n.ops[1]).ok_or("CopyToReg of no register")?;
+                // a result the instruction defines implicitly (the condition
+                // codes of a compare) is already in that register
+                let source = n.ops[2];
+                if matches!(dst, Reg::Phys(_))
+                    && matches!(self.dag.opcode(source), ISD::Machine(_))
+                    && !self.values.contains_key(&(source.node, source.res))
+                {
+                    // Several readers of one compare's codes (two selects on
+                    // one condition) are separate `CopyToReg`s of it. Where
+                    // something between has set the codes again, as a call
+                    // does, the compare runs again for this reader, as the
+                    // pin's scheduler clones it.
+                    if self.flags_from != Some(source.node) {
+                        if let Some(&kept) = self.saved.get(&source.node) {
+                            let mut restore =
+                                Inst::new(Kind::Op("CCR_RESTORE"), vec![Operand::Def(dst), Operand::Use(kept)]);
+                            restore.sets_flags = true;
+                            into.push(restore);
+                            self.flags_from = Some(source.node);
+                            return Ok(());
+                        }
+                        if self.dag.node(source).values.len() != 1 {
+                            return Err("the condition codes of an arithmetic result are read past an instruction \
+                                        that sets them"
+                                .to_owned());
+                        }
+                        self.emit(source.node, into)?;
+                    }
+                    return Ok(());
+                }
+                let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
+                    return Err("CopyToReg of a value that is no register".to_owned());
+                };
+                into.push(Inst::copy(dst, src));
+            }
+            ISD::CopyFromReg => {
+                let src = self.register(n.ops[1]).ok_or("CopyFromReg of no register")?;
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
+                into.push(Inst::copy(dst, src));
+            }
+            // `TargetOpcode::COPY` (20), which has no name in the pin's
+            // instruction table: the value in a register of its own
+            ISD::Machine(20) => {
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
+                let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                    return Err("COPY of a value that is no register".to_owned());
+                };
+                into.push(Inst::copy(dst, src));
+            }
+            ISD::Machine(code) => {
+                let name = opcode_name(code).ok_or_else(|| {
+                    let ops: Vec<String> = n
+                        .ops
+                        .iter()
+                        .map(|op| format!("{:?}:{:?}", self.dag.opcode(*op), self.dag.value_type(*op)))
+                        .collect();
+                    format!("a machine node with no name: {code}, values {:?}, operands {ops:?}", n.values)
+                })?;
+                // `EXTRACT_SUBREG`: the low byte or word of a register is the
+                // register narrowed, which the narrower class's view names
+                if name == "EXTRACT_SUBREG" {
+                    let dst = self.new_reg(Class::of_type(n.values[0]));
+                    self.values.insert((node, 0), dst);
+                    let Some(Operand::Use(src)) = self.operand(n.ops[0])? else {
+                        return Err("EXTRACT_SUBREG of a value that is no register".to_owned());
+                    };
+                    into.push(Inst::copy(dst, src));
+                    return Ok(());
+                }
+                // `SUBREG_TO_REG (CLR16dd (EXTRACT_SUBREG (SWAP x))))`, the
+                // pin's `shl x, 16`: the word swapped up with
+                // the low word cleared. Partial writes of one register are the
+                // pin's coalescer's (sub-register lanes), not
+                // this allocator's: it is `x & 0xFFFF0000` of the
+                // swapped register, and the dead clear and extract are dropped.
+                if name == "SUBREG_TO_REG" {
+                    return self.subreg_to_reg(node, into);
+                }
+                let desc = local::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
+                let mut operands = Vec::new();
+                for (at, vt) in n.values.iter().enumerate().take(usize::from(desc.num_defs)) {
+                    let class = desc
+                        .operands
+                        .get(at)
+                        .and_then(|one| Class::of_pin(one.reg_class))
+                        .unwrap_or_else(|| Class::of_type(*vt));
+                    let class = extension_result(name, class);
+                    let reg = self.new_reg(class);
+                    self.values.insert((node, at as u8), reg);
+                    operands.push(Operand::Def(reg));
+                }
+                for op in n.ops.clone() {
+                    if let Some(operand) = self.operand(op)? {
+                        let operand = self.constrain(name, operand, desc.operands.get(operands.len()), into);
+                        operands.push(operand);
+                    }
+                }
+                let ties = desc
+                    .operands
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, one)| one.tied_to >= 0)
+                    .map(|(at, one)| (one.tied_to as usize, at))
+                    .collect();
+                let ccr = pin::CCR;
+                let sets_flags = desc.implicit_defs.contains(&ccr);
+                if sets_flags || desc.has(flag::CALL) {
+                    self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
+                }
+                into.push(Inst {
+                    call: desc.has(flag::CALL),
+                    ties,
+                    terminator: desc.has(flag::TERMINATOR),
+                    barrier: desc.has(flag::BARRIER),
+                    sets_flags,
+                    reads_flags: desc.implicit_uses.contains(&ccr),
+                    may_load: desc.has(flag::MAY_LOAD),
+                    may_store: desc.has(flag::MAY_STORE),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
+                    commutable: desc.has(flag::COMMUTABLE),
+                    rematerializable: desc.has(flag::REMATERIALIZABLE),
+                    ..Inst::new(Kind::Op(name), operands)
+                });
+                if self.save.contains(&node) {
+                    let kept = self.new_reg(Class::Dr16);
+                    // not a `Copy`: the allocator takes a copy for the same
+                    // value as its source, and the codes of
+                    // two compares are not one value
+                    let mut save = Inst::new(
+                        Kind::Op("CCR_SAVE"),
+                        vec![Operand::Def(kept), Operand::Use(Reg::Phys(crate::reg::CCR))],
+                    );
+                    save.reads_flags = true;
+                    into.push(save);
+                    self.saved.insert(node, kept);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// `InstrEmitter` for one function's blocks.
+pub fn emit(
+    name: &str,
+    blocks: &[Selected],
+) -> Result<MFunction, String> {
+    let first = blocks.first().ok_or("a function with no block")?;
+    let mut emitter = Emitter {
+        dag: &first.dag,
+        function: MFunction::new(name),
+        values: HashMap::new(),
+        builder: HashMap::new(),
+        flags_from: None,
+        save: Default::default(),
+        saved: HashMap::new(),
+    };
+    emitter.function.locals.extend(first.locals.iter().copied());
+    for one in blocks {
+        emitter.dag = &one.dag;
+        emitter.values.clear();
+        emitter.flags_from = None;
+        emitter.saved.clear();
+        emitter.save = emitter.nodes_to_save(one);
+        let mut insts = Vec::new();
+        // A unit lists its glued nodes last first.
+        for unit in &one.units {
+            for &node in unit.nodes.iter().rev() {
+                emitter.emit(node, &mut insts)?;
+            }
+        }
+        emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+    }
+    // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
+    // the block the phi is in.
+    for (pred, one) in blocks.iter().enumerate() {
+        for update in &one.phis {
+            let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
+            // a value the block never names (a phi read only by other blocks'
+            // phis) has no register yet: it is a register of the phi's width
+            let class = match update.bits {
+                1 | 8 => Class::Dr8,
+                16 => Class::Dr16,
+                _ => Class::Xr32,
+            };
+            let register = |emitter: &mut Emitter, number: u32| match emitter.builder.get(&number) {
+                Some(&reg) => reg,
+                None => {
+                    let made = emitter.new_reg(class);
+                    emitter.builder.insert(number, made);
+                    made
+                }
+            };
+            let result = register(&mut emitter, update.result);
+            let incoming = register(&mut emitter, update.incoming);
+            let phis = &mut emitter.function.blocks[at].phis;
+            match phis.iter_mut().find(|phi| phi.result == result) {
+                Some(phi) => phi.incoming.push((pred, incoming)),
+                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            }
+        }
+    }
+    Ok(emitter.function)
+}
+
+/// The conditional branch for an `M68k::CondCode`.
+fn branch_for(cond: i64) -> Option<&'static str> {
+    Some(match cond {
+        2 => "Bhi8",
+        3 => "Bls8",
+        4 => "Bcc8",
+        5 => "Bcs8",
+        6 => "Bne8",
+        7 => "Beq8",
+        8 => "Bvc8",
+        9 => "Bvs8",
+        10 => "Bpl8",
+        11 => "Bmi8",
+        12 => "Bge8",
+        13 => "Blt8",
+        14 => "Bgt8",
+        15 => "Ble8",
+        _ => return None,
+    })
+}
+
+fn is_cmov(inst: &Inst) -> bool {
+    matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV"))
+}
+
+/// A `CMOV`'s result, false value, true value and condition.
+fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
+    let [Operand::Def(result), Operand::Use(on_false), Operand::Use(on_true), Operand::Imm(cond)] = inst.operands[..]
+    else {
+        return Err("a CMOV with unexpected operands".to_owned());
+    };
+    // the node's operands are the false value, then the true one (X86's order)
+    Ok((result, on_false, on_true, cond))
+}
+
+/// The condition codes the compare set reach the join only through an arm
+/// whose phi copies are `move`s, which set them; so what reads them past the
+/// diamond must read them before the branch, or after they are restored. The
+/// instructions of `tail` that read the flags before anything sets them again
+/// and are not the block's terminator, by position: each is movable above the
+/// run when it uses nothing the instructions before it define. A terminator
+/// that reads them, or a reader that uses a value the run defines, stays where
+/// it is; [`expand_cmov`] restores the codes before the first such reader.
+///
+/// DEVIATE from the pin, whose scheduler orders a second reader of one compare
+/// before the pseudo (glue) and whose arms are empty. Exit: never; this
+/// expansion is ours.
+fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
+    let mut readers = Vec::new();
+    for (at, inst) in tail.iter().enumerate() {
+        // another select on the codes is a diamond of its own, with the codes
+        // restored
+        if is_cmov(inst) {
+            continue;
+        }
+        if inst.reads_flags {
+            if inst.terminator {
+                break;
+            }
+            let defined_before: Vec<&Operand> = tail[..at]
+                .iter()
+                .flat_map(|before| before.operands.iter())
+                .filter(|o| matches!(o, Operand::Def(_)))
+                .collect();
+            let blocked = inst
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Use(reg) => defined_before.contains(&&Operand::Def(*reg)),
+                        _ => false,
+                    },
+                );
+            if !blocked {
+                readers.push(at);
+            }
+        }
+        if inst.sets_flags {
+            break;
+        }
+    }
+    readers
+}
+
+/// `M68kTargetLowering::EmitLoweredSelect`: a run of `CMOV` pseudos on one
+/// condition (or its opposite) becomes one diamond. The block branches to a
+/// new block on the condition; the new block that falls through is empty; the
+/// join holds a phi per `CMOV` and what followed the run. A phi may not read an
+/// earlier phi of the join, so a later `CMOV`'s operand that is an earlier
+/// result is renamed to the value that result has on each path.
+///
+/// DEVIATE: the cascaded case (`CMOV (CMOV F, T, c1), T, c2`) is not
+/// translated. Reason: nothing selected it yet. Exit: when a kernel needs it.
+pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
+    let mut next_id = function.blocks.iter().map(|block| block.id + 1).max().unwrap_or(0);
+    let mut at = 0;
+    while at < function.blocks.len() {
+        let Some(p) = function.blocks[at].insts.iter().position(is_cmov) else {
+            at += 1;
+            continue;
+        };
+        let mut tail = function.blocks[at].insts.split_off(p);
+        let (_, _, _, first) = cmov_parts(&tail[0])?;
+        let same =
+            |inst: &Inst| is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1);
+        // The run may hold copies between the `CMOV`s. A copy of a `CMOV`'s
+        // result (the export of a phi input) moves to the join, where its
+        // source is; a copy of a value from before the run moves to the head,
+        // where a later `CMOV` may read it.
+        let mut cmovs: Vec<Inst> = Vec::new();
+        let mut copies: Vec<Inst> = Vec::new();
+        let mut hoisted: Vec<Inst> = Vec::new();
+        let mut taken = 0;
+        for inst in &tail {
+            let copied = |reg: &Reg| copies.iter().any(|copy| copy.operands[0] == Operand::Def(*reg));
+            let uses_copied =
+                |inst: &Inst| inst.operands.iter().any(|operand| matches!(operand, Operand::Use(reg) if copied(reg)));
+            let from_run = |inst: &Inst| {
+                matches!(
+                    &inst.operands[1],
+                    Operand::Use(source) if copied(source) || cmovs.iter().any(|cmov| cmov.operands[0] == Operand::Def(*source))
+                )
+            };
+            if same(inst) && !uses_copied(inst) {
+                cmovs.push(inst.clone());
+            } else if inst.kind == Kind::Copy && from_run(inst) {
+                copies.push(inst.clone());
+            } else if inst.kind == Kind::Copy {
+                hoisted.push(inst.clone());
+            } else {
+                break;
+            }
+            taken += 1;
+        }
+        tail.drain(..taken);
+        tail.splice(0..0, copies);
+        let readers = flag_readers_to_hoist(&tail);
+        hoisted.extend(readers.iter().map(|&one| tail[one].clone()));
+        for &one in readers.iter().rev() {
+            tail.remove(one);
+        }
+        let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
+        // A reader of the codes that stays past the join (a select on another
+        // condition of the same codes, a branch, a reader of a value the run
+        // defines) sees them set again by the arms' copies: the head keeps
+        // them and the join restores them before the first such reader.
+        // DEVIATE from the pin, which orders the readers before the pseudo.
+        if let Some(second) =
+            tail.iter().take_while(|inst| !inst.sets_flags).position(|inst| is_cmov(inst) || inst.reads_flags)
+        {
+            function.classes.push(Class::Dr16);
+            let kept = Reg::Virt(function.classes.len() as u32 - 1);
+            let mut save =
+                Inst::new(Kind::Op("CCR_SAVE"), vec![Operand::Def(kept), Operand::Use(Reg::Phys(crate::reg::CCR))]);
+            save.reads_flags = true;
+            hoisted.push(save);
+            let mut restore =
+                Inst::new(Kind::Op("CCR_RESTORE"), vec![Operand::Def(Reg::Phys(crate::reg::CCR)), Operand::Use(kept)]);
+            restore.sets_flags = true;
+            tail.insert(second, restore);
+        }
+        let mut head_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut other_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut phis = Vec::new();
+        for cmov in &cmovs {
+            let (result, on_false, on_true, cond) = cmov_parts(cmov)?;
+            let (when_true, when_false) = if cond == first { (on_true, on_false) } else { (on_false, on_true) };
+            let on_head = head_value.get(&when_true).copied().unwrap_or(when_true);
+            let on_other = other_value.get(&when_false).copied().unwrap_or(when_false);
+            head_value.insert(result, on_head);
+            other_value.insert(result, on_other);
+            phis.push(Phi { result, incoming: vec![(at, on_head), (at + 1, on_other)] });
+        }
+        let (otherwise, join) = (next_id, next_id + 1);
+        next_id += 2;
+        let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join)]);
+        jump.terminator = true;
+        jump.reads_flags = true;
+        function.blocks[at].insts.extend(hoisted);
+        function.blocks[at].insts.push(jump);
+        function.blocks.insert(at + 1, Block { id: otherwise, insts: Vec::new(), phis: Vec::new() });
+        function.blocks.insert(at + 2, Block { id: join, insts: tail, phis });
+        // the join is where control leaves the original block: other phis name
+        // it, and every block after the original moved down by two
+        for (index, block) in function.blocks.iter_mut().enumerate() {
+            if index == at + 2 {
+                continue;
+            }
+            for phi in &mut block.phis {
+                for (pred, _) in &mut phi.incoming {
+                    if *pred == at {
+                        *pred = at + 2;
+                    } else if *pred > at {
+                        *pred += 2;
+                    }
+                }
+            }
+        }
+        at += 1;
+    }
+    Ok(())
+}

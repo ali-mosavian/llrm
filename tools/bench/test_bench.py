@@ -332,6 +332,13 @@ class StartupTests(unittest.TestCase):
         have = {one.language for one in bench.variants(bench.STARTUP)}
         self.assertEqual(have, {"bas", "bq16", "bq32", "c", "nib"})
 
+@pytest.fixture(autouse=True)
+def no_waivers(monkeypatch):
+    """The repo's own waivers (tools/bench/waivers) are not these tests' fixtures: every exception whose row the one-row base lacks is stale, so the
+    gate failed ("FAIL EXCEPTION ... delete it") on 10 tests the day an exception file landed."""
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
+
+
 
 def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
     """BASIC on our runtime (bq16: llrm runtime, real mode, jwlink) runs beside the Microsoft-runtime `bas` and needs no QB45."""
@@ -949,8 +956,9 @@ def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
 def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
     """branch, loop, qlight and qmove took literal arguments: the optimiser returned the constant (0 to 2 instructions, a 0.03x "gain" at m16 -Os and
     six "region never entered" rows). Their C inputs are volatile reads and their BASIC inputs READ from DATA, so every build runs the body."""
-    for name in ("branch", "loop", "qlight", "qmove"):
-        assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
+    for name in ("branch", "loop", "qlight", "qmove", "control"):  # control: bas/bq16 -Os ran 0 kernel instructions on the tip
+        if name != "control":  # its C passes the inputs through pointers to statics, which the kernel reads
+            assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
         assert re.search(r"^read ", (bench.BENCH / "parity" / name / f"{name}.bas").read_text(), re.M)
 
 
@@ -1036,3 +1044,24 @@ def test_the_first_stage_line_says_how_many_programs_and_how_many_cores(monkeypa
     monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
     bench.main()
     assert f"measuring 2 benchmarks at O2 Os, {len(os.sched_getaffinity(0))} usable of {os.cpu_count()} cores" in capsys.readouterr().err
+
+
+def test_compare_baselines_refuses_two_runs_that_differ_and_names_the_cells(tmp_path, capsys):
+    """A baseline that a second run does not reproduce (main's qlight c: 78 instructions in one run, 2 in another) must stop the comparison."""
+    one, two = tmp_path / "one.json", tmp_path / "two.json"
+    one.write_text(json.dumps({"q/c/Os": {"instructions": 78, "code_bytes": 154}, "q/nib/Os": {"instructions": 9}}))
+    two.write_text(json.dumps({"q/c/Os": {"instructions": 2, "code_bytes": 63}, "q/nib/Os": {"instructions": 9}}))
+    assert bench.compare_baselines(one, two) == 1
+    assert "UNSTABLE q c -Os: code_bytes 154 vs 63, instructions 78 vs 2" in capsys.readouterr().out
+    assert bench.compare_baselines(one, one) == 0
+
+
+def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_it():
+    """With a size-guard candidate parity/control bas and bq16 read 0 instructions (the kernel inlined into the harness) and passed the gate as
+    -100%. A kernel that executes nothing measures nothing; a base that also folded it is not accused."""
+    import bench
+
+    out = bench.against("control bas -Os", {"instructions": 0, "code_bytes": 100}, {"instructions": 156, "code_bytes": 246})
+    assert len(out) == 1 and "INVALID" in out[0], out
+    assert bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0}) == []
+    assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []

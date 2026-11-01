@@ -328,3 +328,55 @@ fn statements_with_a_block_of_words_run_on_arm64() {
     assert_eq!(rows.first().map(|row| row.trim_end()), Some("    AB"), "{screen}");
     assert_eq!(rows[1..].iter().flat_map(|row| row.split_whitespace()).collect::<Vec<_>>(), ["7", "done"], "{screen}");
 }
+
+/// The hand-over text of a program with an error handler reached its landing
+/// pad by a branch after `_setjmp`, and kept `landingpad` and `invoke`: the
+/// pinned LLVM's verifier refused it ("Block containing LandingPadInst must be
+/// jumped to only by the unwind edge of an invoke"; GORILLA.BAS: 647 invokes,
+/// 21 landing pads), so the text could not be diffed against the pin.
+#[test]
+fn the_hand_over_of_a_handled_program_passes_the_pins_verifier() {
+    let dir = std::env::temp_dir().join(format!("handover_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let small = dir.join("h.bas");
+    std::fs::write(
+        &small,
+        b"DECLARE SUB s ()\r\nON ERROR GOTO h\r\ns\r\nPRINT \"back\"\r\nEND\r\nh:\r\nPRINT \"mod\"; ERR\r\nRESUME NEXT\r\nSUB s\r\nERROR 7\r\nPRINT \"in s\"\r\nEND SUB\r\n",
+    )
+    .unwrap();
+    let gorillas = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/basic/gorillas.bas");
+    for bas in [small, gorillas] {
+        let text_path = dir.join("h.ll");
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .args(["--arm64=linux", "-O2"])
+            .arg(&bas)
+            .arg("-o")
+            .arg(dir.join("h.o"))
+            .env("LLRM_ARM64_TEXT", &text_path)
+            .output()
+            .expect("llrm-qb runs");
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = std::fs::read_to_string(&text_path).unwrap();
+        assert!(!text.contains("landingpad") && !text.contains("invoke "), "{}", bas.display());
+        let clang = std::env::var_os("LLRM_PIN_CLANG").expect("LLRM_PIN_CLANG names the pinned clang");
+        let opt = std::path::Path::new(&clang).with_file_name("opt");
+        let verified = Command::new(&opt)
+            .args(["-passes=verify", "-disable-output"])
+            .arg(&text_path)
+            .output()
+            .unwrap_or_else(|error| panic!("{}: {error}", opt.display()));
+        assert!(verified.status.success(), "{}: {}", bas.display(), String::from_utf8_lossy(&verified.stderr));
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// CLEAR called B$SCLR, which no flat runtime defined (clear_variables).
+#[test]
+fn clear_zeroes_the_module_variables_on_arm64() {
+    let mut source = std::fs::read(root().join("tests/run/qb/clear_variables.bas")).unwrap();
+    source.extend_from_slice(b"\r\nEND\r\n");
+    let screen = run_basic("clear_variables", &source);
+    let want = std::fs::read_to_string(root().join("tests/run/qb/clear_variables.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&screen), trimmed(&want));
+}

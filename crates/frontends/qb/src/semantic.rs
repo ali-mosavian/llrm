@@ -4,10 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 mod absolute;
+mod allocation;
 mod assignment;
 mod bounds;
 mod debug;
+mod exclusive;
 mod format_spec;
+mod invariance;
 mod merging;
 mod shapes;
 mod tags;
@@ -286,9 +289,21 @@ struct Function {
     // Each element pointer into a far array: the place of the descriptor
     // owning the allocation it stays inside.
     allocations: BTreeMap<u32, u32>,
+    // Each element pointer of any array, whichever descriptor it came from.
+    elements: BTreeSet<u32>,
+    // Each descriptor-word load nothing rewrites: `!invariant.load`.
+    invariant: BTreeSet<u32>,
+    // Reference parameters (by index) nothing else reaches: `noalias`.
+    no_alias: BTreeSet<usize>,
+    // Back-edge blocks of loops that reach no far
+    // allocation: `NoFarAllocation`.
+    quiet_loops: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
+    // The POKE pointers among them whose segment is a literal: memory no
+    // variable of the program lives in (`Region::Absolute`).
+    unowned: BTreeSet<u32>,
 }
 
 struct Compiler {
@@ -365,6 +380,12 @@ struct Compiler {
     implicit_storage: &'static str,
     next_data: u32,
     next_module_data: u32,
+    /// CLEAR on a flat target: the data object listing every module variable
+    /// (`clear_row`), once a CLEAR is seen.
+    clear_table: Option<u32>,
+    /// CLEAR in a procedure: the object whose header says it is not the main
+    /// module.
+    clear_procedure: Option<u32>,
     def_segment_symbol: Option<u32>,
     def_segment_base_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
@@ -542,6 +563,9 @@ pub struct Options {
     /// one as wide as the near one is the same space: a flat target.
     pub near_bytes: usize,
     pub far_bytes: usize,
+    /// `x ^ y` that squaring does not reach is a call to the runtime's `pow`
+    /// (`B$LPOW`): the target has no extended float to run the x87 sequence on.
+    pub pow_libcall: bool,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
@@ -613,6 +637,9 @@ pub fn compile_debugged(
         merging::applied(&mut compiler);
     }
     shapes::applied(&mut compiler);
+    invariance::applied(&mut compiler);
+    exclusive::applied(&mut compiler);
+    allocation::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -1801,6 +1828,8 @@ impl Compiler {
             // compiler-data sequence: BC's GORILLA$D<n> labels retain their
             // measured ordinals while globals use BASIC's typed spelling.
             next_module_data: 1_000_000,
+            clear_table: None,
+            clear_procedure: None,
             def_segment_symbol: None,
             def_segment_base_symbol: None,
             far_string_segment_symbol: None,
@@ -1937,7 +1966,12 @@ impl Compiler {
             promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            elements: BTreeSet::new(),
+            invariant: BTreeSet::new(),
+            no_alias: BTreeSet::new(),
+            quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
+            unowned: BTreeSet::new(),
         });
     }
 
@@ -3233,7 +3267,84 @@ impl Compiler {
             address: "near",
             common: self.declaring_common,
         });
+        if let Some(table) = self.clear_table {
+            self.clear_row(table, symbol, extent);
+        }
         symbol
+    }
+
+    /// One row of the CLEAR table: the address of module variable `symbol` and
+    /// its bytes. The table is a count after a main-module flag, then the
+    /// rows, each two words of the target's.
+    fn clear_row(
+        &mut self,
+        table: u32,
+        symbol: u32,
+        extent: usize,
+    ) {
+        let word = self.options.near();
+        let index = self.data.iter().position(|object| object.id == table).expect("the CLEAR table exists");
+        let object = &mut self.data[index];
+        let at = object.bytes.len();
+        object.bytes.resize(at + 2 * word, 0);
+        object.bytes[at + word..at + 2 * word].copy_from_slice(&(extent as u64).to_le_bytes()[..word]);
+        object.relocations.push(DataRelocation { at, target: symbol, addend: 0, address: "near" });
+        let count = (at - 2 * word) / (2 * word) + 1;
+        object.bytes[word..2 * word].copy_from_slice(&(count as u64).to_le_bytes()[..word]);
+    }
+
+    /// The address of the CLEAR table of the main module (one with the module
+    /// variables so far and those declared after), or of the object that
+    /// says a procedure CLEARs.
+    fn clear_table_address(&mut self) -> u32 {
+        let main = self.implicit_storage == "module";
+        let existing = if main { self.clear_table } else { self.clear_procedure };
+        let symbol = existing.unwrap_or_else(|| {
+            let word = self.options.near();
+            let symbol = self.next_data;
+            self.next_data += 1;
+            let mut bytes = vec![0; 2 * word];
+            bytes[..word].copy_from_slice(&u64::from(main).to_le_bytes()[..word]);
+            self.data.push(DataObject {
+                align: word as u32,
+                id: symbol,
+                name: if main { "$clearTable".into() } else { "$clearProcedure".into() },
+                bytes,
+                readonly: true,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+                common: false,
+            });
+            if main {
+                self.clear_table = Some(symbol);
+                let rows: Vec<(u32, usize)> = self
+                    .data
+                    .iter()
+                    .filter(|object| object.id >= 1_000_000 && object.id < self.next_module_data)
+                    .map(|object| (object.id, object.bytes.len()))
+                    .collect();
+                for (id, extent) in rows {
+                    self.clear_row(symbol, id, extent);
+                }
+            } else {
+                self.clear_procedure = Some(symbol);
+            }
+            symbol
+        });
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(Place {
+            volatile: false,
+            id: place,
+            name: format!("$clear{symbol}"),
+            type_id: BYTE,
+            offset: 0,
+            extent: 2 * self.options.near(),
+            storage: "static",
+            symbol,
+        });
+        self.far_address(Operand::Place(place), BYTE)
     }
 
     fn basic_global_name(
@@ -3697,7 +3808,15 @@ impl Compiler {
                             }
                             _ => (Operand::Constant(INTEGER, Number::Integer(0)), Number::Integer(0)),
                         };
-                        self.emit_runtime_call("B$SCLR", Vec::new(), vec![stack, Operand::Constant(INTEGER, given)]);
+                        let mut operands = vec![stack, Operand::Constant(INTEGER, given)];
+                        // The flat runtime zeroes the module's variables from a
+                        // table; the Microsoft one knows its
+                        // own data segment.
+                        if self.options.one_space() {
+                            let table = self.clear_table_address();
+                            operands.push(Operand::Value(table));
+                        }
+                        self.emit_runtime_call("B$SCLR", Vec::new(), operands);
                     }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
@@ -4086,7 +4205,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -4131,7 +4250,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -5935,6 +6054,18 @@ impl Compiler {
         let pointer = self.value(pointer_type);
         self.emit("address", vec![pointer], vec![Operand::Place(place)]);
         Ok(pointer)
+    }
+
+    /// The runtime entry that reads a string item into a string of `width`
+    /// bytes (0: a variable one). The Microsoft runtimes' B$RDSD takes
+    /// both; the llrm C runtime keeps B$RDSD for the variable string, so a
+    /// program without a fixed-string READ links nothing more, and reads a
+    /// fixed one with B$RDFS.
+    fn read_string_entry(
+        &self,
+        width: usize,
+    ) -> &'static str {
+        if width > 0 && self.runtime == "llrm" { "B$RDFS" } else { "B$RDSD" }
     }
 
     fn string_width(
@@ -9303,6 +9434,10 @@ impl Compiler {
             }
         }
 
+        if self.options.pow_libcall {
+            return self.library_power(left, right);
+        }
+
         // x87 has no single POW instruction. Keep the mathematical structure
         // visible as log2(base), exponent multiply, exp2. That identity holds
         // for a positive base, which a constant one proves here.
@@ -9339,6 +9474,35 @@ impl Compiler {
         let result = self.value(common);
         self.emit("fexp2", vec![result], vec![product]);
         Ok((Operand::Value(result), common))
+    }
+
+    /// `x ^ y` as a call to the runtime's `pow` (`B$LPOW`), which raises the
+    /// errors of B$POW4 itself. Each operand goes through a DOUBLE cell as it
+    /// is evaluated, so none crosses the other's blocks.
+    fn library_power(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(Operand, u32), SemanticError> {
+        let (base, base_type) = self.expression(left)?;
+        let base = self.convert(base, base_type, DOUBLE)?;
+        let x = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(x), base]);
+        let (exponent, exponent_type) = self.expression(right)?;
+        let common = common_type(base_type, exponent_type, Binary::Power)?;
+        let exponent = self.convert(exponent, exponent_type, DOUBLE)?;
+        let y = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(y), exponent]);
+        let pointer_type = self.pointer_type(DOUBLE);
+        let pointer = self.value(pointer_type);
+        self.emit_runtime_call("B$LPOW", vec![pointer], vec![Operand::Place(x), Operand::Place(y)]);
+        let power = self.value(DOUBLE);
+        self.emit(
+            "load",
+            vec![power],
+            vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
+        );
+        Ok((self.convert(Operand::Value(power), DOUBLE, common)?, common))
     }
 
     /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is
@@ -10620,6 +10784,24 @@ impl Compiler {
                             );
                         }
                     }
+                    if function.invariant.contains(&instruction.id) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Invariant,
+                        );
+                    }
+                    if let Some(region) = region(instruction, function) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Access(region),
+                        );
+                    }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
@@ -10830,6 +11012,45 @@ impl Compiler {
                 facts.state(
                     llrm_hir::facts::Subject::Param { function: i64::from(function.id), index },
                     llrm_hir::facts::Fact::Dereferenceable(bytes as u64),
+                );
+                // A reference is the address of a variable its caller names:
+                // never null, never an undefined value.
+                let at = llrm_hir::facts::Subject::Param { function: i64::from(function.id), index };
+                facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
+                if function.no_alias.contains(&(index as usize)) {
+                    facts.state(at, llrm_hir::facts::Fact::NoAlias);
+                }
+            }
+        }
+        // `mustprogress` deletes a side-effect-free loop it cannot prove ends,
+        // which BASIC's delay and wait loops (`FOR i = 1 TO n: NEXT`,
+        // `DO WHILE flag = 0: LOOP` for an ON KEY handler) must survive: only
+        // a routine with no loop at all, and no call of a routine of the
+        // program (which may recurse or loop), states it.
+        for function in &self.functions {
+            let calls_program = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter_map(|instruction| instruction.callee.as_deref())
+                .any(|callee| self.functions.iter().any(|one| one.name == callee));
+            if has_loop(function) || calls_program {
+                continue;
+            }
+            if let Some(callable) = self.callables.iter().find(|one| one.name == function.name) {
+                facts.state(
+                    llrm_hir::facts::Subject::Callable(i64::from(callable.id)),
+                    llrm_hir::facts::Fact::MustProgress,
+                );
+            }
+        }
+        // A loop that reaches no far allocation keeps every far descriptor's
+        // words.
+        for function in &self.functions {
+            for &block in &function.quiet_loops {
+                facts.state(
+                    llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },
+                    llrm_hir::facts::Fact::NoFarAllocation,
                 );
             }
         }
@@ -11446,6 +11667,45 @@ fn numbers(
     }
 }
 
+/// The region of memory a load or store reaches, where the frontend knows it:
+/// a descriptor's field, or an element of an array (its subscripts are in
+/// range, which an access promises).
+fn region(
+    instruction: &Instruction,
+    function: &Function,
+) -> Option<llrm_hir::facts::Region> {
+    use llrm_hir::facts::Region;
+    if !matches!(instruction.op, "load" | "store") {
+        return None;
+    }
+    if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
+        return Some(Region::Descriptor);
+    }
+    // A literal segment is memory the program owns nothing in; a reference
+    // parameter points at a variable (a near pointer into DS) or an element of
+    // an array of the program, so a routine that writes such memory states the
+    // two apart.
+    if let [Operand::Indirect { base, .. }, ..] = instruction.operands.as_slice() {
+        if function.unowned.contains(base) {
+            return Some(Region::Absolute);
+        }
+        if !function.unowned.is_empty() && function.promises.iter().any(|&(value, _)| value == *base) {
+            return Some(Region::Referent);
+        }
+    }
+    instruction
+        .operands
+        .iter()
+        .any(|operand| match operand {
+            Operand::Indirect { base, inbounds: true, .. } => function.elements.contains(base),
+            // A named array's element, which a parameter may be bound to.
+            Operand::Element(..) => true,
+            Operand::Projection { indices, .. } => !indices.is_empty(),
+            _ => false,
+        })
+        .then_some(Region::Element)
+}
+
 fn operand_json(
     out: &mut String,
     operand: &Operand,
@@ -11528,4 +11788,24 @@ fn plural(
     noun: &str,
 ) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+/// Whether the blocks of a routine hold a cycle: a jump back to a block on the
+/// path to it.
+fn has_loop(function: &Function) -> bool {
+    fn visit(
+        function: &Function,
+        id: u32,
+        state: &mut BTreeMap<u32, bool>,
+    ) -> bool {
+        match state.get(&id) {
+            Some(&on_path) => return on_path,
+            None => state.insert(id, true),
+        };
+        let targets = function.blocks.iter().find(|block| block.id == id).and_then(|block| block.terminator.as_ref());
+        let cyclic = targets.is_some_and(|one| one.targets.iter().any(|&next| visit(function, next, state)));
+        state.insert(id, false);
+        cyclic
+    }
+    function.blocks.first().is_some_and(|entry| visit(function, entry.id, &mut BTreeMap::new()))
 }

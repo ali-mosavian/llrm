@@ -111,10 +111,10 @@ fn an_asc_of_mid_loop_has_no_temporary_or_far_call() {
     }
 }
 
-/// ASC and MID$ inlined only where the size model or `-fno-inline-functions`
-/// let them: crc's loop kept a far call each under `-Os` and with inlining
-/// off, 2.7k clocks against 2.7k x several. They inline whatever the model
-/// says.
+/// ASC, MID$ and LEN inlined only where the size model or
+/// `-fno-inline-functions` let them: crc's loop kept a far call each under
+/// `-Os` and with inlining off, 2.7k clocks against 2.7k x several. They inline
+/// whatever the model says.
 #[test]
 fn asc_and_mid_inline_whatever_the_size_model_says() {
     let directory = tempfile::tempdir().expect("creates a directory");
@@ -129,7 +129,7 @@ fn asc_and_mid_inline_whatever_the_size_model_says() {
         let mir = optimized_mir_inlining(&program, threshold);
         for function in ["A&", "B&", "C&", "D&", "E&"] {
             let text = body(&mir, function);
-            for routine in ["B$FMID", "B$FASC"] {
+            for routine in ["B$FMID", "B$FASC", "B$FLEN"] {
                 assert_eq!(calls(text, routine), 0, "{name} {function}: {routine} stays\n{text}");
             }
         }
@@ -225,4 +225,47 @@ fn a_chr_of_a_byte_has_no_temporary_or_call() {
     let plain = body_of(&mir_of(CHARACTERS, "qb45", false, false), "B$FCHR").to_owned();
     let checked = body_of(&mir_of(CHARACTERS, "qb45", true, false), "B$FCHR").to_owned();
     assert!(!plain.contains("B$SERR") && checked.contains("@llrm.qb.B$SERR(i16 5) cold"), "{plain}\n{checked}");
+}
+
+/// A statement `MID$(s, i, 1) = CHR$(v)` and a `CHR$` in a function, both in a
+/// loop. With inlining off (`-fno-inline-functions`, as the bench builds) the
+/// `B$FCHR` call stayed and allocated a temporary string per byte: jpeg_single
+/// bq16 ran +20M clocks. CHR$ inlines whatever the size model says.
+#[test]
+fn chr_inlines_whatever_the_size_model_says() {
+    let sources = [
+        ("chars.bas", CHARACTERS, "S&"),
+        (
+            "store.bas",
+            "DEFINT A-Z
+DECLARE SUB Fill (n AS INTEGER)
+DIM SHARED buf AS STRING
+buf = STRING$(40, 0)
+Fill 30
+PRINT ASC(buf)
+
+SUB Fill (n AS INTEGER)
+    FOR i = 1 TO n: MID$(buf, i, 1) = CHR$(i + 3): NEXT
+END SUB
+",
+            "FILL",
+        ),
+    ];
+    for (file, source, function) in sources {
+        let directory = tempfile::tempdir().expect("creates a directory");
+        let path = written(&directory, file, source.as_bytes());
+        let frontend = qb_driver::Frontend::new("qb45", "qb45");
+        let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
+        for (name, threshold) in
+            [("none", Threshold::new(0)), ("size", Threshold { limit: 0, ..Threshold::default().for_size() })]
+        {
+            let mir = optimized_mir_inlining(&program, threshold);
+            let at = mir
+                .find(&format!("@{function}("))
+                .or_else(|| mir.find(&format!("@\"{function}\"(")))
+                .expect("the function");
+            let text = &mir[at..at + mir[at..].find("\n}\n").expect("ends")];
+            assert_eq!(calls(text, "B$FCHR"), 0, "{file} {name}: B$FCHR stays\n{text}");
+        }
+    }
 }

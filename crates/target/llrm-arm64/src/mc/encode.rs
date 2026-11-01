@@ -32,6 +32,18 @@ pub enum FixupKind {
 }
 
 impl FixupKind {
+    /// The object's kind of a field a label of the function fills.
+    pub fn label_kind(self) -> Option<llrm_object::FixupKind> {
+        use super::fixup;
+        Some(match self {
+            FixupKind::Branch26 => fixup::BRANCH26,
+            FixupKind::Branch19 => fixup::BRANCH19,
+            FixupKind::Branch14 => fixup::BRANCH14,
+            FixupKind::Adr21 => fixup::ADR21,
+            _ => return None,
+        })
+    }
+
     /// The relocation the object format holds, for the kinds it has one for.
     pub fn relocation(self) -> Option<llrm_object::Fix> {
         use super::fixup;
@@ -331,7 +343,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 | reg(*rt)?
         }
         Inst::BranchReg { link, rn } => (if *link { 0xD63F_0000 } else { 0xD61F_0000 }) | reg(*rn)? << 5,
-        Inst::Cfi(_) => return error("a .cfi directive has no encoding"),
+        Inst::Cfi(_) | Inst::Mark(_) => return error("a directive has no encoding"),
         Inst::Ret { rn } => 0xD65F_0000 | reg(*rn)? << 5,
         Inst::Load { mem, addr, .. } => load_store(mem, addr, true, &mut fixup)?,
         Inst::Store { mem, addr, .. } => load_store(mem, addr, false, &mut fixup)?,
@@ -491,7 +503,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
 
 /// `word` with the pc-relative field of `kind` filled for a target `offset`
 /// bytes from the instruction (a label of the same function).
-pub fn resolve(
+pub(super) fn resolve(
     word: u32,
     kind: FixupKind,
     offset: i64,

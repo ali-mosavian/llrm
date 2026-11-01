@@ -273,6 +273,19 @@ impl Checker<'_> {
                     record.variable.0, record.before.0
                 ));
             }
+            if let crate::module::DebugWhat::Assign { value, address, .. } = record.what {
+                for one in value.into_iter().chain(address) {
+                    if let Operand::Value(value) = one
+                        && let ValueDef::Instruction(defining) = function.value(value).def
+                        && function.is_erased(defining)
+                    {
+                        self.fail(format!(
+                            "a debug assignment of !{} names a value of erased instruction {}",
+                            record.variable.0, defining.0
+                        ));
+                    }
+                }
+            }
             if let crate::module::DebugWhat::Declare(Operand::Value(value))
             | crate::module::DebugWhat::Value(Operand::Value(value))
             | crate::module::DebugWhat::Piece { value: Operand::Value(value), .. } = record.what

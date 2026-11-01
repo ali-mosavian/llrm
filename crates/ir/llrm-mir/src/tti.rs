@@ -67,6 +67,23 @@ impl CostKind {
     }
 }
 
+/// `TTI::AddressingModeKind`: the indexed addressing modes loop strength
+/// reduction favors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddressingMode {
+    None,
+    PreIndexed,
+    PostIndexed,
+    All,
+}
+
+impl AddressingMode {
+    /// `AMK & AMK_PostIndexed`.
+    pub fn has_post_indexed(self) -> bool {
+        matches!(self, AddressingMode::PostIndexed | AddressingMode::All)
+    }
+}
+
 /// A scalar type as the cost model sees it (T1: vectors are not modelled).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ty {
@@ -331,6 +348,11 @@ pub trait Tti {
         false
     }
 
+    /// The same bound for a caller optimized for speed (its tuning table).
+    fn speed_inline_by_code_size(&self) -> bool {
+        false
+    }
+
     /// How many percent of its `CodeSize` units a call and the pushes of its
     /// arguments take in code, where they are bigger than the average
     /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
@@ -380,6 +402,12 @@ pub trait Tti {
         0
     }
 
+    /// What a byte of code is worth in thousandths of a clock at speed, where
+    /// the target trades bytes for clocks; 0: it does not.
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -394,10 +422,31 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-1: the bounds of the recursion the target takes by default
+    /// when optimizing for speed: (depth of a function's copies of itself,
+    /// the largest recursive body in `gcc_insns` that is copied); none: the
+    /// pin's inliner, which copies no recursive callee (`-finline-recursive`
+    /// asks for gcc's).
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// The target's `PartialThreshold` (its tuning table); none: the pass's
+    /// own.
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
+    /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
+    /// 50.
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        None
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read
@@ -642,6 +691,28 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::None
+    }
+
+    /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
+    /// the access size after it (`(An)+`).
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// `isIndexedStoreLegal(MIM_PostInc, ty)`.
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
@@ -674,6 +745,14 @@ pub trait Tti {
     /// first), not one register. The pin charges one and survives on 7
     /// registers; with 6 they spill every outer iteration.
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin (which treats a counter only some trips step as no
+    /// induction variable, `createSimpleAffineAddRec`): such a counter gets a
+    /// pointer that steps with it, where the address takes no scale. False
+    /// keeps the pin's loops. Exit: none, a pass of its own.
+    fn mirrors_conditional_counters(&self) -> bool {
         false
     }
 
