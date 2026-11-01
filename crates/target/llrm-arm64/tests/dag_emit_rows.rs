@@ -41,3 +41,23 @@ fn the_high_half_of_a_signed_multiply_is_smulh() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("smulh x0, x0, x1"), "{asm}");
 }
+
+/// A pointer stepped past each element is a post-index store: the pin selects
+/// `STRXpost` (`str x1, [x0], #8`), a node with two results.
+#[test]
+fn a_store_that_steps_its_pointer_is_post_indexed() {
+    let asm = dag("define ptr @f(ptr %p, i64 %v) {\n  store i64 %v, ptr %p, align 8\n  %n = getelementptr i64, ptr %p, i64 1\n  ret ptr %n\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("str x1, [x0], #8"), "{asm}");
+}
+
+/// A load whose pointer is also stepped is `LDRXpost` (`ldr x8, [x0], #8`):
+/// its second result is the value, which `operand` took for the flags, so
+/// the copy of the value to its register was "a copy of a constant" and the
+/// function was refused.
+#[test]
+fn a_load_that_steps_its_pointer_is_post_indexed() {
+    let asm = dag("define i64 @h(ptr %p, ptr %out) {\n  %v = load i64, ptr %p, align 8\n  %n = getelementptr i64, ptr %p, i64 1\n  store ptr %n, ptr %out, align 8\n  ret i64 %v\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("[x0], #8"), "{asm}");
+}

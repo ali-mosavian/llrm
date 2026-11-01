@@ -173,6 +173,10 @@ enum AddressForm {
     Register,
     /// `roW`: a base and a 32-bit index register, extended.
     RegisterWord,
+    /// `post`: `[base], #imm`; the node's first result is the new base.
+    Post,
+    /// `pre`: `[base, #imm]!`; the node's first result is the new base.
+    Pre,
 }
 
 /// `LDRWui`, `STURXi`, `LDRSBWroX` and the rest of the integer load/store
@@ -192,6 +196,10 @@ fn memory_form(name: &str) -> Option<MemoryForm> {
         (rest.strip_suffix('i')?, AddressForm::Unscaled)
     } else if let Some(element) = rest.strip_suffix("ui") {
         (element, AddressForm::Scaled)
+    } else if let Some(element) = rest.strip_suffix("post") {
+        (element, AddressForm::Post)
+    } else if let Some(element) = rest.strip_suffix("pre") {
+        (element, AddressForm::Pre)
     } else {
         match rest.strip_suffix("roX") {
             Some(element) => (element, AddressForm::Register),
@@ -613,7 +621,16 @@ impl Emitter<'_> {
         value: SDValue,
     ) -> Result<Operand, String> {
         let node = self.dag.node(value);
-        if value.res == 1 && matches!(node.opcode, ISD::Machine(_)) {
+        // The second result of a machine node is the flags it set, except
+        // for a writeback load, whose results are the new base and the value.
+        if value.res == 1
+            && matches!(
+                node.opcode,
+                ISD::Machine(code) if !opcode_name(code).is_some_and(|name| memory_form(name).is_some_and(|form| {
+                    matches!(form.form, AddressForm::Post | AddressForm::Pre)
+                }))
+            )
+        {
             return Ok(Operand::Flags);
         }
         // `FCMP` has no result but the flags.
@@ -919,6 +936,9 @@ impl Emitter<'_> {
             _ => return Err(format!("{name}: a store of something that is no register")),
         };
         let size = i64::from(access.bytes);
+        // A writeback form's first result is the new base: the loaded value is
+        // the second.
+        let writeback = u8::from(matches!(access.form, AddressForm::Post | AddressForm::Pre));
         let addr = match (access.form, address) {
             (
                 AddressForm::Register,
@@ -933,6 +953,20 @@ impl Emitter<'_> {
             }
             (AddressForm::Register | AddressForm::RegisterWord, _) => {
                 return Err(format!("{name}: a register offset that is not base and index"));
+            }
+            // The access updates its base register: the new base is the
+            // node's first result, a copy of the old one that the access
+            // then steps.
+            (AddressForm::Post | AddressForm::Pre, [Operand::Reg(base), Operand::Imm(imm)]) => {
+                let stepped = self.mf.gpr();
+                self.ops.push(Op::Copy { dst: Reg::Gpr(stepped), src: Reg::Gpr(*base) });
+                self.values.insert((id, 0), stepped);
+                let imm = *imm as i64;
+                if access.form == AddressForm::Post {
+                    Addr::Post { base: stepped, imm }
+                } else {
+                    Addr::Pre { base: stepped, imm }
+                }
             }
             (AddressForm::Scaled, [Operand::Reg(base), Operand::Symbol(id, offset)]) => {
                 Addr::PageOffset { base: *base, target: self.target(*id, *offset)?.0, got: false }
@@ -961,7 +995,7 @@ impl Emitter<'_> {
                 Inst::Load { mem, addr, mmo }
             }));
             if !access.store {
-                self.fvalues.insert((id, 0), reg);
+                self.fvalues.insert((id, writeback), reg);
             }
             return Ok(());
         }
@@ -974,7 +1008,7 @@ impl Emitter<'_> {
         };
         self.ops.push(Op::I(if access.store { Inst::Store { mem, addr, mmo } } else { Inst::Load { mem, addr, mmo } }));
         if let Some(rd) = rd {
-            self.values.insert((id, 0), rd);
+            self.values.insert((id, writeback), rd);
         }
         Ok(())
     }
