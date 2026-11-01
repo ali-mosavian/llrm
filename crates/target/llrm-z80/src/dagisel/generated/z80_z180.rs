@@ -8,7 +8,7 @@ use llrm_dagisel::dag::{Dag, Hooks, PatternContext, SDValue};
 use llrm_dagisel::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::dagisel::predicates;
 
-pub static ITEMS: [llrm_dagisel::matcher::Matcher; 570] = [
+pub static ITEMS: [llrm_dagisel::matcher::Matcher; 578] = [
     SwitchOpcode,
     OpcodeCase { size: 62, opcode: 316 },
     RecordMemRef,
@@ -578,10 +578,18 @@ pub static ITEMS: [llrm_dagisel::matcher::Matcher; 570] = [
     EmitNode(Emit { opcode: 369, flags: 0, vts: [Vt(5), Vt(0)], num_vts: 1, operands: Slice { start: 32, len: 1 } }),
     EmitInteger { vt: Vt(7), value: 1 },
     MorphNodeTo(Emit { opcode: 19, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 33, len: 5 } }),
+    OpcodeCase { size: 7, opcode: 227 },
+    RecordChild(0),
+    EmitInteger { vt: Vt(7), value: 3 },
+    EmitInteger { vt: Vt(7), value: 2 },
+    EmitInteger { vt: Vt(5), value: 7 },
+    EmitNode(Emit { opcode: 379, flags: 0, vts: [Vt(5), Vt(5)], num_vts: 2, operands: Slice { start: 38, len: 2 } }),
+    EmitInteger { vt: Vt(7), value: 1 },
+    MorphNodeTo(Emit { opcode: 19, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 40, len: 6 } }),
     OpcodeCase { size: 0, opcode: 0 },
 ];
 
-pub static OPERANDS: [u16; 38] = [0, 1, 5, 2, 3, 4, 6, 7, 1, 2, 3, 2, 2, 0, 3, 1, 4, 2, 1, 3, 0, 4, 0, 2, 0, 1, 2, 1, 0, 1, 4, 3, 3, 1, 0, 2, 4, 5];
+pub static OPERANDS: [u16; 46] = [0, 1, 5, 2, 3, 4, 6, 7, 1, 2, 3, 2, 2, 0, 3, 1, 4, 2, 1, 3, 0, 4, 0, 2, 0, 1, 2, 1, 0, 1, 4, 3, 3, 1, 0, 2, 4, 5, 0, 3, 1, 0, 2, 4, 5, 6];
 
 pub const TABLE: Table = Table { items: &ITEMS, operands: &OPERANDS };
 

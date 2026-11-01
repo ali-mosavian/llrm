@@ -208,6 +208,9 @@ def : Pat<(i8 (trunc (srl GR16:$a, (i8 8)))), (EXTRACT_SUBREG GR16:$a, sub_hi)>;
 def : Pat<(i16 (zext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (LD8ri 0), sub_hi)>;
 def : Pat<(i16 (anyext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (LD8ri 0), sub_hi)>;
 
+// A signed byte widens by its sign: the high byte is the byte shifted right by 7.
+def : Pat<(i16 (sext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (SRA8 GR8:$a, 7), sub_hi)>;
+
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
 

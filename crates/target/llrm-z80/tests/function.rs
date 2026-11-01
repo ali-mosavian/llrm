@@ -148,3 +148,33 @@ fn a_fourth_word_argument_is_refused_until_pushes_exist() {
     let module = llrm_mir::parse::module(&text).expect("parses");
     let _ = select_function(&module, "f", Cpu::Z80);
 }
+
+/// A signed byte widened to a word is the byte and its sign: the high byte is
+/// the byte shifted right by 7. Before the pattern `sext i8 to i16` refused
+/// with `CannotSelect(SignExtend)`, which any signed index or char arithmetic
+/// hits.
+#[test]
+fn a_signed_byte_widens_with_its_sign() {
+    let ir = "define i16 @f(i8 %a) {\n  %r = sext i8 %a to i16\n  ret i16 %r\n}";
+    let blocks = selected(ir, "f");
+    assert!(blocks[0].contains(&"SRA8"), "{blocks:?}");
+}
+
+/// The bench kernel `sum_arr` (clang msp430 IR, a byte loop over a global,
+/// `tests/function/sum_arr.ll`) went through the mid-end and panicked in LSR
+/// ("Formula is illegal") because the cost model accepted no addressing mode at
+/// all; 10 of the 23 bench kernels did. The symptom is the panic, so the test
+/// is the compile.
+#[test]
+fn a_loop_over_a_global_compiles_through_the_mid_end() {
+    use llrm_z80::driver::{Level, Request, selections};
+    let ir = include_str!("function/sum_arr.ll");
+    let worker = std::thread::Builder::new()
+        .stack_size(1 << 28)
+        .spawn(move || {
+            selections(ir, &Request::new(Level::O2))
+                .map(|all| all.into_iter().map(|(name, result)| (name, result.err())).collect::<Vec<_>>())
+        })
+        .unwrap();
+    assert_eq!(worker.join().expect("no panic in the mid-end").unwrap(), [("sum_arr".to_owned(), None)]);
+}
