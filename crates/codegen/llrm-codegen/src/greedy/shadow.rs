@@ -2387,7 +2387,7 @@ mod tests {
             &tables,
             &Default::default(),
             Some(&sets),
-            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes },
+            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes, basic_semantics: false },
             classes.registers,
             &lis,
             &[word, base],
