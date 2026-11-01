@@ -373,11 +373,20 @@ pub fn hoisted(
                     // instructions should always be hoisted providing the
                     // register allocator can just pull them down again", unless
                     // a copy in the loop takes the value.
+                    // An immediate or symbol address goes to a general
+                    // register, whatever its width:
+                    // `floating` takes 8 bytes for a float.
+                    let immediate = one
+                        .what
+                        .as_ref()
+                        .is_some_and(
+                            |what| what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(_)]),
+                        );
                     let constant = value.is_some_and(|value| {
                         one.uses.is_empty()
                             && defs.get(&value) == Some(&1)
                             && !copied.contains(&value)
-                            && !floating.contains(&value)
+                            && (immediate || !floating.contains(&value))
                             && one.defines.len() == 1
                             && one.call.is_none()
                             && one.group.is_none()
@@ -678,5 +687,39 @@ mod tests {
         };
         assert_eq!(run(true), (1, 2), "the phi's copy stays");
         assert_eq!(run(false), (2, 1), "no phi takes it: hoisted");
+    }
+
+    /// m64 nbody_single at -O1/-O2: `mov r64, offset sym` made on every trip of
+    /// a loop was kept there, three per trip, against the pin's one before the
+    /// loop (+18% executed): `floating` took every value wider than 4 bytes
+    /// for a float, an 8-byte address among them.
+    #[test]
+    fn test_a_symbol_address_of_eight_bytes_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let address = Loc::Imm(llrm_lir::Imm {
+            value: 0,
+            width: 8,
+            address: Some(llrm_lir::Addr::new(llrm_lir::Space::Segment, 0)),
+        });
+        let constant = insn(10, Operation::Move, "mov", vec![wide(10)], vec![address], vec![10], vec![]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![constant, branch(11)]).into(),
+                block(2, vec![], vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
     }
 }
