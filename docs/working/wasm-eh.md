@@ -57,9 +57,12 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
   resume_next_print_last resumelocals
 - Need #6293 (`B_OEGP` import; link error now) (3): ownf_local_pds71, ownf_local_vbdos, resumelocals_local
 - currency_arith_pds71 matches since `B$LFPC` (DOUBLE to CURRENCY without `f80`).
-- Open row, currency_convert_pds71 builds and differs in two ways. (1) `i = c`, `l = c` out of range: the x87's `fist`
-  gives the integer indefinite (-32768, -2147483648); wasm's `lrint` truncates. Exit: the frontend range-checks that
-  conversion on a target without `f80`. (2) `PRINT d` of 922337203685477.5807# shows `.6`, BC's build `478`; cause not found.
+- currency_convert_pds71 builds; one row differs. `PRINT d` of 922337203685477.5807# shows `.6`, BC's build `478` (15 digits);
+  the x86-64 host runtime prints `.6` too, so it is the portable `fout.c` against QB's, not wasm. Cause not found.
+  Out-of-range CURRENCY to INTEGER/LONG is the x87's indefinite (`indefinite_integer`).
+- Open row: `llvm.lrint.i64.*` calls `lrint` with an i64 result (the pin's choice, `RTLIB::getLRINT` ignores the result
+  type), where C's `lrint` returns a 32-bit `long` on wasm32; a module with both widths imports one name twice.
+  `llvm.llrint.*` is not lowered at all (the call keeps the intrinsic's name). Exit: select `llrint` by result width.
 - palette_using_pds71 does not build (`Target(24586)` legalize). None touches EH.
 
 The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).

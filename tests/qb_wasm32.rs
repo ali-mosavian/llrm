@@ -549,6 +549,43 @@ fn on_local_error_lands_in_its_handler_on_wasm32() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// CURRENCY to INTEGER or LONG out of range is the x87's `fist`: the integer
+/// indefinite, no error (currency_convert_pds71). wasm's `lrint` truncated:
+/// 100000.5 gave -31072 as an INTEGER and -2147483649 gave 2147483647 as a
+/// LONG. The pairs are the rows of that program's expected output.
+#[test]
+fn a_currency_past_an_integer_type_is_the_indefinite_on_wasm32() {
+    let dir = built(
+        "cyfist",
+        "' dialect: pds71\nDIM c AS CURRENCY, i AS INTEGER, l AS LONG\nFOR n = 1 TO 8\n  READ x#\n  c = x#\n  i = c\n  l = c\n  PRINT i; l\nNEXT\n\
+         DATA 32767.5, -32768.5, -32768.5001, 100000.5, 2147483647.4999, 2147483647.5, -2147483648.5, -2147483649\nEND\n",
+    );
+    let (text, code) = run(&dir, "cyfist", &[]);
+    assert_eq!(
+        text.split_whitespace().collect::<Vec<_>>(),
+        [
+            "-32768",
+            "32768",
+            "-32768",
+            "-32768",
+            "-32768",
+            "-32769",
+            "-32768",
+            "100000",
+            "-32768",
+            "2147483647",
+            "-32768",
+            "-2147483648",
+            "-32768",
+            "-2147483648",
+            "-32768",
+            "-2147483648"
+        ]
+    );
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// currency_arith_pds71 converts DOUBLEs and SINGLEs to CURRENCY at run time
 /// and did not build; it prints what BC's build prints (its overflow is a
 /// handled error, so the build lands by exceptions).
