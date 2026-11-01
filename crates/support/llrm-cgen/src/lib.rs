@@ -400,7 +400,7 @@ impl Gen {
         let pad = "  ".repeat(indent);
         for _ in 0..count {
             match self.rng.below(if self.options.copies {
-                15
+                16
             } else if self.options.walks {
                 13
             } else {
@@ -490,6 +490,24 @@ impl Gen {
                             out,
                             "{pad}{{ const {} *w = {name}; unsigned char n = {len}; while (n--) {{ {step} }} }}",
                             self.c(ty)
+                        )
+                        .unwrap();
+                    }
+                }
+                15 => {
+                    // a copy loop: the load whose only use is the store
+                    let n = scope.arrays.len();
+                    let from = self.rng.below(n.max(1));
+                    let start = self.rng.below(n.max(1));
+                    let to = (0..n)
+                        .map(|k| (start + k) % n)
+                        .find(|&k| k != from && scope.arrays[k].ty == scope.arrays[from].ty);
+                    if let (Some(src), Some(dst)) = (scope.arrays.get(from), to.map(|k| &scope.arrays[k])) {
+                        let (ty, count) = (self.c(src.ty), 1 + self.rng.below(src.len.min(dst.len)));
+                        writeln!(
+                            out,
+                            "{pad}{{ const {ty} *s = {}; {ty} *d = {}; unsigned char n = {count}; while (n--) *d++ = *s++; }}",
+                            src.name, dst.name
                         )
                         .unwrap();
                     }

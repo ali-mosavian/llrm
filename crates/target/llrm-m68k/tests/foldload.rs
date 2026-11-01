@@ -73,6 +73,26 @@ fn every_post_increment_source_encodes_as_binutils_does() {
     assert!(checked >= 15, "only {checked} rows");
 }
 
+/// The moves from `(An)+` to memory are the pin's rows; one that the assembler
+/// makes something else of would store the loaded value in the wrong place.
+#[test]
+fn every_move_from_post_increment_to_memory_encodes_as_binutils_does() {
+    let mut checked = 0;
+    for name in indexed::memory_move_rows() {
+        let operands = match name.as_bytes()[name.len() - 2] {
+            b'p' => vec![Operand::Imm(6), Operand::Reg(reg::A1), Operand::Reg(reg::A2)],
+            _ => vec![Operand::Reg(reg::A1), Operand::Reg(reg::A2)],
+        };
+        let inst = Inst { opcode: name, operands };
+        let text = print(&inst).unwrap();
+        assert!(text.ends_with("(%a2)+") || text.contains("(%a2)+,"), "{name}: {text}");
+        let Some(want) = assembled(&text) else { return };
+        assert_eq!(encode(&inst).unwrap().bytes, want, "{name}: {text}");
+        checked += 1;
+    }
+    assert_eq!(checked, 9);
+}
+
 /// Folds `n` longs read through a post-incremented pointer into `acc` by `op`.
 fn fold(
     op: &str,
@@ -262,5 +282,102 @@ fn a_compare_of_a_loaded_value_counts_the_same_either_way_round() {
             let Some(got) = status(&ir, 40) else { return };
             assert_eq!(got, want as i32, "{pred} value first {v_first}");
         }
+    }
+}
+
+/// Fills a stack buffer with `i * 37 + 5` at byte `i`, copies `n` of them to
+/// another through two stepped pointers, and returns byte `at` of the copy.
+fn byte_copy(at: i32) -> String {
+    format!(
+        "define i32 @f(i32 %n) {{
+entry:
+  %src = alloca [64 x i8]
+  %dst = alloca [64 x i8]
+  br label %fill
+fill:
+  %o = phi i32 [ 0, %entry ], [ %o1, %fill ]
+  %p = getelementptr i8, ptr %src, i32 %o
+  %m = mul i32 %o, 37
+  %v = add i32 %m, 5
+  %b = trunc i32 %v to i8
+  store volatile i8 %b, ptr %p
+  %o1 = add i32 %o, 1
+  %d = icmp slt i32 %o1, 64
+  br i1 %d, label %fill, label %go
+go:
+  br label %l
+l:
+  %s = phi ptr [ %src, %go ], [ %s1, %l ]
+  %t = phi ptr [ %dst, %go ], [ %t1, %l ]
+  %i = phi i32 [ 0, %go ], [ %i1, %l ]
+  %w = load volatile i8, ptr %s
+  store i8 %w, ptr %t
+  %s1 = getelementptr i8, ptr %s, i32 1
+  %t1 = getelementptr i8, ptr %t, i32 1
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, %n
+  br i1 %c, label %l, label %x
+x:
+  %q = getelementptr i8, ptr %dst, i32 {at}
+  %r = load volatile i8, ptr %q
+  %z = zext i8 %r to i32
+  ret i32 %z
+}}"
+    )
+}
+
+/// `while (n-- > 0) *d++ = *s++`, the pointers stepped as written (the
+/// mid-end indexes them, so the tests that use this run without it).
+const BYTE_COPY: &str = "define void @f(ptr %d, ptr %s, i32 %n) {
+entry:
+  %e = icmp sgt i32 %n, 0
+  br i1 %e, label %l, label %x
+l:
+  %p = phi ptr [ %d, %entry ], [ %p1, %l ]
+  %q = phi ptr [ %s, %entry ], [ %q1, %l ]
+  %i = phi i32 [ 0, %entry ], [ %i1, %l ]
+  %w = load i8, ptr %q
+  store i8 %w, ptr %p
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %q1 = getelementptr i8, ptr %q, i32 1
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, %n
+  br i1 %c, label %l, label %x
+x:
+  ret void
+}";
+
+/// A load whose only use is the store of its value is one move from `(An)+`:
+/// `move.b (%a0)+, %d1; move.b %d1, (%a1)+` was two instructions and a
+/// register.
+#[test]
+fn a_load_stored_at_once_is_one_move_between_memory() {
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let options = Options { mid_end: false, ..Options::default() };
+        let out = text_with(&module(BYTE_COPY), "f", cpu, options).expect("compiles");
+        assert!(
+            out.lines()
+                .any(|line| line.starts_with("\tmove.b\t(%a") && line.contains(")+, (%a") && line.ends_with(")+")),
+            "{cpu:?}:\n{out}"
+        );
+    }
+}
+
+/// The bytes copied are the bytes filled, and the byte after the last one
+/// copied is not touched: a destination pointer that stepped wrongly shows.
+#[test]
+fn the_memory_move_copies_what_the_two_instructions_did() {
+    let Some(qemu) = support::qemu() else { return };
+    let want = |i: i64| ((i * 37 + 5) & 255) as i32;
+    for (n, at) in [(40, 7), (40, 39), (1, 0)] {
+        // the pointers stay phis, as written, with the mid-end off
+        let options = Options { mid_end: false, ..Options::default() };
+        let mut all = start("f", &[n]);
+        all.extend(items_with(&module(&byte_copy(at)), "f", Cpu::M68000, options).expect("compiles"));
+        let path = support::unique_path("memory-move");
+        write_executable(&path, &executable(&all).unwrap()).unwrap();
+        let code = support::run(&qemu, &["-cpu", "m68000"], &path);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(code, Some(want(i64::from(at))), "n {n} byte {at}");
     }
 }

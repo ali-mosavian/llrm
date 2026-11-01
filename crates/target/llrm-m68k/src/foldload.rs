@@ -83,34 +83,53 @@ fn fold_one(
         .map(|offset| at + 1 + offset);
     let Some(user) = user else { return false };
     let Kind::Op(name) = insts[user].kind else { return false };
-    let Some(twin) = indexed::source_twin(name) else { return false };
+    let store = indexed::store_twin(name);
+    let Some(twin) = store.or_else(|| indexed::source_twin(name)) else { return false };
     if !name.contains(bits) || !twin.contains(bits) {
         return false;
     }
-    // the memory source takes the place of the operand the text prints first
-    let Some(&(_, _, printed)) = local::text(name) else { return false };
-    let Some(first) = printed.first().map(|one| usize::from(one.at)) else { return false };
     let loaded = Operand::Use(Reg::Virt(v));
-    let mut operands = insts[user].operands.clone();
+    let mut operands;
     let mut readers = Vec::new();
-    if operands[first] != loaded {
-        let other = operands.iter().position(|one| *one == loaded).unwrap_or(first);
-        let both_registers = matches!(operands[first], Operand::Use(Reg::Virt(_)));
-        if insts[user].commutable && both_registers {
-            operands.swap(first, other);
-        } else if operands.len() == 2 && both_registers && !operands.iter().any(|one| matches!(one, Operand::Def(_))) {
-            // a compare of the loaded value with another: the other way round,
-            // and the conditions that read its codes change with it
-            let Some(found) = swapped_readers(&insts[user + 1..]) else { return false };
-            readers = found;
-            operands.swap(0, 1);
-        } else {
+    if store.is_some() {
+        // a store of the loaded value, its last operand: the move from `(An)+`
+        // to where it was stored, the stores' own results first
+        let stored = &insts[user].operands;
+        if stored.last() != Some(&loaded) || stored[..stored.len() - 1].contains(&loaded) {
             return false;
         }
+        operands = stored[..stored.len() - 1].to_vec();
+        let defs = operands.iter().take_while(|operand| matches!(operand, Operand::Def(_))).count();
+        operands.insert(defs, Operand::Def(Reg::Virt(updated)));
+    } else {
+        // the memory source takes the place of the operand the text prints
+        // first
+        let Some(&(_, _, printed)) = local::text(name) else { return false };
+        let Some(first) = printed.first().map(|one| usize::from(one.at)) else { return false };
+        operands = insts[user].operands.clone();
+        if operands[first] != loaded {
+            let other = operands.iter().position(|one| *one == loaded).unwrap_or(first);
+            let both_registers = matches!(operands[first], Operand::Use(Reg::Virt(_)));
+            if insts[user].commutable && both_registers {
+                operands.swap(first, other);
+            } else if operands.len() == 2
+                && both_registers
+                && !operands.iter().any(|one| matches!(one, Operand::Def(_)))
+            {
+                // a compare of the loaded value with another: the other way
+                // round, and the conditions that read its codes
+                // change with it
+                let Some(found) = swapped_readers(&insts[user + 1..]) else { return false };
+                readers = found;
+                operands.swap(0, 1);
+            } else {
+                return false;
+            }
+        }
+        operands.remove(first);
+        let defs = operands.iter().take_while(|operand| matches!(operand, Operand::Def(_))).count();
+        operands.insert(defs, Operand::Def(Reg::Virt(updated)));
     }
-    operands.remove(first);
-    let defs = operands.iter().take_while(|operand| matches!(operand, Operand::Def(_))).count();
-    operands.insert(defs, Operand::Def(Reg::Virt(updated)));
     operands.push(Operand::Use(base));
     // the load moves down to the user, or the user up to the load
     let between = &insts[at + 1..user];
@@ -150,10 +169,10 @@ fn fold_one(
                 || one.reads_flags
                 || touches(one, updated) && !late(at)),
         );
-    let up = between
-        .iter()
-        .all(
-            |one| !(one.sets_flags
+    // a store moved up past a load or store would change what they see
+    let up = store.is_none()
+        && between.iter().all(|one| {
+            !(one.sets_flags
                 || one.reads_flags
                 || one.call
                 || one.barrier
@@ -163,8 +182,8 @@ fn fold_one(
                         operand,
                         Operand::Use(Reg::Virt(r)) if one.operands.contains(&Operand::Def(Reg::Virt(*r)))
                     )
-                })),
-        );
+                }))
+        });
     if !down && !up {
         return false;
     }
