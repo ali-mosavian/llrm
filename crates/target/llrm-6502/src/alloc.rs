@@ -1907,15 +1907,17 @@ pub fn parallel_move(
                 // reads it, or only cycles of cells are left. Park the value
                 // on the stack and read it from there (two moves at most, so
                 // one parked value).
-                let free = |i: usize, pending: &[(RegId, Option<RegId>)]| {
-                    !pending.iter().enumerate().any(|(j, (_, s))| j != i && *s == Some(pending[i].0))
-                };
-                let parked = if (0..pending.len()).any(|i| free(i, &pending)) {
+                let parked = if pending.iter().any(|(_, s)| *s == Some(reg::A)) {
                     out.push_str("  pha\n");
                     reg::A
                 } else {
-                    let (d, _) = pending[0];
-                    writeln!(out, "  lda {}\n  pha", register_name(d)).unwrap();
+                    // no move reads `a`: a cell another move reads is held up
+                    let (d, _) = *pending
+                        .iter()
+                        .find(|(d, _)| pending.iter().any(|(_, s)| *s == Some(*d)))
+                        .expect("a blocked sequence without `a` has a cycle");
+                    move_byte(out, reg::A, d, false, None);
+                    out.push_str("  pha\n");
                     d
                 };
                 for (_, s) in pending.iter_mut().filter(|(_, s)| *s == Some(parked)) {

@@ -382,6 +382,17 @@ fn parallel_moves_swap_and_keep_a() {
     assert_eq!(moved(&to_x, true, "rc2"), 5);
 }
 
+/// A move into `a` waits for the others, and the others are a swap of two
+/// cells: nothing is ready and no move reads `a`, so the loop parked `a`
+/// forever and the emitter asked for 7.7 GB (8 of 300 difftest programs).
+#[test]
+fn a_move_into_a_waits_for_a_swap_of_two_cells() {
+    let moves = [("a", "x"), ("rc2", "rc3"), ("rc3", "rc2")];
+    assert_eq!(moved(&moves, false, "a"), 5);
+    assert_eq!(moved(&moves, false, "rc2"), 2);
+    assert_eq!(moved(&moves, false, "rc3"), 1);
+}
+
 /// A byte loaded, widened and used in a word subtract was a zero-extending
 /// load no pattern selected (`CannotSelect(Load)`): scmp, crc16 and sum16 of
 /// the second bench set, and any `s += p[i]` on an `unsigned`. k = 1000, the
