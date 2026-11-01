@@ -269,7 +269,9 @@ impl Function {
             .collect();
         for operand in self.blocks.iter_mut().flatten().flat_map(|inst| inst.operands.iter_mut()) {
             if let Operand::Block(block) = operand {
-                *block = new_of[*block as usize] as u32;
+                if let Some(&new) = new_of.get(*block as usize) {
+                    *block = new as u32;
+                }
             }
         }
     }
@@ -316,6 +318,11 @@ impl Function {
     }
 
     /// `MRI.getRegClass`.
+    /// How many virtual registers the function has.
+    pub fn vreg_count(&self) -> usize {
+        self.vregs.len()
+    }
+
     pub fn vreg_type(
         &self,
         reg: VReg,

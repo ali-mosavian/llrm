@@ -90,3 +90,27 @@ fn a_call_in_a_loop_with_an_invoke_is_delegated_inside_the_loop() {
 fn a_pad_that_invokes_into_a_second_pad_is_the_pins() {
     check("nested_pads");
 }
+
+/// Every call between two invokes is wrapped, however many there are: blocks
+/// are inserted as links and numbered once at the end. (Numbering at each
+/// insert was a pass over the function per mismatch.)
+#[test]
+fn thousands_of_mismatches_are_all_delegated() {
+    let calls = 3000;
+    let mut text = String::from("declare void @g(i32)\ndeclare i32 @p(...)\n");
+    text.push_str(
+        "define i32 @f(i32 %a) personality ptr @p {\nentry:\n  invoke void @g(i32 %a) to label %b0 unwind label %pad\n",
+    );
+    for i in 0..calls {
+        let next = if i + 1 < calls { format!("b{}", i + 1) } else { "done".to_owned() };
+        text.push_str(&format!(
+            "b{i}:\n  call void @g(i32 {i})\n  invoke void @g(i32 {i}) to label %{next} unwind label %pad\n"
+        ));
+    }
+    text.push_str("done:\n  ret i32 1\npad:\n  %l = landingpad { ptr, i32 } catch ptr null\n  ret i32 2\n}\n");
+    let got = assembly(&text, Width::W32, MODEL).expect("compiles");
+    let count = |word: &str| got.lines().filter(|line| line.trim_start().starts_with(word)).count();
+    assert_eq!(count("delegate"), calls);
+    assert_eq!(count("try"), calls + 1);
+    assert_eq!(count("end_try"), 1);
+}

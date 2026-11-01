@@ -44,6 +44,19 @@ const VOID: i64 = 0x40;
 /// The block `delegate` names to rethrow to the caller (`getFakeCallerBlock`).
 const CALLER: u32 = u32::MAX;
 
+/// No block.
+const NONE: usize = usize::MAX;
+
+/// What fixing unwind mismatches keeps while blocks are inserted: the layout as
+/// links, so an insert is O(1) and the blocks keep their numbers until
+/// [`Stackify::renumber`], and the block that defines each register.
+struct Fixing {
+    next: Vec<usize>,
+    prev: Vec<usize>,
+    /// The block of a register's only definition, or [`NONE`].
+    def_block: Vec<usize>,
+}
+
 struct Stackify<'a> {
     f: &'a mut Function,
     cfg: Cfg,
@@ -447,69 +460,52 @@ impl Stackify<'_> {
         &self,
         tag: u32,
     ) -> (usize, usize) {
-        self.f
-            .blocks
-            .iter()
-            .enumerate()
-            .find_map(|(b, insts)| insts.iter().position(|inst| inst.tag == tag).map(|at| (b, at)))
-            .expect("a tagged instruction")
+        let block = self.block_of[&tag];
+        let at = self.f.blocks[block].iter().position(|inst| inst.tag == tag).expect("a tagged instruction");
+        (block, at)
     }
 
-    /// A block with `insts` and `succs` that becomes block `at`: the blocks
-    /// from `at` on are numbered one higher (`MF.insert`, with the numbers the
-    /// layout gives).
-    fn insert_block(
+    /// A new block with `insts` and `succs`, after `after` in the layout
+    /// (`MF.insert`). It is numbered last; [`Stackify::renumber`] gives the
+    /// layout's numbers once, at the end.
+    fn new_block(
         &mut self,
-        at: usize,
+        fixing: &mut Fixing,
+        after: usize,
         insts: Vec<Inst>,
         succs: Vec<usize>,
-    ) {
-        let shift = |number: usize| if number >= at { number + 1 } else { number };
-        for successors in &mut self.f.succs {
-            for to in successors.iter_mut() {
-                *to = shift(*to);
-            }
+    ) -> usize {
+        let id = self.f.blocks.len();
+        self.f.blocks.push(insts);
+        self.f.succs.push(succs);
+        self.pads.push(false);
+        let following = fixing.next[after];
+        fixing.next.push(following);
+        fixing.prev.push(after);
+        fixing.next[after] = id;
+        if following != NONE {
+            fixing.prev[following] = id;
         }
-        for operand in self.f.blocks.iter_mut().flatten().flat_map(|inst| inst.operands.iter_mut()) {
-            if let Operand::Block(to) = operand {
-                if *to != CALLER && *to as usize >= at {
-                    *to += 1;
-                }
-            }
-        }
-        for home in self.block_of.values_mut() {
-            *home = shift(*home);
-        }
-        for pad in self.try_to_pad.values_mut() {
-            *pad = shift(*pad);
-        }
-        self.pad_to_try = self.pad_to_try.drain().map(|(pad, try_tag)| (shift(pad), try_tag)).collect();
-        for top in self.scope_tops.iter_mut().flatten() {
-            *top = shift(*top);
-        }
-        self.scope_tops.insert(at.min(self.scope_tops.len()), None);
-        self.pads.insert(at.min(self.pads.len()), false);
-        if let Some(appendix) = &mut self.appendix {
-            *appendix = shift(*appendix);
-        }
-        let succs = succs.into_iter().map(shift).collect();
-        for inst in &insts {
-            if inst.tag != 0 {
-                self.block_of.insert(inst.tag, at);
-            }
-        }
-        self.f.blocks.insert(at, insts);
-        self.f.succs.insert(at, succs);
+        self.rehome(fixing, id);
+        id
     }
 
-    /// The markers of `block` are in it.
-    fn homed(
+    /// The markers and definitions of `block` are in it.
+    fn rehome(
         &mut self,
+        fixing: &mut Fixing,
         block: usize,
     ) {
         for inst in &self.f.blocks[block] {
-            if inst.tag != 0 && self.block_of.contains_key(&inst.tag) {
+            if inst.tag != 0 {
                 self.block_of.insert(inst.tag, block);
+            }
+            for operand in &inst.operands {
+                if let Operand::Def(reg) = operand {
+                    if fixing.def_block[*reg as usize] != NONE {
+                        fixing.def_block[*reg as usize] = block;
+                    }
+                }
             }
         }
     }
@@ -519,15 +515,15 @@ impl Stackify<'_> {
     /// is not on the stack becomes two copies.
     fn unstackify_split(
         &mut self,
+        fixing: &Fixing,
         pre: usize,
         post: usize,
     ) {
-        let index = self.f.def_use();
         let used: Vec<u32> = self.f.blocks[post]
             .iter()
             .flat_map(|inst| inst.operands.iter())
             .filter_map(|operand| if let Operand::Use(reg) = operand { Some(*reg) } else { None })
-            .filter(|&reg| index.def_count(reg) == 1 && index.def(reg).is_some_and(|(block, _)| block == pre))
+            .filter(|&reg| fixing.def_block[reg as usize] == pre)
             .collect();
         for reg in used {
             self.f.unstackify(reg);
@@ -561,6 +557,7 @@ impl Stackify<'_> {
     /// exception to `dest`, a pad or [`CALLER`].
     fn add_nested_try_delegate(
         &mut self,
+        fixing: &mut Fixing,
         begin: u32,
         end: u32,
         dest: u32,
@@ -575,40 +572,62 @@ impl Stackify<'_> {
         self.f.blocks[begin_block].insert(begin_at, try_marker);
         let (end_block, end_at) = self.locate(end);
         let split = end_at + 1;
-        let delegate = {
-            self.next_tag += 1;
-            Inst { tag: self.next_tag, ..Inst::new(DELEGATE, &[Operand::Block(dest)]) }
-        };
-        let delegate_tag = delegate.tag;
+        self.next_tag += 1;
+        let delegate_tag = self.next_tag;
+        let delegate = Inst { tag: delegate_tag, ..Inst::new(DELEGATE, &[Operand::Block(dest)]) };
         let delegate_succs = if dest == CALLER { Vec::new() } else { vec![dest as usize] };
         if split == self.f.blocks[end_block].len() {
-            self.insert_block(end_block + 1, vec![delegate], delegate_succs);
-            self.f.succs[end_block].push(end_block + 1);
+            let delegate_block = self.new_block(fixing, end_block, vec![delegate], delegate_succs);
+            self.f.succs[end_block].push(delegate_block);
         } else {
             let catch_after_split = self.pads[end_block]
                 && self.f.blocks[end_block][split..].iter().any(|inst| inst.opcode == CATCH_ALL_LEGACY);
-            let (pre, post) = if !catch_after_split {
-                self.insert_block(end_block + 1, vec![delegate], delegate_succs);
-                self.insert_block(end_block + 2, Vec::new(), Vec::new());
+            let (pre, post, delegate_block) = if !catch_after_split {
+                let delegate_block = self.new_block(fixing, end_block, vec![delegate], delegate_succs);
                 let rest = self.f.blocks[end_block].split_off(split);
-                self.f.blocks[end_block + 2] = rest;
-                self.f.succs[end_block + 2] = std::mem::take(&mut self.f.succs[end_block]);
-                self.homed(end_block + 2);
-                (end_block, end_block + 2)
+                let moved = std::mem::take(&mut self.f.succs[end_block]);
+                let post = self.new_block(fixing, delegate_block, rest, moved);
+                (end_block, post, delegate_block)
             } else {
-                self.insert_block(end_block, Vec::new(), Vec::new());
-                self.insert_block(end_block + 1, vec![delegate], delegate_succs);
-                let head: Vec<Inst> = self.f.blocks[end_block + 2].drain(..split).collect();
-                self.f.blocks[end_block] = head;
-                self.homed(end_block);
-                (end_block, end_block + 2)
+                let head: Vec<Inst> = self.f.blocks[end_block].drain(..split).collect();
+                let before = fixing.prev[end_block];
+                let pre = self.new_block(fixing, before, head, Vec::new());
+                let delegate_block = self.new_block(fixing, pre, vec![delegate], delegate_succs);
+                (pre, end_block, delegate_block)
             };
-            self.unstackify_split(pre, post);
-            self.f.succs[pre] = vec![pre + 1, post];
+            self.unstackify_split(fixing, pre, post);
+            self.f.succs[pre] = vec![delegate_block, post];
         }
-        let delegate_block = self.locate(delegate_tag).0;
-        self.block_of.insert(delegate_tag, delegate_block);
         self.register_scope(try_tag, delegate_tag);
+    }
+
+    /// The layout's numbers, given once the blocks have been inserted:
+    /// `RenumberBlocks`.
+    fn renumber(
+        &mut self,
+        fixing: &Fixing,
+    ) {
+        let mut order = Vec::with_capacity(self.f.blocks.len());
+        let mut at = 0;
+        while at != NONE {
+            order.push(at);
+            at = fixing.next[at];
+        }
+        let mut new_of = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() {
+            new_of[old] = new;
+        }
+        self.f.apply_order(&order);
+        for home in self.block_of.values_mut() {
+            *home = new_of[*home];
+        }
+        for pad in self.try_to_pad.values_mut() {
+            *pad = new_of[*pad];
+        }
+        self.pad_to_try = self.pad_to_try.drain().map(|(pad, try_tag)| (new_of[pad], try_tag)).collect();
+        self.pads = order.iter().map(|&old| self.pads[old]).collect();
+        self.appendix = self.appendix.map(|appendix| new_of[appendix]);
+        self.scope_tops = vec![None; order.len() + 1];
     }
 
     /// `fixCallUnwindMismatches` (legacy EH): a call that may throw inside a
@@ -628,6 +647,7 @@ impl Stackify<'_> {
             if state.f.blocks[block][at].tag == 0 {
                 state.next_tag += 1;
                 state.f.blocks[block][at].tag = state.next_tag;
+                state.block_of.insert(state.next_tag, block);
             }
             state.f.blocks[block][at].tag
         };
@@ -695,17 +715,32 @@ impl Stackify<'_> {
         if ranges.is_empty() {
             return false;
         }
+        let blocks = self.f.blocks.len();
+        self.pads.resize(blocks, false);
+        let index = self.f.def_use();
+        let mut fixing = Fixing {
+            next: (0..blocks).map(|block| if block + 1 < blocks { block + 1 } else { NONE }).collect(),
+            prev: (0..blocks).map(|block| if block == 0 { NONE } else { block - 1 }).collect(),
+            def_block: (0..self.f.vreg_count() as u32)
+                .map(
+                    |reg| {
+                        if index.def_count(reg) == 1 { index.def(reg).map_or(NONE, |(block, _)| block) } else { NONE }
+                    },
+                )
+                .collect(),
+        };
         for (dest, found) in ranges {
             for (begin, end) in found {
                 if dest != CALLER {
-                    let block = self.locate(begin).0;
+                    let block = self.block_of[&begin];
                     if let Some(pad) = self.unwind_pad(block) {
                         self.f.succs[block].retain(|&to| to != pad);
                     }
                 }
-                self.add_nested_try_delegate(begin, end, dest);
+                self.add_nested_try_delegate(&mut fixing, begin, end, dest);
             }
         }
+        self.renumber(&fixing);
         true
     }
 
