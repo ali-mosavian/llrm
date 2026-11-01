@@ -4,6 +4,9 @@
 # rc16..rc25 (rs8..rs12) are more caller-saved scratch, usable up to the platform's zero_page bytes.
 # rs0 is the software stack pointer; the 8-bit hardware stack (page 1) holds return addresses only.
 #
+# @bytes: the 8-bit allocation order: the hardware registers, then the zero-page bytes (rc0, rc1 are the stack pointer).
+@bytes a x y rc2 rc3 rc4 rc5 rc6 rc7 rc8 rc9 rc10 rc11 rc12 rc13 rc14 rc15 rc16 rc17 rc18 rc19 rc20 rc21 rc22 rc23 rc24 rc25
+#
 # name bits root lane classes dwarf codeview
 a      8   a    0   gpr,int        - -
 x      8   x    0   gpr,int,index  - -
