@@ -27,6 +27,14 @@ fn check(name: &str) {
     assert_eq!(norm(&got), norm(&golden), "{name}");
 }
 
+/// `shl 8; ashr 8` on an `i16` is a sign-extension in a register; its type was
+/// refused at "promote result" (bench/nibbles). The pin selects
+/// `i32.extend8_s`.
+#[test]
+fn sext_inreg() {
+    check("sext_inreg");
+}
+
 /// Every shift selected `CannotSelect(Shl)`: the legalizer wanted an `i8`
 /// amount, wasm's is the type shifted.
 #[test]
