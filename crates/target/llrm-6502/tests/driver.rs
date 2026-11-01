@@ -802,6 +802,8 @@ fn a_run_of_word_shifts_carries_one_byte_in_the_accumulator() {
     let ir = module("define i16 @shr3(i16 %x) {\n  %r = lshr i16 %x, 3\n  ret i16 %r\n}");
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(text.contains("lsr a\n  ror rc2"), "the shifts go through memory:\n{text}");
+}
+
 /// gcd's `if (a > b) a -= b; else b -= a;` was folded into two selects
 /// (`a -= a > b ? b : 0`), each a branch here after all: 47 bytes, 239 clocks
 /// a call where llvm-mos and SDCC have 36 to 37 bytes and 127 to 140 clocks.
