@@ -18,6 +18,10 @@
 //!      jne L
 //! ```
 //!
+//! # Example
+//! The loop above: `cmp bx, 9` goes, `bx` starts at -9, and `data` takes 9 more
+//! in its displacement.
+//!
 //! # How it works
 //! A loop of one latch and a preheader that leaves by one jump. The latch ends
 //! `step; sub t, step, K; jcc header` with `t` read by nobody, `step` an `inc`,
