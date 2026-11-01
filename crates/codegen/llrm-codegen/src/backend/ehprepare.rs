@@ -159,6 +159,17 @@ pub fn prepared(
     module: &mut Module,
     layout: &llrm_target::layout::Layout,
 ) -> Result<(), String> {
+    prepared_for(module, layout, false)
+}
+
+/// [`prepared`] where the host throws to the pad instead of the runtime
+/// jumping to the landing function (wasm exception handling): nothing stores
+/// ERR, so the pad asks the runtime for it.
+pub fn prepared_for(
+    module: &mut Module,
+    layout: &llrm_target::layout::Layout,
+    host_lands: bool,
+) -> Result<(), String> {
     let far = layout.spaces.far;
     // The runtime keeps a procedure's handler as an offset in its code
     // segment: a word at m16, a flat address where a pointer is wider.
@@ -260,7 +271,8 @@ pub fn prepared(
         };
         registered(context, function, routines).map_err(why)?;
         let Some(pad) = pad else { continue };
-        selected(context, function, pad, routines.landed).map_err(why)?;
+        selected(context, function, pad, routines.landed, host_lands.then_some((routines.err, routines.asked)))
+            .map_err(why)?;
         demote_phis(context, function, pad).map_err(why)?;
         demote_live(context, function, pad).map_err(why)?;
     }
@@ -395,6 +407,9 @@ struct Routines {
     landing: ConstantId,
     null: ConstantId,
     landed: ConstantId,
+    /// `ERR` and its type.
+    err: ConstantId,
+    asked: TypeId,
     /// The type of ON LOCAL ERROR's handler offset.
     offset: TypeId,
 }
@@ -456,7 +471,7 @@ fn declare(
         registration.map(|one| (one, ty, module.reference(module.named(name).expect("declared"))))
     };
     let (onerror, onlocal) = (routine(onerror, REGISTER, register), routine(onlocal, REGISTER_LOCAL, local));
-    Ok(Routines { onerror, onlocal, landing, null, landed, offset })
+    Ok(Routines { onerror, onlocal, landing, null, landed, err, asked, offset })
 }
 
 /// A far function by BASIC's convention, as the runtime's are.
@@ -559,6 +574,7 @@ fn selected(
     function: &mut Function,
     pad: BlockId,
     landed: ConstantId,
+    asks: Option<(ConstantId, TypeId)>,
 ) -> Result<(), String> {
     let lp = landing_pad(function, pad).expect("a pad");
     let Some(value) = function.instruction(lp).result else { return Ok(()) };
@@ -569,6 +585,26 @@ fn selected(
             return Err("a landing pad read other than for its selector".to_owned());
         }
         let (ty, result) = (user.ty, user.result.expect("a value"));
+        if let Some((err, asked)) = asks {
+            let info = CallInfo {
+                function_type: asked,
+                calling_convention: BASIC,
+                return_attrs: Vec::new(),
+                argument_attrs: Vec::new(),
+                attrs: Vec::new(),
+                tail: Default::default(),
+            };
+            let call = function.create_instruction(
+                Opcode::Call(Box::new(info)),
+                i16,
+                vec![Operand::Constant(err)],
+                Flags::default(),
+                Some("err"),
+            );
+            function.insert(call, Position::Before(one.user))?;
+            let code = Operand::Value(function.instruction(call).result.expect("a value"));
+            store(context, function, code, Operand::Constant(landed), Position::Before(one.user))?;
+        }
         let load = function.create_instruction(
             Opcode::Load { align: None, volatile: false },
             i16,
@@ -662,9 +698,9 @@ fn body_start(
     found.map_or(Position::End(block), Position::Before)
 }
 
-/// Each phi of the pad a slot its predecessors store into before they call,
+/// Each phi of `pad` a slot its predecessors store into before they call,
 /// as DemotePHIToStack makes it.
-fn demote_phis(
+pub fn demote_phis(
     context: &Context,
     function: &mut Function,
     pad: BlockId,
@@ -742,6 +778,17 @@ fn demote_live(
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
+    demote_live_into(context, function, pad, |_, _| false)
+}
+
+/// [`demote_live`] for any `block`, leaving in its register each value
+/// `reaches` says is available wherever the block is entered from.
+pub fn demote_live_into(
+    context: &Context,
+    function: &mut Function,
+    pad: BlockId,
+    reaches: impl Fn(&Function, ValueId) -> bool,
+) -> Result<(), String> {
     let values = live_in(function).remove(&pad).unwrap_or_default();
     let entry = function.entry().expect("a body");
     // An entry block's alloca is the frame's own address, in no register.
@@ -751,7 +798,8 @@ fn demote_live(
         }
         ValueDef::Argument(_) => false,
     };
-    let values: Vec<ValueId> = values.into_iter().filter(|&one| !fixed(function, one)).collect();
+    let values: Vec<ValueId> =
+        values.into_iter().filter(|&one| !fixed(function, one) && !reaches(function, one)).collect();
     for value in values {
         let ty = function.value(value).ty;
         let slot = slot(context, function, ty)?;

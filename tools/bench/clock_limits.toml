@@ -42,8 +42,9 @@
 "parity/qmove bas -Os" = 462  # main 434 (standard)
 
 # class 6: masked scaled IV (pin SCEV does not move shl through the mask) and the LSR formula sharing it: DEBT bench-clocks-masked-iv; owner: w12; due 2026-11-06
-"textfill c -Os" = 60021  # main 58026
-"tile bas -Os" = 10277  # main 10197
+"textfill c -Os" = 60021  # main 58025
+"textfill bas -Os" = 60161  # main 58189; the alias loads are hoisted since #6212, the rest is the c row's masked IV (same +1.97k); owner w12 LSR4
+"tile bas -Os" = 10277  # main 10196
 "tile c -Os" = 10300  # main 10169; RA spill and a larger frame on the same pre-ISel IR (IR 38 -> 40, asm +7), owner w13; was 10224; owner w6; TEMPORARY: fix after the main merge
 "tile nib -Os" = 10292  # main 10186
 "textfill nib -Os" = 60024  # main 58065
@@ -63,4 +64,3 @@
 "parity/qmove c -Os" = 485  # main 465
 
 # class 11 sound alias analysis (main assumed no alias, unsound for BASIC): DEBT bench-clocks-sound-alias; owner: qb-metadata; due 2026-11-06
-"textfill bas -Os" = 60161  # main 58189
