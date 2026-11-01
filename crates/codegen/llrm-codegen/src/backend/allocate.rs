@@ -254,7 +254,7 @@ pub fn allocate(
     classes: &RegisterClasses,
 ) -> Result<Assignment, Error> {
     let mut frame = Frame::new(0);
-    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &[], &mut frame)?.0)
+    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &[], false, &mut frame)?.0)
 }
 
 thread_local! {
@@ -277,6 +277,7 @@ pub fn greedy_rewritten(
     segments: &Segments,
     classes: &RegisterClasses,
     saved: &[RegId],
+    basic_semantics: bool,
     frame: &mut Frame,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     targets::profile(cpu).map_err(Error::Value)?;
@@ -306,7 +307,7 @@ pub fn greedy_rewritten(
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
-        tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes },
+        tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
     };
@@ -414,6 +415,8 @@ pub struct RegAlloc {
     pub saved: Vec<RegId>,
     /// A build for size (`MF->getFunction().hasOptSize()`).
     pub size: bool,
+    /// The module is BASIC's: faults are observed in statement order.
+    pub basic_semantics: bool,
 }
 
 impl RegAlloc {
@@ -434,6 +437,7 @@ impl RegAlloc {
             classes: Rc::clone(classes),
             saved: Vec::new(),
             size: false,
+            basic_semantics: false,
         })
     }
 
@@ -452,6 +456,15 @@ impl RegAlloc {
         saved: Vec<RegId>,
     ) -> Self {
         self.saved = saved;
+        self
+    }
+
+    /// With BASIC's fault order observed.
+    pub fn with_basic_semantics(
+        mut self,
+        basic_semantics: bool,
+    ) -> Self {
+        self.basic_semantics = basic_semantics;
         self
     }
 
@@ -571,6 +584,7 @@ impl RegAlloc {
             &segments,
             &self.classes,
             &self.saved,
+            self.basic_semantics,
             &mut frame.borrow_mut(),
         );
         frame.borrow_mut().defer_colours = false;
@@ -795,6 +809,7 @@ mod tests {
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
             &[],
+            false,
             &mut Frame::new(0),
         );
         let message = got.err().map(|error| error.to_string()).expect("an error, not a fallback allocation");

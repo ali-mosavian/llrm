@@ -66,9 +66,6 @@ pub fn frame_lowering(
         offsets.push(-(size as i64));
     }
     let stack_size = align_to(size, STACK_ALIGN);
-    if stack_size == 0 {
-        return Ok(false);
-    }
     // The joined `CALL` is a pseudo of this crate, outside the generated
     // descriptions.
     let has_calls = f
@@ -76,7 +73,14 @@ pub fn frame_lowering(
         .iter()
         .flatten()
         .any(|inst| matches!(inst.opcode, post::CALL | post::CALL_INDIRECT) || has(inst, flag::CALL));
-    let writeback = !(stack_size <= RED_ZONE && !has_calls);
+    // `needsPrologForEH`: a function with a personality and a call keeps the
+    // incoming stack pointer to restore after a catch.
+    let for_eh = f.personality && has_calls;
+    if stack_size == 0 && !for_eh {
+        return Ok(false);
+    }
+    // `needsSPWriteback`: only a frame of its own is written back.
+    let writeback = stack_size > 0 && !(stack_size <= RED_ZONE && !has_calls);
     let (konst, add, sub, global_get, global_set) = match pointer {
         ValType::I64 => (op::CONST_I64, op::ADD_I64, op::SUB_I64, op::GLOBAL_GET_I64, op::GLOBAL_SET_I64),
         _ => (op::CONST_I32, op::ADD_I32, op::SUB_I32, op::GLOBAL_GET_I32, op::GLOBAL_SET_I32),
@@ -86,15 +90,21 @@ pub fn frame_lowering(
         f.globals.push(("__stack_pointer".to_string(), pointer));
     }
     let sp = f.new_vreg(pointer);
+    f.sp = Some(sp);
 
     // The prologue goes below the ARGUMENTs.
     let at = f.blocks[0].iter().take_while(|inst| is_argument(inst.opcode)).count();
-    let (read, amount) = (f.new_vreg(pointer), f.new_vreg(pointer));
-    let mut prologue = vec![
-        Inst::new(global_get, &[Operand::Def(read), Operand::Sym(stack_pointer)]),
-        Inst::new(konst, &[Operand::Def(amount), Operand::Imm(stack_size as i64)]),
-        Inst::new(sub, &[Operand::Def(sp), Operand::Use(read), Operand::Use(amount)]),
-    ];
+    let mut prologue = Vec::new();
+    if stack_size == 0 {
+        prologue.push(Inst::new(global_get, &[Operand::Def(sp), Operand::Sym(stack_pointer)]));
+    } else {
+        let (read, amount) = (f.new_vreg(pointer), f.new_vreg(pointer));
+        prologue.extend([
+            Inst::new(global_get, &[Operand::Def(read), Operand::Sym(stack_pointer)]),
+            Inst::new(konst, &[Operand::Def(amount), Operand::Imm(stack_size as i64)]),
+            Inst::new(sub, &[Operand::Def(sp), Operand::Use(read), Operand::Use(amount)]),
+        ]);
+    }
     if writeback {
         prologue.push(Inst::new(global_set, &[Operand::Sym(stack_pointer), Operand::Use(sp)]));
     }

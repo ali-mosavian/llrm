@@ -22,29 +22,33 @@ static LAYOUT: LazyLock<Layout> =
     LazyLock::new(|| Layout::parse(include_str!("machines/datalayout.toml")).expect("m68k datalayout.toml parses"));
 static CALLING: LazyLock<Calling> =
     LazyLock::new(|| Calling::parse(include_str!("machines/calling.toml")).expect("m68k calling.toml parses"));
-static DIALECT: LazyLock<Dialect> =
+pub(crate) static DIALECT: LazyLock<Dialect> =
     LazyLock::new(|| Dialect::parse(include_str!("instructions/dialect.toml")).expect("m68k dialect.toml parses"));
 
 /// The m68k target.
 pub struct M68k;
 
-/// m68k's object writers: none yet, the static executable is `crate::object`'s.
+/// m68k's object writers: ELF32 big-endian (`crate::elf`); the static
+/// executable is `crate::object`'s.
 struct M68kObjects;
 
 impl llrm_object::ObjectTarget for M68kObjects {
     fn write_object(
         &self,
         format: &str,
-        _object: &llrm_object::Object,
+        object: &llrm_object::Object,
     ) -> Result<Vec<u8>, llrm_object::Unsupported> {
-        Err(llrm_object::Unsupported(format!("m68k has no {format} object writer")))
+        match format {
+            "elf" => crate::elf::write(object),
+            _ => Err(llrm_object::Unsupported(format!("m68k has no {format} object writer"))),
+        }
     }
 
     fn asm_info(
         &self,
-        _format: &str,
+        format: &str,
     ) -> Option<llrm_object::AsmInfo> {
-        None
+        (format == "elf").then(|| llrm_object::AsmInfo { hosted: true, ..llrm_object::AsmInfo::default() })
     }
 }
 

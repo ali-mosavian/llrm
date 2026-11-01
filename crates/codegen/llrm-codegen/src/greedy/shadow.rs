@@ -1546,7 +1546,11 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tii: &crate::greedy::tii::X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+            },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
         };
@@ -1615,7 +1619,11 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tii: &crate::greedy::tii::X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+            },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
         };
@@ -1790,7 +1798,11 @@ mod tests {
                 sets: None,
                 stable_loads: true,
                 saved: &[],
-                tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+                tii: &crate::greedy::tii::X86InstrInfo {
+                    bits: 16,
+                    classes: &RegisterClasses::m16(),
+                    basic_semantics: false,
+                },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             };
@@ -1847,7 +1859,11 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tii: &crate::greedy::tii::X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+            },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
         };
@@ -1981,7 +1997,11 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tii: &crate::greedy::tii::X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+            },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
         };
@@ -2050,7 +2070,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
         };
@@ -2094,7 +2114,11 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tii: &crate::greedy::tii::X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+            },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
         };
@@ -2132,7 +2156,7 @@ mod tests {
         // The parent (value 1) is in no table: a spill made it.
         let tables = Rc::new(Tables::default());
         let classes = RegisterClasses::m16();
-        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let env = BodySplitEnv::new(
             &body,
             Rc::clone(&tables),
@@ -2171,7 +2195,7 @@ mod tests {
         let tables = Rc::new(Tables::default());
         tables.widths.borrow_mut().insert(1, 4);
         let classes = RegisterClasses::m16();
-        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let env = BodySplitEnv::new(
             &body,
             Rc::clone(&tables),
@@ -2217,7 +2241,7 @@ mod tests {
         );
         let tables = Rc::new(Tables::default());
         let classes = RegisterClasses::m16();
-        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let env = BodySplitEnv::new(
             &body,
             Rc::clone(&tables),

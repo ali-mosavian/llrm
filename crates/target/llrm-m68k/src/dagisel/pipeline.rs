@@ -23,7 +23,7 @@ use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit}
 use llrm_dagisel::interp::Selector;
 
 use super::generated::ids::reg as pin;
-use super::generated::instrinfo::{self, flag};
+use super::generated::instrinfo::flag;
 use super::generated::{m68k_m68000, m68k_m68020};
 use super::hooks::{Cpu, M68kHooks};
 use super::lowering::{M68kLowering, target_lowering};
@@ -122,21 +122,21 @@ impl SchedInfo for M68kSched {
         &self,
         opcode: u32,
     ) -> usize {
-        instrinfo::desc(opcode as u16).map_or(0, |desc| usize::from(desc.num_defs))
+        super::local::desc(opcode as u16).map_or(0, |desc| usize::from(desc.num_defs))
     }
 
     fn implicit_defs(
         &self,
         opcode: u32,
     ) -> &[u16] {
-        instrinfo::desc(opcode as u16).map_or(&[], |desc| desc.implicit_defs)
+        super::local::desc(opcode as u16).map_or(&[], |desc| desc.implicit_defs)
     }
 
     fn is_call(
         &self,
         opcode: u32,
     ) -> bool {
-        instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
+        super::local::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
     fn call_frame_setup(&self) -> Option<u32> {
@@ -170,19 +170,22 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, false, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
-/// `source_order`.
+/// `source_order`, `(An)+` and `-(An)` accesses where `indexed`, and `addq`
+/// and `subq` where `short`.
 pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     source_order: bool,
+    indexed: bool,
+    short: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering;
+    let mut lowering = M68kLowering { indexed };
     let selector = Selector::new(match cpu {
         Cpu::M68000 => m68k_m68000::TABLE,
         Cpu::M68020 => m68k_m68020::TABLE,
@@ -191,6 +194,7 @@ pub fn select_block_with(
         tli: &tli,
         lowering: &mut lowering,
         chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
+        short,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
         llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
@@ -202,6 +206,7 @@ struct M68kTarget<'a> {
     tli: &'a llrm_codegen::backend::selectiondag::actions::TargetLowering,
     lowering: &'a mut M68kLowering,
     chooser: M68kChooser<'a>,
+    short: bool,
 }
 
 struct M68kChooser<'a> {
@@ -215,7 +220,7 @@ impl Select for M68kChooser<'_> {
         adapter: &mut llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter<'_>,
         node: u32,
     ) -> llrm_dagisel::interp::Outcome {
-        self.selector.select(adapter, &mut self.hooks, node)
+        super::indexed::select(adapter, node).unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }
 
@@ -228,6 +233,15 @@ impl DagTarget for M68kTarget<'_> {
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
         (&M68kPins, &mut self.chooser)
+    }
+
+    fn postprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        if self.short {
+            super::short::narrow(dag);
+        }
     }
 }
 

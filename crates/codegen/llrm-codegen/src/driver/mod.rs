@@ -92,6 +92,10 @@ pub struct Options {
     /// where it is named, the selector's `rep movs` where not; and the symbol
     /// the routine has in the object (Open Watcom's `memcpy_`, C's `_memcpy`).
     pub libcalls: Vec<(String, u32, String)>,
+    /// The object format unwinds natively (wasm exception handling): the host
+    /// hand-over of a QB module keeps the `invoke`s and landing pads for the
+    /// backend instead of a `setjmp` frame. The mid-end is the same.
+    pub wasm_exceptions: bool,
 }
 
 impl Options {
@@ -122,6 +126,7 @@ impl Options {
             stack_check: false,
             isel,
             libcalls: Vec::new(),
+            wasm_exceptions: false,
         }
     }
 
@@ -534,7 +539,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+                |module| crate::backend::ehprepare::prepared_for(
+                    module,
+                    &llrm_target::Target::layout(&*options.arch),
+                    options.wasm_exceptions,
+                ),
             )
     })?;
     // The DAG route expands it itself (`expandFP_TO_UINT`), after the combines.
