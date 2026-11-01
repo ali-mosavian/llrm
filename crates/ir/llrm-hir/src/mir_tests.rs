@@ -2190,3 +2190,22 @@ fn test_lowering_reserves_the_functions_instructions() {
     assert_eq!(lowered.instruction_count(), 10);
     assert_eq!(lowered.instruction_capacity(), 10);
 }
+
+/// A relocation's addend was always an `i16` index (`getelementptr (i8, ptr @s,
+/// i16 8)`), whatever the pointer: on a flat 32-bit target the backends took it
+/// for a sign-extended 16-bit offset and the 64-bit one patched the text. The
+/// offset is as wide as the near pointer.
+#[test]
+fn a_relocation_addend_is_as_wide_as_the_near_pointer() {
+    use crate::model::{AddressKind, DataObject, DataRelocation};
+    let mut object = DataObject::new(3, "payload", vec![0, 0, 0, 0, 0, 0, 0, 0]);
+    object.relocations = vec![DataRelocation { at: 0, target: 3, addend: 8, address: AddressKind::Near, code: false }];
+    for (description, index) in [(FLAT, "i32 8)"), (REAL, "i16 8)")] {
+        let mut program = program(difference());
+        program.modules[0].data = vec![object.clone()];
+        let layout = Layout::parse(description).unwrap();
+        let emitted = crate::mir::emit(&program, &layout).remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains(&format!("@payload, {index}")), "{text}");
+    }
+}

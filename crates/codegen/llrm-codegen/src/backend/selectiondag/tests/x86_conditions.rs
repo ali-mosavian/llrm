@@ -27,9 +27,13 @@ fn lowered(
     cmov: bool,
 ) {
     let tli = TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov, sse2: false, min_size: false, i16_mul_chains: false })
-        .run()
-        .unwrap();
+    DagLegalizer::new(
+        dag,
+        &tli,
+        &mut X86Lowering { cmov, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+    )
+    .run()
+    .unwrap();
 }
 
 fn code(

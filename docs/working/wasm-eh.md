@@ -1,0 +1,79 @@
+# Wasm exception handling (ON ERROR landing)
+
+One PR (#6295), one commit per stage. Pin d1106deb71cc, legacy EH. Oracle:
+`llc -mtriple=wasm32 -O0 -fast-isel=false -exception-model=wasm -mattr=+exception-handling [-filetype=obj]`.
+Every stage is O(n) in the blocks and instructions of a function (one pass over them, no nested rescans).
+
+| # | Stage | Pin (permalinks) | Fail-first test |
+|---|-------|------------------|-----------------|
+| 0 | `ExceptionModel` on the wasm driver; `wasm_exceptions` (`--wasm-exceptions`) keeps the invokes for the backend | | `the_wasm_exception_model_refuses_unwinding_and_leaves_the_rest_alone`, `wasm_exceptions_keep_the_landing_pads_for_the_backend` |
+| 1 | `INTRINSIC_*` ISD nodes and `TargetCalling::intrinsic`; wasm names the 7 `llvm.wasm.*` EH intrinsics (shared: llrm-sdag `isd.rs`, llrm-codegen selectiondag) | | `a_function_the_target_names_an_intrinsic_is_an_intrinsic_node` |
+| 2 | Dropped. [WasmEHPrepare.cpp:207:207](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/WasmEHPrepare.cpp#L207) collects `catchpad`/`cleanuppad` blocks and returns at [L223:223](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/WasmEHPrepare.cpp#L223) when there are none: a `landingpad` function (QB's) is untouched. Pin `llc` on `tests/eh/one_invoke.ll` prints `try`, `catch_all`, no `catch`, no `wasm.landingpad.index` | | |
+| 3 | Unwind edges and EH pads in the wasm MIR. The builder's DAG is already the pin's (the pin skips `EH_LABEL` on wasm, [lowerStartEH:9133](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L9133)): `emit` adds the pad as a successor and an `EH_LABEL` at its head | | `an_unwind_edge_is_not_an_edge` |
+| 4 | `WebAssemblyExceptionInfo`, `SortRegion` | [ExceptionInfo.cpp:86:86](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyExceptionInfo.cpp#L86), [SortRegion.h:32:32](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblySortRegion.h#L32) | `an_invoke_in_a_loop_puts_the_try_around_the_loop` |
+| 5 | LateEHPrepare: `catch_all`, stack pointer restore; `needsPrologForEH` in the frame | [LateEHPrepare.cpp:124:124](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyLateEHPrepare.cpp#L124), [FrameLowering.cpp:151:151](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyFrameLowering.cpp#L151) | `one_invoke_is_a_try_with_a_catch_all` |
+| 6 | CFGSort: EH pads first, regions are loops or exceptions | [CFGSort.cpp:397:397](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGSort.cpp#L397) | `two_invokes_share_a_try` |
+| 7 | CFGStackify `placeTryMarker`, `removeUnnecessaryInstrs` | [CFGStackify.cpp:511:511](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L511), [L982:982](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L982) | `a_call_inside_a_try_that_does_not_unwind_to_it_is_refused_by_name` |
+| 8 | Text and object: `try`/`catch_all`/`end_try`, `exception-handling` feature, the table the pin keeps for a personality | | `every_fixture_object_is_the_pins` (llrm-wasm `tests/object.rs`) |
+| 9 | QB: `ehprepare` always runs; a handler lands by `llrm_host_land` (a JS throw) into the function's `catch_all`; the pad reads ERR from the runtime (`ehprepare`, `prepared_for`); host endings are traps, so `END` is not caught | | `on_error_lands_with_wasm_exceptions`, `a_host_ending_gets_through_a_catch_all` |
+| 10 | `eh_reentry`: a pad that branches back into the code it guards runs the body in a dispatch loop (replaces QB's `unwinding()` text transform) | Pin: none, it asserts (W20) | `a_pad_that_branches_back_into_its_body_resumes_there`, `a_pad_entered_again_from_the_body_it_re_enters_runs_that_body_again`, `the_default_successor_of_the_same_pad_is_entered_too` (`tests/reentry.rs`); `a_pad_the_host_throws_to_asks_the_runtime_for_err` |
+| 11 | `fixCallUnwindMismatches`: a call that may throw inside another pad's `try` is wrapped in a `try` / `delegate` to its pad or the caller; `addNestedTryDelegate`, `DELEGATE` depths, `unstackifyVRegsUsedInSplitBB`; `mayThrow` from the callee's `nounwind`; blocks are inserted as links (O(1), as `MF.insert`) and numbered once at the end | [CFGStackify.cpp:1582](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L1582), [L1164](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp#L1164) | `a_call_that_may_throw_inside_a_try_is_delegated_to_the_caller` and five more in `tests/eh.rs`; `the_registrations_are_declared_nounwind_like_the_calls_they_replace` |
+
+## Evidence at edaaadf5cd
+
+Fixtures `crates/target/llrm-wasm/tests/eh/*.ll`; `llrm-wasm-llc -filetype=obj` with the same flags vs the pin's `llc`
+(object md5, first 10 hex). Each linked with `wasm-ld --no-entry --export-all --allow-undefined --import-memory` and
+instantiated under node (imports: memory, `g`).
+
+| Fixture | Pin | Ours | Node |
+|---------|-----|------|------|
+| `one_invoke.ll` | 91add861b2 | 91add861b2 | instantiates |
+| `two_invokes.ll` | 308860c0f5 | 308860c0f5 | instantiates |
+| `loop_invoke.ll` | d185cb6d82 | d185cb6d82 | instantiates |
+
+`call_in_try`, `two_pads`, `call_run`, `call_after_try`, `call_in_loop` and `nested_pads` (stage 11) are text- and object-identical to the pin too; the pin's objects are in `tests/eh/*.wasm`, each linked with `wasm-ld` and instantiated under node.
+
+Non-EH code is unchanged. `llrm-qb` over 693 `.bas` at m16, `-m32`, `-m64`, `--arm64=linux`, `--arm64=darwin`: object md5s
+of the base build (385a3b1c92, binary md5 7317e9ccc1) and this head (0d5f765952) differ in 0 of 693 files on each target
+(ok: 680, 665, 593, 648, 648). Live control, the head binary with `-Os`: 477, 419, 315, 132, 132 files differ.
+
+Shared files touched outside `crates/target/llrm-wasm`: llrm-sdag `isd.rs` (+10, stage 1); llrm-codegen
+`selectiondag/{builder,dagisel_adapter,target_calling}.rs`, `tests/wasm_hooks.rs`, `driver/mod.rs` (the
+`wasm_exceptions` flag); the QB frontend `cli.rs`, `wasm32.rs`; `runtime/qb/posix/startup.c`, `runtime/wasm/*`, tests.
+No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's own.
+
+## DEVIATE
+
+| Id | Difference | Exit |
+|----|-----------|------|
+| W2 | No `TRY_TABLE` or `RETHROW`, and no `fixCatchUnwindMismatches`: it acts only on typed `catch` pads, ours are `catch_all`, which never mismatch | W18 |
+| W18 | No `hoistCatches`, `catchret`/`cleanupret` replacement, `THROW_REF`, `try_table` | a frontend with typed catches or funclet pads |
+| W20 | `eh_reentry` has no pin counterpart: the pin asserts on a pad that branches back into a `try`'s body, which C++ never makes | none |
+
+## ON ERROR programs (28 under `tests/run/qb`, built with `--wasm-exceptions` and each header's flags, run under node)
+
+- Match their `.out` (22): bounds divmod erlnum farchk hugechk intrinsics_errors_{pds71,qb45,vbdos} onerr onrange
+  ownf_err_{pds71,qb45,vbdos} range_exp range_log_trig range_on_error range_power resdiv resnext resume0
+  resume_next_print_last resumelocals
+- Need #6293 (`B_OEGP` import; link error now) (3): ownf_local_pds71, ownf_local_vbdos, resumelocals_local
+- Do not build, unrelated (3): currency_arith_pds71, currency_convert_pds71 (x86_fp80 `LRint` in the mid-end),
+  palette_using_pds71 (`Target(24586)` legalize). None touches EH.
+
+The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).
+
+## Pin on a re-entering pad
+
+`tests/eh/reentry.ll` (two invokes unwinding to one pad that switches back to the block between them; no QB names):
+
+```
+llc -mtriple=wasm32 -O0 -fast-isel=false -exception-model=wasm -mattr=+exception-handling tests/eh/reentry.ll
+WebAssemblyCFGStackify.cpp:525: placeTryMarker: Assertion `!explicitlyBranchesTo(Pred, &MBB) && "Explicit branch to an EH pad!"' failed.
+```
+
+The pin's `FixIrreducibleControlFlow` has no `isEHPad` case, so the multi-entry cycle through the pad is dispatched into the pad.
+`eh_reentry` runs on the IR, before selection, only for a pad with a successor that reaches an invoke unwinding to it and
+does not dominate it; `tests/eh/*.ll` and C++-shaped pads (a `try` in a loop) are untouched.
+
+## Open items
+
+None for EH. `fixCatchUnwindMismatches` waits for typed catches (W18).

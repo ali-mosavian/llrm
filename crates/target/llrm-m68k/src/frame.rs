@@ -74,6 +74,10 @@ pub enum FrameOp {
     Save { registers: Vec<RegId>, base: Base, offset: i64 },
     /// `movem.l (offset, base), regs`
     Restore { registers: Vec<RegId>, base: Base, offset: i64 },
+    /// `move.l reg, -(%sp)` for one register, else `movem.l regs, -(%sp)`
+    Push { registers: Vec<RegId> },
+    /// `move.l (%sp)+, reg` for one register, else `movem.l (%sp)+, regs`
+    Pop { registers: Vec<RegId> },
 }
 
 /// The laid-out frame.
@@ -168,6 +172,39 @@ impl Layout {
             ops.push(FrameOp::Save { registers: self.saved.clone(), base, offset });
         }
         ops
+    }
+
+    /// The prologue with the saved registers pushed before the rest of the
+    /// frame is opened, when there is no frame pointer. The saved slots are the
+    /// top of the frame, so every object keeps its address.
+    ///
+    /// DEVIATE from the pin, which opens the frame with `suba.l` and `movem`s
+    /// the registers into slots. Reason: the push is shorter and no slower, and
+    /// gcc does it. Exit: none; [`Layout::pushes_where_cheaper`] says when.
+    pub fn push_prologue(&self) -> Option<Vec<FrameOp>> {
+        if self.has_fp || self.saved.is_empty() {
+            return None;
+        }
+        let rest = self.adjustment() - SLOT * self.saved.len() as i64;
+        let mut ops = vec![FrameOp::Push { registers: self.saved.clone() }];
+        if rest != 0 {
+            ops.push(FrameOp::SubSp(rest));
+        }
+        Some(ops)
+    }
+
+    /// The epilogue that undoes [`Layout::push_prologue`].
+    pub fn push_epilogue(&self) -> Option<Vec<FrameOp>> {
+        if self.has_fp || self.saved.is_empty() {
+            return None;
+        }
+        let rest = self.adjustment() - SLOT * self.saved.len() as i64;
+        let mut ops = Vec::new();
+        if rest != 0 {
+            ops.push(FrameOp::AddSp(rest));
+        }
+        ops.push(FrameOp::Pop { registers: self.saved.clone() });
+        Some(ops)
     }
 
     /// `emitEpilogue` with `restoreCalleeSavedRegisters`.

@@ -224,12 +224,14 @@ dependencies = [
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
+ "llrm-elf",
  "llrm-lir",
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
  "llrm-target",
  "llrm-transforms",
+ "tempfile",
  "toml",
 ]
 
@@ -506,12 +508,14 @@ dependencies = [
  "llrm-codegen",
  "llrm-dagisel",
  "llrm-debug",
+ "llrm-elf",
  "llrm-lir",
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
  "llrm-target",
  "llrm-transforms",
+ "tempfile",
 ]
 
 [[package]]
@@ -617,6 +621,7 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "llrm-wasm",
  "llrm-x86-m16",
  "logos",
  "num-bigint",
@@ -708,6 +713,17 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "regex",
+]
+
+[[package]]
+name = "llrm-wasm"
+version = "0.1.0"
+dependencies = [
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-target",
 ]
 
 [[package]]

@@ -53,14 +53,16 @@ fn not_and_swap_encode_as_binutils_does() {
 /// `flags.rs`, which only a schedule that separates a compare from its uses
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
-const SOURCE_ORDER: Options = Options { mid_end: true, size: false, source_order: true };
+const SOURCE_ORDER: Options =
+    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, short: false };
 
 fn compiled(
     ir: &str,
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, options).expect("compiles")
+    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, short: false, ..options })
+        .expect("compiles")
 }
 
 fn branches(body: &str) -> String {
@@ -383,7 +385,8 @@ done:
 fn saved_registers_are_stored_into_the_carved_frame_as_the_pin_does() {
     let ir = llrm_m68k::kernels::source_in("library", "fnptr");
     let module = llrm_mir::parse::module(&ir).expect("parses");
-    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    let ours =
+        text_with(&module, "k", Cpu::M68000, Options { push_frame: false, ..Options::default() }).expect("compiles");
     assert!(ours.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{ours}");
     assert!(!ours.contains("-(%sp)"), "{ours}");
 }
@@ -452,7 +455,7 @@ fn word_immediates_encode_as_binutils_does() {
     let word = |opcode, value| Inst { opcode, operands: vec![register("d0"), register("d0"), Operand::Imm(value)] };
     // eori.w #4129,%d0; or.w #40000,%d0 (the pin's `or` with a source of #imm:
     // binutils assembles the same text as `ori`, 0040 9c40, as long and as
-    // quick); and.w #4660,%d0 (c07c 1234)
+    // short); and.w #4660,%d0 (c07c 1234)
     for (inst, golden) in [
         (word("XOR16di", 4129), "0a401021"),
         (word("OR16di", 40000), "807c9c40"),
@@ -636,7 +639,7 @@ fn a_constant_above_32k_is_not_moved_into_an_address_register_by_a_word_move() {
 fn run_reading_zero(ir: &str) -> Option<i32> {
     use llrm_m68k::kernels::{Arg, program};
     use llrm_m68k::object::{executable, write_executable};
-    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+    if support::qemu().is_none() {
         return None;
     }
     let ir = ir.replace("ptr @zero", "ptr %z").replace("define i16 @f()", "define i16 @k(ptr %z)");

@@ -15,10 +15,12 @@ llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }
 llrm-object = { workspace = true }
+llrm-elf = { workspace = true }
 llrm-debug = { workspace = true }
 
 [dev-dependencies]
 llrm-cgen = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 llrm-target = { workspace = true }

@@ -2632,9 +2632,11 @@ pub fn sites_with_trials(
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
         let worth = blocked
             && trials.is_some()
-            && (size == CallerSize::Speed
-                || goes(decision.callee)
-                || worth_a_trial(module, caller, inst, decision.callee));
+            && if size == CallerSize::Speed {
+                !always_only
+            } else {
+                goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee)
+            };
         if !decision.inline && !worth {
             continue;
         }

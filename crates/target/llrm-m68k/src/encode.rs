@@ -20,7 +20,8 @@
 use llrm_lir::registers::RegId;
 
 use crate::REGISTER_INFO;
-use crate::dagisel::enc::{Enc, Piece, encoding};
+use crate::dagisel::enc::{Enc, Piece};
+use crate::dagisel::local;
 use crate::mc::{Inst, Operand};
 
 /// A field of the bytes that waits for a symbol's address (`MCFixup`).
@@ -142,11 +143,7 @@ fn operand_value(
 pub fn encode(inst: &Inst) -> Result<Encoded, String> {
     let (width, pieces) = match crate::divide::encoding(inst.opcode) {
         Some(row) => row,
-        None => {
-            let &(_, width, pieces) =
-                encoding(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?;
-            (width, pieces)
-        }
+        None => local::bits(inst.opcode).ok_or_else(|| format!("no encoding for {}", inst.opcode))?,
     };
     if width == 0 {
         return Err(format!("{} is a pseudo-instruction: it has no encoding", inst.opcode));
@@ -157,6 +154,12 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
         let (lo, width, value) = match *piece {
             Piece::Const { lo, width, value } => (lo, width, value),
             Piece::Operand { lo, width, at, from, enc } => {
+                // DEVIATE from the pin, whose `MOVM*em` (`movem` to `-(An)`)
+                // takes the mask in the instruction's own
+                // reversed order while the printer reads it as
+                // `d0` first: ours is the printed order.
+                let enc =
+                    if at == 1 && matches!(inst.opcode, "MOVM32em" | "MOVM16em") { Enc::InverseMoveMask } else { enc };
                 let whole = operand_value(inst, at as usize, enc, lo, &mut fixups)?;
                 (lo, width, whole >> from)
             }

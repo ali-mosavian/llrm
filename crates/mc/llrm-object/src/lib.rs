@@ -176,6 +176,30 @@ pub fn apply_fixup(
     value: i64,
     section: &str,
 ) -> Result<(), Unsupported> {
+    put_field(image, at, width, pc_rel, value, section, false)
+}
+
+/// [`apply_fixup`] for a big-endian target.
+pub fn apply_fixup_be(
+    image: &mut [u8],
+    at: usize,
+    width: usize,
+    pc_rel: bool,
+    value: i64,
+    section: &str,
+) -> Result<(), Unsupported> {
+    put_field(image, at, width, pc_rel, value, section, true)
+}
+
+fn put_field(
+    image: &mut [u8],
+    at: usize,
+    width: usize,
+    pc_rel: bool,
+    value: i64,
+    section: &str,
+    big: bool,
+) -> Result<(), Unsupported> {
     let fits = match width {
         8 => true,
         4 => i32::try_from(value).is_ok() || (!pc_rel && u32::try_from(value).is_ok()),
@@ -185,7 +209,11 @@ pub fn apply_fixup(
     if !fits {
         return Err(Unsupported(format!("{section}: a value of {value} does not fit its {width}-byte field")));
     }
-    image[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+    if big {
+        image[at..at + width].copy_from_slice(&value.to_be_bytes()[8 - width..]);
+    } else {
+        image[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+    }
     Ok(())
 }
 
