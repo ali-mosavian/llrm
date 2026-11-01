@@ -25,6 +25,7 @@ one and prints the driver and version).
 | 14 | `mc.rs`, `encode.rs` | sub-forms of the printer and the FPU encodings (`encodeFPSYSSelect`, `encodeScale`, `encodeIndexSuppress`) | M4b, M7 |
 | 15 | `mfunc.rs`, `object.rs` | spike-local machine function and static-executable writer; every `ObjectTarget` format answers `Unsupported`; no 16->32 branch relaxation | neutral-lir and the object refactor |
 | 16 | `mac.rs` | the Mac resource layout follows the book and is not run (no emulator or ROM) | when a ROM is fetched |
+| 17 | `dagisel/indexed.rs`, `lowering.rs` | `(An)+` and `-(An)` accesses (the shared indexed combine, on) with m68k-local writeback opcodes (value and new base, base tied). The pin models them with one def and no tied base, its `SelectARIPI`/`SelectARIPD` never match and it sets no indexed action. Off for `Options::PINNED`. Loads that extend are not indexed | none: the goal is best of gcc and clang |
 
 Items 4 to 6 are the only places the code differs from the pin's output on purpose; the rest is
 unfinished translation.
