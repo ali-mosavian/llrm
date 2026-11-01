@@ -410,6 +410,7 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     let (threshold, boost) = run.tti.unroll_threshold_overrides();
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
+    up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;
