@@ -573,6 +573,9 @@ mod tests {
             // The flags go on the new trunc only, which the logic result
             // proves; the old truncs keep theirs.
             "combine_casted_logic.rs",
+            // The memcpy loop builds its two `gep inbounds i8, p, 1` from the
+            // copy's own pointers; it reads no flag off an existing instruction.
+            "memloops.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

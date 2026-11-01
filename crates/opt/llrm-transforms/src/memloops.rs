@@ -48,11 +48,12 @@ use llrm_mir::types::TypeId;
 use crate::edges::split_block_at;
 
 /// How many loops each block of `function` is in, by block number.
-pub fn loop_depths(function: &Function) -> std::collections::HashMap<u32, u32> {
-    let mut depths = std::collections::HashMap::new();
-    for loop_ in &llrm_analysis::cfg::Shape::of(function).loops {
+pub fn loop_depths(function: &Function) -> Vec<u32> {
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let mut depths = vec![0; function.block_capacity()];
+    for loop_ in &shape.loops {
         for &block in loop_.body.iter() {
-            *depths.entry(block as u32).or_insert(0) += 1;
+            depths[block as usize] += 1;
         }
     }
     depths
