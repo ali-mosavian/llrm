@@ -1551,6 +1551,12 @@ routines = ["B$DSEG", "B$DSG0", "B$SCLR", "B$RUNL", "B$StackReset", "B$Init", "B
 [llrm]
 stack_abi = ["B$CLOS", "B$COLR", "B$CSCN", "B$DDIM", "B$FERR", "B$LOCT", "B$OEGA", "B$RDIM", "B$RESN", "B$SERR"]
 
+# What a call of the llrm runtime does to the heaps a loop's cached array words live in. `moves_far_heap`: it reclaims the
+# far heap (shell.c: qb_shell_reclaim after the child returns). `moves_near_heap`: it compacts the local heap, which slides
+# a near array (file.c close_fdb and fre.c nh_compact: B$CLOS, B$FRSD, B$FRI2). DIM, REDIM and ERASE allocate by their tags.
+moves_far_heap = ["B$SSHL"]
+moves_near_heap = ["B$CLOS", "B$FRSD", "B$FRI2"]
+
 # The event trapping of the llrm runtime (runtime/qb/events.c), which has no counterpart in QB's: the front end numbers the
 # handlers and asks which are due, where QB jumps into a handler's address.
 

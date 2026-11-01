@@ -2182,3 +2182,52 @@ fn the_frame_pointer_option_gives_the_attribute_to_functions_without_one() {
     assert!(frame_listing("", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
     assert!(!frame_listing("\"frame-pointer\"=\"none\"", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
 }
+
+const M64_SUM: &str = "target datalayout = \"@m64-datalayout@\"\n\
+    target triple = \"x86_64-unknown-linux-gnu\"\n\
+    @a = global [100 x i64] zeroinitializer\n\
+    define i64 @f(i64 %i) {\n  %p = getelementptr inbounds [100 x i64], ptr @a, i64 0, i64 %i\n  \
+    %v = load i64, ptr %p\n  ret i64 %v\n}\n";
+
+/// `-fno-pic` was ignored at m64: a global array indexed was
+/// `lea reg, offset a` and a register-indexed access, where the pin's static
+/// code is one absolute `a[rdx*8]`.
+#[test]
+fn a_global_array_index_at_m64_without_the_pic_level_flag_is_one_absolute_access() {
+    let text = format!("{M64_SUM}!llvm.module.flags = !{{!0}}\n!0 = !{{i32 7, !\"uwtable\", i32 2}}\n");
+    let (built, _) = compiled(&flags(&["-O2"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("offset a"), "{listing}");
+}
+
+/// The default stays position independent: with the "PIC Level" flag (or none
+/// at all) the symbol's address is made with `lea` from `%rip`.
+#[test]
+fn a_global_array_index_at_m64_with_the_pic_level_flag_is_an_lea() {
+    let flagged = format!(
+        "{M64_SUM}!llvm.module.flags = !{{!0, !1}}\n!0 = !{{i32 8, !\"PIC Level\", i32 2}}\n!1 = !{{i32 7, !\"uwtable\", i32 2}}\n"
+    );
+    for text in [flagged.as_str(), M64_SUM] {
+        let (built, _) = compiled(&flags(&["-O2"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("offset a"), "{listing}");
+    }
+}
+
+/// A loop with a `srem` and a 64-bit sum, called with a constant, asked SCEV
+/// to udiv a 128-bit value: the zero-extension to 132 bits made an `Ap::new`
+/// of width 132 (debug builds aborted in simplifyindvar).
+#[test]
+fn an_srem_loop_with_a_constant_trip_count_compiles_in_a_debug_build() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+        target triple = \"x86_64-unknown-linux-gnu\"\n\
+        define i64 @f(i32 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n  %i = phi i32 [ %n, %entry ], [ %next, %loop ]\n  %acc = phi i64 [ 0, %entry ], [ %sum, %loop ]\n  \
+        %m = mul i32 %i, 3\n  %r = srem i32 %m, 11\n  %w = sext i32 %r to i64\n  %sum = add i64 %acc, %w\n  \
+        %next = sub i32 %i, 1\n  %done = icmp eq i32 %next, 0\n  br i1 %done, label %out, label %loop\n\
+        out:\n  ret i64 %sum\n}\n\
+        declare void @report(i64)\n\
+        define i32 @main() {\n  %v = call i64 @f(i32 2000)\n  call void @report(i64 %v)\n  ret i32 0\n}\n";
+    let _ = compiled(&flags(&["-O2"]), text, "main");
+}

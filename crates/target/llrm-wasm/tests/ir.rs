@@ -27,6 +27,31 @@ fn check(name: &str) {
     assert_eq!(norm(&got), norm(&golden), "{name}");
 }
 
+/// A struct passed `byval` or returned `sret` was refused ("a parameter
+/// attribute that moves it, with a target's calling hook"): any C function
+/// taking or returning a struct bigger than a scalar did not compile. The
+/// caller copies a `byval` argument to a frame object and passes its address.
+#[test]
+fn byval_and_sret() {
+    check("byval_sret");
+}
+
+/// A byval copy is expanded inline into a frame object whose alignment is
+/// raised to the first piece's, and is a `memcpy` beyond the inline limit:
+/// clang's output for structs of 1 to 100 bytes passed, returned and copied.
+#[test]
+fn c_structs() {
+    check("c_structs");
+}
+
+/// A `memcpy` to a local became `memory.copy 0, 12`: the frame offset was
+/// folded into the second memory index, which is no `off`. The pin adds it to
+/// the stack pointer.
+#[test]
+fn memcpy_to_a_local_is_memory_copy_of_its_address() {
+    check("memcpy_to_local");
+}
+
 /// `llvm.log2` and `llvm.exp2` selected `CannotSelect(FLog2)`: llrm-qb --wasm32
 /// refused `2 ^ x` programs (range_power, pow_unrolled). The pin calls
 /// `log2`/`exp2` (and `log2f`/`exp2f`).

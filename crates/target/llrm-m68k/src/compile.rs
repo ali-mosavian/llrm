@@ -46,19 +46,19 @@ pub struct Options {
     pub push_frame: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
-    pub quick: bool,
+    pub short: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options =
-        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, quick: false };
+        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, short: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, quick: true }
+        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, short: true }
     }
 }
 
@@ -91,8 +91,11 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.quick)?;
+    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
     let mut function = emit(name, &blocks)?;
+    if options.short {
+        crate::cmpelim::eliminate_tests(&mut function);
+    }
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);

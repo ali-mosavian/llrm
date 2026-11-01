@@ -348,6 +348,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether a constant address offset may become a phi: false where the
+    /// access folds it as a displacement and the target says to keep it. A
+    /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
+    /// register offset costs an add and a register at m16 (6 GPRs, base+index
+    /// already taken), nothing at m32.
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
+    }
+
     /// The same bound for a caller optimized for speed (its tuning table).
     fn speed_inline_by_code_size(&self) -> bool {
         false
@@ -408,6 +417,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::multiply_by_clocks`.
+    fn multiply_by_clocks(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -435,6 +449,18 @@ pub trait Tti {
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// The target's `PartialThreshold` (its tuning table); none: the pass's
+    /// own.
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
+    /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
+    /// 50.
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        None
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read
