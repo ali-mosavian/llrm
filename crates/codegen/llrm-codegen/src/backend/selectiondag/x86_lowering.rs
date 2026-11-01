@@ -410,7 +410,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
-            ISD::LRint => lower_lrint(dag, node),
+            ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),

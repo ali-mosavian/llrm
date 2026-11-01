@@ -166,7 +166,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> EVT {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
-            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint => self.dag.value_type(self.dag.operand(node, 0)),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
                 _ => self.dag.value_type(node),
@@ -386,9 +386,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
             // `ExpandFPLibCall`: every operand, none signed.
             ISD::FRem => (false, 2),
-            ISD::FSin | ISD::FCos | ISD::FAtan | ISD::FLog | ISD::FLog2 | ISD::FExp | ISD::FExp2 | ISD::LRint => {
-                (false, 1)
-            }
+            ISD::FSin
+            | ISD::FCos
+            | ISD::FAtan
+            | ISD::FLog
+            | ISD::FLog2
+            | ISD::FExp
+            | ISD::FExp2
+            | ISD::LRint
+            | ISD::LLRint => (false, 1),
             _ => return Err(refused),
         };
         let Some(name) = self.tli.libcall_name(op, vt) else { return Err(refused) };
