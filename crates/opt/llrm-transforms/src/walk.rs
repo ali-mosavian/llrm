@@ -673,11 +673,10 @@ pub(crate) fn priced_copy_depth(
     let Some(&first) = sites.first() else { return 0 };
     let arguments = body.instruction(first).operands.len().saturating_sub(1);
     let calls: f64 = sites.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum();
-    let clocks = program_target.costs();
     let bytes = program_target.size_costs();
-    let overhead = crate::inline::call_overhead(&clocks, arguments) as f64;
-    let net =
-        (function_bytes(module, layout, &bytes, body) - crate::inline::call_overhead(&bytes, arguments)).max(0) as f64;
+    let price = llrm_mir::callprice::CallPrice::new(&program_target.costs(), &bytes, arguments, rate);
+    let overhead = price.clocks as f64;
+    let net = (function_bytes(module, layout, &bytes, body) - price.bytes).max(0) as f64;
     let k = sites.len() as f64;
     let (mut seen, mut saved_before, mut grown_before) = (1.0f64, 0.0f64, 0.0f64);
     for level in 1..=ceilings.0 as usize {
@@ -686,7 +685,7 @@ pub(crate) fn priced_copy_depth(
         let grown = (1..=level).map(|one| k.powi(one as i32)).sum::<f64>() * net;
         let (gain, growth) = (saved - saved_before, grown - grown_before);
         let margin = if level == 1 { COPY_MARGIN } else { 1.0 };
-        if growth * rate as f64 * margin > gain * 1000.0 {
+        if !price.pays(gain, growth, margin) {
             return level - 1;
         }
         (saved_before, grown_before) = (saved, grown);
