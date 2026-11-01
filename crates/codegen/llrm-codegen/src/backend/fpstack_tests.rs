@@ -201,29 +201,6 @@ fn test_a_chain_of_blocks_costs_in_proportion_to_its_length() {
     assert!(big <= 2 * small + 8, "{small} instructions for 200 blocks, {big} for 400");
 }
 
-/// DEVIATE 5: `v*v` then `v+v` then a use of both: `handleTwoArgFP` puts the
-/// product on top and the next read of `v` needs an exchange; the product
-/// goes below the copy instead, so none follows. FPDEEP's `p*p` shuffled `p`
-/// back to the top.
-#[test]
-fn test_deviate_5_a_square_keeps_the_value_read_next_on_top() {
-    let cells = [frame_cell(-8, 8), frame_cell(-16, 8)];
-    let body = _body(vec![
-        _load(1, &cells[0]),
-        _store(&cells[0], 1),
-        _arithmetic("fmul", 2, fl(1), fl(1)),
-        _arithmetic("fadd", 3, fl(1), fl(1)),
-        _arithmetic("fdiv", 4, fl(2), fl(3)),
-        _store(&cells[1], 4),
-    ]);
-    let result = fps(&body);
-    assert_eq!(count(&result, "fxch"), 0, "{:?}", names(&result));
-    let insns = result.insns();
-    let (_, stack, stores) = _x87_traced(&insns, &[(&cells[0], 3.0)]);
-    assert_eq!(stores.last().map(|(_, value)| *value), Some(1.5));
-    assert!(stack.is_empty());
-}
-
 /// DEVIATE 7: a branch that skips a block, whose other arm reads two floats the
 /// join does not: the pops belong on the skip edge. Without the split the join
 /// pops two values on entry, and the arm that read them defines two (`fldz`)

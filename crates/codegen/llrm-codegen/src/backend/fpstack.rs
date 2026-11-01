@@ -36,11 +36,6 @@
 //! allocator spilled everything; a value live across one is an error here, as
 //! `floatassign` does not spill across one.
 //!
-//! DEVIATE 5 (temporary,
-//! [#2337](https://github.com/ali-mosavian/llrm/issues/2337)): `v op v`
-//! where `v` stays puts the result below the copy when `v` is read next, so
-//! no `fxch` follows.
-//!
 //! DEVIATE 6 (temporary,
 //! [#2338](https://github.com/ali-mosavian/llrm/issues/2338)): a bundle still
 //! to be fixed takes the order a fixed bundle ahead needs, through blocks that
@@ -135,9 +130,6 @@ struct Step {
     live_after: HashSet<u32>,
     /// A later member of a group of copies taken at its first.
     absorbed: bool,
-    /// For each value read after this step before it is written, the step that
-    /// reads it first.
-    next_read: IndexMap<u32, usize>,
 }
 
 impl Step {
@@ -701,18 +693,12 @@ impl Fps<'_> {
                 self.move_to_top(op1)?;
                 tos = op1;
             } else {
-                if self.square_keeps_the_next_read_on_top(step, name, op0, op1, dest)? {
-                    return Ok(());
-                }
                 self.duplicate_to_top(op0, dest)?;
                 op0 = dest;
                 tos = dest;
                 kills_op0 = true;
             }
         } else if !kills_op0 && !kills_op1 {
-            if self.square_keeps_the_next_read_on_top(step, name, op0, op1, dest)? {
-                return Ok(());
-            }
             self.duplicate_to_top(op0, dest)?;
             op0 = dest;
             tos = dest;
@@ -741,40 +727,6 @@ impl Fps<'_> {
         let slot = self.slot(if update_st0 { tos } else { not_tos })?;
         self.values[slot] = dest;
         Ok(())
-    }
-
-    /// DEVIATE 5: `v op v` where `v` stays. `handleTwoArgFP` copies `v` to the
-    /// top and puts the result there. When `v` is read again before the result
-    /// is, the copy keeps the name `v` and the result takes the slot below it
-    /// (`fmul st(1), st(0)`), so the next read finds `v` on top and no `fxch`
-    /// follows (the old pass's rule, FPDEEP's `p*p` then `p+p`). True when it
-    /// emitted the instruction.
-    fn square_keeps_the_next_read_on_top(
-        &mut self,
-        step: &Step,
-        name: &str,
-        op0: u32,
-        op1: u32,
-        dest: u32,
-    ) -> Result<bool, Raised> {
-        if op0 != op1 {
-            return Ok(false);
-        }
-        let (later, product) = (step.next_read.get(&op0), step.next_read.get(&dest));
-        if !matches!(
-            (later, product),
-            (Some(later), Some(product)) if later < product
-        ) {
-            return Ok(false);
-        }
-        self.duplicate_to_top(op0, op0)?;
-        // The copy is `v` on top; the result goes in the slot below, which the
-        // original `v` held.
-        let below =
-            self.values[1..].iter().position(|value| *value == op0).map(|slot| slot + 1).expect("v is below its copy");
-        self.insert_arith(name.to_owned(), below, vec![st(below), st(0)]);
-        self.values[below] = dest;
-        Ok(true)
     }
 
     fn insert_arith(
@@ -952,7 +904,6 @@ fn steps(
                 defs: Vec::new(),
                 live_after: HashSet::default(),
                 absorbed: true,
-                next_read: IndexMap::default(),
             });
             continue;
         }
@@ -976,28 +927,15 @@ fn steps(
                 defs.extend(float(&what.dests));
             }
         }
-        found.push(Step {
-            positions,
-            uses,
-            defs,
-            live_after: HashSet::default(),
-            absorbed: false,
-            next_read: IndexMap::default(),
-        });
+        found.push(Step { positions, uses, defs, live_after: HashSet::default(), absorbed: false });
     }
     let mut live: HashSet<u32> = live_out.iter().copied().collect();
-    let mut next_read: IndexMap<u32, usize> = IndexMap::default();
-    for (index, step) in found.iter_mut().enumerate().rev() {
+    for step in found.iter_mut().rev() {
         step.live_after = live.clone();
-        step.next_read = next_read.clone();
         for def in &step.defs {
             live.remove(def);
-            next_read.shift_remove(def);
         }
         live.extend(step.uses.iter().copied());
-        for used in &step.uses {
-            next_read.insert(*used, index);
-        }
     }
     found
 }
