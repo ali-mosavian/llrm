@@ -2130,3 +2130,55 @@ fn a_parameter_whose_register_was_reused_is_told_by_its_entry_value() {
     let found = |op: u8| bytes.windows(4).any(|window| window == [op, 0x01, 0x55, 0x9f]);
     assert!(found(0xa3) || found(0xf3), "the entry value of rdi is in the object");
 }
+
+/// The listing of `@f` at m32 -O2, a function with a local array it passes on
+/// (so its cells are reached through a frame or the stack pointer), with
+/// `attrs` and, if `calls` is false, no call besides the leaf's own work.
+fn frame_listing(
+    attrs: &str,
+    calls: bool,
+    extra: &[&str],
+) -> String {
+    let (group, definition) =
+        if attrs.is_empty() { ("", String::new()) } else { ("#0", format!("attributes #0 = {{ {attrs} }}\n")) };
+    let body = if calls {
+        "%a = alloca [16 x i32]\n  call void @g(ptr %a)\n  ret void"
+    } else {
+        "%a = alloca [16 x i32]\n  store i32 1, ptr %a\n  %v = load volatile i32, ptr %a\n  ret void"
+    };
+    let text = format!(
+        "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i386-unknown-linux-gnu\"\n\
+         declare void @g(ptr)\n\
+         define void @f() {group} {{\n  {body}\n}}\n{definition}"
+    );
+    let mut arguments = vec!["-m32", "-O2"];
+    arguments.extend_from_slice(extra);
+    let (built, _) = compiled(&flags(&arguments), &text, "f").unwrap();
+    llrm_codegen::backend::masm::text(&built).unwrap()
+}
+
+/// `"frame-pointer"="all"` was ignored: the function's cells were reached
+/// through `esp`, `ebp` was a value register, and llc's bar for a
+/// six-register comparison could not be made.
+#[test]
+fn the_frame_pointer_all_attribute_keeps_the_frame_register() {
+    let framed = frame_listing("\"frame-pointer\"=\"all\"", true, &[]);
+    assert!(framed.contains("mov ebp, esp"), "{framed}");
+    let plain = frame_listing("", true, &[]);
+    assert!(!plain.contains("mov ebp, esp"), "{plain}");
+}
+
+/// `non-leaf` keeps it where the function calls, and only there.
+#[test]
+fn the_non_leaf_frame_pointer_policy_frames_a_caller_and_not_a_leaf() {
+    assert!(frame_listing("\"frame-pointer\"=\"non-leaf\"", true, &[]).contains("mov ebp, esp"));
+    assert!(!frame_listing("\"frame-pointer\"=\"non-leaf\"", false, &[]).contains("mov ebp, esp"));
+}
+
+/// The pin's `-frame-pointer=all` gives the attribute to each function that
+/// has none; a function's own attribute wins.
+#[test]
+fn the_frame_pointer_option_gives_the_attribute_to_functions_without_one() {
+    assert!(frame_listing("", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
+    assert!(!frame_listing("\"frame-pointer\"=\"none\"", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
+}

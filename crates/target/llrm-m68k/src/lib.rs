@@ -13,6 +13,7 @@ pub mod encode;
 pub mod expand;
 pub mod flags;
 pub mod frame;
+pub mod isa;
 pub mod kernels;
 pub mod mac;
 pub mod machine;

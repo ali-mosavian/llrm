@@ -1158,6 +1158,14 @@ fn staged(
     // (`fsin` as bytes) touches no stack cell. Not where BASIC is tuned for
     // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
     // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
+    // `MachineFunction::disableFramePointerElim`: the function's own
+    // `"frame-pointer"` attribute keeps the frame register, in allocation and
+    // in the entry.
+    let function_attrs: &[llrm_mir::opcode::Attribute] =
+        module.named(name).and_then(|id| module.global(id).function()).map_or(&[], |function| &function.attrs);
+    if crate::backend::framefree::disable_frame_pointer_elim(function_attrs, !calls.is_empty()) {
+        registers.optional = false;
+    }
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && !crate::backend::framefree::has_fp(
             &body,
