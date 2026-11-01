@@ -1,0 +1,14 @@
+#title,Table 9-7 Standard Instruction Loop Mode Execution Times,page,9-5,notes,"*Word or long word only. | <ea> may be (An), (An)+, or –(An) only. Add two clock periods to the table value if <ea> is –(An)."
+Instruction,Size,"Loop Continued / Valid Count cc False / op<ea>, An*","Loop Continued / Valid Count cc False / op<ea>, Dn","Loop Continued / Valid Count cc False / op Dn, <ea>","Loop Terminated / Valid Count cc True / op<ea>, An*","Loop Terminated / Valid Count cc True / op<ea>, Dn","Loop Terminated / Valid Count cc True / op Dn, <ea>","Loop Terminated / Expired Count / op<ea>, An*","Loop Terminated / Expired Count / op<ea>, Dn","Loop Terminated / Expired Count / op Dn, <ea>"
+ADD,"Byte, Word",18(1/0),16(1/0),16(1/1),24(3/0),22(3/0),22(3/1),22(3/0),20(3/0),20(3/1)
+,Long,22(2/0),22(2/0),24(2/2),28(4/0),28(4/0),30(4/2),26(4/0),26(4/0),28(4/2)
+AND,"Byte, Word",—,16(1/0),16(1/1),—,22(3/0),22(3/1),—,20(3/0),20(3/1)
+,Long,—,22(2/0),24(2/2),—,28(4/0),30(4/2),—,26(4/0),28(4/2)
+CMP,"Byte, Word",12(1/0),12(1/0),—,18(3/0),18(3/0),—,16(3/0),16(4/0),—
+,Long,18(2/0),18(2/0),—,24(4/0),24(4/0),—,20(4/0),20(4/0),—
+EOR,"Byte, Word",—,—,16(1/0),—,—,22(3/1),—,—,20(3/1)
+,Long,—,—,24(2/2),—,—,30(4/2),—,—,28(4/2)
+OR,"Byte, Word",—,16(1/0),16(1/0),—,22(3/0),22(3/1),—,20(3/0),20(3/1)
+,Long,—,22(2/0),24(2/2),—,28(4/0),30(4/2),—,26(4/0),28(4/2)
+SUB,"Byte, Word",18(1/0),16(1/0),16(1/1),24(3/0),22(3/0),22(3/1),22(3/0),20(3/0),20(3/1)
+,Long,22(2/0),20(2/0),24(2/2),28(4/0),26(4/0),30(4/2),26(4/0),24(4/0),28(4/2)
