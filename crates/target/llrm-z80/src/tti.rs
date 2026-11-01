@@ -181,14 +181,14 @@ impl Tti for Z80Tti {
         }
     }
 
-    // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
-    // a pair is one call.
+    // The runtime has no routine that leaves both quotient and remainder: a
+    // pair is two calls.
     fn has_div_rem_op(
         &self,
-        bits: u32,
-        signed: bool,
+        _bits: u32,
+        _signed: bool,
     ) -> bool {
-        !signed && bits <= 2 * self.byte_bits
+        false
     }
 
     fn cast_cost(

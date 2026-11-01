@@ -80,12 +80,27 @@ pub fn target_lowering() -> TargetLowering {
     };
     set(&[Add, Sub, And, Or, Xor], &[MVT::I8], Action::Legal);
     set(&[Add, Sub, And, Or, Xor], &[MVT::I16], Action::Legal);
-    set(&[Shl, Srl, Sra], &[MVT::I8, MVT::I16], Action::Legal);
+    // A shift by a constant is an instruction; by a variable it is a call
+    // (`lower_shift`).
+    set(&[Shl, Srl, Sra], &[MVT::I8, MVT::I16], Action::Custom);
+    // `RTLIB::MUL_I16` and the others: libgcc's names (`RuntimeLibcalls.def`),
+    // with the same family for bytes, which this runtime has because a byte
+    // loop is half the word's.
+    set(&[Mul, SDiv, UDiv, SRem, URem], &[MVT::I8, MVT::I16], Action::LibCall);
+    set(&[MulHS, MulHU, UMulLoHi, SMulLoHi, SDivRem, UDivRem], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SignExtendInReg], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
     set(&[Undef, Poison], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
     set(&[ZeroExtend, AnyExtend, SignExtend], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SetCC, Select], &[MVT::I8, MVT::I16], Action::Custom);
+    for (vt, names) in [
+        (MVT::I8, ["__mulqi3", "__divqi3", "__udivqi3", "__modqi3", "__umodqi3"]),
+        (MVT::I16, ["__mulhi3", "__divhi3", "__udivhi3", "__modhi3", "__umodhi3"]),
+    ] {
+        for (op, name) in [Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
+    }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     tl
@@ -94,6 +109,32 @@ pub fn target_lowering() -> TargetLowering {
 /// The custom lowerings.
 pub struct Z80Lowering;
 
+impl Z80Lowering {
+    /// A shift by a constant is selected as it is; by a variable it is the call
+    /// of `__ashl`, `__lshr` or `__ashr` (`RTLIB::SHL_I16`, ...), the
+    /// amount a byte.
+    fn lower_shift(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
+        if dag.constant(amount).is_some() {
+            return Some(node);
+        }
+        let vt = dag.value_type(node);
+        let name = match (dag.opcode(node), vt) {
+            (ISD::Shl, EVT::I8) => "__ashlqi3",
+            (ISD::Srl, EVT::I8) => "__lshrqi3",
+            (ISD::Sra, EVT::I8) => "__ashrqi3",
+            (ISD::Shl, _) => "__ashlhi3",
+            (ISD::Srl, _) => "__lshrhi3",
+            _ => "__ashrhi3",
+        };
+        self.make_lib_call(dag, name, &[value, amount], vt, dag.opcode(node) == ISD::Sra)
+    }
+}
+
 impl Hooks for Z80Lowering {
     fn lower_operation(
         &mut self,
@@ -101,6 +142,7 @@ impl Hooks for Z80Lowering {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
+            ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
@@ -108,6 +150,37 @@ impl Hooks for Z80Lowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             _ => None,
         }
+    }
+
+    /// `makeLibCall` through `LowerCall`: the routine's address is a target
+    /// external symbol, the chain is the entry node (the result is the
+    /// value, nothing orders the call after a store).
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out, lower_call};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let outs: Vec<Out> = args
+            .iter()
+            .map(|&value| Out {
+                value,
+                ext,
+                pointer: false,
+                arg_vt: dag.value_type(value),
+                split: false,
+                variadic: false,
+            })
+            .collect();
+        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let root = dag.entry_node();
+        let (_chain, values) =
+            lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false, arg_vt: ret, split: false }]).ok()?;
+        values.first().copied()
     }
 }
 

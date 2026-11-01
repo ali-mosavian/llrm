@@ -102,6 +102,30 @@ fn a_signed_byte_compare_flips_both_sign_bits() {
     assert_eq!(names.iter().filter(|name| **name == "XOR8i").count(), 2, "{names:?}");
 }
 
+/// Multiply, divide, remainder and a shift by a variable are runtime calls
+/// (`RTLIB`), one per operation. Before them `mul8`, `mul16` and `digits`
+/// refused with `CannotSelect(Mul)` and `CannotSelect(MulHU)`.
+#[test]
+fn multiply_divide_and_variable_shifts_are_calls() {
+    for (ir, name) in [
+        ("define i8 @f(i8 %a, i8 %b) {\n  %r = mul i8 %a, %b\n  ret i8 %r\n}", "f"),
+        ("define i16 @f(i16 %a, i16 %b) {\n  %r = mul i16 %a, %b\n  ret i16 %r\n}", "f"),
+        ("define i16 @f(i16 %a, i16 %b) {\n  %r = udiv i16 %a, %b\n  ret i16 %r\n}", "f"),
+        ("define i16 @f(i16 %a, i16 %b) {\n  %r = srem i16 %a, %b\n  ret i16 %r\n}", "f"),
+        ("define i16 @f(i16 %a, i8 %n) {\n  %c = zext i8 %n to i16\n  %r = shl i16 %a, %c\n  ret i16 %r\n}", "f"),
+    ] {
+        let blocks = selected(ir, name);
+        assert_eq!(blocks[0].iter().filter(|n| **n == "CALL").count(), 1, "{ir}: {blocks:?}");
+    }
+}
+
+/// A shift by a constant stays an instruction.
+#[test]
+fn a_shift_by_a_constant_is_an_instruction() {
+    let ir = "define i8 @f(i8 %a) {\n  %r = shl i8 %a, 3\n  ret i8 %r\n}";
+    assert_eq!(selected(ir, "f"), [["SHL8", "RET"]]);
+}
+
 /// A byte read and widened, and a word read, through a pointer: the byte load
 /// with a zero high byte, and the word load. Before them `scmp`, `crc16` and
 /// `sum16` of the bench refused with `CannotSelect(Load)`.
