@@ -436,6 +436,16 @@ impl Printer<'_> {
                 };
                 self.push(format!("call {symbol}"));
             }
+            "TAILCALL" => {
+                let Some(Operand::Symbol(symbol, _)) = inst.operands.first() else {
+                    return Err("a tail call that names no symbol".to_owned());
+                };
+                if self.frame.active {
+                    self.push("ld sp, ix");
+                    self.push("pop ix");
+                }
+                self.push(format!("jp {symbol}"));
+            }
             "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" => {
                 if matches!(inst.operands.first(), Some(Operand::Imm(bytes)) if *bytes != 0) {
                     return Err("stack arguments are not expanded yet".to_owned());
@@ -674,6 +684,7 @@ pub fn finish(
     number: usize,
     slots: &[(i32, usize)],
 ) -> Result<Vec<Line>, String> {
+    let function = &tail_calls(function);
     let frame = layout(function, slots);
     let returns_bare = function
         .blocks
@@ -834,4 +845,32 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         }
     }
     out
+}
+
+/// `call f; ret` is `jp f`: the callee returns to our caller with its result
+/// in the registers ours would be returned in. Only a call that put nothing on
+/// the stack (the caller cleans up after it).
+fn tail_calls(function: &MFunction) -> MFunction {
+    let mut function = function.clone();
+    for block in &mut function.blocks {
+        let insts = &block.insts;
+        let n = insts.len();
+        let bare_adjust = |inst: &Inst| {
+            matches!(inst.kind, Kind::Op("ADJCALLSTACKUP")) && matches!(inst.operands.first(), Some(Operand::Imm(0)))
+        };
+        if n >= 2 && insts[n - 1].kind == Kind::Op("RET") {
+            let at = if bare_adjust(&insts[n - 2]) { n - 3 } else { n - 2 };
+            if n >= 2 && at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == n - 2 || at == n - 3) {
+                let symbol = insts[at].operands.first().cloned();
+                if let Some(symbol @ Operand::Symbol(..)) = symbol {
+                    let mut tail = Inst::new(Kind::Op("TAILCALL"), vec![symbol]);
+                    tail.terminator = true;
+                    tail.barrier = true;
+                    block.insts.truncate(at);
+                    block.insts.push(tail);
+                }
+            }
+        }
+    }
+    function
 }

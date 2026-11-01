@@ -301,6 +301,9 @@ impl Emitter<'_> {
                     }
                 }
                 self.commute_into_fixed(desc, &mut operands);
+                if desc.has(flag::CALL) {
+                    self.commute_call_arguments(&operands, into);
+                }
                 // a register the instruction overwrites besides its results (`Defs = [A]`)
                 // is a def no one reads: the allocator keeps nothing else in it
                 operands.extend(
@@ -417,6 +420,36 @@ impl Emitter<'_> {
                 ("LD8prA", u32::from(opcode::LD8prA))
             }
             _ => (name, code),
+        }
+    }
+
+    /// A call of a commutative runtime routine (multiply) whose two arguments
+    /// arrive in each other's registers is made with them exchanged, so neither
+    /// is moved.
+    fn commute_call_arguments(
+        &self,
+        operands: &[Operand],
+        into: &mut [Inst],
+    ) {
+        let Some(Operand::Symbol(callee, _)) = operands.first() else { return };
+        if !matches!(callee.as_str(), "__mulqi3" | "__mulhi3") {
+            return;
+        }
+        let args: Vec<_> = operands.iter().filter_map(|one| match one {
+            Operand::Use(Reg::Phys(register)) => Some(*register),
+            _ => None,
+        }).collect();
+        let [first, second] = args[..] else { return };
+        let position = |register| into.iter().rposition(|inst| inst.kind == Kind::Copy && inst.operands[0] == Operand::Def(Reg::Phys(register)));
+        let (Some(a), Some(b)) = (position(first), position(second)) else { return };
+        let source = |inst: &Inst| match inst.operands[1] {
+            Operand::Use(reg) => reg,
+            _ => unreachable!("a copy reads a register"),
+        };
+        let (from_a, from_b) = (source(&into[a]), source(&into[b]));
+        if self.arrives_in.get(&from_a) == Some(&second) && self.arrives_in.get(&from_b) == Some(&first) {
+            into[a].operands[1] = Operand::Use(from_b);
+            into[b].operands[1] = Operand::Use(from_a);
         }
     }
 
