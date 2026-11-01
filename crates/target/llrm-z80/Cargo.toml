@@ -13,6 +13,7 @@ llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-transforms = { workspace = true }
 
 [build-dependencies]
 llrm-target = { workspace = true }
