@@ -230,6 +230,13 @@ impl GreedyEnv for BodyEnv<'_> {
     ) -> u8 {
         self.tri.reg_cost(phys)
     }
+
+    fn preferred_registers(
+        &self,
+        insn: &crate::model::lir::Insn,
+    ) -> Vec<(u32, RegId)> {
+        self.tii.preferred_registers(insn)
+    }
 }
 
 /// What `SplitKit` asks of the function: its loops, its terminators and the

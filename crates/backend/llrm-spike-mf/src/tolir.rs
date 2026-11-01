@@ -155,6 +155,7 @@ pub fn to_lir<T: Target>(
         }
     }
     let mut foldable: Vec<Option<(&'static str, usize)>> = Vec::new();
+    let mut hints: Vec<(&'static str, Vec<OperandHint>)> = Vec::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insns = Vec::with_capacity(block.insts.len());
@@ -166,6 +167,7 @@ pub fn to_lir<T: Target>(
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
+            hints.push(operand_hints::<T>(inst));
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
             // instruction that reads its flags are one instruction to it.
@@ -183,6 +185,10 @@ pub fn to_lir<T: Target>(
                 Some(next) if made.independent(inst, next) => {
                     made.origin.push((at, position + 1));
                     foldable.push(None);
+                    // the bundle is one instruction to greedy: both ask for it
+                    // (the compare's operands come first in it)
+                    hints.last_mut().expect("the compare's own").0 = BUNDLE;
+                    hints.push(("", Vec::new()));
                     insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
                     position += 2;
                 }
@@ -229,7 +235,7 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
-        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, marker: PhantomData },
+        tii: SpikeInstrInfo { classes: function.classes.clone(), registers, foldable, hints, marker: PhantomData },
         tri: SpikeRegisterInfo {
             copy_cost: 1,
             csr_first_use_cost: T::csr_first_use_cost(),
@@ -513,6 +519,35 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
     None
 }
 
+/// A register an instruction is cheaper with: the `index`th source (or
+/// destination, where `def`) the converter gave it. Named by position, not by
+/// value, because the coalescer renames values.
+type OperandHint = (bool, usize, RegId);
+
+/// The name of `inst` and the registers it is cheaper with.
+fn operand_hints<T: Target>(inst: &Inst) -> (&'static str, Vec<OperandHint>) {
+    let Kind::Op(name) = inst.kind else { return ("", Vec::new()) };
+    let (mut sources, mut dests) = (0, 0);
+    let mut hinted = Vec::new();
+    for (at, operand) in inst.operands.iter().enumerate() {
+        match operand {
+            Operand::Use(Reg::Virt(_)) => {
+                hinted.extend(T::operand_hint(inst, at).map(|register| (false, sources, register)));
+                sources += 1;
+            }
+            Operand::Use(Reg::Phys(register)) if !T::reserved(T::root(*register)) => sources += 1,
+            Operand::Imm(_) | Operand::Symbol(..) | Operand::Frame(_) => sources += 1,
+            Operand::Def(Reg::Virt(_)) => {
+                hinted.extend(T::operand_hint(inst, at).map(|register| (true, dests, register)));
+                dests += 1;
+            }
+            Operand::Def(Reg::Phys(register)) if !T::reserved(T::root(*register)) => dests += 1,
+            _ => {}
+        }
+    }
+    (name, hinted)
+}
+
 /// What greedy asks of the spike target's instructions, answered from the
 /// instruction itself: its name and operands, and the target's own spill forms.
 pub struct SpikeInstrInfo<T: Target> {
@@ -521,6 +556,9 @@ pub struct SpikeInstrInfo<T: Target> {
     /// For the instruction numbered `at / 2`: its name and which of its
     /// sources the target can read from memory (`Target::fold_spill`).
     foldable: Vec<Option<(&'static str, usize)>>,
+    /// For the instruction numbered `at / 2`: its name and the registers it is
+    /// cheaper with (`Target::operand_hint`), by operand.
+    hints: Vec<(&'static str, Vec<OperandHint>)>,
     marker: PhantomData<T>,
 }
 
@@ -658,6 +696,28 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 
     /// The read the target takes from memory (`Target::fold_spill`) becomes a
     /// memory source; `from_lir` writes it as the target's own form.
+    fn preferred_registers(
+        &self,
+        one: &Insn,
+    ) -> Vec<(u32, RegId)> {
+        let Some((name, hints)) = self.hints.get((one.at / 2) as usize) else { return Vec::new() };
+        let Some(what) = one.what.as_ref() else { return Vec::new() };
+        // an instruction greedy made (a copy, a spill) carries no hint
+        if what.name.as_deref() != Some(name) {
+            return Vec::new();
+        }
+        hints
+            .iter()
+            .filter_map(|(def, at, register)| {
+                let loc = if *def { what.dests.get(*at) } else { what.sources.get(*at) };
+                match loc {
+                    Some(Loc::Held(held)) => Some((held.value, *register)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     fn fold_memory_operand(
         &self,
         one: &Arc<Insn>,

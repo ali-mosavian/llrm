@@ -1110,3 +1110,109 @@ fn test_a_loop_body_runs_many_times_per_entry() {
     let loop_body = freq.get_block_freq_relative_to_entry_block(1);
     assert!(loop_body >= 8.0, "the loop body runs {loop_body} times per entry");
 }
+
+/// Three registers, and an `inc` that encodes shorter in the last.
+struct IncInLast;
+
+impl Target for IncInLast {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<RegId> {
+        REGISTERS.to_vec()
+    }
+
+    fn view(
+        root: RegId,
+        _: (),
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(_: RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+
+    fn operand_hint(
+        inst: &Inst,
+        _: usize,
+    ) -> Option<RegId> {
+        (inst.kind == Kind::Op("inc")).then_some(RegId::EDX)
+    }
+}
+
+/// A target says an instruction is cheaper in one register (the 6502's `inc`
+/// is `inx` in `x` and `clc; adc #1` in `a`); greedy took the first register
+/// of the class (`ebx` here) and never asked, as `getRegAllocationHints` of
+/// Thumb2 does for its 16-bit encodings.
+#[test]
+fn test_a_value_an_instruction_is_cheaper_with_takes_that_register() {
+    let mut f = MFunction::<()>::new("inc");
+    f.classes = vec![(); 1];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(op("inc", vec![Operand::Def(v(0)), Operand::Use(v(0))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let decided = decide_with_split(&inputs, Mode::Simple, false).expect("allocates");
+    let held = decided.placed.iter().find(|(value, _)| *value == 1).map(|(_, register)| *register);
+    assert_eq!(held, Some(RegId::EDX), "{:?}", decided.placed);
+}
+
+/// The coalescer joins the values of a loop's phi copies and renames the
+/// instructions; a hint kept by value named the value `inc` had before the
+/// join, which no instruction held any more, so it never reached the allocator
+/// (6502 corpus: the hook changed no row). Every register a hint names must be
+/// one that an instruction holds.
+#[test]
+fn test_a_hint_names_a_value_its_instruction_holds_after_the_coalescer() {
+    use llrm_codegen::greedy::tii::TargetInstrInfo;
+    let mut f = MFunction::<()>::new("counted");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(branch(1));
+    let mut body = Block { id: 1, ..Block::default() };
+    body.phis.push(llrm_spike_mf::Phi { result: v(1), incoming: vec![(0, v(0)), (1, v(2))] });
+    body.insts.push(op("inc", vec![Operand::Def(v(2)), Operand::Use(v(1))]));
+    let mut again = op("br", vec![Operand::Block(1), Operand::Block(2)]);
+    again.terminator = true;
+    body.insts.push(again);
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(2))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let mut converted = to_lir::<IncInLast>(&lowered(f), regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let mut named = 0;
+    for block in &converted.body.blocks {
+        for insn in block.insns.iter() {
+            let held: Vec<u32> = insn.uses.iter().chain(&insn.defines).copied().collect();
+            for (value, _) in converted.tii.preferred_registers(insn) {
+                named += 1;
+                assert!(held.contains(&value), "hint names v{value}, the instruction holds {held:?}");
+            }
+        }
+    }
+    assert!(named > 0, "no hint reached an instruction");
+}

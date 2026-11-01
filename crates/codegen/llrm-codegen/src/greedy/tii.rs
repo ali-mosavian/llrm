@@ -88,6 +88,15 @@ pub trait TargetInstrInfo {
         body: &crate::model::lir::LirBody,
     ) -> BTreeSet<u32>;
 
+    /// The registers `one` is cheaper with, as (value, register): the target's
+    /// `getRegAllocationHints` for the values `one` names.
+    fn preferred_registers(
+        &self,
+        _one: &Insn,
+    ) -> Vec<(u32, RegId)> {
+        Vec::new()
+    }
+
     /// `foldMemoryOperand`.
     fn fold_memory_operand(
         &self,
