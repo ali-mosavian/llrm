@@ -193,7 +193,8 @@ pub fn to_lir<T: Target>(
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
-            infos.push(operand_infos::<T>(inst, &function.classes, &clobbered_by_spills));
+            let (name, own, sources, dests) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+            infos.push((name, own));
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
             // instruction that reads its flags are one instruction to it.
@@ -212,8 +213,19 @@ pub fn to_lir<T: Target>(
                     made.origin.push((at, position + 1));
                     foldable.push(None);
                     // the bundle is one instruction to greedy: both ask for it
-                    // (the compare's operands come first in it)
-                    infos.last_mut().expect("the compare's own").0 = BUNDLE;
+                    // (the compare's operands come first in it, then the
+                    // reader's, after the compare's sources and dests)
+                    let (_, read, ..) = operand_infos::<T>(next, &function.classes, &clobbered_by_spills);
+                    let compare = infos.last_mut().expect("the compare's own");
+                    compare.0 = BUNDLE;
+                    compare
+                        .1
+                        .extend(
+                            read.into_iter().map(|info| OperandInfo {
+                                index: info.index + if info.def { dests } else { sources },
+                                ..info
+                            }),
+                        );
                     infos.push(("", Vec::new()));
                     insns.push(Arc::new(made.bundle(inst, next, 2 * ordinal)));
                     position += 2;
@@ -597,8 +609,8 @@ fn operand_infos<T: Target>(
     inst: &Inst,
     classes: &[T::Class],
     clobbered: &[RegId],
-) -> (&'static str, Vec<OperandInfo>) {
-    let Kind::Op(name) = inst.kind else { return ("", Vec::new()) };
+) -> (&'static str, Vec<OperandInfo>, usize, usize) {
+    let Kind::Op(name) = inst.kind else { return ("", Vec::new(), 0, 0) };
     let (mut sources, mut dests) = (0, 0);
     let mut infos = Vec::new();
     let order_of = |v: u32| {
@@ -634,7 +646,7 @@ fn operand_infos<T: Target>(
             _ => {}
         }
     }
-    (name, infos)
+    (name, infos, sources, dests)
 }
 
 /// What greedy asks of the spike target's instructions, answered from the
