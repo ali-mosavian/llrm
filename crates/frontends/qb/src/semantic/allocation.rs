@@ -98,8 +98,10 @@ fn allocates(
         one.tag,
         Some(Tag::Allocate(_) | Tag::Reallocate(_) | Tag::Release { .. })
     )
-        || one.callee.as_deref() == Some("B$SSHL")
-        || (near_moves && matches!(one.callee.as_deref(), Some("B$CLOS" | "B$FRSD" | "B$FRI2")))
+        || one.callee.as_deref().is_some_and(|name| {
+            llrm_codegen::abi::runtime::semantics::moves_far_heap(name)
+                || (near_moves && llrm_codegen::abi::runtime::semantics::moves_near_heap(name))
+        })
 }
 
 /// The back-edge blocks of `function`'s loops that contain no allocating

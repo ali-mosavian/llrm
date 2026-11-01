@@ -323,6 +323,11 @@ impl Lftr<'_> {
             let Some(ind_var) = self.find_loop_counter(header, exiting, exit_count) else { continue };
             // Avoid high cost expansions. Note: This heuristic is questionable
             // in that our definition of "high cost" is not exactly principled.
+            // DEVIATE LFTR1: a stride other than one pays for its limit only if
+            // that costs one operation at most; a unit stride keeps the pin's
+            // budget (shellsort's `at / gap` trips took four more per entry).
+            let ind_value = Operand::Value(self.function.instruction(ind_var).result.expect("a phi value"));
+            let budget = if self.has_unit_step(ind_value) { CHEAP_EXPANSION_BUDGET } else { 1 };
             let (high_cost, safe) = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 (
@@ -331,7 +336,7 @@ impl Lftr<'_> {
                         self.se,
                         &[exit_count],
                         header,
-                        CHEAP_EXPANSION_BUDGET,
+                        budget,
                         self.tti,
                         preheader_term,
                     ),
@@ -510,12 +515,6 @@ impl Lftr<'_> {
                 continue;
             }
             let phi_value = Operand::Value(self.function.instruction(phi).result.expect("a phi value"));
-            // DEVIATE LFTR1 only where the limit is a constant: a stride other
-            // than one whose limit takes code (shellsort's `at / gap` trips)
-            // trades a compare for a counter and its limit.
-            if self.se.as_constant(be_count).is_none() && !self.has_unit_step(phi_value) {
-                continue;
-            }
             let (ar, phi_width, init) = {
                 let cx = self.env.cx(&*self.context, &*self.function);
                 let ar = self.se.get_scev(&cx, phi_value);
