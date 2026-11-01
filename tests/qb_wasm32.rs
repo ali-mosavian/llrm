@@ -363,3 +363,71 @@ fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
         std::fs::remove_dir_all(dir).ok();
     }
 }
+
+/// CLEAR called B$SCLR, which no flat runtime defined: a program with CLEAR did
+/// not instantiate. It zeroes the module's variables, from a table the compiler
+/// lists them in, and accepts a stack size it cannot change.
+#[test]
+fn clear_zeroes_the_variables_and_accepts_a_stack_size_on_wasm32() {
+    for name in ["clear_variables", "clear_stack"] {
+        let path = root().join(format!("tests/run/qb/{name}.bas"));
+        let dir = built(name, &std::fs::read_to_string(&path).unwrap());
+        let (text, code) = run(&dir, name, &[]);
+        let want = std::fs::read_to_string(path.with_extension("out")).unwrap();
+        let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+        assert_eq!(trimmed(&text), trimmed(&want), "{name}");
+        assert_eq!(code, Some(0), "{name}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+/// CLEAR closes the open files: a channel left open made the next OPEN of it
+/// File already open.
+#[test]
+fn clear_closes_the_open_files_on_wasm32() {
+    let dir = built(
+        "clearfile",
+        "OPEN \"CLR.DAT\" FOR OUTPUT AS #1\nPRINT #1, \"x\"\nCLEAR\nOPEN \"CLR.DAT\" FOR OUTPUT AS #1\nPRINT \"reopened\"\nCLOSE\nKILL \"CLR.DAT\"\nEND\n",
+    );
+    let (text, code) = run(&dir, "clearfile", &[]);
+    assert_eq!(text.trim_end(), "reopened");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// CLEAR in a SUB is Illegal function call, as in QB.
+#[test]
+fn clear_in_a_procedure_is_an_illegal_function_call_on_wasm32() {
+    let dir = built("clearsub", "DECLARE SUB s ()\ns\nPRINT \"after\"\nEND\nSUB s\nCLEAR\nEND SUB\n");
+    let (text, code) = run(&dir, "clearsub", &[]);
+    assert!(text.starts_with("Illegal function call"), "{text:?}");
+    assert_eq!(code, Some(255));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A dynamic array is gone after CLEAR and can be dimensioned again.
+#[test]
+fn a_dynamic_array_can_be_redimensioned_after_clear_on_wasm32() {
+    let dir = built(
+        "cleararr",
+        "REDIM a(5) AS INTEGER\na(2) = 7\nCLEAR\nREDIM a(3) AS INTEGER\nPRINT a(2); UBOUND(a)\nEND\n",
+    );
+    let (text, code) = run(&dir, "cleararr", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["0", "3"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A fixed-length string and the fields of a TYPE variable are zero after
+/// CLEAR.
+#[test]
+fn clear_zeroes_a_fixed_string_and_a_type_variable_on_wasm32() {
+    let dir = built(
+        "cleartype",
+        "' dialect: qb45\nTYPE T\n n AS INTEGER\n s AS STRING * 3\nEND TYPE\nDIM t AS T, f AS STRING * 4\nt.n = 5: t.s = \"abc\": f = \"wxyz\"\nCLEAR\nPRINT t.n; ASC(t.s); ASC(f)\nEND\n",
+    );
+    let (text, code) = run(&dir, "cleartype", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["0", "0", "0"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
