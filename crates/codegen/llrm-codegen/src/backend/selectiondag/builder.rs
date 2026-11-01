@@ -1733,13 +1733,21 @@ impl Builder<'_> {
         let mut values = values.to_vec();
         for (value, byval) in values.iter_mut().zip(byvals) {
             let Some((size, align)) = *byval else { continue };
-            let index = self.info.new_stack_object(size as u32, align as u32);
+            if size == 0 {
+                continue;
+            }
+            let opt_size = self.has_opt_size();
+            let destination_align = self.copy_destination_alignment(size, align, opt_size);
+            let index = self.info.new_stack_object(size as u32, destination_align as u32);
             let copy_to = self.dag.get_frame_index(self.target.dag.pointer, index);
-            let root = self.root();
-            let copy = self
-                .inline_memcpy(root, copy_to, *value, size, usize::MAX, align, align)?
-                .ok_or(Refused("byval copy"))?;
-            self.dag.set_root(copy);
+            let size_node = self.dag.get_constant(u128::from(size), self.target.dag.pointer);
+            self.lower_hooked_mem_intrinsic(
+                calling,
+                &llrm_mir::intrinsics::Intrinsic::MemCpy,
+                [copy_to, *value, size_node],
+                [destination_align, align],
+                opt_size,
+            )?;
             *value = copy_to;
         }
         let mut outs = Vec::new();
