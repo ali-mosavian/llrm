@@ -723,6 +723,10 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
     ) -> u8 {
         (self.register_cost)(phys)
     }
+
+    fn lanes_saved_apart(&self) -> bool {
+        true
+    }
 }
 
 /// Spill slots for a function: frame indices above the ones it names.

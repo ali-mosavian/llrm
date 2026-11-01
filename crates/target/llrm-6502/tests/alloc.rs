@@ -74,33 +74,31 @@ fn a_word_add_keeps_its_low_byte_in_a_register() {
 /// 4.
 #[test]
 fn more_live_values_than_registers_spill_and_still_compute() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let pairs = [
-            ("a", "b"),
-            ("b", "c"),
-            ("c", "d"),
-            ("d", "e"),
-            ("e", "f"),
-            ("a", "c"),
-            ("b", "d"),
-            ("c", "e"),
-            ("d", "f"),
-            ("a", "f"),
-        ];
-        let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
-        for (n, (x, y)) in pairs.iter().enumerate() {
-            ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
-        }
-        ir += "  %x0 = xor i8 %t0, %t1\n";
-        for n in 2..pairs.len() {
-            ir += &format!("  %x{} = xor i8 %x{}, %t{n}\n", n - 1, n - 2);
-        }
-        ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
-        let text = compile(&ir, "many");
-        assert!(text.contains("s_many_0"), "no spill in:\n{text}");
-        let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
-        assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
-    });
+    let pairs = [
+        ("a", "b"),
+        ("b", "c"),
+        ("c", "d"),
+        ("d", "e"),
+        ("e", "f"),
+        ("a", "c"),
+        ("b", "d"),
+        ("c", "e"),
+        ("d", "f"),
+        ("a", "f"),
+    ];
+    let mut ir = String::from("define i8 @many(i8 %a, i8 %b, i8 %c, i8 %d, i8 %e, i8 %f) {\n");
+    for (n, (x, y)) in pairs.iter().enumerate() {
+        ir += &format!("  %t{n} = add i8 %{x}, %{y}\n");
+    }
+    ir += "  %x0 = xor i8 %t0, %t1\n";
+    for n in 2..pairs.len() {
+        ir += &format!("  %x{} = xor i8 %x{}, %t{n}\n", n - 1, n - 2);
+    }
+    ir += &format!("  ret i8 %x{}\n}}", pairs.len() - 2);
+    let text = compile(&ir, "many");
+    assert!(text.contains("s_many_0"), "no spill in:\n{text}");
+    let setup: String = (1..=6).map(|n| set(&format!("rc{}", n + 1), n)).collect();
+    assert_eq!(common::run_with("alloc-many", &format!("{setup}  jsr many\n"), &text), 4);
 }
 
 const GCD: &str = "define i8 @gcd(i8 %0, i8 %1) {
@@ -173,12 +171,11 @@ fn a_word_select_returns_the_larger_word() {
 /// t + r = 61; 11 is not `2^n +- 1` times a power of two, so it stays a call.
 #[test]
 fn a_value_live_across_a_call_survives_it() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let ir = "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
-        let text = compile(ir, "across");
-        assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
-        assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
-    });
+    let ir =
+        "define i8 @across(i8 %a) {\n  %t = add i8 %a, 1\n  %r = mul i8 %a, 11\n  %s = add i8 %r, %t\n  ret i8 %s\n}";
+    let text = compile(ir, "across");
+    assert!(text.contains("jsr __mulqi3") && text.contains("s_across_"), "{text}");
+    assert_eq!(common::run_with("alloc-across", &format!("{}  jsr across\n", set("rc2", 5)), &text), 61);
 }
 
 const RECURSIVE: &str = "define i8 @rec(i8 %n) {
@@ -286,24 +283,22 @@ fn a_sum_through_a_pointer_runs_on_the_allocator() {
 /// 4 + 55 + 1 = 60.
 #[test]
 fn a_pointer_live_across_a_call_survives_it() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let ir = "define i8 @keep(ptr %p, i8 %a) {
-      %x = getelementptr i8, ptr %p, i16 2
-      %u = load i8, ptr %x
-      %m = mul i8 %a, 11
-      %y = getelementptr i8, ptr %p, i16 3
-      %w = load i8, ptr %y
-      %s = add i8 %u, %m
-      %t = add i8 %s, %w
-      ret i8 %t
-    }";
-        assert!(on_the_allocator(ir, "keep"));
-        let text = compile(ir, "keep");
-        let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
-        let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
-        assert!(text.contains("s_keep_"), "no spill:\n{text}");
-        assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
-    });
+    let ir = "define i8 @keep(ptr %p, i8 %a) {
+  %x = getelementptr i8, ptr %p, i16 2
+  %u = load i8, ptr %x
+  %m = mul i8 %a, 11
+  %y = getelementptr i8, ptr %p, i16 3
+  %w = load i8, ptr %y
+  %s = add i8 %u, %m
+  %t = add i8 %s, %w
+  ret i8 %t
+}";
+    assert!(on_the_allocator(ir, "keep"));
+    let text = compile(ir, "keep");
+    let data = ".segment \"DATA\"\nvals: .byte 3, 1, 4, 1\n.segment \"CODE\"\n";
+    let setup = "  lda #<vals\n  sta rc2\n  lda #>vals\n  sta rc3\n  lda #5\n  sta rc4\n";
+    assert!(text.contains("s_keep_"), "no spill:\n{text}");
+    assert_eq!(common::run_with("alloc-keep", &format!("{setup}  jsr keep\n"), &format!("{text}{data}")), 60);
 }
 
 /// A recursive function with a local array and a value live across the call:
@@ -920,18 +915,16 @@ const ACROSS: &str = "define i8 @g(i8 %x) {\n  %r = add i8 %x, 3\n  ret i8 %r\n}
 
 #[test]
 fn a_callee_saved_cell_is_taken_only_when_it_is_the_smaller_code() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let single = compile(ACROSS, "across") + &compile(ACROSS, "g");
-        assert!(!single.contains("rc8"), "one call, one value:\n{single}");
-        // across(5) = g(5) + 5 = 8 + 5
-        let program = format!("{single}");
-        assert_eq!(common::run_with("alloc-single-call", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
-        let looped = compile(DIGITS, "digits");
-        assert!(
-            (8..16).any(|n| looped.contains(&format!("rc{n}"))),
-            "a loop of calls keeps its values in a cell:\n{looped}"
-        );
-    });
+    let single = compile(ACROSS, "across") + &compile(ACROSS, "g");
+    assert!(!single.contains("rc8"), "one call, one value:\n{single}");
+    // across(5) = g(5) + 5 = 8 + 5
+    let program = format!("{single}");
+    assert_eq!(common::run_with("alloc-single-call", &format!("{}  jsr across\n", set("rc2", 5)), &program), 13);
+    let looped = compile(DIGITS, "digits");
+    assert!(
+        (8..16).any(|n| looped.contains(&format!("rc{n}"))),
+        "a loop of calls keeps its values in a cell:\n{looped}"
+    );
 }
 
 /// The word result of `name` for a word argument in rc2:rc3 (low byte in A,
@@ -1077,16 +1070,14 @@ fn a_word_equality_against_a_constant_has_no_constant_cells() {
 /// it is a spill slot.
 #[test]
 fn a_callee_saved_cell_goes_to_the_loop_values_only() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let ir = "declare i8 @ext(i8)\n\
-                  define i8 @mix(i8 %cold, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
-                  %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
-                  %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
-        let text = compile(ir, "mix");
-        let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
-        assert_eq!(saved, 3, "{text}");
-        assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
-    });
+    let ir = "declare i8 @ext(i8)\n\
+              define i8 @mix(i8 %cold, i8 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]\n  \
+              %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
+              %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
+    let text = compile(ir, "mix");
+    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
+    assert_eq!(saved, 3, "{text}");
+    assert!(text.contains("  lda rc2\n  sta s_mix"), "cold is in a slot: {text}");
 }
 
 /// `shl i16 x, k` for k from 9 to 15 ran k - 8 asl/rol pairs over the whole

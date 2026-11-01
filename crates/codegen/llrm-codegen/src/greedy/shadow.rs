@@ -205,9 +205,11 @@ impl GreedyEnv for BodyEnv<'_> {
         &self,
         phys: RegId,
     ) -> Option<RegId> {
-        // `getLastCalleeSavedAlias`: the register as `saved` names it, whole
+        // `getLastCalleeSavedAlias`: `saved` names a register's root; where a
+        // lane is saved on its own (a 6502 pair's two cells are two saves) the
+        // register itself is the alias
         let root = self.registers.root(phys);
-        self.saved.contains(&root).then_some(root)
+        self.saved.contains(&root).then_some(if self.tri.lanes_saved_apart() { phys } else { root })
     }
 
     fn csr_first_use_cost(&self) -> u32 {

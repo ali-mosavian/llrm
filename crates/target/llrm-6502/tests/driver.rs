@@ -244,45 +244,41 @@ fn reloads_of(
 /// after the call, which took the register, is needed.
 #[test]
 fn a_spilled_value_is_not_reloaded_where_its_register_is_untouched() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let ir = module(
-            "declare void @g(ptr)
-    define ptr @fun(ptr %b, i16 %v) {
-      %c = icmp slt i16 %v, 0
-      br i1 %c, label %neg, label %m
-    neg:
-      %q = getelementptr inbounds i8, ptr %b, i16 1
-      store i8 45, ptr %b
-      br label %m
-    m:
-      %p = phi ptr [ %q, %neg ], [ %b, %0 ]
-      call void @g(ptr %p)
-      ret ptr %b
-    }",
-        );
-        let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
-        let call = text.find("jsr g").expect("the call");
-        assert_eq!(reloads_of(&text[..call], "s_fun_0"), 0, "reloaded before the call:\n{text}");
-        assert_eq!(reloads_of(&text[call..], "s_fun_0"), 1, "the load after the call is the one needed:\n{text}");
-    });
+    let ir = module(
+        "declare void @g(ptr)
+define ptr @fun(ptr %b, i16 %v) {
+  %c = icmp slt i16 %v, 0
+  br i1 %c, label %neg, label %m
+neg:
+  %q = getelementptr inbounds i8, ptr %b, i16 1
+  store i8 45, ptr %b
+  br label %m
+m:
+  %p = phi ptr [ %q, %neg ], [ %b, %0 ]
+  call void @g(ptr %p)
+  ret ptr %b
+}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    let call = text.find("jsr g").expect("the call");
+    assert_eq!(reloads_of(&text[..call], "s_fun_0"), 0, "reloaded before the call:\n{text}");
+    assert_eq!(reloads_of(&text[call..], "s_fun_0"), 1, "the load after the call is the one needed:\n{text}");
 }
 
 /// The control of the test above: a call takes the register, so the value is
 /// loaded again after each one.
 #[test]
 fn a_spilled_value_is_reloaded_after_each_call_that_takes_its_register() {
-    llrm_6502::alloc::with_spike_allocator(|| {
-        let ir = module(
-            "declare void @g(ptr)
-    define ptr @fun(ptr %b) {
-      call void @g(ptr %b)
-      call void @g(ptr %b)
-      ret ptr %b
-    }",
-        );
-        let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
-        assert_eq!(reloads_of(&text, "s_fun_0"), 2, "{text}");
-    });
+    let ir = module(
+        "declare void @g(ptr)
+define ptr @fun(ptr %b) {
+  call void @g(ptr %b)
+  call void @g(ptr %b)
+  ret ptr %b
+}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert_eq!(reloads_of(&text, "s_fun_0"), 2, "{text}");
 }
 
 /// A C global named `a`, `x`, `y` or `s`, or after an instruction (`inc`,
