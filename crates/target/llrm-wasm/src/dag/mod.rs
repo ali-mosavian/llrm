@@ -113,6 +113,7 @@ pub fn compile_function(
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
     f.calls_unwind = options.calls_unwind;
+    f.nothrow = non_throwing(module);
     f.personality = unwinding
         && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc
@@ -147,6 +148,32 @@ pub fn compile_function(
         }
     }
     Ok(f)
+}
+
+/// The callees `WebAssembly::mayThrow` takes as not throwing: functions marked
+/// `nounwind`, the three that never throw, and the libcalls it lists.
+fn non_throwing(module: &Module) -> std::collections::HashSet<String> {
+    let mut found: std::collections::HashSet<String> = module
+        .functions()
+        .filter(|(_, global, function)| {
+            function.attrs.iter().any(|one| {
+                matches!(
+                    one,
+                    llrm_mir::opcode::Attribute::Flag(name) if name == "nounwind"
+                )
+            }) || matches!(
+                global.name.as_deref(),
+                Some("__cxa_begin_catch" | "_Unwind_Wasm_CallPersonality" | "_ZSt9terminatev")
+            )
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for libcall in ["memcpy", "memmove", "memset"] {
+        if module.named(libcall).is_none() {
+            found.insert(libcall.to_owned());
+        }
+    }
+    found
 }
 
 /// The signature of each called symbol that is no function of `module`, from

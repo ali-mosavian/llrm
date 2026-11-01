@@ -236,6 +236,9 @@ pub struct Function {
     pub personality: bool,
     /// A call that is not an `invoke` may throw (`Options::calls_unwind`).
     pub calls_unwind: bool,
+    /// The callees that never throw (`Function::doesNotThrow`, and the
+    /// libcalls `mayThrow` lists).
+    pub nothrow: std::collections::HashSet<String>,
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,

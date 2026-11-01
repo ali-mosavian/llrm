@@ -31,13 +31,19 @@ use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::BlockId;
 
 use crate::cfg::Cfg;
-use crate::dagisel::post_ids::{BLOCK, CATCH_ALL_LEGACY, END_BLOCK, END_FUNCTION, END_LOOP, END_TRY, LOOP, TRY};
+use crate::dagisel::post_ids::{
+    BLOCK, CALL_INDIRECT, CATCH_ALL_LEGACY, DELEGATE, END_BLOCK, END_FUNCTION, END_LOOP, END_TRY, LOOP, RETHROW, THROW,
+    TRY,
+};
 use crate::exception_info::Exceptions;
 use crate::mir::{Function, Inst, Operand, ValType};
 use crate::sort_region::{Region, Regions};
 
 /// `BlockType::Void`.
 const VOID: i64 = 0x40;
+
+/// The block `delegate` names to rethrow to the caller (`getFakeCallerBlock`).
+const CALLER: u32 = u32::MAX;
 
 struct Stackify<'a> {
     f: &'a mut Function,
@@ -404,46 +410,310 @@ impl Stackify<'_> {
         }
     }
 
-    /// A call in the body of a `try` that does not unwind to its pad would be
-    /// caught by it: the pin delegates it to the caller
-    /// (`fixCallUnwindMismatches`), which is not translated.
-    fn check_unwind_mismatches(&self) -> Result<(), String> {
-        // (the try's marker, its pad, whether the walk is past its `catch`)
-        let mut open: Vec<(u32, usize, bool)> = Vec::new();
-        for (block, insts) in self.f.blocks.iter().enumerate() {
-            let pad_of_block =
-                self.f.succs[block].iter().copied().find(|&to| self.pads.get(to).copied().unwrap_or(false));
-            // Only the last call of a block that ends in an `invoke` unwinds.
-            let invoke = insts.iter().rposition(|inst| crate::branch::is_call(inst));
-            for (at, inst) in insts.iter().enumerate() {
-                let unwinds_to = pad_of_block.filter(|_| Some(at) == invoke);
-                match inst.opcode {
-                    TRY => open.push((inst.tag, self.try_to_pad[&inst.tag], false)),
-                    CATCH_ALL_LEGACY => {
-                        if let Some(one) = open.iter_mut().rev().find(|one| one.1 == block) {
-                            one.2 = true;
-                        }
-                    }
-                    END_TRY => {
-                        let begin = self.end_to_begin[&inst.tag];
-                        open.retain(|one| one.0 != begin);
-                    }
-                    _ if crate::branch::is_call(inst) => {
-                        if let Some(&(_, pad, _)) = open.iter().rev().find(|one| !one.2) {
-                            if unwinds_to != Some(pad) {
-                                return Err(format!(
-                                    "@{}: a call inside a try that does not unwind to it \
-                                     (fixCallUnwindMismatches) is not translated; make it an invoke",
-                                    self.f.name
-                                ));
-                            }
-                        }
-                    }
-                    _ => {}
+    /// `WebAssembly::mayThrow` of instruction `at` of `block`. Where plain
+    /// calls never throw (`Function::calls_unwind` off) only the call that
+    /// ends a block with an unwind edge does.
+    fn may_throw(
+        &self,
+        block: usize,
+        at: usize,
+    ) -> bool {
+        let insts = &self.f.blocks[block];
+        let inst = &insts[at];
+        match inst.opcode {
+            THROW | RETHROW | CALL_INDIRECT => return true,
+            _ if !crate::branch::is_call(inst) => return false,
+            _ => {}
+        }
+        if !self.f.calls_unwind {
+            return self.has_pad_successor(block) && insts.iter().rposition(|one| self.is_call(one)) == Some(at);
+        }
+        match inst.operands.iter().find_map(|operand| if let Operand::Sym(at) = operand { Some(*at) } else { None }) {
+            Some(symbol) => !self.f.nothrow.contains(&self.f.symbols[symbol as usize].0),
+            None => true,
+        }
+    }
+
+    fn has_pad_successor(
+        &self,
+        block: usize,
+    ) -> bool {
+        self.unwind_pad(block).is_some()
+    }
+
+    /// The first successor of `block` that is an EH pad.
+    fn unwind_pad(
+        &self,
+        block: usize,
+    ) -> Option<usize> {
+        self.f.succs[block].iter().copied().find(|&to| self.pads.get(to).copied().unwrap_or(false))
+    }
+
+    /// The (block, position) of the instruction tagged `tag`.
+    fn locate(
+        &self,
+        tag: u32,
+    ) -> (usize, usize) {
+        self.f
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(b, insts)| insts.iter().position(|inst| inst.tag == tag).map(|at| (b, at)))
+            .expect("a tagged instruction")
+    }
+
+    /// A block with `insts` and `succs` that becomes block `at`: the blocks
+    /// from `at` on are numbered one higher (`MF.insert`, with the numbers the
+    /// layout gives).
+    fn insert_block(
+        &mut self,
+        at: usize,
+        insts: Vec<Inst>,
+        succs: Vec<usize>,
+    ) {
+        let shift = |number: usize| if number >= at { number + 1 } else { number };
+        for successors in &mut self.f.succs {
+            for to in successors.iter_mut() {
+                *to = shift(*to);
+            }
+        }
+        for operand in self.f.blocks.iter_mut().flatten().flat_map(|inst| inst.operands.iter_mut()) {
+            if let Operand::Block(to) = operand {
+                if *to != CALLER && *to as usize >= at {
+                    *to += 1;
                 }
             }
         }
-        Ok(())
+        for home in self.block_of.values_mut() {
+            *home = shift(*home);
+        }
+        for pad in self.try_to_pad.values_mut() {
+            *pad = shift(*pad);
+        }
+        self.pad_to_try = self.pad_to_try.drain().map(|(pad, try_tag)| (shift(pad), try_tag)).collect();
+        for top in self.scope_tops.iter_mut().flatten() {
+            *top = shift(*top);
+        }
+        self.scope_tops.insert(at.min(self.scope_tops.len()), None);
+        self.pads.insert(at.min(self.pads.len()), false);
+        if let Some(appendix) = &mut self.appendix {
+            *appendix = shift(*appendix);
+        }
+        let succs = succs.into_iter().map(shift).collect();
+        for inst in &insts {
+            if inst.tag != 0 {
+                self.block_of.insert(inst.tag, at);
+            }
+        }
+        self.f.blocks.insert(at, insts);
+        self.f.succs.insert(at, succs);
+    }
+
+    /// The markers of `block` are in it.
+    fn homed(
+        &mut self,
+        block: usize,
+    ) {
+        for inst in &self.f.blocks[block] {
+            if inst.tag != 0 && self.block_of.contains_key(&inst.tag) {
+                self.block_of.insert(inst.tag, block);
+            }
+        }
+    }
+
+    /// `unstackifyVRegsUsedInSplitBB`: a register `pre` defines and `post`
+    /// reads can no longer live on the stack, and a `TEE` whose result then
+    /// is not on the stack becomes two copies.
+    fn unstackify_split(
+        &mut self,
+        pre: usize,
+        post: usize,
+    ) {
+        let index = self.f.def_use();
+        let used: Vec<u32> = self.f.blocks[post]
+            .iter()
+            .flat_map(|inst| inst.operands.iter())
+            .filter_map(|operand| if let Operand::Use(reg) = operand { Some(*reg) } else { None })
+            .filter(|&reg| index.def_count(reg) == 1 && index.def(reg).is_some_and(|(block, _)| block == pre))
+            .collect();
+        for reg in used {
+            self.f.unstackify(reg);
+        }
+        let mut at = 0;
+        while at < self.f.blocks[pre].len() {
+            let inst = &self.f.blocks[pre][at];
+            if crate::mir::is_tee(inst.opcode) {
+                let (Operand::Def(tee), Operand::Def(reg), Operand::Use(def)) =
+                    (inst.operands[0], inst.operands[1], inst.operands[2])
+                else {
+                    unreachable!("a tee defines two registers and reads one")
+                };
+                if !self.f.is_stackified(tee) {
+                    self.f.unstackify(def);
+                    let copy = self.f.vreg_type(def).copy();
+                    let copies = [
+                        Inst::new(copy, &[Operand::Def(tee), Operand::Use(def)]),
+                        Inst::new(copy, &[Operand::Def(reg), Operand::Use(def)]),
+                    ];
+                    self.f.blocks[pre].splice(at..=at, copies);
+                    at += 1;
+                }
+            }
+            at += 1;
+        }
+    }
+
+    /// `addNestedTryDelegate`: the instructions from `begin` to `end`
+    /// (tags, inclusive) wrapped in a `try` whose `delegate` hands an
+    /// exception to `dest`, a pad or [`CALLER`].
+    fn add_nested_try_delegate(
+        &mut self,
+        begin: u32,
+        end: u32,
+        dest: u32,
+    ) {
+        let (begin_block, mut begin_at) = self.locate(begin);
+        // The range's operands go inside the try too.
+        while begin_at > 0 && self.is_child(&self.f.blocks[begin_block][begin_at - 1]) {
+            begin_at -= 1;
+        }
+        let try_marker = self.new_marker(TRY, &[Operand::Imm(VOID)], begin_block);
+        let try_tag = try_marker.tag;
+        self.f.blocks[begin_block].insert(begin_at, try_marker);
+        let (end_block, end_at) = self.locate(end);
+        let split = end_at + 1;
+        let delegate = {
+            self.next_tag += 1;
+            Inst { tag: self.next_tag, ..Inst::new(DELEGATE, &[Operand::Block(dest)]) }
+        };
+        let delegate_tag = delegate.tag;
+        let delegate_succs = if dest == CALLER { Vec::new() } else { vec![dest as usize] };
+        if split == self.f.blocks[end_block].len() {
+            self.insert_block(end_block + 1, vec![delegate], delegate_succs);
+            self.f.succs[end_block].push(end_block + 1);
+        } else {
+            let catch_after_split = self.pads[end_block]
+                && self.f.blocks[end_block][split..].iter().any(|inst| inst.opcode == CATCH_ALL_LEGACY);
+            let (pre, post) = if !catch_after_split {
+                self.insert_block(end_block + 1, vec![delegate], delegate_succs);
+                self.insert_block(end_block + 2, Vec::new(), Vec::new());
+                let rest = self.f.blocks[end_block].split_off(split);
+                self.f.blocks[end_block + 2] = rest;
+                self.f.succs[end_block + 2] = std::mem::take(&mut self.f.succs[end_block]);
+                self.homed(end_block + 2);
+                (end_block, end_block + 2)
+            } else {
+                self.insert_block(end_block, Vec::new(), Vec::new());
+                self.insert_block(end_block + 1, vec![delegate], delegate_succs);
+                let head: Vec<Inst> = self.f.blocks[end_block + 2].drain(..split).collect();
+                self.f.blocks[end_block] = head;
+                self.homed(end_block);
+                (end_block, end_block + 2)
+            };
+            self.unstackify_split(pre, post);
+            self.f.succs[pre] = vec![pre + 1, post];
+        }
+        let delegate_block = self.locate(delegate_tag).0;
+        self.block_of.insert(delegate_tag, delegate_block);
+        self.register_scope(try_tag, delegate_tag);
+    }
+
+    /// `fixCallUnwindMismatches` (legacy EH): a call that may throw inside a
+    /// `try` that is not its pad's is wrapped in a `try` / `delegate` to the
+    /// pad, or to the caller.
+    fn fix_call_unwind_mismatches(&mut self) -> bool {
+        // (destination, ranges of (first, last) tags), in the order found.
+        let mut ranges: Vec<(u32, Vec<(u32, u32)>)> = Vec::new();
+        let note = |dest: u32, range: (u32, u32), ranges: &mut Vec<(u32, Vec<(u32, u32)>)>| match ranges
+            .iter_mut()
+            .find(|(one, _)| *one == dest)
+        {
+            Some((_, found)) => found.push(range),
+            None => ranges.push((dest, vec![range])),
+        };
+        let tag_of = |state: &mut Self, block: usize, at: usize| {
+            if state.f.blocks[block][at].tag == 0 {
+                state.next_tag += 1;
+                state.f.blocks[block][at].tag = state.next_tag;
+            }
+            state.f.blocks[block][at].tag
+        };
+        // The pads and delegate targets that catch what is thrown here,
+        // innermost last.
+        let mut stack: Vec<u32> = Vec::new();
+        let walk = |state: &Self, stack: &mut Vec<u32>, block: usize, at: usize| match state.f.blocks[block][at].opcode
+        {
+            TRY => {
+                stack.pop();
+            }
+            DELEGATE => {
+                let Operand::Block(dest) = state.f.blocks[block][at].operands[0] else {
+                    unreachable!("a delegate names a block")
+                };
+                stack.push(dest);
+            }
+            CATCH_ALL_LEGACY => stack.push(block as u32),
+            _ => {}
+        };
+        for block in (0..self.f.blocks.len()).rev() {
+            let mut seen = false;
+            for at in (0..self.f.blocks[block].len()).rev() {
+                walk(self, &mut stack, block, at);
+                if seen || !self.has_pad_successor(block) || !self.may_throw(block, at) {
+                    continue;
+                }
+                seen = true;
+                let dest = self.unwind_pad(block).expect("an unwind pad") as u32;
+                if stack.last() == Some(&dest) {
+                    continue;
+                }
+                let tag = tag_of(self, block, at);
+                note(dest, (tag, tag), &mut ranges);
+            }
+        }
+        assert!(stack.is_empty(), "the try markers should be balanced");
+        // Calls that unwind to the caller, which the `try`s around them would
+        // catch.
+        let mut open: Option<(u32, u32)> = None;
+        for block in (0..self.f.blocks.len()).rev() {
+            let mut seen = false;
+            for at in (0..self.f.blocks[block].len()).rev() {
+                let may = self.may_throw(block, at);
+                let opcode = self.f.blocks[block][at].opcode;
+                if self.has_pad_successor(block) && may && !seen {
+                    seen = true;
+                } else if open.is_some() && matches!(opcode, BLOCK | END_BLOCK | LOOP | END_LOOP | TRY | END_TRY) {
+                    note(CALLER, open.take().expect("a range"), &mut ranges);
+                } else if stack.is_empty() || stack.last() == Some(&CALLER) || !may {
+                } else {
+                    let tag = tag_of(self, block, at);
+                    open = Some(match open {
+                        None => (tag, tag),
+                        Some((_, last)) => (tag, last),
+                    });
+                }
+                walk(self, &mut stack, block, at);
+            }
+            if let Some(range) = open.take() {
+                note(CALLER, range, &mut ranges);
+            }
+        }
+        assert!(stack.is_empty(), "the try markers should be balanced");
+        if ranges.is_empty() {
+            return false;
+        }
+        for (dest, found) in ranges {
+            for (begin, end) in found {
+                if dest != CALLER {
+                    let block = self.locate(begin).0;
+                    if let Some(pad) = self.unwind_pad(block) {
+                        self.f.succs[block].retain(|&to| to != pad);
+                    }
+                }
+                self.add_nested_try_delegate(begin, end, dest);
+            }
+        }
+        true
     }
 
     /// The blocks the analyses were made over, before an appendix block.
@@ -462,15 +732,36 @@ impl Stackify<'_> {
                         stack.pop();
                     }
                     END_BLOCK | END_TRY => stack.push((b, inst.tag)),
+                    DELEGATE => {
+                        let tag = inst.tag;
+                        let Operand::Block(dest) = inst.operands[0] else { unreachable!("a delegate names a block") };
+                        let depth = if dest == CALLER {
+                            stack.len()
+                        } else if self.pads.get(dest as usize).copied().unwrap_or(false) {
+                            let end = self.begin_to_end[&self.pad_to_try[&(dest as usize)]];
+                            stack
+                                .iter()
+                                .rev()
+                                .position(|&(block, one)| one == end && block == self.block_of[&end])
+                                .expect("a delegate's try is in scope")
+                        } else {
+                            stack
+                                .iter()
+                                .rev()
+                                .position(|&(block, _)| block == dest as usize)
+                                .expect("a delegate's destination")
+                        };
+                        self.f.blocks[b][i].operands[0] = Operand::Imm(depth as i64);
+                        stack.push((b, tag));
+                    }
                     END_LOOP => stack.push((self.block_of[&self.end_to_begin[&inst.tag]], inst.tag)),
                     _ if inst.is_terminator() => {
                         for operand in &mut self.f.blocks[b][i].operands {
                             if let Operand::Block(target) = *operand {
-                                let depth = stack
-                                    .iter()
-                                    .rev()
-                                    .position(|&(block, _)| block == target as usize)
-                                    .expect("a branch destination is in scope");
+                                let depth =
+                                    stack.iter().rev().position(|&(block, _)| block == target as usize).unwrap_or_else(
+                                        || panic!("a branch destination is in scope: bb{target} from bb{b}"),
+                                    );
                                 *operand = Operand::Imm(depth as i64);
                             }
                         }
@@ -500,7 +791,7 @@ impl Stackify<'_> {
                 while i > 0 {
                     i -= 1;
                     let inst = &self.f.blocks[b][i];
-                    if !matches!(inst.opcode, END_BLOCK | END_LOOP | END_TRY) {
+                    if !matches!(inst.opcode, END_BLOCK | END_LOOP | END_TRY | DELEGATE) {
                         break 'walk;
                     }
                     let begin = self.end_to_begin[&inst.tag];
@@ -563,9 +854,7 @@ pub fn cfg_stackify(f: &mut Function) -> Result<bool, String> {
         }
     }
     if state.f.personality {
-        if state.f.calls_unwind {
-            state.check_unwind_mismatches()?;
-        }
+        state.fix_call_unwind_mismatches();
         state.remove_unnecessary_instrs();
     }
     state.rewrite_depths();
