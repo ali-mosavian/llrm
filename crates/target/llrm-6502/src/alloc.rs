@@ -161,20 +161,6 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
-    /// `inc` and `dec` are one byte in `x` and `y` (`inx`), `clc; adc #1` in
-    /// `a`.
-    fn operand_hint(
-        inst: &Inst,
-        operand: usize,
-    ) -> Option<RegId> {
-        match inst.kind {
-            Kind::Op("INC" | "DEC") => Some(reg::X),
-            // a compared byte follows its source (a copy hint); with none, `a`
-            Kind::Op("CMP") if operand == 1 => Some(reg::A),
-            _ => None,
-        }
-    }
-
     /// A byte class the compare class narrowed has `any` as its larger class.
     fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
         if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register))
@@ -186,28 +172,32 @@ impl<const STACK: bool> Target for Mos<STACK> {
         (any.len() > order.len()).then_some(any)
     }
 
-    /// `dec` and `inc` on a cell are one instruction; on a register value that
-    /// lives in a cell, `ldy; dey; sty`.
-    fn memory_saving(
+    /// What `inst` costs with its operand `operand` in `register`: the bytes
+    /// and the clocks of its form in the timing tables (a step is 1 byte and 2
+    /// clocks in `x`, 2 and 5 on a cell, 3 and 4 in `a`). The operand's other
+    /// appearances in the instruction are in `register` too; any other
+    /// register is priced where it stands, a virtual one as `a`. An
+    /// instruction with no register-dependent form costs 0.
+    fn operand_cost(
         inst: &Inst,
         operand: usize,
+        register: RegId,
     ) -> u32 {
-        match (inst.kind, inst.operands.get(operand)) {
-            (Kind::Op("INC" | "DEC"), Some(Operand::Use(_))) => 2,
-            _ => 0,
-        }
-    }
-
-    /// A join into the compare class takes the memory form from a value the
-    /// join saves one copy for: decline it when what the value's other
-    /// instructions save in memory is more than that copy.
-    fn should_coalesce(join: &Join) -> bool {
-        let loses = |side: &Side| {
-            side.registers.iter().any(|register| is_cell(*register))
-                && !join.joined.iter().any(|register| is_cell(*register))
-                && side.memory_saving > 1
-        };
-        !(loses(&join.source) || loses(&join.destination))
+        let priced = inst.operands.get(operand);
+        let regs: Vec<RegId> = inst
+            .operands
+            .iter()
+            .filter_map(|o| match o {
+                Operand::Def(r) | Operand::Use(r) if Some(o) == priced || matches!((o, priced), (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b) => {
+                    let _ = r;
+                    Some(register)
+                }
+                Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+                Operand::Def(_) | Operand::Use(_) => Some(reg::A),
+                _ => None,
+            })
+            .collect();
+        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs).map_or(0, |priced| priced.bytes + priced.cycles as u32)
     }
 
     type Class = Class;
