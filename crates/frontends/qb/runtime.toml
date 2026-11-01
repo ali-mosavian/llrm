@@ -1409,6 +1409,13 @@ QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-
 '''
 
 [[pop]]
+names = ["B$RDFS"]
+bytes = 6
+evidence = '''
+The llrm runtime's entry for a fixed-string destination (runtime/qb/rdfs.c) takes B$RDSD's two arguments; a program for the Microsoft runtimes never calls it.
+'''
+
+[[pop]]
 names = ["B$FDR1"]
 bytes = 2
 evidence = '''

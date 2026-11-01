@@ -34,6 +34,7 @@ llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-sdag = { path = "crates/codegen/llrm-sdag" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
 llrm-arm64 = { path = "crates/target/llrm-arm64" }
+llrm-wasm = { path = "crates/target/llrm-wasm" }
 llrm-x86-m32-select = { path = "crates/target/llrm-x86-m32-select" }
 llrm-x86-m64 = { path = "crates/target/llrm-x86-m64" }
 llrm-x86-m64-select = { path = "crates/target/llrm-x86-m64-select" }
