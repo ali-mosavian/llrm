@@ -1077,3 +1077,29 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
         .collect();
     assert_eq!(literals, vec![7, 9, 7], "{literals:?}");
 }
+
+/// A function states no branch odds, so greedy's block frequencies took every
+/// edge as 1 in 2 and a loop body ran 1.0 times per entry: spill weights treated
+/// loop code as cold (6502 `lz4` grew cycles by 545 over the spike allocator).
+/// The edge that stays in a loop is 31 in 32, as LLVM's loop branch heuristic.
+#[test]
+fn test_a_loop_body_runs_many_times_per_entry() {
+    let mut f = MFunction::<()>::new("counted");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(branch(1));
+    let mut body = Block { id: 1, ..Block::default() };
+    body.insts.push(op("add", vec![Operand::Def(v(1)), Operand::Use(v(0)), Operand::Use(v(0))]));
+    let mut again = op("br", vec![Operand::Block(1), Operand::Block(2)]);
+    again.terminator = true;
+    body.insts.push(again);
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(1))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let freq = llrm_codegen::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&converted.body);
+    let loop_body = freq.get_block_freq_relative_to_entry_block(1);
+    assert!(loop_body >= 8.0, "the loop body runs {loop_body} times per entry");
+}

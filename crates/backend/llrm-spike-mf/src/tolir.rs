@@ -23,9 +23,10 @@
 //! at another time are fine. Exit: D-6502, if a 6502 function needs both live
 //! together.
 //!
-//! DEVIATE 2: no block odds. The `MFunction` states none, so greedy's block
-//! frequencies come from its loop estimate. Exit: D-6502, with the odds the
-//! front end knows.
+//! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
+//! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
+//! loop branch heuristic); every other branch is even. Exit: the odds the
+//! front end knows (the IR's branch weights).
 
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
@@ -189,6 +190,7 @@ pub fn to_lir<T: Target>(
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
+    loop_branch_odds(&mut body);
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     let clobbered_by_spills = T::spill_clobbers();
@@ -220,6 +222,35 @@ pub fn to_lir<T: Target>(
         tii: SpikeInstrInfo { classes: function.classes.clone(), registers, marker: PhantomData },
         tri: SpikeRegisterInfo { copy_cost: 1, csr_first_use_cost: 0 },
     })
+}
+
+/// The edge odds of a branch with one edge that stays in its innermost loop
+/// and one that leaves it: 31 in 32 to stay (`calcLoopBranchHeuristics`, weights
+/// 124 and 4). The `MFunction` states no odds, so the other branches keep
+/// greedy's even split.
+fn loop_branch_odds(body: &mut LirBody) {
+    use llrm_codegen::model::lir::BlockOdds;
+    let loops = llrm_codegen::analysis::loops::loops(&body.blocks, Some(body.entry));
+    let mut taken = Vec::new();
+    for block in body.blocks.iter() {
+        let mut distinct: Vec<i64> = Vec::new();
+        for to in block.succ.iter() {
+            if !distinct.contains(to) {
+                distinct.push(*to);
+            }
+        }
+        let [first, second] = distinct.as_slice() else { continue };
+        let Some(holding) = loops.iter().find(|one| one.body.contains(&block.at)) else { continue };
+        let stays = [holding.body.contains(first), holding.body.contains(second)];
+        if stays[0] == stays[1] {
+            continue;
+        }
+        for (to, stay) in [(*first, stays[0]), (*second, stays[1])] {
+            let odds = if stay { 31.0 / 32.0 } else { 1.0 / 32.0 };
+            taken.push(((block.at, to), (odds * BlockOdds::CERTAIN).round() as u32));
+        }
+    }
+    body.odds.taken.extend(taken);
 }
 
 /// The bytes a value of `class` takes: its first register's view.
