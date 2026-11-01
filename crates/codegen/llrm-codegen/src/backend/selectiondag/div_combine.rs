@@ -28,6 +28,18 @@ use super::div_const::{signed_magic, unsigned_magic};
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
 
+/// One unit's prices for the divide-or-sequence choice (clocks or bytes).
+struct DivSet {
+    prefix: i64,
+    add: i64,
+    shift: i64,
+    extend: i64,
+    multiply: i64,
+    multiply_long: i64,
+    divide: i64,
+    divide_long: i64,
+}
+
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `isOperationLegalOrCustom(op, vt, IsAfterLegalization)`, and the type
     /// legal; false without a table.
@@ -155,7 +167,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         signed: bool,
         rem: bool,
     ) -> bool {
-        let Some(p) = self.dag.config().div_prices else { return false };
+        let Some(p) = self.dag.config().div_prices.clone() else { return false };
         let bits = vt.size_in_bits();
         let width = i64::from(bits / 8);
         // A byte divide has no selected form, and the double word of a pair is
@@ -167,32 +179,64 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if d <= 1 || signed && d == super::fold::mask(bits) {
             return false;
         }
-        let sized = |price: i64| price + if width != p.operand { p.prefix } else { 0 };
-        let wide = |price: i64| price + if 4 != p.operand { p.prefix } else { 0 };
-        let hardware = sized(if width == 4 { p.divide_long } else { p.divide }) + if signed { p.extend } else { p.add };
+        let known = super::known_bits::known_bits(self.dag, n0);
+        let zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
+        let clocks = Self::sequence_price(
+            &DivSet {
+                prefix: p.prefix,
+                add: p.add,
+                shift: p.shift,
+                extend: p.extend,
+                multiply: p.multiply,
+                multiply_long: p.multiply_long,
+                divide: p.divide,
+                divide_long: p.divide_long,
+            },
+            p.operand,
+            p.product.as_ref().map(|price| (price.0)(d as i64)),
+            (bits, d, signed, rem, zeros),
+        );
+        clocks.0 + clocks.0 * p.margin / 100 < clocks.1
+    }
+
+    /// The divide's price and the multiply-high sequence's, in `set`'s unit:
+    /// `(hardware, sequence)`. `immediate` prices the `imul` by the divisor a
+    /// remainder subtracts (`None`: the multiply or a shift-add chain, the
+    /// cheaper).
+    fn sequence_price(
+        set: &DivSet,
+        operand: i64,
+        immediate: Option<i64>,
+        (bits, d, signed, rem, zeros): (u32, u128, bool, bool, u32),
+    ) -> (i64, i64) {
+        let width = i64::from(bits / 8);
+        let sized = |price: i64| price + if width != operand { set.prefix } else { 0 };
+        let wide = |price: i64| price + if 4 != operand { set.prefix } else { 0 };
+        let hardware =
+            sized(if width == 4 { set.divide_long } else { set.divide }) + if signed { set.extend } else { set.add };
         // A multiply-high of a narrower value is the widened product, its high
         // half taken.
-        let high = wide(p.multiply_long) + if width < 4 { p.extend + p.shift } else { 0 };
-        let (add, shift) = (sized(p.add), sized(p.shift));
+        let high = wide(set.multiply_long) + if width < 4 { set.extend + set.shift } else { 0 };
+        let (add, shift) = (sized(set.add), sized(set.shift));
         let magic = if signed {
             let found = signed_magic(d, bits);
             let top = 1u128 << (bits - 1);
             let factor = (d & top != 0) != (found.magic & top != 0);
             high + if factor { add } else { 0 } + if found.shift != 0 { shift } else { 0 } + shift + add
         } else {
-            let known = super::known_bits::known_bits(self.dag, n0);
-            let zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
             let found = unsigned_magic(d, bits, zeros.min(bits - (128 - d.leading_zeros())), true, false);
             (if found.pre_shift != 0 { shift } else { 0 })
                 + high
                 + if found.is_add { 2 * add + shift } else { 0 }
                 + if found.post_shift != 0 { shift } else { 0 }
         };
-        // The remainder is `x - q * d`: the product by a constant is a multiply
-        // or a few shifts and adds.
-        let back = sized(if width == 4 { p.multiply_long } else { p.multiply }).min(2 * shift + 2 * add) + add;
-        let total = magic + if rem { back } else { 0 };
-        hardware + hardware * p.margin / 100 < total
+        // The remainder is `x - q * d`: the product by a constant, the `imul`
+        // the selector emits for it.
+        let product = immediate.map_or_else(
+            || sized(if width == 4 { set.multiply_long } else { set.multiply }).min(2 * shift + 2 * add),
+            sized,
+        );
+        (hardware, magic + if rem { product + add } else { 0 })
     }
 
     /// `visitSDIVLike`.
