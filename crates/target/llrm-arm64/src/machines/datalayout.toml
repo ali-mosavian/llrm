@@ -4,6 +4,9 @@ llvm_triple = "aarch64-unknown-linux-gnu"
 llvm_cpu = "generic"
 tti = "AArch64"
 
+# The hardware fuses a multiply and an add (fmadd): C may not contract `a * b + c` into one, or its results change.
+fused_multiply_add = true
+
 # LLVM syntax, as the pin's clang prints it for aarch64-linux-gnu. i64 is native; long double is 128 bits.
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
 

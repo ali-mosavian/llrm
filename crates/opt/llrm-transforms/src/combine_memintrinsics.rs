@@ -51,6 +51,7 @@ impl Combiner<'_> {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
+            Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
             None => self.transform_const_expr_cast_call(call),
             _ => Visit::None,
         }

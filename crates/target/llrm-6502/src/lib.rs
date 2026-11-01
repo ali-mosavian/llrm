@@ -5,6 +5,7 @@ pub mod alloc;
 pub mod asm;
 pub mod dagisel;
 pub mod driver;
+pub mod elf;
 pub mod emit;
 pub mod frame;
 pub mod peephole;

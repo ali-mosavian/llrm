@@ -42,6 +42,11 @@ pub trait Machine {
     const NUMBER: u16;
     /// Relocations carry their addend (RELA); else it is in the field (REL).
     const ADDEND: bool;
+    /// ELFDATA2MSB: the file's own fields are big-endian. The section bytes
+    /// are the target's.
+    const BIG_ENDIAN: bool = false;
+    /// `e_flags`: the machine's own (llvm-mos writes its CPU there).
+    const FLAGS: u32 = 0;
     /// `sh_type` of `.eh_frame`: `SHT_X86_64_UNWIND` on x86-64, else PROGBITS.
     const UNWIND_TYPE: u32 = SHT_PROGBITS;
 
@@ -87,18 +92,25 @@ struct Header {
     entry: u64,
 }
 
-fn put16(
+fn put16<M: Machine>(
     out: &mut Vec<u8>,
     value: u16,
 ) {
-    out.extend(value.to_le_bytes());
+    out.extend(if M::BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() });
 }
 
-fn put32(
+fn put32<M: Machine>(
     out: &mut Vec<u8>,
     value: u32,
 ) {
-    out.extend(value.to_le_bytes());
+    out.extend(if M::BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() });
+}
+
+fn put64<M: Machine>(
+    out: &mut Vec<u8>,
+    value: u64,
+) {
+    out.extend(if M::BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() });
 }
 
 /// An address-sized field: 4 bytes in a 32-bit file, 8 in a 64-bit one.
@@ -107,9 +119,9 @@ fn put_word<M: Machine>(
     value: u64,
 ) {
     if M::WIDE {
-        out.extend(value.to_le_bytes());
+        put64::<M>(out, value);
     } else {
-        put32(out, value as u32);
+        put32::<M>(out, value as u32);
     }
 }
 
@@ -180,19 +192,19 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let symbol_size = if M::WIDE { 24 } else { 16 };
     let mut symtab: Vec<u8> = vec![0; symbol_size];
     let symbol = |out: &mut Vec<u8>, name: u32, value: u64, size: u64, info: u8, section: u16| {
-        put32(out, name);
+        put32::<M>(out, name);
         if M::WIDE {
             out.push(info);
             out.push(0);
-            put16(out, section);
-            out.extend(value.to_le_bytes());
-            out.extend(size.to_le_bytes());
+            put16::<M>(out, section);
+            put64::<M>(out, value);
+            put64::<M>(out, size);
         } else {
-            put32(out, value as u32);
-            put32(out, size as u32);
+            put32::<M>(out, value as u32);
+            put32::<M>(out, size as u32);
             out.push(info);
             out.push(0);
-            put16(out, section);
+            put16::<M>(out, section);
         }
     };
     let file = strings.add(&object.name);
@@ -235,7 +247,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
                 symbol(&mut symtab, name, offset as u64, one.size as u64, binding << 4 | kind, section as u16 + 1);
             }
-            Definition::Undefined => symbol(&mut symtab, name, 0, 0, STB_GLOBAL << 4, 0),
+            Definition::Undefined => {
+                let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
+                symbol(&mut symtab, name, 0, 0, binding << 4, 0)
+            }
         }
         elf_symbol[index] = Some(next);
         next += 1;
@@ -269,12 +284,12 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             M::backend().apply_fixup(&mut field, 0, one.kind, one.pc_rel, addend, &section.name)?;
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
-                entries.extend((u64::from(symbol) << 32 | u64::from(kind)).to_le_bytes());
+                put64::<M>(&mut entries, u64::from(symbol) << 32 | u64::from(kind));
             } else {
-                put32(&mut entries, symbol << 8 | kind);
+                put32::<M>(&mut entries, symbol << 8 | kind);
             }
             if M::ADDEND {
-                entries.extend(addend.to_le_bytes());
+                put_word::<M>(&mut entries, addend as u64);
             } else {
                 image[one.at..one.at + width].copy_from_slice(&field[..width]);
             }
@@ -388,33 +403,50 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     align(&mut out, word);
     let table = out.len() as u64;
     for one in &headers {
-        put32(&mut out, one.name);
-        put32(&mut out, one.kind);
+        put32::<M>(&mut out, one.name);
+        put32::<M>(&mut out, one.kind);
         put_word::<M>(&mut out, one.flags);
         put_word::<M>(&mut out, 0);
         put_word::<M>(&mut out, one.offset);
         put_word::<M>(&mut out, one.size);
-        put32(&mut out, one.link);
-        put32(&mut out, one.info);
+        put32::<M>(&mut out, one.link);
+        put32::<M>(&mut out, one.info);
         put_word::<M>(&mut out, one.align);
         put_word::<M>(&mut out, one.entry);
     }
 
-    out[..16].copy_from_slice(&[0x7F, b'E', b'L', b'F', if M::WIDE { 2 } else { 1 }, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    out[..16].copy_from_slice(&[
+        0x7F,
+        b'E',
+        b'L',
+        b'F',
+        if M::WIDE { 2 } else { 1 },
+        if M::BIG_ENDIAN { 2 } else { 1 },
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ]);
     let mut header = Vec::new();
-    put16(&mut header, 1); // ET_REL
-    put16(&mut header, M::NUMBER);
-    put32(&mut header, 1);
+    put16::<M>(&mut header, 1); // ET_REL
+    put16::<M>(&mut header, M::NUMBER);
+    put32::<M>(&mut header, 1);
     put_word::<M>(&mut header, 0); // entry
     put_word::<M>(&mut header, 0); // program headers
     put_word::<M>(&mut header, table);
-    put32(&mut header, 0); // flags
-    put16(&mut header, header_size as u16);
-    put16(&mut header, 0);
-    put16(&mut header, 0);
-    put16(&mut header, if M::WIDE { 64 } else { 40 });
-    put16(&mut header, headers.len() as u16);
-    put16(&mut header, headers.len() as u16 - 1);
+    put32::<M>(&mut header, M::FLAGS);
+    put16::<M>(&mut header, header_size as u16);
+    put16::<M>(&mut header, 0);
+    put16::<M>(&mut header, 0);
+    put16::<M>(&mut header, if M::WIDE { 64 } else { 40 });
+    put16::<M>(&mut header, headers.len() as u16);
+    put16::<M>(&mut header, headers.len() as u16 - 1);
     out[16..header_size].copy_from_slice(&header);
     Ok(out)
 }

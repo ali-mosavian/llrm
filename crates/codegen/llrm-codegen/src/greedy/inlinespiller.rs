@@ -1927,7 +1927,7 @@ mod tests {
         let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
-        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes });
+        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false });
         let tables = Rc::new(Tables::default());
         for value in 1..=4 {
             tables.orders.borrow_mut().insert(value, vec![RegId::EBX, RegId::ESI]);
@@ -1959,7 +1959,7 @@ mod tests {
     #[test]
     fn test_a_copy_is_what_the_target_says() {
         let classes = RegisterClasses::m16();
-        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes });
+        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false });
         let copy = |name: &str| x87(0, Operation::Move, name, vec![held(2)], vec![held(1)], vec![2], vec![1]);
         assert_eq!(tii.copy_source(&copy("cp")), Some(1));
         assert_eq!(tii.copy_source(&copy("mov")), None, "x86's name is not this target's copy");
@@ -1990,7 +1990,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(2, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
-        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let tables = Rc::new(Tables::default());
         for value in 1..=3 {
             tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
@@ -2047,7 +2047,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(3, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
-        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let tables = Rc::new(Tables::default());
         for value in 1..=5 {
             tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
@@ -2125,7 +2125,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(2, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
-        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let order_of = |_: u32| Vec::new();
         let mut spiller = InlineSpiller::new(
             &mut frame,
@@ -2215,7 +2215,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(3, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
-        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let order_of = |_: u32| Vec::new();
         let mut spiller = InlineSpiller::new(
             &mut frame,
@@ -2310,7 +2310,7 @@ mod tests {
         matrix.vrm.set_is_split_from_reg(2, 1);
         let mut frame = Frame::new(0);
         let classes = RegisterClasses::m16();
-        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes };
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
         let tables = Rc::new(Tables::default());
         for value in 1..=2 {
             tables.orders.borrow_mut().insert(value, vec![RegId::AX]);

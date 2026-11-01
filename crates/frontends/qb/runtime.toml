@@ -1165,6 +1165,7 @@ check = { when = "$1 < 1 or $2 < 0", raise = 5 }
 [semantics."B$FCHR"]
 evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the value is not a byte; otherwise a one-byte temporary string holds it."
 parameters = ["int"]
+inline = "always"
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 
@@ -1409,6 +1410,13 @@ QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-
 '''
 
 [[pop]]
+names = ["B$RDFS"]
+bytes = 6
+evidence = '''
+The llrm runtime's entry for a fixed-string destination (runtime/qb/rdfs.c) takes B$RDSD's two arguments; a program for the Microsoft runtimes never calls it.
+'''
+
+[[pop]]
 names = ["B$FDR1"]
 bytes = 2
 evidence = '''
@@ -1543,6 +1551,12 @@ routines = ["B$DSEG", "B$DSG0", "B$SCLR", "B$RUNL", "B$StackReset", "B$Init", "B
 [llrm]
 stack_abi = ["B$CLOS", "B$COLR", "B$CSCN", "B$DDIM", "B$FERR", "B$LOCT", "B$OEGA", "B$RDIM", "B$RESN", "B$SERR"]
 
+# What a call of the llrm runtime does to the heaps a loop's cached array words live in. `moves_far_heap`: it reclaims the
+# far heap (shell.c: qb_shell_reclaim after the child returns). `moves_near_heap`: it compacts the local heap, which slides
+# a near array (file.c close_fdb and fre.c nh_compact: B$CLOS, B$FRSD, B$FRI2). DIM, REDIM and ERASE allocate by their tags.
+moves_far_heap = ["B$SSHL"]
+moves_near_heap = ["B$CLOS", "B$FRSD", "B$FRI2"]
+
 # The event trapping of the llrm runtime (runtime/qb/events.c), which has no counterpart in QB's: the front end numbers the
 # handlers and asks which are due, where QB jumps into a handler's address.
 
@@ -1610,6 +1624,21 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: the handler of that number has returned. Pascal, far, the arguments popped by the callee."
+
+# `^` on a target without an extended float (a description with no `f80`): the runtime's own pow, which QB's counterpart
+# (87btran.asm B$POW4, x87 operands) cannot be on such a target. Only a flat target defines it (runtime/qb/posix/mathops.c).
+["B$LPOW"]
+cleanup = 16
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/posix/mathops.c, written for the llrm runtime; QB's counterpart is 87btran.asm B$POW4, which takes x87 operands: x then y as DOUBLEs, the address of the DOUBLE result in AX; error 5 for 0 ^ negative and a negative base with a fractional exponent, error 6 for y * log2|x| of 32767.5 or more, as B$POW4's. Pascal, far, the arguments popped by the callee."
 
 ["B$FPLY"]
 cleanup = 2
