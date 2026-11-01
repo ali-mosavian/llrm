@@ -63,30 +63,36 @@ fn trace(exe: &Path) -> Vec<u32> {
     pcs
 }
 
-/// `(address, text)` of every instruction of `llvm-objdump -d`, and the
-/// address range of `k`.
+/// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
+/// difftest seed's `ours`) over those functions instead of the kernel `k`.
+fn functions() -> Vec<String> {
+    std::env::var("CYCLES_FUNCS").map_or_else(|_| vec!["k".to_owned()], |list| list.split(',').map(str::to_owned).collect())
+}
+
+/// `(address, text)` of every instruction of `objdump -d`, and the address
+/// ranges of the priced functions.
 fn listing(
     gcc: &Path,
     exe: &Path,
-) -> (Vec<(u32, String)>, std::ops::Range<u32>) {
+) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
         .args(["-d", "--no-show-raw-insn"])
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
+    let wanted = functions();
     let mut lines = Vec::new();
-    let mut range = 0..0;
-    let mut in_k = false;
+    let mut ranges = Vec::new();
+    let mut open: Option<u32> = None;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Some((address, name)) = line.split_once(" <").and_then(|(a, rest)| Some((a, rest.strip_suffix(">:")?))) {
-            if in_k {
-                range.end = u32::from_str_radix(address, 16).unwrap();
-                in_k = false;
+            let address = u32::from_str_radix(address, 16).unwrap();
+            if let Some(start) = open.take() {
+                ranges.push(start..address);
             }
-            if name == "k" {
-                range.start = u32::from_str_radix(address, 16).unwrap();
-                in_k = true;
+            if wanted.iter().any(|one| one == name) {
+                open = Some(address);
             }
             continue;
         }
@@ -94,10 +100,10 @@ fn listing(
         let Ok(address) = u32::from_str_radix(address.trim(), 16) else { continue };
         lines.push((address, from_gnu(&text.trim().replace('\t', " ")).unwrap_or_else(|why| why)));
     }
-    if in_k {
-        range.end = lines.last().map_or(0, |last| last.0 + 2);
+    if let Some(start) = open {
+        ranges.push(start..lines.last().map_or(0, |last| last.0 + 2));
     }
-    (lines, range)
+    (lines, ranges)
 }
 
 struct Total {
@@ -112,7 +118,7 @@ fn price(
     exe: &Path,
     models: &[Model],
 ) -> Total {
-    let (lines, range) = listing(gcc, exe);
+    let (lines, ranges) = listing(gcc, exe);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -127,7 +133,7 @@ fn price(
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
     for (index, pc) in pcs.iter().enumerate() {
-        if !range.contains(pc) {
+        if !ranges.iter().any(|range| range.contains(pc)) {
             continue;
         }
         total.insns += 1;
@@ -173,6 +179,12 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let models = models();
+    if let Some(exe) = std::env::var_os("CYCLES_EXE") {
+        let total = price(&gcc, Path::new(&exe), &models);
+        let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
+        println!("insns {} clocks {} unpriced {} partial {}", total.insns, clocks.join(" "), total.unknown, total.partial);
+        return;
+    }
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
     let (rows, block) = if set == "library" {
         (library_table(), library_data())
