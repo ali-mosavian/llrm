@@ -72,3 +72,14 @@ fn a_copy_between_the_two_bytes_of_a_pair_is_kept() {
     assert!(function.blocks[0].insts.is_empty());
     let _ = Operand::Imm(0);
 }
+
+/// A byte taken from a pair was copied to a spare register first
+/// (`ld d, c` / `ld (hl), d` / `cp a, d`): three bytes and 12 T-states a loop
+/// that read `c` directly.
+#[test]
+fn a_byte_of_a_pair_is_read_in_place() {
+    let ir = include_str!("kernels/ir/fill.ll");
+    let out = text(ir, "fill", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ld (hl), c") && out.contains("cp a, c"), "{out}");
+    assert!(!out.contains("ld d, c"), "{out}");
+}

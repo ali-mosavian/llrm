@@ -64,6 +64,7 @@ fn allocated_with(
     }
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     remove_identity_copies(&mut function, &assignment);
+    use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
@@ -90,6 +91,77 @@ pub fn remove_identity_copies(
             (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => register(*dst) != register(*src),
             _ => true,
         });
+    }
+}
+
+/// Reads the byte a `LO`/`HI` extracts straight from its half of the pair when
+/// the pair keeps its value to the last use, instead of copying it to a byte
+/// register first (`ld d, c` / `cp a, d` becomes `cp a, c`).
+///
+/// Only a byte defined once and used later in its own block, with no write to
+/// that half and no call in between, is rewritten.
+pub fn use_lanes_in_place(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let mut defs = vec![0usize; function.classes.len()];
+    let mut uses = vec![Vec::new(); function.classes.len()];
+    for (b, block) in function.blocks.iter().enumerate() {
+        for inst in &block.insts {
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Def(Reg::Virt(v)) => defs[*v as usize] += 1,
+                    Operand::Use(Reg::Virt(v)) => uses[*v as usize].push(b),
+                    _ => {}
+                }
+            }
+        }
+    }
+    for b in 0..function.blocks.len() {
+        let mut at = 0;
+        while at < function.blocks[b].insts.len() {
+            let inst = &function.blocks[b].insts[at];
+            let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(Reg::Virt(byte)), Operand::Use(source)]) = (inst.kind, &inst.operands[..]) else {
+                at += 1;
+                continue;
+            };
+            let Ok((lo, hi)) = expand::lanes(register(*source)) else {
+                at += 1;
+                continue;
+            };
+            let (byte, half) = (*byte, if op == "LO" { lo } else { hi });
+            if defs[byte as usize] != 1 || uses[byte as usize].iter().any(|one| *one != b) {
+                at += 1;
+                continue;
+            }
+            let insts = &function.blocks[b].insts;
+            let mut last = at;
+            for (k, later) in insts.iter().enumerate().skip(at + 1) {
+                if later.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Virt(v)) if *v == byte)) {
+                    last = k;
+                }
+            }
+            let clobbered = insts[at + 1..=last].iter().any(|later| {
+                later.call
+                    || later.operands.iter().any(|o| matches!(o, Operand::Def(r) if <Z80Registers as llrm_spike_mf::Target>::overlaps(register(*r), half)))
+            });
+            if clobbered {
+                at += 1;
+                continue;
+            }
+            for later in &mut function.blocks[b].insts[at + 1..=last] {
+                for operand in &mut later.operands {
+                    if matches!(operand, Operand::Use(Reg::Virt(v)) if *v == byte) {
+                        *operand = Operand::Use(Reg::Phys(half));
+                    }
+                }
+            }
+            function.blocks[b].insts.remove(at);
+        }
     }
 }
 

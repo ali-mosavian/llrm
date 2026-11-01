@@ -63,7 +63,7 @@ fn name(register: RegId) -> &'static str {
 }
 
 /// The low and high byte of a pair.
-fn lanes(pair: RegId) -> Result<(RegId, RegId), String> {
+pub(crate) fn lanes(pair: RegId) -> Result<(RegId, RegId), String> {
     if pair == reg::BC {
         Ok((reg::C, reg::B))
     } else if pair == reg::DE {
