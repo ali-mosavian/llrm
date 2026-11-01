@@ -540,7 +540,10 @@ impl SelectionDAG {
         if node == self.root.node
             || node == self.entry.node
             || self.is_deleted(node)
-            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store)
+            || !matches!(
+                self.nodes[node as usize].opcode,
+                ISD::Load | ISD::Store | ISD::BrCond
+            )
         {
             return;
         }
@@ -1276,6 +1279,103 @@ impl SelectionDAG {
         swap
     }
 
+    /// `getAtomic` of an `ATOMIC_LOAD_*` read-modify-write: the old value at
+    /// `ptr` and a chain, `value` combined into the memory by `op`.
+    pub fn get_atomic_rmw(
+        &mut self,
+        op: ISD,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        debug_assert!(matches!(
+            op,
+            ISD::AtomicLoadAdd
+                | ISD::AtomicLoadSub
+                | ISD::AtomicLoadAnd
+                | ISD::AtomicLoadClr
+                | ISD::AtomicLoadOr
+                | ISD::AtomicLoadXor
+        ));
+        let vt = self.value_type(value);
+        let node =
+            self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP`
+    /// when `flag` is none: the old value at `ptr`, the success flag of
+    /// type `flag` if asked for, and a chain.
+    pub fn get_atomic_cmp_swap(
+        &mut self,
+        flag: Option<EVT>,
+        chain: SDValue,
+        ptr: SDValue,
+        expected: SDValue,
+        new: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(expected);
+        let (op, types) = match flag {
+            Some(flag) => (ISD::AtomicCmpSwapWithSuccess, vec![vt, flag, EVT::OTHER]),
+            None => (ISD::AtomicCmpSwap, vec![vt, EVT::OTHER]),
+        };
+        let node = self.intern(op, &types, &[chain, ptr, expected, new], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `ATOMIC_FENCE`: only a chain. The ordering (LLVM's numbering) and the
+    /// scope are target constants, as `SelectionDAGBuilder::visitFence`
+    /// builds them.
+    pub fn get_atomic_fence(
+        &mut self,
+        chain: SDValue,
+        ordering: u8,
+        single_thread: bool,
+    ) -> SDValue {
+        let ordering = self.get_constant_with(u128::from(ordering), EVT::I64, true, false);
+        let scope = self.get_constant_with(u128::from(!single_thread), EVT::I64, true, false);
+        self.intern(ISD::AtomicFence, &[EVT::OTHER], &[chain, ordering, scope], SDNodeFlags::default(), NodeData::None)
+    }
+
+    /// `getAtomic` of `ATOMIC_LOAD`: the value at `ptr` and a chain.
+    pub fn get_atomic_load(
+        &mut self,
+        vt: EVT,
+        chain: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node =
+            self.intern(ISD::AtomicLoad, &[vt, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_STORE`: only a chain. The operands are `(chain,
+    /// value, ptr)`, as `SelectionDAGBuilder::visitAtomicStore` builds
+    /// them.
+    pub fn get_atomic_store(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(
+            ISD::AtomicStore,
+            &[EVT::OTHER],
+            &[chain, value, ptr],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
     /// target asks to preserve pointer arithmetic, and ours does not).
     pub fn get_mem_base_plus_offset(
@@ -1503,6 +1603,15 @@ impl SelectionDAG {
         index: u32,
     ) -> SDValue {
         self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
+    }
+
+    /// `getTargetJumpTable`.
+    pub fn get_target_jump_table(
+        &mut self,
+        vt: EVT,
+        index: u32,
+    ) -> SDValue {
+        self.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
     }
 
     pub fn get_register_mask(&mut self) -> SDValue {

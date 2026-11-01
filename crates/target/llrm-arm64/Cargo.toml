@@ -19,6 +19,8 @@ llrm-macho = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-elf = { workspace = true }
 llrm-target = { workspace = true }
+llrm-sdag = { workspace = true }
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 
 [build-dependencies]
 llrm-lir = { workspace = true }

@@ -626,6 +626,58 @@ impl<'a> TypeLegalizer<'a> {
                     None => self.dag.get_node(op, to, &[input]),
                 }
             }
+            op @ (ISD::AtomicSwap
+            | ISD::AtomicLoadAdd
+            | ISD::AtomicLoadSub
+            | ISD::AtomicLoadAnd
+            | ISD::AtomicLoadClr
+            | ISD::AtomicLoadOr
+            | ISD::AtomicLoadXor) => {
+                // `PromoteIntRes_Atomic1`: the access keeps its memory type,
+                // the operand is the promoted value, the result
+                // is wider and the chain follows.
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let operand = self.promoted_integer(self.dag.operand(value, 2));
+                let new = if op == ISD::AtomicSwap {
+                    self.dag.get_atomic_swap(chain, ptr, operand, info)
+                } else {
+                    self.dag.get_atomic_rmw(op, chain, ptr, operand, info)
+                };
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
+                new
+            }
+            ISD::AtomicCmpSwapWithSuccess if value.res == 1 => {
+                // `PromoteIntRes_AtomicCmpSwap`: only the success flag is
+                // widened.
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let ops: Vec<SDValue> = (0..4).map(|at| self.dag.operand(value, at)).collect();
+                let new = self.dag.get_atomic_cmp_swap(Some(to), ops[0], ops[1], ops[2], ops[3], info);
+                self.replace_value_with(SDValue { node: value.node, res: 0 }, SDValue { node: new.node, res: 0 });
+                self.replace_value_with(SDValue { node: value.node, res: 2 }, SDValue { node: new.node, res: 2 });
+                SDValue { node: new.node, res: 1 }
+            }
+            ISD::AtomicLoad => {
+                // `PromoteIntRes_Atomic0`: a zero-extending atomic load.
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let new = self
+                    .dag
+                    .get_atomic_load(
+                        to,
+                        chain,
+                        ptr,
+                        super::dag::MemInfo { ext: Some(super::actions::LoadExt::ZExtLoad), ..info },
+                    );
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
+                new
+            }
             ISD::Load => {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
@@ -759,6 +811,16 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<bool, LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         let result = match self.dag.opcode(node) {
+            ISD::AtomicStore if at == 1 => {
+                // `PromoteIntOp_ATOMIC_STORE`: the promoted value, the same
+                // memory type.
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
+                let operand = self.promoted_integer(self.dag.operand(node, 1));
+                self.dag.get_atomic_store(chain, ptr, operand, info)
+            }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
@@ -845,11 +907,23 @@ impl<'a> TypeLegalizer<'a> {
                     });
                 };
                 let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                // `SExtOrZExtPromotedOperands`: promoted operands whose
+                // significant bits fit the narrow type are
+                // compared as they are, with no zext_inreg.
+                let fits = |legalizer: &Self, value: SDValue| {
+                    let promoted = legalizer.promoted_integer(value);
+                    let wide = legalizer.dag.value_type(promoted).size_in_bits();
+                    let narrow = legalizer.dag.value_type(value).size_in_bits();
+                    wide + 1 - super::known_bits::num_sign_bits(legalizer.dag, promoted) <= narrow
+                };
+                let as_is = !code.is_signed_int() && fits(self, lhs) && fits(self, rhs);
                 let extend = |legalizer: &mut Self, value: SDValue| {
                     let bits = legalizer.dag.value_type(value).size_in_bits();
                     let promoted = legalizer.promoted_integer(value);
                     let wide = legalizer.dag.value_type(promoted);
-                    if code.is_signed_int() {
+                    if as_is {
+                        promoted
+                    } else if code.is_signed_int() {
                         let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
                         let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
                         legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
@@ -988,6 +1062,9 @@ impl<'a> TypeLegalizer<'a> {
             return Ok(true);
         }
         self.replace_value_with(node, result);
+        // `ReplaceNodeWith` deletes the node it replaced, so what it read no
+        // longer counts it as a user.
+        self.dag.delete_replaced(n);
         Ok(false)
     }
 

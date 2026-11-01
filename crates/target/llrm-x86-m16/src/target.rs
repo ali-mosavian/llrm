@@ -267,6 +267,8 @@ impl Machine for Dos {
             // Tuning constant fitted to sc.c, weapons, mdl and lru, not
             // derived.
             size_milliclocks_per_byte: 10_000,
+            // The user's rate for m16 at speed: one clock is two bytes.
+            speed_milliclocks_per_byte: 500,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,

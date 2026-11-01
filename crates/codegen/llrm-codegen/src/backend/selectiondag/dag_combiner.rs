@@ -267,6 +267,7 @@ pub trait CombineHooks {
         _dag: &mut SelectionDAG,
         _op: SDValue,
         _demanded: u128,
+        _level: CombineLevel,
     ) -> Option<Option<SDValue>> {
         None
     }
@@ -2211,6 +2212,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.merge_consecutive_stores(node) {
             return Some(node);
         }
+        if let Some(done) = self.truncating_store_demanded_bits(node, chain, value, ptr, info) {
+            return Some(done);
+        }
         // `replaceStoreOfFPConstant` takes a volatile store too
         // (`isNormalStore`); the hook asks for that.
         let volatile_blocks = info.volatile && !self.hooks.store_fp_constant_as_i64();
@@ -2253,6 +2257,40 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `visitSTORE` of a truncating store of an integer: only the low bits of
+    /// the value are read, so `SimplifyDemandedBits` (and
+    /// `SimplifyMultipleUseDemandedBits`) may rewrite the value.
+    fn truncating_store_demanded_bits(
+        &mut self,
+        node: SDValue,
+        chain: SDValue,
+        value: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(value);
+        if !vt.is_integer()
+            || !info.mem_vt.is_integer()
+            || info.mem_vt.size_in_bits() >= vt.size_in_bits()
+            || vt.size_in_bits() > 64
+        {
+            return None;
+        }
+        if self.dag.is_opaque(value) {
+            return None;
+        }
+        let demanded = super::fold::mask(info.mem_vt.size_in_bits());
+        self.add_to_worklist(value.node);
+        if self.simplify_demanded_bits_of(value, demanded) {
+            self.add_to_worklist(node.node);
+            return Some(node);
+        }
+        if let Some(shorter) = self.simplify_multiple_use_demanded_bits(value, demanded, 0) {
+            return Some(self.dag.get_store(chain, shorter, ptr, info));
+        }
+        None
     }
 
     /// `splitMergedValStore`, for the `BUILD_PAIR` the builder makes before

@@ -169,10 +169,21 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Load | LoadPre | LoadPost => pin::LOAD,
         Store | StorePre | StorePost => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
-        // No x86 table names these; a target whose table does gets its own id
-        // map (B2).
-        AtomicCmpSwap | AtomicLoadAdd | AtomicLoadSub | AtomicLoadAnd | AtomicLoadOr | AtomicLoadXor
-        | AtomicLoadClr | AtomicLoad | AtomicStore => u16::MAX,
+        AtomicLoad => pin::ATOMIC_LOAD,
+        AtomicStore => pin::ATOMIC_STORE,
+        AtomicFence => pin::ATOMIC_STORE - 2,
+        AtomicLoadAdd => pin::ATOMIC_LOAD_ADD,
+        // No x86 table names these, so the generated ids lack
+        // them: `ISD::NodeType`'s order after
+        // `ATOMIC_SWAP` ([ISDOpcodes.h
+        // L1425](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/ISDOpcodes.h#L1425)).
+        AtomicCmpSwap => pin::ATOMIC_STORE + 1,
+        AtomicCmpSwapWithSuccess => pin::ATOMIC_STORE + 2,
+        AtomicLoadSub => pin::ATOMIC_LOAD_ADD + 1,
+        AtomicLoadAnd => pin::ATOMIC_LOAD_ADD + 2,
+        AtomicLoadClr => pin::ATOMIC_LOAD_ADD + 3,
+        AtomicLoadOr => pin::ATOMIC_LOAD_ADD + 4,
+        AtomicLoadXor => pin::ATOMIC_LOAD_ADD + 5,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
@@ -550,6 +561,12 @@ impl<'a> DagisAdapter<'a> {
 }
 
 impl Dag for DagisAdapter<'_> {
+    fn compute_num_sign_bits(
+        &self,
+        value: PinValue,
+    ) -> u32 {
+        super::known_bits::num_sign_bits(self.dag, ours(value))
+    }
     fn opcode(
         &self,
         node: u32,
@@ -728,7 +745,10 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<LoadExt> {
         let node = &self.dag.nodes()[node as usize];
-        matches!(node.opcode, ISD::Load | ISD::LoadPre | ISD::LoadPost).then(|| match node.data {
+        matches!(
+            node.opcode,
+            ISD::Load | ISD::LoadPre | ISD::LoadPost | ISD::AtomicLoad
+        ).then(|| match node.data {
             NodeData::Mem(info) => match info.ext {
                 None => LoadExt::NonExt,
                 Some(super::actions::LoadExt::ExtLoad) => LoadExt::Ext,
@@ -804,6 +824,15 @@ impl Dag for DagisAdapter<'_> {
             _ => false,
         }
     }
+    fn fp_bits(
+        &self,
+        value: PinValue,
+    ) -> Option<u128> {
+        match self.dag.node(ours(value)).data {
+            NodeData::ConstFp { bits } => Some(bits),
+            _ => None,
+        }
+    }
     fn fp_class(
         &self,
         value: PinValue,
@@ -833,6 +862,22 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
+    }
+    fn atomic_ordering(
+        &self,
+        node: u32,
+    ) -> Option<u8> {
+        use llrm_mir::opcode::AtomicOrdering::*;
+        let node = &self.dag.nodes()[node as usize];
+        let NodeData::Mem(info) = node.data else { return None };
+        info.ordering.map(|ordering| match ordering {
+            Unordered => 1,
+            Monotonic => 2,
+            Acquire => 4,
+            Release => 5,
+            AcqRel => 6,
+            SeqCst => 7,
+        })
     }
     fn has_no_unsigned_wrap(
         &self,
@@ -1083,6 +1128,15 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn known_zero_bits(
+        &self,
+        value: PinValue,
+    ) -> u64 {
+        let ours = ours(value);
+        let bits = self.dag.value_type(ours).size_in_bits();
+        let all = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        super::known_bits::known_bits(self.dag, ours).zero as u64 & all
+    }
     fn segment_override(
         &self,
         node: u32,

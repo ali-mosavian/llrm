@@ -138,6 +138,12 @@ impl Level {
     }
 
     fn options(self) -> Options {
+        // The pin's AArch64 pass config adds the atomic tidy at every level but
+        // -O0.
+        Options { atomic_cfg_tidy: true, lower_switches: false, ..self.generic_options() }
+    }
+
+    fn generic_options(self) -> Options {
         match self {
             Self::O0 => Options::none(),
             Self::O1 => Options::basic(),
@@ -162,6 +168,19 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     optimized_at(program, Level::O2)
 }
 
+/// The `-f[no-]PASS` switches of the command line (`-fno-unroll-loops`),
+/// applied to every mid-end run of the process.
+static PASS_FLAGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Records `flag` if it names a mid-end pass; false when it does not.
+pub fn pass_flag(flag: &str) -> bool {
+    if !llrm_codegen::driver::flags::apply_pass_flag(&mut Options::default(), flag) {
+        return false;
+    }
+    PASS_FLAGS.lock().unwrap().push(flag.to_owned());
+    true
+}
+
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -169,6 +188,9 @@ pub fn optimized_at(
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
+    for flag in PASS_FLAGS.lock().unwrap().iter() {
+        llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
+    }
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
@@ -183,6 +205,51 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
         .into_iter()
         .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
         .collect()
+}
+
+/// Which instruction selector makes the machine function (`--isel=`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IselMode {
+    #[default]
+    Hand,
+    Dag,
+    /// The DAG path, the hand selector where it refuses (counted on stderr).
+    Shadow,
+}
+
+impl IselMode {
+    /// The mode `--isel=NAME` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "hand" => Some(Self::Hand),
+            "dag" => Some(Self::Dag),
+            "shadow" => Some(Self::Shadow),
+            _ => None,
+        }
+    }
+}
+
+static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Hand);
+
+/// Chooses the selector for the compiles that follow (the process's, as the
+/// pass flags are).
+pub fn set_isel_mode(mode: IselMode) {
+    *ISEL_MODE.lock().unwrap() = mode;
+}
+
+fn isel_mode() -> IselMode {
+    *ISEL_MODE.lock().unwrap()
+}
+
+/// `name` through the DAG path: the pin's table and the shared stages.
+fn dag_select(
+    module: &llrm_mir::module::Module,
+    name: &str,
+    layout: &llrm_mir::datalayout::DataLayout,
+    platform: Platform,
+) -> Result<crate::mfunc::MFunc, String> {
+    let blocks = crate::dag::function::select_function_in(module, name, layout, platform)?;
+    crate::dag::emit::emit(name, &blocks)
 }
 
 /// Every defined function of `program`'s one module, selected, allocated and
@@ -204,8 +271,17 @@ pub fn functions_with(
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let mut machine = crate::isel::selected(module, id, &program.layout, platform, lines)
-            .map_err(|why| format!("@{name}: {why}"))?;
+        let mut machine = match isel_mode() {
+            IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
+            IselMode::Dag => dag_select(module, &name, &program.layout, platform),
+            // A refusal of the DAG path falls back to the hand selector,
+            // counted.
+            IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
+                eprintln!("isel-shadow: @{name}: {why}");
+                crate::isel::selected(module, id, &program.layout, platform, lines)
+            }),
+        }
+        .map_err(|why| format!("@{name}: {why}"))?;
         dump("Select", &machine);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
@@ -361,13 +437,6 @@ pub fn object_file_with(
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_triple_without_an_os_is_linux_only_for_aarch64() {
-        assert_eq!(platform_or_default("aarch64--"), Some(Platform::Linux));
-        assert_eq!(platform_or_default("arm64-apple-macos"), Some(Platform::Darwin));
-        assert_eq!(platform_or_default("x86_64-unknown-linux-gnu"), None);
-    }
-
     /// Clang writes Apple's variadic reads as `va_arg`, which MIR does not read
     /// ("`va_arg` is not an instruction of MIR's subset"): each becomes the
     /// load of the pointer, the value, and the pointer advanced by a slot.
@@ -385,5 +454,12 @@ mod tests {
         assert!(out.contains("%12 = load i32, ptr %va.0.cur"), "{out}");
         assert!(out.contains("getelementptr inbounds i8, ptr %va.0.cur, i64 8"), "{out}");
         assert!(out.ends_with("  ret i32 %12\n"), "{out}");
+    }
+
+    #[test]
+    fn a_triple_without_an_os_is_linux_only_for_aarch64() {
+        assert_eq!(platform_or_default("aarch64--"), Some(Platform::Linux));
+        assert_eq!(platform_or_default("arm64-apple-macos"), Some(Platform::Darwin));
+        assert_eq!(platform_or_default("x86_64-unknown-linux-gnu"), None);
     }
 }

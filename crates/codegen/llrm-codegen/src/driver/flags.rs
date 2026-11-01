@@ -125,6 +125,8 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sink", |options, on| options.sink = on),
+    ("aarch64-atomic-cfg-tidy", |options, on| options.atomic_cfg_tidy = on),
+    ("llrm-cgpaddr", |options, on| options.cgpaddr = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
     ("llrm-stable-loads", |options, on| options.stable_loads = on),
@@ -224,6 +226,10 @@ pub struct Flags {
     /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
     /// is an explicit `__cdecl`.
     pub regcall_default: bool,
+    /// `-frame-pointer=<all|non-leaf|non-leaf-no-reserve|reserved|none>`, the
+    /// pin's `cl::opt` of `CommandFlags.cpp` (:204): the `"frame-pointer"`
+    /// attribute of each function that has none.
+    pub frame_pointer: Option<String>,
     /// `-mc-library`: the library's functions (`cos`, `strlen`) keep their
     /// C convention, as the Borland library the program links has them.
     pub c_library: bool,
@@ -255,6 +261,7 @@ impl Default for Flags {
             wrapv: false,
             float_store: false,
             regcall_default: false,
+            frame_pointer: None,
             c_library: false,
             level: Level::O2,
             passes: Vec::new(),
@@ -338,6 +345,15 @@ impl Flags {
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            _ if flag.starts_with("-frame-pointer=") => {
+                let policy = &flag["-frame-pointer=".len()..];
+                if !["all", "non-leaf", "non-leaf-no-reserve", "reserved", "none"].contains(&policy) {
+                    return Err(format!(
+                        "-frame-pointer={policy}: expected all, non-leaf, non-leaf-no-reserve, reserved or none"
+                    ));
+                }
+                self.frame_pointer = Some(policy.to_owned());
+            }
             "-mc-library" => self.c_library = true,
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),

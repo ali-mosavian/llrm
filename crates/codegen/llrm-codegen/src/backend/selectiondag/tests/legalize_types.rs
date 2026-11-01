@@ -297,6 +297,33 @@ fn a_promotion_shifts_by_the_targets_shift_amount_type() {
     }
 }
 
+/// A store promoted to a wider register is rebuilt from the old one's memory
+/// info: its atomic ordering must come along, or a `release` store is selected
+/// as a plain one.
+#[test]
+fn a_promoted_store_keeps_its_atomic_ordering() {
+    use llrm_mir::opcode::AtomicOrdering;
+    let tli = TargetLowering::empty(llrm_sdag::lowering::TargetLoweringInfo::new(&[MVT::I32, MVT::I64], false));
+    let mut dag = dag();
+    let value = load(&mut dag, EVT::Simple(MVT::I16), 1);
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = MemInfo {
+        mem_vt: EVT::Simple(MVT::I16),
+        align: 2,
+        volatile: false,
+        base: MemBase::Stack(2),
+        ext: None,
+        space: 0,
+        ordering: Some(AtomicOrdering::Release),
+    };
+    let store = dag.get_store(chain, value, ptr, info);
+    dag.set_root(store);
+    assert_eq!(legalize(&mut dag, &tli), Ok(true));
+    let NodeData::Mem(stored) = dag.node(dag.get_root()).data else { panic!("a store has a memory operand") };
+    assert_eq!(stored.ordering, Some(AtomicOrdering::Release));
+}
+
 /// A divide in a promoted type was refused ("promote result"; wasm's `sdiv
 /// i8`). `PromoteIntRes_SDIV/UDIV` extends both operands in the register, sign
 /// for the signed forms and zero for the unsigned.
