@@ -41,7 +41,8 @@
 //! not X86's. Optimizing for size does not take the pin's shortcut.
 //!
 //! DEVIATE MC1 (owner funcattrs-port, exit 2026-11-13): the trace is the
-//! block alone. `MachineTraceMetrics` ([updatePhysDepsDownwards](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineTraceMetrics.cpp#L745))
+//! block alone. `MachineTraceMetrics`
+//! ([updatePhysDepsDownwards](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineTraceMetrics.cpp#L745))
 //! also follows predecessors and every physical register; here only the stack
 //! pointer around calls does, as a chain of `CALL_FRAME_LATENCY` per call, so
 //! two calls arrive in order (still O(n)). A value made outside the block has
