@@ -122,21 +122,21 @@ impl SchedInfo for M68kSched {
         &self,
         opcode: u32,
     ) -> usize {
-        super::indexed::desc(opcode as u16).map_or(0, |desc| usize::from(desc.num_defs))
+        super::local::desc(opcode as u16).map_or(0, |desc| usize::from(desc.num_defs))
     }
 
     fn implicit_defs(
         &self,
         opcode: u32,
     ) -> &[u16] {
-        super::indexed::desc(opcode as u16).map_or(&[], |desc| desc.implicit_defs)
+        super::local::desc(opcode as u16).map_or(&[], |desc| desc.implicit_defs)
     }
 
     fn is_call(
         &self,
         opcode: u32,
     ) -> bool {
-        super::indexed::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
+        super::local::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
     fn call_frame_setup(&self) -> Option<u32> {
@@ -170,16 +170,18 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, &mut Temporaries::new(0))
+    select_block_with(dag, cpu, false, false, false, &mut Temporaries::new(0))
 }
 
 /// [`select_block`], with the pin's source-order scheduler where
-/// `source_order`, and `(An)+` and `-(An)` accesses where `indexed`.
+/// `source_order`, `(An)+` and `-(An)` accesses where `indexed`, and `addq`
+/// and `subq` where `short`.
 pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     source_order: bool,
     indexed: bool,
+    short: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
@@ -192,6 +194,7 @@ pub fn select_block_with(
         tli: &tli,
         lowering: &mut lowering,
         chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
+        short,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
         llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
@@ -203,6 +206,7 @@ struct M68kTarget<'a> {
     tli: &'a llrm_codegen::backend::selectiondag::actions::TargetLowering,
     lowering: &'a mut M68kLowering,
     chooser: M68kChooser<'a>,
+    short: bool,
 }
 
 struct M68kChooser<'a> {
@@ -229,6 +233,15 @@ impl DagTarget for M68kTarget<'_> {
 
     fn selection(&mut self) -> (&dyn PinRegisters, &mut dyn Select) {
         (&M68kPins, &mut self.chooser)
+    }
+
+    fn postprocess(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        if self.short {
+            super::short::narrow(dag);
+        }
     }
 }
 

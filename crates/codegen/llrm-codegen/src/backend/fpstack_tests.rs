@@ -304,3 +304,77 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
     let converted = converted(&body, &RegisterClasses::of(&llrm_x86_m16::M16)).expect("a value across an out");
     assert_eq!(count(&converted, "out"), 1, "{:?}", names(&converted));
 }
+
+/// A loop whose header wants its two floats in the order latch 2 leaves them
+/// and latch 1 does not; both reach the header through `chain` blocks that only
+/// rename. Returns the exchanges on the path through each latch.
+fn latch_paths(chain: i64) -> (usize, usize) {
+    use crate::model::lir::{LirBlock, Phi};
+    let fchs = crate::backend::floatalloc::tests::fchs;
+    let cells = [frame_cell(-8, 8), frame_cell(-16, 8)];
+    let (b1, b2, r1) = (32, 64, 96);
+    let mut body = _body(vec![
+        _load(1, &cells[0]),
+        _load(2, &cells[1]),
+        // latch 1 leaves (7 on top, 8): the header's top is the second.
+        fchs(8, 4),
+        fchs(7, 3),
+        // latch 2 leaves (6 on top, 5).
+        fchs(5, 3),
+        fchs(6, 4),
+    ]);
+    let insns = body.insns();
+    let mut blocks: Vec<crate::model::lir::Block> = vec![
+        block(0, insns[..2].to_vec(), vec![16]).into(),
+        LirBlock {
+            phis: vec![
+                Phi { result: 3, incoming: vec![(0, 1), (r1 + 16 * (chain - 1), 9)] },
+                Phi { result: 4, incoming: vec![(0, 2), (r1 + 16 * (chain - 1), 10)] },
+            ]
+            .into(),
+            ..block(16, vec![], vec![b1, b2])
+        }
+        .into(),
+        block(b1, insns[2..4].to_vec(), vec![r1]).into(),
+        block(b2, insns[4..6].to_vec(), vec![r1]).into(),
+    ];
+    for k in 0..chain {
+        let at = r1 + 16 * k;
+        let phis = if k == 0 {
+            vec![
+                Phi { result: 9, incoming: vec![(b1, 7), (b2, 5)] },
+                Phi { result: 10, incoming: vec![(b1, 8), (b2, 6)] },
+            ]
+        } else {
+            Vec::new()
+        };
+        let next = if k + 1 < chain { at + 16 } else { 16 };
+        blocks.push(LirBlock { phis: phis.into(), ..block(at, vec![], vec![next]) }.into());
+    }
+    body.blocks = blocks;
+    let lowered = crate::phielimination::lowered(&body).unwrap();
+    let stacked = converted(&lowered, &RegisterClasses::of(&llrm_x86_m16::M16)).unwrap();
+    let in_block = |at: i64| {
+        stacked
+            .blocks
+            .iter()
+            .find(|block| block.at == at)
+            .map_or(0, |block| block.insns.iter().filter(|one| name(one) == "fxch").count())
+    };
+    let chain_fxch: usize = (0..chain).map(|k| in_block(r1 + 16 * k)).sum();
+    (in_block(b1) + chain_fxch, in_block(b2) + chain_fxch)
+}
+
+/// DEVIATE 6 followed the renaming blocks ahead of a fixed bundle at most
+/// three deep (`DEPTH`): with four or more, the latch that fixes the bundle
+/// chose its own order and the other latch exchanged twice, once to match it
+/// and once more at the header (4 exchanges on its path, 2 with the order
+/// taken from the header).
+#[test]
+fn test_the_order_a_header_wants_is_taken_through_any_number_of_renaming_blocks() {
+    let costs: Vec<(usize, usize)> = [2, 3, 6, 9].iter().map(|chain| latch_paths(*chain)).collect();
+    assert!(
+        costs.iter().all(|cost| *cost == (2, 2)),
+        "exchanges on the two latches' paths, by chain 2, 3, 6, 9: {costs:?}"
+    );
+}
