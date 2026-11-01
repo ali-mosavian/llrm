@@ -957,6 +957,7 @@ def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
 def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
     """branch, loop, qlight and qmove took literal arguments: the optimiser returned the constant (0 to 2 instructions, a 0.03x "gain" at m16 -Os and
     six "region never entered" rows). Their C inputs are volatile reads and their BASIC inputs READ from DATA, so every build runs the body."""
+    # Instrument config (owner w6, 2026-11-06): the parity kernels that once folded to constants, named because each had its own fold.
     for name in ("branch", "loop", "qlight", "qmove", "control"):  # control: bas/bq16 -Os ran 0 kernel instructions on the tip
         if name != "control":  # its C passes the inputs through pointers to statics, which the kernel reads
             assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
