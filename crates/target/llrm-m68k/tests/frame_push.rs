@@ -1,6 +1,6 @@
 //! The saved registers pushed with `-(%sp)` and popped with `(%sp)+`. The pin
-//! opens the frame with `suba.l #n, %sp` and `movem`s them into slots, which for
-//! one register is 24 bytes against 4.
+//! opens the frame with `suba.l #n, %sp` and `movem`s them into slots, which
+//! for one register is 24 bytes against 4.
 
 use std::path::PathBuf;
 
@@ -83,7 +83,8 @@ done:
 }";
 
 /// One saved register, no other frame, was `suba.l #4,%sp; movem.l %d2,(0,%sp)`
-/// and the mirror (24 bytes). It is `move.l %d2,-(%sp)` and `move.l (%sp)+,%d2`.
+/// and the mirror (24 bytes). It is `move.l %d2,-(%sp)` and `move.l
+/// (%sp)+,%d2`.
 #[test]
 fn one_saved_register_is_pushed_and_popped() {
     for cpu in [Cpu::M68000, Cpu::M68020] {

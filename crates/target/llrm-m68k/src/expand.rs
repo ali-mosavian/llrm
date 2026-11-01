@@ -80,7 +80,8 @@ fn frame_op(
     });
 }
 
-/// Bytes and clocks of `ops` on `cpu`, from the encoder and the manuals' tables.
+/// Bytes and clocks of `ops` on `cpu`, from the encoder and the manuals'
+/// tables.
 fn frame_cost(
     ops: &[FrameOp],
     cpu: crate::dagisel::hooks::Cpu,
@@ -102,9 +103,11 @@ fn frame_cost(
 fn frame_ops(
     layout: &frame::Layout,
     cpu: crate::dagisel::hooks::Cpu,
+    push_frame: bool,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
-    let (Some(opening), Some(closing)) = (layout.push_prologue(), layout.push_epilogue()) else {
+    let pushed = if push_frame { layout.push_prologue().zip(layout.push_epilogue()) } else { None };
+    let Some((opening, closing)) = pushed else {
         return Ok((pin_opening, pin_closing));
     };
     let no_worse = |ours: &[FrameOp], pin: &[FrameOp]| -> Result<bool, String> {
@@ -148,6 +151,7 @@ pub fn finish(
     number: usize,
     slots: &[i32],
     cpu: crate::dagisel::hooks::Cpu,
+    push_frame: bool,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -219,7 +223,7 @@ pub fn finish(
         ..Function::default()
     });
     let mut out = Vec::new();
-    let (opening, closing) = frame_ops(&layout, cpu)?;
+    let (opening, closing) = frame_ops(&layout, cpu, push_frame)?;
     opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
