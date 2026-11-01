@@ -1100,7 +1100,7 @@ pub struct Decided {
     pub edited: Option<LirBody>,
     pub spill_failed: bool,
     /// The value each clone a split or a spill made was cloned from.
-    pub parents: std::collections::HashMap<u32, u32>,
+    pub parents: crate::support::hash::HashMap<u32, u32>,
 }
 
 /// How a spilled range is dealt with.
