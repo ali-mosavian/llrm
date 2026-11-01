@@ -18,6 +18,9 @@
 //! 5. a block of one conditional branch identical to the branch that ends the
 //!    block before it takes that branch away (L1586).
 //!
+//! A branch on a compare of a register the block just loaded with a constant
+//! is a jump or nothing (`knownflags`, DEVIATE B1).
+//!
 //! A block that nothing enters is dead; its source bytes are kept by `_prune`.
 //!
 //! # Deviations from the pin
@@ -30,6 +33,8 @@
 //!
 //! # See also
 //! `tailmerge` (the pass this one follows), `placement`.
+
+mod knownflags;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -330,6 +335,10 @@ impl<'a> Folder<'a> {
         let exit = Exit::of(&block);
         if exit.cond.as_deref().is_some_and(counted) {
             return false;
+        }
+        // A branch on a compare of a constant just loaded.
+        if self.constant_branch(index, &exit) {
+            return true;
         }
         // A conditional whose two ways are one block.
         if let (Some(cond), Some(jump)) = (&exit.cond, &exit.jump)

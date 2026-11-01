@@ -2403,3 +2403,94 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
     let optimized = names("386");
     assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
 }
+
+fn dword() -> Loc {
+    Loc::Reg(Reg { register: RegId::EAX, width: 4 })
+}
+
+/// `mov eax, value; <test|cmp> eax, ..; <cc> 3; jmp 2` in block 1, and the two
+/// ways out.
+fn constant_compare(
+    value: i64,
+    name: &str,
+    other: Loc,
+    cc: &str,
+) -> LirBody {
+    let load =
+        _insn(1, Operation::Move, "mov", vec![dword()], vec![Loc::Imm(Imm { value, width: 4, address: None })], None);
+    let compare = _insn(1, Operation::Compare, name, vec![], vec![dword(), other], None);
+    let mut source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![load, compare, _branch(1, cc, 3), _jump(1, 2)], vec![3, 2]).into(),
+            block(2, vec![_move(2, imm(0)), _return(2)], vec![]).into(),
+            block(3, vec![_return(3)], vec![]).into(),
+        ],
+    );
+    source.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+    source
+}
+
+fn names(result: &LirBody) -> Vec<String> {
+    result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| !one.is_meta())
+        .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+        .collect()
+}
+
+/// qlight's byte clamp ended `mov eax, 255; test eax, eax; jg out` on the
+/// path that had just set eax to 255: a compare and a branch that always go
+/// one way, +5 bytes and 2 instructions on every clamped value.
+#[test]
+fn test_a_branch_on_a_compare_of_a_loaded_constant_goes_one_way() {
+    let eax = dword();
+    let cases = [
+        // (constant, compare, other operand, branch, taken)
+        (255, "test", eax.clone(), "jg", true),
+        (255, "test", eax.clone(), "jle", false),
+        (0, "test", eax.clone(), "je", true),
+        (-1, "test", eax.clone(), "js", true),
+        (-1, "test", eax.clone(), "jb", false),
+        (255, "cmp", Loc::Imm(Imm { value: 255, width: 4, address: None }), "jge", true),
+        (255, "cmp", Loc::Imm(Imm { value: 256, width: 4, address: None }), "jge", false),
+        // unsigned: 0xFFFFFFFF is above 1; signed it is below.
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "ja", true),
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        // signed overflow: i32::MIN < 1 though the difference is positive.
+        (i64::from(i32::MIN), "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        (i64::from(i32::MAX), "cmp", Loc::Imm(Imm { value: -1, width: 4, address: None }), "jg", true),
+    ];
+    for (value, name, other, cc, taken) in cases {
+        let result = threaded(&constant_compare(value, name, other, cc));
+        let got = names(&result);
+        assert!(!got.iter().any(|one| one == name), "{name} {cc} {value}: {got:?}");
+        // The taken way is the bare return; the other also clears the result.
+        let moves = got.iter().filter(|one| *one == "mov").count();
+        assert_eq!(moves, if taken { 1 } else { 2 }, "{name} {cc} {value}: {got:?}");
+    }
+}
+
+/// A write to the register between the load and the compare, or a compare
+/// that is not the one before the branch's flags, decides nothing.
+#[test]
+fn test_a_branch_after_the_constant_is_changed_keeps_its_compare() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    let byte = _insn(
+        1,
+        Operation::Move,
+        "mov",
+        vec![Loc::Reg(Reg { register: RegId::AX, width: 1 })],
+        vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+        None,
+    );
+    let block = source.blocks[0].clone();
+    let mut insns = block.insns.to_vec();
+    insns.insert(1, byte);
+    source.blocks[0] = block.with_insns(insns).into_inner().into();
+    let got = names(&threaded(&source));
+    assert!(got.iter().any(|one| one == "test"), "{got:?}");
+}
