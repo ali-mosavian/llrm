@@ -1453,6 +1453,50 @@ b0:
     assert!(!m16.contains("call i32 @callee"), "the folding call stayed:\n{m16}");
 }
 
+/// A call that folds once inlined stays a call with inlining off
+/// (`-fno-inline-functions`): the trial of a blocked site at a speed caller
+/// ignored the switch, and 6 llrm-nib tests lost their out-of-line callees
+/// (`_kdiv proc near` not in the listing) and every bench kernel folded into
+/// `main`.
+#[test]
+fn test_an_o2_call_that_folds_once_inlined_stays_a_call_with_inlining_off() {
+    let text = "define i32 @callee(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %a = phi i32 [ 1, %b0 ], [ %a1, %h ]
+  %m = mul i32 %a, 31
+  %x = xor i32 %m, %i
+  %a1 = add i32 %x, 7
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %a1
+}
+
+define i32 @top() {
+b0:
+  %r = call i32 @callee(i32 6)
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let options = crate::pipeline::Options { inline: crate::inline::Threshold::none(), ..Default::default() };
+    let applied = crate::pipeline::Applied { options, ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let top = printed.split("define").find(|one| one.contains("@top(")).expect("the function");
+    assert!(top.contains("call i32 @callee"), "inlining off, the call was inlined:\n{top}");
+}
+
 /// `@top` after the -Os pipeline over `text`.
 fn at_os(
     text: &str,

@@ -44,7 +44,7 @@ fn legalized_by(
     DagLegalizer::new(
         &mut dag,
         tli,
-        &mut X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .expect("legalizes");
@@ -128,7 +128,7 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .expect("legalizes");

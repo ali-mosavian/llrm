@@ -4109,7 +4109,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -4154,7 +4154,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -5958,6 +5958,18 @@ impl Compiler {
         let pointer = self.value(pointer_type);
         self.emit("address", vec![pointer], vec![Operand::Place(place)]);
         Ok(pointer)
+    }
+
+    /// The runtime entry that reads a string item into a string of `width`
+    /// bytes (0: a variable one). The Microsoft runtimes' B$RDSD takes
+    /// both; the llrm C runtime keeps B$RDSD for the variable string, so a
+    /// program without a fixed-string READ links nothing more, and reads a
+    /// fixed one with B$RDFS.
+    fn read_string_entry(
+        &self,
+        width: usize,
+    ) -> &'static str {
+        if width > 0 && self.runtime == "llrm" { "B$RDFS" } else { "B$RDSD" }
     }
 
     fn string_width(

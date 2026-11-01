@@ -307,7 +307,7 @@ pub fn filled_with(
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
             if let Some(found) = found {
-                _filled(context, declared, function, &found);
+                _filled(context, layout, declared, function, &found);
                 standing.changed();
                 changed = true;
                 continue 'again;
@@ -1000,6 +1000,7 @@ pub(crate) fn _copy(
 /// The loop made one trip that fills.
 fn _filled(
     context: &mut Context,
+    layout: &DataLayout,
     declared: &mut Declared,
     function: &mut Function,
     found: &_Found,
@@ -1113,11 +1114,33 @@ fn _filled(
         off,
         Operand::Constant(seeds.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) })),
     ]);
+    // A memset's destination keeps the alignment its stores had, the least of
+    // them: without it the backend fills by bytes (`rep stosb`).
+    let dest_align = matches!(found.stored, Stored::Fill(..))
+        .then(|| {
+            std::iter::once(found.effect)
+                .chain(found.absorbed.iter().copied())
+                .map(|store| match function.instruction(store).opcode {
+                    // No `align` is the type's ABI alignment.
+                    Opcode::Store { align, .. } => align.or_else(|| {
+                        let ty = function.operand_type(context, function.instruction(store).operands[0])?;
+                        Some(layout.align(&context.types, ty))
+                    }),
+                    _ => None,
+                })
+                .try_fold(u64::MAX, |least, align| align.map(|align| least.min(align)))
+        })
+        .flatten()
+        .filter(|align| *align != u64::MAX);
+    let mut argument_attrs = vec![Vec::new(); 4];
+    if let Some(align) = dest_align {
+        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+    }
     let info = CallInfo {
         function_type,
         calling_convention: 0,
         return_attrs: Vec::new(),
-        argument_attrs: vec![Vec::new(); 4],
+        argument_attrs,
         attrs: Vec::new(),
         tail: Default::default(),
     };
