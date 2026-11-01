@@ -38,6 +38,8 @@ pub struct Segment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Where {
     Place(Place),
+    /// The value held in the place, plus a constant (`DW_OP_plus_uconst`).
+    Offset(Place, i64),
     Constant(i64),
     /// Nothing says: its value is not held here, or was deleted.
     Undef,
@@ -65,8 +67,8 @@ pub struct Located {
 
 /// The ranges of every variable. `segments` gives each value's stretches
 /// (sorted, not overlapping); `end` is where the code ends. A note of a value
-/// the table does not know, or of a form this does not place yet (`Offset`,
-/// `Expr`, `Arrived`), is `Undef` over its range.
+/// the table does not know, or of a form this does not place yet (`Expr`,
+/// `Arrived`), is `Undef` over its range.
 pub fn locate(
     notes: &[Positioned],
     segments: &BTreeMap<u32, Vec<Segment>>,
@@ -97,7 +99,8 @@ pub fn locate(
             };
             match &note.value {
                 NoteValue::Constant(value) => push(start, stop, Where::Constant(*value)),
-                NoteValue::Value(value) => {
+                NoteValue::Value(value) | NoteValue::Offset(value, _) => {
+                    let add = if let NoteValue::Offset(_, add) = note.value { Some(add) } else { None };
                     let mut from = start;
                     for segment in segments.get(value).into_iter().flatten() {
                         let (low, high) = (segment.start.max(start), segment.end.min(stop));
@@ -105,7 +108,11 @@ pub fn locate(
                             continue;
                         }
                         push(from, low, Where::Undef);
-                        push(low, high, Where::Place(segment.place));
+                        push(
+                            low,
+                            high,
+                            add.map_or(Where::Place(segment.place), |add| Where::Offset(segment.place, add)),
+                        );
                         from = high;
                     }
                     push(from, stop, Where::Undef);
@@ -193,5 +200,14 @@ mod tests {
         let found = locate(&[note(2, 1, NoteValue::Constant(9)), note(4, 2, NoteValue::Nothing)], &BTreeMap::new(), 8);
         let one = found.iter().find(|one| one.variable == 1).unwrap();
         assert_eq!((one.start, one.end, one.at), (2, 8, Where::Constant(9)));
+    }
+
+    /// A value plus a constant keeps the constant with the place, in each
+    /// range of the value.
+    #[test]
+    fn an_offset_note_keeps_its_constant_in_every_place() {
+        let table = BTreeMap::from([(7, vec![seg(0, 5, reg(1)), seg(5, 9, Place::Cell(-8))])]);
+        let found = locate(&[note(0, 1, NoteValue::Offset(7, 12))], &table, 9);
+        assert_eq!(ranges(&found), [(0, 5, Where::Offset(reg(1), 12)), (5, 9, Where::Offset(Place::Cell(-8), 12))]);
     }
 }
