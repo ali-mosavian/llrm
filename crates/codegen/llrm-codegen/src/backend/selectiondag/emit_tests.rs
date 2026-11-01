@@ -335,8 +335,14 @@ fn a_lea_of_a_base_and_a_scaled_dword_index_at_m16_has_no_displacement() {
     context_in(AddrMode::Real16, |ctx| {
         let units = schedule(&dag, root, &Info);
         let emitted = emit(&dag, &units, ctx).expect("emits");
-        let lea = emitted.blocks[0].insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("lea"))).expect("a lea");
-        let Some(llrm_lir::Loc::Mem(cell)) = lea.what.as_ref().and_then(|w| w.sources.first()) else { panic!("{lea:?}") };
+        let lea = emitted.blocks[0]
+            .insns
+            .iter()
+            .find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("lea")))
+            .expect("a lea");
+        let Some(llrm_lir::Loc::Mem(cell)) = lea.what.as_ref().and_then(|w| w.sources.first()) else {
+            panic!("{lea:?}")
+        };
         assert_eq!(cell.disp_width, 0, "{cell:?}");
     });
 }

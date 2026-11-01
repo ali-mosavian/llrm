@@ -3809,7 +3809,8 @@ impl Emitter<'_, '_> {
             }
             let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 {
                 // A base register leaves mod 00/01 to the encoder: the dword
-                // displacement is for the index alone (`[index*scale + disp32]`).
+                // displacement is for the index alone (`[index*scale +
+                // disp32]`).
                 match (base.is_some(), disp) {
                     (false, _) => 4,
                     (true, 0) => 0,
