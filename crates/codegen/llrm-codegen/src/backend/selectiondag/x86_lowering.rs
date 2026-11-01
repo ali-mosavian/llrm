@@ -162,6 +162,17 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    fn pack_word_pairs(&self) -> bool {
+        true
+    }
+
+    fn is_compare_with_flags(
+        &self,
+        user: ISD,
+    ) -> bool {
+        user == x86isd::CMP
+    }
+
     /// DEVIATE G1 (x87 only: with SSE the conversion is in registers): the
     /// `fist` to a scratch slot, the load of the slot and the store of it
     /// become one `fist` to the store's address.
@@ -1803,12 +1814,11 @@ fn lower_vastart(
         };
         return Some(dag.get_store(chain, first, list, info));
     }
-    let (save, gp_offset) = dag.var_args_save?;
+    let (save, gp_offset, fp_offset) = dag.var_args_save?;
     let mut stores = Vec::new();
     let fields: [(u128, EVT, SDValue); 4] = [
         (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
-        // 6 * 8: the vector registers' part of the area starts there
-        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (4, EVT::I32, dag.get_constant(u128::from(fp_offset), EVT::I32)),
         (8, pointer, dag.get_frame_index(pointer, index)),
         (16, pointer, dag.get_frame_index(pointer, save)),
     ];
