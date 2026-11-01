@@ -131,6 +131,11 @@ def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d,
 // ld r,(hl) / ld (hl),r / ld (hl),n: the pointer is HL.
 let mayLoad = 1 in
   def LD8rm : Z80Inst<(outs GR8:$d), (ins HLR:$p), "ld $d, ($p)", [(set i8:$d, (load i16:$p))]>;
+// A word through a pointer in HL: two byte loads or stores with an `inc hl` between, expanded when emitted.
+let mayLoad = 1 in
+  def LD16rm : Z80Inst<(outs GR16:$d), (ins HLR:$p), "ld16 $d, ($p)", [(set i16:$d, (load i16:$p))]>;
+let mayStore = 1 in
+  def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
 let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;
@@ -199,3 +204,7 @@ def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 GR8:$lo), (shl (ext8 GR8:$hi), (i8 8)))),
           (REG_SEQUENCE GR16, GR8:$lo, sub_lo, GR8:$hi, sub_hi)>;
+
+// A byte loaded and widened: the load, and a zero high byte.
+def : Pat<(i16 (zextloadi8 i16:$p)), (REG_SEQUENCE GR16, (LD8rm i16:$p), sub_lo, (LD8ri 0), sub_hi)>;
+def : Pat<(i16 (extloadi8 i16:$p)), (REG_SEQUENCE GR16, (LD8rm i16:$p), sub_lo, (LD8ri 0), sub_hi)>;

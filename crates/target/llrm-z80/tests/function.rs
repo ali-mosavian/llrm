@@ -80,6 +80,18 @@ fn two_bytes_joined_are_a_pair_not_an_or() {
     assert!(blocks[0].contains(&"REG_SEQUENCE") && !blocks[0].contains(&"OR16"), "{blocks:?}");
 }
 
+/// A byte read and widened, and a word read, through a pointer: the byte load
+/// with a zero high byte, and the word load. Before them `scmp`, `crc16` and
+/// `sum16` of the bench refused with `CannotSelect(Load)`.
+#[test]
+fn loads_through_a_pointer_widen_a_byte_and_read_a_word() {
+    let widened = "define i16 @f(ptr %p) {\n  %b = load i8, ptr %p\n  %w = zext i8 %b to i16\n  ret i16 %w\n}";
+    let blocks = selected(widened, "f");
+    assert_eq!(blocks, [["LD8rm", "LD8ri", "RET"]]);
+    let word = "define i16 @g(ptr %p) {\n  %w = load i16, ptr %p\n  ret i16 %w\n}";
+    assert!(selected(word, "g")[0].contains(&"LD16rm"));
+}
+
 /// Known gap: an argument beyond the registers is refused, not misplaced (the
 /// builder's hook cannot return an error, so it panics).
 #[test]
