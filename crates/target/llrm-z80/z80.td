@@ -57,6 +57,9 @@ def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SD
 // expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
 def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
 def Z80stsp : SDNode<"Z80ISD::STSP", SDT_Z80StSP, [SDNPHasChain, SDNPMayStore]>;
+// The sign of a byte or word as the Z flag: bit 7 of the byte, or of the high byte. Z is set when the sign bit is clear.
+def SDTZ80Tsts : SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisInt<1>]>;
+def Z80tsts : SDNode<"Z80ISD::TSTS", SDTZ80Tsts>;
 def Z80wrapper : SDNode<"Z80ISD::WRAPPER", SDTIntUnaryOp>;
 def Z80retglue : SDNode<"Z80ISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
@@ -114,6 +117,13 @@ multiclass Logic16<string n, SDPatternOperator op> {
   let Defs = [F, A] in
     def NAME#"16" : Z80Inst<(outs GR16:$d), (ins GR16:$a, GR16:$b), n#"16 $d, $a, $b", [(set i16:$d, (op i16:$a, i16:$b))]>;
 }
+multiclass Logic16i<string n, SDPatternOperator op> {
+  let Defs = [F, A] in
+    def NAME#"16i" : Z80Inst<(outs GR16:$d), (ins GR16:$a, i16imm:$b), n#"16 $d, $a, $b", [(set i16:$d, (op i16:$a, (i16 imm:$b)))]>;
+}
+defm AND : Logic16i<"and", and>;
+defm OR : Logic16i<"or", or>;
+defm XOR : Logic16i<"xor", xor>;
 defm AND : Logic16<"and", and>;
 defm OR : Logic16<"or", or>;
 defm XOR : Logic16<"xor", xor>;
@@ -170,6 +180,8 @@ def CP8i : Z80Inst<(outs Flags:$f), (ins ACC:$a, i8imm:$b), "cp $b", [(set i8:$f
 // A is clobbered, as the pseudo says.
 let Defs = [A] in
   def CP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
+def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
+def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
 let isBranch = 1, isTerminator = 1 in {
   def JPNZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nz, $t", [(Z80brcond bb:$t, (i8 0), i8:$f)]>;
   def JPZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp z, $t", [(Z80brcond bb:$t, (i8 1), i8:$f)]>;

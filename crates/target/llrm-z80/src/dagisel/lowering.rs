@@ -29,6 +29,7 @@ pub mod z80isd {
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
+    pub const TSTS: ISD = ISD::Target(ids::TSTS);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
 }
 
@@ -338,6 +339,33 @@ fn translate_cc(
     }
 }
 
+/// The condition code and flags of `op0 cc op1`. A comparison of a signed value
+/// with zero is the test of its sign bit (`bit 7`), not a compare of the value
+/// with a flipped copy: `x < 0` is `NZ`, `x >= 0` is `Z`.
+fn compare(
+    dag: &mut SelectionDAG,
+    mut cc: CondCode,
+    op0: SDValue,
+    mut op1: SDValue,
+) -> (u128, SDValue) {
+    use CondCode::*;
+    let vt = dag.value_type(op0);
+    let minus_one = (1u128 << vt.size_in_bits()) - 1;
+    // x > -1 is x >= 0, x <= -1 is x < 0
+    if let (SetGt | SetLe, Some(c)) = (cc, dag.constant(op1)) {
+        if c == minus_one {
+            cc = if cc == SetGt { SetGe } else { SetLt };
+            op1 = dag.get_constant(0, vt);
+        }
+    }
+    if matches!(cc, SetLt | SetGe) && dag.constant(op1) == Some(0) {
+        let flags = dag.get_node(z80isd::TSTS, EVT::I8, &[op0]);
+        return (if cc == SetLt { cond::NZ } else { cond::Z }, flags);
+    }
+    let (code, a, b) = translate_cc(dag, cc, op0, op1);
+    (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]))
+}
+
 /// `LowerSETCC`, integer part: `SETCC cc, (CMP a, b)`.
 fn lower_setcc(
     dag: &mut SelectionDAG,
@@ -360,8 +388,7 @@ fn lower_setcc(
     if !matches!(dag.value_type(op0), EVT::I8 | EVT::I16) {
         return None;
     }
-    let (code, a, b) = translate_cc(dag, cc, op0, op1);
-    let flags = dag.get_node(z80isd::CMP, EVT::I8, &[a, b]);
+    let (code, flags) = compare(dag, cc, op0, op1);
     let code = cc_operand(dag, code);
     Some(dag.get_node(z80isd::SETCC, EVT::I8, &[code, flags]))
 }

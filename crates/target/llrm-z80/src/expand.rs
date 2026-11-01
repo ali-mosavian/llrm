@@ -258,6 +258,20 @@ impl Printer<'_> {
                     self.push(format!("{mnemonic} {to}"));
                 }
             }
+            "SHL16" | "SRL16" if shift_count(inst)? >= 8 => {
+                // a whole byte moves across: the other byte is cleared, the rest is a byte shift
+                let count = shift_count(inst)?;
+                let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                let (kept, cleared, shifted) = if op == "SHL16" { (lo, hi, "sla") } else { (hi, lo, "srl") };
+                self.push(format!("ld {}, {}", name(cleared), name(kept)));
+                self.push(format!("ld {}, #0", name(kept)));
+                if count > 8 {
+                    for _ in 0..count - 8 {
+                        self.push(format!("{shifted} {}", name(cleared)));
+                    }
+                }
+            }
+            "SHL16" if shift_count(inst)? == 1 && self.register(inst, 0)? == reg::HL => self.push("add hl, hl"),
             "SHL16" | "SRL16" | "SRA16" => {
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (lo, hi) = (name(lo), name(hi));
@@ -334,6 +348,14 @@ impl Printer<'_> {
                 let (from, at) = (name_of(self, 0)?, self.address(inst, 1)?);
                 self.push(format!("ld ({at}), {from}"));
             }
+            "BIT7_8" => {
+                let source = name_of(self, 1)?;
+                self.push(format!("bit 7, {source}"));
+            }
+            "BIT7_16" => {
+                let (_, hi) = lanes(self.register(inst, 1)?)?;
+                self.push(format!("bit 7, {}", name(hi)));
+            }
             "CP8r" => {
                 let source = name_of(self, 2)?;
                 self.push(format!("cp a, {source}"));
@@ -345,6 +367,24 @@ impl Printer<'_> {
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
             "CP16" => self.compare16(inst, rest)?,
+            "AND16i" | "OR16i" | "XOR16i" => {
+                let mnemonic = op[..op.len() - 3].to_lowercase();
+                let (to, a) = (self.register(inst, 0)?, self.register(inst, 1)?);
+                let Some(Operand::Imm(mask)) = inst.operands.get(2) else { return Err("a word logic op with no mask".to_owned()) };
+                let ((dl, dh), (al, ah)) = (lanes(to)?, lanes(a)?);
+                for (d, x, byte) in [(dl, al, mask & 0xFF), (dh, ah, (mask >> 8) & 0xFF)] {
+                    match (mnemonic.as_str(), byte) {
+                        ("and", 0xFF) | ("or", 0) | ("xor", 0) => self.byte_move(d, x),
+                        ("and", 0) => self.push(format!("ld {}, #0", name(d))),
+                        ("or", 0xFF) => self.push(format!("ld {}, #255", name(d))),
+                        _ => {
+                            self.push(format!("ld a, {}", name(x)));
+                            self.push(format!("{mnemonic} a, #{byte}"));
+                            self.push(format!("ld {}, a", name(d)));
+                        }
+                    }
+                }
+            }
             "AND16" | "OR16" | "XOR16" => {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
                 let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
