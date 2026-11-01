@@ -534,6 +534,14 @@ pub trait Tti {
         to: Ty,
     ) -> bool;
 
+    /// Whether the target has a conditional move. Without one a `select` is a
+    /// branch after all, and speculating the arms of an `if` into its block to
+    /// make one only adds work. The base class says yes; the pin's
+    /// `foldTwoEntryPHINode` never asks.
+    fn has_conditional_move(&self) -> bool {
+        true
+    }
+
     /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that
     /// makes the quotient and the remainder. The base class has none.
     fn has_div_rem_op(
