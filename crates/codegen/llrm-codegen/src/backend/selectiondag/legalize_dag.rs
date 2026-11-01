@@ -216,6 +216,60 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         new
     }
 
+    /// `LegalizeLoadOps` for an extending load of memory that is not a power
+    /// of two wide (`i56`, seven bytes): a zero-extending load of each power of
+    /// two it is the sum of, shifted into place and or-ed, sign-extended in
+    /// the register for a signed load. The value and the chain it replaces.
+    fn expand_odd_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let vt = self.dag.value_type(node);
+        let pieces = super::legalize_types::odd_memory(info.mem_vt)
+            .filter(|_| vt.size_in_bits() > info.mem_vt.size_in_bits())?;
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let mut joined: Option<SDValue> = None;
+        let mut chains = Vec::new();
+        let mut at = 0u32;
+        for piece in pieces {
+            let piece_ptr = if at == 0 {
+                ptr
+            } else {
+                let by = self.dag.get_constant(u128::from(at / 8), self.dag.value_type(ptr));
+                self.dag.get_node(ISD::Add, self.dag.value_type(ptr), &[ptr, by])
+            };
+            let piece_info = MemInfo {
+                mem_vt: piece,
+                align: if at == 0 { info.align } else { info.align.min(at / 8) },
+                ext: Some(super::actions::LoadExt::ZExtLoad),
+                ..info
+            };
+            let part = self.dag.get_ext_load(super::actions::LoadExt::ZExtLoad, vt, chain, piece_ptr, piece_info);
+            chains.push(SDValue { node: part.node, res: 1 });
+            let part = if at == 0 {
+                part
+            } else {
+                let by = self.dag.get_constant(u128::from(at), EVT::I8);
+                self.dag.get_node(ISD::Shl, vt, &[part, by])
+            };
+            joined = Some(match joined {
+                Some(low) => self.dag.get_node(ISD::Or, vt, &[low, part]),
+                None => part,
+            });
+            at += piece.size_in_bits();
+        }
+        let mut value = joined?;
+        if info.ext == Some(super::actions::LoadExt::SExtLoad) {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            value = self.dag.get_node(ISD::SignExtendInReg, vt, &[value, ty]);
+        }
+        Some((value, self.dag.get_token_factor(&chains)))
+    }
+
     /// `LegalizeLoadOps`, extending loads: one the target does not have is an
     /// any-extending load and an extension in the register. The value and
     /// the chain it replaces.
@@ -259,7 +313,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
         }
-        if let Some(result) = self.expand_ext_load(node) {
+        if let Some(result) = self.expand_odd_ext_load(node).or_else(|| self.expand_ext_load(node)) {
             self.replace_node(node, result.0);
             self.replace_node(SDValue { node: n, res: 1 }, result.1);
             return Ok(());
@@ -603,7 +657,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let high = self.dag.get_node(ISD::AnyExtend, vt, &[hi]);
                 let half = self.dag.get_constant(u128::from(vt.size_in_bits() / 2), EVT::I8);
                 let high = self.dag.get_node(ISD::Shl, vt, &[high, half]);
-                Some(vec![self.dag.get_node(ISD::Or, vt, &[low, high])])
+                // The pair's kind goes on the `or` (DEVIATE PAIR1).
+                let kind = self
+                    .dag
+                    .node(node)
+                    .flags
+                    .intersect(super::dag::SDNodeFlags::PAIR_FAR.union(super::dag::SDNodeFlags::PAIR_LONG));
+                Some(vec![self.dag.get_node_flags(ISD::Or, vt, &[low, high], kind)])
             }
             ISD::BitCast => Some(vec![self.expand_bitcast(node)]),
             ISD::ExtractElement => {

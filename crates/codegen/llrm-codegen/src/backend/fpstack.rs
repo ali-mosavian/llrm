@@ -1002,16 +1002,6 @@ fn steps(
     found
 }
 
-/// DEVIATE 6: the order a bundle still to be fixed should take.
-/// `finishBlockStack` lets the first exit to reach a bundle choose its order.
-/// A block that only passes the stack on (no floating instruction, or only
-/// copies, which rename) leads on to a bundle that may already be fixed (a
-/// loop's header, reached by the back edge): the order that bundle has, seen
-/// back through the renames, is taken, so the exit that fixes it shuffles once
-/// there and no later edge of the loop shuffles again. Followed through at most
-/// `DEPTH` such blocks.
-const DEPTH: usize = 3;
-
 thread_local! {
     /// The blocks `Ahead::renames` has scanned, counted for the test that fixes
     /// it at one scan a block.
@@ -1021,6 +1011,15 @@ thread_local! {
 /// What `Ahead::renames` found, by block.
 type Renamed = RefCell<HashMap<i64, Option<Vec<(u32, u32)>>>>;
 
+/// DEVIATE 6: the order a bundle still to be fixed should take.
+/// `finishBlockStack` lets the first exit to reach a bundle choose its order.
+/// A block that only passes the stack on (no floating instruction, or only
+/// copies, which rename) leads on to a bundle that may already be fixed (a
+/// loop's header, reached by the back edge): the order that bundle has, seen
+/// back through the renames, is taken, so the exit that fixes it shuffles once
+/// there and no later edge of the loop shuffles again. Followed through such
+/// blocks until a fixed bundle, a block that does more, or a block already
+/// seen: each block once a call, so a loop of renames ends.
 struct Ahead<'a> {
     renamed: &'a Renamed,
     at_of: &'a IndexMap<i64, &'a Block>,
@@ -1069,18 +1068,21 @@ impl Ahead<'_> {
     }
 
     /// The order the values entering `at` should be in, from what lies ahead.
+    /// `seen` holds the blocks this call has been through.
     fn order(
         &self,
         at: i64,
-        depth: usize,
+        seen: &mut HashSet<i64>,
     ) -> Option<Vec<u32>> {
+        if !seen.insert(at) {
+            return None;
+        }
         let block = self.at_of.get(&at)?;
         let pairs = self.renames(block)?;
         let exit = &self.live_bundles.get(&self.bundles.of[&at].1)?;
         let after = match &exit.fixed {
             Some(fixed) => fixed.clone(),
-            None if depth > 0 => block.succ.iter().find_map(|next| self.order(*next, depth - 1))?,
-            None => return None,
+            None => block.succ.iter().find_map(|next| self.order(*next, seen))?,
         };
         // Back through the copies: a value a copy wrote was the copy's source.
         Some(
@@ -1097,10 +1099,11 @@ fn successor_order(
     block: &Block,
     mask: &BTreeSet<u32>,
 ) -> Option<Vec<u32>> {
+    let mut seen = HashSet::default();
     block
         .succ
         .iter()
-        .find_map(|next| ahead.order(*next, DEPTH))
+        .find_map(|next| ahead.order(*next, &mut seen))
         .filter(|order| order.len() == mask.len() && order.iter().all(|value| mask.contains(value)))
 }
 
