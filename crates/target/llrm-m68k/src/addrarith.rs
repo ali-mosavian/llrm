@@ -38,27 +38,31 @@ enum Use {
     Other,
 }
 
-fn uses_of(
-    function: &MFunction,
-    v: u32,
-) -> Vec<Use> {
-    let reads = |one: &Operand| matches!(one, Operand::Use(Reg::Virt(u)) if *u == v);
-    let mut all = Vec::new();
+/// Every use of every virtual register, in one pass over the function. A
+/// rewrite only removes the use of the copy it deletes and defines a register
+/// no one else uses, so the table stays right for the registers it is asked
+/// about.
+fn uses_by_register(function: &MFunction) -> Vec<Vec<Use>> {
+    let mut all: Vec<Vec<Use>> = (0..function.classes.len()).map(|_| Vec::new()).collect();
     for block in &function.blocks {
         for phi in &block.phis {
-            if phi.incoming.iter().any(|(_, r)| matches!(r, Reg::Virt(u) if *u == v)) {
-                all.push(match phi.result {
-                    Reg::Virt(result) => Use::Phi(result),
-                    Reg::Phys(_) => Use::Other,
-                });
+            for (_, incoming) in &phi.incoming {
+                if let Reg::Virt(v) = incoming {
+                    all[*v as usize].push(match phi.result {
+                        Reg::Virt(result) => Use::Phi(result),
+                        Reg::Phys(_) => Use::Other,
+                    });
+                }
             }
         }
         for inst in &block.insts {
-            if inst.operands.iter().any(reads) {
-                all.push(match (&inst.kind, &inst.operands[..]) {
-                    (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
-                    _ => Use::Other,
-                });
+            for operand in &inst.operands {
+                if let Operand::Use(Reg::Virt(v)) = operand {
+                    all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
+                        (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
+                        _ => Use::Other,
+                    });
+                }
             }
         }
     }
@@ -69,18 +73,19 @@ fn uses_of(
 /// register.
 fn reaches_addresses_only(
     function: &MFunction,
+    uses: &[Vec<Use>],
     v: u32,
     seen: &mut HashSet<u32>,
 ) -> bool {
     if !seen.insert(v) {
         return true;
     }
-    let uses = uses_of(function, v);
-    !uses.is_empty()
-        && uses.iter().all(|one| match one {
+    let own = &uses[v as usize];
+    !own.is_empty()
+        && own.iter().all(|one| match one {
             Use::Copy(to) | Use::Phi(to) => match function.classes[*to as usize] {
                 Class::Ar32 => true,
-                Class::Xr32 => reaches_addresses_only(function, *to, seen),
+                Class::Xr32 => reaches_addresses_only(function, uses, *to, seen),
                 _ => false,
             },
             Use::Other => false,
@@ -173,10 +178,11 @@ pub fn address_adds(
     cpu: Cpu,
     size: bool,
 ) {
+    let uses = uses_by_register(function);
     for b in 0..function.blocks.len() {
         let mut at = 0;
         while at < function.blocks[b].insts.len() {
-            if let Some(done) = rewrite_one(function, b, at, cpu, size) {
+            if let Some(done) = rewrite_one(function, &uses, b, at, cpu, size) {
                 // the copy before the add is gone
                 at = done;
             } else {
@@ -188,6 +194,7 @@ pub fn address_adds(
 
 fn rewrite_one(
     function: &mut MFunction,
+    uses: &[Vec<Use>],
     b: usize,
     at: usize,
     cpu: Cpu,
@@ -214,7 +221,7 @@ fn rewrite_one(
         )?;
     let Kind::Copy = insts[copy].kind else { return None };
     let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
-    if function.classes[y as usize] != Class::Ar32 || uses_of(function, x).len() != 1 {
+    if function.classes[y as usize] != Class::Ar32 || uses[x as usize].len() != 1 {
         return None;
     }
     // the add's codes are read by nobody
@@ -226,7 +233,7 @@ fn rewrite_one(
             return None;
         }
     }
-    if !reaches_addresses_only(function, d, &mut HashSet::new()) {
+    if !reaches_addresses_only(function, uses, d, &mut HashSet::new()) {
         return None;
     }
     let one = cheapest(sign * value, cpu, size)?;
