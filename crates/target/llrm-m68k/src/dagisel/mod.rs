@@ -14,6 +14,7 @@ pub mod enc;
 pub mod generated;
 pub mod function;
 pub mod hooks;
+pub mod indexed;
 pub mod lowering;
 pub mod pipeline;
 pub mod predicates;

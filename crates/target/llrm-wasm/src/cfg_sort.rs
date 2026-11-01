@@ -10,9 +10,9 @@
 //! placed has a different layout successor than before, its terminators are
 //! updated (`updateTerminator`).
 //!
-//! DEVIATE W1: no exception regions (`WebAssemblyExceptionInfo`) and no `EHPad`
-//! ordering. Reason: the QB has no exception handling; `ON ERROR` traps. Exit:
-//! with wasm exception handling.
+//! A region is a loop or an exception (`sort_region`); an EH pad sorts ahead of
+//! every other block that is ready, so its exception follows the code it
+//! guards.
 //!
 //! # See also
 //! `WebAssemblyCFGSort.cpp` (`sortBlocks`), `WebAssemblySortRegion.cpp`, pin
@@ -21,17 +21,18 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use llrm_mir::loopinfo::LoopId;
 use llrm_mir::module::BlockId;
 
 use crate::branch::update_terminator;
 use crate::cfg::Cfg;
+use crate::exception_info::Exceptions;
 use crate::mir::Function;
+use crate::sort_region::{Region, Regions};
 
-/// An open region: a loop, the blocks of it still to place, and the blocks that
-/// wait for it.
+/// An open region, the blocks of it still to place, and the blocks that wait
+/// for it.
 struct Entry {
-    region: LoopId,
+    region: Region,
     header: usize,
     blocks_left: usize,
     deferred: Vec<usize>,
@@ -58,50 +59,44 @@ pub fn cfg_sort(f: &mut Function) -> bool {
     let n = f.blocks.len();
     let cfg = Cfg::of(f);
     let (tree, loops) = cfg.analyses();
+    let exceptions = Exceptions::of(f, &cfg, &tree);
+    let regions = Regions { loops: &loops, exceptions: &exceptions };
     let block_id = |block: usize| BlockId(block as u32);
-    let region_of = |block: usize| loops.get_loop_for(block_id(block));
+    let pad: Vec<bool> = (0..n).map(|block| f.is_eh_pad(block)).collect();
 
     let mut preds_left = vec![0_usize; n];
     for (block, left) in preds_left.iter_mut().enumerate() {
         let mut count = cfg.predecessors_of(block).count();
-        if let Some(region) = region_of(block).filter(|region| region.get_header() == block_id(block)) {
-            count -= cfg.predecessors_of(block).filter(|&pred| region.contains(block_id(pred))).count();
+        if let Some(one) = loops.get_loop_for(block_id(block)).filter(|one| one.get_header() == block_id(block)) {
+            count -= cfg.predecessors_of(block).filter(|&pred| one.contains(block_id(pred))).count();
         }
         *left = count;
     }
 
-    // `Preferred` takes the lowest number, `Ready` the highest.
-    let mut preferred: BinaryHeap<Reverse<usize>> = BinaryHeap::new();
-    let mut ready: BinaryHeap<usize> = BinaryHeap::new();
+    // `Preferred` takes an EH pad before any other block, then the lowest
+    // number; `Ready` an EH pad first, then the highest.
+    let mut preferred: BinaryHeap<(bool, Reverse<usize>)> = BinaryHeap::new();
+    let mut ready: BinaryHeap<(bool, usize)> = BinaryHeap::new();
     let mut entries: Vec<Entry> = Vec::new();
     let mut order = Vec::with_capacity(n);
     let mut current = 0;
     loop {
         order.push(current);
-        let region = region_of(current);
-        if let Some(region) = &region {
-            if region.get_header() == block_id(current) {
+        let region = regions.region_for(current);
+        if let Some(region) = region {
+            if regions.header(region) == current {
                 entries.push(Entry {
-                    region: region.id(),
+                    region,
                     header: current,
-                    blocks_left: region.get_num_blocks(),
+                    blocks_left: regions.num_blocks(region),
                     deferred: Vec::new(),
                 });
             }
             for entry in &mut entries {
-                if loops.get_loop_for(block_id(current)).is_some_and(|inner| {
-                    let mut at = Some(inner);
-                    while let Some(candidate) = at {
-                        if candidate.id() == entry.region {
-                            return true;
-                        }
-                        at = candidate.get_parent_loop();
-                    }
-                    false
-                }) {
+                if regions.contains(entry.region, current) {
                     entry.blocks_left -= 1;
                     if entry.blocks_left == 0 {
-                        ready.extend(entry.deferred.iter().copied());
+                        ready.extend(entry.deferred.iter().map(|&block| (pad[block], block)));
                     }
                 }
             }
@@ -110,37 +105,37 @@ pub fn cfg_sort(f: &mut Function) -> bool {
             }
         }
         for &succ in &f.succs[current] {
-            if let Some(succ_loop) = region_of(succ) {
+            if let Some(succ_loop) = loops.get_loop_for(block_id(succ)) {
                 if succ_loop.get_header() == block_id(succ) && succ_loop.contains(block_id(current)) {
                     continue;
                 }
             }
             preds_left[succ] -= 1;
             if preds_left[succ] == 0 {
-                preferred.push(Reverse(succ));
+                preferred.push((pad[succ], Reverse(succ)));
             }
         }
         let mut next = None;
-        while let Some(Reverse(candidate)) = preferred.pop() {
+        while let Some((_, Reverse(candidate))) = preferred.pop() {
             if let Some(open) = entries.last_mut() {
                 if !tree.dominates(block_id(open.header), block_id(candidate)) {
                     open.deferred.push(candidate);
                     continue;
                 }
             }
-            let inside_and_after_header = match &region {
-                Some(region) => !region.contains(block_id(candidate)) || region.get_header().0 < candidate as u32,
+            let inside_and_after_header = match region {
+                Some(region) => !regions.contains(region, candidate) || regions.header(region) < candidate,
                 None => true,
             };
-            if candidate < current && inside_and_after_header {
-                ready.push(candidate);
+            if candidate < current && !pad[candidate] && inside_and_after_header {
+                ready.push((pad[candidate], candidate));
                 continue;
             }
             next = Some(candidate);
             break;
         }
         if next.is_none() {
-            let Some(top) = ready.pop() else {
+            let Some((_, top)) = ready.pop() else {
                 maybe_update_terminator(f, current, None);
                 break;
             };
@@ -149,7 +144,7 @@ pub fn cfg_sort(f: &mut Function) -> bool {
                 match entries.last_mut() {
                     Some(open) if !tree.dominates(block_id(open.header), block_id(candidate)) => {
                         open.deferred.push(candidate);
-                        candidate = ready.pop().expect("a ready block remains while some wait on the loop");
+                        candidate = ready.pop().expect("a ready block remains while some wait on the loop").1;
                     }
                     _ => break,
                 }
