@@ -8,7 +8,7 @@ ucsim_z80. Byte routines are checked on every input pair; word and long routines
 Exit 1 on any difference. Prints the T-states of a few calls (call and ret included).
 """
 import re, subprocess, sys, os, random, tempfile
-RT = sys.argv[1]
+RT = os.path.abspath(sys.argv[1])
 W = tempfile.mkdtemp(prefix="rt-")
 
 def sh(cmd, inp=None):
@@ -49,14 +49,19 @@ SIGS = {
   "A,L>A":  dict(isz=2, osz=1, load="\tld\ta,0(ix)\n\tld\tl,1(ix)\n", store="\tld\t(hl),a\n"),
   "HL,DE>DE": dict(isz=4, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
   "L,A>L": dict(isz=5, osz=4, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\ta,4(ix)\n", pre="\tld\t(0x8010),de\n\tld\t(0x8012),hl\n", store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  "LL>L": dict(isz=8, osz=4,
+    load="\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\tc,4(ix)\n\tld\tb,5(ix)\n",
+    pre="\tpop\taf\n\tld\t(0x8010),de\n\tld\t(0x8012),hl\n",
+    store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   "HL,A>DE": dict(isz=3, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\ta,2(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
 }
 
 def check(name, sig, ref, vectors, label=""):
     s = SIGS[sig]
     ok = True
+    bad = 0
     n_total = len(vectors)
-    CH = 3000
+    CH = 15000 // s['isz']  # the table sits at 0x1000, the runtime at 0x6000
     for start in range(0, n_total, CH):
         vs = vectors[start:start + CH]
         tbl = "".join("\t.db " + ",".join(str(b) for b in enc(sig, v)) + "\n" for v in vs)
@@ -96,12 +101,14 @@ table:
             got = int.from_bytes(bytes(data[0x9000 + i * s['osz'] + j] for j in range(s['osz'])), "little")
             want = ref(*decode(sig, v))
             if got != want:
-                print(f"FAIL {name}{label} {decode(sig, v)}: got {got}, want {want}"); ok = False
-                if sum(1 for _ in range(1)) and i > 3: break
+                bad += 1; ok = False
+                if bad <= 400: print(f"FAIL {name}{label} {decode(sig, v)}: got {got}, want {want}")
         if not ok: break
+    if bad > 5: print(f"  ... {bad} failures in {name}")
     return ok
 
 def enc(sig, v):
+    if sig == "LL>L": return tuple((v[0] >> (8 * k)) & 255 for k in range(4)) + tuple((v[1] >> (8 * k)) & 255 for k in range(4))
     if sig == "L,A>L": return (v[0] & 255, v[0] >> 8 & 255, v[0] >> 16 & 255, v[0] >> 24, v[1])
     if sig == "A,L>A": return v
     if sig == "HL,DE>DE": return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
@@ -112,7 +119,7 @@ def decode(sig, v):
 
 def cost(name, sig, args):
     """T-states of one call incl. its call+ret: run with the call minus without."""
-    regs = {"A,L>A": "\tld a,#%d\n\tld l,#%d\n", "HL,DE>DE": "\tld hl,#%d\n\tld de,#%d\n", "HL,A>DE": "\tld hl,#%d\n\tld a,#%d\n", "L,A>L": "\tld hl,#%d\n\tld de,#0\n\tld a,#%d\n"}[sig] % args
+    regs = {"A,L>A": "\tld a,#%d\n\tld l,#%d\n", "HL,DE>DE": "\tld hl,#%d\n\tld de,#%d\n", "HL,A>DE": "\tld hl,#%d\n\tld a,#%d\n", "LL>L": "\tld hl,#0\n\tpush hl\n\tld hl,#%d\n\tld de,#0\n\tld bc,#%d\n", "L,A>L": "\tld hl,#%d\n\tld de,#0\n\tld a,#%d\n"}[sig] % args
     base = f"\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n{regs}"
     t = {}
     for tag, call in (("with", f"\tcall {name}\n"), ("without", "")):
@@ -159,8 +166,16 @@ def main():
     s32 = lambda x: x - (1 << 32) if x >> 31 else x
     for nm, f in (("__ashlsi3", lambda a, b: a << b & 0xFFFFFFFF), ("__lshrsi3", lambda a, b: a >> b), ("__ashrsi3", lambda a, b: s32(a) >> b & 0xFFFFFFFF)):
         allok &= check(nm, "L,A>L", f, [(a, b) for a in l32 for b in range(32)])
+    def s32c(x): return x - (1 << 32) if x >> 31 else x
+    def tdiv32(a, b): q = abs(a) // abs(b); return q if (a < 0) == (b < 0) else -q
+    l32b = l32 + [10, 100, 1000, 65535, 65537, 0x10000, 0x7FFF, 0x8000, 0xFFFF0000, 0x80000001]
+    lp = [(a, b) for a in l32b for b in l32b if b] + [(rnd.getrandbits(32), rnd.getrandbits(rnd.choice([3, 8, 16, 24, 32])) or 1) for _ in range(150)]
+    allok &= check("__udivsi3", "LL>L", lambda a, b: a // b, lp)
+    allok &= check("__umodsi3", "LL>L", lambda a, b: a % b, lp)
+    allok &= check("__divsi3", "LL>L", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF, lp)
+    allok &= check("__modsi3", "LL>L", lambda a, b: (s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF, lp)
     print("ALL OK" if allok else "FAILURES")
-    for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20))):
+    for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
     sys.exit(0 if allok else 1)
 main()

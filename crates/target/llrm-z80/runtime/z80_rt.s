@@ -299,3 +299,147 @@ __ashrsi3:
 2$:	djnz	1$
 	ex	de,hl
 	ret
+
+; ---- long divide and remainder -------------------------------------------------------------------
+
+; The dividend is hl (low) and de (high), the divisor bc (low) and the word the caller stored on the stack (high);
+; the result is de (low) and hl (high). Restoring division over a frame addressed through ix, which is kept: 32 steps,
+; the quotient shifting into the dividend's place as the remainder shifts in. Mode bits in the frame: 0 remainder
+; wanted, 1 signed, 2 quotient negative, 3 remainder negative.
+	.globl __udivsi3
+__udivsi3:
+	xor	a
+	jr	udivmodsi
+	.globl __umodsi3
+__umodsi3:
+	ld	a,#1
+	jr	udivmodsi
+	.globl __divsi3
+__divsi3:
+	ld	a,#2
+	jr	udivmodsi
+	.globl __modsi3
+__modsi3:
+	ld	a,#3
+udivmodsi:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	af
+	push	bc
+	push	de
+	push	hl
+	ld	hl,#0
+	push	hl
+	push	hl
+	bit	1,-1(ix)
+	jr	z,loop
+	bit	7,-5(ix)
+	jr	z,1$
+	xor	a
+	sub	a,-8(ix)
+	ld	-8(ix),a
+	ld	a,#0
+	sbc	a,-7(ix)
+	ld	-7(ix),a
+	ld	a,#0
+	sbc	a,-6(ix)
+	ld	-6(ix),a
+	ld	a,#0
+	sbc	a,-5(ix)
+	ld	-5(ix),a
+	ld	a,-1(ix)
+	xor	a,#12
+	ld	-1(ix),a
+1$:	bit	7,5(ix)
+	jr	z,loop
+	xor	a
+	sub	a,-4(ix)
+	ld	-4(ix),a
+	ld	a,#0
+	sbc	a,-3(ix)
+	ld	-3(ix),a
+	ld	a,#0
+	sbc	a,4(ix)
+	ld	4(ix),a
+	ld	a,#0
+	sbc	a,5(ix)
+	ld	5(ix),a
+	ld	a,-1(ix)
+	xor	a,#4
+	ld	-1(ix),a
+loop:	ld	b,#32
+1$:	sla	-8(ix)
+	rl	-7(ix)
+	rl	-6(ix)
+	rl	-5(ix)
+	rl	-12(ix)
+	rl	-11(ix)
+	rl	-10(ix)
+	rl	-9(ix)
+	sbc	a,a
+	ld	c,a
+	ld	a,-12(ix)
+	sub	a,-4(ix)
+	ld	l,a
+	ld	a,-11(ix)
+	sbc	a,-3(ix)
+	ld	h,a
+	ld	a,-10(ix)
+	sbc	a,4(ix)
+	ld	e,a
+	ld	a,-9(ix)
+	sbc	a,5(ix)
+	ld	d,a
+	jr	nc,2$
+	ld	a,c
+	or	a,a
+	jr	z,3$
+2$:	ld	-12(ix),l
+	ld	-11(ix),h
+	ld	-10(ix),e
+	ld	-9(ix),d
+	inc	-8(ix)
+3$:	djnz	1$
+	bit	0,-1(ix)
+	jr	nz,4$
+	bit	2,-1(ix)
+	jr	z,5$
+	xor	a
+	sub	a,-8(ix)
+	ld	-8(ix),a
+	ld	a,#0
+	sbc	a,-7(ix)
+	ld	-7(ix),a
+	ld	a,#0
+	sbc	a,-6(ix)
+	ld	-6(ix),a
+	ld	a,#0
+	sbc	a,-5(ix)
+	ld	-5(ix),a
+5$:	ld	e,-8(ix)
+	ld	d,-7(ix)
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	jr	6$
+4$:	bit	3,-1(ix)
+	jr	z,7$
+	xor	a
+	sub	a,-12(ix)
+	ld	-12(ix),a
+	ld	a,#0
+	sbc	a,-11(ix)
+	ld	-11(ix),a
+	ld	a,#0
+	sbc	a,-10(ix)
+	ld	-10(ix),a
+	ld	a,#0
+	sbc	a,-9(ix)
+	ld	-9(ix),a
+7$:	ld	e,-12(ix)
+	ld	d,-11(ix)
+	ld	l,-10(ix)
+	ld	h,-9(ix)
+6$:	ld	sp,ix
+	pop	ix
+	ret
