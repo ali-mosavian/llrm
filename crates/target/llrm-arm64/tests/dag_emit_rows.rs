@@ -25,6 +25,26 @@ fn dag(body: &str) -> Result<String, String> {
     }
 }
 
+/// A whole module through the DAG path and the shared greedy allocator.
+fn full_greedy(text: &str) -> Result<String, String> {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, text).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .env("LLRM_ARM64_GREEDY", "1")
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    if said.status.success() {
+        Ok(std::fs::read_to_string(&output).unwrap())
+    } else {
+        Err(String::from_utf8_lossy(&said.stderr).into_owned())
+    }
+}
+
 /// A whole module through the DAG path.
 fn full(text: &str) -> Result<String, String> {
     let dir = tempfile::tempdir().unwrap();
@@ -138,10 +158,37 @@ fn inserting_a_byte_into_a_word_is_a_bitfield_move() {
 /// the shared PHIElimination/RegisterCoalescer do not run on arm64 yet. +6.7%
 /// static instructions over the corpus at -O2.
 #[test]
-#[ignore = "needs the shared RegisterCoalescer on arm64 (spike step 6)"]
 fn the_dag_path_leaves_no_register_copy_in_a_float_loop() {
-    let asm = full(include_str!("data/float_loop_copies.ll")).unwrap_or_else(|why| panic!("{why}"));
-    let copies =
-        asm.lines().filter(|l| l.trim().starts_with("orr x0, xzr, x") || l.trim().starts_with("fmov d0, d")).count();
+    let asm = full_greedy(include_str!("data/float_loop_copies.ll")).unwrap_or_else(|why| panic!("{why}"));
+    let body = asm.split(".Lf.2:").nth(1).and_then(|rest| rest.split("ret").next()).unwrap_or_default();
+    let copies = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("fmov d") && l.rsplit(", ").next().is_some_and(|src| src.starts_with('d')))
+        .chain(
+            body.lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with("orr x") && l.contains("xzr, x") && !l.contains("xzr, xzr")),
+        )
+        .count();
     assert_eq!(copies, 0, "{asm}");
+}
+
+/// A `br` on `a | b | c` is several branches in blocks the lowering made. The
+/// phi copies went on the first block's edges only and `branch_targets` read
+/// the branches after selection (none), so `queens`'s `place` left the phi
+/// register unwritten on the other edges: the shared coalescer asserted on it,
+/// the linear scan read a stale register.
+#[test]
+fn every_branch_of_a_split_condition_carries_the_phi_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .env("LLRM_ARM64_VERIFY", "1")
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(dir.path().join("t.s"))
+        .arg("tests/data/queens_place.ll")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
 }

@@ -64,7 +64,9 @@ fn compare(name: &str) {
     let llc = Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
     // Unverified: MIR's verifier refuses the intrinsics clang emits that its
     // table lacks (`llvm.ctlz`, `cttz`, `bswap`, `va_end`, `stacksave`).
-    run(Command::new(llc).env("LLRM_VERIFY", "0").arg("-o").arg(&ours).arg(&ir));
+    // `ARM64_ISEL=dag` runs the same programs through the DAG selector.
+    let isel = format!("--isel={}", std::env::var("ARM64_ISEL").unwrap_or_else(|_| "hand".into()));
+    run(Command::new(llc).env("LLRM_VERIFY", "0").arg(isel).arg("-o").arg(&ours).arg(&ir));
     run(Command::new(&tools.clang).args(["-target", triple, "-O2", "-c", "-o"]).arg(&reference).arg(&source));
     run(Command::new(&tools.clang)
         .args(["-target", triple, "-O2", "-ffreestanding", "-fno-builtin", "-c", "-o"])

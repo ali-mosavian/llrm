@@ -474,15 +474,13 @@ fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
 
 /// `memcpy` once reached the x86 `rep movs` expansion and panicked with `no
 /// arm64 register rcx`, which killed the whole compile in shadow mode. A target
-/// with no string instructions refuses it.
+/// with no string instructions gets the library call.
 #[test]
-fn memcpy_is_refused_not_expanded_with_x86_registers() {
+fn memcpy_is_a_library_call_not_an_x86_expansion() {
     let ir = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
 define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 100, i1 false)\n  ret void\n}";
-    let why = selected(ir).expect_err("refused");
-    // A target with no string instructions now gets the `memcpy` library call;
-    // selecting its `ExternalSymbol` is not translated yet.
-    assert!(why.contains("mem") || why.contains("ExternalSymbol"), "{why}");
+    let selected = selected(ir).expect("selected");
+    assert!(selected[0].contains(&"BL"), "{selected:?}");
 }
 
 mod emitted {

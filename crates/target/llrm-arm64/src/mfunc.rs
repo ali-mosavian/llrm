@@ -447,3 +447,118 @@ pub fn sequence_copies(
     }
     out
 }
+
+/// The virtual registers some path reads before writing: a phi copy that
+/// missed an edge leaves one (`LLRM_ARM64_VERIFY`).
+pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
+    use std::collections::HashSet;
+    let labels: HashMap<&str, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    let count = function.blocks.len();
+    let successors: Vec<Vec<usize>> =
+        function.blocks.iter().enumerate().map(|(at, block)| successors_of(block, at, count, &labels)).collect();
+    let mut predecessors = vec![Vec::new(); count];
+    for (from, targets) in successors.iter().enumerate() {
+        for &to in targets {
+            predecessors[to].push(from);
+        }
+    }
+    let all: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .flat_map(|op| {
+            let (defs, _) = op.defs_and_uses();
+            defs
+        })
+        .filter(|register| register.is_virtual())
+        .collect();
+    let mut out: Vec<HashSet<Reg>> = vec![all.clone(); count];
+    let walk = |block: &MBlock, mut defined: HashSet<Reg>, report: &mut Vec<Reg>| {
+        for op in &block.ops {
+            let (defs, uses) = op.defs_and_uses();
+            report.extend(uses.into_iter().filter(|register| register.is_virtual() && !defined.contains(register)));
+            defined.extend(defs);
+        }
+        defined
+    };
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for at in 0..count {
+            let entering: HashSet<Reg> = if at == 0 {
+                HashSet::new()
+            } else {
+                let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
+                match from.next() {
+                    Some(first) => from.fold(first.clone(), |acc, next| acc.intersection(next).copied().collect()),
+                    None => all.clone(),
+                }
+            };
+            let leaving = walk(&function.blocks[at], entering, &mut Vec::new());
+            if leaving != out[at] {
+                out[at] = leaving;
+                changed = true;
+            }
+        }
+    }
+    let mut report = Vec::new();
+    for (at, block) in function.blocks.iter().enumerate() {
+        let entering: HashSet<Reg> = if at == 0 {
+            HashSet::new()
+        } else {
+            let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
+            match from.next() {
+                Some(first) => from.fold(first.clone(), |acc, next| acc.intersection(next).copied().collect()),
+                None => all.clone(),
+            }
+        };
+        walk(block, entering, &mut report);
+    }
+    report.sort();
+    report.dedup();
+    report
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+
+    fn block(
+        label: &str,
+        ops: Vec<Op>,
+    ) -> MBlock {
+        MBlock { label: label.into(), ops: ops.into() }
+    }
+
+    /// A register written on one path only is a read before a write: the
+    /// instrument that found `place`'s missing phi copies.
+    #[test]
+    fn a_register_written_on_one_path_is_reported() {
+        let mut function = MFunc::new("f");
+        let (a, b) = (function.gpr(), function.gpr());
+        let branch = Op::I(Inst::BranchCond { cond: crate::mc::inst::Cond::Eq, target: Target::Label("join".into()) });
+        function
+            .blocks
+            .push(
+                block(
+                    "entry",
+                    vec![Op::Copy { dst: Reg::Gpr(a), src: Reg::Gpr(Gpr(0)) }, branch, branch_to("then")],
+                ),
+            );
+        function
+            .blocks
+            .push(block("then", vec![Op::Copy { dst: Reg::Gpr(b), src: Reg::Gpr(Gpr(1)) }, branch_to("join")]));
+        function
+            .blocks
+            .push(
+                block(
+                    "join",
+                    vec![Op::Copy { dst: Reg::Gpr(Gpr(0)), src: Reg::Gpr(b) }, Op::Return { uses: vec![], tail: None }],
+                ),
+            );
+        assert_eq!(undefined_reads(&function), vec![Reg::Gpr(b)]);
+        function.blocks[0].ops.insert(0, Op::Copy { dst: Reg::Gpr(b), src: Reg::Gpr(Gpr(1)) });
+        assert_eq!(undefined_reads(&function), vec![]);
+    }
+}

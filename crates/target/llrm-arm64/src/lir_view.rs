@@ -8,18 +8,23 @@ use std::sync::{Mutex, OnceLock};
 
 use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::mfunc::{Block, Inst as LirInst, Kind, MFunction, Operand, Reg as LirReg};
-use llrm_spike_mf::regalloc::Target as AllocTarget;
+use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
+use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::flagcse::writes_flags;
-use crate::mc::inst::{Gpr, Inst, Target, Vreg};
+use crate::mc::inst::{Gpr, Inst, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
+use crate::regalloc::{Allocation, spill_access};
 
 /// A virtual register's class: the width of a use is the instruction's.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Class {
     Gpr,
     Fpr,
+    /// A vector register read whole: a call keeps only the low 64 bits of
+    /// `v8`-`v15`, so it never takes one.
+    Quad,
 }
 
 /// The register file's id of machine register `n` of a class: `x0..x30` and
@@ -31,7 +36,7 @@ fn id(
     match (class, n) {
         (Class::Gpr, 31) => crate::reg::XZR,
         (Class::Gpr, n) => RegId::from_raw(crate::reg::X0.index() as u8 + n as u8),
-        (Class::Fpr, n) => RegId::from_raw(crate::reg::V0.index() as u8 + n as u8),
+        (Class::Fpr | Class::Quad, n) => RegId::from_raw(crate::reg::V0.index() as u8 + n as u8),
     }
 }
 
@@ -53,7 +58,7 @@ fn from_lir(
         (LirReg::Phys(r), _) if r.index() >= crate::reg::V0.index() => Reg::Fpr(Vreg(number(crate::reg::V0, r))),
         (LirReg::Phys(r), _) => Reg::Gpr(Gpr(number(crate::reg::X0, r))),
         (LirReg::Virt(n), Class::Gpr) => Reg::Gpr(Gpr(n + Gpr::FIRST_VIRTUAL)),
-        (LirReg::Virt(n), Class::Fpr) => Reg::Fpr(Vreg(n + Gpr::FIRST_VIRTUAL)),
+        (LirReg::Virt(n), Class::Fpr | Class::Quad) => Reg::Fpr(Vreg(n + Gpr::FIRST_VIRTUAL)),
     }
 }
 
@@ -83,11 +88,29 @@ fn label_of(inst: &Inst) -> Option<&str> {
     }
 }
 
+/// What an operation is apart from its registers, as a number: the allocator
+/// sees the instruction by name and this, and `rebuild` finds the operation
+/// again by it.
+fn content(op: &Op) -> i64 {
+    use std::hash::{Hash, Hasher};
+    let mut blank = op.clone();
+    blank.visit(&mut |register, _| match register {
+        RegRef::Gpr(register) => *register = Gpr(0),
+        RegRef::Fpr(register) => *register = Vreg(0),
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{blank:?}").hash(&mut hasher);
+    hasher.finish() as i64
+}
+
 /// The allocator's function for `function`, registers of both classes numbered
 /// from zero.
 pub fn view(function: &MFunc) -> MFunction<Class> {
     let mut lir = MFunction::<Class>::new(&function.name);
     lir.classes = vec![Class::Gpr; (function.next_register - Gpr::FIRST_VIRTUAL) as usize];
+    lir.locals =
+        function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
+    let wide = crate::regalloc::wide_registers(function);
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     for (at, block) in function.blocks.iter().enumerate() {
@@ -129,9 +152,13 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             let mut op = op.clone();
             op.visit(&mut |register, role| {
                 let key = register.key();
-                let (reg, class) = (to_lir(key), if matches!(key, Reg::Gpr(_)) { Class::Gpr } else { Class::Fpr });
+                let reg = to_lir(key);
                 if let LirReg::Virt(n) = reg {
-                    lir.classes[n as usize] = class;
+                    lir.classes[n as usize] = match key {
+                        Reg::Gpr(_) => Class::Gpr,
+                        _ if wide.contains(&key) => Class::Quad,
+                        _ => Class::Fpr,
+                    };
                 }
                 match role {
                     Role::Def => operands.push(Operand::Def(reg)),
@@ -148,6 +175,9 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             {
                 operands.push(Operand::Block(*target));
             }
+            if kind != Kind::Copy {
+                operands.push(Operand::Imm(content(&op)));
+            }
             let mut inst = LirInst::new(kind, operands);
             inst.ties = ties;
             inst.terminator = terminator;
@@ -155,6 +185,26 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             inst.call = call;
             inst.sets_flags = writes_flags(&op);
             inst.reads_flags = reads_flags(&op);
+            inst.may_load = matches!(
+                op,
+                Op::I(Inst::Load { .. } | Inst::LoadPair { .. } | Inst::Atomic { .. } | Inst::Prefetch { .. })
+            );
+            inst.may_store = matches!(
+                op,
+                Op::I(Inst::Store { .. } | Inst::StorePair { .. } | Inst::Atomic { .. })
+            );
+            inst.side_effects = matches!(
+                op,
+                Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
+            );
+            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }));
+            inst.rematerializable = matches!(
+                op,
+                Op::Imm { .. }
+                    | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
+                    | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
+            );
+            inst.cheap_as_move = matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
@@ -162,37 +212,110 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
     lir
 }
 
-/// `function` with the registers of `lir`, which has the instructions of
-/// [`view`] in the same places.
-pub fn apply(
+/// `function`, its registers the physical ones greedy chose in `lir`
+/// (`assignment` by virtual number) and the spills it wrote: each operation is
+/// the original one found by its [`content`], the spills and copies new.
+pub fn rebuild(
     function: &mut MFunc,
     lir: &MFunction<Class>,
+    assignment: &Assignment,
+    spill_slots: &[(i32, Class)],
 ) {
+    let mut originals: HashMap<i64, Op> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        originals.entry(content(op)).or_insert_with(|| op.clone());
+    }
+    let mut slots: HashMap<i32, u32> = HashMap::new();
+    for (slot, class) in spill_slots {
+        let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
+        slots.insert(*slot, function.slot(size, align));
+    }
+    let physical = |register: LirReg| match register {
+        LirReg::Virt(v) => LirReg::Phys(assignment.0[v as usize]),
+        phys => phys,
+    };
+    let class_of = |register: LirReg| match register {
+        LirReg::Virt(v) => lir.classes[v as usize],
+        LirReg::Phys(id) if id.index() >= crate::reg::V0.index() => Class::Fpr,
+        LirReg::Phys(_) => Class::Gpr,
+    };
     for (block, lir_block) in function.blocks.iter_mut().zip(&lir.blocks) {
-        for (op, inst) in (&mut block.ops).into_iter().zip(&lir_block.insts) {
-            let mut registers = inst
+        let mut ops = Vec::with_capacity(lir_block.insts.len());
+        for inst in &lir_block.insts {
+            let registers: Vec<(LirReg, Class)> = inst
                 .operands
                 .iter()
-                .filter_map(
-                    |operand| match operand {
-                        Operand::Def(reg) | Operand::Use(reg) => Some(*reg),
-                        _ => None,
-                    },
-                );
-            op.visit(&mut |register, role| {
-                let reg = registers.next().expect("an operand for each register");
-                if role == Role::UseDef {
-                    registers.next();
+                .filter_map(|operand| match operand {
+                    Operand::Def(reg) | Operand::Use(reg) => Some((*reg, class_of(*reg))),
+                    _ => None,
+                })
+                .collect();
+            let reg_at = |n: usize| {
+                let (register, class) = registers[n];
+                from_lir(physical(register), class)
+            };
+            match inst.kind {
+                Kind::Copy => {
+                    let (dst, src) = (reg_at(0), reg_at(1));
+                    if dst != src {
+                        ops.push(Op::Copy { dst, src });
+                    }
                 }
-                let class = if matches!(register.key(), Reg::Gpr(_)) { Class::Gpr } else { Class::Fpr };
-                match (register, from_lir(reg, class)) {
-                    (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
-                    (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
-                    _ => panic!("a register moved between classes"),
+                Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {
+                    let Some(Operand::Frame(slot)) = inst.operands.last() else { panic!("a spill names no slot") };
+                    let slot = slots[slot];
+                    let quad = registers[0].1 == Class::Quad;
+                    ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
                 }
-            });
+                Kind::Op(_) => {
+                    let Some(Operand::Imm(hash)) = inst.operands.last() else { panic!("an operation with no content") };
+                    let mut op = originals[hash].clone();
+                    let mut at = 0;
+                    op.visit(&mut |register, role| {
+                        let new = reg_at(at);
+                        at += if role == Role::UseDef { 2 } else { 1 };
+                        match (register, new) {
+                            (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
+                            (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
+                            _ => panic!("a register moved between classes"),
+                        }
+                    });
+                    ops.push(op);
+                }
+            }
+        }
+        block.ops = ops.into();
+    }
+}
+
+/// The callee-saved registers `function` writes, for the frame to save.
+pub fn written_callee_saved(function: &MFunc) -> Allocation {
+    let mut allocation = Allocation::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        let (defs, _) = op.defs_and_uses();
+        for register in defs {
+            match register {
+                Reg::Gpr(Gpr(n)) if (19..=28).contains(&n) && !allocation.saved_gprs.contains(&n) => {
+                    allocation.saved_gprs.push(n)
+                }
+                Reg::Fpr(Vreg(n)) if (8..=15).contains(&n) && !allocation.saved_fprs.contains(&n) => {
+                    allocation.saved_fprs.push(n)
+                }
+                _ => {}
+            }
         }
     }
+    allocation.saved_gprs.sort_unstable();
+    allocation.saved_fprs.sort_unstable();
+    allocation
+}
+
+/// `function` with every register physical, by the shared greedy allocator.
+pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
+    let mut lir = view(function);
+    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), false)?;
+    rebuild(function, &lir, &assignment, &slots);
+    Ok(written_callee_saved(function))
 }
 
 /// The 64-bit and vector registers the allocator hands out, in the pin's
@@ -201,8 +324,13 @@ pub fn apply(
 pub struct Arm64;
 
 fn gpr_order() -> Vec<RegId> {
-    // x9..x15 and x0..x8 (caller-saved) first, then x16, x17 and x19..x28.
-    (9..=15u32).chain(0..=8).chain(16..=17).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
+    // The caller-saved registers first, then x19..x28. x15..x17 are the frame
+    // lowerer's and the pair folder's scratch registers.
+    (9..=14u32).chain((0..=8).rev()).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
+}
+
+fn callee_saved_fpr(id: RegId) -> bool {
+    (8..=15).any(|n| self::id(Class::Fpr, n) == id)
 }
 
 fn fpr_order() -> Vec<RegId> {
@@ -216,7 +344,11 @@ impl AllocTarget for Arm64 {
         one: Class,
         other: Class,
     ) -> Option<Class> {
-        (one == other).then_some(one)
+        match (one, other) {
+            (one, other) if one == other => Some(one),
+            (Class::Fpr, Class::Quad) | (Class::Quad, Class::Fpr) => Some(Class::Quad),
+            _ => None,
+        }
     }
 
     fn any() -> Class {
@@ -227,6 +359,7 @@ impl AllocTarget for Arm64 {
         match class {
             Class::Gpr => gpr_order(),
             Class::Fpr => fpr_order(),
+            Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
         }
     }
 
@@ -255,6 +388,26 @@ impl AllocTarget for Arm64 {
 
     fn csr_first_use_cost() -> u32 {
         1
+    }
+
+    fn spill_store(
+        _class: Class,
+        register: LirReg,
+        slot: i32,
+    ) -> Option<LirInst> {
+        let mut inst = LirInst::new(Kind::Op("SpillStore"), vec![Operand::Use(register), Operand::Frame(slot)]);
+        inst.may_store = true;
+        Some(inst)
+    }
+
+    fn spill_load(
+        _class: Class,
+        register: LirReg,
+        slot: i32,
+    ) -> Option<LirInst> {
+        let mut inst = LirInst::new(Kind::Op("SpillLoad"), vec![Operand::Def(register), Operand::Frame(slot)]);
+        inst.may_load = true;
+        Some(inst)
     }
 }
 
@@ -303,28 +456,25 @@ mod tests {
         let keep = &lir.blocks[0].insts[2];
         assert_eq!(keep.ties, vec![(0, 1)], "{keep:?}");
         assert_eq!(lir.classes, vec![Class::Gpr, Class::Gpr, Class::Fpr]);
-        assert_eq!(lir.blocks[0].insts[4].operands, vec![Operand::Block(1)]);
+        assert_eq!(lir.blocks[0].insts[4].operands[0], Operand::Block(1));
     }
 
-    /// The view and back is the same function; a register the allocator
-    /// changed shows up in the instruction.
+    /// The registers greedy chose go back into the original operations, a
+    /// copy between the same register goes, and a tied register stays one.
     #[test]
     fn registers_go_back_into_the_function() {
         let function = sample();
-        let mut lir = view(&function);
-        let mut same = function.clone();
-        apply(&mut same, &lir);
-        assert_eq!(same.blocks, function.blocks);
-        let x5 = LirReg::Phys(crate::reg::X5);
-        for operand in &mut lir.blocks[0].insts[1].operands {
-            if let Operand::Def(reg) = operand {
-                *reg = x5;
-            }
-        }
-        let mut changed = function.clone();
-        apply(&mut changed, &lir);
-        let Op::I(Inst::AddSubImm { rd, .. }) = &changed.blocks[0].ops[1] else { panic!() };
+        let lir = view(&function);
+        let mut back = function.clone();
+        let (x0, x5, v4) = (crate::reg::X0, crate::reg::X5, RegId::from_raw(crate::reg::V0.index() as u8 + 4));
+        rebuild(&mut back, &lir, &Assignment(vec![x0, x5, v4]), &[]);
+        let ops = &back.blocks[0].ops;
+        assert_eq!(ops.len(), 4, "the copy of x0 into itself goes: {ops:?}");
+        let Op::I(Inst::AddSubImm { rd, rn, .. }) = &ops[0] else { panic!("{ops:?}") };
+        assert_eq!((*rd, *rn), (Gpr(5), Gpr(0)));
+        let Op::I(Inst::MoveWide { rd, .. }) = &ops[1] else { panic!("{ops:?}") };
         assert_eq!(*rd, Gpr(5));
+        assert_eq!(ops[2], Op::Copy { dst: Reg::Fpr(Vreg(4)), src: Reg::Fpr(Vreg(0)) });
     }
 
     /// Machine registers are the register file's ids: raw numbers made `x5`

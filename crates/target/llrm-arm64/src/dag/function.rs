@@ -172,18 +172,26 @@ pub fn select_function_in(
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
         let made = !extras.is_empty();
+        let parent_updates = built.phi_updates.clone();
+        // The branches are read before selection turns them into machine nodes.
+        let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
         let units = select_block(&mut built.dag, &globals, &mut info).map_err(|why| format!("{why:?}"))?;
-        work.push((block.0, made, built, units));
+        work.push((block.0, made, built, units, exits));
         for (id, mut extra) in extras {
+            // `FinishBasicBlock`: a block the lowering made is a predecessor
+            // of the successors too, so each takes the phi values the block
+            // that made it does.
+            extra.phi_updates = parent_updates.clone();
+            let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
             let units = select_block(&mut extra.dag, &globals, &mut info).map_err(|why| format!("{why:?}"))?;
-            work.push((id.0, true, extra, units));
+            work.push((id.0, true, extra, units, exits));
         }
     }
     let order: Vec<u32> = work.iter().map(|(id, ..)| *id).collect();
-    for (at, (id, made, built, units)) in work.into_iter().enumerate() {
+    for (at, (id, made, built, units, (targets, jumps))) in work.into_iter().enumerate() {
         let successors = if made {
-            let mut successors = branch_targets(&built.dag);
-            if !ends_in_jump(&built.dag) {
+            let mut successors = targets;
+            if !jumps {
                 successors.extend(order.get(at + 1).copied());
             }
             successors
@@ -225,19 +233,26 @@ pub fn select_function_in(
 }
 
 /// The blocks the branches of a built block name, in the order they execute.
+/// The chain from the root passes the nodes between the branches (the copies
+/// that export a value to another block).
 fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
     let mut targets = Vec::new();
     let mut at = dag.get_root();
     loop {
-        let (op, dest) = match dag.opcode(at) {
-            ISD::Br => (0, 1),
-            ISD::BrCond => (0, 2),
-            _ => break,
+        let dest = match dag.opcode(at) {
+            ISD::Br => Some(1),
+            ISD::BrCond => Some(2),
+            _ => None,
         };
-        if let NodeData::Block(block) = dag.node(dag.operand(at, dest)).data {
+        if let Some(dest) = dest
+            && let NodeData::Block(block) = dag.node(dag.operand(at, dest)).data
+        {
             targets.push(block);
         }
-        at = dag.operand(at, op);
+        match dag.node(at).ops.first() {
+            Some(&chain) if dag.value_type(chain) == EVT::OTHER => at = chain,
+            _ => break,
+        }
     }
     targets.reverse();
     targets

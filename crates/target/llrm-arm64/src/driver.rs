@@ -283,6 +283,12 @@ pub fn functions_with(
         }
         .map_err(|why| format!("@{name}: {why}"))?;
         dump("Select", &machine);
+        if llrm_support::env_flag!("LLRM_ARM64_VERIFY") {
+            let undefined = crate::mfunc::undefined_reads(&machine);
+            if !undefined.is_empty() {
+                return Err(format!("@{name}: read before written: {undefined:?}"));
+            }
+        }
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
         crate::flagcse::run(&mut machine);
@@ -293,7 +299,11 @@ pub fn functions_with(
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
-        let allocation = crate::regalloc::allocate(&mut machine);
+        let allocation = if llrm_support::env_flag!("LLRM_ARM64_GREEDY") {
+            crate::lir_view::allocate(&mut machine).map_err(|why| format!("@{name}: {why}"))?
+        } else {
+            crate::regalloc::allocate(&mut machine)
+        };
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
