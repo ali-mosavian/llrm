@@ -1,7 +1,8 @@
 //! `cycles [SET]`: the kernels of `bench/<SET>` (`kernels`, or `library`)
 //! compiled by this compiler (default and size), run under `qemu-m68k`, and
 //! the clocks of the executed instructions inside `k` added up from
-//! `llrm_m68k::timing` for the 68000 and the 68020 (cache case). Needs
+//! `llrm_m68k::timing` for the processors of `CYCLES_CPUS` (default the 68000
+//! and the 68020, cache case). Needs
 //! `$GCC_M68K` (the unpacked m68k binutils, for `objdump`: the pin's
 //! `llvm-objdump` shows `addq` and `tst` as `<unknown>`) and `qemu-m68k`.
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
@@ -13,12 +14,30 @@ use std::process::{Command, Stdio};
 
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
+use llrm_m68k::isa::Cpu as Model;
 use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
-use llrm_m68k::timing::{cost, from_gnu};
+use llrm_m68k::timing::{cost_on, from_gnu};
 
 /// Executed instructions read before a run is called runaway.
 const CAP: usize = 2_000_000;
+
+/// `CYCLES_CPUS=68000,68030,68060`: the processors to price for (default 68000
+/// and 68020).
+fn models() -> Vec<Model> {
+    let list = std::env::var("CYCLES_CPUS").unwrap_or_else(|_| "68000,68020".to_owned());
+    list.split(',')
+        .map(|one| match one.trim() {
+            "68000" => Model::M68000,
+            "68010" => Model::M68010,
+            "68020" => Model::M68020,
+            "68030" => Model::M68030,
+            "68040" => Model::M68040,
+            "68060" => Model::M68060,
+            other => panic!("CYCLES_CPUS: no processor {other}"),
+        })
+        .collect()
+}
 
 /// The program counters qemu executed, in order.
 fn trace(exe: &Path) -> Vec<u32> {
@@ -83,7 +102,7 @@ fn listing(
 
 struct Total {
     insns: usize,
-    clocks: [u64; 2],
+    clocks: Vec<u64>,
     partial: bool,
     unknown: usize,
 }
@@ -91,6 +110,7 @@ struct Total {
 fn price(
     gcc: &Path,
     exe: &Path,
+    models: &[Model],
 ) -> Total {
     let (lines, range) = listing(gcc, exe);
     let at: HashMap<u32, (usize, &str)> = lines
@@ -101,7 +121,7 @@ fn price(
         })
         .collect();
     let pcs = trace(exe);
-    let mut total = Total { insns: 0, clocks: [0; 2], partial: false, unknown: 0 };
+    let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
@@ -118,8 +138,8 @@ fn price(
         };
         let taken = pcs.get(index + 1).is_some_and(|next| *next != pc + *bytes as u32);
         let mut failed = false;
-        for (slot, cpu) in [Cpu::M68000, Cpu::M68020].into_iter().enumerate() {
-            match cost(cpu, text, *bytes as u32, taken) {
+        for (slot, cpu) in models.iter().copied().enumerate() {
+            match cost_on(cpu, text, *bytes as u32, taken) {
                 Ok(one) => {
                     total.clocks[slot] += u64::from(one.clocks);
                     total.partial |= one.partial;
@@ -137,8 +157,11 @@ fn price(
     if std::env::var_os("CYCLES_LISTING").is_some() {
         for (pc, count) in &counts {
             if let Some((bytes, text)) = at.get(pc) {
-                let one = |cpu| cost(cpu, text, *bytes as u32, false).map_or(0, |c| c.clocks);
-                eprintln!("{pc:x} x{count} {text}  [68000 {} / 68020 {}]", one(Cpu::M68000), one(Cpu::M68020));
+                let each: Vec<String> = models
+                    .iter()
+                    .map(|cpu| format!("{cpu:?} {}", cost_on(*cpu, text, *bytes as u32, false).map_or(0, |c| c.clocks)))
+                    .collect();
+                eprintln!("{pc:x} x{count} {text}  [{}]", each.join(" / "));
             }
         }
     }
@@ -149,6 +172,7 @@ fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
     let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    let models = models();
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
     let (rows, block) = if set == "library" {
         (library_table(), library_data())
@@ -159,8 +183,11 @@ fn main() {
         let module = llrm_mir::parse::module(&source_in(&set, "h")).unwrap();
         items(&module, "h", Cpu::M68000).unwrap()
     });
-    println!("| kernel | B | insns | 68000 clk | 68020 clk | -Os B | -Os insns | -Os 68000 | -Os 68020 |");
-    println!("|---|---|---|---|---|---|---|---|---|");
+    let names: Vec<String> = models.iter().map(|cpu| format!("{cpu:?}").trim_start_matches('M').to_owned()).collect();
+    let clock_heads =
+        |prefix: &str| names.iter().map(|name| format!("{prefix}{name} clk")).collect::<Vec<_>>().join(" | ");
+    println!("| kernel | B | insns | {} | -Os B | -Os insns | {} |", clock_heads(""), clock_heads("-Os "));
+    println!("|{}", "---|".repeat(5 + 2 * models.len()));
     for (name, args, _, leaf) in rows {
         let mut text = source_in(&set, name);
         let mut runtime_names: Vec<&str> = Vec::new();
@@ -183,13 +210,11 @@ fn main() {
             code.extend(runtime.clone());
             let exe = dir.join(format!("{name}.elf"));
             write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap()).unwrap();
-            let total = price(&gcc, &exe);
+            let total = price(&gcc, &exe, &models);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            cells.push(format!(
-                "{size} | {} | {}{mark}{unknown} | {}{mark}{unknown}",
-                total.insns, total.clocks[0], total.clocks[1]
-            ));
+            let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
+            cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
         }
         println!("| {name} | {} |", cells.join(" | "));
     }
