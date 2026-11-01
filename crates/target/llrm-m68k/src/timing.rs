@@ -26,6 +26,7 @@
 mod m68010;
 mod m68030;
 mod m68040;
+mod m68060;
 mod table;
 
 use crate::dagisel::hooks::Cpu as SelectCpu;
@@ -128,7 +129,8 @@ fn list_size(text: &str) -> Option<u32> {
 
 fn operand(text: &str) -> Result<Operand, String> {
     let unsupported = || format!("operand `{text}` is not in the tables");
-    // a bit field's `{offset:width}` and a register pair `%d1:%d0` do not change the operand's mode
+    // a bit field's `{offset:width}` and a register pair `%d1:%d0` do not
+    // change the operand's mode
     if let Some((inner, field)) = text.split_once('{').filter(|(_, field)| field.ends_with('}')) {
         let _ = field;
         return operand(inner);
@@ -319,11 +321,20 @@ pub fn cost_on(
         Cpu::M68020 => clocks68020(base, suffix, &operands, bytes, taken),
         Cpu::M68030 => m68030::clocks(base, suffix, &operands, bytes, taken),
         Cpu::M68040 => m68040::clocks(base, suffix, &operands, bytes, taken),
-        Cpu::M68060 => None,
+        Cpu::M68060 => m68060::clocks(base, suffix, &operands, rest, taken),
     }
     .ok_or_else(|| format!("`{text}` is not in the {cpu:?} tables"))?;
-    let by_register = is_shift(base) && matches!(cpu, Cpu::M68000 | Cpu::M68010) && places(&operands).is_none() && operands.len() == 2;
-    let partial = matches!(base, "mulu" | "muls" | "divu" | "divs") || by_register || (set_on_condition(base) && cpu == Cpu::M68000);
+    let by_register = is_shift(base)
+        && matches!(cpu, Cpu::M68000 | Cpu::M68010)
+        && places(&operands).is_none()
+        && operands.len() == 2;
+    let partial = if cpu == Cpu::M68060 {
+        m68060::partial(base, suffix)
+    } else {
+        matches!(base, "mulu" | "muls" | "divu" | "divs")
+            || by_register
+            || (set_on_condition(base) && cpu == Cpu::M68000)
+    };
     Ok(Cost { clocks, partial })
 }
 

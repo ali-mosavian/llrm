@@ -25,7 +25,7 @@ pub struct Table {
     rows: Vec<(String, String, Vec<String>)>,
 }
 
-fn split_csv(line: &str) -> Vec<String> {
+pub(super) fn split_csv(line: &str) -> Vec<String> {
     let mut fields = vec![String::new()];
     let mut quoted = false;
     let mut chars = line.chars().peekable();
@@ -95,7 +95,8 @@ impl Table {
         size_ok: impl Fn(&str) -> bool,
         column: &str,
     ) -> Option<&str> {
-        // a column the manual marks with a stray `+` (a footnote mark on `(d8,An,Xn)`) is the same column
+        // a column the manual marks with a stray `+` (a footnote mark on
+        // `(d8,An,Xn)`) is the same column
         let column = key(column);
         let index = self.columns.iter().position(|name| key(name) == column || key(name) == format!("{column}+"))?;
         let row = key(row);
@@ -103,12 +104,18 @@ impl Table {
             .rows
             .iter()
             .filter(|(first, second, _)| {
-                // `ASR, ASL` and `ADD/ADDA` list instructions; `(d16, An)` is one mode
-                let names: Vec<&str> = if first.contains('(') { vec![first] } else { first.split(['/', ',']).collect() };
+                // `ASR, ASL` and `ADD/ADDA` list instructions; `(d16, An)` is
+                // one mode
+                let names: Vec<&str> =
+                    if first.contains('(') { vec![first] } else { first.split(['/', ',']).collect() };
                 names.iter().any(|one| key(one) == row) && size_ok(&key(second))
             })
             .nth(nth)?;
-        found.2.get(index).map(String::as_str).filter(|text| !text.is_empty() && key(text) != "-" && *text != "\u{2014}")
+        found
+            .2
+            .get(index)
+            .map(String::as_str)
+            .filter(|text| !text.is_empty() && key(text) != "-" && *text != "\u{2014}")
     }
 
     pub fn get(
@@ -121,7 +128,8 @@ impl Table {
     }
 }
 
-/// `12(2/0)+`, `6+2n(1/0)`, `12+4n(3+n/0)`, `0(0/0)`: the clocks before the bus cycle counts.
+/// `12(2/0)+`, `6+2n(1/0)`, `12+4n(3+n/0)`, `0(0/0)`: the clocks before the bus
+/// cycle counts.
 pub fn parse_cell(text: &str) -> Option<Cell> {
     let head = text.split('(').next()?.trim();
     let (head, maximum) = (head.trim_end_matches('*'), text.contains(")*") || text.ends_with('*'));
