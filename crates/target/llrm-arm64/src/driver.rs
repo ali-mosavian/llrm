@@ -299,10 +299,15 @@ pub fn functions_with(
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
-        let allocation = if llrm_support::env_flag!("LLRM_ARM64_GREEDY") {
-            crate::lir_view::allocate(&mut machine).map_err(|why| format!("@{name}: {why}"))?
-        } else {
-            crate::regalloc::allocate(&mut machine)
+        // A function greedy refuses goes to the linear scan, reported.
+        let greedy = llrm_support::env_flag!("LLRM_ARM64_GREEDY").then(|| crate::lir_view::allocate(&mut machine));
+        let allocation = match greedy {
+            Some(Ok(allocation)) => allocation,
+            Some(Err(why)) => {
+                eprintln!("greedy: @{name}: {why}");
+                crate::regalloc::allocate(&mut machine)
+            }
+            None => crate::regalloc::allocate(&mut machine),
         };
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
