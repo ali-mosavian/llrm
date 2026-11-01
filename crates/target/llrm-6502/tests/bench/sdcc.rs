@@ -37,7 +37,7 @@ pub fn versions() -> String {
 }
 
 /// The C declaration of the kernel in its source: `ret name(params)`.
-fn prototype(
+pub fn prototype(
     kernel: &Kernel,
     source: &str,
 ) -> Result<(String, String), String> {
@@ -75,12 +75,13 @@ fn argument(arg: Arg) -> String {
 }
 
 /// The driver: the data of `driver()` in C, and the call loop.
-fn driver(
+pub fn driver(
     kernel: &Kernel,
     ret: &str,
     params: &str,
     calls: u32,
     with_args: bool,
+    exits: &str,
 ) -> String {
     let mut c = String::new();
     let params = if params.is_empty() || !with_args { "void" } else { params };
@@ -97,7 +98,13 @@ fn driver(
     ] {
         c.push_str(&format!("unsigned char {name}[] = \"{text}\";\n"));
     }
-    c.push_str("void done_ok(void) { __asm lda #0 \n jmp 0xFFF9 __endasm; }\nvoid done_bad(void) { __asm lda #1 \n jmp 0xFFF9 __endasm; }\n");
+    c.push_str(exits);
+    // every datum stays linked whether or not the kernel (or its stub) reads it
+    // (llvm-mos collects unused sections): one read of each, once, before the
+    // loop
+    c.push_str(
+        "volatile unsigned char keep_sink;\nvoid keep(void) { keep_sink = buf[0] + str[0] + tab[0] + lz[0] + lzout[0] + dst[0] + mix[0] + mix2[0] + num[0] + pat[0] + set[0]; }\n",
+    );
     let wide = kernel.wide_result || kernel.hand.as_ref().is_some_and(|h| h.rel.is_some());
     let result = if wide { "unsigned" } else { "unsigned char" };
     let args: Vec<String> = kernel.args.iter().filter(|_| with_args).map(|&a| argument(a)).collect();
@@ -108,10 +115,13 @@ fn driver(
     };
     let want = if wide { kernel.expect } else { kernel.expect & 0xFF };
     c.push_str(&format!(
-        "void main(void) {{\n  unsigned char i;\n  {result} r = 0;\n  for (i = 0; i < {calls}; i++) r = ({result})({value});\n  if (r == {want}U) done_ok(); else done_bad();\n}}\n"
+        "void main(void) {{\n  unsigned char i;\n  {result} r = 0;\n  keep();\n  for (i = 0; i < {calls}; i++) r = ({result})({value});\n  if (r == {want}U) done_ok(); else done_bad();\n}}\n"
     ));
     c
 }
+
+/// sim65's `exit` ($FFF9) with 0 when the result matched, 1 when not.
+const SDCC_EXITS: &str = "void done_ok(void) { __asm lda #0 \n jmp 0xFFF9 __endasm; }\nvoid done_bad(void) { __asm lda #1 \n jmp 0xFFF9 __endasm; }\n";
 
 /// The data bytes of an Intel hex file: the image the simulator loads.
 fn image_bytes(path: &Path) -> Result<i64, String> {
@@ -212,7 +222,8 @@ pub fn row(
     // `k`: the kernel, `s`: its stub, `n`: the empty call without arguments
     let build = |calls: u32, which: &str| -> Result<std::path::PathBuf, String> {
         let name = format!("{tag}-{which}{calls}");
-        std::fs::write(dir.join(format!("{name}.c")), driver(kernel, &ret, &params, calls, which != "n")).unwrap();
+        std::fs::write(dir.join(format!("{name}.c")), driver(kernel, &ret, &params, calls, which != "n", SDCC_EXITS))
+            .unwrap();
         tool(&dir, &[target, "-c", &format!("{name}.c"), "-o", &format!("{name}-d.rel")])?;
         let ihx = format!("{name}.ihx");
         let function = if which == "k" { kernel_object.clone() } else { format!("{tag}-{which}.rel") };
