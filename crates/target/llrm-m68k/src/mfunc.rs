@@ -572,16 +572,17 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
 
 /// The condition codes the compare set reach the join only through an arm
 /// whose phi copies are `move`s, which set them; so what reads them past the
-/// diamond must read them before the branch. The instructions of `tail` that
-/// read the flags before anything sets them again and are not the block's
-/// terminator, by position: each is movable above the run when it uses nothing
-/// the instructions before it define. A terminator that reads them cannot be
-/// moved, and is refused.
+/// diamond must read them before the branch, or after they are restored. The
+/// instructions of `tail` that read the flags before anything sets them again
+/// and are not the block's terminator, by position: each is movable above the
+/// run when it uses nothing the instructions before it define. A terminator
+/// that reads them, or a reader that uses a value the run defines, stays where
+/// it is; [`expand_cmov`] restores the codes before the first such reader.
 ///
 /// DEVIATE from the pin, whose scheduler orders a second reader of one compare
 /// before the pseudo (glue) and whose arms are empty. Exit: never; this
 /// expansion is ours.
-fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
+fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
     let mut readers = Vec::new();
     for (at, inst) in tail.iter().enumerate() {
         // another select on the codes is a diamond of its own, with the codes
@@ -591,7 +592,7 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
         }
         if inst.reads_flags {
             if inst.terminator {
-                return Err("a branch reads the flags of a compare past the select that follows it".to_owned());
+                break;
             }
             let defined_before: Vec<&Operand> = tail[..at]
                 .iter()
@@ -607,16 +608,15 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
                         _ => false,
                     },
                 );
-            if blocked {
-                return Err("a flag reader past a select uses a value the select defines".to_owned());
+            if !blocked {
+                readers.push(at);
             }
-            readers.push(at);
         }
         if inst.sets_flags {
             break;
         }
     }
-    Ok(readers)
+    readers
 }
 
 /// `M68kTargetLowering::EmitLoweredSelect`: a run of `CMOV` pseudos on one
@@ -671,17 +671,20 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         }
         tail.drain(..taken);
         tail.splice(0..0, copies);
-        let readers = flag_readers_to_hoist(&tail)?;
+        let readers = flag_readers_to_hoist(&tail);
         hoisted.extend(readers.iter().map(|&one| tail[one].clone()));
         for &one in readers.iter().rev() {
             tail.remove(one);
         }
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
-        // A select on another condition of the same codes follows the join,
-        // where the copies of the arms have set them again: the head
-        // keeps them and the join restores them. DEVIATE from the pin,
-        // which orders the readers before the pseudo.
-        if let Some(second) = tail.iter().take_while(|inst| !inst.sets_flags).position(is_cmov) {
+        // A reader of the codes that stays past the join (a select on another
+        // condition of the same codes, a branch, a reader of a value the run
+        // defines) sees them set again by the arms' copies: the head keeps
+        // them and the join restores them before the first such reader.
+        // DEVIATE from the pin, which orders the readers before the pseudo.
+        if let Some(second) =
+            tail.iter().take_while(|inst| !inst.sets_flags).position(|inst| is_cmov(inst) || inst.reads_flags)
+        {
             function.classes.push(Class::Dr16);
             let kept = Reg::Virt(function.classes.len() as u32 - 1);
             let mut save =

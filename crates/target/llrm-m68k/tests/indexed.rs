@@ -37,6 +37,8 @@ fn status(
     write_executable(&path, &executable(&all).unwrap()).unwrap();
     let code = support::run(&qemu, &[], &path);
     std::fs::remove_file(&path).ok();
+    // a run that ends on a signal is a failure, not a skipped check
+    assert!(code.is_some(), "f({args:?}) ended on a signal");
     code
 }
 
