@@ -70,6 +70,10 @@ pub struct ShadowInputs<'a> {
     /// rematerialization.
     pub tii: &'a dyn super::tii::TargetInstrInfo,
     pub tri: &'a dyn super::targetinfo::TargetRegisterInfo,
+    /// A value pinned to a byte lane holds that lane only, as the pin's
+    /// register units say. x86 holds the whole root (`_whole`): its pins are
+    /// roots, and its output depends on it.
+    pub lane_pins: bool,
 }
 
 /// What the shadow allocator decided.
@@ -996,6 +1000,8 @@ pub struct Decided {
     /// about, and whether a spill could not be written.
     pub edited: Option<LirBody>,
     pub spill_failed: bool,
+    /// The value each clone a split or a spill made was cloned from.
+    pub parents: std::collections::HashMap<u32, u32>,
 }
 
 /// How a spilled range is dealt with.
@@ -1132,13 +1138,23 @@ pub fn decide_with_split(
     let widest = crate::backend::widths::_widest(body);
     let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
-        let mut order: Vec<RegId> = if floats.contains(&reg) {
+        // A caller that orders byte registers itself (a target whose classes
+        // name them) keeps its order: the GR8 order below is x86's.
+        let named = (inputs.order)(reg);
+        let by_caller = widest.get(&reg) == Some(&1)
+            && !inputs.pins.contains_key(&reg)
+            && !floats.contains(&reg)
+            && !named.is_empty()
+            && named.iter().all(|one| bytes.contains(one));
+        let mut order: Vec<RegId> = if by_caller {
+            named
+        } else if floats.contains(&reg) {
             inputs.registers.rfp_registers().to_vec()
         } else {
-            (inputs.order)(reg).into_iter().map(|one| inputs.registers.root(one)).collect()
+            named.into_iter().map(|one| inputs.registers.root(one)).collect()
         };
         order.dedup();
-        if widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
+        if !by_caller && widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
             let roots = order.clone();
             let lanes: Vec<RegId> =
                 bytes.iter().copied().filter(|byte| roots.contains(&inputs.registers.root(*byte))).collect();
@@ -1206,12 +1222,9 @@ pub fn decide_with_split(
             tables.remat_roots.borrow_mut().entry(*value).or_insert_with(|| Arc::clone(one));
         }
     }
-    let pins = inputs
-        .pins
-        .iter()
-        .filter(|(reg, _)| !floats.contains(reg))
-        .map(|(&reg, &phys)| (reg, inputs.registers.root(phys)))
-        .collect();
+    let pin_of = |phys: RegId| if inputs.lane_pins { phys } else { inputs.registers.root(phys) };
+    let pins =
+        inputs.pins.iter().filter(|(reg, _)| !floats.contains(reg)).map(|(&reg, &phys)| (reg, pin_of(phys))).collect();
     let env = BodyEnv {
         orders: Rc::clone(&tables),
         tii: inputs.tii,
@@ -1333,7 +1346,7 @@ pub fn decide_with_split(
             .into_iter()
             .map(|(reg, phys)| FixedPin {
                 reg,
-                root: inputs.registers.root(phys),
+                root: pin_of(phys),
                 segments: greedy
                     .lis
                     .interval_rc(reg)
@@ -1363,7 +1376,13 @@ pub fn decide_with_split(
                 for (start, end) in list {
                     match merged.last_mut() {
                         Some(last) if start <= last.1 => {
-                            conflict |= start < last.1 && !copies.contains_key(&start);
+                            // A register written and not read by an instruction
+                            // (a call that clobbers a pair and its bytes) holds
+                            // nothing past it: it meets a range that ends at
+                            // that instruction, or another such write, without
+                            // conflict.
+                            let both_dead = end == start.get_dead_slot() && last.1 == start.get_dead_slot();
+                            conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead;
                             last.1 = std::cmp::max(last.1.clone(), end)
                         }
                         _ => merged.push((start, end)),
@@ -1403,7 +1422,7 @@ pub fn decide_with_split(
     // evicted or spilled.
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) && !floats.contains(&reg) {
-            tables.orders.borrow_mut().insert(reg, vec![inputs.registers.root(phys)]);
+            tables.orders.borrow_mut().insert(reg, vec![pin_of(phys)]);
             if !fixed_regs.iter().any(|(fixed, _)| *fixed == reg) {
                 greedy.pinned.insert(reg);
             }
@@ -1470,7 +1489,8 @@ pub fn decide_with_split(
             }
         }
     }
-    Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed() })
+    let parents = tables.parents.borrow().iter().map(|(new, from)| (*new, *from)).collect();
+    Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed(), parents })
 }
 
 #[cfg(test)]
@@ -1544,6 +1564,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1612,6 +1633,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1786,6 +1808,7 @@ mod tests {
                 saved: &[],
                 tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
+                lane_pins: false,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1842,6 +1865,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1975,6 +1999,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2023,6 +2048,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            lane_pins: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");

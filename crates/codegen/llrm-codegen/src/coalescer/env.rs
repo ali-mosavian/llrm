@@ -40,11 +40,31 @@ pub struct TargetEnv {
     pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
+    /// A join leaves a pinned value standing ([`CoalescerEnv::keeps`]): for a
+    /// caller whose pins are values of their own, not constraints on an
+    /// instruction.
+    pub keep_pinned: bool,
+    /// For each pinned value, the pinned values on overlapping registers.
+    pub aliases: IndexMap<u32, Vec<u32>>,
 }
 
 impl CoalescerEnv for TargetEnv {
     fn tuned_for_size(&self) -> bool {
         self.size
+    }
+
+    fn keeps(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.keep_pinned && self.pins.contains_key(&value)
+    }
+
+    fn aliases(
+        &self,
+        value: u32,
+    ) -> Vec<u32> {
+        self.aliases.get(&value).cloned().unwrap_or_default()
     }
 
     fn can_share(
@@ -103,6 +123,38 @@ pub fn joined(
     // The allocator starts from these (`take_handed_over_edited_to`).
     crate::liveness::liveintervals::hand_over(lis, &after);
     after
+}
+
+/// `body` with its copies joined, for a caller that states the palettes and
+/// pins itself (a target whose registers are not x86 classes). The palettes
+/// come back narrowed to what each surviving value may take.
+pub fn coalesce(
+    body: &LirBody,
+    palettes: IndexMap<u32, BTreeSet<RegId>>,
+    pins: IndexMap<u32, RegId>,
+    size: bool,
+    regs: llrm_lir::registers::Regs,
+) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
+    let aliases = pins
+        .iter()
+        .map(|(value, register)| {
+            let others = pins
+                .iter()
+                .filter(|(other, theirs)| {
+                    *other != value
+                        && regs.root(**theirs) == regs.root(*register)
+                        && regs.lanes(**theirs) & regs.lanes(*register) != 0
+                })
+                .map(|(other, _)| *other)
+                .collect();
+            (*value, others)
+        })
+        .collect();
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases };
+    let depths = crate::analysis::intervals::depths_shared(body);
+    let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
+    let after = joined(body, &env, &depth);
+    (after, env.palettes.into_inner())
 }
 
 /// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A

@@ -37,6 +37,28 @@ pub trait CoalescerEnv {
     ) {
     }
 
+    /// A value a join must leave standing, whatever the interval sizes: a
+    /// value pinned to a register of its own, whose range the allocator keeps
+    /// other values out of. Merged into a virtual value it would be an
+    /// ordinary value with one register to choose from, and lose to the values
+    /// that took the register first.
+    fn keeps(
+        &self,
+        _value: u32,
+    ) -> bool {
+        false
+    }
+
+    /// The pinned values on registers that overlap `value`'s (a pair and its
+    /// bytes): `value` holds the units they hold, so a join that makes it
+    /// longer must keep clear of their ranges (`checkRegUnitInterference`).
+    fn aliases(
+        &self,
+        _value: u32,
+    ) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// A build for size: a copy of a constant is made again only where that
     /// leaves no second copy of the constant (DEVIATE C10).
     fn tuned_for_size(&self) -> bool {
