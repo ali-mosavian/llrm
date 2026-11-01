@@ -308,6 +308,7 @@ pub fn greedy_rewritten(
         saved,
         tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
+        size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);

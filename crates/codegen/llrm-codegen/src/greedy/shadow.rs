@@ -70,6 +70,9 @@ pub struct ShadowInputs<'a> {
     /// rematerialization.
     pub tii: &'a dyn super::tii::TargetInstrInfo,
     pub tri: &'a dyn super::targetinfo::TargetRegisterInfo,
+    /// The function is optimized for size (`optsize`): the pin's
+    /// `trySplitAroundHintReg` makes no split then.
+    pub size: bool,
 }
 
 /// What the shadow allocator decided.
@@ -1082,6 +1085,7 @@ pub fn decide_with_split(
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
+    crate::greedy::greedy::OPT_SIZE.with(|size| size.set(inputs.size));
     if llrm_support::env_var("LLRM_MIR_PRINT").is_some_and(|n| n == &*body.name) {
         match crate::backend::mirprint::mir(body, inputs.pins) {
             Ok(text) => eprintln!("{text}"),
@@ -1544,6 +1548,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -1612,6 +1617,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1786,6 +1792,7 @@ mod tests {
                 saved: &[],
                 tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1842,6 +1849,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1975,6 +1983,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2043,12 +2052,11 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
         };
         let in_ecx = |decided: &Decided| decided.placed.iter().filter(|(v, reg)| *reg == RegId::ECX && *v > 4).count();
         // At -Os the pin skips the split: the premise, v1 whole in another register.
-        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(true));
-        let whole = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
-        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(false));
+        let whole = decide_with_split(&ShadowInputs { size: true, ..inputs }, Mode::Simple, true).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
         assert_eq!(in_ecx(&whole), 0, "premise: v1 lost ecx whole: {:?}", whole.placed);
         assert_eq!(in_ecx(&split), 1, "the loop part of v1 is in ecx: {:?}", split.placed);
@@ -2088,6 +2096,7 @@ mod tests {
             saved: &[],
             tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
+            size: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
