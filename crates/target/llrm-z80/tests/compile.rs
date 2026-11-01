@@ -190,3 +190,13 @@ fn a_byte_in_a_is_stored_through_any_pair() {
     let out = text(ir, "cp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld (de), a") && out.contains("ld (bc), a") && !out.contains("ex de, hl"), "{out}");
 }
+
+/// `find` made `ld hl, #buf` on every trip of its loop: 415 T-states against SDCC's 387. Made once before the loop it
+/// is 365.
+#[test]
+fn a_constant_added_in_a_loop_is_made_before_the_loop() {
+    let ir = include_str!("kernels/ir/find.ll");
+    let out = text(ir, "find", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let (made, looped) = (out.find("#_buf").expect("loads the address"), out.find("L0_1:").expect("has the loop"));
+    assert!(made < looped && out.matches("#_buf").count() == 1, "{out}");
+}

@@ -3,6 +3,7 @@
 
 use llrm_spike_mf::regalloc::{Assignment, eliminate_phis_with, two_address};
 use llrm_lir::registers::Regs;
+use llrm_spike_mf::cfg::Cfg;
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::{Request, selections};
@@ -101,6 +102,31 @@ fn allocated_with(
 ) -> Result<Allocated, String> {
     let mut function = machine_function_with(ir, name, request, duplicate)?;
     eliminate_phis_with(&mut function, false);
+    let mut hoisted = function.clone();
+    if !hoist_constants(&mut hoisted) {
+        return allocate(function, name);
+    }
+    // the allocator does not see that a byte of a pair is read in place, so a constant kept across a loop can cost
+    // more than making it there: the hoisted loop stays only if it is no bigger and no slower
+    let (plain, with) = (allocate(function, name), allocate(hoisted, name));
+    let price = |one: &Allocated| {
+        let (function, assignment, slots, reads) = one;
+        finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price(&lines))
+    };
+    match (plain, with) {
+        (Ok(plain), Ok(with)) => match (price(&plain), price(&with)) {
+            (Some((pb, pt)), Some((wb, wt))) if wb > pb || wt > pt => Ok(plain),
+            _ => Ok(with),
+        },
+        (_, Ok(with)) => Ok(with),
+        (plain, Err(_)) => plain,
+    }
+}
+
+fn allocate(
+    mut function: MFunction,
+    name: &str,
+) -> Result<Allocated, String> {
     two_address(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
@@ -116,6 +142,73 @@ fn allocated_with(
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     Ok((function, assignment, slots.into_iter().map(|(slot, class)| (slot, size(class))).collect(), reads))
+}
+
+/// A constant made in a loop is made once before it (`MachineLICM`'s hoisting of a trivially rematerializable
+/// instruction): `find` made `ld hl, #buf` on every trip. Where the registers run out the allocator makes the constant
+/// again at its uses, as it does for any rematerializable value. Whether anything moved.
+fn hoist_constants(function: &mut MFunction) -> bool {
+    let mut moved = false;
+    let cfg = Cfg::new(function);
+    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Def(Reg::Virt(v)) = operand {
+                *defs.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    let constant = |inst: &Inst| {
+        inst.rematerializable
+            && matches!(&inst.operands[..], [Operand::Def(Reg::Virt(v)), Operand::Imm(_) | Operand::Symbol(..)] if defs[v] == 1)
+    };
+    // the innermost loop first, so a constant moves out as many loops as it can
+    for (header, body) in cfg.loops().iter().rev() {
+        let outside: Vec<usize> = cfg.preds[*header].iter().copied().filter(|p| !body[*p]).collect();
+        let [pre] = outside[..] else { continue };
+        if cfg.succs[pre] != [*header] {
+            continue;
+        }
+        let mut hoisted = Vec::new();
+        for (_, block) in function.blocks.iter_mut().enumerate().filter(|(b, _)| body[*b]) {
+            let (out, keep): (Vec<Inst>, Vec<Inst>) = std::mem::take(&mut block.insts).into_iter().partition(&constant);
+            block.insts = keep;
+            hoisted.extend(out);
+        }
+        let made: Vec<u32> = hoisted
+            .iter()
+            .filter_map(|inst| match inst.operands[0] {
+                Operand::Def(Reg::Virt(v)) => Some(v),
+                _ => None,
+            })
+            .collect();
+        // a commutable instruction that adds the constant to a fixed register takes the other operand there
+        for (_, block) in function.blocks.iter_mut().enumerate().filter(|(b, _)| body[*b]) {
+            for at in 0..block.insts.len() {
+                let inst = &block.insts[at];
+                let uses: Vec<usize> =
+                    (0..inst.operands.len()).filter(|&n| matches!(inst.operands[n], Operand::Use(Reg::Virt(_)))).collect();
+                let (true, [other]) = (inst.commutable, &uses[..]) else { continue };
+                let Operand::Use(Reg::Virt(c)) = inst.operands[*other] else { continue };
+                let Some(copy) = (0..at).rev().find(|&n| matches!(&block.insts[n].operands[..],
+                    [Operand::Def(Reg::Phys(_)), Operand::Use(Reg::Virt(_))])) else { continue };
+                let Operand::Use(Reg::Virt(x)) = block.insts[copy].operands[1] else { continue };
+                if block.insts[copy].kind == Kind::Copy
+                    && made.contains(&x)
+                    && !made.contains(&c)
+                    && function.classes[x as usize] == function.classes[c as usize]
+                {
+                    block.insts[copy].operands[1] = Operand::Use(Reg::Virt(c));
+                    block.insts[at].operands[*other] = Operand::Use(Reg::Virt(x));
+                }
+            }
+        }
+        let insts = &mut function.blocks[pre].insts;
+        let at = insts.iter().position(|inst| inst.terminator).unwrap_or(insts.len());
+        moved |= !hoisted.is_empty();
+        insts.splice(at..at, hoisted);
+    }
+    moved
 }
 
 /// Drops the copies the allocation gave one register.
