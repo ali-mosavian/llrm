@@ -26,6 +26,7 @@ pub mod cli;
 pub mod compile;
 pub mod driver;
 pub mod qbstages;
+pub mod wasm32;
 mod zero_fill;
 
 #[cfg(test)]

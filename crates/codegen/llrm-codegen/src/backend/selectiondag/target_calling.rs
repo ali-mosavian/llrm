@@ -84,7 +84,33 @@ pub enum Site {
     Return,
 }
 
+/// A function the target lowers as an `INTRINSIC_*` node of its own
+/// (`llvm.wasm.throw`): the number the target gives it, and whether it has
+/// side effects or reads memory (a chain, as `visitTargetIntrinsic`'s
+/// `HasChain`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TargetIntrinsic {
+    pub id: u32,
+    pub chained: bool,
+}
+
 pub trait TargetCalling: Debug + Sync {
+    /// The intrinsic this name is for the target; none: an ordinary call.
+    fn intrinsic(
+        &self,
+        _name: &str,
+    ) -> Option<TargetIntrinsic> {
+        None
+    }
+
+    /// Whether a `byval` argument is passed as the address of a copy the
+    /// caller makes in its own frame, the callee reading through the pointer.
+    /// A target that puts the bytes in the argument area says no, and a call
+    /// with one is refused.
+    fn byval_by_reference(&self) -> bool {
+        false
+    }
+
     /// Whether the target places these parts (`outs` the values sent, `ins` the
     /// values received); the builder refuses with the reason when it does not.
     fn accepts(

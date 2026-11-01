@@ -247,3 +247,79 @@ fn target_address_leaves_are_not_scheduled() {
     let order = schedule(&dag, b, &Info);
     assert_eq!(order.len(), 2, "{order:?}");
 }
+
+struct CopyInfo {
+    flags: [u16; 1],
+    clobbers: bool,
+}
+
+impl SchedInfo for CopyInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | LOAD | CMP))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if matches!(opcode, CMP) { &self.flags } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        reg == self.flags[0]
+    }
+
+    fn copy_clobbers(&self) -> Option<u16> {
+        self.clobbers.then_some(self.flags[0])
+    }
+
+    fn preference(&self) -> super::schedule::Preference {
+        super::schedule::Preference::Ilp
+    }
+}
+
+/// `cmp; copy; br`: the copy of a loop-carried value is chained before the
+/// branch and nothing else orders it, so it landed between the compare and
+/// its branch. On M68k a copy becomes a `move`, which sets the flags, and the
+/// compiler saved them around it (`move.w %sr,-(%sp)` .. `move.w (%sp)+,%ccr`
+/// in `hex`'s loop). A target that says its copies clobber the flag register
+/// gets the copy before the compare.
+#[test]
+fn a_copy_that_clobbers_the_flags_is_not_scheduled_between_the_compare_and_its_branch() {
+    let flags = super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
+    let build = |clobbers: bool| {
+        let mut dag = dag();
+        let entry = dag.entry_node();
+        let a = load(&mut dag, 1, entry);
+        let b = load(&mut dag, 2, chain_of(a));
+        let cmp = machine(&mut dag, CMP, &[EVT::I32, EVT::I32], &[a, b]);
+        let to_flags = dag.get_copy_to_phys_reg(
+            entry,
+            super::dagisel_adapter::EFLAGS_ID,
+            SDValue { node: cmp.node, res: 1 },
+            None,
+        );
+        let copy = dag.get_copy_to_reg(chain_of(b), 100, a);
+        let branch = machine(&mut dag, BR, &[EVT::OTHER], &[copy, SDValue { node: to_flags.node, res: 1 }]);
+        let order = schedule(&dag, branch, &CopyInfo { flags: [flags], clobbers });
+        let (at_cmp, at_copy, at_branch) = (position(&order, cmp), position(&order, copy), position(&order, branch));
+        (at_cmp < at_copy && at_copy < at_branch, format!("{order:?}"))
+    };
+    let (between, order) = build(false);
+    assert!(between, "premise: a target that says nothing gets the copy between: {order}");
+    let (between, order) = build(true);
+    assert!(!between, "{order}");
+}

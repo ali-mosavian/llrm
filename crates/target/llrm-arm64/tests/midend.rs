@@ -644,3 +644,127 @@ fn a_loop_of_memset_patterns_is_not_fully_unrolled() {
     let stores = asm.lines().filter(|line| line.trim_start().starts_with("strh")).count();
     assert_eq!(stores, 1, "{asm}");
 }
+
+/// `-g` on arm64 wrote no debug information at all (`Object::debug` was always
+/// none): a debugger could not name a function or print a variable. At -O0 each
+/// variable lives in its frame object, `a` at `sp+0` and the frame 32 bytes, so
+/// 32 bytes below the canonical frame address.
+#[test]
+fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
+    use llrm_debug::Location;
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
+            .expect("lowers");
+    let info = object.debug.as_ref().expect("debug information");
+    let function = info.functions.iter().find(|one| one.name == "f").expect("the function");
+    let places: Vec<(&str, &Location)> =
+        function.variables.iter().map(|one| (one.name.as_str(), &one.location)).collect();
+    assert_eq!(
+        places,
+        [
+            ("a", &Location::Frame { disp: -32 }),
+            ("b", &Location::Frame { disp: -28 }),
+            ("t", &Location::Frame { disp: -24 })
+        ]
+    );
+    use llrm_debug::DebugObjectTarget;
+    let elf = llrm_arm64::mc::Arm64Objects
+        .write_described("elf", &object.object, object.debug.as_ref())
+        .expect("the DWARF writer takes it");
+    assert!(elf.windows(8).any(|window| window == b".debug_i"), "a .debug_info section");
+}
+
+/// The line table of an arm64 object: a row where the source place changes,
+/// and one at the function's start for the line it is declared at (clang's
+/// rows for the same function, bar its `prologue_end` flags).
+#[test]
+fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
+            .expect("lowers");
+    let rows: Vec<(usize, u32, u32)> = object
+        .debug
+        .as_ref()
+        .expect("debug information")
+        .lines
+        .iter()
+        .map(|one| (one.offset, one.line, one.column))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (0, 2, 0),
+            (16, 3, 13),
+            (20, 3, 11),
+            (24, 3, 18),
+            (28, 3, 16),
+            (32, 3, 7),
+            (36, 4, 10),
+            (40, 4, 12),
+            (44, 4, 3)
+        ]
+    );
+}
+
+/// `-g` must not change the code: the source place each operation carries
+/// through the passes decides nothing. The fixtures (clang's -O0 and -O2
+/// output) lower to the same bytes with and without it.
+#[test]
+fn debug_information_leaves_the_code_as_it_was() {
+    for (text, level) in
+        [(include_str!("data/debug_o0.ll"), driver::Level::O0), (include_str!("data/debug_o2.ll"), driver::Level::O2)]
+    {
+        let text_of = |debug| {
+            let object = driver::object_with(text, Platform::Linux, "same", level, debug).expect("lowers");
+            object.sections[0].image.clone()
+        };
+        assert!(!text_of(false).is_empty(), "premise: code");
+        assert_eq!(text_of(false), text_of(true));
+    }
+}
+
+/// The pin flags the first row after the frame is built `prologue_end` and the
+/// first row that takes it down `epilogue_begin`. The arm64 line table had
+/// neither: the functions had no body bounds, so gdb stepped into the prologue
+/// and a debugger could not tell where the epilogue began.
+#[test]
+fn an_arm64_function_has_its_body_bounds_and_the_line_table_flags_them() {
+    for (text, level) in
+        [(include_str!("data/debug_o0.ll"), driver::Level::O0), (include_str!("data/debug_o2.ll"), driver::Level::O2)]
+    {
+        let object = driver::object_with(text, Platform::Linux, "flags", level, true).expect("lowers");
+        let info = object.debug.as_ref().expect("debug information");
+        let function = info.functions.first().expect("a function");
+        let (start, end) = function.body.expect("the body's bounds");
+        let range = &function.ranges[0];
+        assert!(0 < start && start < end && end < range.length, "{start}..{end} of {}", range.length);
+        assert_eq!((start % 4, end % 4), (0, 0));
+        assert!(
+            info.lines.iter().any(|one| one.offset == range.offset + start)
+                && info.lines.iter().any(|one| one.offset == range.offset + end),
+            "a row at each bound: {:?}",
+            info.lines
+        );
+    }
+}
+
+/// A row is a statement where its line is not the line before it (the pin's
+/// rule for a function without key instructions); the arm64 table made every
+/// row a statement, so a debugger stopped at each column of a line.
+#[test]
+fn an_arm64_row_on_the_line_before_it_is_not_a_statement() {
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "stmt", driver::Level::O0, true)
+            .expect("lowers");
+    let info = object.debug.as_ref().expect("debug information");
+    let mut previous = None;
+    let mut expected = std::collections::BTreeSet::new();
+    for row in &info.lines {
+        if previous == Some(row.line) {
+            expected.insert((0, row.offset));
+        }
+        previous = Some(row.line);
+    }
+    assert!(!expected.is_empty(), "premise: a line with more than one row");
+    assert_eq!(info.not_stmt, expected);
+}

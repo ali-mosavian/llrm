@@ -1264,6 +1264,48 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
     }
 }
 
+/// k = a * 3 at m16 -O2 is `mov ax,[a]; lea si,[eax+eax*2]` since #6186; the
+/// LEA took the first part's debug tags and dropped the value the last part
+/// made, so `-gtd` had no `k` (tests/turbo.rs
+/// `tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register`
+/// failed: no register k).
+#[test]
+fn test_the_lea_of_a_pair_keeps_the_value_the_last_part_made_for_the_debugger() {
+    let ax = rl(RegId::AX, 2);
+    let first = Insn {
+        debug: crate::model::lir::DebugTags { defines: vec![5], before: vec![0] },
+        ..insn(
+            0,
+            Some((0, 0)),
+            Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(RegId::DI, 2)])),
+            vec![],
+            vec![],
+        )
+    };
+    let last = Insn {
+        debug: crate::model::lir::DebugTags { defines: vec![7], before: vec![1] },
+        ..insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])),
+            vec![],
+            vec![],
+        )
+    };
+    let call = Insn {
+        clobbers: BTreeSet::from([RegId::AX, RegId::CX, RegId::DX]),
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    let input =
+        body("lea-debug", 0, vec![block(0, vec![Arc::new(first), Arc::new(last), Arc::new(call)], vec![]).into()]);
+
+    let result = addresses(&input, "486").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["lea", "call"]);
+    let lea = &result.blocks[0].insns[0];
+    assert_eq!((&lea.debug.defines, &lea.debug.before), (&vec![7], &vec![0, 1]));
+}
+
 /// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the
 /// borrow, so stays.
 #[test]
@@ -5588,6 +5630,29 @@ fn test_a_reload_into_another_register_stays_where_the_filling_register_is_writt
         vec![],
     );
     assert_eq!(store_then_reload_elsewhere(vec![write]), None);
+}
+
+/// bench/nbody_single at x86-64 -O2 printed 3731452 for 86016: `[bp-8] := mov
+/// xmm7 ; xmm7 := movss [const] ; xmm2 := mov [bp-8]` became `xmm2 := mov
+/// xmm7`, the constant, for an SSE register has no lanes to guard.
+#[test]
+fn test_a_reload_into_another_register_stays_where_an_sse_filling_register_is_loaded() {
+    let cell = || Loc::Mem(mem(frame(-8), 4, RegId::BP, -8, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let constant = Loc::Mem(mem(None, 4, RegId::BP, 0, 0));
+    let insns = vec![
+        mov(0, vec![cell()], vec![rl(RegId::XMM7, 4)]),
+        mov(10, vec![rl(RegId::XMM7, 4)], vec![constant]),
+        mov(100, vec![rl(RegId::XMM2, 4)], vec![cell()]),
+        insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]),
+    ];
+    let insns = insns.into_iter().map(Arc::new).collect();
+    let done = forwarded_copies(rules(), &body("forwarded-copy", 0, vec![block(0, insns, vec![]).into()]));
+    let reload = whats(&done.blocks[0].insns).into_iter().rev().nth(1).expect("the reload").clone();
+    assert!(matches!(reload.sources.as_slice(), [Loc::Mem(_)]), "the reload copied the constant: {reload:?}");
 }
 
 /// x87 `lrint` at m16 -Os: `fistp [bp-4] ; mov eax,[bp-4] ; mov [bp-8],eax`

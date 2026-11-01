@@ -39,6 +39,7 @@ fn selects(body: &str) -> Result<(), String> {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: AddrMode::Real16,
     });
     let mut info = FunctionLoweringInfo::new(function);
@@ -49,7 +50,7 @@ fn selects(body: &str) -> Result<(), String> {
         legalized(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
             &machine,
         )
         .map_err(|r| format!("{r:?}"))?;

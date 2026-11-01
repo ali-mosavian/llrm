@@ -182,6 +182,7 @@ impl Machine for Dos {
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
+            recursive_inlining: (!self.pin_tuning).then_some((2, 14)),
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
@@ -269,6 +270,8 @@ impl Machine for Dos {
             // Tuning constant fitted to sc.c, weapons, mdl and lru, not
             // derived.
             size_milliclocks_per_byte: 10_000,
+            // The user's rate for m16 at speed: one clock is two bytes.
+            speed_milliclocks_per_byte: 500,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -276,11 +279,30 @@ impl Machine for Dos {
             // and 1350 bytes unrolled, 306 and 418 not.
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
+            // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
+            // (partial and runtime on) copied matmul's outer body, 455 code
+            // bytes against 297, past Borland C's 298.
+            unroll_partial_threshold: Some(0),
+            // DEVIATE: the -O3 non-trivial unswitch copies the loop; the byte
+            // bar holds at every level, so no candidate is cheap enough (queens
+            // 178 -> 229 bytes, Borland C 172).
+            unswitch_threshold: Some(0),
             // DEVIATE: bytes over clocks at every level: the inliner's bar is
             // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
             // 1703).
             inline_threshold: Some(50),
+            // DEVIATE: bytes over clocks at -O2 too: a callee that stays is
+            // not copied into a speed caller where it grows the code (D11).
+            // qlight c: `ls_scale_byte` x4, 376 -> 185 B. Open rows, clocks
+            // above 854bb7efc4 (numbered, owner w10): parity/qlight c +19,
+            // branch c +16, qmove c +41, qbsp c +36, sum_three c +2. Cause: a
+            // constant `imul` where main has a shift chain (the pin keeps
+            // imul; a priced chain measured 2 to 3 B per clock, not worth
+            // it), and frame reloads in sum_three. Exit 2026-11-30: the
+            // bytes those rows hold above main recovered by the register
+            // allocator, then re-price the chain.
+            inline_size_guard_at_speed: true,
             // DEVIATE: byte registers are scarce at every level, not only at
             // optsize (SD103): merged, sieve's `i*i >= n || i >= 32` is a
             // `setcc` pair and an `or` that took `bp` addressing out of the

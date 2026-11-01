@@ -362,8 +362,8 @@ fn invariants(
         changed = false;
         for &block in blocks {
             let ops = std::mem::take(&mut function.blocks[block].ops);
-            let mut kept = Vec::with_capacity(ops.len());
-            for op in ops {
+            let mut kept = crate::mfunc::OpList::default();
+            for (op, loc) in ops {
                 let invariant = pure(&op)
                     && defined(&op).is_some_and(|register| {
                         definitions.get(&register) == Some(&1) && only.is_none_or(|chosen| chosen.contains(&register))
@@ -379,7 +379,7 @@ fn invariants(
                     hoisted.push(op);
                     changed = true;
                 } else {
-                    kept.push(op);
+                    kept.push_at(op, loc);
                 }
             }
             function.blocks[block].ops = kept;
@@ -599,7 +599,7 @@ mod tests {
         let (a, b, c, d) = (64, 65, 66, 67);
         function.next_register = 70;
         function.blocks = vec![
-            MBlock { label: "entry".into(), ops: vec![movz(a, 5000), movz(b, 0), branch_to("loop")] },
+            MBlock { label: "entry".into(), ops: vec![movz(a, 5000), movz(b, 0), branch_to("loop")].into() },
             MBlock {
                 label: "loop".into(),
                 ops: vec![
@@ -612,9 +612,10 @@ mod tests {
                         target: Target::Label("loop".into()),
                     }),
                     branch_to("exit"),
-                ],
+                ]
+                .into(),
             },
-            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }] },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
         ];
         function
     }
@@ -655,7 +656,8 @@ mod tests {
                 mmo: MemOperand::default(),
             })
         };
-        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
+        function.blocks[0].ops =
+            vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")].into();
         run(&mut function);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
@@ -712,8 +714,9 @@ pub fn order_copies(function: &mut MFunc) {
             // Stable: a copy into its source's home register moves behind the
             // others.
             block
-                .ops[at..end]
+                .ops
                 .sort_by_key(
+                    at..end,
                     |op| match op {
                         Op::Copy { dst, src } => home.get(src) == Some(dst),
                         _ => false,

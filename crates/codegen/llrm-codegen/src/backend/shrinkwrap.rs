@@ -519,6 +519,18 @@ impl<'a> Uses<'a> {
 }
 
 impl Frame for Uses<'_> {
+    /// `X86FrameLowering::canUseAsPrologue`: the frame's `sub esp` writes the
+    /// flags, so a block entered with a flag live (a second `jcc` on one
+    /// `cmp`) cannot set it up. DEVIATE: the pin keeps the block and adjusts
+    /// with `lea`; here the Save moves up to a block the flags are not live
+    /// into.
+    fn can_use_as_prologue(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        !self.framed || !crate::backend::peephole::flags_live_in(self.body, self.block(block).at)
+    }
+
     fn touches(
         &self,
         block: BlockId,
@@ -656,6 +668,40 @@ mod tests {
             assert!(named(regs, &one).contains(&regs.root(register)));
         }
         assert!(!any_named(regs, &one, |named| named == regs.root(RegId::EDI)));
+    }
+
+    fn named_branch(
+        at: i64,
+        name: &str,
+        target: i64,
+    ) -> Arc<Insn> {
+        insn(at, Semantics { name: Some(name.into()), target: Some(target), ..Semantics::new(ir::Operation::Branch) })
+    }
+
+    /// `fib` with its recursion copied into itself four deep: `cmp edi,4; jb
+    /// early; push rbx; sub rsp,48; jne late`. The frame was set up in the
+    /// block of the second jump, whose flags the `sub` wrote: `fib(4)` took the
+    /// wrong arm and `fib(5)` returned 6 (bench frames printed 619185, not
+    /// 616371). The Save must sit where no flag is live.
+    #[test]
+    fn test_a_frame_is_not_set_up_in_a_block_entered_with_the_flags_live() {
+        let compare = insn(
+            0,
+            Semantics {
+                name: Some("cmp".into()),
+                sources: vec![Loc::Reg(Reg { register: RegId::EDI, width: 4 })],
+                ..Semantics::new(ir::Operation::Compare)
+            },
+        );
+        let blocks = vec![
+            block(0, vec![compare, named_branch(2, "jb", 30)], vec![30, 10]),
+            block(10, vec![touch(10, RegId::ESP), named_branch(12, "jne", 20)], vec![20, 14]),
+            block(14, vec![touch(14, RegId::ESP)], vec![20]),
+            block(20, vec![touch(20, RegId::ESP), ret(22)], vec![]),
+            block(30, vec![ret(30)], vec![]),
+        ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::new(), Some((RegId::EBP, RegId::ESP)), false, false);
+        assert!(wrap.is_none_or(|wrap| !wrap.opens.contains_key(&10)), "the frame opens in the block the flags enter");
     }
 
     /// The early exit saved every register the late path uses, and popped them

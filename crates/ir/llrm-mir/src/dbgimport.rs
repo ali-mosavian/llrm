@@ -12,7 +12,9 @@
 //! and so is whatever names it.
 
 use crate::context::ConstantKind;
-use crate::debuginfo::{self, Dialect, Function, Global, Kind, Language, Member, Reach, Scalar, Type, Variable};
+use crate::debuginfo::{
+    self, Declaration, Dialect, Function, Global, Kind, Language, Member, Reach, Scalar, Type, Variable,
+};
 use crate::hash::HashMap;
 use crate::module::{DebugWhat, GlobalKind, MetadataId, MetadataOperand, Module};
 
@@ -65,11 +67,23 @@ impl Import {
             let Some(function) = module.globals[at].function() else { continue };
             let Some(&(_, subprogram)) = function.metadata.iter().find(|(kind, _)| kind == "dbg") else { continue };
             let Some(name) = module.globals[at].name.as_deref().map(str::to_owned) else { continue };
+            if function.is_declaration() {
+                // A callee the unit does not define: its call sites name it.
+                if let (Some(display), Some(r#type)) =
+                    (text(module, subprogram, "name"), self.r#type(module, node(module, subprogram, "type")))
+                {
+                    debuginfo::add_declaration(module, &Declaration { function: name, name: display, r#type });
+                }
+                continue;
+            }
             let mut records = function.debug_records.clone();
             let mut parameters: Vec<(i64, String, MetadataId)> = Vec::new();
             let mut made: HashMap<MetadataId, MetadataId> = HashMap::default();
             for record in &mut records {
-                if !matches!(record.what, DebugWhat::Declare(_) | DebugWhat::Value(_)) {
+                if !matches!(
+                    record.what,
+                    DebugWhat::Declare(_) | DebugWhat::Value(_) | DebugWhat::Args(_)
+                ) {
                     continue;
                 }
                 let old = record.variable;
@@ -108,9 +122,18 @@ impl Import {
             if let (Some(display), Some(procedure)) =
                 (text(module, subprogram, "name"), self.r#type(module, node(module, subprogram, "type")))
             {
+                let all_calls =
+                    ident(module, subprogram, "flags").is_some_and(|flags| flags.contains("DIFlagAllCallsDescribed"));
                 debuginfo::add_function(
                     module,
-                    &Function { function: name, module: false, name: display, r#type: procedure, parameters },
+                    &Function {
+                        function: name,
+                        module: false,
+                        name: display,
+                        r#type: procedure,
+                        parameters,
+                        all_calls,
+                    },
                 );
             }
             if let GlobalKind::Function(function) = &mut module.globals[at].kind {

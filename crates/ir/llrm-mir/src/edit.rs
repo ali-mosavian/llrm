@@ -787,6 +787,23 @@ impl Function {
     }
 
     /// What `-g` says of the variables, in the order of the program.
+    pub fn debug_args(
+        &self,
+        list: u32,
+    ) -> &[Operand] {
+        &self.debug_arglists[list as usize]
+    }
+
+    /// A list of values a record is made of; the record names it by the
+    /// number this returns.
+    pub fn add_debug_args(
+        &mut self,
+        values: Vec<Operand>,
+    ) -> u32 {
+        self.debug_arglists.push(values);
+        u32::try_from(self.debug_arglists.len() - 1).expect("a few lists")
+    }
+
     pub fn debug_records(&self) -> &[DebugRecord] {
         &self.debug_records
     }
@@ -816,6 +833,52 @@ impl Function {
         self.debug_records.push(DebugRecord { before, variable, what, expression: None, location: None });
     }
 
+    /// As [`add_debug_record`](Self::add_debug_record), with the expression and
+    /// location a `#dbg_value` was written with.
+    pub fn add_debug_record_with(
+        &mut self,
+        before: InstId,
+        variable: MetadataId,
+        what: DebugWhat,
+        expression: Option<MetadataId>,
+        location: Option<MetadataId>,
+    ) {
+        self.debug_records.push(DebugRecord { before, variable, what, expression, location });
+    }
+
+    /// The `#dbg_assign` records linked to `inst`: those whose assignment id is
+    /// the `!DIAssignID` it carries (`at::getDVRAssignmentMarkers`), by their
+    /// index in [`debug_records`](Self::debug_records).
+    pub fn assignment_markers(
+        &self,
+        inst: InstId,
+    ) -> Vec<usize> {
+        let Some(&(_, id)) = self.instruction(inst).metadata.iter().find(|(kind, _)| kind == "DIAssignID") else {
+            return Vec::new();
+        };
+        (0..self.debug_records.len())
+            .filter(|&at| {
+                matches!(
+                    self.debug_records[at].what,
+                    DebugWhat::Assign { id: one, .. } if one == id
+                )
+            })
+            .collect()
+    }
+
+    /// Takes away the records at `indices`
+    /// (`DbgVariableRecord::eraseFromParent`).
+    pub fn remove_debug_records(
+        &mut self,
+        indices: &[usize],
+    ) {
+        let mut at = 0;
+        self.debug_records.retain(|_| {
+            at += 1;
+            !indices.contains(&(at - 1))
+        });
+    }
+
     /// The records of what `value` was now say `with`.
     fn retarget_debug_records(
         &mut self,
@@ -827,6 +890,18 @@ impl Function {
                 && *at == Operand::Value(value)
             {
                 *at = with;
+            }
+            if let DebugWhat::Assign { value: at, address, .. } = &mut record.what {
+                for one in [at, address] {
+                    if *one == Some(Operand::Value(value)) {
+                        *one = Some(with);
+                    }
+                }
+            }
+        }
+        for one in self.debug_arglists.iter_mut().flatten() {
+            if *one == Operand::Value(value) {
+                *one = with;
             }
         }
     }
@@ -848,8 +923,17 @@ impl Function {
         for record in &mut self.debug_records {
             match record.what {
                 DebugWhat::Value(at) if at == Operand::Value(value) => record.what = DebugWhat::Gone,
+                DebugWhat::Args(list) if self.debug_arglists[list as usize].contains(&Operand::Value(value)) => {
+                    record.what = DebugWhat::Gone
+                }
                 DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => {
                     record.what = DebugWhat::GonePiece { offset, bytes }
+                }
+                // The assignment stays (its id is what ties it to the store),
+                // with nothing where the value or the address was.
+                DebugWhat::Assign { value: at, address, id, address_expression } => {
+                    let gone = |one: Option<Operand>| one.filter(|&one| one != Operand::Value(value));
+                    record.what = DebugWhat::Assign { value: gone(at), address: gone(address), id, address_expression };
                 }
                 _ => {}
             }
@@ -1295,6 +1379,12 @@ impl Function {
         for one in said {
             let what = match one.what {
                 DebugWhat::Value(operand) if !same_everywhere(self, operand) => DebugWhat::Gone,
+                DebugWhat::Assign { value, address, id, address_expression } => DebugWhat::Assign {
+                    value: value.filter(|&one| same_everywhere(self, one)),
+                    address,
+                    id,
+                    address_expression,
+                },
                 DebugWhat::Piece { value, offset, bytes } if !same_everywhere(self, value) => {
                     DebugWhat::GonePiece { offset, bytes }
                 }

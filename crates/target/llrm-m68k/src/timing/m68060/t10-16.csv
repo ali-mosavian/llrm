@@ -1,0 +1,18 @@
+#title,Bit Field Execution Times¹,page,10-20,notes,"¹ The type of offset and width (static, dynamic) does not affect the execution time. ² Add 2(1/0) cycles to the (bd,An,Xi*SF) time for a memory indirect address."
+Instruction,Destination / Dn,Destination / An,Destination / (An),Destination / (An)+,Destination / -(An),"Destination / (d16,An)","Destination / (d8,An,Xi*SF)","Destination / (bd,An,Xi*SF)²",Destination / (xxx).WL
+BFCHG (< 5 Bytes),8(0/0),—,8(2/1),—,—,8(2/1),9(2/1),10(2/1),9(2/1)
+BFCHG(= 5 Bytes),12(0/0),—,12(4/2),—,—,12(4/2),13(4/2),14(4/2),13(4/2)
+BFCLR (< 5 Bytes),8(0/0),—,8(2/1),—,—,8(2/1),9(2/1),10(2/1),9(2/1)
+BFCLR(= 5 Bytes),12(0/0),—,12(4/2),—,—,12(4/2),13(4/2),14(4/2),13(4/2)
+BFEXTS(< 5 Bytes),6(0/0),—,6(1/0),—,—,6(1/0),7(1/0),8(1/0),7(1/0)
+BFEXTS(= 5 Bytes),8(0/0),—,8(2/0),—,—,8(2/0),9(2/0),10(2/0),9(2/0)
+BFEXTU(< 5 Bytes),6(0/0),—,6(1/0),—,—,6(1/0),7(1/0),8(1/0),7(1/0)
+BFEXTU(= 5 Bytes),8(0/0),—,8(2/0),—,—,8(2/0),9(2/0),10(2/0),9(2/0)
+BFFFO(< 5 Bytes),9(0/0),—,9(1/0),—,—,9(1/0),10(1/0),11(1/0),10(1/0)
+BFFFO(= 5 Bytes),11(0/0),—,11(2/0),—,—,11(2/0),12(2/0),13(2/0),12(2/0)
+BFINS (< 5 Bytes),6(0/0),—,6(1/1),—,—,6(1/1),7(1/1),8(1/1),7(1/1)
+BFINS(= 5 Bytes),6(0/0),—,6(2/2),—,—,6(2/2),7(2/2),8(2/2),7(2/2)
+BFSET(< 5 Bytes),8(0/0),—,8(2/1),—,—,8(2/1),9(2/1),10(2/1),9(2/1)
+BFSET(= 5 Bytes),12(0/0),—,12(4/2),—,—,12(4/2),13(4/2),14(4/2),13(4/2)
+BFTST (< 5 Bytes),6(0/0),—,6(1/0),—,—,6(1/0),7(1/0),8(1/0),7(1/0)
+BFTST(= 5 Bytes),8(0/0),—,8(2/0),—,—,8(2/0),9(2/0),10(2/0),9(2/0)

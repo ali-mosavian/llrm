@@ -14,6 +14,7 @@ llrm-codegen = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-target = { workspace = true }
 llrm-arm64 = { workspace = true }
+llrm-wasm = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-mir = { workspace = true }
@@ -32,6 +33,7 @@ toml = { workspace = true }
 [dev-dependencies]
 llrm-x86-m16 = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 regex = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-codegen = { workspace = true, features = ["testing"] }
