@@ -550,11 +550,12 @@ fn on_local_error_lands_in_its_handler_on_wasm32() {
 }
 
 /// currency_arith_pds71 converts DOUBLEs and SINGLEs to CURRENCY at run time
-/// and did not build; it prints what BC's build prints.
+/// and did not build; it prints what BC's build prints (its overflow is a
+/// handled error, so the build lands by exceptions).
 #[test]
 fn currency_arithmetic_prints_the_bc_output_on_wasm32() {
     let path = root().join("tests/run/qb/currency_arith_pds71.bas");
-    let dir = built("curarith", &std::fs::read_to_string(&path).unwrap());
+    let dir = built_with("curarith", &std::fs::read_to_string(&path).unwrap(), "--wasm-exceptions");
     let (text, code) = run(&dir, "curarith", &[]);
     let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
     let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();

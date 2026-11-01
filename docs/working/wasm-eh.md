@@ -56,8 +56,11 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
   ownf_err_{pds71,qb45,vbdos} range_exp range_log_trig range_on_error range_power resdiv resnext resume0
   resume_next_print_last resumelocals
 - Need #6293 (`B_OEGP` import; link error now) (3): ownf_local_pds71, ownf_local_vbdos, resumelocals_local
-- Do not build, unrelated (3): currency_arith_pds71, currency_convert_pds71 (x86_fp80 `LRint` in the mid-end),
-  palette_using_pds71 (`Target(24586)` legalize). None touches EH.
+- currency_arith_pds71 matches since `B$LFPC` (DOUBLE to CURRENCY without `f80`).
+- Open row, currency_convert_pds71 builds and differs in two ways. (1) `i = c`, `l = c` out of range: the x87's `fist`
+  gives the integer indefinite (-32768, -2147483648); wasm's `lrint` truncates. Exit: the frontend range-checks that
+  conversion on a target without `f80`. (2) `PRINT d` of 922337203685477.5807# shows `.6`, BC's build `478`; cause not found.
+- palette_using_pds71 does not build (`Target(24586)` legalize). None touches EH.
 
 The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).
 
