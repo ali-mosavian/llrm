@@ -462,3 +462,14 @@ fn the_32_bit_model_names_its_16_bit_types() {
     assert!(text.contains("struct S { unsigned char a; unsigned short b;"));
     assert!(!text.contains("(int)") && !text.contains("unsigned ck"));
 }
+
+/// A corpus with `walks` on has the pointer loops, and with it off none: a
+/// differential test of a backend's post-increment loads that never saw one
+/// would agree with anything.
+#[test]
+fn the_walks_option_adds_pointer_loops_and_only_then() {
+    let model = Options::new(DataModel::INT32);
+    let with = |walks| (0..300).filter(|seed| program(*seed, &Options { walks, ..model }).contains("*w++")).count();
+    assert_eq!(with(false), 0);
+    assert!(with(true) >= 60, "{} of 300 programs walk a pointer", with(true));
+}
