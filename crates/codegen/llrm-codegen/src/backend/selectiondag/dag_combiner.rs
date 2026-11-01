@@ -179,6 +179,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// Whether `user` compares its first operand with its second, so an `or`
+    /// feeding it against zero sets the flags it reads. Default false.
+    fn is_compare_with_flags(
+        &self,
+        _user: ISD,
+    ) -> bool {
+        false
+    }
+
     /// `replaceStoreOfFPConstant` stores a `double` constant as one `i64` when
     /// that type is legal. Default false until x86 is judged.
     fn store_fp_constant_as_i64(&self) -> bool {

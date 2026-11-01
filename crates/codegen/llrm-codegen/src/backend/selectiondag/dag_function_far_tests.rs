@@ -1219,3 +1219,25 @@ entry:
         "{names:?}"
     );
 }
+
+/// A LONG returned and tested against zero kept `movzx`, `shl`, `or` (the `or`
+/// sets the flags); the `shrd` pack cost Nib's grep a `test` and 3 bytes.
+#[test]
+fn a_long_returned_and_tested_against_zero_is_not_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 0
+  ret i1 %c
+}
+",
+    );
+    assert_eq!(
+        (names.iter().filter(|n| *n == "shrd").count(), names.iter().filter(|n| *n == "or").count()),
+        (0, 1),
+        "{names:?}"
+    );
+}

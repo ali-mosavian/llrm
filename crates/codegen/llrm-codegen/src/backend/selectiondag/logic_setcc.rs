@@ -256,6 +256,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.dag.node(node).flags.has(super::dag::SDNodeFlags::PAIR_FAR) {
             return None;
         }
+        // The `or` sets the flags a compare with zero reads; the `shrd` does not.
+        let tested = self.dag.users(node).any(|user| {
+            let user = SDValue { node: user, res: 0 };
+            self.hooks.is_compare_with_flags(self.dag.opcode(user)) && self.dag.constant(self.dag.operand(user, 1)) == Some(0)
+        });
+        if tested {
+            return None;
+        }
         let sixteen = self.dag.get_constant(16, EVT::I8);
         let lo_wide = self.dag.get_node(ISD::AnyExtend, vt, &[lo]);
         let lo_high = self.dag.get_node(ISD::Shl, vt, &[lo_wide, sixteen]);

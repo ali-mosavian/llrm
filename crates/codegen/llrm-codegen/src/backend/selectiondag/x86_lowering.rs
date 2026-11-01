@@ -166,6 +166,13 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    fn is_compare_with_flags(
+        &self,
+        user: ISD,
+    ) -> bool {
+        user == x86isd::CMP
+    }
+
     /// DEVIATE G1 (x87 only: with SSE the conversion is in registers): the
     /// `fist` to a scratch slot, the load of the slot and the store of it
     /// become one `fist` to the store's address.
