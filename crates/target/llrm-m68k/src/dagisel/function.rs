@@ -91,14 +91,14 @@ pub fn select_function(
 
 /// [`select_function`], with `source_order`: the pin's source-order scheduler
 /// in place of the ILP list scheduler, and `indexed`: `(An)+` and `-(An)`
-/// accesses, and `quick`: `addq` and `subq`.
+/// accesses, and `short`: `addq` and `subq`.
 pub fn select_function_with(
     module: &Module,
     name: &str,
     cpu: Cpu,
     source_order: bool,
     indexed: bool,
-    quick: bool,
+    short: bool,
 ) -> Result<Vec<Selected>, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
@@ -122,12 +122,12 @@ pub fn select_function_with(
         // follow the block that made them, as x86's driver lays them
         // out
         let extras = std::mem::take(&mut built.extra);
-        let units = select_block_with(&mut built.dag, cpu, source_order, indexed, quick, &mut temporaries)
+        let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
             .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
         selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
-            let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, quick, &mut temporaries)
+            let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
             selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
