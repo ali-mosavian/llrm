@@ -83,6 +83,15 @@ impl Target for M68kRegisters {
         CALLER_SAVED.to_vec()
     }
 
+    /// `copyPhysReg`: a copy into a data register is a `move`, which sets the
+    /// codes.
+    fn copy_sets_flags(
+        to: RegId,
+        from: RegId,
+    ) -> bool {
+        to != from && crate::flags::is_data(to)
+    }
+
     /// `getStoreRegOpcode`: a `MOVEM` pseudo, since a `move` would overwrite
     /// the condition codes a branch may still read.
     fn spill_store(
