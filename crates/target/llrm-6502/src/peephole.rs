@@ -13,9 +13,10 @@
 //! - [`drop_known_loads`]: `ldx #n` of what the register already holds, tracked
 //!   through immediates and transfers, forgotten at a label, a call or an
 //!   instruction not listed.
-//! - [`drop_zero_compares`]: `cmp #0` before a branch on zero or sign, after an
-//!   instruction that set those flags from `a`. Labels between the two do not
-//!   matter: a path that jumps to one brings its own flags.
+//! - [`drop_zero_compares`]: `cmp #0` (likewise `cpx`, `cpy`) before a branch
+//!   on zero or sign, after an instruction that set those flags from that
+//!   register. Labels between the two do not matter: a path that jumps to one
+//!   brings its own flags.
 //! - [`drop_cancelling_transfers`]: `tya; tay` and its three twins: the second
 //!   moves what the first just moved.
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
@@ -38,7 +39,7 @@
 
 use std::collections::HashSet;
 
-use crate::asm::{Asm, Flags, Inst, Line, Op, Operand};
+use crate::asm::{Asm, Flags, Inst, Line, Op, Operand, Registers};
 
 /// Whether the zero and sign flags are set again before anything reads them,
 /// from `lines[from]` on.
@@ -50,7 +51,7 @@ fn flags_unread_after(
         let Line::Inst(inst) = line else { return false };
         match inst.flags() {
             Flags::Keeps => {}
-            Flags::OfA | Flags::Sets => return true,
+            Flags::Of(_) | Flags::Sets => return true,
             Flags::Reads => return false,
         }
     }
@@ -60,7 +61,16 @@ fn flags_unread_after(
 /// Whether the emitted instruction leaves the zero and sign flags describing
 /// what `a` now holds.
 pub fn sets_nz_of_a(inst: &Inst) -> bool {
-    inst.flags() == Flags::OfA
+    sets_nz_of(inst, Registers::A)
+}
+
+/// Whether the instruction leaves the zero and sign flags describing what
+/// `register` now holds.
+fn sets_nz_of(
+    inst: &Inst,
+    register: Registers,
+) -> bool {
+    matches!(inst.flags(), Flags::Of(set) if set.contains(register))
 }
 
 /// The passes, in the order they feed each other.
@@ -94,20 +104,26 @@ pub fn drop_zero_compares(asm: &mut Asm) {
     let lines = &asm.lines;
     let keep: Vec<bool> = (0..lines.len())
         .map(|at| {
-            let compare = matches!(
-                &lines[at],
-                Line::Inst(Inst { op: Op::Cmp, operand: Operand::Imm(v) }) if v == "0"
-            );
+            let compared = match &lines[at] {
+                Line::Inst(Inst { op, operand: Operand::Imm(v) }) if v == "0" => match op {
+                    Op::Cmp => Some(Registers::A),
+                    Op::Cpx => Some(Registers::X),
+                    Op::Cpy => Some(Registers::Y),
+                    _ => None,
+                },
+                _ => None,
+            };
             let branch = next_instruction(lines, at + 1)
                 .is_some_and(|next| matches!(next.op, Op::Beq | Op::Bne | Op::Bmi | Op::Bpl));
-            let tested = compare
-                && branch
-                && lines[..at]
-                    .iter()
-                    .rev()
-                    .find(|before| !before.inst().is_some_and(|i| i.flags() == Flags::Keeps))
-                    .and_then(Line::inst)
-                    .is_some_and(sets_nz_of_a);
+            let tested = branch
+                && compared.is_some_and(|register| {
+                    lines[..at]
+                        .iter()
+                        .rev()
+                        .find(|before| !before.inst().is_some_and(|i| i.flags() == Flags::Keeps))
+                        .and_then(Line::inst)
+                        .is_some_and(|before| sets_nz_of(before, register))
+                });
             !tested
         })
         .collect();

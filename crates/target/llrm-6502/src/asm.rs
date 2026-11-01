@@ -48,13 +48,42 @@ opcodes! {
     Stx "stx", Sty "sty", Stz "stz", Tax "tax", Tay "tay", Tsx "tsx", Txa "txa", Txs "txs", Tya "tya",
 }
 
+/// A set of the registers `a`, `x`, `y`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Registers(u8);
+
+impl Registers {
+    pub const A: Registers = Registers(1);
+    pub const X: Registers = Registers(2);
+    pub const Y: Registers = Registers(4);
+
+    pub fn contains(
+        self,
+        other: Registers,
+    ) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl std::ops::BitOr for Registers {
+    type Output = Registers;
+
+    fn bitor(
+        self,
+        other: Registers,
+    ) -> Registers {
+        Registers(self.0 | other.0)
+    }
+}
+
 /// What an instruction does to the accumulator and the zero and sign flags.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Flags {
     /// Neither `a` nor the flags change: a store, a carry flag, `pha`, `nop`.
     Keeps,
-    /// The flags describe `a` afterwards.
-    OfA,
+    /// The flags describe what these registers hold afterwards (a transfer
+    /// leaves both).
+    Of(Registers),
     /// The flags are set from some other result, or clobbered (a call).
     Sets,
     /// A branch, a jump or an instruction that may read the flags.
@@ -70,10 +99,15 @@ impl Op {
         use Op::*;
         match self {
             Sta | Stx | Sty | Stz | Clc | Sec | Pha | Nop => Flags::Keeps,
-            Lda | Txa | Tya | Tax | Tay | Pla | And | Ora | Eor | Adc | Sbc => Flags::OfA,
-            Asl | Lsr | Rol | Ror | Inc | Dec if *operand == Operand::Acc => Flags::OfA,
-            Ldx | Ldy | Cmp | Cpx | Cpy | Asl | Lsr | Rol | Ror | Inc | Dec | Inx | Iny | Dex | Dey | Bit | Jsr
-            | Rts => Flags::Sets,
+            Lda | Pla | And | Ora | Eor | Adc | Sbc => Flags::Of(Registers::A),
+            Txa => Flags::Of(Registers::A | Registers::X),
+            Tya => Flags::Of(Registers::A | Registers::Y),
+            Tax => Flags::Of(Registers::A | Registers::X),
+            Tay => Flags::Of(Registers::A | Registers::Y),
+            Ldx | Inx | Dex => Flags::Of(Registers::X),
+            Ldy | Iny | Dey => Flags::Of(Registers::Y),
+            Asl | Lsr | Rol | Ror | Inc | Dec if *operand == Operand::Acc => Flags::Of(Registers::A),
+            Cmp | Cpx | Cpy | Asl | Lsr | Rol | Ror | Inc | Dec | Bit | Jsr | Rts => Flags::Sets,
             _ => Flags::Reads,
         }
     }

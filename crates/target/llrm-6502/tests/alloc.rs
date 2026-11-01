@@ -2350,6 +2350,30 @@ fn a_zero_compare_goes_across_a_label_before_its_branch() {
     assert_eq!(pass(drop_zero_compares, carry), carry);
 }
 
+/// `cpx #0` / `cpy #0` after an instruction that set the flags from that
+/// register (`ldx`, `inx`, `tax`, `ldy`, `dey`, `tay`) tested what the flags
+/// already said (`strlower`: 2 bytes and 2 clocks a trip); a load of another
+/// register does not set them.
+#[test]
+fn a_zero_compare_of_x_or_y_after_an_op_that_set_its_flags_goes() {
+    use llrm_6502::peephole::drop_zero_compares;
+    for (before, compare) in
+        [("ldx rc4", "cpx"), ("inx", "cpx"), ("tax", "cpx"), ("ldy rc4", "cpy"), ("dey", "cpy"), ("tay", "cpy")]
+    {
+        let text = format!("  {before}\n  sta rc2\n  {compare} #0\n  bne l\n");
+        assert_eq!(pass(drop_zero_compares, &text), format!("  {before}\n  sta rc2\n  bne l\n"), "{before}; {compare}");
+    }
+    for kept in [
+        "  ldy rc4\n  cpx #0\n  bne l\n",
+        "  lda rc4\n  cpx #0\n  bne l\n",
+        "  ldx rc4\n  cpy #0\n  bne l\n",
+        "  ldx rc4\n  cpx #0\n  bcs l\n",
+        "  ldx rc4\nl:\n  cpx #0\n  bne l\n",
+    ] {
+        assert_eq!(pass(drop_zero_compares, kept), kept);
+    }
+}
+
 /// `jmp l` to an `rts` (11 sites in 7 kernels) is the `rts`: a byte and a jump
 /// less. Only a label that is directly a return counts.
 #[test]
