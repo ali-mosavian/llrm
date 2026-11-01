@@ -68,6 +68,15 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
     llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses")
 });
 
+/// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
+/// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
+/// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
+/// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
+/// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
+fn tuning() -> llrm_mir::target::Tuning {
+    llrm_mir::target::Tuning { multiply_by_clocks: true, ..llrm_mir::target::Tuning::PIN }
+}
+
 impl M32 {
     /// The pressure sets and classes of the pin's x86.
     pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
@@ -414,7 +423,7 @@ impl llrm_target::Target for M32 {
                     .tti
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
-                    .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                    .map(|one| std::rc::Rc::new(one.with_tuning(tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )
         }

@@ -1052,7 +1052,9 @@ fn selected_in(
     } else {
         cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
     };
-    let frequencies = (mul_rate > 0).then(|| {
+    let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
+    let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let frequencies = (mul_rate > 0 && !mul_by_clocks).then(|| {
         let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
             llrm_analysis::bpi::Module {
                 context: &module.context,
@@ -1077,16 +1079,27 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
-                profile: frequencies
-                    .as_ref()
-                    .map(
-                        |frequencies| super::x86_lowering::MulPricing {
-                            cpu,
-                            arch,
-                            freq: frequencies.relative_to_entry(parent),
-                            milliclocks_per_byte: mul_rate,
-                        },
-                    ),
+                profile: if mul_by_clocks {
+                    Some(super::x86_lowering::MulPricing {
+                        cpu,
+                        arch,
+                        freq: 1.0,
+                        milliclocks_per_byte: mul_rate,
+                        by_clocks: true,
+                    })
+                } else {
+                    frequencies
+                        .as_ref()
+                        .map(
+                            |frequencies| super::x86_lowering::MulPricing {
+                                cpu,
+                                arch,
+                                freq: frequencies.relative_to_entry(parent),
+                                milliclocks_per_byte: mul_rate,
+                                by_clocks: false,
+                            },
+                        )
+                },
             },
             &selector,
             &mut hooks,
