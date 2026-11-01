@@ -703,6 +703,13 @@ impl<'a> TypeLegalizer<'a> {
                 let input = self.dag.operand(value, 0);
                 self.dag.get_node(ISD::LRint, to, &[input])
             }
+            ISD::SignExtendInReg => {
+                // `PromoteIntRes_SIGN_EXTEND_INREG`: the promoted operand,
+                // extended from the same type.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let from = self.dag.operand(value, 1);
+                self.dag.get_node(ISD::SignExtendInReg, self.dag.value_type(promoted), &[promoted, from])
+            }
             ISD::UAddO
             | ISD::USubO
             | ISD::UAddOCarry

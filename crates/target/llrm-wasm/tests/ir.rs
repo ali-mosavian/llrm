@@ -263,6 +263,14 @@ fn unreachable_traps() {
     check("unreachable");
 }
 
+/// `shl 8; ashr 8` on an `i16` is a sign-extension in a register; its type was
+/// refused at "promote result" (bench/nibbles). The pin selects
+/// `i32.extend8_s`.
+#[test]
+fn sext_inreg() {
+    check("sext_inreg");
+}
+
 /// A `weak` or `linkonce_odr` function printed `.globl` (and was an object-file
 /// global): a weak default (the runtime's no-op `music_tick`) could not be
 /// overridden by the strong one.
