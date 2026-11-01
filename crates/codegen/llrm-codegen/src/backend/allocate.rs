@@ -411,6 +411,8 @@ pub struct RegAlloc {
     /// one costs a `push` and a `pop` (`tryAssignCSRFirstTime`). None: it
     /// costs nothing.
     pub saved: Vec<RegId>,
+    /// A build for size (`MF->getFunction().hasOptSize()`).
+    pub size: bool,
 }
 
 impl RegAlloc {
@@ -430,7 +432,17 @@ impl RegAlloc {
             segments: segments.clone(),
             classes: Rc::clone(classes),
             saved: Vec::new(),
+            size: false,
         })
+    }
+
+    /// For a build for size.
+    pub fn with_size(
+        mut self,
+        size: bool,
+    ) -> Self {
+        self.size = size;
+        self
     }
 
     /// With the registers the function's convention keeps.
@@ -548,6 +560,7 @@ impl RegAlloc {
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
+        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(self.size));
         let allocated = greedy_rewritten(
             &body,
             Some(&pins),

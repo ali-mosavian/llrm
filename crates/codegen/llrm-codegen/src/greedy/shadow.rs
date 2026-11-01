@@ -1989,6 +1989,71 @@ mod tests {
         );
     }
 
+    /// `trySplitAroundHintReg` was not translated: `v1 = copy v2` in a loop
+    /// (v2 pinned to ecx) lost ecx to a heavier range in the cold exit and the
+    /// whole of `v1` went to edx, the copy kept in the hot block (jpeg_single
+    /// -O2 m16: 2844 B against 2835). The split puts the loop part in ecx.
+    #[test]
+    fn test_a_range_that_lost_its_hint_register_is_split_around_it() {
+        use crate::model::ir::{Held, Loc, Operation, Semantics};
+        let insn = |defines: &[u32], uses: &[u32]| Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()));
+        let copy = {
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 2 })],
+                sources: vec![Loc::Held(Held { value: 2, width: 2 })],
+                ..Semantics::new(Operation::Move)
+            };
+            Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))
+        };
+        let mut cold = vec![insn(&[3], &[])];
+        cold.extend((0..60).map(|_| insn(&[], &[3])));
+        cold.push(insn(&[], &[1, 4]));
+        let rows: Vec<(i64, Vec<Arc<Insn>>, Vec<i64>)> = vec![
+            (0, vec![insn(&[4], &[])], vec![1]),
+            (1, vec![insn(&[], &[4])], vec![2]),
+            (2, vec![insn(&[2], &[4]), copy], vec![2, 3]),
+            (3, vec![insn(&[], &[4])], vec![1, 4]),
+            (4, cold, vec![]),
+        ];
+        let blocks: Vec<Block> = rows
+            .into_iter()
+            .map(|(n, insns, succ)| {
+                let mut b = LirBlock::new(n, insns);
+                b.succ = succ.into();
+                Block::from(b)
+            })
+            .collect();
+        let body = LirBody::new("hint", 0, blocks, IndexMap::default(), IndexMap::default());
+        let order = |v: u32| match v {
+            3 => vec![RegId::ECX],
+            4 => vec![RegId::EAX],
+            _ => vec![RegId::EAX, RegId::ECX, RegId::EDX],
+        };
+        let pins: IndexMap<u32, RegId> = [(2, RegId::ECX)].into_iter().collect();
+        let inputs = ShadowInputs {
+            body: &body,
+            registers: Regs(&llrm_x86_m16::REGISTER_INFO),
+            order: &order,
+            pins: &pins,
+            unspillable: &BTreeSet::new(),
+            data: None,
+            sets: None,
+            stable_loads: true,
+            saved: &[],
+            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16() },
+            tri: &crate::greedy::targetinfo::X86RegisterInfo,
+        };
+        let in_ecx = |decided: &Decided| decided.placed.iter().filter(|(v, reg)| *reg == RegId::ECX && *v > 4).count();
+        // At -Os the pin skips the split: the premise, v1 whole in another register.
+        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(true));
+        let whole = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
+        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(false));
+        let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
+        assert_eq!(in_ecx(&whole), 0, "premise: v1 lost ecx whole: {:?}", whole.placed);
+        assert_eq!(in_ecx(&split), 1, "the loop part of v1 is in ecx: {:?}", split.placed);
+    }
+
     /// Splitting is on by default (`LLRM_NO_SPLIT=1` turns it off): the
     /// default allocation of the body that only splitting can improve is the
     /// split one.
