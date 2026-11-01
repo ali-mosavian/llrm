@@ -492,3 +492,54 @@ fn m68010_multiprecision_and_movep() {
     assert!(cost_on(Cpu::M68010, "cmpm.l (%a0)+, (%a1)+", 2, true).is_ok());
     assert!(cost_on(Cpu::M68010, "movep.w %d0, (4,%a0)", 4, true).is_ok());
 }
+
+fn m68020(text: &str) -> u32 {
+    clocks(Cpu::M68020, text)
+}
+
+/// M68020UM 8.2.8 (p. 8-30): MUL.L is marked `**` (add fetch immediate address
+/// time): 43 cache case + 2 for `#<data>.W,Dn` (8.2.2, p. 8-14). The hand-coded
+/// model added the plain fetch time (0) and priced it 43. 8.2.11 (p. 8-33): CLR
+/// Mem is marked `†` (add calculate address time): CLR (An) = 4 + 2; the
+/// hand-coded model added the fetch time (4) and priced it 8.
+#[test]
+fn m68020_marks_pick_the_address_table() {
+    assert_eq!(m68020("mulu.l %d1, %d0"), 45);
+    assert_eq!(m68020("mulu.w %d1, %d0"), 27);
+    assert_eq!(m68020("clr.l (%a0)"), 6);
+    assert_eq!(m68020("neg.l (%a0)"), 4 + 4);
+    assert_eq!(m68020("lea (4,%a0), %a1"), 2 + 2);
+}
+
+/// 8.2.15 (p. 8-38): DBcc cc true 6, count not expired 6, count expired 10 (the
+/// hand-coded model priced a `dbt` that falls through 10). 8.2.9 (p. 8-31):
+/// CMPI #,EA 2 + fetch immediate `.W,(An)` 4 (it was 8). 8.2.7 (p. 8-29): MOVE
+/// EA,SR 8 and EA,CCR 4.
+#[test]
+fn m68020_conditional_immediate_and_status() {
+    assert_eq!(cost_on(Cpu::M68020, "dbt %d0, .L1", 4, false).unwrap().clocks, 6);
+    assert_eq!(cost_on(Cpu::M68020, "dbf %d0, .L1", 4, true).unwrap().clocks, 6);
+    assert_eq!(cost_on(Cpu::M68020, "dbf %d0, .L1", 4, false).unwrap().clocks, 10);
+    assert_eq!(m68020("cmpi.w #5, (%a0)"), 2 + 4);
+    assert_eq!(m68020("move.w %d0, %sr"), 8);
+    assert_eq!(m68020("move.w %d0, %ccr"), 4);
+}
+
+/// 8.2.13 (p. 8-36): BTST Dn,Dn 4; BSET #,Mem 4 + fetch immediate `.W,(An)` 4.
+/// 8.2.14 (p. 8-37): BFEXTU Dn 8; BFEXTU Mem (< 5 bytes) 13 + calculate
+/// immediate `.W,(An)` 2, a best case. 8.2.10 (p. 8-35): ABCD Dn,Dn 4,
+/// ADDX -(An),-(An) 12, CMPM 9. 8.2.16: RTR 14, LINK.W 5.
+#[test]
+fn m68020_bits_fields_multiprecision_and_returns() {
+    assert_eq!(m68020("btst %d1, %d0"), 4);
+    assert_eq!(m68020("bset #3, (%a0)"), 4 + 4);
+    assert_eq!(m68020("bfextu %d0{0:8}, %d1"), 8);
+    assert_eq!(m68020("bfextu (%a0){0:8}, %d1"), 13 + 2);
+    assert!(cost_on(Cpu::M68020, "bfextu (%a0){0:8}, %d1", 4, true).unwrap().partial);
+    assert_eq!(m68020("abcd %d0, %d1"), 4);
+    assert_eq!(m68020("addx.l -(%a0), -(%a1)"), 12);
+    assert_eq!(m68020("cmpm.w (%a0)+, (%a1)+"), 9);
+    assert_eq!(m68020("rtr"), 14);
+    assert_eq!(m68020("link.w %a6, #-4"), 5);
+    assert_eq!(m68020("movem.l %d0-%d3, -(%sp)"), 4 + 3 * 4 + 4);
+}

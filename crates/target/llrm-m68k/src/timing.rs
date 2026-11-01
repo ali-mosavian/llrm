@@ -9,9 +9,8 @@
 //! - 68030, 68040, 68060: their manuals' tables (`m68030.rs`, `m68040.rs`,
 //!   `m68060.rs`).
 //! - 68020: MC68020UM section 8, the cache case column (instruction cache hit,
-//!   no wait states). The manual says its tables bound the real time and do not
-//!   predict it, since overlap and alignment move it; the move matrix is copied
-//!   from section 8.2.6.
+//!   no wait states), in `m68020.rs`. The manual says its tables bound the real
+//!   time and do not predict it.
 //!
 //! A branch is priced taken or not by the caller's `taken`. A [`Cost`] with
 //! `partial` set leaves out a data-dependent term: a shift by a register
@@ -25,6 +24,7 @@
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
 mod family;
+mod m68020;
 mod m68030;
 mod m68040;
 mod m68060;
@@ -315,7 +315,7 @@ pub fn cost_on(
     let clocks = match cpu {
         Cpu::M68000 => family::clocks(&family::M68000, base, suffix, &operands, bytes, taken),
         Cpu::M68010 => family::clocks(&family::M68010, base, suffix, &operands, bytes, taken),
-        Cpu::M68020 => clocks68020(base, suffix, &operands, bytes, taken),
+        Cpu::M68020 => m68020::clocks(base, suffix, &operands, rest, bytes, taken),
         Cpu::M68030 => m68030::clocks(base, suffix, &operands, bytes, taken),
         Cpu::M68040 => m68040::clocks(base, suffix, &operands, bytes, taken),
         Cpu::M68060 => m68060::clocks(base, suffix, &operands, rest, taken),
@@ -327,211 +327,14 @@ pub fn cost_on(
         && operands.len() == 2;
     let partial = if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
+    } else if cpu == Cpu::M68020 {
+        matches!(base, "mulu" | "muls" | "divu" | "divs") || m68020::partial(base)
     } else {
         matches!(base, "mulu" | "muls" | "divu" | "divs")
             || by_register
             || (set_on_condition(base) && cpu == Cpu::M68000)
     };
     Ok(Cost { clocks, partial })
-}
-
-/// MC68020UM 8.2.1 (p. 8-13), cache case: fetching an operand's address and
-/// value.
-fn fetch68020(
-    mode: Mode,
-    size: Size,
-) -> u32 {
-    match mode {
-        Mode::Dn | Mode::An => 0,
-        Mode::Ind | Mode::Post | Mode::AbsW | Mode::AbsL => 4,
-        Mode::Pre | Mode::Disp | Mode::PcDisp => 5,
-        Mode::Index | Mode::PcIndex => 7,
-        Mode::Imm if size == Size::L => 4,
-        Mode::Imm => 2,
-    }
-}
-
-/// MC68020UM 8.2.2 (p. 8-14), cache case: fetching an immediate and the
-/// address of its memory destination (a byte or word immediate is the `.W`
-/// row).
-fn fetch_immediate68020(
-    mode: Mode,
-    size: Size,
-) -> Option<u32> {
-    let long = size == Size::L;
-    let (word, long_time) = match mode {
-        Mode::Dn => (2, 4),
-        Mode::Ind => (4, 4),
-        Mode::Post => (6, 8),
-        Mode::Pre => (5, 7),
-        Mode::Disp | Mode::AbsW => (5, 7),
-        Mode::AbsL => (6, 8),
-        Mode::Index => (9, 11),
-        _ => return None,
-    };
-    Some(if long { long_time } else { word })
-}
-
-/// MC68020UM 8.2.3 (p. 8-16), cache case: calculating an address only.
-fn calculate68020(mode: Mode) -> Option<u32> {
-    match mode {
-        Mode::Ind | Mode::Post | Mode::Pre | Mode::Disp | Mode::PcDisp | Mode::AbsW => Some(2),
-        Mode::AbsL | Mode::Index | Mode::PcIndex => Some(4),
-        _ => None,
-    }
-}
-
-/// MC68020UM 8.2.5 (p. 8-19), cache case: a jump address.
-fn jump68020(mode: Mode) -> Option<u32> {
-    match mode {
-        Mode::Ind | Mode::AbsW | Mode::AbsL => Some(2),
-        Mode::Disp | Mode::PcDisp => Some(4),
-        Mode::Index | Mode::PcIndex => Some(6),
-        _ => None,
-    }
-}
-
-/// MC68020UM 8.2.4 (p. 8-17), cache case: the register mask word and the
-/// address of a `movem`.
-fn movem_address68020(mode: Mode) -> Option<u32> {
-    match mode {
-        Mode::Ind => Some(2),
-        Mode::Post | Mode::Pre | Mode::Disp | Mode::PcDisp => Some(4),
-        _ => None,
-    }
-}
-
-/// MC68020UM 8.2.6 (pp. 8-23, 8-24), cache case: a move, by source row and
-/// destination column.
-fn move68020(
-    source: Mode,
-    size: Size,
-    destination: Mode,
-) -> Option<u32> {
-    let row = match source {
-        Mode::Dn | Mode::An => 0,
-        Mode::Imm if size != Size::L => 1,
-        Mode::Imm => 2,
-        Mode::Ind => 3,
-        Mode::Post => 4,
-        Mode::Pre => 5,
-        Mode::Disp | Mode::PcDisp => 6,
-        Mode::AbsW => 7,
-        Mode::AbsL => 8,
-        Mode::Index | Mode::PcIndex => 9,
-    };
-    let column = match destination {
-        Mode::An => 0,
-        Mode::Dn => 1,
-        Mode::Ind => 2,
-        Mode::Post => 3,
-        Mode::Pre => 4,
-        Mode::Disp | Mode::PcDisp => 5,
-        Mode::AbsW => 6,
-        Mode::AbsL => 7,
-        Mode::Index | Mode::PcIndex => 8,
-        Mode::Imm => return None,
-    };
-    //     An  Dn  (An) (An)+ -(An) d16 .W .L d8
-    const CELLS: [[u32; 9]; 10] = [
-        [2, 2, 4, 4, 5, 5, 4, 6, 7],
-        [4, 4, 6, 6, 7, 7, 6, 8, 7],
-        [6, 6, 8, 8, 9, 9, 8, 10, 9],
-        [6, 6, 7, 7, 7, 7, 7, 9, 9],
-        [6, 6, 7, 7, 7, 7, 7, 9, 9],
-        [7, 7, 8, 8, 8, 8, 8, 10, 10],
-        [7, 7, 8, 8, 8, 8, 8, 10, 10],
-        [6, 6, 7, 7, 7, 7, 7, 9, 9],
-        [6, 6, 7, 7, 7, 7, 7, 9, 9],
-        [9, 9, 10, 10, 10, 10, 10, 12, 12],
-    ];
-    Some(CELLS[row][column])
-}
-
-fn clocks68020(
-    base: &str,
-    suffix: Option<&str>,
-    operands: &[Operand],
-    bytes: u32,
-    taken: bool,
-) -> Option<u32> {
-    let size = size_of(suffix);
-    let long = size == Size::L;
-    let wide = |word: u32, long_time: u32| if long { long_time } else { word };
-    match (base, operands) {
-        ("move" | "movea", [source, Operand::Status]) => Some(4 + fetch68020(mode(source)?, Size::W)),
-        ("move", [Operand::Status, destination]) => match mode(destination)? {
-            Mode::Dn => Some(4),
-            memory => Some(5 + calculate68020(memory)?),
-        },
-        ("move" | "movea", [source, destination]) => move68020(mode(source)?, size, mode(destination)?),
-        ("moveq", [_, _]) => Some(2),
-        ("add" | "sub" | "adda" | "suba" | "and" | "or" | "eor" | "cmp" | "cmpa", [source, destination]) => {
-            let (source, destination) = (mode(source)?, mode(destination)?);
-            match (base, destination) {
-                ("eor", Mode::Dn) => Some(2),
-                (_, Mode::An) => Some(if base == "cmp" || base == "cmpa" { 4 } else { 2 } + fetch68020(source, size)),
-                (_, Mode::Dn) => Some(2 + fetch68020(source, size)),
-                (_, memory) if source == Mode::Dn => Some(4 + fetch68020(memory, size)),
-                (_, memory) if source == Mode::Imm => Some(4 + fetch_immediate68020(memory, size)?),
-                _ => None,
-            }
-        }
-        ("addi" | "subi" | "andi" | "ori" | "eori" | "cmpi", [_, destination]) => {
-            let to_memory = if base == "cmpi" { 2 } else { 4 };
-            match mode(destination)? {
-                Mode::Dn => Some(2 + fetch_immediate68020(Mode::Dn, size)?),
-                memory => Some(to_memory + fetch_immediate68020(memory, size)?),
-            }
-        }
-        ("addq" | "subq", [_, destination]) => match mode(destination)? {
-            Mode::Dn | Mode::An => Some(2),
-            memory => Some(4 + fetch68020(memory, size)),
-        },
-        ("clr" | "neg" | "negx" | "not", [destination]) => match mode(destination)? {
-            Mode::Dn => Some(2),
-            memory => Some(4 + fetch68020(memory, size)),
-        },
-        ("tst", [destination]) => Some(2 + fetch68020(mode(destination)?, size)),
-        ("ext" | "swap", _) => Some(4),
-        ("nop" | "exg", _) => Some(2),
-        ("lsl" | "lsr", [Operand::Mode(Mode::Imm, _), _]) => Some(4),
-        ("lsl" | "lsr", [_, _]) => Some(6),
-        ("asl", [_, _]) => Some(8),
-        ("asr", [_, _]) => Some(6),
-        ("rol" | "ror", [_, _]) => Some(8),
-        ("roxl" | "roxr", [_, _]) => Some(12),
-        ("mulu" | "muls", [source, _]) => Some(wide(27, 43) + fetch68020(mode(source)?, Size::W)),
-        ("divu", [source, _]) => Some(wide(44, 78) + fetch68020(mode(source)?, Size::W)),
-        ("divs", [source, _]) => Some(wide(56, 90) + fetch68020(mode(source)?, Size::W)),
-        ("lea", [source, _]) => Some(2 + calculate68020(mode(source)?)?),
-        ("pea", [source]) => Some(5 + calculate68020(mode(source)?)?),
-        ("jmp" | "jsr", [target]) => {
-            let address = match target {
-                Operand::Target => 2,
-                other => jump68020(mode(other)?)?,
-            };
-            Some(address + if base == "jmp" { 4 } else { 5 })
-        }
-        ("bra", [_]) => Some(6),
-        ("bsr", [_]) => Some(7),
-        (condition, [_]) if condition_branch(condition) => Some(match (taken, bytes) {
-            (true, _) => 6,
-            (false, 0..=2) => 4,
-            (false, _) => 6,
-        }),
-        ("dbf" | "dbra" | "dbt" | "dbne" | "dbeq", [_, _]) => Some(if taken { 6 } else { 10 }),
-        ("rts", []) => Some(10),
-        ("link", [_, _]) => Some(wide(5, 6)),
-        ("unlk", [_]) => Some(6),
-        (set, [destination]) if set_on_condition(set) => match mode(destination)? {
-            Mode::Dn => Some(4),
-            memory => Some(6 + calculate68020(memory)?),
-        },
-        ("movem", [Operand::List(registers), memory]) => Some(4 + 3 * registers + movem_address68020(mode(memory)?)?),
-        ("movem", [memory, Operand::List(registers)]) => Some(8 + 4 * registers + movem_address68020(mode(memory)?)?),
-        _ => None,
-    }
 }
 
 const BASES: [&str; 62] = [
