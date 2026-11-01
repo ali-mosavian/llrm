@@ -404,9 +404,9 @@ pub fn place_operand(
     match addr.space {
         // Long mode reaches a symbol through the instruction pointer: `[rip +
         // disp32]`, the displacement a PC32 relocation. A symbol plus a
-        // register has no such form.
-        Space::Segment | Space::External if bits == 64 => {
-            (!based && addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
+        // register is the absolute disp32 of static code (`sym(%rax)`).
+        Space::Segment | Space::External if bits == 64 && !based => {
+            (addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
         }
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the

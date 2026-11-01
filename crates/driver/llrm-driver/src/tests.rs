@@ -2182,3 +2182,34 @@ fn the_frame_pointer_option_gives_the_attribute_to_functions_without_one() {
     assert!(frame_listing("", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
     assert!(!frame_listing("\"frame-pointer\"=\"none\"", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
 }
+
+const M64_SUM: &str = "target datalayout = \"@m64-datalayout@\"\n\
+    target triple = \"x86_64-unknown-linux-gnu\"\n\
+    @a = global [100 x i64] zeroinitializer\n\
+    define i64 @f(i64 %i) {\n  %p = getelementptr inbounds [100 x i64], ptr @a, i64 0, i64 %i\n  \
+    %v = load i64, ptr %p\n  ret i64 %v\n}\n";
+
+/// `-fno-pic` was ignored at m64: a global array indexed was
+/// `lea reg, offset a` and a register-indexed access, where the pin's static
+/// code is one absolute `a[rdx*8]`.
+#[test]
+fn a_global_array_index_at_m64_without_the_pic_level_flag_is_one_absolute_access() {
+    let text = format!("{M64_SUM}!llvm.module.flags = !{{!0}}\n!0 = !{{i32 7, !\"uwtable\", i32 2}}\n");
+    let (built, _) = compiled(&flags(&["-O2"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("offset a"), "{listing}");
+}
+
+/// The default stays position independent: with the "PIC Level" flag (or none
+/// at all) the symbol's address is made with `lea` from `%rip`.
+#[test]
+fn a_global_array_index_at_m64_with_the_pic_level_flag_is_an_lea() {
+    let flagged = format!(
+        "{M64_SUM}!llvm.module.flags = !{{!0, !1}}\n!0 = !{{i32 8, !\"PIC Level\", i32 2}}\n!1 = !{{i32 7, !\"uwtable\", i32 2}}\n"
+    );
+    for text in [flagged.as_str(), M64_SUM] {
+        let (built, _) = compiled(&flags(&["-O2"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("offset a"), "{listing}");
+    }
+}
