@@ -542,6 +542,10 @@ impl Tti for X86 {
         self.tuning.unroll_partial_threshold
     }
 
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.tuning.unswitch_threshold
+    }
+
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.recursive_inlining
     }

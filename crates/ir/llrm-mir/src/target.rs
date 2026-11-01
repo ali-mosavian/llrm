@@ -35,6 +35,9 @@ pub struct Tuning {
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
     pub unroll_partial_threshold: Option<u32>,
+    /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
+    /// (loop size times copies) a candidate must stay under; none: 50.
+    pub unswitch_threshold: Option<i64>,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
@@ -61,6 +64,7 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
+        unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,

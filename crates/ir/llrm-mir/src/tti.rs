@@ -443,6 +443,12 @@ pub trait Tti {
         None
     }
 
+    /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
+    /// 50.
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        None
+    }
+
     /// `getUnrollingPreferences` given the loop's shape, which targets read
     /// (nesting depth, exits); by default the loop-blind
     /// `get_unrolling_preferences`.

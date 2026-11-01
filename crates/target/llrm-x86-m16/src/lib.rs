@@ -598,6 +598,7 @@ mod tuning_tests {
         assert_eq!(table.speed_milliclocks_per_byte, 500);
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(table.unroll_partial_threshold, Some(0));
+        assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -611,6 +612,7 @@ mod tuning_tests {
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
                 unroll_partial_threshold: None,
+                unswitch_threshold: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
                 inline_size_guard_at_speed: false,
