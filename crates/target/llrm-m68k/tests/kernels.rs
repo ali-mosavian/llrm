@@ -17,8 +17,7 @@ mod support;
 
 /// The kernel's hand-derived result and the exit status of its run.
 fn run_kernel(name: &str) -> Option<(i32, i32)> {
-    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
-        eprintln!("qemu-m68k is not installed: not run");
+    if support::qemu().is_none() {
         return None;
     }
     let (_, args, expected) = table().into_iter().find(|(one, ..)| *one == name).expect("a known kernel");
@@ -81,8 +80,7 @@ fn clang_agrees_with_the_target_on_sizes_and_datalayout() {
 /// the exit status is 1150 mod 256.
 #[test]
 fn more_live_values_than_data_registers_are_spilled() {
-    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
-        eprintln!("qemu-m68k is not installed: not run");
+    if support::qemu().is_none() {
         return;
     }
     let params: Vec<String> = (0..20).map(|k| format!("i32 %a{k}")).collect();
@@ -113,7 +111,7 @@ fn run_ir(
     ir: &str,
     args: &[Arg],
 ) -> Option<i32> {
-    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+    if support::qemu().is_none() {
         return None;
     }
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
@@ -131,7 +129,7 @@ fn run_ir_with_runtime(
     ir: &str,
     args: &[Arg],
 ) -> Option<i32> {
-    if !std::path::Path::new("/usr/bin/qemu-m68k").exists() {
+    if support::qemu().is_none() {
         return None;
     }
     let runtime = llrm_m68k::kernels::source_in("library", "rt");

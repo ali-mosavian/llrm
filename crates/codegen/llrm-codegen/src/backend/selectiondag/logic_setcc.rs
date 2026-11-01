@@ -227,15 +227,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// DEVIATE: a dword from two words (`BUILD_PAIR` expanded to `zext lo |
     /// (aext hi << 16)`, a LONG in `dx:ax`) is `fshr (hi, lo << 16, 16)`, a
     /// `shl` and a `shrd`: a byte and a clock under the pin's `movzx`,
-    /// `shl`, `or` on the 486. Only once legal, and only when every user
-    /// computes with the whole dword: a far pointer's halves are taken
-    /// apart again, which the `or` form folds away. O(users).
+    /// `shl`, `or` on the 486. Only in the last sweep, once the folds that take
+    /// a dword apart have run, and not for a far pointer's
+    /// pair (`PAIR_FAR`), whose halves are taken apart again, which the `or`
+    /// form folds away. O(1).
     fn pack_words_by_shrd(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
-        if self.level != CombineLevel::AfterLegalizeDag || vt != EVT::I32 {
+        if !self.late || vt != EVT::I32 {
             return None;
         }
         let (a, b) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
@@ -250,27 +251,24 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return None;
         }
-        // Only a value that is computed with stays whole; one that is stored,
-        // passed on or taken apart (a far pointer's halves) is not packed.
-        let computed = self
+        // A far pointer's halves are taken apart again, which the `or` form
+        // folds away; the builder marks its pairs (DEVIATE PAIR1).
+        if self.dag.node(node).flags.has(super::dag::SDNodeFlags::PAIR_FAR) {
+            return None;
+        }
+        // The `or` sets the flags a compare with zero reads; the `shrd` does
+        // not.
+        let tested = self
             .dag
             .users(node)
-            .all(
-                |user| matches!(
-                    self.dag.opcode(SDValue { node: user, res: 0 }),
-                    ISD::Add
-                        | ISD::Sub
-                        | ISD::Mul
-                        | ISD::SDiv
-                        | ISD::UDiv
-                        | ISD::SRem
-                        | ISD::URem
-                        | ISD::Xor
-                        | ISD::SetCC
-                        | ISD::SIntToFp
-                ),
+            .any(
+                |user| {
+                    let user = SDValue { node: user, res: 0 };
+                    self.hooks.is_compare_with_flags(self.dag.opcode(user))
+                        && self.dag.constant(self.dag.operand(user, 1)) == Some(0)
+                },
             );
-        if !computed {
+        if tested {
             return None;
         }
         let sixteen = self.dag.get_constant(16, EVT::I8);

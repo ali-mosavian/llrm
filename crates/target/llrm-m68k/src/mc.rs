@@ -13,7 +13,7 @@
 use llrm_lir::registers::RegId;
 
 use crate::REGISTER_INFO;
-use crate::dagisel::asm::asm;
+use crate::dagisel::local;
 
 /// One machine operand (`MCOperand`).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,7 +148,7 @@ fn print_method(
 
 /// The assembly text of `inst`, as `llc` prints it (without indentation).
 pub fn print(inst: &Inst) -> Result<String, String> {
-    let &(_, text, operands) = asm(inst.opcode).ok_or_else(|| format!("no instruction {}", inst.opcode))?;
+    let &(_, text, operands) = local::text(inst.opcode).ok_or_else(|| format!("no instruction {}", inst.opcode))?;
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('$') {
