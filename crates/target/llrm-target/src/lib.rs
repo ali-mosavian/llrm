@@ -398,6 +398,23 @@ impl BuilderArch for &dyn Target {
     }
 }
 
+/// Which register allocator compiles a target's functions
+/// (`TargetPassConfig::createRegAllocPass`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Allocator {
+    /// The translated greedy allocator, which the pin runs for every target
+    /// that has one.
+    Greedy,
+    /// The spike graph-colouring allocator (`llrm-spike-mf`): a target waits
+    /// on it until its greedy port lands.
+    Spike,
+    /// An allocator of the target's own.
+    Own,
+    /// None: the pin's target replaces register allocation (wasm's
+    /// `addRegAssignAndRewriteOptimized` returns false).
+    None,
+}
+
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
@@ -417,6 +434,12 @@ pub trait Target {
 
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
+
+    /// The allocator that compiles this target's functions: the pin's choice
+    /// unless the target says otherwise.
+    fn register_allocator(&self) -> Allocator {
+        Allocator::Greedy
+    }
 
     /// Whether `--isel` unnamed selects through the DAG, not the old selector.
     fn selects_by_dag(&self) -> bool {
