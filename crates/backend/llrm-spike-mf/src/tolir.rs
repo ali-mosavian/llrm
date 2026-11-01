@@ -952,7 +952,9 @@ pub fn from_lir<T: Target>(
                 Kind::Copy => name == Some(COPY),
                 Kind::Op(op) => name == Some(op),
             };
-            if !agrees && name != Some(COPY) {
+            // a literal made again stands beside any instruction: its position says
+            // nothing about which literal it is
+            if (insn.rematerialized || !agrees) && name != Some(COPY) {
                 (from, inst) = *definitions
                     .get(&format!("{:?}{:?}", what.name, what.sources))
                     .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;

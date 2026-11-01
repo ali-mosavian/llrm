@@ -1025,3 +1025,55 @@ fn test_nothing_stands_between_a_compare_and_the_instruction_that_reads_its_flag
     assert!(insts[read - 1].sets_flags, "{insts:?}");
     converted.coalesce(regs(), false);
 }
+
+/// A literal made again stands beside whatever instruction needs it, and
+/// carries that instruction's position. Beside another literal, the way back
+/// took the neighbour for its source and wrote the neighbour's immediate:
+/// `ldi 0` came back as `ldi 3` (seed 850269 of the 6502 difftest: 171 for 129).
+#[test]
+fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
+    use llrm_codegen::model::ir::Held;
+    let mut f = MFunction::<()>::new("neighbours");
+    f.classes = vec![(); 2];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut seven = op("ldi", vec![Operand::Def(v(0)), Operand::Imm(7)]);
+    seven.rematerializable = true;
+    entry.insts.push(seven);
+    entry.insts.push(op("ldi", vec![Operand::Def(v(1)), Operand::Imm(9)]));
+    entry.insts.push(op("store", vec![Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(1))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let mut decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let edited = decided.edited.as_mut().expect("an edited body");
+    edited.blocks[0].insns.edit(|insns| {
+    let nine = insns.iter().position(|one| one.defines == [2]).expect("the second literal");
+    let seven = insns.iter().position(|one| one.defines == [1]).expect("the first literal");
+    let mut again = (*insns[seven]).clone();
+    again.at = insns[nine].at;
+    again.covers = Some((again.at, again.at));
+    again.defines = vec![3];
+    again.spill_reload = true;
+    again.rematerialized = true;
+    let what = again.what.as_mut().expect("semantics");
+    what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+    let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
+    insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
+    insns.insert(nine + 1, std::sync::Arc::new(again));
+    });
+    let back = from_lir::<Flat>(&f, &converted, &decided, regs()).expect("writes back");
+    let literals: Vec<i64> = back
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.kind == Kind::Op("ldi"))
+        .filter_map(|i| i.operands.iter().find_map(|o| if let Operand::Imm(n) = o { Some(*n as i64) } else { None }))
+        .collect();
+    assert_eq!(literals, vec![7, 9, 7], "{literals:?}");
+}
