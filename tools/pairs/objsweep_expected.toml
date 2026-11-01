@@ -1,23 +1,2 @@
 # Objects a leg of objsweep_gate.py may change against the merge-base, with the reason. Empty once the base has the change.
-# Counts first read at base 8e1999fad134 (feat/parity) and held at base 2e792c37b484ab6edda0b676f5f996064f447190 (origin/release/next),
-# head 5b838f4291579621eb5f9942eeaab34a605d90f6; `llrm-llc --version` stamps as printed by the run. Primary objects are identical in m16 and m32; the changes are in the side writers.
-
-[leg."m32"]
-changed = 142
-why = "the 32-bit ELF writer adds .eh_frame and local symbols"
-
-[leg."m32 debug"]
-changed = 426
-why = "the 32-bit ELF writer adds .eh_frame and local symbols; DWARF variants grow with it"
-
-[leg."m16 debug"]
-changed = 284
-why = "a 16-bit object with debug info is refused by the ELF and Mach-O writers with their own text, not DWARF's (primary OMF identical)"
-
-[leg."m64"]
-changed = 140
-why = "the 64-bit ELF writer adds local symbols (about 14 per object)"
-
-[leg."m64 debug"]
-changed = 140
-why = "local symbols; -g adds DW_OP_entry_value, expression locations"
+# Base origin/release/next has the 32-bit and 64-bit ELF writer changes; this PR changes no x86 object.
