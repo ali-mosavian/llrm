@@ -369,6 +369,14 @@ static void music_stop(void)
         dev_tick_stop();
 }
 
+/* CLEAR: what is queued is not played and the speaker is quiet; the tick keeps running (clear.c). */
+void music_clear(void)
+{
+    tail = head;
+    sound_left = quiet_left = 0;
+    dev_tone(0);
+}
+
 static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};
 
 #define XI_FN play_xinit
