@@ -15,6 +15,17 @@ pub trait TargetRegisterInfo {
         &self,
         any_saved: bool,
     ) -> u32;
+
+    /// `getCSRCostScale`: the percentage of that cost the allocator charges
+    /// (the default is LLVM's, X86 takes it).
+    fn csr_cost_scale(&self) -> u32 {
+        30
+    }
+
+    /// `GreedyEnv::csr_spill_first`.
+    fn csr_spill_first(&self) -> bool {
+        false
+    }
 }
 
 /// `X86RegisterInfo`.

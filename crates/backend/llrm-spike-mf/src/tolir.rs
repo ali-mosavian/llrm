@@ -220,7 +220,12 @@ pub fn to_lir<T: Target>(
         origin: made.origin,
         reachable,
         tii: SpikeInstrInfo { classes: function.classes.clone(), registers, marker: PhantomData },
-        tri: SpikeRegisterInfo { copy_cost: 1, csr_first_use_cost: 0 },
+        tri: SpikeRegisterInfo {
+            copy_cost: 1,
+            csr_first_use_cost: T::csr_first_use_cost(),
+            csr_cost_scale: T::csr_cost_scale(),
+            csr_spill_first: T::csr_spill_first(),
+        },
     })
 }
 
@@ -673,6 +678,8 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
 pub struct SpikeRegisterInfo {
     pub copy_cost: u32,
     pub csr_first_use_cost: u32,
+    pub csr_cost_scale: u32,
+    pub csr_spill_first: bool,
 }
 
 impl TargetRegisterInfo for SpikeRegisterInfo {
@@ -685,6 +692,14 @@ impl TargetRegisterInfo for SpikeRegisterInfo {
         any_saved: bool,
     ) -> u32 {
         if any_saved { self.csr_first_use_cost } else { 0 }
+    }
+
+    fn csr_cost_scale(&self) -> u32 {
+        self.csr_cost_scale
+    }
+
+    fn csr_spill_first(&self) -> bool {
+        self.csr_spill_first
     }
 }
 

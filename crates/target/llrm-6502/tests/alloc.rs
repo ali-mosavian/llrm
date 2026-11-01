@@ -393,6 +393,26 @@ fn a_move_into_a_waits_for_a_swap_of_two_cells() {
     assert_eq!(moved(&moves, false, "rc3"), 1);
 }
 
+/// A pointer kept across one call on a path that may not run took two
+/// callee-saved cells, saved and restored with `pha`/`pla`: `k_memset` of the
+/// bench grew from 67 to 85 bytes. A static slot costs a store and a load.
+#[test]
+fn a_value_kept_across_one_call_does_not_take_a_callee_saved_cell() {
+    let ir = "declare ptr @memset(ptr, i16, i16)
+define ptr @keep(ptr %d, i16 %c, i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %go
+go:
+  %r = call ptr @memset(ptr %d, i16 %c, i16 %n)
+  br label %done
+done:
+  ret ptr %d
+}";
+    let code = compile(ir, "keep");
+    assert!(!code.contains("pha"), "{code}");
+}
+
 /// A byte loaded, widened and used in a word subtract was a zero-extending
 /// load no pattern selected (`CannotSelect(Load)`): scmp, crc16 and sum16 of
 /// the second bench set, and any `s += p[i]` on an `unsigned`. k = 1000, the

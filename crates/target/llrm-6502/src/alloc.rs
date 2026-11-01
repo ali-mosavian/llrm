@@ -209,6 +209,19 @@ impl<const STACK: bool> Target for Mos<STACK> {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
 
+    /// A byte cell: `lda cell; pha` on entry, `pla; sta cell` on exit.
+    fn csr_first_use_cost() -> u32 {
+        4
+    }
+
+    fn csr_cost_scale() -> u32 {
+        100
+    }
+
+    fn csr_spill_first() -> bool {
+        true
+    }
+
     fn spill_clobbers() -> Vec<RegId> {
         if STACK { vec![reg::Y] } else { Vec::new() }
     }

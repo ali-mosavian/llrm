@@ -363,6 +363,18 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
+    /// `TRI->getCSRCostScale(MF)`: the percentage of the first-use cost charged.
+    fn csr_cost_scale(&self) -> u32 {
+        DEFAULT_CSR_COST_SCALE
+    }
+    /// DEVIATE CSR3: whether a range that would take a callee-saved register
+    /// for the first time is spilled instead when its spill costs less than
+    /// that use, at any stage before `RS_Spill` (LLVM takes the register
+    /// once no pre-split pays). Off for every target but one whose save and
+    /// restore cost more than a spill. Exit: none, a target knob.
+    fn csr_spill_first(&self) -> bool {
+        false
+    }
 }
 
 /// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
@@ -371,7 +383,7 @@ const NO_COST_LIMIT: u8 = u8::MAX;
 
 /// `-regalloc-csr-cost-scale` / `TRI->getCSRCostScale(MF)`: the percentage of
 /// the first-use cost the allocator charges (X86 takes the default).
-const CSR_COST_SCALE: u32 = 30;
+const DEFAULT_CSR_COST_SCALE: u32 = 30;
 
 /// `DefaultEvictionAdvisor::isUnusedCalleeSavedReg`
 /// (RegAllocEvictionAdvisor.cpp): `phys` is a callee-saved register no
@@ -388,13 +400,14 @@ pub(crate) fn is_unused_callee_saved_reg(
 /// pop (`first_use` entry executions) scaled by `CSR_COST_SCALE` percent.
 fn csr_cost_of(
     first_use: u32,
+    scale: u32,
     entry: u64,
 ) -> BlockFrequency {
     let cost = BlockFrequency(u64::from(first_use) * entry);
-    if CSR_COST_SCALE < 100 {
-        cost * BranchProbability::new(CSR_COST_SCALE, 100)
+    if scale < 100 {
+        cost * BranchProbability::new(scale, 100)
     } else {
-        cost / BranchProbability::new(100, CSR_COST_SCALE)
+        cost / BranchProbability::new(100, scale)
     }
 }
 
@@ -1271,7 +1284,7 @@ impl<'a> RAGreedy<'a> {
         self.csr_cost = BlockFrequency(0);
         let Some(split) = &self.split else { return };
         let entry = split.mbfi.get_entry_freq().get_frequency();
-        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), entry);
+        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), self.env.csr_cost_scale(), entry);
     }
 
     /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
@@ -1290,6 +1303,7 @@ impl<'a> RAGreedy<'a> {
     ) -> Option<RegId> {
         let stage = self.extra.get_stage(virt.reg());
         let csr_cost = self.csr_cost;
+        let spill_first = self.env.csr_spill_first();
         let ss = self.split.as_mut()?;
         let mut splitter = Splitter {
             lis: &mut self.lis,
@@ -1308,6 +1322,10 @@ impl<'a> RAGreedy<'a> {
             }
             // We are going to spill, set CostPerUseLimit to 1 to make sure that
             // we will not use a callee-saved register in tryEvict.
+            *cost_per_use_limit = 1;
+            return None;
+        }
+        if spill_first && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost) {
             *cost_per_use_limit = 1;
             return None;
         }
@@ -1646,7 +1664,7 @@ mod tests {
     fn test_a_first_use_of_a_callee_saved_register_costs_thirty_percent_of_two_entries() {
         // BranchProbability is 31-bit fixed point: 30/100 of 2000 rounds to
         // 599.
-        let cost = csr_cost_of(2, 1000).get_frequency();
+        let cost = csr_cost_of(2, DEFAULT_CSR_COST_SCALE, 1000).get_frequency();
         assert!(cost.abs_diff(600) <= 1, "{cost}");
     }
 

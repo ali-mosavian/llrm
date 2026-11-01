@@ -77,6 +77,24 @@ pub trait Target {
         false
     }
 
+    /// The instructions the first use of a callee-saved register adds, saved
+    /// on entry and restored on exit (`getCSRFirstUseCost`).
+    fn csr_first_use_cost() -> u32 {
+        0
+    }
+
+    /// The percentage of that cost greedy charges (LLVM's default 30 prices
+    /// it below its own spill weights).
+    fn csr_cost_scale() -> u32 {
+        30
+    }
+
+    /// Whether a value is spilled, not given a callee-saved register, when
+    /// its spill costs less than the register's first use.
+    fn csr_spill_first() -> bool {
+        false
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.
