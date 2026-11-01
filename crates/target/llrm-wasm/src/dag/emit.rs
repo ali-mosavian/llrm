@@ -166,8 +166,9 @@ impl Emitter<'_> {
                     }
                 }
                 ISD::Machine(code) => {
-                    // `TargetOpcode::IMPLICIT_DEF` is the generic opcode the matcher
-                    // selects for `undef`; the wasm passes know it by `mir::IMPLICIT_DEF`.
+                    // `TargetOpcode::IMPLICIT_DEF` is the generic opcode the
+                    // matcher selects for `undef`; the wasm
+                    // passes know it by `mir::IMPLICIT_DEF`.
                     let code = match code as u16 {
                         llrm_dagisel::generated::ids::target_opcode::IMPLICIT_DEF => IMPLICIT_DEF,
                         code => code,
