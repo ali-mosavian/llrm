@@ -655,9 +655,11 @@ dependencies = [
 name = "llrm-spike-mf"
 version = "0.1.0"
 dependencies = [
+ "llrm-codegen",
  "llrm-lir",
  "llrm-mir",
  "llrm-support",
+ "llrm-x86-m16",
 ]
 
 [[package]]

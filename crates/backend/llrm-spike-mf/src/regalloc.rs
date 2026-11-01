@@ -15,6 +15,35 @@ use llrm_support::hash::{HashMap, HashSet};
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::sink::{Jump, split_critical_edge};
 
+/// A copy about to be joined, as [`Target::should_coalesce`] sees it.
+pub struct Join<'a> {
+    pub source: Side<'a>,
+    pub destination: Side<'a>,
+    /// The registers the joined value may take.
+    pub joined: &'a [RegId],
+    /// The frequency of the copy's block, relative to the entry block: how
+    /// often the copy the join removes would run.
+    pub copy_frequency: f32,
+}
+
+impl Join<'_> {
+    /// What the join costs the two values' other instructions, weighted by
+    /// their blocks' frequencies: each is priced in the cheapest register the
+    /// narrower class still has ([`Target::operand_cost`]).
+    pub fn extra_cost(&self) -> f32 {
+        self.source.extra_cost + self.destination.extra_cost
+    }
+}
+
+/// One side of a [`Join`].
+pub struct Side<'a> {
+    /// The registers the value may take before the join.
+    pub registers: &'a [RegId],
+    /// The sum over the value's other instructions of their block's frequency
+    /// times what the join adds to their cost.
+    pub extra_cost: f32,
+}
+
 /// What the allocator needs to know of a register file.
 pub trait Target {
     /// A virtual register's class (`TargetRegisterClass`).
@@ -61,6 +90,88 @@ pub trait Target {
         _weight: u64,
     ) -> bool {
         true
+    }
+
+    /// Whether `inst` only moves the lanes of one register into those of
+    /// another (the 6502's `PACK` and `UNPACK`): its operands may share
+    /// storage, a lane at a time.
+    fn moves_lanes(_inst: &Inst) -> bool {
+        false
+    }
+
+    /// Whether `inst` reads the status flags set by the instruction before
+    /// it, where a copy, spill or reload overwrites them: the two are one
+    /// instruction to the allocator, which puts nothing between them.
+    fn reads_flags_set_just_before(_inst: &Inst) -> bool {
+        false
+    }
+
+    /// The instructions the first use of a callee-saved register adds, saved
+    /// on entry and restored on exit (`getCSRFirstUseCost`).
+    fn csr_first_use_cost() -> u32 {
+        0
+    }
+
+    /// The percentage of that cost greedy charges (LLVM's default 30 prices
+    /// it below its own spill weights).
+    fn csr_cost_scale() -> u32 {
+        30
+    }
+
+    /// Whether a value is spilled, not given a callee-saved register, when
+    /// its spill costs less than the register's first use.
+    fn csr_spill_first() -> bool {
+        false
+    }
+
+    /// What using `register` costs beyond a free one (LLVM's `CostPerUse`):
+    /// greedy tries to evict a lighter value from a cheaper register before
+    /// it takes a dearer one.
+    fn register_cost(_register: RegId) -> u8 {
+        0
+    }
+
+    /// `TargetRegisterInfo::shouldCoalesce`: whether a copy between two values
+    /// is joined into one that may take only the registers both could. A join
+    /// narrows both for good, and the allocator cannot widen the survivor.
+    fn should_coalesce(join: &Join) -> bool {
+        join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
+    }
+
+    /// What one register-to-register copy costs, in the unit of
+    /// [`Target::operand_cost`].
+    fn copy_cost() -> u32 {
+        1
+    }
+
+    /// What the instruction `inst` costs with its operand `operand` in
+    /// `register` (clocks or bytes by the target's goal, from its instruction
+    /// tables): the 6502's `dec` is one instruction on a zero-page cell and
+    /// three in a register that has to be loaded and stored back. Greedy
+    /// hints the cheapest register ([`getRegAllocationHints`] from the
+    /// descriptor), and `should_coalesce` prices a join by it.
+    fn operand_cost(
+        _inst: &Inst,
+        _operand: usize,
+        _register: RegId,
+    ) -> u32 {
+        0
+    }
+
+    /// The registers of the next larger class that holds `order`
+    /// (`getLargestLegalSuperClass`), or none when there is none. A value a
+    /// join narrowed is a proper subclass: greedy isolates single instructions
+    /// around it, and a piece no narrowing instruction names takes the larger
+    /// class (`recomputeRegClass`).
+    fn larger_order(_order: &[RegId]) -> Option<Vec<RegId>> {
+        None
+    }
+
+    /// Registers the code of a spill or a reload overwrites (the 6502's
+    /// stack-mode spill goes through `y`): greedy writes spills after it has
+    /// chosen registers, so no value may be held in one.
+    fn spill_clobbers() -> Vec<RegId> {
+        Vec::new()
     }
 
     /// The class the instruction `name` names for operand `index`, where it
@@ -506,10 +617,12 @@ impl<T: Target> GraphColoring<T> {
     /// Colour every register, or name each one nothing fits, in colouring
     /// order. A register left uncoloured constrains no other, so one round
     /// names every victim the others still leave.
-    pub fn colour(
+    /// The registers and virtual registers (as nodes) that hold different
+    /// values at once, and so cannot share storage.
+    fn interference(
         &self,
         function: &MFunction<T::Class>,
-    ) -> Result<Assignment, Vec<Uncolourable>> {
+    ) -> (usize, Nodes, usize, Vec<HashSet<usize>>) {
         let count = function.classes.len();
         let mut nodes = Nodes { count, physical: Vec::new() };
         let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
@@ -578,6 +691,101 @@ impl<T: Target> GraphColoring<T> {
                 live.extend(uses.iter().copied());
             }
         }
+        (count, nodes, total, edges)
+    }
+
+    /// Whether `assignment` gives two registers that interfere storage that
+    /// overlaps; the first such pair, as text.
+    pub fn check(
+        &self,
+        function: &MFunction<T::Class>,
+        assignment: &Assignment,
+    ) -> Result<(), String> {
+        let (count, nodes, total, edges) = self.interference(function);
+        // a virtual register live into the entry is read before anything sets
+        // it
+        let mut scratch = Nodes { count, physical: Vec::new() };
+        let effects_of: Vec<Vec<(Vec<usize>, Vec<usize>)>> = function
+            .blocks
+            .iter()
+            .map(|block| block.insts.iter().map(|inst| effects::<T>(inst, &mut scratch)).collect())
+            .collect();
+        let (live_in, _) = liveness(function, &effects_of);
+        if let Some(entry) = live_in.first()
+            && let Some(node) = entry.iter().filter(|node| **node < count).min()
+        {
+            return Err(format!("{}: {} is read before it is set", function.name, name_of(*node, count)));
+        }
+        let register_of = |node: usize| -> Option<RegId> {
+            if node < count { assignment.0.get(node).copied().map(T::root) } else { Some(nodes.physical[node - count]) }
+        };
+        let mut lanes: HashSet<(usize, usize)> = HashSet::default();
+        for block in &function.blocks {
+            for inst in block.insts.iter().filter(|inst| T::moves_lanes(inst)) {
+                let nodes_of: Vec<usize> = inst
+                    .operands
+                    .iter()
+                    .filter_map(|operand| match operand {
+                        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => Some(*v as usize),
+                        _ => None,
+                    })
+                    .collect();
+                for one in &nodes_of {
+                    for other in &nodes_of {
+                        lanes.insert((*one, *other));
+                    }
+                }
+            }
+        }
+        for a in 0..total {
+            for b in edges[a].iter().filter(|b| **b > a && (a < count || **b < count) && !lanes.contains(&(a, **b))) {
+                if let (Some(x), Some(y)) = (register_of(a), register_of(*b))
+                    && T::overlaps(x, y)
+                {
+                    let mut mentions = String::new();
+                    for (at, block) in function.blocks.iter().enumerate() {
+                        for (i, inst) in block.insts.iter().enumerate() {
+                            let mentioned = inst
+                                .operands
+                                .iter()
+                                .any(
+                                    |operand| match operand {
+                                        Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)) => {
+                                            *v as usize == a || *v as usize == *b
+                                        }
+                                        _ => false,
+                                    },
+                                );
+                            if mentioned {
+                                mentions.push_str(&format!("\n  bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands));
+                            }
+                        }
+                    }
+                    if llrm_support::env_flag!("LLRM_SPIKE_DUMP") {
+                        mentions.clear();
+                        for (at, block) in function.blocks.iter().enumerate() {
+                            for (i, inst) in block.insts.iter().enumerate() {
+                                mentions.push_str(&format!("\n  bb{at}.{i}: {:?} {:?}", inst.kind, inst.operands));
+                            }
+                        }
+                    }
+                    return Err(format!(
+                        "{}: {} and {} are live together in overlapping registers {x:?} and {y:?}{mentions}",
+                        function.name,
+                        name_of(a, count),
+                        name_of(*b, count)
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn colour(
+        &self,
+        function: &MFunction<T::Class>,
+    ) -> Result<Assignment, Vec<Uncolourable>> {
+        let (count, mut nodes, total, mut edges) = self.interference(function);
         let mut parent: Vec<usize> = (0..total).collect();
         fn find(
             parent: &mut [usize],
@@ -725,4 +933,11 @@ impl<T: Target> GraphColoring<T> {
         }
         Ok(Assignment(assigned.into_iter().map(|one| one.expect("every register is coloured")).collect()))
     }
+}
+
+fn name_of(
+    node: usize,
+    count: usize,
+) -> String {
+    if node < count { format!("%{node}") } else { format!("physical#{}", node - count) }
 }
