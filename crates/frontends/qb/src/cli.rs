@@ -59,6 +59,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
     let mut wasm32 = false;
+    let mut wasm_exceptions = false;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -121,6 +122,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 });
                 flags.take(&["-m64".to_owned()], &mut 0)?;
             }
+            "--wasm-exceptions" => wasm_exceptions = true,
             "--wasm32" => {
                 wasm32 = true;
                 flags.take(&["-m32".to_owned()], &mut 0)?;
@@ -146,8 +148,17 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
+    // `--arm64` and `--wasm32` lower through an x86 target's mid-end, but the
+    // object is the host target's: its datalayout says whether it has `f80`.
+    let object_layout = match (arm64, wasm32) {
+        (Some(platform), _) => platform.datalayout().to_owned(),
+        (None, true) => llrm_wasm::driver::datalayout(llrm_wasm::Width::W32),
+        (None, false) => bound.target.layout().datalayout.clone(),
+    };
+    frontend.pow_libcall = !llrm_target::layout::states_extended_float(&object_layout);
     let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
+        wasm_exceptions: wasm32 && wasm_exceptions,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
     // A host (ELF, Mach-O) has no handler of the runtime's for the fault.

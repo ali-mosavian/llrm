@@ -31,8 +31,8 @@ pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
 
 use crate::dagisel::function::Selected;
 use crate::dagisel::generated::ids::reg as pin;
-use crate::dagisel::generated::instrinfo::{self, flag};
-use crate::dagisel::generated::m68k_m68000::MACHINE_OPCODES;
+use crate::dagisel::generated::instrinfo::flag;
+use crate::dagisel::local;
 
 /// The register class a virtual register is allocated from
 /// (`M68kRegisterInfo`).
@@ -86,11 +86,7 @@ pub type MFunction = mf::MFunction<Class>;
 
 /// Whether the pin marks the instruction `name` `isCommutable`.
 pub fn pin_commutable(name: &str) -> bool {
-    MACHINE_OPCODES
-        .iter()
-        .find(|(_, one)| *one == name)
-        .and_then(|(code, _)| instrinfo::desc(*code as u16))
-        .is_some_and(|desc| desc.has(flag::COMMUTABLE))
+    local::code_of(name).and_then(local::desc).is_some_and(|desc| desc.has(flag::COMMUTABLE))
 }
 
 /// The class the pin's description of `name` gives operand `index`.
@@ -98,8 +94,7 @@ pub fn operand_class(
     name: &str,
     index: usize,
 ) -> Option<Class> {
-    let (code, _) = MACHINE_OPCODES.iter().find(|(_, one)| *one == name)?;
-    let desc = instrinfo::desc(*code as u16)?;
+    let desc = local::desc(local::code_of(name)?)?;
     Class::of_pin(desc.operands.get(index)?.reg_class).map(|class| extension_result(name, class))
 }
 
@@ -118,7 +113,7 @@ fn extension_result(
 }
 
 fn opcode_name(code: u32) -> Option<&'static str> {
-    MACHINE_OPCODES.iter().find(|(value, _)| u32::from(*value) == code).map(|(_, name)| *name)
+    local::name_of(code)
 }
 
 /// Whether a result type carries a value (not a chain, glue or flags register).
@@ -293,7 +288,7 @@ impl Emitter<'_> {
                 let value = SDValue { node, res: 0 };
                 match self.dag.opcode(value) {
                     ISD::Machine(code) => {
-                        let Some(desc) = instrinfo::desc(code as u16) else { continue };
+                        let Some(desc) = local::desc(code as u16) else { continue };
                         let sets = desc.implicit_defs.contains(&pin::CCR);
                         if sets || desc.has(flag::CALL) {
                             flags_from = (sets && !desc.has(flag::CALL)).then_some(node);
@@ -410,7 +405,7 @@ impl Emitter<'_> {
                 if name == "SUBREG_TO_REG" {
                     return self.subreg_to_reg(node, into);
                 }
-                let desc = instrinfo::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
+                let desc = local::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
                 let mut operands = Vec::new();
                 for (at, vt) in n.values.iter().enumerate().take(usize::from(desc.num_defs)) {
                     let class = desc
@@ -577,16 +572,17 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
 
 /// The condition codes the compare set reach the join only through an arm
 /// whose phi copies are `move`s, which set them; so what reads them past the
-/// diamond must read them before the branch. The instructions of `tail` that
-/// read the flags before anything sets them again and are not the block's
-/// terminator, by position: each is movable above the run when it uses nothing
-/// the instructions before it define. A terminator that reads them cannot be
-/// moved, and is refused.
+/// diamond must read them before the branch, or after they are restored. The
+/// instructions of `tail` that read the flags before anything sets them again
+/// and are not the block's terminator, by position: each is movable above the
+/// run when it uses nothing the instructions before it define. A terminator
+/// that reads them, or a reader that uses a value the run defines, stays where
+/// it is; [`expand_cmov`] restores the codes before the first such reader.
 ///
 /// DEVIATE from the pin, whose scheduler orders a second reader of one compare
 /// before the pseudo (glue) and whose arms are empty. Exit: never; this
 /// expansion is ours.
-fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
+fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
     let mut readers = Vec::new();
     for (at, inst) in tail.iter().enumerate() {
         // another select on the codes is a diamond of its own, with the codes
@@ -596,7 +592,7 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
         }
         if inst.reads_flags {
             if inst.terminator {
-                return Err("a branch reads the flags of a compare past the select that follows it".to_owned());
+                break;
             }
             let defined_before: Vec<&Operand> = tail[..at]
                 .iter()
@@ -612,16 +608,15 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Result<Vec<usize>, String> {
                         _ => false,
                     },
                 );
-            if blocked {
-                return Err("a flag reader past a select uses a value the select defines".to_owned());
+            if !blocked {
+                readers.push(at);
             }
-            readers.push(at);
         }
         if inst.sets_flags {
             break;
         }
     }
-    Ok(readers)
+    readers
 }
 
 /// `M68kTargetLowering::EmitLoweredSelect`: a run of `CMOV` pseudos on one
@@ -676,17 +671,20 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         }
         tail.drain(..taken);
         tail.splice(0..0, copies);
-        let readers = flag_readers_to_hoist(&tail)?;
+        let readers = flag_readers_to_hoist(&tail);
         hoisted.extend(readers.iter().map(|&one| tail[one].clone()));
         for &one in readers.iter().rev() {
             tail.remove(one);
         }
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
-        // A select on another condition of the same codes follows the join,
-        // where the copies of the arms have set them again: the head
-        // keeps them and the join restores them. DEVIATE from the pin,
-        // which orders the readers before the pseudo.
-        if let Some(second) = tail.iter().take_while(|inst| !inst.sets_flags).position(is_cmov) {
+        // A reader of the codes that stays past the join (a select on another
+        // condition of the same codes, a branch, a reader of a value the run
+        // defines) sees them set again by the arms' copies: the head keeps
+        // them and the join restores them before the first such reader.
+        // DEVIATE from the pin, which orders the readers before the pseudo.
+        if let Some(second) =
+            tail.iter().take_while(|inst| !inst.sets_flags).position(|inst| is_cmov(inst) || inst.reads_flags)
+        {
             function.classes.push(Class::Dr16);
             let kept = Reg::Virt(function.classes.len() as u32 - 1);
             let mut save =

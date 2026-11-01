@@ -755,6 +755,13 @@ impl<'a> TypeLegalizer<'a> {
                 let input = self.dag.operand(value, 0);
                 self.dag.get_node(ISD::LRint, to, &[input])
             }
+            ISD::SignExtendInReg => {
+                // `PromoteIntRes_SIGN_EXTEND_INREG`: the promoted operand,
+                // extended from the same type.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let from = self.dag.operand(value, 1);
+                self.dag.get_node(ISD::SignExtendInReg, self.dag.value_type(promoted), &[promoted, from])
+            }
             ISD::UAddO
             | ISD::USubO
             | ISD::UAddOCarry
@@ -1276,6 +1283,29 @@ impl<'a> TypeLegalizer<'a> {
                 let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
                 (self.dag.get_node(op, half, &[ll, rl]), self.dag.get_node(op, half, &[lh, rh]))
             }
+            ISD::Truncate => {
+                // `ExpandIntRes_TRUNCATE`: the low half truncated from the
+                // operand, the high half from the operand shifted down.
+                let operand = self.dag.operand(value, 0);
+                let operand_vt = self.dag.value_type(operand);
+                let lo = self.dag.get_node(ISD::Truncate, half, &[operand]);
+                let shift = self.dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
+                let down = self.dag.get_node(ISD::Srl, operand_vt, &[operand, shift]);
+                (lo, self.dag.get_node(ISD::Truncate, half, &[down]))
+            }
+            ISD::ExtractElement => {
+                // `ExpandRes_EXTRACT_ELEMENT`: the half of the pair the index
+                // names, split again into this type's halves.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+                let index = self.dag.operand(value, 1);
+                let part = if self.dag.constant(index).is_some_and(|which| which != 0) { hi } else { lo };
+                let index_vt = self.dag.value_type(index);
+                let (zero, one) = (self.dag.get_constant(0, index_vt), self.dag.get_constant(1, index_vt));
+                (
+                    self.dag.get_node(ISD::ExtractElement, half, &[part, zero]),
+                    self.dag.get_node(ISD::ExtractElement, half, &[part, one]),
+                )
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);
@@ -1454,7 +1484,7 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow
     /// result, the high halves with that carry in. The ADDC/ADDE form (glue)
-    /// and the compare-for-carry form are not translated.
+    /// is not translated.
     fn expand_add_sub(
         &mut self,
         value: SDValue,
@@ -1469,11 +1499,15 @@ impl<'a> TypeLegalizer<'a> {
             (ISD::USubO, ISD::USubOCarry, ISD::Sub)
         };
         if !self.tli.is_operation_legal_or_custom(carry_op, half) {
-            return Err(LegalizeError::Unsupported {
-                op,
-                ty: self.dag.value_type(value),
-                what: "expand add or subtract without a carry operation",
-            });
+            // Without a carry operation: the plain halves, the carry (a borrow
+            // for a subtract) a compare of the low result with its operand.
+            let lo = self.dag.get_node(plain, half, &[ll, rl]);
+            let (compared, with, cc) =
+                if op == ISD::Add { (lo, ll, CondCode::SetULt) } else { (ll, rl, CondCode::SetULt) };
+            let cmp = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), compared, with, cc);
+            let carry = self.dag.get_zext_or_trunc(cmp, half);
+            let hi = self.dag.get_node(plain, half, &[lh, rh]);
+            return Ok((lo, self.dag.get_node(plain, half, &[hi, carry])));
         }
         let overflow_vt = self.tli.types.set_cc_result_type(half);
         let lo = self.dag.get_node_multi(lo_op, &[half, overflow_vt], &[ll, rl]);

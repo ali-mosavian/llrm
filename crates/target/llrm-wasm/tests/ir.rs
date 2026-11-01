@@ -27,6 +27,14 @@ fn check(name: &str) {
     assert_eq!(norm(&got), norm(&golden), "{name}");
 }
 
+/// `llvm.log2` and `llvm.exp2` selected `CannotSelect(FLog2)`: llrm-qb --wasm32
+/// refused `2 ^ x` programs (range_power, pow_unrolled). The pin calls
+/// `log2`/`exp2` (and `log2f`/`exp2f`).
+#[test]
+fn log2_exp2() {
+    check("log2_exp2");
+}
+
 /// Every shift selected `CannotSelect(Shl)`: the legalizer wanted an `i8`
 /// amount, wasm's is the type shifted.
 #[test]
@@ -255,10 +263,26 @@ fn unreachable_traps() {
     check("unreachable");
 }
 
+/// `shl 8; ashr 8` on an `i16` is a sign-extension in a register; its type was
+/// refused at "promote result" (bench/nibbles). The pin selects
+/// `i32.extend8_s`.
+#[test]
+fn sext_inreg() {
+    check("sext_inreg");
+}
+
 /// A `weak` or `linkonce_odr` function printed `.globl` (and was an object-file
 /// global): a weak default (the runtime's no-op `music_tick`) could not be
 /// overridden by the strong one.
 #[test]
 fn weak_functions_print_weak() {
     check("weak");
+}
+
+/// A returned or passed `undef` selects `IMPLICIT_DEF`, which reached the
+/// encoder as opcode 10 ("has no encoding") and killed llrm-qb --wasm32 on 20
+/// programs of tests/run/qb. The pin turns it into a zero constant.
+#[test]
+fn undef_values() {
+    check("undef_values");
 }

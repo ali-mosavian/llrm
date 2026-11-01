@@ -155,6 +155,10 @@ pub fn encode_instruction(
     signatures: &[(Vec<ValType>, Vec<ValType>)],
     relocs: &mut Vec<Reloc>,
 ) {
+    // A label is a symbol in the assembler's table, not a byte.
+    if inst.opcode == crate::mir::EH_LABEL {
+        return;
+    }
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no encoding", inst.opcode));
     let binary = asm.binary;
     if binary < 1 << 8 {
@@ -268,6 +272,9 @@ pub struct Encoded {
     /// The wasm globals the body names.
     pub globals: Vec<(String, ValType)>,
     pub binding: Binding,
+    /// The function has a personality: the pin keeps the indirect function
+    /// table alive for it.
+    pub personality: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -341,6 +348,7 @@ pub fn encode_function(f: &Function) -> Encoded {
         callees: f.callees.clone(),
         globals: f.globals.clone(),
         binding: f.binding,
+        personality: f.personality,
     }
 }
 
@@ -490,6 +498,7 @@ fn introduce<'a>(
 pub fn write(
     functions: &[Encoded],
     data: &Data,
+    exceptions: bool,
 ) -> Vec<u8> {
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
@@ -555,7 +564,7 @@ pub fn write(
     }
     // `emitEndOfAsmFile`: a function whose address is taken, a constructor
     // included, keeps the table alive.
-    let address_taken = !slots.is_empty() || !data.init_funcs.is_empty();
+    let address_taken = !slots.is_empty() || !data.init_funcs.is_empty() || functions.iter().any(|f| f.personality);
     if address_taken {
         introduce(&mut symbols, data, None, crate::INDIRECT_FUNCTION_TABLE);
     }
@@ -873,8 +882,13 @@ pub fn write(
     }
 
     payload.clear();
-    uleb(&mut payload, TARGET_FEATURES.len() as u64);
-    for feature in TARGET_FEATURES {
+    // Sorted by name: `exception-handling` follows `call-indirect-overlong`.
+    let mut features = TARGET_FEATURES.to_vec();
+    if exceptions {
+        features.insert(3, "exception-handling");
+    }
+    uleb(&mut payload, features.len() as u64);
+    for feature in features {
         payload.push(b'+');
         name(&mut payload, feature);
     }

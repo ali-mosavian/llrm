@@ -1368,6 +1368,51 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `visitTargetIntrinsic`: `INTRINSIC_WO_CHAIN` without side effects,
+    /// else `INTRINSIC_W_CHAIN` (or `INTRINSIC_VOID` with no result), the id
+    /// a target constant before the arguments.
+    fn visit_target_intrinsic(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: &llrm_mir::opcode::CallInfo,
+        found: super::target_calling::TargetIntrinsic,
+    ) -> Result<(), Refused> {
+        let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        let (result_type, _, _) = self.module.signature(info.function_type);
+        let void = self.module.context.types.is_void(result_type);
+        let mut ops = Vec::with_capacity(arguments.len() + 2);
+        if found.chained {
+            ops.push(self.root());
+        }
+        ops.push(self.dag.get_constant_with(u128::from(found.id), self.target.dag.pointer, true, false));
+        for argument in arguments {
+            ops.push(self.get_value(*argument)?);
+        }
+        let node = match (found.chained, void) {
+            (false, true) => return Err(Refused("a target intrinsic with no result and no side effects")),
+            (false, false) => {
+                let vt = self.type_of(result_type)?;
+                self.dag.get_node_multi(ISD::IntrinsicWoChain, &[vt], &ops)
+            }
+            (true, true) => {
+                let node = self.dag.get_node_multi(ISD::IntrinsicVoid, &[EVT::OTHER], &ops);
+                self.dag.set_root(node);
+                return Ok(());
+            }
+            (true, false) => {
+                let vt = self.type_of(result_type)?;
+                self.dag.get_node_multi(ISD::IntrinsicWChain, &[vt, EVT::OTHER], &ops)
+            }
+        };
+        if found.chained {
+            self.dag.set_root(SDValue { node: node.node, res: 1 });
+        }
+        if let Some(result) = instruction.result {
+            self.set_value(result, SDValue { node: node.node, res: 0 });
+        }
+        Ok(())
+    }
+
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(
         &mut self,
@@ -1410,6 +1455,12 @@ impl Builder<'_> {
                         why
                     },
                 );
+        }
+        if let Some(found) = direct
+            .and_then(|global| self.module.global(global).name.owned())
+            .and_then(|name| self.calling().and_then(|calling| calling.intrinsic(&name)))
+        {
+            return self.visit_target_intrinsic(instruction, info, found);
         }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
