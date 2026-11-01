@@ -25,6 +25,25 @@ fn dag(body: &str) -> Result<String, String> {
     }
 }
 
+/// A whole module through the DAG path.
+fn full(text: &str) -> Result<String, String> {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, text).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    if said.status.success() {
+        Ok(std::fs::read_to_string(&output).unwrap())
+    } else {
+        Err(String::from_utf8_lossy(&said.stderr).into_owned())
+    }
+}
+
 /// `add x, y, sext(z)` is the pin's `ADDXrx` (`add x0, x0, w1, sxtw`).
 #[test]
 fn an_add_of_a_sign_extended_word_is_the_extended_register_add() {
@@ -81,4 +100,23 @@ fn a_scaled_float_conversion_is_the_fixed_point_form() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("fcvtzs x0, s0, #5"), "{asm}");
     assert!(asm.contains("scvtf d0, w0, #3"), "{asm}");
+}
+
+/// `TargetOpcode::COPY` is no pattern output, so it had no name in the table
+/// and the node was refused ("a machine node with no name"): sieve's
+/// `m = (unsigned short)(m + i)` loop.
+#[test]
+fn a_selector_made_copy_node_is_a_register_copy() {
+    let asm = full(include_str!("data/sieve_kernel.ll")).unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("strb"), "{asm}");
+    assert!(asm.contains("bench_sieve"), "{asm}");
+}
+
+/// Two compares joined by `and` are one `cmp` and one `ccmp`
+/// (`ccmp x0, x8, #2, lo`); `CCMPXr` had no row and refused sieve.
+#[test]
+fn two_joined_compares_are_a_compare_and_a_conditional_compare() {
+    let asm = dag("define i1 @f(i64 %a, i64 %b) {\n  %x = icmp ult i64 %a, %b\n  %y = icmp ult i64 %a, 32\n  %r = and i1 %x, %y\n  ret i1 %r\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("ccmp x0, x9, #2, lo"), "{asm}");
 }

@@ -31,15 +31,22 @@ use super::globals::Globals;
 use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
 use crate::mc::inst::{
-    AddSub, Addr, Bitfield, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst, Logic,
-    MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
+    AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
+    Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, block_label};
 
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
-    MACHINE_OPCODES.iter().find(|(v, _)| u32::from(*v) == code).map(|(_, name)| *name)
+    // `TargetOpcode::COPY` is no output of a pattern, so the table does not
+    // list it; the selector's own code makes it.
+    const COPY: u32 = 20;
+    MACHINE_OPCODES
+        .iter()
+        .find(|(v, _)| u32::from(*v) == code)
+        .map(|(_, name)| *name)
+        .or((code == COPY).then_some("COPY"))
 }
 
 /// The machine register number of an arm64 register id: `x5` and `w5` are 5.
@@ -333,6 +340,31 @@ fn build(
             [Operand::Reg(rn), Operand::Reg(rm)] => {
                 let op = if name == "SMULHrr" { Mul3::Smulh } else { Mul3::Umulh };
                 Ok(Inst::ThreeSource { op, width: Width::X, rd, rn: *rn, rm: *rm, ra: Gpr::R31 })
+            }
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
+    // `CCMPXi`, `CCMNWr`: the compare runs when the flags the previous
+    // instruction set meet `cond`, else the flags become `nzcv`.
+    if let Some(rest) = name
+        .strip_prefix("CCMP")
+        .map(|rest| (false, rest))
+        .or_else(|| name.strip_prefix("CCMN").map(|rest| (true, rest)))
+    {
+        let (negate, rest) = rest;
+        let width = match rest {
+            "Wr" | "Wi" => Width::W,
+            "Xr" | "Xi" => Width::X,
+            _ => return Err(format!("{name}: no such conditional compare")),
+        };
+        return match operands {
+            [Operand::Reg(rn), second, Operand::Imm(nzcv), Operand::Imm(cond), ..] => {
+                let rm_or_imm = match (second, rest.ends_with('i')) {
+                    (Operand::Reg(rm), false) => CcOperand::Reg(*rm),
+                    (Operand::Imm(imm), true) => CcOperand::Imm5(*imm as u8),
+                    _ => return Err(format!("{name}: operands are not those of its form")),
+                };
+                Ok(Inst::CondCompare { negate, width, rn: *rn, rm_or_imm, nzcv: *nzcv as u8, cond: cond_of(*cond)? })
             }
             _ => Err(format!("{name}: operands are not those of its form")),
         };
@@ -1104,7 +1136,7 @@ impl Emitter<'_> {
                 Ok(())
             }
             ISD::Machine(code) => {
-                let name = opcode_name(code).ok_or("a machine node with no name")?;
+                let name = opcode_name(code).ok_or_else(|| format!("a machine node with no name (opcode {code})"))?;
                 if name == "RET_ReallyLR" {
                     let uses = node
                         .ops
@@ -1162,7 +1194,7 @@ impl Emitter<'_> {
                     self.ops.push(Op::I(compare));
                     return Ok(());
                 }
-                if name == "COPY_TO_REGCLASS" {
+                if name == "COPY_TO_REGCLASS" || name == "COPY" {
                     return self.copy_to_class(id, &operands);
                 }
                 if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
