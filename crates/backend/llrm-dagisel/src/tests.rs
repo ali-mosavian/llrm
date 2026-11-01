@@ -1967,6 +1967,27 @@ mod x64_table {
         assert_ne!(dag.nodes[base.node as usize].register, Some(crate::generated::ids::x86::RIP));
     }
 
+    /// `[rip + sym - i]` takes no index: `sym - i` folded the negated `i` into
+    /// the RIP-based address, which the encoder wrote as `lea rax, b[rdi]`
+    /// with a PC-relative fixup. gcc.c-torture 990524-1 compared `b -
+    /// pzDta` against the wrong address and aborted (`isRIPRelative` of the
+    /// pin's `SUB` case).
+    #[test]
+    fn a_register_is_not_subtracted_into_a_rip_address() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let x = dag.input(1, mvt::i64);
+        let minus_one = dag.make_constant(-1, mvt::i64);
+        let offset = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, minus_one]), 0);
+        let address = SDValue::new(dag.node(isd::SUB, &[mvt::i64], &[offset, x]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert!(am.index_reg.is_none() || am.symbol.is_none(), "a rip address takes no index");
+        assert!(!am.negate_index);
+    }
+
     /// An `i32` address sum at 64 bits is `LEA64_32r`; there is no `LEA32r` in
     /// 64-bit mode (D64-1).
     #[test]
