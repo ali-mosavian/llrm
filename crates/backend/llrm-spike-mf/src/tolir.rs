@@ -94,10 +94,13 @@ impl<T: Target> Converted<T> {
                     let saving = side
                         .uses
                         .iter()
-                        .flat_map(|one| operands_in(&infos, one))
-                        .filter(|(value, _)| *value == side.value)
-                        .map(|(_, info)| info.saving)
-                        .sum();
+                        .flat_map(|(one, freq)| {
+                            operands_in(&infos, one)
+                                .into_iter()
+                                .filter(|(value, _)| *value == side.value)
+                                .map(move |(_, info)| *freq * info.saving as f32)
+                        })
+                        .sum::<f32>();
                     (side.palette.iter().copied().collect::<Vec<RegId>>(), saving)
                 };
                 let ((source, source_saving), (destination, destination_saving)) = (side(&join.one), side(&join.other));
@@ -106,6 +109,7 @@ impl<T: Target> Converted<T> {
                     source: Side { registers: &source, memory_saving: source_saving },
                     destination: Side { registers: &destination, memory_saving: destination_saving },
                     joined: &joined,
+                    copy_frequency: join.copy_frequency,
                 })
             }),
         );

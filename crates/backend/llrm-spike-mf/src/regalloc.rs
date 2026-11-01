@@ -24,12 +24,17 @@ pub struct Join<'a> {
     pub destination: Side<'a>,
     /// The registers the joined value may take.
     pub joined: &'a [RegId],
+    /// The frequency of the copy's block, relative to the entry block: what
+    /// the copy the join removes saves.
+    pub copy_frequency: f32,
 }
 
 /// One side of a [`Join`].
 pub struct Side<'a> {
     pub registers: &'a [RegId],
-    pub memory_saving: u32,
+    /// The sum over the value's other instructions of their block's frequency
+    /// times what [`Target::memory_saving`] says they save.
+    pub memory_saving: f32,
 }
 
 /// What the allocator needs to know of a register file.

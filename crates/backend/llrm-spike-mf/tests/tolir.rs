@@ -1275,9 +1275,9 @@ impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
     }
 
     /// A join that takes the memory form from a value is worth less than the
-    /// copy it saves: it saves one.
+    /// copy it saves, each weighed by the frequency of its block.
     fn should_coalesce(join: &Join) -> bool {
-        let loses = |side: &Side| side.registers.len() > join.joined.len() && side.memory_saving > 1;
+        let loses = |side: &Side| side.registers.len() > join.joined.len() && side.memory_saving > join.copy_frequency;
         !DECLINE || !(loses(&join.source) || loses(&join.destination))
     }
 }
@@ -1498,6 +1498,42 @@ fn test_a_target_can_decline_a_join_that_takes_a_memory_form_from_a_value() {
 }
 
 /// The same rule joins where the value has no memory form to lose.
+/// The `dec` and the compare copy in different blocks, one of them in a loop.
+fn counter_in_a_loop(dec_in_loop: bool) -> usize {
+    let mut f = MFunction::<bool>::new("counter");
+    f.classes = vec![false, true];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    let mut body = Block { id: 1, ..Block::default() };
+    let dec = op("dec", vec![Operand::Def(v(0)), Operand::Use(v(0))]);
+    let copy =
+        [Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]), op("compare", vec![Operand::Use(v(1))])];
+    if dec_in_loop {
+        entry.insts.extend(copy);
+        body.insts.push(dec);
+    } else {
+        entry.insts.push(dec);
+        body.insts.extend(copy);
+    }
+    body.insts.push(branch(1));
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(0))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let mut converted = to_lir::<Narrowing<true>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count()
+}
+
+/// The same instructions, the same rule: only the block frequencies differ.
+/// The memory form is worth keeping where the `dec` runs more often than the
+/// copy would.
+#[test]
+fn test_the_frequency_of_the_blocks_decides_a_join_that_takes_a_memory_form() {
+    assert_eq!(counter_in_a_loop(true), 1, "the copy outside the loop was joined");
+    assert_eq!(counter_in_a_loop(false), 0, "the copy in the loop was kept");
+}
+
 #[test]
 fn test_a_join_that_takes_no_memory_form_goes_ahead() {
     assert_eq!(counter(false), 0, "the copy was kept");
