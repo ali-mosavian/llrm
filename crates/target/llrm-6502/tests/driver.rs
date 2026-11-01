@@ -817,3 +817,25 @@ fn a_crc_step_branches_on_the_carry_of_its_shift() {
     assert!(text.contains("bcc") || text.contains("bcs"), "no branch on the carry:\n{text}");
     assert!(!text.contains("bpl") && !text.contains("bmi"), "a sign branch is left:\n{text}");
 }
+
+/// A Galois LFSR step tests bit 0 (`and #1`) and shifts right. The test
+/// followed a `lsr`/`ror` that had put that bit in the carry; the branch reads
+/// the carry, and the step still computes the register (not a corpus row).
+#[test]
+fn an_lfsr_step_branches_on_the_carry_of_its_right_shift() {
+    let ir = module(
+        "@odd = global i16 4661\n@even = global i16 4660\n\
+         define i16 @lfsr(i16 %x) noinline {\n  %t = and i16 %x, 1\n  %b = icmp ne i16 %t, 0\n  \
+         %s = lshr i16 %x, 1\n  %y = xor i16 %s, 46080\n  %r = select i1 %b, i16 %y, i16 %s\n  ret i16 %r\n}\n\
+         define i8 @high_of_odd() {\n  %v = load volatile i16, ptr @odd\n  %r = call i16 @lfsr(i16 %v)\n  \
+         %h = lshr i16 %r, 8\n  %t = trunc i16 %h to i8\n  ret i8 %t\n}\n\
+         define i8 @low_of_even() {\n  %v = load volatile i16, ptr @even\n  %r = call i16 @lfsr(i16 %v)\n  \
+         %t = trunc i16 %r to i8\n  ret i8 %t\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let step: String = text.lines().skip_while(|l| *l != "lfsr:").take_while(|l| !l.contains("rts")).collect::<Vec<_>>().join("\n");
+    assert!(step.contains("bcc") || step.contains("bcs"), "no branch on the carry:\n{step}");
+    assert!(!step.contains("and #1"), "the bit is tested again:\n{step}");
+    assert_eq!(exit_code_of(&text, "high_of_odd"), 0xBD, "{text}");
+    assert_eq!(exit_code_of(&text, "low_of_even"), 0x1A, "{text}");
+}
