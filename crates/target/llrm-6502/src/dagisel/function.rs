@@ -23,6 +23,7 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
@@ -197,7 +198,7 @@ fn select_built(
         return Err("a switch to a block with phis: split its critical edges first".into());
     }
     // The block each phi is in, to split the copies by successor.
-    let mut home: HashMap<ValueId, BlockId> = HashMap::new();
+    let mut home: IdMap<ValueId, BlockId> = IdMap::new();
     let mut successors = Vec::new();
     if let Some((function, block)) = top.filter(|_| built.extra.is_empty()) {
         successors = function.successors(block).iter().copied().collect::<Vec<_>>();
@@ -205,7 +206,9 @@ fn select_built(
             for phi in
                 function.iter_block(successor).take_while(|inst| function.instruction(*inst).opcode == Opcode::Phi)
             {
-                home.extend(function.instruction(phi).result.map(|result| (result, successor)));
+                if let Some(result) = function.instruction(phi).result {
+                    home.insert(result, successor);
+                }
             }
         }
     }
