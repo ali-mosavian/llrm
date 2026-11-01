@@ -106,8 +106,24 @@ fn operand_text(operand: &Operand) -> String {
     }
 }
 
+/// The temporary labels a module has used so far: `MCContext` numbers
+/// `.Ltmp` and `.Lfunc_begin` across its functions.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Labels {
+    pub tmp: i64,
+    pub functions: usize,
+}
+
 /// The function as `llc` prints it, from `.section` to the end comment.
 pub fn function(f: &Function) -> String {
+    function_in(f, &mut Labels::default())
+}
+
+/// [`function`] in a module whose earlier functions used `labels`.
+pub fn function_in(
+    f: &Function,
+    labels: &mut Labels,
+) -> String {
     let name = &f.name;
     let begin = format!("# -- Begin function {name}");
     let mut out = vec![format!("\t.section\t.text.{name},\"\",@")];
@@ -122,6 +138,13 @@ pub fn function(f: &Function) -> String {
         }
     }
     out.push(with_comment(&format!("{name}:"), &format!("# @{name}")));
+    // A function with a personality has labels for its tables.
+    let number = f.personality.then_some(labels.functions);
+    labels.functions += usize::from(f.personality);
+    if let Some(number) = number {
+        out.push(format!(".Lfunc_begin{number}:"));
+    }
+    let tmp = labels.tmp;
     out.push(format!("\t.functype\t{name} ({}) -> ({})", type_list(&f.params), type_list(&f.results)));
     if !f.locals.is_empty() {
         out.push(format!("\t.local  \t{}", type_list(&f.locals)));
@@ -130,10 +153,14 @@ pub fn function(f: &Function) -> String {
     out.extend(f.blocks.iter().flatten().map(|i| match i.operands[..] {
         // `EmitInstruction` of `EH_LABEL`: the label, at the margin.
         [Operand::Imm(label)] if i.opcode == crate::mir::EH_LABEL => {
-            with_comment(&format!(".Ltmp{label}:"), "# EH_LABEL")
+            with_comment(&format!(".Ltmp{}:", tmp + label), "# EH_LABEL")
         }
         _ => format!("\t{}", instruction(f, i)),
     }));
+    labels.tmp += f.blocks.iter().flatten().filter(|inst| inst.opcode == crate::mir::EH_LABEL).count() as i64;
+    if let Some(number) = number {
+        out.push(format!(".Lfunc_end{number}:"));
+    }
     out.push(with_comment("", "# -- End function"));
     out.join("\n") + "\n"
 }

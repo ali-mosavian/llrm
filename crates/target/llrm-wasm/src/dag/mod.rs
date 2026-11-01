@@ -129,7 +129,7 @@ pub fn compile_function(
         reg_stackify(&mut f);
     }
     cfg_sort(&mut f);
-    cfg_stackify(&mut f);
+    cfg_stackify(&mut f)?;
     explicit_locals(&mut f);
     lower_br_unless(&mut f);
     for (symbol, _) in f.symbols.clone() {

@@ -40,19 +40,30 @@ fn an_over_aligned_object_is_refused_by_name() {
     assert!(why.contains("stack realignment"), "{why}");
 }
 
-/// `-exception-model=wasm` is the EH port's switch (stage 0): a function with
-/// an `invoke` or a `landingpad` is refused by name until the stages that
-/// lower them land, not compiled as if there were no unwinding; and the model
-/// changes nothing for a function without either, which stays the pin's
-/// `-exception-model=none` output.
+/// A call that does not unwind to a pad, laid out inside that pad's `try`,
+/// would be caught by it: the pin wraps it in a `try`/`delegate` to the caller
+/// (`fixCallUnwindMismatches`), which is not translated. It must stop at
+/// compile time by name; the output had the call inside the `try` unguarded.
 #[test]
-fn the_wasm_exception_model_refuses_unwinding_and_leaves_the_rest_alone() {
+fn a_call_inside_a_try_that_does_not_unwind_to_it_is_refused_by_name() {
     use llrm_wasm::dag::ExceptionModel;
 
     let model = Options { exception_model: ExceptionModel::Wasm, ..Options::default() };
-    let unwinding = "declare void @g(i32)\ndeclare i32 @p(...)\ndefine i32 @f(i32 %a) personality ptr @p {\nentry:\n  invoke void @g(i32 %a) to label %ok unwind label %pad\nok:\n  ret i32 1\npad:\n  %l = landingpad { ptr, i32 } cleanup\n  ret i32 2\n}\n";
-    let why = assembly(unwinding, Width::W32, model).expect_err("refused");
-    assert!(why.contains("exception handling is not translated yet"), "{why}");
+    let text = include_str!("eh/call_in_try.ll");
+    let why = assembly(text, Width::W32, model).expect_err("refused");
+    assert!(why.contains("fixCallUnwindMismatches"), "{why}");
+    // The same calls, each an `invoke`, are the pin's output.
+    let invoked = text.replace("call void @g(i32 1)", "invoke void @g(i32 1) to label %b2 unwind label %pad\nb2:");
+    assert!(assembly(&invoked, Width::W32, model).is_ok());
+}
+
+/// `-exception-model=wasm` changes nothing for a function without an `invoke`
+/// or a `landingpad`, which stays the pin's `-exception-model=none` output.
+#[test]
+fn the_wasm_exception_model_leaves_a_function_without_unwinding_alone() {
+    use llrm_wasm::dag::ExceptionModel;
+
+    let model = Options { exception_model: ExceptionModel::Wasm, ..Options::default() };
     let plain = "define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n";
     assert_eq!(assembly(plain, Width::W32, model), assembly(plain, Width::W32, Options::default()));
 }

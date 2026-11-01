@@ -10,6 +10,7 @@ pub mod custom_inserter;
 pub mod dag;
 pub mod dagisel;
 pub mod driver;
+pub mod exception_info;
 pub mod explicit_locals;
 pub mod fix_br_table_defaults;
 pub mod fix_irreducible;
@@ -23,6 +24,7 @@ pub mod print;
 pub mod reg_numbering;
 pub mod reg_stackify;
 pub mod set_p2align;
+pub mod sort_region;
 pub mod unreachable_blocks;
 
 use llrm_lir::registers::{RegId, Row};
