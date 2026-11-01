@@ -254,6 +254,15 @@ impl<const STACK: bool> Target for Mos<STACK> {
         register
     }
 
+    /// `tax`, `tay`, `txa`, `tya` and the loads `lda`, `ldx`, `ldy` set N and
+    /// Z; a store sets nothing.
+    fn copy_sets_flags(
+        to: RegId,
+        _: RegId,
+    ) -> bool {
+        [reg::A, reg::X, reg::Y].contains(&to)
+    }
+
     /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
     fn reads_flags_set_just_before(inst: &Inst) -> bool {
         inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
