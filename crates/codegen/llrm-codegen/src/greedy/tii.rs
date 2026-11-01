@@ -100,6 +100,17 @@ pub trait TargetInstrInfo {
         Vec::new()
     }
 
+    /// The registers of the smallest class that holds `order` and has more
+    /// (`getLargestLegalSuperClass`), or none when `order` is the largest: a
+    /// register narrowed by a join is a proper subclass (`isProperSubClass`),
+    /// and `recomputeRegClass` starts from the larger class.
+    fn larger_order(
+        &self,
+        _order: &[RegId],
+    ) -> Option<Vec<RegId>> {
+        None
+    }
+
     /// The registers `one` is cheaper with, as (value, register): the target's
     /// `getRegAllocationHints` for the values `one` names.
     fn preferred_registers(

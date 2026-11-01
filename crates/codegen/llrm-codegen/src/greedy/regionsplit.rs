@@ -19,9 +19,10 @@
 //!   result     c1=copy v ... use ... c0=copy c1     the rest stays on the stack
 //! ```
 //!
-//! DEVIATE D-RS1: no register classes: `RegClassInfo.isProperSubClass` is
-//! false, so `SingleInstrs` is false and `tryInstructionSplit` is not
-//! translated; a value is one class here (the shadow allocator's whole root).
+//! DEVIATE D-RS1: `RegClassInfo.isProperSubClass` is false unless the target
+//! says a value's order has a larger one (`TargetInstrInfo::larger_order`), so
+//! `SingleInstrs` is false for the shadow allocator's roots, and
+//! `tryInstructionSplit` is not translated.
 //!
 //! DEVIATE D-RS2: no `IMPLICIT_DEF`: `addSplitConstraints`' test of the last
 //! instruction for an implicit def is dropped, LIR has none.
@@ -640,8 +641,8 @@ impl Splitter<'_, '_> {
         assert!(num_global_intvs != 0, "No global intervals configured");
 
         // Isolate even single instructions when dealing with a proper
-        // sub-class: none here (D-RS1).
-        let single_instrs = false;
+        // sub-class.
+        let single_instrs = self.env.is_proper_subclass(se.edit().parent());
 
         // First handle all the blocks with uses.
         let use_blocks = self.ss.sa.get_use_blocks().to_vec();
@@ -1092,8 +1093,7 @@ impl Splitter<'_, '_> {
         virt: &Rc<LiveInterval>,
         new_vregs: &mut Vec<u32>,
     ) -> Option<RegId> {
-        // D-RS1: no proper sub-classes.
-        let single_instrs = false;
+        let single_instrs = self.env.is_proper_subclass(virt.reg());
         let mut delegate = NoDelegate;
         let mut se = SplitEditor::new();
         se.reset(self.lis, LiveRangeEdit::new(virt.reg(), &mut delegate), SPLIT_SPILL_MODE);

@@ -178,6 +178,13 @@ impl GreedyEnv for BodyEnv<'_> {
         self.orders.orders.borrow().get(&virt).map_or(0, Vec::len)
     }
 
+    fn is_proper_subclass(
+        &self,
+        virt: u32,
+    ) -> bool {
+        self.orders.orders.borrow().get(&virt).is_some_and(|order| self.tii.larger_order(order).is_some())
+    }
+
     fn copy_cost(
         &self,
         _virt: u32,
@@ -343,7 +350,8 @@ fn reclass_orders(
 /// (`TargetInstrInfo::operand_orders`): the registers every instruction naming
 /// the value allows. A copy, or an instruction the target does not describe (a
 /// spill the allocator wrote), asks nothing; a value only such instructions
-/// name keeps its parent's order, as does one no register would satisfy.
+/// name takes the larger class its parent's has, or keeps the parent's; so
+/// does one no register would satisfy.
 fn reclass_by_operands(
     tables: &Tables,
     pinned: &crate::support::hash::HashSet<u32>,
@@ -356,7 +364,9 @@ fn reclass_by_operands(
             continue;
         }
         let mut seen = crate::support::hash::HashSet::default();
-        let mut allowed: Option<Vec<RegId>> = None;
+        // Start from the larger class the parent's has, if any, and let the
+        // instructions narrow it again.
+        let mut allowed = tables.orders.borrow().get(&reg).and_then(|current| tii.larger_order(current));
         for op in lis.operands(reg) {
             if !seen.insert(op.instr) {
                 continue;

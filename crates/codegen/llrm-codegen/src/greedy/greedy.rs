@@ -325,6 +325,14 @@ pub trait GreedyEnv: SpillWeightEnv {
         &self,
         virt: u32,
     ) -> Vec<RegId>;
+    /// `RegClassInfo.isProperSubClass(MRI->getRegClass(VirtReg))`: a larger
+    /// class exists, so isolating one instruction can move its piece to it.
+    fn is_proper_subclass(
+        &self,
+        _virt: u32,
+    ) -> bool {
+        false
+    }
     /// `RegClassInfo.getNumAllocatableRegs(RC)`.
     fn num_allocatable_regs(
         &self,

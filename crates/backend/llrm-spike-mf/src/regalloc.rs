@@ -114,6 +114,15 @@ pub trait Target {
         true
     }
 
+    /// The registers of the next larger class that holds `order`
+    /// (`getLargestLegalSuperClass`), or none when there is none. A value a
+    /// join narrowed is a proper subclass: greedy isolates single instructions
+    /// around it, and a piece no narrowing instruction names takes the larger
+    /// class (`recomputeRegClass`).
+    fn larger_order(_order: &[RegId]) -> Option<Vec<RegId>> {
+        None
+    }
+
     /// `getRegAllocationHints` for one operand (ARM's Thumb2 hints the low
     /// registers its 16-bit encodings need): the register `inst` is cheaper
     /// with at operand `operand`, if there is one.
