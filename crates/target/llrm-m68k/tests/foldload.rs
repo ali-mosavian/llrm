@@ -188,3 +188,79 @@ fn the_folded_instruction_computes_what_the_two_did() {
         assert_eq!(got, (want & 255) as i32, "{op}");
     }
 }
+
+/// Counts how many of `n` longs of a filled buffer satisfy `v <pred> 1000`
+/// (`v_first`) or `1000 <pred> v`.
+fn counted(
+    pred: &str,
+    v_first: bool,
+) -> String {
+    let (a, b) = if v_first { ("%w", "%t") } else { ("%t", "%w") };
+    format!(
+        "define i32 @f(i32 %n) {{
+entry:
+  %buf = alloca [256 x i8]
+  br label %fill
+fill:
+  %o = phi i32 [ 0, %entry ], [ %o1, %fill ]
+  %p = getelementptr i32, ptr %buf, i32 %o
+  %m = mul i32 %o, 37
+  %v = add i32 %m, 5
+  store i32 %v, ptr %p
+  %o1 = add i32 %o, 1
+  %d = icmp slt i32 %o1, 64
+  br i1 %d, label %fill, label %go
+go:
+  %t = add i32 %n, 960
+  br label %l
+l:
+  %q = phi ptr [ %buf, %go ], [ %q1, %l ]
+  %i = phi i32 [ 0, %go ], [ %i1, %l ]
+  %s = phi i32 [ 0, %go ], [ %s1, %l ]
+  %w = load i32, ptr %q
+  %k = icmp {pred} i32 {a}, {b}
+  %z = zext i1 %k to i32
+  %s1 = add i32 %s, %z
+  %q1 = getelementptr i32, ptr %q, i32 1
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, 64
+  br i1 %c, label %l, label %x
+x:
+  ret i32 %s1
+}}"
+    )
+}
+
+/// A compare of the loaded value is the memory source whichever side the
+/// value is on, and the condition that reads the codes follows it: swapping
+/// the operands of a compare without swapping `gt` for `lt` counts the wrong
+/// elements.
+#[test]
+fn a_compare_of_a_loaded_value_counts_the_same_either_way_round() {
+    let longs: Vec<i64> = (0..64i64).map(|i| i * 37 + 5).collect();
+    let threshold = 1000;
+    for (pred, test) in [
+        ("sgt", (|a: i64, b: i64| a > b) as fn(i64, i64) -> bool),
+        ("sge", |a, b| a >= b),
+        ("slt", |a, b| a < b),
+        ("sle", |a, b| a <= b),
+        ("ugt", |a, b| a > b),
+        ("ult", |a, b| a < b),
+        ("uge", |a, b| a >= b),
+        ("ule", |a, b| a <= b),
+        ("eq", |a, b| a == b),
+        ("ne", |a, b| a != b),
+    ] {
+        for v_first in [true, false] {
+            let ir = counted(pred, v_first);
+            for cpu in [Cpu::M68000, Cpu::M68020] {
+                let out = text(&ir, cpu);
+                assert!(out.contains("cmp.l\t(%a") && out.contains(")+, %d"), "{pred} {v_first} {cpu:?}:\n{out}");
+            }
+            let want =
+                longs.iter().filter(|v| if v_first { test(**v, threshold) } else { test(threshold, **v) }).count();
+            let Some(got) = status(&ir, 40) else { return };
+            assert_eq!(got, want as i32, "{pred} value first {v_first}");
+        }
+    }
+}
