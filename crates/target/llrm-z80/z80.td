@@ -110,7 +110,7 @@ let Predicates = [HasZ180], Defs = [F] in
 // Word logic is the two bytes' ops, expanded when emitted (the 6502's OR16 is the same); the join of two bytes
 // into a pair, `lo | (hi << 8)`, is the more specific pattern below and wins.
 multiclass Logic16<string n, SDPatternOperator op> {
-  let Defs = [F] in
+  let Defs = [F, A] in
     def NAME#"16" : Z80Inst<(outs GR16:$d), (ins GR16:$a, GR16:$b), n#"16 $d, $a, $b", [(set i16:$d, (op i16:$a, i16:$b))]>;
 }
 defm AND : Logic16<"and", and>;
@@ -140,7 +140,7 @@ def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d,
 let mayLoad = 1 in
   def LD8rm : Z80Inst<(outs GR8:$d), (ins HLR:$p), "ld $d, ($p)", [(set i8:$d, (load i16:$p))]>;
 // A word through a pointer in HL: two byte loads or stores with an `inc hl` between, expanded when emitted.
-let mayLoad = 1 in
+let mayLoad = 1, Defs = [A] in
   def LD16rm : Z80Inst<(outs GR16:$d), (ins HLR:$p), "ld16 $d, ($p)", [(set i16:$d, (load i16:$p))]>;
 let mayStore = 1 in
   def LD16mr : Z80Inst<(outs), (ins GR16:$s, HLR:$p), "ld16 ($p), $s", [(store i16:$s, i16:$p)]>;
@@ -165,9 +165,10 @@ def COPY16 : Z80Inst<(outs GR16:$d), (ins GR16:$s), "copy $d, $s", []>;
 // cp r / cp n: the flags of a - b.
 def CP8r : Z80Inst<(outs Flags:$f), (ins ACC:$a, GR8:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, i8:$b))]>;
 def CP8i : Z80Inst<(outs Flags:$f), (ins ACC:$a, i8imm:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, (i8 imm:$b)))]>;
-// The flags of a - b over a word: push hl; or a; sbc hl,rr; pop hl. HL is kept; Z covers both bytes (SBC HL sets it
-// on the 16-bit result) and C is the unsigned borrow.
-def CP16 : Z80Inst<(outs Flags:$f), (ins HLR:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
+// The flags of a - b over a word, through A: sub/sbc of the two byte pairs for the carry, sub and a skip for Z.
+// A is clobbered, as the pseudo says.
+let Defs = [A] in
+  def CP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {
   def JPNZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nz, $t", [(Z80brcond bb:$t, (i8 0), i8:$f)]>;
   def JPZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp z, $t", [(Z80brcond bb:$t, (i8 1), i8:$f)]>;
@@ -219,11 +220,14 @@ defm : RemapAllTargetPseudoPointerOperands<GR16>;
 // A word's bytes are the two halves of its pair.
 def : Pat<(i8 (trunc GR16:$a)), (EXTRACT_SUBREG GR16:$a, sub_lo)>;
 def : Pat<(i8 (trunc (srl GR16:$a, (i8 8)))), (EXTRACT_SUBREG GR16:$a, sub_hi)>;
-def : Pat<(i16 (zext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (LD8ri 0), sub_hi)>;
-def : Pat<(i16 (anyext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (LD8ri 0), sub_hi)>;
+// A byte widens into a pair with one source byte, so the two halves can never trade places the way a general join of
+// two bytes can: the byte, then a zero.
+def ZEXT8 : Z80Inst<(outs GR16:$d), (ins GR8:$a), "zext $d, $a", [(set i16:$d, (zext i8:$a))]>;
+def : Pat<(i16 (anyext GR8:$a)), (ZEXT8 GR8:$a)>;
 
-// A signed byte widens by its sign: the high byte is the byte shifted right by 7.
-def : Pat<(i16 (sext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (SRA8 GR8:$a, 7), sub_hi)>;
+// A signed byte widens by its sign: ld lo,a; rla; sbc a,a; ld hi,a.
+let Defs = [F, A] in
+  def SEXT8 : Z80Inst<(outs GR16:$d), (ins ACC:$a), "sext $d, $a", [(set i16:$d, (sext i8:$a))]>;
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
@@ -234,5 +238,5 @@ def : Pat<(i16 (or (ext8 GR8:$lo), (shl (ext8 GR8:$hi), (i8 8)))),
           (REG_SEQUENCE GR16, GR8:$lo, sub_lo, GR8:$hi, sub_hi)>;
 
 // A byte loaded and widened: the load, and a zero high byte.
-def : Pat<(i16 (zextloadi8 i16:$p)), (REG_SEQUENCE GR16, (LD8rm i16:$p), sub_lo, (LD8ri 0), sub_hi)>;
-def : Pat<(i16 (extloadi8 i16:$p)), (REG_SEQUENCE GR16, (LD8rm i16:$p), sub_lo, (LD8ri 0), sub_hi)>;
+def : Pat<(i16 (zextloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
+def : Pat<(i16 (extloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;

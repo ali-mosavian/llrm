@@ -37,6 +37,7 @@ pub fn allocated(
     two_address(&mut function);
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     remove_identity_copies(&mut function, &assignment);
+    llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     Ok((function, assignment, slots.into_iter().map(|(slot, class)| (slot, size(class))).collect()))
 }

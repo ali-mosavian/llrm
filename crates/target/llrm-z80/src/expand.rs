@@ -157,10 +157,18 @@ impl Printer<'_> {
         pair: RegId,
         lo: RegId,
         hi: RegId,
+        rest: &[Inst],
     ) -> Result<(), String> {
         let (dl, dh) = lanes(pair)?;
         if dl == hi && dh == lo && lo != hi {
-            return Err(format!("PACK swapping {} and {} needs a scratch byte", name(lo), name(hi)));
+            // the two bytes of a pair trade places: through `a`, if nothing needs it
+            if !self.dead_after(reg::A, rest) {
+                return Err(format!("PACK swapping {} and {} needs a, which is live", name(lo), name(hi)));
+            }
+            self.push(format!("ld a, {}", name(dl)));
+            self.push(format!("ld {}, {}", name(dl), name(dh)));
+            self.push(format!("ld {}, a", name(dh)));
+            return Ok(());
         }
         if dl == hi {
             self.byte_move(dh, hi);
@@ -176,6 +184,7 @@ impl Printer<'_> {
         &mut self,
         inst: &Inst,
         next: Option<u32>,
+        rest: &[Inst],
     ) -> Result<(), String> {
         let name_of = |this: &Self, at| this.register(inst, at).map(name);
         let Kind::Op(op) = inst.kind else {
@@ -190,7 +199,22 @@ impl Printer<'_> {
             }
             "PACK" => {
                 let (pair, lo, hi) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
-                self.pack(pair, lo, hi)?;
+                self.pack(pair, lo, hi, rest)?;
+            }
+            "ZEXT8" => {
+                let (pair, from) = (self.register(inst, 0)?, self.register(inst, 1)?);
+                let (dl, dh) = lanes(pair)?;
+                // the byte is read before the high half is cleared
+                self.byte_move(dl, from);
+                self.push(format!("ld {}, #0", name(dh)));
+            }
+            "SEXT8" => {
+                let (pair, _) = (self.register(inst, 0)?, self.register(inst, 1)?);
+                let (dl, dh) = lanes(pair)?;
+                self.push(format!("ld {}, a", name(dl)));
+                self.push("rla");
+                self.push("sbc a, a");
+                self.push(format!("ld {}, a", name(dh)));
             }
             "ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" => {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
@@ -245,7 +269,12 @@ impl Printer<'_> {
             }
             "LD8ri" => {
                 let (to, value) = (name_of(self, 0)?, self.immediate(inst, 1, 0xFF)?);
-                self.push(format!("ld {to}, {value}"));
+                // `xor a, a` is a byte and three clocks less, and sets the flags
+                if to == "a" && value == "#0" && flags_dead(rest) {
+                    self.push("xor a, a");
+                } else {
+                    self.push(format!("ld {to}, {value}"));
+                }
             }
             "LD16ri" => {
                 let (to, value) = (name_of(self, 0)?, self.immediate(inst, 1, 0xFFFF)?);
@@ -266,13 +295,18 @@ impl Printer<'_> {
             "LD16rm" => {
                 let to = self.register(inst, 0)?;
                 if to == reg::HL {
-                    return Err("LD16rm into hl needs a scratch byte".to_owned());
+                    // the pointer is overwritten: the low byte waits in a, which the pseudo clobbers
+                    self.push("ld a, (hl)");
+                    self.push("inc hl");
+                    self.push("ld h, (hl)");
+                    self.push("ld l, a");
+                } else {
+                    let (lo, hi) = lanes(to)?;
+                    self.push(format!("ld {}, (hl)", name(lo)));
+                    self.push("inc hl");
+                    self.push(format!("ld {}, (hl)", name(hi)));
+                    self.push("dec hl");
                 }
-                let (lo, hi) = lanes(to)?;
-                self.push(format!("ld {}, (hl)", name(lo)));
-                self.push("inc hl");
-                self.push(format!("ld {}, (hl)", name(hi)));
-                self.push("dec hl");
             }
             "LD16mr" => {
                 let from = self.register(inst, 0)?;
@@ -299,14 +333,20 @@ impl Printer<'_> {
             }
             "CP8i" => {
                 let value = self.immediate(inst, 2, 0xFF)?;
-                self.push(format!("cp a, {value}"));
+                // `or a, a` is a byte and three clocks less. It differs from `cp a, 0` in
+                // the parity/overflow and half-carry flags, which no branch here reads.
+                self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
-            "CP16" => {
-                let source = name_of(self, 2)?;
-                self.push("push hl");
-                self.push("or a, a");
-                self.push(format!("sbc hl, {source}"));
-                self.push("pop hl");
+            "CP16" => self.compare16(inst, rest)?,
+            "AND16" | "OR16" | "XOR16" => {
+                let mnemonic = op[..op.len() - 2].to_lowercase();
+                let (to, a, b) = (self.register(inst, 0)?, self.register(inst, 1)?, self.register(inst, 2)?);
+                let ((dl, dh), (al, ah), (bl, bh)) = (lanes(to)?, lanes(a)?, lanes(b)?);
+                for (d, x, y) in [(dl, al, bl), (dh, ah, bh)] {
+                    self.push(format!("ld a, {}", name(x)));
+                    self.push(format!("{mnemonic} a, {}", name(y)));
+                    self.push(format!("ld {}, a", name(d)));
+                }
             }
             "JP" | "JPNZ" | "JPZ" | "JPNC" | "JPC" => {
                 let Some(Operand::Block(target)) = inst.operands.first() else {
@@ -369,6 +409,69 @@ impl Printer<'_> {
         Ok(())
     }
 
+    /// Whether the byte register `register` holds nothing a later instruction of
+    /// the block reads: the first mention after this point defines it without
+    /// reading it. A block that ends with `ret` before any mention is dead too
+    /// (what the function returns is a `ret` operand); any other end is not
+    /// known.
+    fn dead_after(
+        &self,
+        register: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        for inst in rest {
+            let mentions = |want_def: bool| {
+                inst.operands.iter().any(|operand| match operand {
+                    Operand::Def(r) if want_def => self.physical(*r) == register,
+                    Operand::Use(r) if !want_def => self.physical(*r) == register,
+                    _ => false,
+                })
+            };
+            if mentions(false) {
+                return false;
+            }
+            if mentions(true) {
+                return true;
+            }
+        }
+        matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
+    }
+
+    /// `CP16 a, b`: the flags of `a - b` through `a`, which the pseudo clobbers.
+    /// What follows says which flag is read: `sub` and `sbc` give the carry of the
+    /// word; zero needs both bytes, so the second compare is skipped when the first
+    /// differs.
+    fn compare16(
+        &mut self,
+        inst: &Inst,
+        rest: &[Inst],
+    ) -> Result<(), String> {
+        let ((al, ah), (bl, bh)) = (lanes(self.register(inst, 1)?)?, lanes(self.register(inst, 2)?)?);
+        let reader = rest.iter().find(|one| one.reads_flags).and_then(|one| match one.kind {
+            Kind::Op(name) => Some(name),
+            Kind::Copy => None,
+        });
+        match reader {
+            Some("JPC" | "JPNC") => {
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("sub a, {}", name(bl)));
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("sbc a, {}", name(bh)));
+            }
+            Some("JPZ" | "JPNZ") => {
+                let skip = format!("{}$", self.out.len());
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("sub a, {}", name(bl)));
+                self.push(format!("jr nz, {skip}"));
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("sub a, {}", name(bh)));
+                self.out.push(Line::Label(skip));
+            }
+            other => return Err(format!("CP16 read by {other:?}")),
+        }
+        Ok(())
+    }
+
     /// `d(ix)` for byte `extra` of frame object `index`.
     fn slot(
         &self,
@@ -402,6 +505,21 @@ impl Printer<'_> {
     ) -> Result<String, String> {
         Ok(self.immediate(inst, at, 0xFFFF)?.trim_start_matches('#').to_owned())
     }
+}
+
+/// Whether nothing in `rest` reads the flags before something sets them again.
+/// A block ends with them dead: only a branch reads them, and it follows its
+/// own compare in the block.
+fn flags_dead(rest: &[Inst]) -> bool {
+    for inst in rest {
+        if inst.reads_flags {
+            return false;
+        }
+        if inst.sets_flags {
+            return true;
+        }
+    }
+    true
 }
 
 fn shift_count(inst: &Inst) -> Result<i64, String> {
@@ -464,8 +582,8 @@ pub fn finish(
     for (at, block) in function.blocks.iter().enumerate() {
         printer.out.push(Line::Label(label(number, block.id)));
         let next = function.blocks.get(at + 1).map(|block| block.id);
-        for inst in &block.insts {
-            printer.instruction(inst, next)?;
+        for (index, inst) in block.insts.iter().enumerate() {
+            printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
     Ok(printer.out)

@@ -58,21 +58,23 @@ pub mod opcode {
     pub const OR8r: u16 = 374;
     pub const RET: u16 = 375;
     pub const SETCC8: u16 = 376;
-    pub const SHL16: u16 = 377;
-    pub const SHL8: u16 = 378;
-    pub const SRA16: u16 = 379;
-    pub const SRA8: u16 = 380;
-    pub const SRL16: u16 = 381;
-    pub const SRL8: u16 = 382;
-    pub const STSP16: u16 = 383;
-    pub const STSP8: u16 = 384;
-    pub const SUB16: u16 = 385;
-    pub const SUB8i: u16 = 386;
-    pub const SUB8r: u16 = 387;
-    pub const UMUL8X8: u16 = 388;
-    pub const XOR16: u16 = 389;
-    pub const XOR8i: u16 = 390;
-    pub const XOR8r: u16 = 391;
+    pub const SEXT8: u16 = 377;
+    pub const SHL16: u16 = 378;
+    pub const SHL8: u16 = 379;
+    pub const SRA16: u16 = 380;
+    pub const SRA8: u16 = 381;
+    pub const SRL16: u16 = 382;
+    pub const SRL8: u16 = 383;
+    pub const STSP16: u16 = 384;
+    pub const STSP8: u16 = 385;
+    pub const SUB16: u16 = 386;
+    pub const SUB8i: u16 = 387;
+    pub const SUB8r: u16 = 388;
+    pub const UMUL8X8: u16 = 389;
+    pub const XOR16: u16 = 390;
+    pub const XOR8i: u16 = 391;
+    pub const XOR8r: u16 = 392;
+    pub const ZEXT8: u16 = 393;
 }
 
 pub mod reg {

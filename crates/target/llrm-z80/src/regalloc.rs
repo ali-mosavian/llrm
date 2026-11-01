@@ -141,3 +141,25 @@ impl Target for Z80Registers {
         Some(Inst { may_load: true, ..Inst::new(Kind::Op(name), vec![Operand::Def(register), Operand::Frame(slot)]) })
     }
 }
+
+const CONDITIONAL: [(&str, &str); 2] = [("JPNZ", "JPZ"), ("JPNC", "JPC")];
+
+impl llrm_spike_mf::Jump for Z80Registers {
+    fn jump(block: u32) -> Inst {
+        let mut inst = Inst::new(Kind::Op("JP"), vec![Operand::Block(block)]);
+        inst.terminator = true;
+        inst.barrier = true;
+        inst
+    }
+
+    /// `reverseBranchCondition`: `jp nz` and `jp z` swap, as do `jp nc` and `jp c`.
+    fn reverse(branch: &Inst) -> Option<Inst> {
+        let Kind::Op(name) = branch.kind else { return None };
+        let opposite = CONDITIONAL.iter().find_map(|&(one, two)| match () {
+            _ if one == name => Some(two),
+            _ if two == name => Some(one),
+            _ => None,
+        })?;
+        Some(Inst { kind: Kind::Op(opposite), ..branch.clone() })
+    }
+}

@@ -73,6 +73,25 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     }
 }
 
+/// The register a pin register number (`Z80::HL`) names, if it is one the
+/// allocator hands out: the flags and the stack pointer are not.
+fn allocatable(id: u16) -> Option<llrm_lir::registers::RegId> {
+    Some(match id {
+        pin::A => crate::reg::A,
+        pin::B => crate::reg::B,
+        pin::BC => crate::reg::BC,
+        pin::C => crate::reg::C,
+        pin::D => crate::reg::D,
+        pin::DE => crate::reg::DE,
+        pin::E => crate::reg::E,
+        pin::H => crate::reg::H,
+        pin::HL => crate::reg::HL,
+        pin::IY => crate::reg::IY,
+        pin::L => crate::reg::L,
+        _ => return None,
+    })
+}
+
 /// Whether the pin's class id is the flags.
 fn is_flags(id: i16) -> bool {
     u16::try_from(id) == Ok(pin::FlagsRegClassID)
@@ -268,6 +287,11 @@ impl Emitter<'_> {
                         operands.push(operand);
                     }
                 }
+                // a register the instruction overwrites besides its results (`Defs = [A]`)
+                // is a def no one reads: the allocator keeps nothing else in it
+                operands.extend(
+                    desc.implicit_defs.iter().filter_map(|&id| allocatable(id)).map(|id| Operand::Def(Reg::Phys(id))),
+                );
                 // operands in a one-register class: the register, copied in and out
                 let mut after = Vec::new();
                 for (at, operand) in operands.iter_mut().enumerate() {
