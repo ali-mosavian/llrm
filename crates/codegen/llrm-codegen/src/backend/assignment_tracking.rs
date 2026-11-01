@@ -34,6 +34,7 @@
 //! `llvm/lib/CodeGen/AssignmentTrackingAnalysis.cpp`, pin d1106deb71cc.
 
 mod fill;
+mod redundant;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
@@ -1491,6 +1492,7 @@ pub fn analyze(
         }
         let slots = |inst: InstId| count.get(&inst).copied().unwrap_or(0);
         fill::run(module, function, &mut builder, &with_slot, &slots, coalesce);
+        redundant::run(module, function, &mut builder, &slots);
     }
     Some(builder.finish())
 }
@@ -1931,5 +1933,57 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
         assert!(high.is_some(), "{:?}", all.iter().map(|one| expression_text(&one.expression)).collect::<Vec<_>>());
         assert_eq!(high.unwrap().values.len(), 1, "at the alloca");
         assert!(locs.variable(high.unwrap().variable).fragment == Some(Fragment { offset: 32, size: 32 }));
+    }
+
+    /// Runs the redundancy passes over the entry block of `array()` with the
+    /// locations `put` adds, at its first, second and third instruction.
+    fn pruned(put: impl FnOnce(&mut FunctionVarLocsBuilder, [InstId; 3], Operand, DebugVariable)) -> Vec<Vec<usize>> {
+        let module = array(TAGGED_1, TAGGED_2);
+        let function = function_f(&module);
+        let insts: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
+        let value = Operand::Value(function.instruction(insts[0]).result.unwrap());
+        let mut builder = FunctionVarLocsBuilder::default();
+        let variable = whole(function.debug_records()[0].variable.0);
+        put(&mut builder, [insts[0], insts[1], insts[2]], value, variable);
+        redundant::run(&module, function, &mut builder, &|_| 0);
+        let locs = builder.finish();
+        insts[..3].iter().map(|&inst| locs.locs_before(inst).iter().map(|one| one.values.len()).collect()).collect()
+    }
+
+    fn whole(node: u32) -> DebugVariable {
+        DebugVariable { variable: MetadataId(node), fragment: None, inlined_at: None }
+    }
+
+    /// Two locations of the same bytes in one run: only the later one stays.
+    /// Both stayed, and a debugger saw the variable have two values at once.
+    #[test]
+    fn a_location_a_later_one_covers_is_dropped() {
+        let kept = pruned(|builder, at, value, variable| {
+            builder.add_var_loc((at[0], 0), variable, vec![], None, vec![value]);
+            builder.add_var_loc((at[0], 0), variable, vec![DwOp::Deref], None, vec![value, value]);
+        });
+        assert_eq!(kept[0], [2], "only the later");
+    }
+
+    /// A location that says what the variable already is, is dropped.
+    #[test]
+    fn a_location_that_repeats_the_last_is_dropped() {
+        let kept = pruned(|builder, at, value, variable| {
+            builder.add_var_loc((at[0], 0), variable, vec![], None, vec![value]);
+            builder.add_var_loc((at[1], 0), variable, vec![], None, vec![value]);
+        });
+        assert_eq!((kept[0].len(), kept[1].len()), (1, 0));
+    }
+
+    /// A location of nothing before any real one in the entry block is
+    /// dropped; after a real one it stays (the pin's `HasDefinedBits`).
+    #[test]
+    fn nothing_before_a_real_location_in_the_entry_block_is_dropped() {
+        let kept = pruned(|builder, at, value, variable| {
+            builder.add_var_loc((at[0], 0), variable, vec![], None, vec![]);
+            builder.add_var_loc((at[1], 0), variable, vec![], None, vec![value]);
+            builder.add_var_loc((at[2], 0), variable, vec![], None, vec![]);
+        });
+        assert_eq!((kept[0].len(), kept[1].len(), kept[2].len()), (0, 1, 1));
     }
 }
