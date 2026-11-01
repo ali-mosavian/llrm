@@ -1,0 +1,9 @@
+[package]
+name = "llrm-z80"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The Z80 target: its DAG selector tables, generated from z80.td"
+
+[dependencies]
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
