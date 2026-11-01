@@ -276,15 +276,16 @@ fn exp_log_and_power_run_on_wasm32() {
 }
 
 /// `^` was the x87 sequence (`log2`, a multiply, `exp2`) on wasm32, which has
-/// no extended float: the product lost its low bits and `10# ^ 400` printed an
-/// infinity where QB raises Overflow. It is a call of the runtime's `pow`
-/// now, and the errors are B$POW4's.
+/// no extended float: the product lost its low bits. It is a call of the
+/// runtime's `pow` now, with the errors of B$POW4: 5 for 0 to a negative power
+/// and a negative base with a fractional exponent, 6 past 2^32767.5, none for a
+/// result only past a DOUBLE (range_power).
 #[test]
 fn power_is_a_library_call_that_raises_the_errors_of_b_pow4() {
     for (name, body, message) in [
         ("powzero", "x# = 0: y# = -1: PRINT x# ^ y#", "Illegal function call"),
         ("powroot", "x# = -8: y# = 1 / 3: PRINT x# ^ y#", "Illegal function call"),
-        ("powbig", "x# = 10: y# = 400: PRINT x# ^ y#", "Overflow"),
+        ("powbig", "x# = 2: y# = 32768: PRINT x# ^ y#", "Overflow"),
     ] {
         let dir = built(name, &format!("{body}\nEND\n"));
         let (text, code) = run(&dir, name, &[]);
@@ -292,6 +293,10 @@ fn power_is_a_library_call_that_raises_the_errors_of_b_pow4() {
         assert_eq!(code, Some(255), "{name}");
         std::fs::remove_dir_all(dir).ok();
     }
+    let dir = built("powdouble", "x# = 10: y# = 500: z# = x# ^ y#\nPRINT \"ok\"\nEND\n");
+    let (text, code) = run(&dir, "powdouble", &[]);
+    assert_eq!((text.trim_end(), code), ("ok", Some(0)));
+    std::fs::remove_dir_all(dir).ok();
     let dir = built("powsign", "x# = -2: y# = 3: z# = 0: PRINT x# ^ y#; z# ^ y#; z# ^ z#; 2# ^ -y#\nEND\n");
     let (text, code) = run(&dir, "powsign", &[]);
     assert_eq!(text.trim_end(), "-8  0  1  .125");
