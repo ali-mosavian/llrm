@@ -41,6 +41,8 @@ impl Class {
     const M: u8 = 8;
     const P: u8 = 16;
     pub const ANY: Class = Class(15);
+    /// What `cmp`, `cpx` and `cpy` test as their first operand.
+    pub const COMPARED: Class = Class(Class::A | Class::X | Class::Y);
     /// A zero-page pair, for `(zp),y`.
     pub const PAIR: Class = Class(Class::P);
     /// What an ALU instruction reads as its second operand.
@@ -154,6 +156,14 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// `inc` and `dec` are one byte in `x` and `y` (`inx`), `clc; adc #1` in `a`.
+    fn operand_hint(
+        inst: &Inst,
+        _operand: usize,
+    ) -> Option<RegId> {
+        matches!(inst.kind, Kind::Op("INC" | "DEC")).then_some(reg::X)
+    }
+
     type Class = Class;
 
     fn meet(
@@ -362,6 +372,20 @@ impl Builder {
     fn fresh(&mut self) -> Reg {
         self.function.classes.push(Class::ANY);
         Reg::Virt(self.function.classes.len() as u32 - 1)
+    }
+
+    /// `value` copied to a register of `class`, as LLVM's `InstrEmitter` copies
+    /// an operand to the class its instruction needs: the allocator joins the
+    /// copy to `value` when `value` is already in the class.
+    fn copy_to_class(
+        &mut self,
+        value: Reg,
+        class: Class,
+    ) -> Reg {
+        self.function.classes.push(class);
+        let copy = Reg::Virt(self.function.classes.len() as u32 - 1);
+        self.copy(copy, value);
+        copy
     }
 
     /// The register a byte operand names: `a`, `x`, `y`, `rcN`, or a cell.
@@ -586,6 +610,7 @@ impl Builder {
     fn redo_compare(
         &mut self,
         code: i64,
+        branch: bool,
     ) -> Result<(), Unsupported> {
         let Compare { a, b, word, zero } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
@@ -627,10 +652,15 @@ impl Builder {
         }
         if word && matches!(code, 4 | 5) && self.word_constant(&b.0) == Some([0, 0]) {
             let (_, ah) = self.read_word(&a.0)?;
-            self.copy(acc, ah);
+            let tested = if branch {
+                self.copy_to_class(ah, Class::COMPARED)
+            } else {
+                self.copy(acc, ah);
+                acc
+            };
             let mut test = Inst::new(
                 Kind::Op("CMP"),
-                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), Operand::Imm(0)],
+                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), Operand::Imm(0)],
             );
             test.sets_flags = true;
             self.push(test);
@@ -661,9 +691,18 @@ impl Builder {
             };
             ([lhs, lhs], [rhs.clone(), rhs])
         };
-        self.copy(acc, lhs[0]);
+        // A branch on a byte tests the flags and nothing else: any of `a`,
+        // `x`, `y` compares. A select or a set reads `a` as the compare left
+        // it, and a word's high byte is subtracted in `a`, so those compare
+        // there.
+        let tested = if branch && !word {
+            self.copy_to_class(lhs[0], Class::COMPARED)
+        } else {
+            self.copy(acc, lhs[0]);
+            acc
+        };
         let mut cmp =
-            Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), rhs[0].clone()]);
+            Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), rhs[0].clone()]);
         cmp.sets_flags = true;
         self.push(cmp);
         if word {
@@ -1300,7 +1339,7 @@ pub fn build(
                 b.push(Inst::new(Kind::Op("LOADC"), vec![Operand::Def(acc), Operand::Use(acc)]));
             }
             op::SETCC8 => {
-                b.redo_compare(immediate(&o[1])?)?;
+                b.redo_compare(immediate(&o[1])?, false)?;
                 b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 let mut set = Inst::new(
@@ -1446,7 +1485,7 @@ pub fn build(
             }
             code @ (op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL) => {
                 let condition = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL].iter().position(|c| *c == code);
-                b.redo_compare(condition.map_or(-1, |c| c as i64))?;
+                b.redo_compare(condition.map_or(-1, |c| c as i64), true)?;
                 let mnemonic = match code {
                     op::BEQ => "BEQ",
                     op::BNE => "BNE",
@@ -1469,7 +1508,7 @@ pub fn build(
                 b.push(jump);
             }
             op::CMOV8 => {
-                b.redo_compare(immediate(&o[3])?)?;
+                b.redo_compare(immediate(&o[3])?, false)?;
                 b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 let value = |b: &mut Builder, operand: &Machine| -> Result<Operand, Unsupported> {
@@ -1506,7 +1545,7 @@ pub fn build(
                 let (nl, nh) = (b.fresh(), b.fresh());
                 b.copy(nl, fl);
                 b.copy(nh, fh);
-                b.redo_compare(immediate(&o[3])?)?;
+                b.redo_compare(immediate(&o[3])?, false)?;
                 for r in [nl, nh, tl, th] {
                     b.require(r, Class(Class::X | Class::Y | Class::M))?;
                 }
@@ -2235,53 +2274,6 @@ fn save_preserved<const STACK: bool>(
     true
 }
 
-/// `COPY a, x; CMP a, m` where nothing reads `a` afterwards compares the index
-/// register itself: `CPX m` (likewise `y`). A select after the compare reads
-/// `a` as the compare left it, so it keeps the copy.
-///
-/// DEVIATE (6502-1): a rewrite after allocation, where the pin selects `CMP`
-/// on the index class. Exit: `CMP` patterns on the X and Y classes once the
-/// allocator can constrain a compare's class (the greedy PR #6259).
-fn compare_index_registers(
-    function: &mut MFunction<Class>,
-    at: &dyn Fn(Reg) -> RegId,
-) {
-    let after = live_after(function, at);
-    for (b, block) in function.blocks.iter_mut().enumerate() {
-        let mut folds = Vec::new();
-        for i in 1..block.insts.len() {
-            let (copy, compare) = (&block.insts[i - 1], &block.insts[i]);
-            let [Operand::Def(to), Operand::Use(from)] = copy.operands[..] else { continue };
-            let (true, [_, Operand::Use(tested), _]) = (compare.kind == Kind::Op("CMP"), &compare.operands[..]) else {
-                continue;
-            };
-            let index = match at(from) {
-                reg::X => "CPX",
-                reg::Y => "CPY",
-                _ => continue,
-            };
-            let next = block.insts.get(i + 1);
-            let selected = next.is_some_and(|next| next.kind == Kind::Op("CMOV"));
-            // against zero the transfer already set the flags: no compare
-            let zero_test = compare.operands[2] == Operand::Imm(0) && next.is_some_and(reads_zero_or_sign_only);
-            if copy.kind == Kind::Copy
-                && at(to) == reg::A
-                && at(*tested) == reg::A
-                && !after[b][i].contains(&reg::A)
-                && !selected
-                && !zero_test
-            {
-                folds.push((i, index, from));
-            }
-        }
-        for (i, index, from) in folds.into_iter().rev() {
-            block.insts[i].kind = Kind::Op(index);
-            block.insts[i].operands[1] = Operand::Use(from);
-            block.insts.remove(i - 1);
-        }
-    }
-}
-
 /// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`,
 /// or a select or set whose condition code (the last immediate, before the
 /// flags it reads) is one of those.
@@ -2386,7 +2378,6 @@ fn emit_with<const STACK: bool>(
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
-    compare_index_registers(&mut function, &at);
     let moved = place && {
         let odds = loop_odds(&function);
         llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
@@ -2686,7 +2677,8 @@ fn emit_with<const STACK: bool>(
                 // against zero, a load or an ALU result has already set the
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
-                    if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
+                    if regs[1] == reg::A
+                        && block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
                         && out.last_inst().is_some_and(crate::peephole::sets_nz_of_a) =>
                 {
                     // `iny; tya; bne`: the step set the flags of y itself
@@ -2710,13 +2702,19 @@ fn emit_with<const STACK: bool>(
                         out.pop();
                     }
                 }
-                (Kind::Op(compare @ ("CMP" | "CPX" | "CPY")), [_, _, second]) => {
+                // the register the left side is in decides the opcode
+                (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
                         Operand::Frame(slot) => slot_name(*slot),
                         _ => register_name(regs[2]),
                     };
-                    writeln!(out, "  {} {text}", compare.to_lowercase()).unwrap();
+                    let compare = match regs[1] {
+                        r if r == reg::X => "cpx",
+                        r if r == reg::Y => "cpy",
+                        _ => "cmp",
+                    };
+                    writeln!(out, "  {compare} {text}").unwrap();
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
                     writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();
@@ -2750,7 +2748,9 @@ fn emit_with<const STACK: bool>(
                     // just before
                     let held = i.checked_sub(2).and_then(|first| match (&block.insts[first], &block.insts[i - 1]) {
                         (copy, compare) if compare.kind == Kind::Op("CMP") => match (copy.kind, &copy.operands[..]) {
-                            (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(lhs)]) if *a == reg::A => {
+                            (Kind::Copy, [Operand::Def(tested), Operand::Use(lhs)])
+                                if compare.operands.get(1) == Some(&Operand::Use(*tested)) && at(*tested) == reg::A =>
+                            {
                                 Some(at(*lhs))
                             }
                             _ => None,
