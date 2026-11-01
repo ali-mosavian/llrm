@@ -43,6 +43,12 @@ def SDTZ80Cmp : SDTypeProfile<1, 2, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>]>;
 def SDTZ80Brcond : SDTypeProfile<0, 3, [SDTCisVT<0, OtherVT>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>;
 def Z80cmp : SDNode<"Z80ISD::CMP", SDTZ80Cmp>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
+def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
+def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
+def Z80callseq_start : SDNode<"ISD::CALLSEQ_START", SDT_Z80CallSeqStart, [SDNPHasChain, SDNPOutGlue]>;
+def Z80callseq_end : SDNode<"ISD::CALLSEQ_END", SDT_Z80CallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
+def SDT_Z80Call : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
+def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
 def Z80wrapper : SDNode<"Z80ISD::WRAPPER", SDTIntUnaryOp>;
 def Z80retglue : SDNode<"Z80ISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
@@ -58,6 +64,7 @@ class Z80Inst<dag outs, dag ins, string asm, list<dag> pattern> : Instruction {
 def HasZ180 : Predicate<"Subtarget->hasZ180()">;
 
 def brtarget : Operand<OtherVT>;
+def calltarget : Operand<i16>;
 
 // A op r and A op n: ADD, SUB, AND, OR, XOR. Every one writes the flags and leaves the result in A.
 multiclass ALU8<string n, SDPatternOperator op> {
@@ -91,6 +98,23 @@ let Predicates = [HasZ180], Defs = [F] in
   def UMUL8X8 : Z80Inst<(outs GR16:$d), (ins GR8:$a, GR8:$b), "umul8x8 $d, $a, $b",
                         [(set i16:$d, (mul (zext i8:$a), (zext i8:$b)))]>;
 
+
+// sub hl,rr: or a; sbc hl,rr. The carry out of an add is not an operand here, so a word add and subtract are the
+// one instruction each; i32 and i64 come in through the carry forms later.
+let Defs = [F], Constraints = "$d = $a" in
+  def SUB16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sub hl, $b", [(set i16:$d, (sub i16:$a, i16:$b))]>;
+
+// Shifts by a constant: one SLA/SRL/SRA (or add hl,hl, srl h; rr l) per bit, expanded when emitted.
+multiclass Shift<string n, RegisterClass rc, ValueType vt> {
+  let Defs = [F], Constraints = "$d = $a" in {
+    def SHL#n : Z80Inst<(outs rc:$d), (ins rc:$a, i8imm:$k), "shl $d, $k", [(set vt:$d, (shl vt:$a, (i8 imm:$k)))]>;
+    def SRL#n : Z80Inst<(outs rc:$d), (ins rc:$a, i8imm:$k), "srl $d, $k", [(set vt:$d, (srl vt:$a, (i8 imm:$k)))]>;
+    def SRA#n : Z80Inst<(outs rc:$d), (ins rc:$a, i8imm:$k), "sra $d, $k", [(set vt:$d, (sra vt:$a, (i8 imm:$k)))]>;
+  }
+}
+defm "" : Shift<"8", GR8, i8>;
+defm "" : Shift<"16", GR16, i16>;
+
 def LD8ri : Z80Inst<(outs GR8:$d), (ins i8imm:$v), "ld $d, $v", [(set i8:$d, imm:$v)]>;
 def LD16ri : Z80Inst<(outs GR16:$d), (ins i16imm:$v), "ld $d, $v", [(set i16:$d, imm:$v)]>;
 
@@ -118,6 +142,9 @@ def COPY16 : Z80Inst<(outs GR16:$d), (ins GR16:$s), "copy $d, $s", []>;
 // cp r / cp n: the flags of a - b.
 def CP8r : Z80Inst<(outs Flags:$f), (ins ACC:$a, GR8:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, i8:$b))]>;
 def CP8i : Z80Inst<(outs Flags:$f), (ins ACC:$a, i8imm:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, (i8 imm:$b)))]>;
+// The flags of a - b over a word: push hl; or a; sbc hl,rr; pop hl. HL is kept; Z covers both bytes (SBC HL sets it
+// on the 16-bit result) and C is the unsigned borrow.
+def CP16 : Z80Inst<(outs Flags:$f), (ins HLR:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {
   def JPNZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nz, $t", [(Z80brcond bb:$t, (i8 0), i8:$f)]>;
   def JPZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp z, $t", [(Z80brcond bb:$t, (i8 1), i8:$f)]>;
@@ -127,6 +154,19 @@ let isBranch = 1, isTerminator = 1 in {
 // jp or jr: branch relaxation picks the short form once the distance is known.
 let isBranch = 1, isTerminator = 1, isBarrier = 1 in
   def JP : Z80Inst<(outs), (ins brtarget:$t), "jp $t", [(br bb:$t)]>;
+
+let isCall = 1 in
+  def CALL : Z80Inst<(outs), (ins calltarget:$t), "call $t", [(Z80call tglobaladdr:$t)]>;
+// a routine the selector names itself (the libcall of a fill or copy of unknown size)
+def : Pat<(Z80call texternalsym:$t), (CALL texternalsym:$t)>;
+
+// The call sequence's stack adjustment, resolved by the frame code once the frame is laid out.
+let Defs = [SP, F], Uses = [SP] in {
+  def ADJCALLSTACKDOWN : Z80Inst<(outs), (ins i16imm:$amt, i16imm:$amt2), "#ADJCALLSTACKDOWN",
+                                 [(Z80callseq_start timm:$amt, timm:$amt2)]>;
+  def ADJCALLSTACKUP : Z80Inst<(outs), (ins i16imm:$amt1, i16imm:$amt2), "#ADJCALLSTACKUP",
+                               [(Z80callseq_end timm:$amt1, timm:$amt2)]>;
+}
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : Z80Inst<(outs), (ins), "ret", [(Z80retglue)]>;
@@ -144,3 +184,8 @@ def : Pat<(i16 (anyext GR8:$a)), (REG_SEQUENCE GR16, GR8:$a, sub_lo, (LD8ri 0), 
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
+
+// The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
+def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
+def : Pat<(i16 (or (ext8 GR8:$lo), (shl (ext8 GR8:$hi), (i8 8)))),
+          (REG_SEQUENCE GR16, GR8:$lo, sub_lo, GR8:$hi, sub_hi)>;
