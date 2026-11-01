@@ -83,9 +83,9 @@ pub struct Frontend {
     /// the 16-bit target's).
     pub near_bytes: usize,
     pub far_bytes: usize,
-    /// The runtime's `pow` and CURRENCY scaling stand in for the x87 where the
-    /// target has no extended float: its description states no `f80`.
-    pub without_extended_float: bool,
+    /// `x ^ y` calls the runtime's `pow` where the target has no extended
+    /// float for the x87 sequence: its description states no `f80`.
+    pub pow_libcall: bool,
     pub includes: Vec<PathBuf>,
 }
 
@@ -118,7 +118,7 @@ impl Frontend {
             segment_bytes: None,
             near_bytes: 0,
             far_bytes: 0,
-            without_extended_float: false,
+            pow_libcall: false,
             includes: Vec::new(),
         }
     }
@@ -160,7 +160,7 @@ fn _options(
             segment_bytes: frontend.segment_bytes,
             near_bytes: frontend.near_bytes,
             far_bytes: frontend.far_bytes,
-            without_extended_float: frontend.without_extended_float,
+            pow_libcall: frontend.pow_libcall,
             bc_codeview: frontend.bc_codeview,
             run_time_module: frontend.run_time_module,
         },

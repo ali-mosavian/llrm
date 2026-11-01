@@ -544,24 +544,6 @@ fn test_power_stays_the_x87_sequence_where_the_target_states_f80() {
     assert!(!text.contains("B$LPOW") && text.contains("db 0d9h,0e8h,0d9h,0c9h,0d9h,0f1h"), "{text}");
 }
 
-/// A float scaled to CURRENCY is the runtime's `B$LFPC` only where the target
-/// states no `f80`: an x86 target keeps the x87 scaling and `fist`.
-#[test]
-fn test_currency_scaling_stays_the_x87_sequence_where_the_target_states_f80() {
-    let directory = tempfile::tempdir().expect("creates a directory");
-    let out = directory.path().join("scale_x87.asm");
-    let input = written(
-        &directory,
-        "scale_x87.bas",
-        b"' dialect: pds71\r\nDIM c AS CURRENCY\r\nINPUT x#\r\nc = x#\r\nPRINT c\r\nEND\r\n",
-    );
-    let argv =
-        [input.to_str().unwrap(), "-m32", "-O2", "--isel=dag", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
-    assert_eq!(crate::cli::main(&argv), 0);
-    let text = std::fs::read_to_string(&out).expect("the listing");
-    assert!(!text.contains("B$LFPC") && !text.contains("B_LFPC"), "{text}");
-}
-
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
 /// the raise ran outside its statement, so the runtime found no statement
 /// to resume after.

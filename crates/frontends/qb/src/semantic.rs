@@ -563,10 +563,9 @@ pub struct Options {
     /// one as wide as the near one is the same space: a flat target.
     pub near_bytes: usize,
     pub far_bytes: usize,
-    /// The target has no extended float to run the x87 sequence on: `x ^ y`
-    /// that squaring does not reach is a call to the runtime's `pow`
-    /// (`B$LPOW`), and a float scaled to CURRENCY a call to `B$LFPC`.
-    pub without_extended_float: bool,
+    /// `x ^ y` that squaring does not reach is a call to the runtime's `pow`
+    /// (`B$LPOW`): the target has no extended float to run the x87 sequence on.
+    pub pow_libcall: bool,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
@@ -9435,7 +9434,7 @@ impl Compiler {
             }
         }
 
-        if self.options.without_extended_float {
+        if self.options.pow_libcall {
             return self.library_power(left, right);
         }
 
@@ -9504,27 +9503,6 @@ impl Compiler {
             vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
         );
         Ok((self.convert(Operand::Value(power), DOUBLE, common)?, common))
-    }
-
-    /// A DOUBLE scaled to CURRENCY by the runtime (`B$LFPC`), which does what
-    /// the x87 does for B$FPCY with integers: the product rounded to 64 bits,
-    /// then to the nearest integer, ties to even.
-    fn library_scaled_float(
-        &mut self,
-        operand: Operand,
-    ) -> Result<Operand, SemanticError> {
-        let x = self.temporary(DOUBLE)?;
-        self.emit("store", Vec::new(), vec![Operand::Place(x), operand]);
-        let pointer_type = self.pointer_type(CURRENCY);
-        let pointer = self.value(pointer_type);
-        self.emit_runtime_call("B$LFPC", vec![pointer], vec![Operand::Place(x)]);
-        let scaled = self.value(CURRENCY);
-        self.emit(
-            "load",
-            vec![scaled],
-            vec![Operand::Indirect { base: pointer, offset: 0, type_id: CURRENCY, volatile: false, inbounds: false }],
-        );
-        Ok(Operand::Value(scaled))
     }
 
     /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is
@@ -9700,9 +9678,6 @@ impl Compiler {
             }
             if matches!(from, SINGLE | DOUBLE) {
                 let operand = self.convert(operand, from, DOUBLE)?;
-                if self.options.without_extended_float {
-                    return self.library_scaled_float(operand);
-                }
                 let wide = self.computed("convert", EXTENDED, vec![operand]);
                 // A SINGLE holds 10000 exactly, and a 4-byte constant is the
                 // pin's pool entry for it where a 10-byte one
