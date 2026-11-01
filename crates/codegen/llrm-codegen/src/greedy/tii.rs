@@ -111,6 +111,14 @@ pub trait TargetInstrInfo {
         None
     }
 
+    /// `getSpillWeightScaleFactor` of the class whose registers are `order`.
+    fn spill_weight_scale(
+        &self,
+        _order: &[RegId],
+    ) -> f32 {
+        1.0
+    }
+
     /// What one reference to `value` in `one` adds to its spill weight, as a
     /// multiple of LLVM's one (see `SpillWeightEnv::reference_weight`).
     fn reference_weight(
