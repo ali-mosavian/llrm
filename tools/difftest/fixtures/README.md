@@ -1,0 +1,2 @@
+Positive control: C files with sibling calls under conditions (g(int) or g(int, int); callees print their names).
+Expectation on x86-64 -O2 against the pin's clang: a compiler without the callee check in `jumps/tailmerge.rs` (before #6146/#6147) differs on 6 of the 27 files with a `g` of one or two int arguments (a4, b17, b21, d2, d3, d4); the fixed one on none. The other files are skipped by the harness.
