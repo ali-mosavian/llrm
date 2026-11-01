@@ -127,6 +127,12 @@ struct Emitter<'a> {
     arrives_in: HashMap<Reg, llrm_lir::registers::RegId>,
     /// The results of the instructions emitted so far.
     made: HashSet<Reg>,
+    /// For each flags value, the instructions that make it (the compare and the
+    /// copies into its registers), to be issued again where the flags were
+    /// overwritten before a reader.
+    flag_groups: HashMap<(u32, u8), Vec<Inst>>,
+    /// The flags value the machine's flags hold now, if known.
+    flags_now: Option<(u32, u8)>,
     /// The byte each `ZEXT8` widened.
     widened: HashMap<Reg, Reg>,
     /// For the block being emitted: the nodes that read each value.
@@ -276,13 +282,20 @@ impl Emitter<'_> {
                 let desc = instrinfo::desc(code as u16).ok_or_else(|| format!("{name}: no description"))?;
                 let mut operands = Vec::new();
                 let mut defines_flags = false;
+                let mut flags_key = None;
                 for (at, vt) in n.values.iter().enumerate().take(usize::from(desc.num_defs)) {
                     let wanted = desc.operands.get(at);
                     let reg = if wanted.is_some_and(|one| is_flags(one.reg_class)) {
                         defines_flags = true;
+                        flags_key = Some((node, at as u8));
                         Reg::Phys(crate::reg::FLAGS)
                     } else {
-                        let class = wanted.and_then(|one| Class::of_pin(one.reg_class)).unwrap_or(Class::of_type(*vt));
+                        // a result in a one-register class is copied out of that register: the copy
+                        // takes the general class (isel's CopyFromReg takes getRegClassFor(VT))
+                        let class = wanted
+                            .filter(|one| fixed_register(one.reg_class).is_none())
+                            .and_then(|one| Class::of_pin(one.reg_class))
+                            .unwrap_or(Class::of_type(*vt));
                         self.new_reg(class)
                     };
                     self.values.insert((node, at as u8), reg);
@@ -293,6 +306,16 @@ impl Emitter<'_> {
                     operands.push(Operand::Def(reg));
                 }
                 let mut reads_flags = false;
+                // flags another instruction overwrote since their compare: compare again
+                for op in &n.ops {
+                    let key = (op.node, op.res);
+                    if self.flags_now != Some(key) {
+                        if let Some(group) = self.flag_groups.get(&key) {
+                            into.extend(group.clone());
+                            self.flags_now = Some(key);
+                        }
+                    }
+                }
                 for op in n.ops.clone() {
                     if let Some(operand) = self.operand(op)? {
                         reads_flags |= matches!(operand, Operand::Use(Reg::Phys(id)) if id == crate::reg::FLAGS);
@@ -319,6 +342,7 @@ impl Emitter<'_> {
                 );
                 // operands in a one-register class: the register, copied in and out
                 let mut after = Vec::new();
+                let group_start = into.len();
                 for (at, operand) in operands.iter_mut().enumerate() {
                     let Some(fixed) = desc.operands.get(at).and_then(|one| fixed_register(one.reg_class)) else {
                         continue;
@@ -357,6 +381,14 @@ impl Emitter<'_> {
                     rematerializable: desc.has(flag::REMATERIALIZABLE),
                     ..Inst::new(Kind::Op(name), operands)
                 });
+                match flags_key {
+                    Some(key) => {
+                        self.flag_groups.insert(key, into[group_start..].to_vec());
+                        self.flags_now = Some(key);
+                    }
+                    None if desc.implicit_defs.contains(&pin::F) || desc.has(flag::CALL) => self.flags_now = None,
+                    None => {}
+                }
                 into.extend(after);
             }
             _ => {}
@@ -559,6 +591,8 @@ pub fn emit(
         arrives_in: HashMap::new(),
         made: HashSet::new(),
         widened: HashMap::new(),
+        flag_groups: HashMap::new(),
+        flags_now: None,
         users: HashMap::new(),
         in_acc: Default::default(),
     };
@@ -569,6 +603,8 @@ pub fn emit(
         emitter.dag = &one.dag;
         emitter.values.clear();
         emitter.in_acc.clear();
+        emitter.flag_groups.clear();
+        emitter.flags_now = None;
         emitter.users.clear();
         for (at, node) in one.dag.nodes().iter().enumerate() {
             for op in &node.ops {
