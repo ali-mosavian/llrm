@@ -124,7 +124,7 @@ pub struct Assembled {
 }
 
 /// `getRelaxedOpcodeBranch`: the 16-bit form of an 8-bit branch.
-fn relaxed(opcode: &str) -> Option<&'static str> {
+pub(crate) fn relaxed(opcode: &str) -> Option<&'static str> {
     let wide = format!("{}16", opcode.strip_suffix('8')?);
     encoding(&wide).map(|(name, ..)| *name)
 }

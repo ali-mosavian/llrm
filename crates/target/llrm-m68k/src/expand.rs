@@ -39,6 +39,10 @@ pub(crate) fn mask_bit(root: RegId) -> Option<u32> {
         )
 }
 
+fn is_address(register: RegId) -> bool {
+    mask_bit(REGISTER_INFO.root(register)).is_some_and(|bit| bit >= 8)
+}
+
 fn frame_op(
     op: &FrameOp,
     out: &mut Vec<mc::Inst>,
@@ -59,7 +63,72 @@ fn frame_op(
         FrameOp::Restore { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32mp", operands: vec![Imm(mask(registers)), Imm(*offset), base(at)] }
         }
+        FrameOp::Push { registers } => match registers[..] {
+            [one] => {
+                let opcode = if is_address(one) { "MOV32ea" } else { "MOV32ed" };
+                mc::Inst { opcode, operands: vec![R(reg::SP), R(one)] }
+            }
+            _ => mc::Inst { opcode: "MOVM32em", operands: vec![R(reg::SP), Imm(mask(registers))] },
+        },
+        FrameOp::Pop { registers } => match registers[..] {
+            [one] => {
+                let opcode = if is_address(one) { "MOV32ao" } else { "MOV32do" };
+                mc::Inst { opcode, operands: vec![R(one), R(reg::SP)] }
+            }
+            _ => mc::Inst { opcode: "MOVM32mo", operands: vec![Imm(mask(registers)), R(reg::SP)] },
+        },
     });
+}
+
+/// Bytes and clocks of `ops` on `cpu`, from the encoder and the manuals'
+/// tables.
+pub fn frame_cost(
+    ops: &[FrameOp],
+    cpu: crate::dagisel::hooks::Cpu,
+) -> Result<(usize, u32), String> {
+    let mut insts = Vec::new();
+    ops.iter().for_each(|op| frame_op(op, &mut insts));
+    let (mut bytes, mut clocks) = (0, 0);
+    for inst in &insts {
+        let size = crate::encode::encode(inst)?.bytes.len();
+        bytes += size;
+        clocks += crate::timing::cost(cpu, &mc::print(inst)?, size as u32, false)?.clocks;
+    }
+    Ok((bytes, clocks))
+}
+
+/// The prologue and the epilogue: the pin's (`suba.l`, then `movem` into
+/// slots), or the saved registers pushed and popped, whichever of the two is
+/// no larger and no slower on `cpu` in each; the pin's otherwise.
+fn frame_ops(
+    layout: &frame::Layout,
+    cpu: crate::dagisel::hooks::Cpu,
+    push_frame: bool,
+) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
+    frame_ops_priced(layout, push_frame, |ops| frame_cost(ops, cpu))
+}
+
+/// [`frame_ops`] with the price of a sequence, `(bytes, clocks)`, given: a test
+/// makes the push dearer to see the pin's frame chosen.
+pub fn frame_ops_priced(
+    layout: &frame::Layout,
+    push_frame: bool,
+    cost: impl Fn(&[FrameOp]) -> Result<(usize, u32), String>,
+) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
+    let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
+    let pushed = if push_frame { layout.push_prologue().zip(layout.push_epilogue()) } else { None };
+    let Some((opening, closing)) = pushed else {
+        return Ok((pin_opening, pin_closing));
+    };
+    let no_worse = |ours: &[FrameOp], pin: &[FrameOp]| -> Result<bool, String> {
+        let ((ours_bytes, ours_clocks), (pin_bytes, pin_clocks)) = (cost(ours)?, cost(pin)?);
+        Ok(ours_bytes <= pin_bytes && ours_clocks <= pin_clocks)
+    };
+    if no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)? {
+        Ok((opening, closing))
+    } else {
+        Ok((pin_opening, pin_closing))
+    }
 }
 
 /// A line of the function: a block's label (its layout index) or an
@@ -92,6 +161,7 @@ pub fn finish(
     number: usize,
     slots: &[i32],
     cpu: crate::dagisel::hooks::Cpu,
+    push_frame: bool,
 ) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
@@ -163,7 +233,8 @@ pub fn finish(
         ..Function::default()
     });
     let mut out = Vec::new();
-    layout.prologue().iter().for_each(|op| frame_op(op, &mut out));
+    let (opening, closing) = frame_ops(&layout, cpu, push_frame)?;
+    opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
@@ -258,7 +329,6 @@ pub fn finish(
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("RET") => {
-                let closing = layout.epilogue();
                 closing.iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
@@ -302,6 +372,12 @@ pub fn finish(
             }
             Kind::Op(name) if extension(name).is_some() => {
                 out.extend(expand_extension(name, &operands)?);
+            }
+            Kind::Op(name) if crate::dagisel::indexed::printed_as(name).is_some() => {
+                let (opcode, def) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
+                let mut operands = operands;
+                operands.remove(def);
+                out.push(mc::Inst { opcode, operands });
             }
             Kind::Op(name) => out.push(mc::Inst { opcode: name, operands }),
         }

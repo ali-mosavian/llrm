@@ -157,6 +157,12 @@ pub fn encode(inst: &Inst) -> Result<Encoded, String> {
         let (lo, width, value) = match *piece {
             Piece::Const { lo, width, value } => (lo, width, value),
             Piece::Operand { lo, width, at, from, enc } => {
+                // DEVIATE from the pin, whose `MOVM*em` (`movem` to `-(An)`)
+                // takes the mask in the instruction's own
+                // reversed order while the printer reads it as
+                // `d0` first: ours is the printed order.
+                let enc =
+                    if at == 1 && matches!(inst.opcode, "MOVM32em" | "MOVM16em") { Enc::InverseMoveMask } else { enc };
                 let whole = operand_value(inst, at as usize, enc, lo, &mut fixups)?;
                 (lo, width, whole >> from)
             }
