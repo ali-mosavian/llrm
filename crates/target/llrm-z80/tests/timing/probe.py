@@ -107,13 +107,13 @@ def timings(form, insn, cpu, d):
     return delta("", insn, cpu, d), None
 
 
-# Cells where ucsim_z80 0.8.15 disagrees with the manual's table, pinned at what it returns so a fixed simulator
+# Cells where ucsim_z80 0.8.15 disagrees with the manual (UM0080; manual_check.py), pinned at what it returns so a fixed simulator
 # shows up. The manual's value is the CSV's; the reasons are why the simulator is the instrument in error.
 UCSIM_WRONG = {
-    "inc (hl)": (7, "a read-modify-write cannot cost the 7 T of a plain load; the manual says 11"),
+    "inc (hl)": (7, "UM0080 says 11 (4, 4, 3); ucsim charges a plain load"),
     "dec (hl)": (7, "same as inc (hl)"),
-    "bit 0;(hl)": (15, "above the 12 T of the manual; bit 0,b is 8 and the (hl) form adds a read of 4"),
-    "mlt bc": (0, "an instruction that takes no time cannot be; it fetches two bytes"),
+    "bit 0;(hl)": (15, "UM0080 says 12 (4, 4, 4)"),
+    "mlt bc": (0, "17 T per the Z180 manual (from memory); ucsim charges nothing for a two-byte instruction"),
 }
 
 
