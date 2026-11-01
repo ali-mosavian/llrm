@@ -29,6 +29,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
+import elfsize  # noqa: E402
 import irguard  # noqa: E402
 import omfcode  # noqa: E402
 import pin  # noqa: E402
@@ -96,7 +98,7 @@ def clang_flags(machine: str) -> tuple[str, list[str]]:
 
 def pin_text_size(obj: Path) -> int:
     out = subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True).stdout
-    return sum(int(line.split()[1]) for line in out.splitlines() if line.startswith(".text"))
+    return elfsize.text_bytes(out)
 
 
 NOP = re.compile(r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax)\b")
