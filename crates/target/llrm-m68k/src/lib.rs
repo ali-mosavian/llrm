@@ -24,6 +24,7 @@ pub mod mac;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
+pub mod narrow;
 pub mod negadd;
 pub mod object;
 pub mod regalloc;

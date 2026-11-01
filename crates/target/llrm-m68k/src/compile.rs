@@ -116,6 +116,7 @@ pub fn items_with(
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+        crate::narrow::narrow_logic_immediates(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);

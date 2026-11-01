@@ -38,7 +38,9 @@ fn a_mask_keeps_its_immediate_form_and_its_value() {
         let ir =
             format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert!(asm.contains(&format!("and.l\t#{mask},")), "mask {mask}: {asm}");
+        // A mask of ones above bit 15 is the word `and` (`narrow.rs`).
+        let form = if mask < 0 { format!("and.w\t#{},", mask & 0xFFFF) } else { format!("and.l\t#{mask},") };
+        assert!(asm.contains(&form), "mask {mask}: {asm}");
         if let Some(code) = status(&ir, &[0x85], Options::default()) {
             assert_eq!(code, ((0x85 & mask) + 0x85) & 0xFF, "mask {mask}: {asm}");
         }
