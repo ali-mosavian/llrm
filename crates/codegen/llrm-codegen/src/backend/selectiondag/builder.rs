@@ -130,6 +130,10 @@ pub struct BuilderTarget {
     /// The target has x86's `rep movs` and `rep stos`; without them a copy or
     /// fill past the inline limit is a call (the pin's `memcpy`, `memset`).
     pub string_instructions: bool,
+    /// The target selects `ATOMIC_LOAD`, `ATOMIC_STORE` and the
+    /// read-modify-write nodes itself; x86 gets only the exchange its lock
+    /// prefix covers.
+    pub native_atomics: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -327,6 +331,7 @@ impl BuilderTarget {
             size_trade: None,
             ordered_copies: false,
             string_instructions: true,
+            native_atomics: false,
             tail_calls: false,
             is_zext_free: |_, _, _| false,
             tti: None,
@@ -365,6 +370,7 @@ impl BuilderTarget {
             size_trade: None,
             ordered_copies: false,
             string_instructions: true,
+            native_atomics: false,
             tail_calls: false,
             is_zext_free: |_, _, _| false,
             tti: None,
@@ -1254,6 +1260,9 @@ impl Builder<'_> {
     ) -> Result<(), Refused> {
         use llrm_mir::opcode::{AtomicKind, RmwOp};
         let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        if self.target.native_atomics {
+            return self.visit_native_atomic(instruction, info);
+        }
         let (pointer, value) = match info.kind {
             AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
             AtomicKind::Store => (arguments[1], arguments[0]),
@@ -1270,6 +1279,91 @@ impl Builder<'_> {
         self.dag.set_root(SDValue { node: swap.node, res: 1 });
         if let Some(result) = instruction.result {
             self.set_value(result, swap);
+        }
+        Ok(())
+    }
+
+    /// `visitAtomicLoad`, `visitAtomicStore` and `visitAtomicRMW`: the node
+    /// carries the instruction's ordering in its memory info.
+    fn visit_native_atomic(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: llrm_mir::opcode::AtomicInfo,
+    ) -> Result<(), Refused> {
+        use llrm_mir::opcode::{AtomicKind, RmwOp};
+        let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        if info.kind == AtomicKind::Fence {
+            use llrm_mir::opcode::AtomicOrdering::*;
+            let ordering = match info.ordering {
+                Unordered => 1,
+                Monotonic => 2,
+                Acquire => 4,
+                Release => 5,
+                AcqRel => 6,
+                SeqCst => 7,
+            };
+            let root = self.root();
+            let fence = self.dag.get_atomic_fence(root, ordering, info.single_thread);
+            self.dag.set_root(fence);
+            return Ok(());
+        }
+        let (pointer, value) = match info.kind {
+            AtomicKind::Load => (arguments[0], None),
+            AtomicKind::Store => (arguments[1], Some(arguments[0])),
+            AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => (arguments[0], Some(arguments[1])),
+            _ => return Err(Refused("an atomic other than a load, store or read-modify-write")),
+        };
+        if self.operand_type(pointer)? == MVT::Far.into() {
+            return Err(Refused("an atomic access through a far pointer"));
+        }
+        let ty = match value {
+            Some(value) => self.function.operand_type(&self.module.context, value).ok_or(Refused("block operand"))?,
+            None => instruction.ty,
+        };
+        let ptr = self.get_value(pointer)?;
+        let mut mem = self.mem_info(ty, info.align, true, pointer)?;
+        mem.ordering = Some(info.ordering);
+        let root = self.root();
+        match (info.kind, value) {
+            (AtomicKind::Load, _) => {
+                let vt = self.type_of(ty)?;
+                let load = self.dag.get_atomic_load(vt, root, ptr, mem);
+                self.dag.set_root(SDValue { node: load.node, res: 1 });
+                if let Some(result) = instruction.result {
+                    self.set_value(result, load);
+                }
+            }
+            (AtomicKind::Store, Some(value)) => {
+                let src = self.get_value(value)?;
+                let store = self.dag.get_atomic_store(root, ptr, src, mem);
+                self.dag.set_root(store);
+            }
+            (AtomicKind::Rmw(op), Some(value)) => {
+                let src = self.get_value(value)?;
+                let old = match op {
+                    RmwOp::Xchg => self.dag.get_atomic_swap(root, ptr, src, mem),
+                    RmwOp::Add => self.dag.get_atomic_rmw(ISD::AtomicLoadAdd, root, ptr, src, mem),
+                    RmwOp::Sub => self.dag.get_atomic_rmw(ISD::AtomicLoadSub, root, ptr, src, mem),
+                    RmwOp::And => self.dag.get_atomic_rmw(ISD::AtomicLoadAnd, root, ptr, src, mem),
+                    RmwOp::Or => self.dag.get_atomic_rmw(ISD::AtomicLoadOr, root, ptr, src, mem),
+                    RmwOp::Xor => self.dag.get_atomic_rmw(ISD::AtomicLoadXor, root, ptr, src, mem),
+                    _ => return Err(Refused("an atomic read-modify-write the DAG path does not take")),
+                };
+                self.dag.set_root(SDValue { node: old.node, res: 1 });
+                if let Some(result) = instruction.result {
+                    self.set_value(result, old);
+                }
+            }
+            (AtomicKind::CmpXchg { .. }, Some(expected)) => {
+                let expected = self.get_value(expected)?;
+                let new = self.get_value(arguments[2])?;
+                let swap = self.dag.get_atomic_cmp_swap(Some(EVT::I1), root, ptr, expected, new, mem);
+                self.dag.set_root(SDValue { node: swap.node, res: 2 });
+                if let Some(result) = instruction.result {
+                    self.set_value(result, swap);
+                }
+            }
+            _ => unreachable!("the kinds were matched above"),
         }
         Ok(())
     }
