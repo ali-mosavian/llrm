@@ -22,6 +22,12 @@ pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
 pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
 
 /// `DATALAYOUT_TOML`, parsed once.
+/// DEVIATE G1 (m64): a callee that stays is inlined into an `-Os` caller only
+/// if its code does not outgrow the call. The pin's `OptSizeThreshold` 50
+/// counts instructions; gcc -Os calls where the copy would grow (recsum).
+const TUNING: llrm_mir::target::Tuning =
+    llrm_mir::target::Tuning { inline_size_guard_at_size: true, ..llrm_mir::target::Tuning::PIN };
+
 static LAYOUT: LazyLock<llrm_target::layout::Layout> =
     LazyLock::new(|| llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("x86-64 datalayout.toml parses"));
 
@@ -348,7 +354,7 @@ impl llrm_target::Target for M64 {
                 prices,
                 Some(OPCOSTS.size_costs()),
                 llrm_x86::tti::X86::of_cpu("x86-64")
-                    .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                    .map(|one| std::rc::Rc::new(one.with_tuning(TUNING)) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: true })),
             )
         }

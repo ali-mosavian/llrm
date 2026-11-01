@@ -48,6 +48,9 @@ pub struct Tuning {
     /// also holds a caller optimized for speed; false: the pin's threshold
     /// alone decides there.
     pub inline_size_guard_at_speed: bool,
+    /// The same bound holds a caller optimized for size (`-Os`), whatever the
+    /// target's real-mode description says; false: the pin's threshold alone.
+    pub inline_size_guard_at_size: bool,
 }
 
 impl Tuning {
@@ -68,6 +71,7 @@ impl Tuning {
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,
+        inline_size_guard_at_size: false,
     };
 }
 

@@ -2182,3 +2182,23 @@ fn the_frame_pointer_option_gives_the_attribute_to_functions_without_one() {
     assert!(frame_listing("", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
     assert!(!frame_listing("\"frame-pointer\"=\"none\"", true, &["-frame-pointer=all"]).contains("mov ebp, esp"));
 }
+
+/// At -Os m64 inlined an external loop function into its one caller with a
+/// constant argument, `bench_recsum` (recsum 102 B against gcc's 65): the
+/// callee stays, so the copy was pure growth.
+#[test]
+fn an_external_loop_function_is_not_inlined_into_an_optsize_caller_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+        target triple = \"x86_64-unknown-linux-gnu\"\n\
+        declare void @report(i64)\n\
+        define i64 @bench_recsum(i32 %n) optsize {\n\
+        entry:\n  br label %loop\n\
+        loop:\n  %i = phi i32 [ %n, %entry ], [ %next, %loop ]\n  %acc = phi i64 [ 0, %entry ], [ %sum, %loop ]\n  \
+        %r = and i32 %i, 7\n  %w = sext i32 %r to i64\n  %sum = add i64 %acc, %w\n  \
+        %next = sub i32 %i, 1\n  %done = icmp eq i32 %next, 0\n  br i1 %done, label %out, label %loop\n\
+        out:\n  ret i64 %sum\n}\n\
+        define i32 @main() optsize {\n  %v = call i64 @bench_recsum(i32 2000)\n  call void @report(i64 %v)\n  ret i32 0\n}\n";
+    let (built, _) = compiled(&flags(&["-Os"]), text, "main").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("call bench_recsum"), "{listing}");
+}
