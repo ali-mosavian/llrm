@@ -36,11 +36,10 @@
 //! DEVIATE W20: the pin has no such pass; it asserts. Exit: none, the form is
 //! outside what C++ makes.
 
-use std::collections::BTreeSet;
-
 use llrm_codegen::backend::ehprepare::{demote_live_into, demote_phis};
 use llrm_mir::GlobalId;
 use llrm_mir::TypeId;
+use llrm_mir::dense::IdSet;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueDef};
@@ -187,7 +186,12 @@ fn function(
             rename_incoming(b.function, target, pad, looped);
         }
     }
-    let targets: BTreeSet<BlockId> = redirects.iter().map(|&(_, target)| target).collect();
+    let mut targets: Vec<BlockId> = Vec::new();
+    for &(_, target) in &redirects {
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
     for target in targets {
         demote_live_into(b.context, b.function, target, &reaches)?;
     }
@@ -222,13 +226,14 @@ fn reentering_pads(function: &Function) -> Vec<BlockId> {
     let dom = DomTree::of(function);
     let mut found = Vec::new();
     for pad in pads(function) {
-        let mut reaching: BTreeSet<BlockId> = function
-            .layout()
-            .iter()
-            .copied()
-            .filter(|&block| function.terminator(block).is_some_and(|t| unwind_of(function, t) == Some(pad)))
-            .collect();
-        let mut work: Vec<BlockId> = reaching.iter().copied().collect();
+        let mut reaching = IdSet::<BlockId>::new();
+        let mut work: Vec<BlockId> = Vec::new();
+        for &block in function.layout() {
+            if function.terminator(block).is_some_and(|t| unwind_of(function, t) == Some(pad)) && reaching.insert(block)
+            {
+                work.push(block);
+            }
+        }
         while let Some(block) = work.pop() {
             for before in function.predecessors(block) {
                 if before != pad && reaching.insert(before) {
