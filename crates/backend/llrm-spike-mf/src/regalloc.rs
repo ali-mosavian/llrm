@@ -17,19 +17,31 @@ use crate::sink::{Jump, split_critical_edge};
 
 /// A copy about to be joined, as [`Target::should_coalesce`] sees it.
 pub struct Join<'a> {
-    /// The registers the source value may take, and what its other
-    /// instructions save while it may sit in memory
-    /// ([`Target::memory_saving`]).
     pub source: Side<'a>,
     pub destination: Side<'a>,
     /// The registers the joined value may take.
     pub joined: &'a [RegId],
+    /// The frequency of the copy's block, relative to the entry block: how
+    /// often the copy the join removes would run.
+    pub copy_frequency: f32,
+}
+
+impl Join<'_> {
+    /// What the join costs the two values' other instructions, weighted by
+    /// their blocks' frequencies: each is priced in the cheapest register the
+    /// narrower class still has ([`Target::operand_cost`]).
+    pub fn extra_cost(&self) -> f32 {
+        self.source.extra_cost + self.destination.extra_cost
+    }
 }
 
 /// One side of a [`Join`].
 pub struct Side<'a> {
+    /// The registers the value may take before the join.
     pub registers: &'a [RegId],
-    pub memory_saving: u32,
+    /// The sum over the value's other instructions of their block's frequency
+    /// times what the join adds to their cost.
+    pub extra_cost: f32,
 }
 
 /// What the allocator needs to know of a register file.
@@ -122,17 +134,26 @@ pub trait Target {
     /// `TargetRegisterInfo::shouldCoalesce`: whether a copy between two values
     /// is joined into one that may take only the registers both could. A join
     /// narrows both for good, and the allocator cannot widen the survivor.
-    fn should_coalesce(_join: &Join) -> bool {
-        true
+    fn should_coalesce(join: &Join) -> bool {
+        join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
-    /// What the instruction `inst` saves on its operand `operand` while the
-    /// value may sit in memory: the instructions the register form needs to
-    /// get it there and back (the 6502's `dec cell` is one instruction;
-    /// `ldy; dey; sty` is three).
-    fn memory_saving(
+    /// What one register-to-register copy costs, in the unit of
+    /// [`Target::operand_cost`].
+    fn copy_cost() -> u32 {
+        1
+    }
+
+    /// What the instruction `inst` costs with its operand `operand` in
+    /// `register` (clocks or bytes by the target's goal, from its instruction
+    /// tables): the 6502's `dec` is one instruction on a zero-page cell and
+    /// three in a register that has to be loaded and stored back. Greedy
+    /// hints the cheapest register ([`getRegAllocationHints`] from the
+    /// descriptor), and `should_coalesce` prices a join by it.
+    fn operand_cost(
         _inst: &Inst,
         _operand: usize,
+        _register: RegId,
     ) -> u32 {
         0
     }
@@ -143,16 +164,6 @@ pub trait Target {
     /// around it, and a piece no narrowing instruction names takes the larger
     /// class (`recomputeRegClass`).
     fn larger_order(_order: &[RegId]) -> Option<Vec<RegId>> {
-        None
-    }
-
-    /// `getRegAllocationHints` for one operand (ARM's Thumb2 hints the low
-    /// registers its 16-bit encodings need): the register `inst` is cheaper
-    /// with at operand `operand`, if there is one.
-    fn operand_hint(
-        _inst: &Inst,
-        _operand: usize,
-    ) -> Option<RegId> {
         None
     }
 

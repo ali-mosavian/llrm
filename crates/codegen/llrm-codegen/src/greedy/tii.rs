@@ -111,6 +111,16 @@ pub trait TargetInstrInfo {
         None
     }
 
+    /// What one reference to `value` in `one` adds to its spill weight, as a
+    /// multiple of LLVM's one (see `SpillWeightEnv::reference_weight`).
+    fn reference_weight(
+        &self,
+        _one: &Insn,
+        _value: u32,
+    ) -> f32 {
+        1.0
+    }
+
     /// The registers `one` is cheaper with, as (value, register): the target's
     /// `getRegAllocationHints` for the values `one` names.
     fn preferred_registers(

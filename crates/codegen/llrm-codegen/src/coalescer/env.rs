@@ -50,6 +50,10 @@ pub struct TargetEnv {
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
     pub should_join: Box<dyn Fn(&Join) -> bool>,
+    /// The frequency of each block relative to the entry block
+    /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
+    /// runs once.
+    pub freq: Vec<f32>,
 }
 
 /// One side of a copy about to be joined.
@@ -57,9 +61,9 @@ pub struct JoinSide {
     pub value: u32,
     /// The registers it may take.
     pub palette: BTreeSet<RegId>,
-    /// The instructions that name it, the copy apart: what the join would
-    /// leave a narrower class to serve.
-    pub uses: Vec<Arc<Insn>>,
+    /// The instructions that name it, the copy apart, with the frequency of
+    /// their block: what the join would leave a narrower class to serve.
+    pub uses: Vec<(Arc<Insn>, f32)>,
 }
 
 /// What `shouldCoalesce` is asked: the two sides of the copy and the
@@ -68,6 +72,9 @@ pub struct Join {
     pub one: JoinSide,
     pub other: JoinSide,
     pub joined: BTreeSet<RegId>,
+    /// The frequency of the copy's block: what one copy the join removes
+    /// saves.
+    pub copy_frequency: f32,
 }
 
 impl CoalescerEnv for TargetEnv {
@@ -115,18 +122,22 @@ impl CoalescerEnv for TargetEnv {
     ) -> bool {
         let palettes = self.palettes.borrow();
         let (Some(x), Some(y)) = (palettes.get(&src), palettes.get(&dst)) else { return true };
+        let freq = |key: InstrKey| {
+            let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
+            self.freq.get(block).copied().unwrap_or(1.0)
+        };
         let side = |value: u32, palette: &BTreeSet<RegId>| {
             let mut seen = crate::support::hash::HashSet::default();
             let uses = lis
                 .operands(value)
                 .iter()
                 .filter(|op| op.instr != copy && seen.insert(op.instr))
-                .map(|op| Arc::clone(lis.instr(op.instr)))
+                .map(|op| (Arc::clone(lis.instr(op.instr)), freq(op.instr)))
                 .collect();
             JoinSide { value, palette: palette.clone(), uses }
         };
         let joined = x.intersection(y).copied().collect();
-        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined })
+        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
     fn narrow(
@@ -196,7 +207,9 @@ pub fn coalesce(
             (*value, others)
         })
         .collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join };
+    let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+    let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);
