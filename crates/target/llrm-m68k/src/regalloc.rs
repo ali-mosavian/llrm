@@ -143,6 +143,14 @@ pub fn allocate_spilling_by_frequency(
     llrm_spike_mf::spill::allocate_spilling_ordered::<M68kRegisters>(function, first_slot, true)
 }
 
+/// [`allocate_spilling_by_frequency`] by the translated greedy allocator.
+pub fn allocate_greedy(
+    function: &mut MFunction,
+    size: bool,
+) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    llrm_spike_mf::tolir::allocate_greedy::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), size)
+}
+
 /// `MachineSinking` over the m68k function.
 pub fn machine_sink(function: &mut MFunction) -> bool {
     llrm_spike_mf::machine_sink::<M68kRegisters>(function)
