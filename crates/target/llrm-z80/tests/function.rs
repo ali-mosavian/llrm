@@ -138,15 +138,62 @@ fn loads_through_a_pointer_widen_a_byte_and_read_a_word() {
     assert!(selected(word, "g")[0].contains(&"LD16rm"));
 }
 
-/// Known gap: an argument beyond the registers is refused, not misplaced (the
-/// builder's hook cannot return an error, so it panics).
-#[test]
-#[should_panic(expected = "Stack")]
-fn a_fourth_word_argument_is_refused_until_pushes_exist() {
-    let ir = "define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  ret i16 %d\n}";
-    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+fn function(
+    body: &str,
+    name: &str,
+) -> llrm_z80::dagisel::function::Selection {
+    let text = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
     let module = llrm_mir::parse::module(&text).expect("parses");
-    let _ = select_function(&module, "f", Cpu::Z80);
+    select_function(&module, name, Cpu::Z80).expect("selects")
+}
+
+/// A fourth word argument panicked with "Stack": three pairs hold three words
+/// and the fourth has no register. Worked out from `calling.toml`: `a` HL, `b`
+/// DE, `c` BC, `d` the first stack argument, offset 0 from the first stack byte
+/// (the return address and saved IX in front of it are the frame resolver's, 4
+/// bytes). The callee loads it from that fixed object, through the object's
+/// address.
+#[test]
+fn a_fourth_word_argument_is_a_fixed_object_at_offset_zero() {
+    let ir = "define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {\n  ret i16 %d\n}";
+    let f = function(ir, "f");
+    assert_eq!(f.blocks.len(), 1);
+    assert!(names(&f.blocks[0]).starts_with(&["LEAFI", "LD16rm"]), "{:?}", names(&f.blocks[0]));
+    assert_eq!(f.blocks[0].dag.fixed_offsets.values().copied().collect::<Vec<_>>(), [0]);
+}
+
+/// `f(i32 a, i32 b)` as a caller: `a` is HL and DE, the low word of `b` BC, its
+/// high word the one stack word. The call sequence reserves 2 bytes and one
+/// `STSP16` stores the high word at offset 0 in it.
+#[test]
+fn a_call_with_two_longs_stores_one_word_on_the_stack() {
+    let ir = "declare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %r = call i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}";
+    let f = function(ir, "f");
+    let all: Vec<_> = f.blocks.iter().flat_map(names).collect();
+    assert_eq!(all.iter().filter(|name| **name == "STSP16").count(), 1, "{all:?}");
+    let block = &f.blocks[0];
+    let node = |wanted: &str| {
+        block
+            .dag
+            .nodes()
+            .iter()
+            .position(|n| matches!(
+                n.opcode,
+                ISD::Machine(code) if MACHINE_OPCODES.iter().any(|(v, name)| u32::from(*v) == code && *name == wanted)
+            ))
+            .unwrap_or_else(|| panic!("no {wanted} in {all:?}"))
+    };
+    let constant = |at: usize, operand: usize| {
+        let operands = &block.dag.nodes()[at].ops;
+        block
+            .dag
+            .constant(operands[operand])
+            .unwrap_or_else(|| panic!("operand {operand} of {wanted_name} is no constant", wanted_name = at))
+    };
+    // STSP16 operands: value, offset, chain
+    let store = node("STSP16");
+    assert_eq!(constant(store, 1), 0);
+    assert_eq!(constant(node("ADJCALLSTACKDOWN"), 0), 2);
 }
 
 /// A signed byte widened to a word is the byte and its sign: the high byte is

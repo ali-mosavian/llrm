@@ -87,6 +87,7 @@ pub fn target_lowering() -> TargetLowering {
     // with the same family for bytes, which this runtime has because a byte
     // loop is half the word's.
     set(&[Mul, SDiv, UDiv, SRem, URem], &[MVT::I8, MVT::I16], Action::LibCall);
+    set(&[ShlParts, SrlParts, SraParts], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi, SDivRem, UDivRem], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[SignExtendInReg], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
@@ -100,6 +101,19 @@ pub fn target_lowering() -> TargetLowering {
         for (op, name) in [Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
             tl.set_libcall_name(op, vt, name);
         }
+    }
+    // the longs are expanded to words; a divide or a variable shift of one is
+    // the call, not a word-wise expansion
+    for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip([
+        "__divsi3",
+        "__udivsi3",
+        "__modsi3",
+        "__umodsi3",
+        "__ashlsi3",
+        "__lshrsi3",
+        "__ashrsi3",
+    ]) {
+        tl.set_libcall_name(op, MVT::I32, name);
     }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
@@ -165,22 +179,41 @@ impl Hooks for Z80Lowering {
     ) -> Option<SDValue> {
         use super::call::{Ext, In, Out, lower_call};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
-        let outs: Vec<Out> = args
-            .iter()
-            .map(|&value| Out {
-                value,
+        // `LowerCallTo` splits a type the target holds in no register: a long
+        // travels as two words, low first
+        let mut outs = Vec::new();
+        for &value in args {
+            let vt = dag.value_type(value);
+            let parts = if vt == EVT::I32 {
+                let sixteen = dag.get_constant(16, EVT::I8);
+                let high = dag.get_node(ISD::Srl, vt, &[value, sixteen]);
+                vec![dag.get_node(ISD::Truncate, EVT::I16, &[value]), dag.get_node(ISD::Truncate, EVT::I16, &[high])]
+            } else {
+                vec![value]
+            };
+            let split = parts.len() > 1;
+            outs.extend(parts.into_iter().map(|part| Out {
+                value: part,
                 ext,
                 pointer: false,
-                arg_vt: dag.value_type(value),
-                split: false,
+                arg_vt: vt,
+                split,
                 variadic: false,
-            })
-            .collect();
+            }));
+        }
+        let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
+        let ins = vec![
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32 };
+            if ret == EVT::I32 { 2 } else { 1 }
+        ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();
-        let (_chain, values) =
-            lower_call(dag, root, callee, &outs, &[In { vt: ret, pointer: false, arg_vt: ret, split: false }]).ok()?;
-        values.first().copied()
+        let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        match values[..] {
+            [one] => Some(one),
+            [lo, hi] => Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi])),
+            _ => None,
+        }
     }
 }
 

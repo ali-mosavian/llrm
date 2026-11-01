@@ -88,13 +88,15 @@ impl<D: AddrDag> Hooks<D> for Z80Hooks {
         unreachable!("the Z80 tables name no complex pattern, got {pattern}")
     }
 
+    /// The one transform of the tables is `to_tframeindex`.
     fn run_xform(
         &mut self,
-        _dag: &mut D,
-        _value: SDValue,
-        xform: u8,
+        dag: &mut D,
+        value: SDValue,
+        _xform: u8,
     ) -> SDValue {
-        unreachable!("the Z80 tables name no transform, got {xform}")
+        let index = dag.frame_index(value).expect("to_tframeindex takes a frame index");
+        dag.target_frame_index(index, mvt::i16)
     }
 
     fn is_profitable_to_fold(

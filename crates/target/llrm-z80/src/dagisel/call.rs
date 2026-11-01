@@ -8,9 +8,16 @@
 //! in `a`, a word in `e:d` (DE), a long in `e:d:l:h`. The values arrive already
 //! split into legal `i8` and `i16` parts, so an `i32` is two words.
 //!
-//! DEVIATE: an argument that fits no register is refused. Reason: the stack
-//! arguments are pushed, and the `PUSH` node and the frame object a callee
-//! reads them from are not written. Exit: the frame lowering.
+//! An argument that fits no register goes on the stack at the offset
+//! `Convention::place` gives it, counted from the first stack argument. The
+//! caller stores it at SP + offset inside the call frame its `CALLSEQ_START`
+//! opens (`STSP`, as AVR's `LowerCall` stores through `STDSPQRr`); the callee
+//! loads it from a fixed object at the same offset. The four bytes of return
+//! address and saved IX in front of the first argument
+//! (`first_argument_offset`) are the frame resolver's, added in one place.
+//!
+//! DEVIATE: the stores are not `PUSH`. Reason: the pin turns stores into pushes
+//! in a separate pass (`X86CallFrameOptimization`). Exit: that pass (row 7).
 //!
 //! # See also
 //! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311),
@@ -19,7 +26,7 @@
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_target::calling::{Convention, Kind, Place};
 
 use super::generated::ids::isd as ids;
@@ -28,6 +35,8 @@ use crate::abi;
 /// `Z80ISD::CALL` and `Z80ISD::RET_GLUE`, numbered by `own_ids.txt`.
 pub const CALL: ISD = ISD::Target(ids::CALL);
 pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
+/// A store to SP + offset in the call frame.
+pub const STSP: ISD = ISD::Target(ids::STSP);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, TargetCalling};
@@ -36,14 +45,14 @@ use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, TargetCalling}
 pub enum Refused {
     /// A type other than `i8` or `i16`.
     Type(EVT),
-    /// An argument that goes on the stack.
-    Stack,
 }
 
 /// Where an argument is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Location {
     Register(llrm_lir::registers::RegId),
+    /// Bytes from the first stack argument.
+    Stack(i64),
 }
 
 fn kind(vt: EVT) -> Result<Kind, Refused> {
@@ -69,7 +78,7 @@ fn locations(
         .map(|(at, place)| match place {
             Place::Registers(names) if vts[at] == EVT::I16 => Ok(Location::Register(abi::pair_of(&names[0]))),
             Place::Registers(names) => Ok(Location::Register(abi::register(&names[0]))),
-            Place::Stack(_) => Err(Refused::Stack),
+            Place::Stack(offset) => Ok(Location::Stack(*offset)),
         })
         .collect::<Result<_, _>>()?;
     Ok((places, placement.stack_bytes))
@@ -123,9 +132,26 @@ pub fn lower_call(
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
     let (targets, bytes) = locations(&convention, &vts)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
-    let mut glue = None;
+    let mut stores = Vec::new();
     for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target;
+        if let Location::Stack(offset) = target {
+            let at = dag.get_constant(offset as u128, EVT::I16);
+            stores.push(dag.get_node_multi(STSP, &[EVT::OTHER], &[chain, out.value, at]));
+        }
+    }
+    if !stores.is_empty() {
+        chain = dag.get_token_factor(&stores);
+    }
+    let in_registers: Vec<_> = outs
+        .iter()
+        .zip(&targets)
+        .filter_map(|(out, &target)| match target {
+            Location::Register(register) => Some((out, register)),
+            Location::Stack(_) => None,
+        })
+        .collect();
+    let mut glue = None;
+    for &(out, register) in &in_registers {
         let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
@@ -137,8 +163,7 @@ pub fn lower_call(
         _ => callee,
     };
     let mut operands = vec![chain, callee];
-    for (out, &target) in outs.iter().zip(&targets) {
-        let Location::Register(register) = target;
+    for &(out, register) in &in_registers {
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
@@ -162,7 +187,7 @@ pub fn lower_formal_arguments(
     dag: &mut SelectionDAG,
     chain: SDValue,
     ins: &[In],
-    _fixed: FixedObject,
+    fixed: FixedObject,
     live_in: LiveIn,
 ) -> Result<Vec<SDValue>, Refused> {
     let convention = abi::z80();
@@ -175,6 +200,21 @@ pub fn lower_formal_arguments(
             Location::Register(register) => {
                 let copy = dag.get_copy_from_reg(chain, live_in(register), arg.vt);
                 SDValue { node: copy.node, res: 0 }
+            }
+            // `LowerMemArgument`: the argument is its fixed object, loaded
+            Location::Stack(offset) => {
+                let index = fixed(arg.vt.size_in_bits() / 8, offset, true);
+                let address = dag.get_frame_index(EVT::I16, index);
+                let info = MemInfo {
+                    mem_vt: arg.vt,
+                    align: 1,
+                    volatile: false,
+                    base: MemBase::Stack(index),
+                    ext: None,
+                    space: 0,
+                    ordering: None,
+                };
+                dag.get_load(arg.vt, chain, address, info)
             }
         })
         .collect())

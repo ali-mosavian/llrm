@@ -53,6 +53,10 @@ def Z80callseq_start : SDNode<"ISD::CALLSEQ_START", SDT_Z80CallSeqStart, [SDNPHa
 def Z80callseq_end : SDNode<"ISD::CALLSEQ_END", SDT_Z80CallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def SDT_Z80Call : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
 def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+// A store to SP + offset in the call frame the callseq opens. The Z80 has no SP-relative store, so the pseudo is
+// expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
+def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
+def Z80stsp : SDNode<"Z80ISD::STSP", SDT_Z80StSP, [SDNPHasChain, SDNPMayStore]>;
 def Z80wrapper : SDNode<"Z80ISD::WRAPPER", SDTIntUnaryOp>;
 def Z80retglue : SDNode<"Z80ISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
@@ -193,6 +197,16 @@ let Defs = [SP, F], Uses = [SP] in {
   def ADJCALLSTACKUP : Z80Inst<(outs), (ins i16imm:$amt1, i16imm:$amt2), "#ADJCALLSTACKUP",
                                [(Z80callseq_end timm:$amt1, timm:$amt2)]>;
 }
+
+let mayStore = 1, Uses = [SP] in {
+  def STSP8 : Z80Inst<(outs), (ins GR8:$v, i16imm:$off), "stsp $off, $v", [(Z80stsp i8:$v, imm:$off)]>;
+  def STSP16 : Z80Inst<(outs), (ins GR16:$v, i16imm:$off), "stsp16 $off, $v", [(Z80stsp i16:$v, imm:$off)]>;
+}
+
+// The address of a frame object: IX + displacement, resolved when the frame is laid out. The (ix+d) loads and
+// stores take the object without the address (row 6).
+def LEAFI : Z80Inst<(outs GR16:$d), (ins i16imm:$fi), "leafi $d, $fi", []>;
+def : Pat<(i16 frameindex:$fi), (LEAFI (to_tframeindex $fi))>;
 
 let isReturn = 1, isTerminator = 1, isBarrier = 1 in
   def RET : Z80Inst<(outs), (ins), "ret", [(Z80retglue)]>;

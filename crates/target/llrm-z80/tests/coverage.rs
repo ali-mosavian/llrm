@@ -1,6 +1,7 @@
-//! Selection coverage: one small function per operation and type, signed as well as unsigned, so a gap in the
-//! legalizer or the tables is a failing test and not a find. Every function must select. `sext i8 to i16` was refused
-//! for want of a pattern and no unsigned bench kernel noticed.
+//! Selection coverage: one small function per operation and type, signed as
+//! well as unsigned, so a gap in the legalizer or the tables is a failing test
+//! and not a find. Every function must select. `sext i8 to i16` was refused for
+//! want of a pattern and no unsigned bench kernel noticed.
 
 use llrm_z80::dagisel::function::select_function;
 use llrm_z80::dagisel::hooks::Cpu;
@@ -36,7 +37,8 @@ fn binary(
     )
 }
 
-/// The second operand is a constant, so the function takes one argument and needs no stack slot.
+/// The second operand is a constant, so the function takes one argument and
+/// needs no stack slot.
 fn binary_const(
     op: &str,
     bits: u32,
@@ -102,20 +104,20 @@ fn arithmetic_selects_at_every_width() {
     assert!(bad.is_empty(), "{} refused:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// A long divide is a call of `__divsi3` and its kin, two longs: eight bytes of arguments, seven registers, so the
-/// stack (row 4). The type legalizer has to take the target's libcall name for the expanded type, as the pin's
-/// `ExpandIntRes_SDIV` does; today it knows only the x86 inline `i64` routine.
+/// A long divide is a call of `__divsi3` and its kin. The type legalizer has to
+/// take the target's libcall name for the expanded type, as the pin's
+/// `ExpandIntRes_SDIV` does; it knew only the x86 inline `i64` routine, and
+/// refused every `i32` divide with "the i64 divide routine is unavailable".
 #[test]
-#[ignore = "row 4: stack arguments (due 2026-11-04)"]
 fn divides_of_a_long_select() {
     let cases: Vec<_> = DIVIDES.iter().map(|op| binary_const(op, 32)).collect();
     let bad = refused(&cases);
     assert!(bad.is_empty(), "{} refused:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Two `i32` arguments are eight bytes and the registers hold seven, so the second one goes on the stack: row 4.
+/// Two `i32` arguments are eight bytes and the registers hold seven, so the
+/// last word goes on the stack.
 #[test]
-#[ignore = "row 4: stack arguments (due 2026-11-04)"]
 fn arithmetic_on_two_longs_selects() {
     let cases: Vec<_> = OPS.iter().map(|op| binary(op, 32)).collect();
     let bad = refused(&cases);
@@ -137,9 +139,7 @@ fn signed_and_unsigned_compares_select_at_every_width() {
     assert!(bad.is_empty(), "{} refused:\n{}", bad.len(), bad.join("\n"));
 }
 
-/// Row 4, as above.
 #[test]
-#[ignore = "row 4: stack arguments (due 2026-11-04)"]
 fn compares_of_two_longs_select() {
     let cases: Vec<_> = CONDS.iter().map(|cc| compare(cc, 32)).collect();
     let bad = refused(&cases);

@@ -34,8 +34,9 @@ fn a_word_add_is_cheaper_than_its_bytes() {
     assert!(word.bytes < bytes.iter().map(|c| c.bytes).sum::<u32>());
 }
 
-/// `mlt bc` was a row of the Z80 table, priced from memory, and `cost` returned it for a plain Z80. It is the
-/// Z180 set's, with its own source note, until the Z180 manual is fetched.
+/// `mlt bc` was a row of the Z80 table, priced from memory, and `cost` returned
+/// it for a plain Z80. It is the Z180 set's, with its own source note, until
+/// the Z180 manual is fetched.
 #[test]
 fn the_z80_table_has_no_z180_form() {
     assert_eq!(cost("mlt bc"), None);
