@@ -499,6 +499,34 @@ fn float_inst(
             _ => wrong(),
         });
     }
+    // `FCVTZSSXSri`, `SCVTFSWDri`: the fixed-point forms, the second operand
+    // the number of fractional bits.
+    for (stem, signed, to_int) in
+        [("FCVTZSS", true, true), ("FCVTZUS", false, true), ("SCVTFS", true, false), ("UCVTFS", false, false)]
+    {
+        if let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("ri")) {
+            let (width, size) = (gpr_width(&rest[..1])?, fp_size(rest.get(1..)?)?);
+            return Some(match (to_int, operands) {
+                (true, [Operand::Fpr(fpr), Operand::Imm(fbits)]) => Ok(Inst::FpFixed {
+                    op: FpConvert::ToIntZero { signed },
+                    width,
+                    size,
+                    gpr: gd,
+                    fpr: *fpr,
+                    fbits: *fbits as u8,
+                }),
+                (false, [Operand::Reg(gpr), Operand::Imm(fbits)]) => Ok(Inst::FpFixed {
+                    op: FpConvert::ToFp { signed },
+                    width,
+                    size,
+                    gpr: *gpr,
+                    fpr: rd,
+                    fbits: *fbits as u8,
+                }),
+                _ => wrong(),
+            });
+        }
+    }
     // `SCVTFUWDri`: unscaled, from a `W`, to a `D`.
     for (stem, signed) in [("SCVTFU", true), ("UCVTFU", false)] {
         if let Some(rest) = name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("ri")) {

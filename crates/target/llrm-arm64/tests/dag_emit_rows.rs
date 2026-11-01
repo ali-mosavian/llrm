@@ -71,3 +71,14 @@ fn a_libcall_the_legalizer_made_is_a_direct_call() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("bl _memset") || asm.contains("bl _bzero"), "{asm}");
 }
+
+/// A float multiplied by a power of two and converted is the fixed-point
+/// convert (`fcvtzs x0, s0, #5`); `FCVTZSSXSri` / `SCVTFSWDri` had no row and
+/// refused fpbench.
+#[test]
+fn a_scaled_float_conversion_is_the_fixed_point_form() {
+    let asm = dag("define i64 @f(float %x) {\n  %m = fmul float %x, 32.0\n  %r = fptosi float %m to i64\n  ret i64 %r\n}\ndefine double @g(i32 %x) {\n  %f = sitofp i32 %x to double\n  %m = fmul double %f, 0.125\n  ret double %m\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("fcvtzs x0, s0, #5"), "{asm}");
+    assert!(asm.contains("scvtf d0, w0, #3"), "{asm}");
+}
