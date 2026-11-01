@@ -420,3 +420,15 @@ fn m68040_pack_move16_moves_and_cmp2() {
     assert!(cost_on(Cpu::M68040, "moves.l %d0, (%a0)", 4, true).is_ok());
     assert!(cost_on(Cpu::M68040, "cmp2.l (%a0), %d0", 4, true).is_ok());
 }
+
+/// MC68030UM 11.6 (I-cache case): TAS Dn 4 and TAS Mem 12 (p. 11-44, table
+/// 11.6.11) with the cea of `(An)` 2; MOVES Rn,EA 5 and EA,Rn 7 (p. 11-39,
+/// table 11.6.7) with the jea of `(An)` 2 and of `(d16,An)` 4.
+#[test]
+fn m68030_tas_and_moves() {
+    assert_eq!(m68030("tas %d0"), 4);
+    assert_eq!(m68030("tas (%a0)"), 14);
+    assert_eq!(m68030("moves.l %d0, (%a0)"), 7);
+    assert_eq!(m68030("moves.l (%a0), %d0"), 9);
+    assert_eq!(m68030("moves.l %d0, (4,%a0)"), 9);
+}

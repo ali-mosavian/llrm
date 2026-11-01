@@ -304,6 +304,14 @@ pub(super) fn clocks(
                 memory => Some(plain(get(11, "Scc Mem", "**"))? + cea(memory)?),
             }
         }
+        ("tas", [destination]) => match mode(destination)? {
+            Mode::Dn => plain(get(11, "TAS Dn", "")),
+            memory => Some(plain(get(11, "TAS Mem", "**"))? + cea(memory)?),
+        },
+        ("moves", [first, second]) => match (mode(first)?, mode(second)?) {
+            (Mode::Dn | Mode::An, memory) => Some(plain(get(7, "MOVES Rn,EA", "%"))? + jea(memory)?),
+            (memory, _) => Some(plain(get(7, "MOVES EA,Rn", "%"))? + jea(memory)?),
+        },
         ("ext", _) => plain(get(11, "EXT Dn", "")),
         ("swap", _) => plain(get(7, "SWAP Dn", "")),
         ("exg", _) => plain(get(7, "EXG Ry,Rx", "")),
