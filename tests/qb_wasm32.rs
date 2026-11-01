@@ -180,3 +180,19 @@ fn read_fills_a_fixed_length_string_padded_and_cut() {
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// EXP, LOG and `^` compile to calls of `exp`, `log` and `log2`/`pow`; the host
+/// supplied only sin, cos, atan and lrint, so the module did not instantiate
+/// ("function import requires a callable": data_after_checked, log_exp_digits,
+/// range_power).
+#[test]
+fn exp_log_and_power_run_on_wasm32() {
+    let dir = built(
+        "mathfns",
+        "DIM x AS DOUBLE\nx = 3\nPRINT EXP(x - 3); LOG(x - 2); 2# ^ x; x ^ 2#; SQR(x + 1)\nEND\n",
+    );
+    let (text, code) = run(&dir, "mathfns", &[]);
+    assert_eq!(text.trim_end(), " 1  0  8  9  2");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}

@@ -7,6 +7,12 @@ export class Exit extends Error {
   constructor(code) { super(`exit ${code}`); this.code = code; }
 }
 
+// The C math routines the wasm backend calls where the pin does (`RTLIB`): the double routine, and the float one
+// rounded to a float.
+const doubles = { sin: Math.sin, cos: Math.cos, atan: Math.atan, exp: Math.exp, log: Math.log, log2: Math.log2,
+  exp2: (x) => 2 ** x, pow: Math.pow, fmod: (x, y) => x % y };
+const libm = Object.fromEntries(Object.entries(doubles).flatMap(([name, f]) =>
+  [[name, f], [`${name}f`, (...args) => Math.fround(f(...args))]]));
 // C's lrint: ties to even.
 export const lrint = (x) => { const r = Math.round(x); return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r; };
 
@@ -39,7 +45,8 @@ export async function instantiate(bytes, hooks) {
     llrm_host_key_poll: (ready) => hooks.keyPoll?.(ready, host.now),
     llrm_host_poll: () => { look(); },
     llrm_host_tone: (hertz) => hooks.tone?.(hertz, host.now),
-    sin: Math.sin, cos: Math.cos, atan: Math.atan, lrint, lrintf: lrint,
+    ...libm,
+    lrint, lrintf: lrint,
   } };
   const { instance } = await WebAssembly.instantiate(bytes, imports);
   host.exports = instance.exports;
