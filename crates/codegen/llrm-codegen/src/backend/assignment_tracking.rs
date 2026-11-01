@@ -3,12 +3,13 @@
 //! the code generator emits.
 //!
 //! # How it works
-//! This file holds the result, [`FunctionVarLocs`], and the table it is built
-//! in, [`FunctionVarLocsBuilder`]: the variables (a variable and the bit range
-//! of it a location covers), the variables that have one location for their
-//! whole scope, and the locations that start just before an instruction. The
-//! analysis that fills it comes in later commits; the first part of it is here,
-//! the overlap map and the stores it reads.
+//! [`FunctionVarLocs`] is the result, built in [`FunctionVarLocsBuilder`]:
+//! the variables (a variable and the bit range of it a location covers), the
+//! variables that have one location for their whole scope, and the locations
+//! that start just before an instruction. [`build_overlap_map`] finds which
+//! fragments contain which and which stores write them; [`Lowering`] is the
+//! dataflow: a state per block ([`BlockInfo`]), transfer functions for stores,
+//! escaping calls and records, and `run`, the fixpoint over the blocks.
 //!
 //! # Example
 //! A variable `x` kept in `%a` from its first use, and `y` in its stack slot
@@ -42,6 +43,11 @@ use llrm_mir::{
     ConstantKind, DebugRecord, DebugWhat, DwOp, Function, InstId, MetadataId, Module, Opcode, Operand, ValueDef,
     ValueId,
 };
+
+/// Where a location starts: just before record `slot` of `inst`, or before
+/// `inst` itself when `slot` is the number of records standing before it
+/// (`VarLocInsertPt`, a `DbgRecord` or an `Instruction`).
+pub type InsertPt = (InstId, u32);
 
 /// A number of a variable in [`FunctionVarLocs::variables`]; 0 is reserved
 /// (`VariableID::Reserved`), as the pin's table is one-based.
@@ -309,7 +315,7 @@ pub struct FunctionVarLocsBuilder {
     variables: Vec<DebugVariable>,
     ids: HashMap<DebugVariable, VariableId>,
     single: Vec<VarLocInfo>,
-    before: BTreeMap<InstId, Vec<VarLocInfo>>,
+    before: BTreeMap<InsertPt, Vec<VarLocInfo>>,
 }
 
 impl FunctionVarLocsBuilder {
@@ -341,7 +347,7 @@ impl FunctionVarLocsBuilder {
     /// The locations that start just before `inst`, none if there are none.
     pub fn wedge(
         &self,
-        inst: InstId,
+        inst: InsertPt,
     ) -> Option<&[VarLocInfo]> {
         self.before.get(&inst).map(Vec::as_slice)
     }
@@ -349,7 +355,7 @@ impl FunctionVarLocsBuilder {
     /// Replaces the locations that start just before `inst` (`setWedge`).
     pub fn set_wedge(
         &mut self,
-        inst: InstId,
+        inst: InsertPt,
         wedge: Vec<VarLocInfo>,
     ) {
         self.before.insert(inst, wedge);
@@ -370,7 +376,7 @@ impl FunctionVarLocsBuilder {
     /// A location that starts just before `before` (`addVarLoc`).
     pub fn add_var_loc(
         &mut self,
-        before: InstId,
+        before: InsertPt,
         variable: DebugVariable,
         expression: Vec<DwOp>,
         location: Option<MetadataId>,
@@ -382,7 +388,15 @@ impl FunctionVarLocsBuilder {
 
     /// The result (`FunctionVarLocs::init`).
     pub fn finish(self) -> FunctionVarLocs {
-        FunctionVarLocs { variables: self.variables, single: self.single, before: self.before }
+        // The locations of the records standing before an instruction come
+        // first, in record order, then its own (`FunctionVarLocs::init`).
+        let mut before: BTreeMap<InstId, Vec<VarLocInfo>> = BTreeMap::new();
+        for ((inst, _), locs) in self.before {
+            if !locs.is_empty() {
+                before.entry(inst).or_default().extend(locs);
+            }
+        }
+        FunctionVarLocs { variables: self.variables, single: self.single, before }
     }
 }
 
@@ -924,10 +938,8 @@ pub fn build_overlap_map(
     prepared
 }
 
-/// Where a location starts: just before record `slot` of `inst`, or before
-/// `inst` itself when `slot` is the number of records standing before it
-/// (`VarLocInsertPt`, a `DbgRecord` or an `Instruction`).
-pub type InsertPt = (InstId, u32);
+/// Blocks above which the analysis gives up (`debug-ata-max-blocks`).
+pub const MAX_BLOCKS: usize = 10000;
 
 /// `walkToAllocaAndPrependOffsetDeref`: the alloca `address` is a constant
 /// in-bounds offset from, and `ops` as the location of the variable that is
@@ -1245,26 +1257,13 @@ impl<'a> Lowering<'a> {
     ) {
         let function = self.q.function;
         let instructions: Vec<InstId> = function.iter_block(block).collect();
-        for (at, &inst) in instructions.iter().enumerate() {
-            let records = self.records.get(&inst).cloned().unwrap_or_default();
-            for (slot, &index) in records.iter().enumerate() {
-                let record = function.debug_records()[index];
-                let after = (inst, slot as u32 + 1);
-                // The location a record made before is made again.
-                self.insert_before.remove(&after);
-                if matches!(record.what, DebugWhat::Declare(_)) {
-                    continue;
-                }
-                if fragment_of(&self.ops_of(record.expression)).is_some_and(|fragment| fragment.size == 0) {
-                    continue;
-                }
-                match record.what {
-                    DebugWhat::Assign { .. } => self.process_dbg_assign(live, &record, after),
-                    _ => self.process_dbg_value(live, &record, after),
-                }
-            }
-            // A frame is an instruction and the records after it.
+        // A frame is an instruction and the records standing before the next;
+        // the records before the first one are a frame of their own.
+        if let Some(&first) = instructions.first() {
+            self.process_records(live, first);
             self.finish_frame(live);
+        }
+        for (at, &inst) in instructions.iter().enumerate() {
             if function.instruction(inst).opcode.is_terminator() {
                 break;
             }
@@ -1277,6 +1276,174 @@ impl<'a> Lowering<'a> {
                 self.process_untagged(live, inst, after);
             }
             self.process_escaping_call(live, inst, after);
+            self.process_records(live, next);
+            self.finish_frame(live);
+        }
+    }
+
+    /// The records standing before `inst`, in order.
+    fn process_records(
+        &mut self,
+        live: &mut BlockInfo,
+        inst: InstId,
+    ) {
+        let function = self.q.function;
+        let records = self.records.get(&inst).cloned().unwrap_or_default();
+        for (slot, &index) in records.iter().enumerate() {
+            let record = function.debug_records()[index];
+            let after = (inst, slot as u32 + 1);
+            // The location a record made before is made again.
+            self.insert_before.remove(&after);
+            if matches!(record.what, DebugWhat::Declare(_)) {
+                continue;
+            }
+            if fragment_of(&self.ops_of(record.expression)).is_some_and(|fragment| fragment.size == 0) {
+                continue;
+            }
+            match record.what {
+                DebugWhat::Assign { .. } => self.process_dbg_assign(live, &record, after),
+                _ => self.process_dbg_value(live, &record, after),
+            }
+        }
+    }
+
+    /// `run`: the dataflow over the function's blocks, two worklists in
+    /// reverse post order as the pin has them, then the locations as the
+    /// table: a variable always in its stack home has one location for its
+    /// whole scope, the others their wedges, and the variables with no stack
+    /// slot their records as they stand (`emitPromotedVarLocs`).
+    ///
+    /// Complexity: the pin's: a block is processed again when its entry
+    /// state changes, a state only moves up its lattice (a variable's kind
+    /// and assignments), so O(blocks x variables) passes of O(instructions),
+    /// cut off at [`MAX_BLOCKS`] blocks.
+    pub fn run(mut self) -> Option<FunctionVarLocs> {
+        use std::collections::BTreeSet;
+        let function = self.q.function;
+        if function.layout().len() > MAX_BLOCKS {
+            return None;
+        }
+        let size = self.prepared.tracked_variables;
+        let order = llrm_mir::blockorder::reverse_post_order_traversal(function);
+        let number: HashMap<llrm_mir::BlockId, usize> = order.iter().enumerate().map(|(at, &b)| (b, at)).collect();
+        let mut live_in: HashMap<llrm_mir::BlockId, BlockInfo> = HashMap::new();
+        let mut live_out: HashMap<llrm_mir::BlockId, BlockInfo> = HashMap::new();
+        let mut visited: HashSet<llrm_mir::BlockId> = HashSet::new();
+        let mut worklist: BTreeSet<usize> = (0..order.len()).collect();
+        let mut pending: BTreeSet<usize> = BTreeSet::new();
+        while !worklist.is_empty() {
+            while let Some(at) = worklist.pop_first() {
+                let block = order[at];
+                let mut changed = self.join(block, &visited, size, &mut live_in, &live_out);
+                changed |= visited.insert(block);
+                if !changed {
+                    continue;
+                }
+                let mut live = live_in[&block].clone();
+                self.process(block, &mut live);
+                if live_out.get(&block) != Some(&live) {
+                    live_out.insert(block, live);
+                    for successor in function.successors(block).iter() {
+                        if let Some(&n) = number.get(successor) {
+                            pending.insert(n);
+                        }
+                    }
+                }
+            }
+            std::mem::swap(&mut worklist, &mut pending);
+        }
+        Some(self.finish())
+    }
+
+    /// `join`: the state at the top of `block` from its predecessors visited
+    /// so far (a back edge not yet visited counts as nothing); whether it
+    /// changed.
+    fn join(
+        &self,
+        block: llrm_mir::BlockId,
+        visited: &HashSet<llrm_mir::BlockId>,
+        size: usize,
+        live_in: &mut HashMap<llrm_mir::BlockId, BlockInfo>,
+        live_out: &HashMap<llrm_mir::BlockId, BlockInfo>,
+    ) -> bool {
+        let preds: Vec<_> =
+            self.q.function.predecessors(block).iter().copied().filter(|p| visited.contains(p)).collect();
+        let joined = match preds.split_first() {
+            None => {
+                return if live_in.contains_key(&block) {
+                    false
+                } else {
+                    live_in.insert(block, BlockInfo::new(size));
+                    true
+                };
+            }
+            Some((first, [])) => live_out[first].clone(),
+            Some((first, rest)) => {
+                rest.iter().fold(live_out[first].clone(), |acc, p| BlockInfo::join(&acc, &live_out[p], size))
+            }
+        };
+        if live_in.get(&block) == Some(&joined) {
+            return false;
+        }
+        live_in.insert(block, joined);
+        true
+    }
+
+    /// The table from what the dataflow made.
+    fn finish(mut self) -> FunctionVarLocs {
+        let mut always: HashSet<MetadataId> = HashSet::new();
+        for locs in self.insert_before.values() {
+            for loc in locs {
+                let aggregate = self.builder.variable(loc.variable).variable;
+                if self.not_always_stack_homed.contains(&aggregate) {
+                    continue;
+                }
+                // Different fragments in different allocas, or anything but
+                // a bare deref, fall back to wedges.
+                if loc.expression != [DwOp::Deref] {
+                    self.not_always_stack_homed.insert(aggregate);
+                    continue;
+                }
+                if always.insert(aggregate) {
+                    let variable = *self.builder.variable(loc.variable);
+                    self.builder.add_single_loc_var(variable, Vec::new(), loc.location, loc.values.clone());
+                }
+            }
+        }
+        let wedges = std::mem::take(&mut self.insert_before);
+        for (at, locs) in wedges {
+            let kept: Vec<VarLocInfo> = locs
+                .into_iter()
+                .filter(|loc| !always.contains(&self.builder.variable(loc.variable).variable))
+                .collect();
+            self.builder.set_wedge(at, kept);
+        }
+        self.emit_promoted();
+        self.builder.finish()
+    }
+
+    /// `emitPromotedVarLocs`: a record of a variable with no stack slot is
+    /// a location where it stands.
+    fn emit_promoted(&mut self) {
+        let function = self.q.function;
+        for record in function.debug_records() {
+            if matches!(record.what, DebugWhat::Declare(_)) || self.with_slot.contains(&record.variable) {
+                continue;
+            }
+            let variable = debug_variable_of(self.module, record);
+            let ops = self.ops_of(record.expression);
+            let values = match record.what {
+                DebugWhat::Value(value) | DebugWhat::Piece { value, .. } => vec![value],
+                DebugWhat::Assign { value, .. } => value.into_iter().collect(),
+                DebugWhat::Args(list) => function.debug_args(list).to_vec(),
+                _ => Vec::new(),
+            };
+            let slot = self
+                .records
+                .get(&record.before)
+                .and_then(|list| list.iter().position(|&at| std::ptr::eq(&function.debug_records()[at], record)));
+            let at = (record.before, slot.map_or(0, |one| one as u32));
+            self.builder.add_var_loc(at, variable, ops, record.location, values);
         }
     }
 
@@ -1397,8 +1564,8 @@ mod tests {
     #[test]
     fn locations_keep_their_instruction_and_order() {
         let mut builder = FunctionVarLocsBuilder::default();
-        builder.add_var_loc(InstId(3), variable(5), vec![], None, vec![]);
-        builder.add_var_loc(InstId(3), variable(6), vec![DwOp::Deref], None, vec![]);
+        builder.add_var_loc((InstId(3), 0), variable(5), vec![], None, vec![]);
+        builder.add_var_loc((InstId(3), 0), variable(6), vec![DwOp::Deref], None, vec![]);
         builder.add_single_loc_var(variable(7), vec![DwOp::Deref], None, vec![]);
         let result = builder.finish();
         let names: Vec<u32> = result.locs_before(InstId(3)).iter().map(|one| one.variable.0).collect();
@@ -1660,5 +1827,53 @@ declare void @g(ptr)\ndeclare void @h(ptr readonly)\n\
             )),
             "{locations:?}"
         );
+    }
+
+    /// `int x` whose only store is tagged and followed by its `dbg_assign`,
+    /// in a loop that re-stores it: `x` is in its stack home everywhere, so
+    /// the table has one location for it (the bare memory home) and no
+    /// wedge, and the back edge does not keep the dataflow from ending.
+    const LOOP: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+define i32 @f(i32 %n) {\nentry:\n  %x = alloca i32, align 4, !DIAssignID !24\n\
+    #dbg_assign(i1 poison, !20, !DIExpression(), !24, ptr %x, !DIExpression(), !25)\n  br label %loop\n\
+loop:\n  %i = phi i32 [ 0, %entry ], [ %j, %loop ]\n  store i32 %i, ptr %x, align 4, !DIAssignID !28\n\
+    #dbg_assign(i32 %i, !20, !DIExpression(), !28, ptr %x, !DIExpression(), !25)\n\
+  %j = add i32 %i, 1\n  %c = icmp slt i32 %j, %n\n  br i1 %c, label %loop, label %done\n\
+done:\n  ret i32 %j\n}\n\
+!17 = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)\n\
+!20 = !DILocalVariable(name: \"x\", scope: !14, type: !17)\n\
+!24 = distinct !DIAssignID()\n!28 = distinct !DIAssignID()\n\
+!14 = distinct !DISubprogram(name: \"f\")\n!25 = !DILocation(line: 0, scope: !14)\n";
+
+    fn run(text: &str) -> FunctionVarLocs {
+        let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let function = function_f(&module);
+        let q = Query::new(&module, function, &layout);
+        let markers = AssignmentMarkers::new(function);
+        let with_slot = vars_with_stack_slot(function, &markers);
+        let mut builder = FunctionVarLocsBuilder::default();
+        let callees = llrm_mir::memory::callees(&module);
+        let prepared = build_overlap_map(&module, &q, &mut builder, &markers, &with_slot, &callees);
+        Lowering::new(&module, &q, &markers, &with_slot, prepared, builder).run().expect("few blocks")
+    }
+
+    #[test]
+    fn a_variable_always_in_its_stack_home_has_one_location_and_no_wedge() {
+        let locs = run(LOOP);
+        assert_eq!(locs.single_locs().len(), 1);
+        assert_eq!(locs.single_locs()[0].expression, []);
+        assert_eq!(locs.instructions().count(), 0, "no wedge: {:?}", locs.instructions().collect::<Vec<_>>());
+    }
+
+    /// The same loop with a `dbg_value` of `x` in the body: `x` is not
+    /// always in memory, so it keeps its wedges and has no single location.
+    #[test]
+    fn a_variable_a_dbg_value_overrides_keeps_its_wedges() {
+        let text = LOOP.replace("%j = add", "#dbg_value(i32 %i, !20, !DIExpression(), !25)\n  %j = add");
+        assert_ne!(text, LOOP);
+        let locs = run(&text);
+        assert!(locs.single_locs().is_empty());
+        assert!(locs.instructions().count() > 0);
     }
 }
