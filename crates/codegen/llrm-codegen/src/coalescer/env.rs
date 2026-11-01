@@ -46,6 +46,9 @@ pub struct TargetEnv {
     pub keep_pinned: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
+    /// `TargetRegisterInfo::shouldCoalesce`: whether a join of values with
+    /// these palettes, into the third, goes ahead.
+    pub should_join: Box<dyn Fn(&BTreeSet<RegId>, &BTreeSet<RegId>, &BTreeSet<RegId>) -> bool>,
 }
 
 impl CoalescerEnv for TargetEnv {
@@ -79,7 +82,10 @@ impl CoalescerEnv for TargetEnv {
         }
         let palettes = self.palettes.borrow();
         match (palettes.get(&a), palettes.get(&b)) {
-            (Some(x), Some(y)) => x.intersection(y).next().is_some(),
+            (Some(x), Some(y)) => {
+                let joined: BTreeSet<RegId> = x.intersection(y).copied().collect();
+                !joined.is_empty() && (self.should_join)(x, y, &joined)
+            }
             _ => true,
         }
     }
@@ -134,6 +140,7 @@ pub fn coalesce(
     pins: IndexMap<u32, RegId>,
     size: bool,
     regs: llrm_lir::registers::Regs,
+    should_join: Box<dyn Fn(&BTreeSet<RegId>, &BTreeSet<RegId>, &BTreeSet<RegId>) -> bool>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
     let aliases = pins
         .iter()
@@ -150,7 +157,7 @@ pub fn coalesce(
             (*value, others)
         })
         .collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases };
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);

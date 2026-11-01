@@ -1217,10 +1217,11 @@ fn test_a_hint_names_a_value_its_instruction_holds_after_the_coalescer() {
     assert!(named > 0, "no hint reached an instruction");
 }
 
-/// One register is all a narrow class allows; a wide class has three.
-struct Narrowing;
+/// Two registers are all a narrow class allows; a wide class has three. A
+/// target with `DECLINE` refuses a join that narrows a class.
+struct Narrowing<const DECLINE: bool>;
 
-impl Target for Narrowing {
+impl<const DECLINE: bool> Target for Narrowing<DECLINE> {
     type Class = bool;
 
     fn meet(
@@ -1235,7 +1236,7 @@ impl Target for Narrowing {
     }
 
     fn candidates(narrow: bool) -> Vec<RegId> {
-        if narrow { vec![RegId::EBX] } else { REGISTERS.to_vec() }
+        if narrow { vec![RegId::EBX, RegId::ECX] } else { REGISTERS.to_vec() }
     }
 
     fn view(
@@ -1256,6 +1257,14 @@ impl Target for Narrowing {
     fn caller_saved() -> Vec<RegId> {
         vec![]
     }
+
+    fn should_coalesce(
+        one: &[RegId],
+        other: &[RegId],
+        joined: &[RegId],
+    ) -> bool {
+        !DECLINE || joined.len() == 1 || (joined.len() == one.len() && joined.len() == other.len())
+    }
 }
 
 /// A copy of a wide value into a narrow class (the 6502's compare takes `a`,
@@ -1271,15 +1280,35 @@ fn test_a_copy_into_a_narrow_class_does_not_narrow_the_value_that_lives_past_it(
     block.insts.push(op("load", vec![Operand::Def(v(0))]));
     block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
     block.insts.push(op("compare", vec![Operand::Use(v(1))]));
-    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
-    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX))]));
+    block.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX)), Operand::Def(Reg::Phys(RegId::ECX))]));
+    block.insts.push(op("get", vec![Operand::Use(Reg::Phys(RegId::EBX)), Operand::Use(Reg::Phys(RegId::ECX))]));
     block.insts.push(op("store", vec![Operand::Use(v(0))]));
     block.insts.push(ret());
     f.blocks = vec![block];
-    let mut converted = to_lir::<Narrowing>(&f, regs()).expect("converts");
+    let mut converted = to_lir::<Narrowing<false>>(&f, regs()).expect("converts");
     converted.coalesce(regs(), false);
     let order = |value: u32| converted.order(value);
     let inputs = converted.inputs(regs(), &order);
     let decided = decide_with_split(&inputs, Mode::Simple, true).expect("allocates");
     assert_eq!((decided.report.stores, decided.report.reloads), (0, 0), "{:?}", decided.placed);
+}
+
+/// A target that says a join must not narrow a class keeps the copy (and its
+/// hint): the two values stay apart, as `TargetRegisterInfo::shouldCoalesce`
+/// lets a target decline.
+#[test]
+fn test_a_target_can_decline_a_join_that_narrows_a_class() {
+    let mut f = MFunction::<bool>::new("narrowing");
+    f.classes = vec![false, true];
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts.push(op("load", vec![Operand::Def(v(0))]));
+    block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    block.insts.push(op("compare", vec![Operand::Use(v(1))]));
+    block.insts.push(op("store", vec![Operand::Use(v(0))]));
+    block.insts.push(ret());
+    f.blocks = vec![block];
+    let mut converted = to_lir::<Narrowing<true>>(&f, regs()).expect("converts");
+    converted.coalesce(regs(), false);
+    let copies = converted.body.blocks.iter().flat_map(|b| b.insns.iter()).filter(|i| i.copy_of().is_some()).count();
+    assert_eq!(copies, 1, "the copy into the narrow class was joined");
 }
