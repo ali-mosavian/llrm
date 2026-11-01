@@ -141,6 +141,14 @@ impl SpillWeightEnv for BodyEnv<'_> {
         Vec::new()
     }
 
+    fn reference_weight(
+        &self,
+        insn: &crate::model::lir::Insn,
+        reg: u32,
+    ) -> f32 {
+        self.tii.reference_weight(insn, reg)
+    }
+
     fn spill_weight_scale(
         &self,
         _reg: u32,
