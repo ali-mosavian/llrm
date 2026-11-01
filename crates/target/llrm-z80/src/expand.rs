@@ -327,6 +327,24 @@ impl Printer<'_> {
                 self.push(format!("ld {to}, {value}"));
             }
             "LD8rm" => {
+                // a byte widened at once is loaded into the low half of the pair: no byte register, no copy
+                let widened = match (inst.operands.first(), rest.first()) {
+                    (Some(Operand::Def(Reg::Virt(loaded))), Some(next))
+                        if next.kind == Kind::Op("ZEXT8")
+                            && next.operands.get(1) == Some(&Operand::Use(Reg::Virt(*loaded)))
+                            && self.reads.get(loaded) == Some(&1) =>
+                    {
+                        Some(self.register(next, 0)?)
+                    }
+                    _ => None,
+                };
+                if let Some(pair) = widened {
+                    let (lo, hi) = lanes(pair)?;
+                    self.push(format!("ld {}, (hl)", name(lo)));
+                    self.push(format!("ld {}, #0", name(hi)));
+                    self.skip = 1;
+                    return Ok(());
+                }
                 let to = name_of(self, 0)?;
                 self.push(format!("ld {to}, (hl)"));
             }

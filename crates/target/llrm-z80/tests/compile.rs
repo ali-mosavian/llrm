@@ -210,3 +210,11 @@ fn a_byte_read_by_an_alu_op_is_read_from_memory() {
     let sum = text(include_str!("kernels/ir/sum_arr.ll"), "sum_arr", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(sum.contains("add a, (hl)"), "{sum}");
 }
+
+/// A loaded byte that is widened went to a byte register and was copied to the pair's low half
+/// (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte and 4 T-states more per widened load.
+#[test]
+fn a_widened_load_goes_to_the_pairs_low_half() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
+}
