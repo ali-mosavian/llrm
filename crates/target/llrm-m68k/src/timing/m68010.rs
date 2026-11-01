@@ -155,7 +155,11 @@ pub(super) fn clocks(
         ("movec", [_, Operand::Control]) => misc("MOVEC", "Register→Destination").map(|cell| cell.base),
         ("move" | "movea", [source, destination]) => {
             let number = if long { 4 } else { 2 };
-            Some(table(number).get(label(mode(source)?), any, &format!("Destination / {}", label(mode(destination)?)))?.base)
+            Some(
+                table(number)
+                    .get(label(mode(source)?), any, &format!("Destination / {}", label(mode(destination)?)))?
+                    .base,
+            )
         }
         ("moveq", [_, _]) => cell(8, "MOVEQ", Size::L, "op #, Dn").map(|cell| cell.base),
         ("add" | "sub" | "and" | "or" | "eor" | "cmp" | "adda" | "suba" | "cmpa", [source, destination]) => {
@@ -169,7 +173,9 @@ pub(super) fn clocks(
                     cell(8, immediate_name(base)?, size, "op #, Dn").map(|cell| cell.base)
                 }
                 (_, Mode::Dn) => with_ea(cell(6, &name, size, "op<ea>, Dn")?, Some(source), size, true),
-                (_, memory) if source == Mode::Dn => with_ea(cell(6, &name, size, "op Dn, <M>")?, Some(memory), size, true),
+                (_, memory) if source == Mode::Dn => {
+                    with_ea(cell(6, &name, size, "op Dn, <M>")?, Some(memory), size, true)
+                }
                 (_, memory) if source == Mode::Imm => {
                     with_ea(cell(8, immediate_name(base)?, size, "op #, M")?, Some(memory), size, true)
                 }
@@ -189,9 +195,7 @@ pub(super) fn clocks(
                 memory => with_ea(cell(8, &name, size, "op #, M")?, Some(memory), size, true),
             }
         }
-        ("clr", [destination]) => {
-            Some(table(10).get("CLR", sized(size), bus_label(mode(destination)?))?.base)
-        }
+        ("clr", [destination]) => Some(table(10).get("CLR", sized(size), bus_label(mode(destination)?))?.base),
         ("neg" | "negx" | "not" | "nbcd", [destination]) => {
             let name = base.to_ascii_uppercase();
             match mode(destination)? {
@@ -226,8 +230,13 @@ pub(super) fn clocks(
             let nth = usize::from(base == "mulu");
             let text = table(6).text_nth("MULS", nth, any, "op<ea>, Dn")?;
             with_ea(super::table::parse_cell(text)?, mode(source), Size::W, true).map(|clocks| {
-                // the second row prints no `+`: MULU takes the same effective address time
-                if nth == 1 { clocks + ea(mode(source).unwrap_or(Mode::Dn), Size::W, true).unwrap_or(0) } else { clocks }
+                // the second row prints no `+`: MULU takes the same effective
+                // address time
+                if nth == 1 {
+                    clocks + ea(mode(source).unwrap_or(Mode::Dn), Size::W, true).unwrap_or(0)
+                } else {
+                    clocks
+                }
             })
         }
         ("divs" | "divu", [source, _]) => {
@@ -241,8 +250,15 @@ pub(super) fn clocks(
         ("jmp" | "jsr", [target]) => {
             let name = base.to_ascii_uppercase();
             let column = match target {
-                // a call to an address is absolute short in four bytes, long in six
-                Operand::Target => if bytes == 4 { "(xxx) W" } else { "(xxx).L" },
+                // a call to an address is absolute short in four bytes, long in
+                // six
+                Operand::Target => {
+                    if bytes == 4 {
+                        "(xxx) W"
+                    } else {
+                        "(xxx).L"
+                    }
+                }
                 other => bus_label(mode(other)?),
             };
             Some(table(16).get(&name, any, column)?.base)
@@ -272,7 +288,8 @@ pub(super) fn clocks(
         ("stop", [_]) => register("STOP"),
         ("reset", []) => register("RESET"),
         ("movem", [Operand::List(registers), memory]) => movem("MOVEM R→M", memory, long, *registers),
-        // DEVIATE (limit 3): the page prints 24+8n for `(An)` long; its neighbour `(An)+` is 12+8n
+        // DEVIATE (limit 3): the page prints 24+8n for `(An)` long; its
+        // neighbour `(An)+` is 12+8n
         ("movem", [memory, Operand::List(registers)]) if long && mode(memory)? == Mode::Ind => {
             movem("MOVEM M→R", &Operand::Mode(Mode::Post, 0), long, *registers)
         }

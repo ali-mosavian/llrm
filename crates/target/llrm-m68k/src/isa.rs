@@ -1,4 +1,5 @@
-//! The 68k family's opcode table: which first words each CPU decodes, and as what.
+//! The 68k family's opcode table: which first words each CPU decodes, and as
+//! what.
 //!
 //! # How it works
 //! `isa/table.tsv` has one row per mnemonic and operand shape: the cubes
@@ -8,18 +9,18 @@
 //! reader; `tests/isa.rs` compares the two.
 //!
 //! # Limits
-//! 1. binutils decodes the FPU and MMU (line F, cpid 0 and 1) under
-//!    `-m68000`, which has no coprocessor interface and takes the F-line
-//!    exception. The table puts those rows on the 68020 and later only.
-//! 2. binutils has no mnemonics for coprocessors 2 to 7. The generic
-//!    `cpGEN`, `cpBcc`, `cpDBcc`, `cpScc`, `cpTRAPcc`, `cpSAVE` and
-//!    `cpRESTORE` rows are the manual's patterns, on the 68020 and 68030.
+//! 1. binutils decodes the FPU and MMU (line F, cpid 0 and 1) under `-m68000`,
+//!    which has no coprocessor interface and takes the F-line exception. The
+//!    table puts those rows on the 68020 and later only.
+//! 2. binutils has no mnemonics for coprocessors 2 to 7. The generic `cpGEN`,
+//!    `cpBcc`, `cpDBcc`, `cpScc`, `cpTRAPcc`, `cpSAVE` and `cpRESTORE` rows are
+//!    the manual's patterns, on the 68020 and 68030.
 //! 3. The MC68851 is a separate chip: its rows (the MMU forms on a 68020) are
 //!    the 68020's by the oracle; the 68030's on-chip MMU is the same forms.
 //! 4. Extension words of lines 0-E are not modelled (an operand's length
 //!    follows from its mode bits). Line F rows carry the command word's cubes.
-//! 5. `emulated` lists the CPUs that decode a form but trap it to the
-//!    software package (68040's Table 9-10); the 68060's list is
+//! 5. `emulated` lists the CPUs that decode a form but trap it to the software
+//!    package (68040's Table 9-10); the 68060's list is
 //!    `isa/prm/m68060_support.tsv`.
 
 use std::sync::LazyLock;
@@ -49,7 +50,8 @@ impl Cpu {
 pub struct Form {
     pub mnemonic: &'static str,
     pub operands: &'static str,
-    /// `(mask, value)`: a first word is in the form when `word & mask == value`.
+    /// `(mask, value)`: a first word is in the form when `word & mask ==
+    /// value`.
     pub cubes: Vec<(u16, u16)>,
     /// Cubes of the command word that follows, for the forms that have one.
     pub ext: Vec<(u16, u16)>,
@@ -112,10 +114,16 @@ static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| {
                     .collect()
             };
             let set = |names: &str| {
-                names.split(',').filter(|name| *name != "-").fold(0, |set, name| {
-                    let cpu = Cpu::ALL.iter().position(|cpu| &cpu.name()[2..] == name);
-                    set | 1 << cpu.unwrap_or_else(|| panic!("isa/table.tsv: cpu {name:?}"))
-                })
+                names
+                    .split(',')
+                    .filter(|name| *name != "-")
+                    .fold(
+                        0,
+                        |set, name| {
+                            let cpu = Cpu::ALL.iter().position(|cpu| &cpu.name()[2..] == name);
+                            set | 1 << cpu.unwrap_or_else(|| panic!("isa/table.tsv: cpu {name:?}"))
+                        },
+                    )
             };
             Form {
                 mnemonic,

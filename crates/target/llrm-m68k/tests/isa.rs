@@ -102,7 +102,13 @@ fn table_decodes_what_binutils_decodes() {
                 wrong.push(format!("{word:04x}: binutils {seen:?}, table {ours:?}"));
             }
         }
-        assert!(wrong.is_empty(), "{} words differ on the {}: {:#?}", wrong.len(), cpu.name(), &wrong[..wrong.len().min(10)]);
+        assert!(
+            wrong.is_empty(),
+            "{} words differ on the {}: {:#?}",
+            wrong.len(),
+            cpu.name(),
+            &wrong[..wrong.len().min(10)]
+        );
     }
 }
 
@@ -129,7 +135,13 @@ fn table_decodes_the_coprocessor_commands_binutils_does() {
                 let first = 0xf000 | cpid << 9 | kind << 6 | mode;
                 let exts: Vec<u16> = match (cpid, kind) {
                     (1, 0) => (0..8u16)
-                        .flat_map(|class| (0..8u16).flat_map(move |src| (0..128u16).flat_map(move |op| [0u16, 5].map(move |dst| class << 13 | src << 10 | dst << 7 | op))))
+                        .flat_map(|class| {
+                            (0..8u16).flat_map(move |src| {
+                                (0..128u16).flat_map(move |op| {
+                                    [0u16, 5].map(move |dst| class << 13 | src << 10 | dst << 7 | op)
+                                })
+                            })
+                        })
                         .collect(),
                     (0, 0) => (0..=0xffff).collect(),
                     (_, 1) => (0..64).collect(),
@@ -150,7 +162,13 @@ fn table_decodes_the_coprocessor_commands_binutils_does() {
             })
             .map(|((first, ext), seen)| format!("{first:04x} {ext:04x}: binutils {seen:?}"))
             .collect();
-        assert!(wrong.is_empty(), "{} commands differ on the {}: {:#?}", wrong.len(), cpu.name(), &wrong[..wrong.len().min(10)]);
+        assert!(
+            wrong.is_empty(),
+            "{} commands differ on the {}: {:#?}",
+            wrong.len(),
+            cpu.name(),
+            &wrong[..wrong.len().min(10)]
+        );
     }
 }
 
@@ -162,14 +180,18 @@ fn pattern(text: &str) -> (u16, u16) {
 }
 
 fn manual_rows() -> Vec<(String, (u16, u16))> {
-    [include_str!("../src/isa/prm/int_a.tsv"), include_str!("../src/isa/prm/int_b.tsv"), include_str!("../src/isa/prm/sup.tsv")]
-        .iter()
-        .flat_map(|file| file.lines())
-        .filter_map(|line| {
-            let column: Vec<_> = line.split('\t').collect();
-            (column.len() > 4 && column[4].len() == 16).then(|| (column[0].to_owned(), pattern(column[4])))
-        })
-        .collect()
+    [
+        include_str!("../src/isa/prm/int_a.tsv"),
+        include_str!("../src/isa/prm/int_b.tsv"),
+        include_str!("../src/isa/prm/sup.tsv"),
+    ]
+    .iter()
+    .flat_map(|file| file.lines())
+    .filter_map(|line| {
+        let column: Vec<_> = line.split('\t').collect();
+        (column.len() > 4 && column[4].len() == 16).then(|| (column[0].to_owned(), pattern(column[4])))
+    })
+    .collect()
 }
 
 /// Every word the table decodes is inside some pattern the manual prints.
@@ -194,9 +216,8 @@ fn every_manual_pattern_reaches_a_decoded_word() {
         .into_iter()
         .filter(|(_, (mask, value))| mask >> 12 == 0xf && !value_is_fpu_or_mmu(*value))
         .filter(|(_, (mask, value))| {
-            !(0..=0xffffu16).any(|word| {
-                word & mask == *value && Cpu::ALL.iter().any(|&cpu| decode(word, cpu).next().is_some())
-            })
+            !(0..=0xffffu16)
+                .any(|word| word & mask == *value && Cpu::ALL.iter().any(|&cpu| decode(word, cpu).next().is_some()))
         })
         .map(|(name, _)| name)
         .collect();
@@ -244,7 +265,12 @@ fn the_68040_traps_the_transcendentals() {
 
 #[test]
 fn cache_move16_and_lpstop_belong_to_the_late_cpus() {
-    let only = |word: u16, name: &str| Cpu::ALL.into_iter().filter(|&cpu| decode(word, cpu).any(|form| form.mnemonic.starts_with(name))).collect::<Vec<_>>();
+    let only = |word: u16, name: &str| {
+        Cpu::ALL
+            .into_iter()
+            .filter(|&cpu| decode(word, cpu).any(|form| form.mnemonic.starts_with(name)))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(only(0xf600, "move16"), [Cpu::M68040, Cpu::M68060], "move16");
     assert_eq!(only(0xf418, "cinv"), [Cpu::M68040, Cpu::M68060], "cinva");
     assert_eq!(only(0xf800, "lpstop"), [Cpu::M68060], "lpstop");
@@ -256,7 +282,11 @@ fn cache_move16_and_lpstop_belong_to_the_late_cpus() {
 #[test]
 fn the_68060_traps_more_than_the_68040() {
     let form = |name: &str, cpu: Cpu| forms().iter().find(|form| form.mnemonic == name && form.on(cpu)).unwrap();
-    assert!(!form("fdbeq", Cpu::M68040).emulated_on(Cpu::M68040) && form("fdbeq", Cpu::M68060).emulated_on(Cpu::M68060));
-    assert!(form("movepw", Cpu::M68060).emulated_on(Cpu::M68060) && !form("movepw", Cpu::M68030).emulated_on(Cpu::M68030));
+    assert!(
+        !form("fdbeq", Cpu::M68040).emulated_on(Cpu::M68040) && form("fdbeq", Cpu::M68060).emulated_on(Cpu::M68060)
+    );
+    assert!(
+        form("movepw", Cpu::M68060).emulated_on(Cpu::M68060) && !form("movepw", Cpu::M68030).emulated_on(Cpu::M68030)
+    );
     assert!(!form("fadd", Cpu::M68060).emulated_on(Cpu::M68060));
 }

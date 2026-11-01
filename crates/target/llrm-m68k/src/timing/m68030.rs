@@ -9,7 +9,8 @@
 //! the tables", never a guess. The cache case assumes two-clock memory.
 //!
 //! # Limits
-//! 1. Memory-indirect and full-format modes are not priced (the pin emits none).
+//! 1. Memory-indirect and full-format modes are not priced (the pin emits
+//!    none).
 //! 2. A bit field in memory is priced as under five bytes; the five-byte row is
 //!    4 to 8 clocks more, so it is partial.
 //! 3. A shift by a register is priced at the "count <= size" row (`%`) and is
@@ -75,7 +76,8 @@ static TABLES: LazyLock<Vec<Vec<Row>>> = LazyLock::new(|| {
     ]
 });
 
-/// The cell of subsection 11.6.`table` whose printed label is `label` and whose mark is `mark`.
+/// The cell of subsection 11.6.`table` whose printed label is `label` and whose
+/// mark is `mark`.
 fn get(
     table: usize,
     label: &str,
@@ -85,13 +87,17 @@ fn get(
     TABLES[table - 1].iter().find(|row| row.label == label && row.mark == mark).map(|row| row.cell)
 }
 
-/// A row of the effective address tables (11.6.1 to 11.6.5), by the mode's printed name.
+/// A row of the effective address tables (11.6.1 to 11.6.5), by the mode's
+/// printed name.
 fn address(
     table: usize,
     label: &str,
 ) -> Option<u32> {
     let label = key(label);
-    TABLES[table - 1].iter().find(|row| row.label.starts_with(&label) && row.label[label.len()..].starts_with(',') || row.label == label).map(|row| row.cell.base)
+    TABLES[table - 1]
+        .iter()
+        .find(|row| row.label.starts_with(&label) && row.label[label.len()..].starts_with(',') || row.label == label)
+        .map(|row| row.cell.base)
 }
 
 fn mode_label(mode: Mode) -> Option<&'static str> {
@@ -127,7 +133,8 @@ fn cea(mode: Mode) -> Option<u32> {
     address(3, mode_label(mode)?)
 }
 
-/// 11.6.5: a jump address (`(An)` and the like; `(d16,PC)` is `(d16,An)`'s row).
+/// 11.6.5: a jump address (`(An)` and the like; `(d16,PC)` is `(d16,An)`'s
+/// row).
 fn jea(mode: Mode) -> Option<u32> {
     let label = match mode {
         Mode::Disp | Mode::PcDisp => "(d16,An)",
@@ -192,7 +199,8 @@ fn move_cell(
         _ => return None,
     };
     let register = matches!(source, Mode::Dn | Mode::An);
-    // Rn-source rows exist for the first five destinations; the rest are `EA` rows
+    // Rn-source rows exist for the first five destinations; the rest are `EA`
+    // rows
     let cell = if register {
         get(6, &format!("MOVE Rn,{place}"), "").or_else(|| get(6, &format!("MOVE EA,{place}"), "*"))
     } else {
@@ -215,9 +223,7 @@ pub(super) fn clocks(
         ("andi" | "ori" | "eori", [_, Operand::Status]) => plain(get(16, "ANDI to SR", "")),
         ("move", [_, Operand::Usp]) => plain(get(7, "MOVE An,USP", "")),
         ("move", [Operand::Usp, _]) => plain(get(7, "MOVE USP,An", "")),
-        ("move", [source, Operand::Status]) => {
-            Some(plain(get(7, "MOVE EA,SR", "#"))? + fea(mode(source)?, Size::W)?)
-        }
+        ("move", [source, Operand::Status]) => Some(plain(get(7, "MOVE EA,SR", "#"))? + fea(mode(source)?, Size::W)?),
         ("move", [Operand::Status, destination]) => match mode(destination)? {
             Mode::Dn => plain(get(7, "MOVE SR,Dn", "")),
             memory => Some(plain(get(7, "MOVE SR,Mem", "*"))? + cea(memory)?),
@@ -238,16 +244,25 @@ pub(super) fn clocks(
                     if register {
                         plain(get(8, &label("Rn"), ""))
                     } else {
-                        Some(plain(get(8, &label("EA"), "*").or_else(|| get(8, &label("EA").replace("ADDA.W", "ADD.W"), "*")))? + fea(source, size)?)
+                        Some(
+                            plain(
+                                get(8, &label("EA"), "*")
+                                    .or_else(|| get(8, &label("EA").replace("ADDA.W", "ADD.W"), "*")),
+                            )? + fea(source, size)?,
+                        )
                     }
                 }
                 ("eor", Mode::Dn) => plain(get(8, "EOR Dn,Dn", "")),
                 (_, Mode::Dn) if source == Mode::Imm && base != "cmp" => {
                     Some(plain(get(9, &format!("{} #<data>,Dn", immediate_name(base)?), "**"))? + fiea(Mode::Dn, size)?)
                 }
-                (_, Mode::Dn) if register => plain(get(8, &format!("{name} Rn,Dn"), "").or_else(|| get(8, &format!("{name} Dn,Dn"), ""))),
+                (_, Mode::Dn) if register => {
+                    plain(get(8, &format!("{name} Rn,Dn"), "").or_else(|| get(8, &format!("{name} Dn,Dn"), "")))
+                }
                 (_, Mode::Dn) => Some(plain(get(8, &format!("{name} EA,Dn"), "*"))? + fea(source, size)?),
-                (_, memory) if source == Mode::Dn => Some(plain(get(8, &format!("{name} Dn,EA"), "*"))? + fea(memory, size)?),
+                (_, memory) if source == Mode::Dn => {
+                    Some(plain(get(8, &format!("{name} Dn,EA"), "*"))? + fea(memory, size)?)
+                }
                 (_, memory) if source == Mode::Imm => {
                     Some(plain(get(9, &format!("{} #<data>,Mem", immediate_name(base)?), "**"))? + fiea(memory, size)?)
                 }
@@ -327,7 +342,9 @@ pub(super) fn clocks(
             let what = if by_data { "#<data>" } else { "Dn" };
             match mode(destination)? {
                 Mode::Dn => plain(get(13, &format!("{name} {what},Dn"), "")),
-                memory if by_data => Some(plain(get(13, &format!("{name} #<data>,Mem"), "#"))? + fiea(memory, Size::B)?),
+                memory if by_data => {
+                    Some(plain(get(13, &format!("{name} #<data>,Mem"), "#"))? + fiea(memory, Size::B)?)
+                }
                 memory => Some(plain(get(13, &format!("{name} Dn,Mem"), "*"))? + fea(memory, Size::B)?),
             }
         }
@@ -364,10 +381,13 @@ pub(super) fn clocks(
             memory => Some(plain(get(16, "CHK EA,Dn (No Exception)", "*"))? + fea(memory, Size::W)?),
         },
         ("cmp2" | "chk2", [source, _]) => {
-            let (table, label, mark) = if base == "cmp2" { (8, "CMP2 EA,Rn", "**+") } else { (16, "CHK2 Mem,Rn (No Exception)", "#+") };
+            let (table, label, mark) =
+                if base == "cmp2" { (8, "CMP2 EA,Rn", "**+") } else { (16, "CHK2 Mem,Rn (No Exception)", "#+") };
             Some(plain(get(table, label, mark))? + fiea(mode(source)?, Size::W)?)
         }
-        ("cas", [_, _, memory]) => Some(plain(get(16, "CAS (Successful Compare)", "##"))? + ciea(mode(memory)?, Size::W)?),
+        ("cas", [_, _, memory]) => {
+            Some(plain(get(16, "CAS (Successful Compare)", "##"))? + ciea(mode(memory)?, Size::W)?)
+        }
         ("trapv", []) => plain(get(17, "TRAPV (No Trap)", "")),
         ("trapcc" | "trapt" | "trapf" | "trapeq" | "trapne", _) => plain(get(17, "TRAPcc (No Trap)", "")),
         ("bkpt", [_]) => plain(get(17, "BKPT", "")),
@@ -438,7 +458,8 @@ fn immediate_name(base: &str) -> Option<&'static str> {
     })
 }
 
-/// The row name of a shift or rotate in 11.6.12 (`LSd` stands for `LSL` and `LSR`).
+/// The row name of a shift or rotate in 11.6.12 (`LSd` stands for `LSL` and
+/// `LSR`).
 fn shift_name(shift: &str) -> (&'static str, &'static str) {
     match shift {
         "lsl" | "lsr" => ("LSd", ""),

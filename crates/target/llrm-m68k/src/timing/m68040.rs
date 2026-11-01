@@ -13,7 +13,8 @@
 //! 1. The 68040 is pipelined: one number per instruction is a throughput
 //!    estimate, not a latency. Stalls, write-back, cache and ATC misses, and
 //!    the FPU's own pipeline are not in it.
-//! 2. Memory-indirect and full-format modes are not priced (the pin emits none).
+//! 2. Memory-indirect and full-format modes are not priced (the pin emits
+//!    none).
 //! 3. Floating-point instructions are not priced.
 //! 4. A taken branch is priced as the manual's "Branch Taken" row; the branch
 //!    cache is not modelled.
@@ -112,15 +113,26 @@ static TABLES: LazyLock<Tables> = LazyLock::new(|| {
     let mut groups = Vec::new();
     for (grid, one) in mode_grids.iter().enumerate() {
         for column in (1..one.header.len()).step_by(2) {
-            groups.push(Group { names: group_names(&one.header[column]), grid, calculate: column, execute: column + 1 });
+            groups.push(Group {
+                names: group_names(&one.header[column]),
+                grid,
+                calculate: column,
+                execute: column + 1,
+            });
         }
     }
-    Tables { mode_grids, groups, moves: parse(include_str!("m68040/t10.4.csv")), misc: parse(include_str!("m68040/t10.5.csv")) }
+    Tables {
+        mode_grids,
+        groups,
+        moves: parse(include_str!("m68040/t10.4.csv")),
+        misc: parse(include_str!("m68040/t10.5.csv")),
+    }
 });
 
-/// A cell is `lead L + base`; `a/b` lists two cases (`pick` chooses; footnotes say which: immediate or
-/// register count, word or long); `D'` and `A'` are the registers of a `movem` list (`registers` together);
-/// footnote marks are dropped. A dash is no entry.
+/// A cell is `lead L + base`; `a/b` lists two cases (`pick` chooses; footnotes
+/// say which: immediate or register count, word or long); `D'` and `A'` are the
+/// registers of a `movem` list (`registers` together); footnote marks are
+/// dropped. A dash is no entry.
 fn stage(
     text: &str,
     pick: usize,
@@ -143,7 +155,8 @@ fn stage(
         } else if term == "D'" {
             base += registers;
         } else if term == "A'" || term == "A" || term == "N" {
-            // the address registers of the list are counted with the data registers
+            // the address registers of the list are counted with the data
+            // registers
         } else {
             base += term.parse::<u32>().ok()?;
         }
@@ -202,7 +215,8 @@ fn by_mode_with(
     busiest(&found[group.calculate], &found[group.execute], pick, registers)
 }
 
-/// Section 10.5: the row of `instruction` (carried down) whose condition column starts with `condition`.
+/// Section 10.5: the row of `instruction` (carried down) whose condition column
+/// starts with `condition`.
 fn miscellaneous(
     instruction: &str,
     condition: &str,
@@ -226,7 +240,8 @@ fn move_clocks(
     destination: Mode,
 ) -> Option<u32> {
     let grid = &TABLES.moves;
-    // a source address register reads as the data register row (no `An` row is printed)
+    // a source address register reads as the data register row (no `An` row is
+    // printed)
     let row = key(mode_label(if source == Mode::An { Mode::Dn } else { source }));
     let found = grid.rows.iter().find(|fields| key(&fields[0]) == row)?;
     let column = key(&format!("DEST {} <ea> Calculate", mode_label(destination)));
@@ -234,10 +249,15 @@ fn move_clocks(
     busiest(&found[calculate], &found[calculate + 1], 0, 0)
 }
 
-/// The operand whose addressing mode picks the row: the memory one of two, else the first.
+/// The operand whose addressing mode picks the row: the memory one of two, else
+/// the first.
 fn effective(operands: &[Operand]) -> Option<Mode> {
     let modes: Vec<Mode> = operands.iter().filter_map(mode).collect();
-    modes.iter().copied().find(|mode| !matches!(mode, Mode::Dn | Mode::An | Mode::Imm)).or_else(|| modes.last().copied())
+    modes
+        .iter()
+        .copied()
+        .find(|mode| !matches!(mode, Mode::Dn | Mode::An | Mode::Imm))
+        .or_else(|| modes.last().copied())
 }
 
 pub(super) fn clocks(
@@ -261,11 +281,17 @@ pub(super) fn clocks(
         ("move", [source, destination]) => move_clocks(mode(source)?, mode(destination)?),
         ("movea", [source, _]) => by_mode("MOVEA.L", mode(source)?),
         ("moveq", _) => miscellaneous("MOVEQ", ""),
-        ("add" | "sub" | "and" | "or" | "eor" | "cmp", [source, destination]) if mode(source)? == Mode::Imm && base != "cmp" => {
+        ("add" | "sub" | "and" | "or" | "eor" | "cmp", [source, destination])
+            if mode(source)? == Mode::Imm && base != "cmp" =>
+        {
             by_mode(&format!("{}I", name), mode(destination)?)
         }
-        ("add" | "sub" | "and" | "or" | "eor" | "cmp" | "tst" | "adda" | "suba" | "clr" | "neg" | "negx" | "not" | "nbcd" | "tas" | "pea" | "lea"
-        | "addi" | "subi" | "andi" | "ori" | "eori" | "cmpi" | "addq" | "subq" | "chk" | "scc" | "jmp" | "jsr", _) => {
+        (
+            "add" | "sub" | "and" | "or" | "eor" | "cmp" | "tst" | "adda" | "suba" | "clr" | "neg" | "negx" | "not"
+            | "nbcd" | "tas" | "pea" | "lea" | "addi" | "subi" | "andi" | "ori" | "eori" | "cmpi" | "addq" | "subq"
+            | "chk" | "scc" | "jmp" | "jsr",
+            _,
+        ) => {
             let operand = match operands {
                 [Operand::Target] => Mode::AbsL,
                 _ => effective(operands)?,
@@ -285,15 +311,22 @@ pub(super) fn clocks(
             let by_register = matches!(operands, [Operand::Mode(Mode::Dn, _), _]);
             by_mode_with(&group, effective(operands)?, usize::from(by_register), 0)
         }
-        ("mulu" | "muls" | "divu" | "divs", _) => {
-            by_mode_with(&format!("{name}.{}", if long { "L" } else { "W" }), effective(operands)?, usize::from(long), 0)
-        }
+        ("mulu" | "muls" | "divu" | "divs", _) => by_mode_with(
+            &format!("{name}.{}", if long { "L" } else { "W" }),
+            effective(operands)?,
+            usize::from(long),
+            0,
+        ),
         ("btst" | "bchg" | "bclr" | "bset", [source, destination]) => {
             by_mode_with(&name, mode(destination)?, usize::from(mode(source)? == Mode::Dn), 0)
         }
         (field, _) if field.starts_with("bf") => by_mode(&name, effective(operands)?),
-        ("movem", [Operand::List(registers), memory]) => by_mode_with("MOVEM <list>,<ea>", mode(memory)?, 0, *registers),
-        ("movem", [memory, Operand::List(registers)]) => by_mode_with("MOVEM.L <ea>,<list>", mode(memory)?, 0, *registers),
+        ("movem", [Operand::List(registers), memory]) => {
+            by_mode_with("MOVEM <list>,<ea>", mode(memory)?, 0, *registers)
+        }
+        ("movem", [memory, Operand::List(registers)]) => {
+            by_mode_with("MOVEM.L <ea>,<list>", mode(memory)?, 0, *registers)
+        }
         ("abcd" | "sbcd" | "addx" | "subx", [first, _]) => {
             miscellaneous(&name, if mode(first)? == Mode::Dn { "Dy,Dx" } else { "-(Ay),-(Ax)" })
         }
@@ -308,7 +341,9 @@ pub(super) fn clocks(
                 _ => "Dy,Ax",
             },
         ),
-        ("swap" | "nop" | "link" | "unlk" | "rts" | "rtr" | "rtd" | "bsr" | "trap" | "reset", _) => miscellaneous(&name, ""),
+        ("swap" | "nop" | "link" | "unlk" | "rts" | "rtr" | "rtd" | "bsr" | "trap" | "reset", _) => {
+            miscellaneous(&name, "")
+        }
         ("bra", _) => miscellaneous("BRA", if taken { "Branch Taken" } else { "Branch Not Taken" }),
         (condition, [_]) if super::condition_branch(condition) => {
             let _ = bytes;
