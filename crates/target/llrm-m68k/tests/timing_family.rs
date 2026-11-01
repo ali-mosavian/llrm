@@ -545,3 +545,26 @@ fn m68020_bits_fields_multiprecision_and_returns() {
     assert_eq!(m68020("link.w %a6, #-4"), 5);
     assert_eq!(m68020("movem.l %d0-%d3, -(%sp)"), 4 + 3 * 4 + 4);
 }
+
+/// `git diff --check` (the gate's diff check) refused 1,100 lines of the timing
+/// CSVs: they had CRLF endings, which it reports as trailing whitespace.
+#[test]
+fn timing_tables_have_no_carriage_returns() {
+    fn walk(
+        dir: &std::path::Path,
+        found: &mut Vec<String>,
+    ) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|ext| ext == "csv") && std::fs::read(&path).unwrap().contains(&b'\r')
+            {
+                found.push(path.display().to_string());
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/timing"), &mut found);
+    assert!(found.is_empty(), "CRLF in {found:?}");
+}
