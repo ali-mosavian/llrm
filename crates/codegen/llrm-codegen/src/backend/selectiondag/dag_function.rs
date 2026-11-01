@@ -836,6 +836,7 @@ fn selected_in(
     let mut builder_target = builder_target;
     // The frontends compile static code: every symbol is `dso_local`.
     builder_target.dag.dso_local_symbols = true;
+    builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(cpu.target().tuning())
         .with_runtime_calls(libcalls)

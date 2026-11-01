@@ -10,6 +10,9 @@ pub const BRANCH_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 2);
 /// x86-64: the place's offset from the target's global offset table entry
 /// (`R_X86_64_REX_GOTPCRELX`).
 pub const GOT_PCREL_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 3);
+/// x86-64 static code: a symbol's address as a sign-extended `disp32`
+/// beside a base or an index (`R_X86_64_32S`).
+pub const ABS_SIGNED_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 6);
 
 /// OMF: the selector of the target's segment (OMF's BASE).
 pub const SEGMENT_BASE: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 4);
@@ -51,6 +54,11 @@ pub const fn branch(width: usize) -> Fix {
     )
 }
 
+/// A symbol's address as a sign-extended 4-byte field.
+pub const fn abs_signed_4() -> Fix {
+    Fix::plain(ABS_SIGNED_4)
+}
+
 /// The place's offset from the target's GOT entry, relative to the place `from`
 /// bytes past the field's start.
 pub const fn got_pc_rel(from: usize) -> Fix {
@@ -63,6 +71,7 @@ pub fn kind_info(kind: FixupKind) -> FixupKindInfo {
         BRANCH_2 => ("branch_2byte_pcrel", 16),
         BRANCH_4 => ("branch_4byte_pcrel", 32),
         GOT_PCREL_4 => ("reloc_riprel_4byte_gotpcrelx", 32),
+        ABS_SIGNED_4 => ("reloc_signed_4byte", 32),
         SEGMENT_BASE => ("segment_base", 16),
         FAR_POINTER => ("far_pointer", 32),
         generic => return generic.info(),
