@@ -369,3 +369,38 @@ fn the_hand_over_of_a_handled_program_passes_the_pins_verifier() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// ON LOCAL ERROR called B$OEGP, which no flat runtime defined: the program did
+/// not link. An error in a procedure below the one with the handler lands in
+/// the handler, and RESUME NEXT goes on after the call (ownf_local_pds71).
+#[test]
+fn on_local_error_lands_in_the_callers_handler_on_arm64() {
+    let source = std::fs::read(root().join("tests/run/qb/ownf_local_pds71.bas")).unwrap();
+    let mut source = source;
+    source.extend_from_slice(b"\r\nEND\r\n");
+    assert_eq!(
+        run_basic("ownf_local", &source).split_whitespace().collect::<Vec<_>>(),
+        ["handler", "11", "top", "1", "done"]
+    );
+}
+
+/// CURRENCY as text (currency_text_pds71): INPUT, READ, PRINT, STR$, MKC$, CVC,
+/// USING and WRITE, none of which had a flat definition.
+#[test]
+fn currency_text_matches_the_microsoft_output_on_arm64() {
+    let root = root();
+    let mut source = std::fs::read(root.join("tests/run/qb/currency_text_pds71.bas")).unwrap();
+    source.extend_from_slice(b"\r\nEND\r\n");
+    let screen = run_basic_with(
+        "currency_text",
+        &source,
+        &[
+            ("QB_HEADLESS_KEYS", "12.5\\r-0.0001, 922337203685477.5807\\r3\\r"),
+            ("QB_HEADLESS_GAP", "30"),
+            ("QB_HEADLESS_SECONDS", "20"),
+        ],
+    );
+    let want = std::fs::read_to_string(root.join("tests/run/qb/currency_text_pds71.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&screen), trimmed(&want));
+}
