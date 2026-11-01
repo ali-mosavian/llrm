@@ -60,7 +60,7 @@
 "particle bas -Os" = 309245  # main 280330
 "particle nib -Os" = 238202  # main 228221
 
-# class 7 fill idiom: pin makes memset only for byte patterns, a 16-bit fill stays a counted loop: DEBT bench-clocks-fill-idiom-stosw; owner: w2; due 2026-11-06
+# class 7 imul operand role: the final loop multiplies with the varying operand as the multiplier; exit: measurement or Abrash/Intel text on the 486 early-out operand: DEBT bench-clocks-imul-operand-role; owner: w2; due open
 "scroll c -Os" = 687174  # main 668279
 
 # class 8 call-result add order: the 4th call result goes to a second stack slot instead of the first: DEBT bench-clocks-call-result-add-order; owner: w10 (llrm-w10-instcombine); due 2026-11-06
