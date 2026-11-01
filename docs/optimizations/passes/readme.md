@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 229 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 230 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -170,6 +170,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
+| memloops | Turns the `llvm.memcpy` calls of chosen functions into byte loops, before instruction selection. | In a target's driver, on a copy of the module, for the functions it names. | [memloops](memloops.md) |
 | memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: `crate::lsr` calls `found` and `applied` on each loop before | [mirror](mirror.md) |
