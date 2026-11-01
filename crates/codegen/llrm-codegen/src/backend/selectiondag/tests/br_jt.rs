@@ -19,7 +19,7 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false },
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
     )
     .run()
     .unwrap();

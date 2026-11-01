@@ -498,3 +498,62 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// A function returning an `i64` was refused: "calling.toml has a result row"
+/// (6502 `pair_return`, `value_of_valueless`), then, with the row,
+/// "ExtractElement I32 expand result" and "Truncate I32 expand result". The
+/// halves come back in the right order: high byte 0x44 minus low byte 0x88 is
+/// 0xBC.
+#[test]
+fn an_i64_result_comes_back_in_eight_registers_in_order() {
+    let ir = module(
+        r#"@a = global i32 287454020
+@b = global i32 1432778632
+define internal i64 @pair(i32 %x, i32 %y) #0 {
+  %hi = zext i32 %x to i64
+  %up = shl i64 %hi, 32
+  %lo = zext i32 %y to i64
+  %r = or i64 %up, %lo
+  ret i64 %r
+}
+define i8 @pair_halves() {
+  %x = load i32, ptr @a
+  %y = load i32, ptr @b
+  %r = call i64 @pair(i32 %x, i32 %y)
+  %top = lshr i64 %r, 32
+  %h = trunc i64 %top to i8
+  %l = trunc i64 %r to i8
+  %d = sub i8 %h, %l
+  ret i8 %d
+}
+attributes #0 = { noinline }"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "pair_halves"), 0xBC, "{text}");
+}
+
+/// An `i64` add or subtract split into `i32` halves, for which there is no
+/// carry operation, was refused ("expand add or subtract without a carry
+/// operation"; sbb_wide_sub, sysv_abi). 5 - 7 borrows into the high half: the
+/// high byte is 0xFF and the low 0xFE, so 0xFF - 0xFE is 1.
+#[test]
+fn a_64_bit_subtract_borrows_between_its_32_bit_halves() {
+    let ir = module(
+        r#"@a = global i32 5
+@b = global i32 7
+define i8 @borrow() {
+  %x = load i32, ptr @a
+  %y = load i32, ptr @b
+  %wx = zext i32 %x to i64
+  %wy = zext i32 %y to i64
+  %r = sub i64 %wx, %wy
+  %top = lshr i64 %r, 32
+  %h = trunc i64 %top to i8
+  %l = trunc i64 %r to i8
+  %d = sub i8 %h, %l
+  ret i8 %d
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "borrow"), 1, "{text}");
+}
