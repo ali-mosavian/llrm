@@ -281,13 +281,14 @@ fn link(
 }
 
 /// The simulator: `LLRM_SIM65`, a sim65 that also prints the instructions it
-/// executed (`tools/sim65-insns.sh` builds one), else the system's, which counts
-/// cycles only.
+/// executed (`tools/sim65-insns.sh` builds one), else the system's, which
+/// counts cycles only.
 fn run_sim(bin: &Path) -> Result<(i32, i64, Option<i64>), String> {
     let sim = std::env::var("LLRM_SIM65").unwrap_or_else(|_| "sim65".to_owned());
     let out = Command::new(sim).args(["-c", "-x", "200000000"]).arg(bin).output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout);
-    let count = |unit: &str| text.lines().find_map(|l| l.trim().strip_suffix(unit).and_then(|n| n.trim().parse::<i64>().ok()));
+    let count =
+        |unit: &str| text.lines().find_map(|l| l.trim().strip_suffix(unit).and_then(|n| n.trim().parse::<i64>().ok()));
     let cycles = count(" cycles").ok_or("no cycle count")?;
     Ok((out.status.code().unwrap_or(-1), cycles, count(" instructions")))
 }
@@ -625,7 +626,9 @@ fn table4() {
 fn table3() {
     let mut out = String::from("| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 |\n|---|---|---|---|---|\n");
     let cell = |row: &Result<Row, String>| match row {
-        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed()),
+        Ok(r) if r.body != r.bytes => {
+            format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed())
+        }
         Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
         Err(why) if why.starts_with("no hand") => "-".to_owned(),
         Err(why) => format!("n/a ({why})"),
@@ -657,7 +660,9 @@ fn table(
         "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 |\n|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {
-        Ok(r) if r.body != r.bytes => format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed()),
+        Ok(r) if r.body != r.bytes => {
+            format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed())
+        }
         Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
         Err(why) => format!("n/a ({why})"),
     };
