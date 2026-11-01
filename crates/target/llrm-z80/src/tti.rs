@@ -158,6 +158,12 @@ impl Tti for Z80Tti {
         matches!((from, to), (Ty::Int(from), Ty::Int(to)) if to < from)
     }
 
+    /// What the selector folds into one access: a register alone (`ld a,(hl)`)
+    /// or an absolute address with its offset (`ld a,(nn)`). A register
+    /// plus a displacement is `(ix+d)`, which is not selected yet, and the Z80
+    /// has no register-plus-register or scaled mode. The pin's default
+    /// always accepts `r`, so LSR's initial formula is legal; `Basic`
+    /// accepts nothing and LSR's `Formula is illegal` assertion fires.
     fn is_legal_addressing_mode(
         &self,
         gv: bool,
@@ -165,7 +171,14 @@ impl Tti for Z80Tti {
         base: bool,
         scale: i64,
     ) -> bool {
-        Basic.is_legal_addressing_mode(gv, offset, base, scale)
+        if !matches!(scale, 0 | 1) {
+            return false;
+        }
+        match usize::from(base) + usize::from(scale == 1) {
+            0 => true,
+            1 => !gv && offset == 0,
+            _ => false,
+        }
     }
 
     // The runtime's unsigned divide leaves the remainder behind (`rc6:rc7`), so
