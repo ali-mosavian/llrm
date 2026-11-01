@@ -147,6 +147,11 @@ fn lane(
     rc(2 * (pair.index() as u8 - reg::RS0.index() as u8) + lane)
 }
 
+/// Whether `order` holds a zero-page pair.
+fn is_pair_order(order: &[RegId]) -> bool {
+    order.iter().any(|register| is_pair(*register))
+}
+
 fn is_cell(register: RegId) -> bool {
     register.index() >= reg::RC0.index()
 }
@@ -167,6 +172,15 @@ impl<const STACK: bool> Target for Mos<STACK> {
             Kind::Op("CMP") if operand == 1 => Some(reg::A),
             _ => None,
         }
+    }
+
+    /// A byte class the compare class narrowed has `any` as its larger class.
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+        if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register)) || is_pair_order(order) {
+            return None;
+        }
+        let any = Self::candidates(Class::ANY);
+        (any.len() > order.len()).then_some(any)
     }
 
     type Class = Class;
