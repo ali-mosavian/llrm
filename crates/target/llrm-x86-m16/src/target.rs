@@ -276,6 +276,10 @@ impl Machine for Dos {
             // and 1350 bytes unrolled, 306 and 418 not.
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
+            // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
+            // (partial and runtime on) copied matmul's outer body, 455 code
+            // bytes against 297, past Borland C's 298.
+            unroll_partial_threshold: Some(0),
             // DEVIATE: bytes over clocks at every level: the inliner's bar is
             // the pin's `OptSizeThreshold`, 50, not 225. jpeg_single.nib: 3178
             // instructions in 6 procedures at 225, 1559 in 10 at 50 (main
