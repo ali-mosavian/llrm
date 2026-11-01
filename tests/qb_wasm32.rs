@@ -229,6 +229,24 @@ fn play_hands_its_tones_to_the_host() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// The MID$ statement has a C runtime entry (`B$SMID`): its call was left
+/// unresolved on every flat target, so a module using it did not instantiate
+/// (jpeg, stft). Over a variable string, a fixed one, and from an
+/// overlapping source (rt/mid.asm copies forward, a byte at a time: the first
+/// byte spreads).
+#[test]
+fn the_mid_statement_overwrites_in_place() {
+    let dir = built(
+        "midstmt",
+        "a$ = \"hello world\"\nMID$(a$, 7, 3) = \"WORLD\"\nMID$(a$, 1) = \"J\"\nDIM f AS STRING * 5\nf = \"abcde\"\n\
+         MID$(f, 4, 9) = \"XYZ\"\nb$ = \"abcdef\"\nMID$(b$, 2) = b$\nPRINT a$; \"|\"; f; \"|\"; b$\nEND\n",
+    );
+    let (text, code) = run(&dir, "midstmt", &[]);
+    assert_eq!(text.trim_end(), "Jello WORld|abcXY|aaaaaa");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// `READ` into a `STRING * 5` called B$RDSD, which wrote a descriptor over the
 /// fixed buffer (garbage on screen); a fixed string is read by B$RDFS now.
 #[test]
