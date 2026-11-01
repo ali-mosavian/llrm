@@ -662,9 +662,9 @@ fn body_start(
     found.map_or(Position::End(block), Position::Before)
 }
 
-/// Each phi of the pad a slot its predecessors store into before they call,
+/// Each phi of `pad` a slot its predecessors store into before they call,
 /// as DemotePHIToStack makes it.
-fn demote_phis(
+pub fn demote_phis(
     context: &Context,
     function: &mut Function,
     pad: BlockId,
@@ -742,6 +742,17 @@ fn demote_live(
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
+    demote_live_into(context, function, pad, |_, _| false)
+}
+
+/// [`demote_live`] for any `block`, leaving in its register each value
+/// `reaches` says is available wherever the block is entered from.
+pub fn demote_live_into(
+    context: &Context,
+    function: &mut Function,
+    pad: BlockId,
+    reaches: impl Fn(&Function, ValueId) -> bool,
+) -> Result<(), String> {
     let values = live_in(function).remove(&pad).unwrap_or_default();
     let entry = function.entry().expect("a body");
     // An entry block's alloca is the frame's own address, in no register.
@@ -751,7 +762,8 @@ fn demote_live(
         }
         ValueDef::Argument(_) => false,
     };
-    let values: Vec<ValueId> = values.into_iter().filter(|&one| !fixed(function, one)).collect();
+    let values: Vec<ValueId> =
+        values.into_iter().filter(|&one| !fixed(function, one) && !reaches(function, one)).collect();
     for value in values {
         let ty = function.value(value).ty;
         let slot = slot(context, function, ty)?;
