@@ -123,7 +123,7 @@ fn spill_displacement(pushed: bool) -> i64 {
         insts.push(op("CCR_POP", vec![], true, false));
     }
     insts.push(op("RET", vec![Operand::Imm(0)], false, false));
-    let lines = finish(&function(insts), &assignment(), 0, &[0], Cpu::M68000).unwrap();
+    let lines = finish(&function(insts), &assignment(), 0, &[0], Cpu::M68000, false).unwrap();
     lines
         .iter()
         .find_map(|line| match line {

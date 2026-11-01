@@ -379,6 +379,22 @@ fn currency_text_matches_the_microsoft_output_on_wasm32() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// ON ERROR lands on wasm32 with exception handling: the runtime throws and the
+/// function's `catch_all` takes it. With the `setjmp` stub the program ended at
+/// the first error with "ON ERROR landed: longjmp is not supported". The pad
+/// branches back into the function (RESUME NEXT, RESUME 0), which a `catch`
+/// cannot do, so the function runs inside a dispatch loop.
+#[test]
+fn on_error_lands_with_wasm_exceptions() {
+    let source = "ON ERROR GOTO h\nPRINT \"a\"\nERROR 5\nPRINT \"b\"\nERROR 6\nPRINT \"c\"\nEND\n\
+        h:\nPRINT \"err\"; ERR\nRESUME NEXT\n";
+    let dir = built_with("eh_land", source, "--wasm-exceptions");
+    let (text, code) = run(&dir, "eh_land", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["a", "err", "5", "b", "err", "6", "c"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// A currency read from text is exact (a double holds 16 digits, not 19), the
 /// fifth place rounds half away from zero, and a magnitude past the type is
 /// Overflow.
@@ -417,8 +433,7 @@ fn dateserial_counts_days_from_1899_12_30_and_carries_on_wasm32() {
 }
 
 /// ON LOCAL ERROR did not instantiate (B$OEGP). A handler that is never needed
-/// is registered and the program runs on; landing in it waits for the EH
-/// stages.
+/// is registered and the program runs on.
 #[test]
 fn on_local_error_registers_and_the_program_runs_on_wasm32() {
     let dir = built(
@@ -429,4 +444,31 @@ fn on_local_error_registers_and_the_program_runs_on_wasm32() {
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "done"]);
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A procedure's ON LOCAL ERROR handler takes the error and resumes: the
+/// ownf_local and resumelocals_local programs did not link (B$OEGP) and then
+/// ended at the first error.
+#[test]
+fn on_local_error_lands_in_its_handler_on_wasm32() {
+    let dir = built_with(
+        "locland",
+        "' dialect: pds71\nDECLARE SUB top ()\ntop\nPRINT \"done\"\nEND\nSUB top\nON LOCAL ERROR GOTO th\nPRINT \"in\"\nERROR 5\nPRINT \"after\"\nEXIT SUB\nth:\nPRINT \"err\"; ERR\nRESUME NEXT\nEND SUB\n",
+        "--wasm-exceptions",
+    );
+    let (text, code) = run(&dir, "locland", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "err", "5", "after", "done"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A module's `catch_all` catches what an import throws, so the host's
+/// endings (`END`, a fatal error) are traps: thrown, `END` inside a function
+/// with a handler landed in the handler and the program went on.
+#[test]
+fn a_host_ending_gets_through_a_catch_all() {
+    need("node");
+    let probe = root().join("runtime/wasm/probe_end.mjs");
+    let out = Command::new("node").arg(&probe).output().expect("node");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "escaped", "{}", String::from_utf8_lossy(&out.stderr));
 }

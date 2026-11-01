@@ -19,6 +19,7 @@ use crate::explicit_locals::explicit_locals;
 use crate::fix_br_table_defaults::fix_br_table_defaults;
 use crate::fix_irreducible::fix_irreducible_control_flow;
 use crate::frame::frame_lowering;
+use crate::late_eh_prepare::late_eh_prepare;
 use crate::lower_br_unless::lower_br_unless;
 use crate::mir::{Function, Operand, ValType};
 use crate::phi_elimination::phi_elimination;
@@ -67,16 +68,34 @@ pub fn signature(
     Ok((params, results))
 }
 
+/// `-exception-model=` of the pin's `llc` (`TargetOptions::ExceptionModel`),
+/// the two it takes for wasm.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExceptionModel {
+    /// No unwinding: an `invoke` is a call and a `landingpad` builds nothing.
+    #[default]
+    None,
+    /// `-exception-model=wasm` with `-mattr=+exception-handling`: `try`,
+    /// `catch` and `throw`.
+    Wasm,
+}
+
 /// Which passes run.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// `RegStackify`: the pin runs it at `-O0`, LLVM 20's `llc -O0` does not.
     pub stackify: bool,
+    pub exception_model: ExceptionModel,
+    /// A `call` that is not the last of a block with an unwind edge may throw,
+    /// as in LLVM. DEVIATE W19: off, such a call never throws (QB's mid-end
+    /// makes every call that can raise an `invoke`), so the pin's
+    /// `fixCallUnwindMismatches` has nothing to fix. Exit: that pass.
+    pub calls_unwind: bool,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { stackify: true }
+        Options { stackify: true, exception_model: ExceptionModel::None, calls_unwind: true }
     }
 }
 
@@ -88,10 +107,14 @@ pub fn compile_function(
     width: Width,
     options: Options,
 ) -> Result<Function, String> {
-    let blocks = function::select_function(module, name, width)?;
+    let unwinding = options.exception_model == ExceptionModel::Wasm;
+    let blocks = function::select_function(module, name, width, unwinding)?;
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
+    f.calls_unwind = options.calls_unwind;
+    f.personality = unwinding
+        && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
     f.binding =
@@ -107,11 +130,12 @@ pub fn compile_function(
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
     fix_irreducible_control_flow(&mut f);
+    late_eh_prepare(&mut f);
     if options.stackify {
         reg_stackify(&mut f);
     }
     cfg_sort(&mut f);
-    cfg_stackify(&mut f);
+    cfg_stackify(&mut f)?;
     explicit_locals(&mut f);
     lower_br_unless(&mut f);
     for (symbol, _) in f.symbols.clone() {

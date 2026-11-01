@@ -9,7 +9,7 @@ use llrm_target::BuilderArch;
 
 use super::super::builder::{BlockDag, BuilderTarget, TargetNodes, build_block};
 use super::super::function_lowering::FunctionLoweringInfo;
-use super::super::target_calling::{FixedObject, In, LiveIn, Out, TargetCalling};
+use super::super::target_calling::{FixedObject, In, LiveIn, Out, TargetCalling, TargetIntrinsic};
 use super::*;
 
 /// A target with no x86 description (wasm): the builder asks its hooks, not
@@ -47,9 +47,22 @@ struct Probe {
     in_place: bool,
     buffer: bool,
     mem: bool,
+    intrinsics: bool,
 }
 
 impl TargetCalling for Probe {
+    fn intrinsic(
+        &self,
+        name: &str,
+    ) -> Option<TargetIntrinsic> {
+        match name {
+            "llvm.test.effect" if self.intrinsics => Some(TargetIntrinsic { id: 7, chained: true }),
+            "llvm.test.read" if self.intrinsics => Some(TargetIntrinsic { id: 8, chained: true }),
+            "llvm.test.pure" if self.intrinsics => Some(TargetIntrinsic { id: 9, chained: false }),
+            _ => None,
+        }
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
@@ -323,4 +336,30 @@ fn a_hooked_target_asserts_the_extension_a_parameter_and_a_result_carry() {
     assert!(has(&block, ISD::AssertZext) && has(&block, ISD::AssertSext), "parameters and the result are asserted");
     let count = |op| block.dag.nodes().iter().filter(|node| node.opcode == op).count();
     assert_eq!((count(ISD::AssertZext), count(ISD::AssertSext)), (2, 1), "zeroext a and the result; signext b");
+}
+
+const INTRINSICS: &str = "declare void @llvm.test.effect(i32)\ndeclare i32 @llvm.test.read(i32)\ndeclare i32 @llvm.test.pure(i32)\n\
+    define i32 @f(i32 %a) {\n  call void @llvm.test.effect(i32 %a)\n  %r = call i32 @llvm.test.read(i32 %a)\n  \
+    %p = call i32 @llvm.test.pure(i32 %r)\n  ret i32 %p\n}\n";
+
+/// A function the target names an intrinsic was a call of its own name, an
+/// import nothing defines. It is an `INTRINSIC_*` node (`VOID` with no result,
+/// `W_CHAIN` with side effects, `WO_CHAIN` without) whose first value operand
+/// is the target's id; a target that names none keeps the call.
+#[test]
+fn a_function_the_target_names_an_intrinsic_is_an_intrinsic_node() {
+    let (plain, ..) = built(INTRINSICS, Probe::default(), |_| {});
+    let plain = plain.unwrap();
+    assert!(has(&plain, x86isd::CALL) && !has(&plain, ISD::IntrinsicVoid));
+    let (named, ..) = built(INTRINSICS, Probe { intrinsics: true, ..Probe::default() }, |_| {});
+    let named = named.unwrap();
+    assert!(!has(&named, x86isd::CALL), "no call of the name is left");
+    let id = |opcode: ISD, at: usize| {
+        let node = named.dag.nodes().iter().find(|node| node.opcode == opcode).unwrap_or_else(|| panic!("{opcode:?}"));
+        named.dag.constant(node.ops[at])
+    };
+    // chained nodes have the chain first, the unchained one starts with the id
+    assert_eq!(id(ISD::IntrinsicVoid, 1), Some(7));
+    assert_eq!(id(ISD::IntrinsicWChain, 1), Some(8));
+    assert_eq!(id(ISD::IntrinsicWoChain, 0), Some(9));
 }

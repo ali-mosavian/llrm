@@ -80,7 +80,7 @@ function due() {
     const reached = d.afterKeys === undefined ? now >= d.at : keyTimes.length >= d.afterKeys && now >= keyTimes[d.afterKeys - 1] + d.dwell;
     if (reached) { d.done = true; dump(d.name); }
   }
-  if (now > limitMs || (wallMs && Date.now() - started > wallMs)) throw new Exit(124);
+  if (now > limitMs || (wallMs && Date.now() - started > wallMs)) host.end(new Exit(124));
 }
 
 host = await instantiate(readFileSync(wasmPath), {
