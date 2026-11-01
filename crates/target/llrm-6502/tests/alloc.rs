@@ -2620,3 +2620,23 @@ fn a_hot_count_takes_x_from_a_count_held_for_later() {
     let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
     assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
 }
+
+/// A byte stored before it is tested against zero is still the byte in `a`,
+/// and the load set the flags: the test cost a `cmp #0` (2 bytes, 2 clocks a
+/// pass of strcspn's outer loop) because the store sat between the two.
+#[test]
+fn a_store_between_a_load_and_its_zero_test_keeps_the_flags() {
+    let ir = "@g = global i8 0
+define i8 @f(ptr %p) {
+  %x = load volatile i8, ptr %p
+  store volatile i8 %x, ptr @g
+  %c = icmp eq i8 %x, 0
+  br i1 %c, label %a, label %b
+a:
+  ret i8 1
+b:
+  ret i8 2
+}";
+    let text = compile(ir, "f");
+    assert!(!text.contains("cmp #0"), "{text}");
+}

@@ -2159,6 +2159,12 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     }
 }
 
+/// Whether the emitted line stores a register: neither `a` nor the flags
+/// change.
+fn is_store(line: &str) -> bool {
+    matches!(line.trim().split_once(' '), Some(("sta" | "stx" | "sty", _)))
+}
+
 /// Whether the emitted line leaves the zero and sign flags describing what `a`
 /// now holds.
 fn sets_nz_of_a(line: &str) -> bool {
@@ -2479,7 +2485,7 @@ fn emit_with<const STACK: bool>(
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
                     if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
-                        && out.lines().last().is_some_and(sets_nz_of_a) => {}
+                        && out.lines().rev().find(|line| !is_store(line)).is_some_and(sets_nz_of_a) => {}
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
