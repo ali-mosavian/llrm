@@ -87,6 +87,9 @@ multiclass ALU8<string n, SDPatternOperator op> {
     def NAME#"8r" : Z80Inst<(outs ACC:$d), (ins ACC:$a, GR8:$b), n#" a, $b", [(set i8:$d, (op i8:$a, i8:$b))]>;
     def NAME#"8i" : Z80Inst<(outs ACC:$d), (ins ACC:$a, i8imm:$b), n#" a, $b", [(set i8:$d, (op i8:$a, (i8 imm:$b)))]>;
   }
+  // the second operand read from memory through HL: `add a, (hl)`, one byte
+  let Defs = [F], Constraints = "$d = $a", mayLoad = 1, isCommutable = !if(!eq(n, "sub"), 0, 1) in
+    def NAME#"8m" : Z80Inst<(outs ACC:$d), (ins ACC:$a, HLR:$p), n#" a, ($p)", [(set i8:$d, (op i8:$a, (load i16:$p)))]>;
 }
 defm ADD : ALU8<"add", add>;
 defm SUB : ALU8<"sub", sub>;
@@ -188,6 +191,8 @@ def COPY16 : Z80Inst<(outs GR16:$d), (ins GR16:$s), "copy $d, $s", []>;
 // cp r / cp n: the flags of a - b.
 def CP8r : Z80Inst<(outs Flags:$f), (ins ACC:$a, GR8:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, i8:$b))]>;
 def CP8i : Z80Inst<(outs Flags:$f), (ins ACC:$a, i8imm:$b), "cp $b", [(set i8:$f, (Z80cmp i8:$a, (i8 imm:$b)))]>;
+let mayLoad = 1 in
+  def CP8m : Z80Inst<(outs Flags:$f), (ins ACC:$a, HLR:$p), "cp ($p)", [(set i8:$f, (Z80cmp i8:$a, (load i16:$p)))]>;
 // The flags of a - b over a word, through A: sub/sbc of the two byte pairs for the carry, sub and a skip for Z.
 // A is clobbered, as the pseudo says.
 let Defs = [A] in {

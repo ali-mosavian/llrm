@@ -248,6 +248,11 @@ impl Printer<'_> {
                 let source = self.source(inst, 2)?;
                 self.push(format!("{mnemonic} a, {source}"));
             }
+            "ADD8m" | "SUB8m" | "AND8m" | "OR8m" | "XOR8m" => {
+                let mnemonic = op[..op.len() - 2].to_lowercase();
+                self.push(format!("{mnemonic} a, (hl)"));
+            }
+            "CP8m" => self.push("cp a, (hl)"),
             "ADD8i" | "SUB8i" | "AND8i" | "OR8i" | "XOR8i" => {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
                 let value = self.immediate(inst, 2, 0xFF)?;

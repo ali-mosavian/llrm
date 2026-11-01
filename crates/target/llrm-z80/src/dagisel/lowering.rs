@@ -345,7 +345,7 @@ fn translate_cc(
 fn compare(
     dag: &mut SelectionDAG,
     mut cc: CondCode,
-    op0: SDValue,
+    mut op0: SDValue,
     mut op1: SDValue,
 ) -> (u128, SDValue) {
     use CondCode::*;
@@ -361,6 +361,25 @@ fn compare(
     if matches!(cc, SetLt | SetGe) && dag.constant(op1) == Some(0) {
         let flags = dag.get_node(z80isd::TSTS, EVT::I8, &[op0]);
         return (if cc == SetLt { cond::NZ } else { cond::Z }, flags);
+    }
+    // `cp (hl)` takes the memory operand second: a loaded byte compared with a register is compared the other way
+    // round, with the order of the condition reversed
+    if vt == EVT::I8 && dag.opcode(op0) == ISD::Load && dag.opcode(op1) != ISD::Load && dag.constant(op1).is_none() {
+        cc = match cc {
+            SetULt => SetUGt,
+            SetUGt => SetULt,
+            SetULe => SetUGe,
+            SetUGe => SetULe,
+            SetLt => SetGt,
+            SetGt => SetLt,
+            SetLe => SetGe,
+            SetGe => SetLe,
+            other => other,
+        };
+        std::mem::swap(&mut op0, &mut op1);
+        let op1 = op1;
+        let (code, a, b) = translate_cc(dag, cc, op0, op1);
+        return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
     }
     let (code, a, b) = translate_cc(dag, cc, op0, op1);
     (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]))

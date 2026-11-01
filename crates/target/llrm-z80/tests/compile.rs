@@ -200,3 +200,13 @@ fn a_constant_added_in_a_loop_is_made_before_the_loop() {
     let (made, looped) = (out.find("#_buf").expect("loads the address"), out.find("L0_1:").expect("has the loop"));
     assert!(made < looped && out.matches("#_buf").count() == 1, "{out}");
 }
+
+/// A byte loaded through `hl` and then compared or added was loaded into a register first (`ld a, (hl)` / `cp a, c`):
+/// `find` was 18 B and `sum_arr` 18 B. `cp a, (hl)` and `add a, (hl)` read the memory themselves.
+#[test]
+fn a_byte_read_by_an_alu_op_is_read_from_memory() {
+    let find = text(include_str!("kernels/ir/find.ll"), "find", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(find.contains("cp a, (hl)") && !find.contains("ld a, (hl)"), "{find}");
+    let sum = text(include_str!("kernels/ir/sum_arr.ll"), "sum_arr", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(sum.contains("add a, (hl)"), "{sum}");
+}
