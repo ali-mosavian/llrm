@@ -192,3 +192,15 @@ fn every_branch_of_a_split_condition_carries_the_phi_copies() {
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{said}");
 }
+
+/// `0 - zext(x)` is `SUBXrx` with a zero base. In the extended-register and
+/// immediate add/sub the base is `GPR64sp`: register 31 there is `sp`, so the
+/// zero written as `xzr` read the stack pointer (`queens -O2` on the Mac:
+/// `sub x23, sp, w27, uxtw` and a SIGBUS).
+#[test]
+fn a_zero_base_of_an_extended_subtract_is_a_register_not_sp() {
+    let asm = dag("define i64 @f(i32 %a) {\n  %z = zext i32 %a to i64\n  %r = sub i64 0, %z\n  ret i64 %r\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(!asm.contains("sub x0, sp,") && !asm.contains("xzr, w0, uxtw"), "{asm}");
+    assert!(asm.contains("sub x0, x9, w0, uxtw"), "{asm}");
+}

@@ -1164,7 +1164,7 @@ impl Emitter<'_> {
                     "TCRETURNdi" | "TCRETURNri" | "TCRETURNriBTI" => return self.tail_call(id, name),
                     _ => {}
                 }
-                let operands = node
+                let mut operands = node
                     .ops
                     .iter()
                     .filter(|op| {
@@ -1332,6 +1332,22 @@ impl Emitter<'_> {
                         }));
                     }
                     _ => {
+                        // `GPR64sp`/`GPR32sp`: register number 31 in these
+                        // operands is
+                        // the stack pointer, so a zero base is a register
+                        // holding zero.
+                        let width = add_sub(name)
+                            .filter(|&(.., immediate)| immediate)
+                            .map(|(_, width, _)| width)
+                            .or_else(|| add_sub_extended(name).map(|(_, width)| width));
+                        if let (Some(width), Some(Operand::Reg(rn))) = (width, operands.first_mut())
+                            && *rn == Gpr::R31
+                        {
+                            let zero = self.mf.gpr();
+                            let bits = if width == Width::X { 64 } else { 32 };
+                            self.ops.push(Op::Imm { dst: zero, bits, value: 0 });
+                            *rn = zero;
+                        }
                         self.ops.push(Op::I(build(name, rd, &operands)?));
                     }
                 }
