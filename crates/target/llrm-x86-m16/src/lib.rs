@@ -608,6 +608,7 @@ mod tuning_tests {
                 max_stores_per_memcpy_opt_size: 4,
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
+                multiply_by_clocks: false,
                 speed_milliclocks_per_byte: 0,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
@@ -616,6 +617,7 @@ mod tuning_tests {
                 inline_threshold: None,
                 split_merged_conditions: false,
                 inline_size_guard_at_speed: false,
+                keep_constant_displacements: false,
                 ..table
             },
             Tuning::PIN

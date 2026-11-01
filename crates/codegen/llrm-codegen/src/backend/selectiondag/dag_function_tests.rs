@@ -763,6 +763,28 @@ define i32 @f(i32 %a) {{
     assert_eq!(count(&seven, "imul"), 0, "m32 -Os x*7: {seven:?}");
 }
 
+/// m32 -O2 kept `x * 1664525` (the LCG step of x_iir, x_hash, x_histo2) an
+/// `imul`: 13-42 clocks by the multiplier on a 486 where gcc's `lea`/`shl`
+/// chain is a few; x_iir priced 130525 clk against gcc's 60034 (2.17x) with
+/// half its instructions.
+#[test]
+fn at_m32_speed_a_multiply_by_a_wide_constant_is_a_chain_not_an_imul() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 1664525
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("m32 states a 486").clone();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]

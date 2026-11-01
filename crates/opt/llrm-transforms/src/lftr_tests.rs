@@ -56,12 +56,24 @@ fn test_a_test_already_not_equal_on_a_counter_is_left() {
     assert!(!changed, "{after}");
 }
 
-/// A step of two is no counter (`isLoopCounter` wants one), so nothing
-/// replaces the test.
+/// A step of two that cannot wrap reaches the limit exactly, so the test
+/// becomes `!=` (the pin leaves it: `isLoopCounter` wants a step of one, and
+/// `textfill`'s fill loop kept `cmp; lea; jb` where main ended its counter
+/// at zero).
 #[test]
-fn test_a_stride_of_two_is_not_a_counter() {
-    let (changed, after) = replaced(&counted("icmp ult i16 %inc, 10", 2));
-    assert!(!changed, "{after}");
+fn test_a_stride_of_two_that_cannot_wrap_becomes_not_equal_to_the_limit() {
+    let (changed, after) = replaced(&counted("icmp ult i16 %inc, 10", 2).replace("add i16 %i,", "add nuw i16 %i,"));
+    assert!(changed, "{after}");
+    assert!(after.contains("%exitcond = icmp ne i16 %inc, 10"), "{after}");
+}
+
+/// A bound the step does not divide: the counter still lands on the limit
+/// `start + count * step` (10), not on the bound (9).
+#[test]
+fn test_a_stride_of_two_with_an_odd_bound_lands_on_the_limit() {
+    let (changed, after) = replaced(&counted("icmp ult i16 %inc, 9", 2).replace("add i16 %i,", "add nuw i16 %i,"));
+    assert!(changed, "{after}");
+    assert!(after.contains("%exitcond = icmp ne i16 %inc, 10"), "{after}");
 }
 
 /// Exiting from the header, not the latch, the test reads the counter before
@@ -86,4 +98,50 @@ exit:
     );
     assert!(changed, "{after}");
     assert!(after.contains("%exitcond = icmp ne i16 %i, 10"), "{after}");
+}
+
+/// Strides of 3, 4 and 8 that cannot wrap land on the limit like a stride of
+/// two: `start + count * step`.
+#[test]
+fn test_larger_strides_that_cannot_wrap_become_not_equal_to_the_limit() {
+    for (step, bound, limit) in [(3, 10, 12), (4, 10, 12), (8, 100, 104)] {
+        let text = counted(&format!("icmp ult i16 %inc, {bound}"), step).replace("add i16 %i,", "add nuw i16 %i,");
+        let (changed, after) = replaced(&text);
+        assert!(changed, "step {step}: {after}");
+        assert!(after.contains(&format!("%exitcond = icmp ne i16 %inc, {limit}")), "step {step}: {after}");
+    }
+}
+
+/// A counter that steps down by two from a start above the bound reaches the
+/// limit `start - count * 2`.
+#[test]
+fn test_a_negative_stride_becomes_not_equal_to_the_limit() {
+    let (changed, after) = replaced(
+        "define i16 @f(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 20, %entry ], [ %inc, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s2, %loop ]
+  %s2 = add i16 %s, %n
+  %inc = add nsw i16 %i, -2
+  %c = icmp sgt i16 %inc, 0
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %s2
+}
+",
+    );
+    assert!(changed, "{after}");
+    assert!(after.contains("%exitcond = icmp ne i16 %inc, 0"), "{after}");
+}
+
+/// shellsort's inner loop (`at -= gap` while `at >= gap`) trips `at / gap`
+/// times: its limit takes a division. A stride of two over a bound only known
+/// at run time kept `cmp; jae` before this gate; with it the counter and the
+/// limit cost +26..44 instructions on three targets.
+#[test]
+fn test_a_stride_whose_limit_needs_code_is_left_alone() {
+    let (changed, after) = replaced(&counted("icmp ult i16 %inc, %n", 2).replace("add i16 %i,", "add nuw i16 %i,"));
+    assert!(!changed, "{after}");
 }
