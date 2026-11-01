@@ -139,6 +139,11 @@ pub struct Selected {
     /// The IR block whose lowering made this one: itself, or the `switch`
     /// block.
     pub origin: u32,
+    /// The unwind destination of the `invoke` ending this block (an EH
+    /// pad's block id), when the model keeps unwinding edges.
+    pub unwind: Option<u32>,
+    /// The block starts with a `landingpad`: an EH pad.
+    pub landing: bool,
     /// The machine blocks' ids in layout order: each IR block, then the blocks
     /// its lowering made.
     pub layout: Vec<u32>,
@@ -165,6 +170,7 @@ pub fn select_function(
     module: &Module,
     name: &str,
     width: Width,
+    unwinding: bool,
 ) -> Result<Vec<Selected>, String> {
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -215,6 +221,8 @@ pub fn select_function(
             selected.push(Selected {
                 id: id.0,
                 origin: origin.0,
+                unwind: if unwinding { unwind_of(function, origin) } else { None },
+                landing: unwinding && id == origin && starts_with_landing_pad(function, origin),
                 phis,
                 dag: one.dag,
                 units,
@@ -232,6 +240,36 @@ pub fn select_function(
         block.frame.clone_from(&frame);
     }
     Ok(selected)
+}
+
+/// The pad an `invoke` ending `block` unwinds to.
+fn unwind_of(
+    function: &llrm_mir::module::Function,
+    block: llrm_mir::module::BlockId,
+) -> Option<u32> {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+
+    let last = function.iter_block(block).last()?;
+    let inst = function.instruction(last);
+    match (&inst.opcode, inst.operands.as_slice()) {
+        (Opcode::Invoke(_), [.., Operand::Block(_), Operand::Block(pad), _]) => Some(pad.0),
+        _ => None,
+    }
+}
+
+/// Whether the first instruction of `block` after its phis is a `landingpad`.
+fn starts_with_landing_pad(
+    function: &llrm_mir::module::Function,
+    block: llrm_mir::module::BlockId,
+) -> bool {
+    use llrm_mir::opcode::Opcode;
+
+    function
+        .iter_block(block)
+        .map(|inst| &function.instruction(inst).opcode)
+        .find(|opcode| !matches!(opcode, Opcode::Phi))
+        .is_some_and(|opcode| matches!(opcode, Opcode::LandingPad { .. }))
 }
 
 /// The (size, alignment) of each static alloca, by the frame index

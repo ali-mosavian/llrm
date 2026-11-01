@@ -53,14 +53,15 @@ fn not_and_swap_encode_as_binutils_does() {
 /// `flags.rs`, which only a schedule that separates a compare from its uses
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
-const SOURCE_ORDER: Options = Options { mid_end: true, size: false, source_order: true };
+const SOURCE_ORDER: Options =
+    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false };
 
 fn compiled(
     ir: &str,
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, options).expect("compiles")
+    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, ..options }).expect("compiles")
 }
 
 fn branches(body: &str) -> String {
@@ -383,7 +384,8 @@ done:
 fn saved_registers_are_stored_into_the_carved_frame_as_the_pin_does() {
     let ir = llrm_m68k::kernels::source_in("library", "fnptr");
     let module = llrm_mir::parse::module(&ir).expect("parses");
-    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
+    let ours =
+        text_with(&module, "k", Cpu::M68000, Options { push_frame: false, ..Options::default() }).expect("compiles");
     assert!(ours.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{ours}");
     assert!(!ours.contains("-(%sp)"), "{ours}");
 }

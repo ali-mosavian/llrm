@@ -84,6 +84,35 @@ pub fn visit_fsub(
     Visit::None
 }
 
+/// `visitCallInst`'s `Intrinsic::fmuladd`
+/// ([L3217](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L3217)):
+/// when the product alone simplifies, `fmuladd(a, b, c)` is that plus `c` with
+/// the call's flags (`fmuladd(0.0, x, 1.5)` for a finite `x` that is not
+/// negative is `0.0 + 1.5`, which folds). The `fma` arm is not translated.
+pub fn visit_fmuladd(
+    c: &mut Combiner,
+    call: InstId,
+) -> Visit {
+    let instruction = c.function.instruction(call).clone();
+    let [a, b, addend, ..] = instruction.operands[..] else { return Visit::None };
+    let env = c.env;
+    let Some(product) = llrm_mir::simplify::simplify_binop_with_flags_at(
+        c.context,
+        env.globals,
+        env.layout,
+        Some(&env.analyses),
+        c.function,
+        call,
+        BinaryOp::FMul,
+        instruction.flags,
+        a,
+        b,
+    ) else {
+        return Visit::None;
+    };
+    c.replace_with_binop(call, BinaryOp::FAdd, product, addend, instruction.flags)
+}
+
 /// `m_FNeg(Y)`: `fneg Y`, or `fsub -0.0, Y`.
 fn fneg_operand(
     c: &Combiner,

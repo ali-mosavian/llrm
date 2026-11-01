@@ -58,13 +58,14 @@ pub fn assembly(
 ) -> Result<String, String> {
     let module = module(text, width)?;
     let mut out = String::new();
+    let mut labels = print::Labels::default();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
-        out.push_str(&print::function(&f));
+        out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
 }
@@ -86,7 +87,11 @@ pub fn object(
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
-    Ok(crate::object::write(&functions, &data(&module, width)?))
+    Ok(crate::object::write(
+        &functions,
+        &data(&module, width)?,
+        options.exception_model == crate::dag::ExceptionModel::Wasm,
+    ))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`

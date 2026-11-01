@@ -37,6 +37,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [m68k-isa](m68k-isa.md) | The 68k family opcode table: how it is checked against binutils and the manual, numbered limits, sources |
 | [m68k-timing](m68k-timing.md) | Clocks per CPU of the 68k family: tables used, how they were checked, numbered limits |
 | [m68k-timing-cycles](m68k-timing-cycles.md) | The kernels priced on each CPU of the 68k family |
+| [wasm-eh](wasm-eh.md) | Wasm exception handling for ON ERROR landing: the stages, the oracle, which touch shared crates |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |

@@ -4,6 +4,7 @@ pub mod abi;
 pub mod alloc;
 pub mod dagisel;
 pub mod driver;
+pub mod elf;
 pub mod emit;
 pub mod frame;
 pub mod platform;
