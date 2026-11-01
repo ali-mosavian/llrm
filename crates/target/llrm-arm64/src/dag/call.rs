@@ -203,6 +203,12 @@ impl TargetCalling for Aarch64Calling {
             (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
                 dag.get_target_global_address(EVT::I64, symbol, offset)
             }
+            // A libcall the legalizer made (`memset`): `LowerCall`'s
+            // `getTargetExternalSymbol`.
+            (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+                let name = dag.symbol_names[id as usize].clone();
+                dag.get_target_external_symbol(EVT::I64, &name)
+            }
             _ => callee,
         };
         // The arguments are where the callee reads them: no stack adjustment.
@@ -280,6 +286,12 @@ impl TargetCalling for Aarch64Calling {
         let callee = match (dag.opcode(callee), dag.node(callee).data) {
             (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
                 dag.get_target_global_address(EVT::I64, symbol, offset)
+            }
+            // A libcall the legalizer made (`memset`): `LowerCall`'s
+            // `getTargetExternalSymbol`.
+            (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
+                let name = dag.symbol_names[id as usize].clone();
+                dag.get_target_external_symbol(EVT::I64, &name)
             }
             _ => callee,
         };

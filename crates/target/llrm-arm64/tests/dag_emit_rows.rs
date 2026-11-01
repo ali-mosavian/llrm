@@ -61,3 +61,13 @@ fn a_load_that_steps_its_pointer_is_post_indexed() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("[x0], #8"), "{asm}");
 }
+
+/// A `memset` the legalizer turned into a libcall has an `ExternalSymbol`
+/// callee; the DAG path refused it as `CannotSelect("ExternalSymbol")`, which
+/// stopped 8 of the corpus's bench kernels (bintree, ...) at `--isel=dag`.
+#[test]
+fn a_libcall_the_legalizer_made_is_a_direct_call() {
+    let asm = dag("declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\ndefine void @f(ptr %p, i64 %n) {\n  call void @llvm.memset.p0.i64(ptr %p, i8 0, i64 %n, i1 false)\n  ret void\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("bl _memset") || asm.contains("bl _bzero"), "{asm}");
+}

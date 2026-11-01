@@ -86,6 +86,9 @@ enum Operand {
     Fpr(Vreg),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
+    /// A routine the legalizer named (a libcall), by index into the DAG's
+    /// symbol names.
+    External(u32),
     /// A block by id, as a branch names it.
     Block(u32),
     /// An incoming argument at this offset into the caller's outgoing area.
@@ -645,6 +648,7 @@ impl Emitter<'_> {
                 Ok(Operand::Imm(bits as u64))
             }
             NodeData::Block(id) => Ok(Operand::Block(id)),
+            NodeData::Symbol(id) if node.opcode == ISD::TargetExternalSymbolNode => Ok(Operand::External(id)),
             // The zero register as an operand of `CSINC` and the like.
             NodeData::PhysReg(id) if gpr_of(id).is_ok_and(|g| g == Gpr::R31) => Ok(Operand::Reg(Gpr::R31)),
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
@@ -680,6 +684,9 @@ impl Emitter<'_> {
                 Target::Symbol { name, .. } => Callee::Symbol(name),
                 _ => return Err("a callee that is no symbol".into()),
             },
+            ("BL", Operand::External(symbol)) => {
+                Callee::Symbol(self.globals.external(&self.dag.symbol_names[symbol as usize]))
+            }
             ("BLR", Operand::Reg(register)) => Callee::Register(register),
             _ => return Err(format!("{name}: a callee that is neither a symbol nor a register")),
         };

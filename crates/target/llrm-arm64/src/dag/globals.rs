@@ -23,7 +23,7 @@ pub struct Global {
 }
 
 #[derive(Clone, Default)]
-pub struct Globals(Rc<HashMap<u32, Global>>);
+pub struct Globals(Rc<HashMap<u32, Global>>, Option<Platform>);
 
 impl Globals {
     pub fn of(
@@ -55,7 +55,15 @@ impl Globals {
                 },
             );
         }
-        Globals(Rc::new(by_id))
+        Globals(Rc::new(by_id), Some(platform))
+    }
+
+    /// The linker's name of a routine the legalizer named (`memset`).
+    pub fn external(
+        &self,
+        name: &str,
+    ) -> String {
+        self.1.map_or_else(|| name.to_owned(), |platform| crate::data::symbol_name(platform, name))
     }
 
     pub fn get(
