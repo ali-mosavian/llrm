@@ -56,3 +56,28 @@ fn the_wasm_exception_model_refuses_unwinding_and_leaves_the_rest_alone() {
     let plain = "define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  ret i32 %b\n}\n";
     assert_eq!(assembly(plain, Width::W32, model), assembly(plain, Width::W32, Options::default()));
 }
+
+/// `llvm.wasm.throw` and its siblings were plain calls of an undefined symbol
+/// `llvm.wasm.throw` (exit 0, an import that cannot be satisfied). They are
+/// `INTRINSIC_*` nodes now; with no selection for them yet (stage 4) they stop
+/// at compile time by name, in both exception models.
+#[test]
+fn a_wasm_eh_intrinsic_is_never_a_call_of_its_name() {
+    use llrm_wasm::dag::ExceptionModel;
+
+    for (declare, call) in [
+        ("declare void @llvm.wasm.throw(i32, ptr)", "call void @llvm.wasm.throw(i32 0, ptr %p)"),
+        ("declare void @llvm.wasm.rethrow()", "call void @llvm.wasm.rethrow()"),
+        ("declare ptr @llvm.wasm.catch(i32)", "%c = call ptr @llvm.wasm.catch(i32 0)"),
+        ("declare ptr @llvm.wasm.lsda()", "%c = call ptr @llvm.wasm.lsda()"),
+    ] {
+        let text = format!("{declare}\ndefine void @f(ptr %p) {{\n  {call}\n  ret void\n}}\n");
+        for exception_model in [ExceptionModel::None, ExceptionModel::Wasm] {
+            let options = Options { exception_model, ..Options::default() };
+            match assembly(&text, Width::W32, options) {
+                Ok(out) => assert!(!out.contains("llvm.wasm"), "{call}: {out}"),
+                Err(why) => assert!(why.to_lowercase().contains("intrinsic"), "{call}: {why}"),
+            }
+        }
+    }
+}
