@@ -668,10 +668,12 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
     let module = optimized_mir(&source);
     let procedure = function_text(&module, "MISSINGFILE");
-    // ERL is 100 at the only error site, so its check folds away: only the
-    // ERR mismatch still reports, and the landing resumes into `recovered`.
-    let reports: Vec<&str> = procedure.lines().filter(|line| line.contains("@REPORTFAIL(")).collect();
-    assert_eq!(reports.len(), 1, "{procedure}");
+    // The ERL table holds 100 at every site (it was 0: ERL reported 0). How
+    // many `REPORTFAIL` calls remain is the inliner's choice, not the premise.
+    let table = module.lines().find(|line| line.starts_with("@$QB$ERL$MISSINGFILE")).expect("the ERL table");
+    let entries = table.matches("i16 ").count();
+    assert!(entries > 0 && table.matches("i16 100").count() == entries, "{table}");
+    assert!(procedure.contains("icmp eq i16 %erl, 100"), "{procedure}");
     let errnum = module
         .lines()
         .find(|line| line.contains("c\"errnum\""))
