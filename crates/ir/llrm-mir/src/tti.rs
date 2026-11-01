@@ -431,6 +431,14 @@ pub trait Tti {
         None
     }
 
+    /// The registers of the stack a float of this type lives in, where the
+    /// target keeps it there (x87: `Ty::X87`, and `Float`/`Double` without
+    /// SSE); none: it has a register file. A full unroll that would promote
+    /// more floats than this holds them across the loop in memory.
+    fn float_stack(&self, _ty: Ty) -> Option<u32> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {

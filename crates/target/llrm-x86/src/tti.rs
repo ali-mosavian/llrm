@@ -538,6 +538,18 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    /// The x87 stack holds eight values and one is the scratch (`RFP` has
+    /// `ST0`-`ST6`, as the allocator's `float_stack` counts).
+    fn float_stack(&self, ty: Ty) -> Option<u32> {
+        let stack = match ty {
+            Ty::X87 => true,
+            Ty::Float => !self.sse1,
+            Ty::Double => !self.sse2,
+            _ => false,
+        };
+        stack.then_some(7)
+    }
+
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.recursive_inlining
     }

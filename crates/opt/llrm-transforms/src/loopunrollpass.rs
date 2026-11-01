@@ -868,6 +868,37 @@ fn add_cost_recursively(
     }
 }
 
+/// DEVIATE X1 (owner w10, exit 2026-11-06: price it in the CPU model): a full
+/// unroll of a loop that reads floats from memory makes SROA promote the cells
+/// to values, and where floats live on a stack (x87) more of them than the
+/// stack holds spill or `fxch` around the nest (nbody -O2: 3808 dynamic
+/// `fxch` against gcc's 1200, which keeps the arrays). The pin has no such
+/// check; its x86 `getUnrollingPreferences` is absent. Not taken where the
+/// target has registers for the type (`Tti::float_stack`).
+fn float_cells_exceed_stack(
+    run: &Run,
+    lp: Loop,
+    trip_count: u32,
+) -> bool {
+    use llrm_mir::opcode::Opcode;
+    use llrm_mir::tti::Ty;
+    let mut cells = 0u32;
+    let mut stack: Option<u32> = None;
+    for &block in lp.get_blocks() {
+        for inst in run.function.iter_block(block) {
+            let one = run.function.instruction(inst);
+            if !matches!(one.opcode, Opcode::Load { .. }) {
+                continue;
+            }
+            let Some(ty) = Ty::of(&run.context.types, one.ty).filter(|ty| ty.is_float()) else { continue };
+            let Some(size) = run.tti.float_stack(ty) else { continue };
+            stack = Some(stack.map_or(size, |seen| seen.min(size)));
+            cells += 1;
+        }
+    }
+    stack.is_some_and(|size| u64::from(cells) * u64::from(trip_count) > u64::from(size))
+}
+
 /// `shouldFullUnroll`.
 fn should_full_unroll(
     run: &mut Run,
@@ -880,6 +911,10 @@ fn should_full_unroll(
 ) -> Option<u32> {
     debug_assert!(full_unroll_trip_count != 0, "should be non-zero!");
     if full_unroll_trip_count > up.full_unroll_max_count {
+        return None;
+    }
+
+    if std::env::var_os("LLRM_X_NOX1").is_none() && float_cells_exceed_stack(run, lp, full_unroll_trip_count) {
         return None;
     }
 
