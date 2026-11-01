@@ -2067,4 +2067,21 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
         let again = llrm_mir::parse::module(&printed).unwrap_or_else(|error| panic!("{error}\n{printed}"));
         assert_eq!(function_f(&again).debug_records().len(), records.len(), "{printed}");
     }
+
+    /// The pin's `llc -print-debug-ata` on this loop (with the `dbg_value`
+    /// of `x` before `%j`): `DW_OP_deref` of the alloca before the entry
+    /// branch, then `%i` before the add, and nothing else.
+    #[test]
+    fn the_loop_with_a_dbg_value_has_the_pins_two_locations() {
+        let text = LOOP.replace("%j = add", "#dbg_value(i32 %i, !20, !DIExpression(), !25)\n  %j = add");
+        let module = llrm_mir::parse::module(&text).unwrap();
+        let function = function_f(&module);
+        let locs = run(&text);
+        let at =
+            |name: &str| function.walk().find(|&(_, i)| function.instruction(i).opcode.mnemonic() == name).unwrap().1;
+        let seen: Vec<_> = locs.instructions().map(|inst| (inst, locs.locs_before(inst).len())).collect();
+        assert_eq!(seen, [(at("br"), 1), (at("add"), 1)]);
+        assert_eq!(locs.locs_before(at("br"))[0].expression, [DwOp::Deref]);
+        assert_eq!(locs.locs_before(at("add"))[0].expression, []);
+    }
 }
