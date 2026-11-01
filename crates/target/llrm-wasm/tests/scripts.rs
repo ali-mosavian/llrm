@@ -26,3 +26,22 @@ fn the_scripts_name_the_pin_tool_they_need() {
         assert!(!ok && why.contains(variable), "{script}: {why}");
     }
 }
+
+/// `-o -` wrote a file named `-` into the working directory (and was committed
+/// by mistake) instead of the text to standard output.
+#[test]
+fn llc_writes_standard_output_for_a_dash() {
+    let dir = std::env::temp_dir().join(format!("llrm-wasm-dash-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/arith.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-o", "-"])
+        .arg(ir)
+        .current_dir(&dir)
+        .output()
+        .expect("llrm-wasm-llc");
+    let stray = dir.join("-").exists();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.status.success() && !stray, "stray file: {stray}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(".functype"));
+}
