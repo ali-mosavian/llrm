@@ -2,7 +2,7 @@
 //! sequence (`movzx`, `imul`, `shr`, `imul`, `sub`; 13 instructions against 6,
 //! +21..25% clocks on bench/huge at m16 -Os).
 
-use super::super::dag::DivPrices;
+use super::super::dag::{DivPrices, ProductPrice};
 use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
 use super::*;
 
@@ -70,6 +70,7 @@ const I486_REAL_MODE: DivPrices = DivPrices {
     divide: 24,
     divide_long: 43,
     margin: 25,
+    product: None,
 };
 
 fn priced(
@@ -120,7 +121,7 @@ fn a_32_bit_divide_by_a_constant_stays_the_magic_sequence() {
 fn a_flat_target_keeps_the_magic_sequence() {
     let flat = DivPrices { operand: 4, divide: 43, divide_long: 43, multiply: 26, multiply_long: 26, ..I486_REAL_MODE };
     for d in [10, 97, 1000] {
-        assert_ne!(priced(ISD::URem, EVT::I32, d, Some(flat)), ISD::URem, "{d}");
+        assert_ne!(priced(ISD::URem, EVT::I32, d, Some(flat.clone())), ISD::URem, "{d}");
     }
 }
 
@@ -132,4 +133,18 @@ fn the_margin_is_read_from_the_prices() {
     let none = DivPrices { margin: 0, ..I486_REAL_MODE };
     assert_eq!(priced(ISD::SRem, EVT::I32, 14, Some(none)), ISD::SRem);
     assert_ne!(priced(ISD::SRem, EVT::I32, 14, Some(I486_REAL_MODE)), ISD::SRem);
+}
+
+/// The remainder's `q * d` was priced as a 2-shift 2-add chain the selector
+/// does not emit; it emits what `Machine::multiply_by` prices. A dear product
+/// makes the divide win where the cheap chain let the sequence.
+#[test]
+fn the_remainders_product_is_priced_as_what_the_selector_emits() {
+    let flat = |clocks: i64| DivPrices {
+        margin: 0,
+        product: Some(ProductPrice(std::rc::Rc::new(move |_| clocks))),
+        ..I486_REAL_MODE
+    };
+    assert_ne!(priced(ISD::SRem, EVT::I32, 14, Some(flat(0))), ISD::SRem);
+    assert_eq!(priced(ISD::SRem, EVT::I32, 14, Some(flat(100))), ISD::SRem);
 }
