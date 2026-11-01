@@ -1232,3 +1232,39 @@ define void @g(i56 %v) {
     assert_eq!(bytes("f", true), 7, "loaded");
     assert_eq!(bytes("g", false), 7, "stored");
 }
+
+/// A float constant read from the constant pool carried no invariant flag to
+/// LIR, so MachineLICM and the sinker took it for memory a store may change:
+/// the pin's pool access is a constant pseudo source value
+/// (`MachinePointerInfo::getConstantPool`, `isDereferenceableInvariantLoad`).
+#[test]
+fn a_float_constant_load_from_the_pool_is_an_invariant_load_in_lir() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f() {
+entry:
+  ret double 0.7071
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let flags: Vec<bool> = done
+        .body
+        .insns()
+        .iter()
+        .filter(|one| {
+            one.what
+                .as_ref()
+                .is_some_and(
+                    |what| matches!(
+                        what.op,
+                        crate::model::ir::Operation::Move | crate::model::ir::Operation::FloatLoad
+                    )
+                        && matches!(what.sources.as_slice(), [crate::model::ir::Loc::Mem(_)]),
+                )
+        })
+        .map(|one| one.invariant())
+        .collect();
+    assert!(!flags.is_empty(), "the premise: the constant is loaded from memory");
+    assert!(flags.iter().all(|&flag| flag), "{flags:?}");
+}

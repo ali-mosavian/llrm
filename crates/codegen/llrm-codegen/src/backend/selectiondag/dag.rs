@@ -1156,7 +1156,20 @@ impl SelectionDAG {
         if info.volatile {
             self.volatile_accesses.insert(load.node);
         }
+        self.note_pool_load(load.node, info);
         load
+    }
+
+    /// A load of a constant pool entry is `isDereferenceableInvariantLoad`:
+    /// `MachinePointerInfo::getConstantPool` is a constant pseudo source value.
+    fn note_pool_load(
+        &mut self,
+        load: u32,
+        info: MemInfo,
+    ) {
+        if matches!(info.base, MemBase::ConstantPool(_)) {
+            self.invariant_loads.insert(load);
+        }
     }
 
     /// `getExtLoad`: a load of `info.mem_vt` extended to `vt`.
@@ -1181,6 +1194,7 @@ impl SelectionDAG {
         if info.volatile {
             self.volatile_accesses.insert(load.node);
         }
+        self.note_pool_load(load.node, info);
         load
     }
 
