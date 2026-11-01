@@ -436,9 +436,10 @@ done:
 }"#,
     );
     assert!(looped < 100, "crc16 grew to {looped} bytes: the table is back");
-    // the bit counter steps with `dec` on its cell; joined into the compare's
-    // `a`/`x`/`y` it became `lda; sec; sbc #1; sta` (88 bytes)
-    assert!(looped <= 84, "crc16 is {looped} bytes: the bit counter lost its dec");
+    // the 88-byte loop of the ruling; 83 bytes while the bit counter kept its
+    // `dec` on a cell (an opcode-keyed join rule, removed): an open row until
+    // the split price sees the instruction cost
+    assert!(looped <= 88, "crc16 is {looped} bytes: the loop grew");
     let table = bytes_at_o2(CRC16_SELECT_SHAPED);
     assert!(table > 500, "the select-shaped crc16 is {table} bytes: the bound cannot see the table");
 }

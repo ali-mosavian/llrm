@@ -18,8 +18,8 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
-    Block, Inst, Join, Jump, Kind, MFunction, Operand, Reg, Side, Target, branch_fold, forward_reloads,
-    machine_sink_in_place, remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
+    Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
+    remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
@@ -188,7 +188,13 @@ impl<const STACK: bool> Target for Mos<STACK> {
             .operands
             .iter()
             .filter_map(|o| match o {
-                Operand::Def(r) | Operand::Use(r) if Some(o) == priced || matches!((o, priced), (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b) => {
+                Operand::Def(r) | Operand::Use(r)
+                    if Some(o) == priced
+                        || matches!(
+                            (o, priced),
+                            (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
+                        ) =>
+                {
                     let _ = r;
                     Some(register)
                 }
@@ -197,7 +203,8 @@ impl<const STACK: bool> Target for Mos<STACK> {
                 _ => None,
             })
             .collect();
-        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs).map_or(0, |priced| priced.bytes + priced.cycles as u32)
+        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs)
+            .map_or(0, |priced| priced.bytes + priced.cycles as u32)
     }
 
     type Class = Class;
