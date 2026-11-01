@@ -66,6 +66,10 @@ pub struct Dos {
     /// The pin's tuning limits instead of the table's overrides: for tests of
     /// a pass's own thresholds.
     pub pin_tuning: bool,
+    /// REC-1: (depth, callee size) of the recursion the target copies at
+    /// speed. None by default (the entry in `RealMode` below); tests of the
+    /// mechanism set it.
+    pub recursive_inlining: Option<(u32, i64)>,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -92,6 +96,7 @@ impl Default for Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            recursive_inlining: None,
         }
     }
 }
@@ -144,6 +149,7 @@ impl Dos {
             private: None,
             calling: None,
             pin_tuning: PIN_TUNING.with(std::cell::Cell::get),
+            recursive_inlining: None,
         }
     }
 }
@@ -182,7 +188,11 @@ impl Machine for Dos {
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
-            recursive_inlining: (!self.pin_tuning).then_some((2, 14)),
+            // DEVIATE (REC-1, owner x86-m16, review 2026-11-10): none. The
+            // copies of a recursive body (fib 60 -> 152 B, rectwo 80 -> 259 B,
+            // frames 169 -> 338 B at -O2) end past Borland C's bytes (83, 104,
+            // 251) for clocks that were already ahead of it.
+            recursive_inlining: self.recursive_inlining,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
