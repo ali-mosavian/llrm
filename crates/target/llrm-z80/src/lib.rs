@@ -4,6 +4,7 @@ pub mod abi;
 pub mod compile;
 pub mod dagisel;
 pub mod expand;
+pub mod inline_rt;
 pub mod driver;
 pub mod mfunc;
 pub mod prepare;

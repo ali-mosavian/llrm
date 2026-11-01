@@ -4,6 +4,7 @@
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request, selections};
+use llrm_z80::inline_rt::inline_sole_uses;
 
 fn main() {
     let mut level = Level::O2;
@@ -21,12 +22,13 @@ fn main() {
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    println!("\t.area _CODE");
+    let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
-        println!("\t.globl _{name}");
+        module.push_str(&format!("\t.globl _{name}\n"));
         match text(&ir, name, number, &request) {
-            Ok(text) => print!("{text}"),
+            Ok(text) => module.push_str(&text),
             Err(why) => eprintln!("REFUSED @{name}: {why}"),
         }
     }
+    print!("{}", inline_sole_uses(&module, llrm_z80::RUNTIME));
 }
