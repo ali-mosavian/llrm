@@ -77,6 +77,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
+    "IvZero",
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
@@ -95,6 +96,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
+    ("IvZero", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
@@ -179,6 +181,8 @@ pub fn machine_with<'a>(
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
+        // A counted loop's index ends at zero (DEVIATE LSR3).
+        Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),

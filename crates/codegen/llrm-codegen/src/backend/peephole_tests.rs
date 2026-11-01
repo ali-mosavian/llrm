@@ -5632,6 +5632,29 @@ fn test_a_reload_into_another_register_stays_where_the_filling_register_is_writt
     assert_eq!(store_then_reload_elsewhere(vec![write]), None);
 }
 
+/// bench/nbody_single at x86-64 -O2 printed 3731452 for 86016: `[bp-8] := mov
+/// xmm7 ; xmm7 := movss [const] ; xmm2 := mov [bp-8]` became `xmm2 := mov
+/// xmm7`, the constant, for an SSE register has no lanes to guard.
+#[test]
+fn test_a_reload_into_another_register_stays_where_an_sse_filling_register_is_loaded() {
+    let cell = || Loc::Mem(mem(frame(-8), 4, RegId::BP, -8, 1));
+    let mov = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", dests, sources)), vec![], vec![])
+    };
+    let constant = Loc::Mem(mem(None, 4, RegId::BP, 0, 0));
+    let insns = vec![
+        mov(0, vec![cell()], vec![rl(RegId::XMM7, 4)]),
+        mov(10, vec![rl(RegId::XMM7, 4)], vec![constant]),
+        mov(100, vec![rl(RegId::XMM2, 4)], vec![cell()]),
+        insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![]),
+    ];
+    let insns = insns.into_iter().map(Arc::new).collect();
+    let done = forwarded_copies(rules(), &body("forwarded-copy", 0, vec![block(0, insns, vec![]).into()]));
+    let reload = whats(&done.blocks[0].insns).into_iter().rev().nth(1).expect("the reload").clone();
+    assert!(matches!(reload.sources.as_slice(), [Loc::Mem(_)]), "the reload copied the constant: {reload:?}");
+}
+
 /// x87 `lrint` at m16 -Os: `fistp [bp-4] ; mov eax,[bp-4] ; mov [bp-8],eax`
 /// kept the value in a second cell across a call, 4 bytes of frame and one
 /// instruction more than main. Returns the cells the reloads at the end read
