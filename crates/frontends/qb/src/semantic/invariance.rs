@@ -87,7 +87,7 @@ fn proven(compiler: &Compiler) -> bool {
                     // A callee that is not a runtime routine of the program is
                     // not seen; every call of one is an `Invoke`.
                     !matches!(one.tag, Some(Tag::Reallocate(_) | Tag::Release { .. }))
-                        && one.callee.as_deref() != Some("B$SSHL")
+                        && !one.callee.as_deref().is_some_and(llrm_codegen::abi::runtime::semantics::moves_far_heap)
                         && (!matches!(one.tag, Some(Tag::Allocate(_))) || (main && block.id == ENTRY))
                         && !matches!(
                             &one.tag,
