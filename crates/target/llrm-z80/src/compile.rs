@@ -6,7 +6,7 @@ use llrm_lir::registers::Regs;
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::{Request, selections};
-use crate::expand::{Line, finish};
+use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
 use crate::regalloc::Z80Registers;
 use crate::REGISTER_INFO;
@@ -17,10 +17,24 @@ pub fn machine_function(
     name: &str,
     request: &Request,
 ) -> Result<MFunction, String> {
+    machine_function_with(ir, name, request, true)
+}
+
+/// [`machine_function`], with or without the return blocks copied into their
+/// predecessors.
+fn machine_function_with(
+    ir: &str,
+    name: &str,
+    request: &Request,
+    duplicate: bool,
+) -> Result<MFunction, String> {
     let selected = selections(ir, request)?;
     let (_, selection) = selected.into_iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let mut function = emit(name, &selection?)?;
     expand_cmov(&mut function)?;
+    if duplicate {
+        tail_duplicate_returns(&mut function);
+    }
     Ok(function)
 }
 
@@ -32,7 +46,16 @@ pub fn allocated(
     name: &str,
     request: &Request,
 ) -> Result<(MFunction, Assignment, Vec<(i32, usize)>), String> {
-    let mut function = machine_function(ir, name, request)?;
+    allocated_with(ir, name, request, true)
+}
+
+fn allocated_with(
+    ir: &str,
+    name: &str,
+    request: &Request,
+    duplicate: bool,
+) -> Result<(MFunction, Assignment, Vec<(i32, usize)>), String> {
+    let mut function = machine_function_with(ir, name, request, duplicate)?;
     eliminate_phis_with(&mut function, false);
     two_address(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
@@ -41,6 +64,7 @@ pub fn allocated(
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     remove_identity_copies(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
+    return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     Ok((function, assignment, slots.into_iter().map(|(slot, class)| (slot, size(class))).collect()))
 }
@@ -85,8 +109,20 @@ pub fn lines(
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
-    let (function, assignment, slots) = allocated(ir, name, request)?;
-    finish(&function, &assignment, number, &slots)
+    let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
+        let (function, assignment, slots) = allocated_with(ir, name, request, duplicate)?;
+        finish(&function, &assignment, number, &slots)
+    };
+    // Copying a return block into its predecessors saves a `jp` and often a
+    // move, or costs a copy of the block: the smaller result, then the faster,
+    // is kept.
+    let copied = compile(true);
+    let kept = compile(false);
+    match (copied, kept) {
+        (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+        (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+        (Err(why), Err(_)) => Err(why),
+    }
 }
 
 /// The function as text: its label, then one line per instruction.
@@ -198,4 +234,127 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         at += 1;
     }
     Ok(())
+}
+
+/// The most instructions, `ret` included, of a block that is copied into its
+/// predecessors.
+const TAIL_DUPLICATION_SIZE: usize = 4;
+
+/// `TailDuplicator`: a small block that ends in `ret` is copied into each
+/// predecessor that reaches it without a conditional branch, so `jp` (three
+/// bytes) and the phi copy ahead of it become a `ret`. A predecessor that
+/// branches to it conditionally keeps the original, with that edge's phi
+/// inputs.
+fn tail_duplicate_returns(function: &mut MFunction) {
+    let mut j = 1;
+    while j < function.blocks.len() {
+        let block = &function.blocks[j];
+        let small = block.insts.len() <= TAIL_DUPLICATION_SIZE
+            && matches!(block.insts.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
+            && block.insts.iter().filter(|inst| inst.terminator).count() == 1;
+        if !small {
+            j += 1;
+            continue;
+        }
+        let id = block.id;
+        let preds: Vec<usize> = (0..function.blocks.len())
+            .filter(|&p| llrm_spike_mf::regalloc::successors(function)[p].contains(&j))
+            .collect();
+        let reaches_unconditionally = |function: &MFunction, p: usize| {
+            let last = function.blocks[p].insts.last();
+            match last {
+                Some(inst) if inst.barrier => {
+                    matches!(inst.kind, Kind::Op("JP")) && inst.operands == [Operand::Block(id)]
+                }
+                // falls through: no branch at all, or a conditional one that goes elsewhere
+                last => {
+                    p + 1 == j
+                        && last.is_none_or(|inst| !inst.terminator || !inst.operands.contains(&Operand::Block(id)))
+                }
+            }
+        };
+        let copy_into: Vec<usize> = preds.iter().copied().filter(|&p| reaches_unconditionally(function, p)).collect();
+        if copy_into.is_empty() {
+            j += 1;
+            continue;
+        }
+        let tail = function.blocks[j].insts.clone();
+        for &p in &copy_into {
+            // the phi inputs for this edge, as copies
+            let mut moves = Vec::new();
+            for phi in &mut function.blocks[j].phis {
+                if let Some(at) = phi.incoming.iter().position(|(pred, _)| *pred == p) {
+                    let (_, input) = phi.incoming.remove(at);
+                    moves.push(Inst::copy(phi.result, input));
+                }
+            }
+            let insts = &mut function.blocks[p].insts;
+            if insts.last().is_some_and(|inst| inst.barrier) {
+                insts.pop();
+            }
+            insts.extend(moves);
+            insts.extend(tail.iter().cloned());
+        }
+        // the original goes when nothing branches to it now
+        let others = preds.len() - copy_into.len();
+        if others == 0 {
+            function.blocks.remove(j);
+            for block in &mut function.blocks {
+                for phi in &mut block.phis {
+                    for (pred, _) in &mut phi.incoming {
+                        if *pred > j {
+                            *pred -= 1;
+                        }
+                    }
+                }
+            }
+        } else {
+            j += 1;
+        }
+    }
+}
+
+/// `jp cc, T` over a bare `ret` that falls into `T` is `ret !cc`: the branch
+/// returns on the opposite condition and the code after it is `T`.
+fn return_conditionally(function: &mut MFunction) {
+    use llrm_spike_mf::Jump;
+    let mut i = 0;
+    while i + 2 < function.blocks.len() {
+        let (here, bare, after) = (&function.blocks[i], &function.blocks[i + 1], &function.blocks[i + 2]);
+        let branch = here.insts.last().filter(|inst| inst.terminator && !inst.barrier);
+        let to_after = branch.is_some_and(|inst| inst.operands.first() == Some(&Operand::Block(after.id)));
+        let bare_ret = matches!(&bare.insts[..], [one] if one.kind == Kind::Op("RET")) && bare.phis.is_empty();
+        let referenced = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .any(|inst| inst.terminator && inst.operands.contains(&Operand::Block(bare.id)));
+        if to_after && bare_ret && !referenced {
+            let reversed = Z80Registers::reverse(branch.expect("a branch"));
+            if let Some(Inst { kind: Kind::Op(name), .. }) = reversed {
+                let returning = match name {
+                    "JPNZ" => "RETNZ",
+                    "JPZ" => "RETZ",
+                    "JPNC" => "RETNC",
+                    _ => "RETC",
+                };
+                let last = function.blocks[i].insts.len() - 1;
+                let mut inst = Inst::new(Kind::Op(returning), vec![]);
+                inst.reads_flags = true;
+                function.blocks[i].insts[last] = inst;
+                function.blocks.remove(i + 1);
+                for block in &mut function.blocks {
+                    for phi in &mut block.phis {
+                        for (pred, _) in &mut phi.incoming {
+                            if *pred > i + 1 {
+                                *pred -= 1;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
 }

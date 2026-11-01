@@ -54,6 +54,8 @@ struct Printer<'a> {
     number: usize,
     out: Vec<Line>,
     frame: Frame,
+    /// The blocks that are only a `ret`.
+    returns_bare: Vec<u32>,
 }
 
 fn name(register: RegId) -> &'static str {
@@ -357,6 +359,15 @@ impl Printer<'_> {
                 let Some(Operand::Block(target)) = inst.operands.first() else {
                     return Err(format!("{op} without a target"));
                 };
+                // a branch to a bare `ret` is a `ret` (a byte, not three)
+                if self.returns_bare.contains(target) && !self.frame.active {
+                    if op == "JP" {
+                        self.push("ret");
+                    } else {
+                        self.push(format!("ret {}", op[2..].to_lowercase()));
+                    }
+                    return Ok(());
+                }
                 if op == "JP" && Some(*target) == next {
                     return Ok(());
                 }
@@ -401,6 +412,12 @@ impl Printer<'_> {
                         format!("ld {}, {slot}", name(byte))
                     });
                 }
+            }
+            "RETNZ" | "RETZ" | "RETNC" | "RETC" => {
+                if self.frame.active {
+                    return Err("a conditional return in a function with a frame".to_owned());
+                }
+                self.push(format!("ret {}", op[3..].to_lowercase()));
             }
             "RET" => {
                 if self.frame.active {
@@ -484,13 +501,13 @@ impl Printer<'_> {
             Kind::Copy => None,
         });
         match reader {
-            Some("JPC" | "JPNC") => {
+            Some("JPC" | "JPNC" | "RETC" | "RETNC") => {
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {}", name(bl)));
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("sbc a, {}", name(bh)));
             }
-            Some("JPZ" | "JPNZ") => {
+            Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") => {
                 let skip = format!("{}$", self.out.len());
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {}", name(bl)));
@@ -605,7 +622,13 @@ pub fn finish(
     slots: &[(i32, usize)],
 ) -> Result<Vec<Line>, String> {
     let frame = layout(function, slots);
-    let mut printer = Printer { assignment, number, out: Vec::new(), frame };
+    let returns_bare = function
+        .blocks
+        .iter()
+        .filter(|block| matches!(&block.insts[..], [one] if one.kind == Kind::Op("RET")))
+        .map(|block| block.id)
+        .collect();
+    let mut printer = Printer { assignment, number, out: Vec::new(), frame, returns_bare };
     if printer.frame.active {
         for line in prologue(&printer.frame) {
             printer.push(line);
@@ -619,4 +642,67 @@ pub fn finish(
         }
     }
     Ok(printer.out)
+}
+
+/// The `timing/z80.csv` key of an instruction as printed here: operands by
+/// kind (`b` any byte register, `n` an 8-bit immediate, `nn` a 16-bit one or an
+/// address, `(ix+d)` an indexed cell).
+fn form(text: &str) -> String {
+    let (mnemonic, rest) = text.split_once(' ').unwrap_or((text, ""));
+    let mut operands: Vec<String> = rest.split(',').map(|one| one.trim().to_owned()).filter(|one| !one.is_empty()).collect();
+    // sub, and, or, xor and cp name the accumulator only implicitly in the table
+    if matches!(mnemonic, "sub" | "and" | "or" | "xor" | "cp") && operands.first().is_some_and(|one| one == "a") {
+        operands.remove(0);
+    }
+    let wide = operands.first().is_some_and(|one| matches!(one.as_str(), "bc" | "de" | "hl" | "ix" | "iy" | "sp"));
+    let kind = |one: &str, first: bool| -> String {
+        match one {
+            "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
+            "a" | "b" | "c" | "d" | "e" | "h" | "l" => {
+                if mnemonic == "ld" && one == "a" && !first { "b".to_owned() } else { "b".to_owned() }
+            }
+            "bc" | "de" | "af" => "bc".to_owned(),
+            "hl" | "ix" | "iy" | "sp" => one.to_owned(),
+            "(hl)" => "(hl)".to_owned(),
+            "(bc)" | "(de)" => one.to_owned(),
+            _ if one.ends_with("(ix)") || one.ends_with("(iy)") => "(ix+d)".to_owned(),
+            _ if one.starts_with('(') => "(nn)".to_owned(),
+            _ if one.starts_with('#') => if wide || matches!(mnemonic, "jp" | "call") { "nn".to_owned() } else { "n".to_owned() },
+            other => if matches!(mnemonic, "jp" | "call" | "jr") || other.starts_with('L') { "nn".to_owned() } else { other.to_owned() },
+        }
+    };
+    let kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
+    // a conditional jump or call names its condition first
+    let mut key = mnemonic.to_owned();
+    if !kinds.is_empty() {
+        key.push(' ');
+        key.push_str(&kinds.join(";"));
+    }
+    // `jp nz, L` is `jp nz;nn`; a bare condition on ret is `ret nz`
+    key
+}
+
+/// Bytes and T-states of the lines, summed over every instruction (a loop body
+/// counts once): what two variants of one function are compared by. A form the
+/// table lacks costs two bytes and eight clocks.
+pub fn price(lines: &[Line]) -> (u32, u32) {
+    let (mut bytes, mut clocks) = (0, 0);
+    for line in lines {
+        let Line::Inst(text) = line else { continue };
+        let key = form(text);
+        let cost = crate::timing::cost(&key)
+            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")));
+        match cost {
+            Some(cost) => {
+                bytes += cost.bytes;
+                clocks += cost.taken;
+            }
+            None => {
+                bytes += 2;
+                clocks += 8;
+            }
+        }
+    }
+    (bytes, clocks)
 }
