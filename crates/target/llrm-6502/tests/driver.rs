@@ -884,3 +884,22 @@ fn an_lfsr_step_branches_on_the_carry_of_its_right_shift() {
     assert_eq!(exit_code_of(&text, "high_of_odd"), 0xBD, "{text}");
     assert_eq!(exit_code_of(&text, "low_of_even"), 0x1A, "{text}");
 }
+
+/// `stpcpy`'s copy loop (a pointer walk with an exit phi that names the entry
+/// and the loop) made the paged variant a function the selector refused ("phi
+/// without an input from a predecessor"), and the whole compile failed: the
+/// k_stpcpy cell of the hand corpus was BROKEN on the #6302 branch.
+#[test]
+fn a_copy_until_zero_loop_with_an_exit_phi_compiles() {
+    let ir = module(
+        "define ptr @k_stpcpy(ptr %dst, ptr %src) {\n\
+         entry:\n  %c = load i8, ptr %src\n  store i8 %c, ptr %dst\n  %z = icmp eq i8 %c, 0\n  \
+         br i1 %z, label %done, label %loop\n\
+         loop:\n  %s = phi ptr [ %s1, %loop ], [ %src, %entry ]\n  %d = phi ptr [ %d1, %loop ], [ %dst, %entry ]\n  \
+         %s1 = getelementptr inbounds i8, ptr %s, i16 1\n  %d1 = getelementptr inbounds i8, ptr %d, i16 1\n  \
+         %v = load i8, ptr %s1\n  store i8 %v, ptr %d1\n  %e = icmp eq i8 %v, 0\n  br i1 %e, label %done, label %loop\n\
+         done:\n  %r = phi ptr [ %dst, %entry ], [ %d1, %loop ]\n  ret ptr %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).expect("compiles");
+    assert!(text.contains("k_stpcpy:"), "{text}");
+}

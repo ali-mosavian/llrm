@@ -272,10 +272,6 @@ fn rewrite(
     let index_ty = context.types.int(index_bits);
     let flag = context.types.int(1);
     let void = function.instruction(jump).ty;
-    let first = function
-        .iter_block(header)
-        .find(|&one| function.instruction(one).opcode != Opcode::Phi)
-        .ok_or("a terminated header")?;
     let new = |function: &mut Function, block: Position, opcode: Opcode, ty, operands: Vec<Operand>, flags| {
         let made = function.create_instruction(opcode, ty, operands, flags, None);
         function.insert(made, block).map_err(|why| why.to_string())?;
@@ -323,14 +319,21 @@ fn rewrite(
     let bump = function.create_block(Some("page-bump"));
     function.insert_block(bump, Some(stepper)).map_err(|why| why.to_string())?;
 
+    // after the split: it takes the header's first instruction with it when
+    // the header is the latch and the step is its first, and leaves only phis
+    let first = function
+        .iter_block(header)
+        .find(|&one| function.instruction(one).opcode != Opcode::Phi)
+        .map_or(Position::End(header), Position::Before);
+
     // the index and the bases, phis at the top of the header and of the join
     let zero = int(context, index_ty, 0);
     let step_value = int(context, index_ty, step);
-    let index = new(function, Position::Before(first), Opcode::Phi, index_ty, Vec::new(), Flags::default())?;
+    let index = new(function, first, Opcode::Phi, index_ty, Vec::new(), Flags::default())?;
     let mut bases = Vec::new();
     for walker in &found {
         let ty = function.operand_type(context, Operand::Value(walker.value)).ok_or("a typed pointer")?;
-        bases.push(new(function, Position::Before(first), Opcode::Phi, ty, Vec::new(), Flags::default())?);
+        bases.push(new(function, first, Opcode::Phi, ty, Vec::new(), Flags::default())?);
     }
     let gep = Opcode::GetElementPtr { source: byte };
     let mut onward = Vec::new();
