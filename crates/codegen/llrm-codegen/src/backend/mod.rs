@@ -202,6 +202,7 @@ pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
+pub mod ivshare;
 pub mod ivzero;
 pub mod jumps;
 pub mod lanes;
