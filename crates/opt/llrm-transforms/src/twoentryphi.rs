@@ -28,12 +28,13 @@
 //!   (`dropUBImplyingAttrsAndMetadata`) and loses the rest; there are no debug
 //!   records to drop.
 //!
-//! - D5. A target whose `select` is a branch (`Tti::select_is_branch`: no
-//!   conditional move, the i486) keeps a diamond whose arms have code to run:
-//!   the fold would execute both arms and branch anyway. gcc if-converts only
-//!   where a conditional move exists. x_isqrt -18%, x_mergesort -20% clocks,
-//!   x_crc32 1179 -> 159 B at m32 -O2. Exit: none while the target has no cmov.
-//!   Owner llrm-target-x86-m32.
+//! - D5. A target whose `select` is a branch (`Tti::has_cmov` false: the i486)
+//!   keeps a diamond whose arms have code to run: the fold would execute both
+//!   arms and branch anyway. gcc if-converts only where a conditional move
+//!   exists. x_isqrt -18%, x_mergesort -20% clocks, x_crc32 1179 -> 175 B at
+//!   1.58x clocks (numbered trade row; exit 2026-11-20: price the loop-carried
+//!   arm in the cost model so crc keeps the select where the clocks pay). Owner
+//!   llrm-target-x86-m32.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -338,7 +339,7 @@ pub fn folded(
     }
     // D5. Where a select is a branch, folding runs the arms' code on both paths
     // and still branches.
-    if spec.tti.select_is_branch() && !hoist.is_empty() {
+    if !spec.tti.has_cmov() && !hoist.is_empty() {
         return changed;
     }
     // Unless the arms are emptied, the control flow stays.

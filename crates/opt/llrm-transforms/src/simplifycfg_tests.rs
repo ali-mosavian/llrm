@@ -633,7 +633,7 @@ b0:
 /// x_crc32 1179 B against gcc's 161.
 #[test]
 fn test_where_a_select_is_a_branch_an_arm_with_code_keeps_its_branch() {
-    let flagged = crate::testing::Flagged { select_is_branch: true, ..Default::default() };
+    let flagged = crate::testing::Flagged { no_cmov: true, ..Default::default() };
     let keep = |text: &str| {
         let mut module = parsed(text);
         let outer = Outer::of(&module, None);

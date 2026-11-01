@@ -167,7 +167,7 @@ use llrm_mir::tti;
 #[derive(Default)]
 pub struct Flagged {
     pub exit_ne: bool,
-    pub select_is_branch: bool,
+    pub no_cmov: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -175,8 +175,8 @@ impl llrm_mir::tti::Tti for Flagged {
         self.exit_ne
     }
 
-    fn select_is_branch(&self) -> bool {
-        self.select_is_branch
+    fn has_cmov(&self) -> bool {
+        !self.no_cmov
     }
 
     fn cmp_sel_cost(
@@ -274,7 +274,7 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 
 impl llrm_mir::target::Machine for Tuned {
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        self.exit_ne.then(|| std::rc::Rc::new(Flagged { exit_ne: true, select_is_branch: false }) as _)
+        self.exit_ne.then(|| std::rc::Rc::new(Flagged { exit_ne: true, no_cmov: false }) as _)
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

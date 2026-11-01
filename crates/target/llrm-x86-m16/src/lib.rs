@@ -606,7 +606,6 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
-                select_is_branch: false,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
                 inline_threshold: None,

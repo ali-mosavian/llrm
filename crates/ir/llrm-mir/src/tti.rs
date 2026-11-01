@@ -413,9 +413,9 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::select_is_branch`.
-    fn select_is_branch(&self) -> bool {
-        false
+    /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
+    fn has_cmov(&self) -> bool {
+        true
     }
 
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this

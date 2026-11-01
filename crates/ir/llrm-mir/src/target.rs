@@ -32,10 +32,6 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
-    /// The target has no conditional move: a `select` is lowered to a branch,
-    /// so running an arm early to form one does the work of both arms and
-    /// still branches. SimplifyCFG then leaves such a branch alone.
-    pub select_is_branch: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -64,7 +60,6 @@ impl Tuning {
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
         multiply_by_clocks: false,
-        select_is_branch: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         inline_threshold: None,
