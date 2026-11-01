@@ -36,6 +36,13 @@ pub struct Tuning {
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
     pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
+    /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
+    /// the pass's own, 150.
+    pub unroll_partial_threshold: Option<u32>,
+    /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
+    /// (loop size times copies) a candidate must stay under; none: 50.
+    pub unswitch_threshold: Option<i64>,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
@@ -62,6 +69,8 @@ impl Tuning {
         multiply_by_clocks: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
+        unroll_partial_threshold: None,
+        unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,
@@ -691,7 +700,10 @@ mod tests {
         assert_eq!((pin.max_stores_per_memcpy, pin.max_stores_per_memcpy_opt_size), (8, 4));
         assert_eq!((pin.max_stores_per_memmove, pin.max_stores_per_memmove_opt_size), (8, 4));
         assert_eq!(pin.size_milliclocks_per_byte, 0);
-        assert_eq!((pin.unroll_threshold, pin.unroll_max_percent_threshold_boost), (None, None));
+        assert_eq!(
+            (pin.unroll_threshold, pin.unroll_max_percent_threshold_boost, pin.unroll_partial_threshold),
+            (None, None, None)
+        );
         assert_eq!(pin.inline_threshold, None);
     }
 }
