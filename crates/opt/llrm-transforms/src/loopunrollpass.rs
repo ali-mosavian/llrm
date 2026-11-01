@@ -882,20 +882,29 @@ fn float_cells_exceed_stack(
 ) -> bool {
     use llrm_mir::opcode::Opcode;
     use llrm_mir::tti::Ty;
-    let mut cells = 0u32;
+    // A cell the loop both reads and writes is a value carried through
+    // memory: what SROA turns into a phi once the loop is gone.
+    let mut loads: Vec<llrm_mir::module::Operand> = Vec::new();
+    let mut stores: Vec<llrm_mir::module::Operand> = Vec::new();
     let mut stack: Option<u32> = None;
     for &block in lp.get_blocks() {
         for inst in run.function.iter_block(block) {
             let one = run.function.instruction(inst);
-            if !matches!(one.opcode, Opcode::Load { .. }) {
-                continue;
-            }
-            let Some(ty) = Ty::of(&run.context.types, one.ty).filter(|ty| ty.is_float()) else { continue };
+            let (pointer, ty) = match one.opcode {
+                Opcode::Load { .. } => (one.operands[0], one.ty),
+                Opcode::Store { .. } => {
+                    let Some(ty) = run.function.operand_type(run.context, one.operands[0]) else { continue };
+                    (one.operands[1], ty)
+                }
+                _ => continue,
+            };
+            let Some(ty) = Ty::of(&run.context.types, ty).filter(|ty| ty.is_float()) else { continue };
             let Some(size) = run.tti.float_stack(ty) else { continue };
             stack = Some(stack.map_or(size, |seen| seen.min(size)));
-            cells += 1;
+            if matches!(one.opcode, Opcode::Load { .. }) { loads.push(pointer) } else { stores.push(pointer) }
         }
     }
+    let cells = loads.iter().filter(|pointer| stores.contains(pointer)).count() as u32;
     stack.is_some_and(|size| u64::from(cells) * u64::from(trip_count) > u64::from(size))
 }
 
@@ -914,7 +923,7 @@ fn should_full_unroll(
         return None;
     }
 
-    if std::env::var_os("LLRM_X_NOX1").is_none() && float_cells_exceed_stack(run, lp, full_unroll_trip_count) {
+    if float_cells_exceed_stack(run, lp, full_unroll_trip_count) {
         return None;
     }
 

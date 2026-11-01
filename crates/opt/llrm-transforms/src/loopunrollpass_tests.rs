@@ -468,3 +468,52 @@ exit:
     assert_eq!(results(&module, inputs), before, "{after}");
     assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
 }
+
+/// Two double arrays updated in a four-trip loop: eight cells once unrolled,
+/// which SROA would promote to the eight values the x87 stack (seven) cannot
+/// hold (nbody -O2 at m32: 3808 dynamic `fxch` against gcc's 1200). With
+/// SSE2 the registers are there and the loop unrolls as before.
+fn two_arrays() -> String {
+    "@a = internal global [4 x double] zeroinitializer
+@b = internal global [4 x double] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %pa = getelementptr [4 x double], ptr @a, i16 0, i16 %i
+  %pb = getelementptr [4 x double], ptr @b, i16 0, i16 %i
+  %x = load double, ptr %pa
+  %y = load double, ptr %pb
+  %nx = fadd double %x, %y
+  %ny = fsub double %y, %x
+  store double %nx, ptr %pa
+  store double %ny, ptr %pb
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 4
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret void
+}
+"
+    .to_string()
+}
+
+#[test]
+fn a_loop_of_floats_that_would_outgrow_the_x87_stack_stays_rolled_but_not_with_sse2() {
+    let run = |cpu: &str| {
+        let mut module = parsed(&two_arrays());
+        let function = module.function_mut("f").expect("@f").1;
+        crate::loopsimplify::simplified(function);
+        crate::lcssa::closed(function).expect("closes");
+        let tti = X86::of_cpu(cpu).expect("a cpu");
+        let options =
+            Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+        unroll_function(&mut module, "f", &tti, options).expect("unrolls")
+    };
+    assert!(run("core2"), "control: with SSE2 the loop is unrolled");
+    assert!(!run("i486"), "on the x87 stack the eight promoted cells stay in memory");
+}
