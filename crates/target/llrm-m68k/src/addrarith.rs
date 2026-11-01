@@ -27,7 +27,7 @@ use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 use crate::dagisel::hooks::Cpu;
 use crate::dagisel::local;
 use crate::mc;
-use crate::mfunc::{Class, MFunction, op_inst};
+use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::reg;
 
 /// A use of a virtual register: an instruction operand, or a phi's incoming.
@@ -35,6 +35,8 @@ enum Use {
     /// A copy into this register.
     Copy(u32),
     Phi(u32),
+    /// An operand the instruction's description gives an address register.
+    Address,
     Other,
 }
 
@@ -56,10 +58,11 @@ fn uses_by_register(function: &MFunction) -> Vec<Vec<Use>> {
             }
         }
         for inst in &block.insts {
-            for operand in &inst.operands {
+            for (index, operand) in inst.operands.iter().enumerate() {
                 if let Operand::Use(Reg::Virt(v)) = operand {
                     all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
+                        (Kind::Op(name), _) if operand_class(name, index) == Some(Class::Ar32) => Use::Address,
                         _ => Use::Other,
                     });
                 }
@@ -70,11 +73,12 @@ fn uses_by_register(function: &MFunction) -> Vec<Vec<Use>> {
 }
 
 /// Whether everything `v` reaches, through copies and phis, ends in an address
-/// register.
+/// register; a copy into `skip` is the caller's own and does not count.
 fn reaches_addresses_only(
     function: &MFunction,
     uses: &[Vec<Use>],
     v: u32,
+    skip: Option<u32>,
     seen: &mut HashSet<u32>,
 ) -> bool {
     if !seen.insert(v) {
@@ -83,11 +87,13 @@ fn reaches_addresses_only(
     let own = &uses[v as usize];
     !own.is_empty()
         && own.iter().all(|one| match one {
+            Use::Copy(to) if Some(*to) == skip => true,
             Use::Copy(to) | Use::Phi(to) => match function.classes[*to as usize] {
                 Class::Ar32 => true,
-                Class::Xr32 => reaches_addresses_only(function, uses, *to, seen),
+                Class::Xr32 => reaches_addresses_only(function, uses, *to, skip, seen),
                 _ => false,
             },
+            Use::Address => true,
             Use::Other => false,
         })
 }
@@ -221,8 +227,15 @@ fn rewrite_one(
         )?;
     let Kind::Copy = insts[copy].kind else { return None };
     let Operand::Use(base @ Reg::Virt(y)) = insts[copy].operands[1] else { return None };
-    if function.classes[y as usize] != Class::Ar32 || uses[x as usize].len() != 1 {
+    if uses[x as usize].len() != 1 {
         return None;
+    }
+    // either an address register, or one of either class (a loop's pointer)
+    // whose other uses are all addresses too
+    match function.classes[y as usize] {
+        Class::Ar32 => {}
+        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::new()) => {}
+        _ => return None,
     }
     // the add's codes are read by nobody
     for after in &insts[at + 1..] {
@@ -233,7 +246,7 @@ fn rewrite_one(
             return None;
         }
     }
-    if !reaches_addresses_only(function, uses, d, &mut HashSet::new()) {
+    if !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::new()) {
         return None;
     }
     let one = cheapest(sign * value, cpu, size)?;
@@ -242,6 +255,7 @@ fn rewrite_one(
     // none of the three changes the codes; the pin's `adda` says it does
     inst.sets_flags = false;
     function.classes[d as usize] = Class::Ar32;
+    function.classes[y as usize] = Class::Ar32;
     let insts = &mut function.blocks[b].insts;
     insts[at] = inst;
     insts.remove(copy);

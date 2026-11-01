@@ -59,6 +59,45 @@ fn a_pointer_step_is_one_instruction_in_the_address_register() {
     }
 }
 
+/// A pointer that steps once per outer iteration, past an inner loop, is a phi
+/// of either register class; the pass left it as `move.l %a0, %d1; addq.l #1,
+/// %d1; move.l %d1, %a0` (a byte checksum loop, 3 instructions per byte).
+#[test]
+fn a_pointer_stepped_after_an_inner_loop_is_one_addq() {
+    let ir = "define i32 @f(ptr %p, i32 %n) {
+entry:
+  br label %outer
+outer:
+  %q = phi ptr [ %p, %entry ], [ %q1, %inner.end ]
+  %i = phi i32 [ %n, %entry ], [ %i1, %inner.end ]
+  %h = phi i32 [ 0, %entry ], [ %h2, %inner.end ]
+  %b = load i8, ptr %q
+  %z = zext i8 %b to i32
+  %h0 = xor i32 %h, %z
+  br label %inner
+inner:
+  %k = phi i32 [ 8, %outer ], [ %k1, %inner ]
+  %g = phi i32 [ %h0, %outer ], [ %g1, %inner ]
+  %g1 = shl i32 %g, 1
+  %k1 = sub i32 %k, 1
+  %c = icmp eq i32 %k1, 0
+  br i1 %c, label %inner.end, label %inner
+inner.end:
+  %h2 = add i32 %g1, 1
+  %q1 = getelementptr i8, ptr %q, i32 1
+  %i1 = sub i32 %i, 1
+  %e = icmp eq i32 %i1, 0
+  br i1 %e, label %x, label %outer
+x:
+  ret i32 %h2
+}";
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text(ir, cpu);
+        let bounced = out.lines().any(|line| line.starts_with("\tmove.l\t%a") && line.contains(", %d"));
+        assert!(out.contains("addq.l\t#1, %a") && !bounced, "{cpu:?}:\n{out}");
+    }
+}
+
 /// Exit status of `f(args)`; `None` without an optional qemu.
 fn status(
     ir: &str,
