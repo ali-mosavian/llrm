@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from arm64_shadow import PIN_FLAGS, ours, parse_pin  # noqa: E402
+from arm64_shadow import PIN_FLAGS, OracleFailed, compare, ours, parse_pin, pin  # noqa: E402
 
 MIR = """name:            f
 body:             |
@@ -36,8 +36,6 @@ class PinModule(unittest.TestCase):
         self.assertEqual(module.count("ret void"), 1, module)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PinCpu(unittest.TestCase):
@@ -45,3 +43,22 @@ class PinCpu(unittest.TestCase):
         toml = (Path(__file__).resolve().parents[2] / "crates/target/llrm-arm64/dagisel.toml").read_text()
         self.assertIn('cpus = ["apple-m1"]', toml)
         self.assertIn("-mcpu=apple-m1", PIN_FLAGS)
+
+
+class Compare(unittest.TestCase):
+    def test_one_seeded_wrong_opcode_is_the_only_function_flagged(self):
+        # The control: of three functions only the one whose opcode is wrong may be a `differ`.
+        ours_ = {"a": [["ADDWri", "B"]], "b": [["SUBWri"]], "c": [["MOVi32imm", "RET_ReallyLR"]]}
+        pin_ = {"a": [["ADDWri", "B"]], "b": [["ADDWri"]], "c": [["MOVi32imm", "RET_ReallyLR"]]}
+        flagged = [line for line in compare("f.ll", ours_, {}, pin_) if "differ" in line]
+        self.assertEqual(len(flagged), 1, flagged)
+        self.assertIn("@b:", flagged[0])
+
+    def test_an_oracle_failure_is_a_line_not_an_abort(self):
+        # `sys.exit` on a module the pin's llc could not parse ended the whole 92-file run after 15 functions.
+        with self.assertRaises(OracleFailed):
+            pin("/bin/false", "define void @f() { ret void }")
+
+
+if __name__ == "__main__":
+    unittest.main()

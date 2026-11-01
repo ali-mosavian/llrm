@@ -59,6 +59,10 @@ def parse_pin(text):
 PIN_FLAGS = ["-O2", "-mtriple=arm64-apple-macosx", "-mcpu=apple-m1", "-stop-after=finalize-isel"]
 
 
+class OracleFailed(Exception):
+    """The pin's llc could not read or compile the module."""
+
+
 def pin(llc, module):
     with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as f:
         f.write(module)
@@ -66,7 +70,7 @@ def pin(llc, module):
                          capture_output=True, text=True)
     os.unlink(f.name)
     if out.returncode:
-        sys.exit(f"llc failed:\n{out.stderr[-2000:]}")
+        raise OracleFailed(out.stderr[-2000:])
     return parse_pin(out.stdout)
 
 
@@ -79,17 +83,27 @@ def main():
         sys.exit(f"no llc at {args.llc!r}: pass --llc or set LLVM_BUILD to the pin's build")
     for path in args.files:
         module, blocks, refused = ours(path)
-        theirs = pin(args.llc, module)
-        for name in sorted(set(blocks) | set(refused)):
-            if name in refused:
-                print(f"{path} @{name}: refused: {refused[name]}")
-            elif blocks[name] == theirs.get(name):
-                print(f"{path} @{name}: equal")
-            elif [sorted(b) for b in blocks[name]] == [sorted(b) for b in theirs.get(name) or []]:
-                print(f"{path} @{name}: equal (order)")
-            else:
-                print(f"{path} @{name}: differ\n  ours: {blocks[name]}\n  pin:  {theirs.get(name)}")
+        try:
+            theirs = pin(args.llc, module)
+        except OracleFailed as why:
+            print(f"{path}: oracle failed: {str(why).splitlines()[0] if str(why) else '?'}")
+            continue
+        print("\n".join(compare(path, blocks, refused, theirs)))
 
+
+def compare(path, blocks, refused, theirs):
+    """One line per function: equal, equal (order), differ (both lists follow) or refused."""
+    lines = []
+    for name in sorted(set(blocks) | set(refused)):
+        if name in refused:
+            lines.append(f"{path} @{name}: refused: {refused[name]}")
+        elif blocks[name] == theirs.get(name):
+            lines.append(f"{path} @{name}: equal")
+        elif [sorted(b) for b in blocks[name]] == [sorted(b) for b in theirs.get(name) or []]:
+            lines.append(f"{path} @{name}: equal (order)")
+        else:
+            lines.append(f"{path} @{name}: differ\n  ours: {blocks[name]}\n  pin:  {theirs.get(name)}")
+    return lines
 
 if __name__ == "__main__":
     main()
