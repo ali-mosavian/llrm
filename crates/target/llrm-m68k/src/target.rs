@@ -22,7 +22,7 @@ static LAYOUT: LazyLock<Layout> =
     LazyLock::new(|| Layout::parse(include_str!("machines/datalayout.toml")).expect("m68k datalayout.toml parses"));
 static CALLING: LazyLock<Calling> =
     LazyLock::new(|| Calling::parse(include_str!("machines/calling.toml")).expect("m68k calling.toml parses"));
-static DIALECT: LazyLock<Dialect> =
+pub(crate) static DIALECT: LazyLock<Dialect> =
     LazyLock::new(|| Dialect::parse(include_str!("instructions/dialect.toml")).expect("m68k dialect.toml parses"));
 
 /// The m68k target.

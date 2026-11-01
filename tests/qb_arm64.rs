@@ -369,3 +369,14 @@ fn the_hand_over_of_a_handled_program_passes_the_pins_verifier() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// CLEAR called B$SCLR, which no flat runtime defined (clear_variables).
+#[test]
+fn clear_zeroes_the_module_variables_on_arm64() {
+    let mut source = std::fs::read(root().join("tests/run/qb/clear_variables.bas")).unwrap();
+    source.extend_from_slice(b"\r\nEND\r\n");
+    let screen = run_basic("clear_variables", &source);
+    let want = std::fs::read_to_string(root().join("tests/run/qb/clear_variables.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&screen), trimmed(&want));
+}

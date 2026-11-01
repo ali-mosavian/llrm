@@ -539,7 +539,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+                |module| crate::backend::ehprepare::prepared_for(
+                    module,
+                    &llrm_target::Target::layout(&*options.arch),
+                    options.wasm_exceptions,
+                ),
             )
     })?;
     // The DAG route expands it itself (`expandFP_TO_UINT`), after the combines.
