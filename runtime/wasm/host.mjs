@@ -46,7 +46,17 @@ export async function instantiate(bytes, hooks) {
   // The host's own memory: a page after the program's. `__heap_base` is the top of the program's stack, whose outermost
   // frames anything written below it would overwrite.
   host.scratch = host.exports.memory.grow(1) * 65536;
-  host.run = () => { host.exports.__wasm_call_ctors(); return host.exports.llrm_wasm_start(); };
+  // The engine's call stack is the program's stack check: when it runs out the program ends as QB's does, with the
+  // runtime's "Out of stack space" (the call exits the program).
+  host.run = () => {
+    try {
+      host.exports.__wasm_call_ctors();
+      return host.exports.llrm_wasm_start();
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      return host.exports.llrm_wasm_stack_overflow();
+    }
+  };
 
   // The screen: its size, the palette (8 bits a channel, 256 entries) and the pixels as palette indices; copies.
   host.frame = () => {
