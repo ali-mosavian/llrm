@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 229 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 231 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -129,7 +129,9 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | interprocedural | The whole-program step run once every body has reached its own fixed point: states what each body does, inlines, carries constants across direct calls, drops dead pure calls and the tails of calls that never return, and sends each changed body back through its pipeline. | A `ProgramPass` after the per-body fixed point and before `globaldce`, | [interprocedural](interprocedural.md) |
 | ipacp | Copies a function for the constants its callers pass and redirects those calls to the copy, so the copy's loops and branches fold on values the original cannot assume: GCC's `ipa-cp` cloning. | In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are | [ipacp](ipacp.md) |
 | ipsccp | Interprocedural sparse conditional constant propagation. | Once per compile at -O1 and up, first in [`crate::walk::ModuleIpo`](walk.md) | [ipsccp](ipsccp.md) |
+| ivscale | A counter read only as `i << k` counts in bytes (DEVIATE LSR4). | After `lsr`, `differences` and `maskscale`, in the strength slot | [ivscale](ivscale.md) |
 | ivusers | The users of a loop's induction variables (`IVUsers.cpp` at `d1106deb71cc`), which loop strength reduction rewrites. | Nothing runs it yet: stage 3 of the translation of LSR. | [ivusers](ivusers.md) |
+| ivutil | What the counter-rewriting passes ([`crate::maskscale`], [`crate::ivscale`]) read of the IR: an integer constant, an operand's defining instruction, a value wrapped to a width, and a constant of a type. | Named by `ivscale`, `maskscale`. | [ivutil](ivutil.md) |
 | jumptableswitch | A call through a table of functions is a switch of direct calls: LLVM's `JumpTableToSwitch` (`jump-table-to-switch`; [JumpTableToSwitch.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpTableToSwitch.cpp) at `d1106deb71cc`). | Slot `jumptableswitch@672`, after `cvp@669`. The pin reads | [jumptableswitch](jumptableswitch.md) |
 | jumpthreading | Jump threading: a block that ends in a branch or switch on a condition some of its predecessors decide is bypassed for those predecessors, which jump straight to the target; as LLVM's `jump-threading`. | `pipeline` (`jumpthreading@668`, `jumpthreading@809`), the `Partial` | [jumpthreading](jumpthreading.md) |
 | knownpred | A branch on a value known in some predecessors, threaded: LLVM's [`SimplifyCFGOpt::foldCondBranchOnValueKnownInPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3814) and its `Impl` ([L3624](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3624)). | Named by `simplifycfg`. | [knownpred](knownpred.md) |

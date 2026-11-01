@@ -455,7 +455,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "ivscale" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" | "cgpaddr" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -1286,6 +1286,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // target prices a scaled index.
         if applied.options.wanted("maskscale") {
             passes.push(Box::new(crate::maskscale::MaskScale));
+        }
+        // A counter read only shifted counts in the shifted unit.
+        if applied.options.wanted("ivscale") {
+            passes.push(Box::new(crate::ivscale::IvScale { size: applied.options.prefers_size() }));
         }
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.

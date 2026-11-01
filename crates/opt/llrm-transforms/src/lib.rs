@@ -238,9 +238,11 @@ mod instworklist_tests;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod ipsccp;
+pub mod ivscale;
 pub mod ivusers;
 #[cfg(test)]
 mod ivusers_tests;
+pub(crate) mod ivutil;
 pub mod jumptableswitch;
 pub mod jumpthreading;
 #[cfg(test)]

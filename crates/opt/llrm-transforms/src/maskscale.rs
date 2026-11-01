@@ -41,10 +41,12 @@
 //! After `lsr` and `differences`, in the strength slot
 //! ([`crate::pipeline::strength_slot`]); option `maskscale`.
 
-use llrm_mir::context::{Constant, ConstantKind, Context};
-use llrm_mir::module::{Function, InstId, Operand, ValueDef};
+use llrm_mir::context::Context;
+use llrm_mir::module::{Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+
+use crate::ivutil::{constant, def, int, wrap};
 
 pub struct MaskScale;
 
@@ -62,35 +64,6 @@ struct Ring {
     start: u128,
     width: u32,
     shift: u32,
-}
-
-fn constant(
-    context: &Context,
-    operand: Operand,
-) -> Option<u128> {
-    let Operand::Constant(id) = operand else { return None };
-    match context.get(id).kind {
-        ConstantKind::Int(value) => Some(value),
-        _ => None,
-    }
-}
-
-fn def(
-    function: &Function,
-    operand: Operand,
-) -> Option<InstId> {
-    let Operand::Value(value) = operand else { return None };
-    match function.value(value).def {
-        ValueDef::Instruction(def) => Some(def),
-        _ => None,
-    }
-}
-
-fn wrap(
-    value: u128,
-    bits: u32,
-) -> u128 {
-    if bits >= 128 { value } else { value & ((1u128 << bits) - 1) }
 }
 
 /// The least `j` with `c * j == d` mod `2^bits`, if there is one.
@@ -221,15 +194,6 @@ fn matched(
         return None;
     }
     Some(Ring { phi, start_slot, next, and, geps, icmp, exit, mask, step, start, width, shift })
-}
-
-fn int(
-    context: &Context,
-    like: llrm_mir::types::TypeId,
-    value: u128,
-    width: u32,
-) -> Operand {
-    Operand::Constant(context.constant(Constant { ty: like, kind: ConstantKind::Int(wrap(value, width)) }))
 }
 
 fn rewrite(
