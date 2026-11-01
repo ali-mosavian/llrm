@@ -769,7 +769,9 @@ impl<'a> RAGreedy<'a> {
                 let split = self.lis.interval_rc(reg);
                 assert!(!self.matrix.vrm.has_phys(reg), "Register already assigned");
                 if self.lis.reg_nodbg_empty(reg) {
-                    assert!(split.empty(), "Non-empty but used interval");
+                    // LLVM asserts `split.empty()` here, with assertions on only; a
+                    // release build removes the interval. A region split can leave the
+                    // complement a phi-only range around a loop, with nothing to hold.
                     self.lis.remove_interval(reg);
                     continue;
                 }
