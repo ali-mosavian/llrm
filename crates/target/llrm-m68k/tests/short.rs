@@ -1,13 +1,14 @@
-//! `addq` and `subq`: an add or subtract of 1 to 8 was the pin's `add.l #n`,
-//! two bytes longer in a register and 4 in memory; the encodings against
-//! binutils and the selection by immediate range.
+//! `addq`, `subq` and `tst`: an add or subtract of 1 to 8 was the pin's
+//! `add.l #n`, two bytes longer in a register and 4 in memory, and a compare
+//! with zero its `cmpi #0`, two or four bytes longer than `tst`; the encodings
+//! against binutils and the selection by immediate range.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
-use llrm_m68k::dagisel::quick;
+use llrm_m68k::dagisel::short;
 use llrm_m68k::encode::encode;
 use llrm_m68k::mc::{Inst, Operand, print};
 use llrm_m68k::object::{executable, start, write_executable};
@@ -34,12 +35,12 @@ fn binutils(tool: &str) -> Option<Command> {
 
 /// The bytes binutils assembles `text` to.
 fn assembled(text: &str) -> Option<Vec<u8>> {
-    let object = support::unique_path("quick-o");
-    let source = support::unique_path("quick-s");
+    let object = support::unique_path("short-o");
+    let source = support::unique_path("short-s");
     std::fs::write(&source, format!("{text}\n")).unwrap();
     let status = binutils("as")?.args(["-m68020", "-o"]).arg(&object).arg(&source).status().unwrap();
     assert!(status.success(), "{text}");
-    let flat = support::unique_path("quick-bin");
+    let flat = support::unique_path("short-bin");
     let status = binutils("objcopy")?.args(["-O", "binary", "-j", ".text"]).arg(&object).arg(&flat).status().unwrap();
     assert!(status.success());
     let bytes = std::fs::read(&flat).unwrap();
@@ -49,7 +50,7 @@ fn assembled(text: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// The operands a quick instruction of `class` takes, with the immediate.
+/// The operands a short instruction of `class` takes, with the immediate.
 fn operands(
     class: &str,
     value: i64,
@@ -62,26 +63,36 @@ fn operands(
         "ji" => vec![address, imm],
         "pi" => vec![Operand::Imm(12), address, imm],
         "fi" => vec![Operand::Imm(12), address, index, imm],
+        // `tst` has no immediate
+        "d" => vec![data],
+        "j" => vec![address],
+        "p" => vec![Operand::Imm(12), address],
+        "f" => vec![Operand::Imm(12), address, index],
+        "b" => vec![Operand::Imm(0x1234_5678)],
         _ => unreachable!("{class}"),
     }
 }
 
-/// Every quick instruction's bytes are what the assembler makes of its text,
+/// Every short instruction's bytes are what the assembler makes of its text,
 /// for each immediate: the encoding rows are built from the pin's, and a
 /// wrong field would run as another instruction.
 #[test]
 fn every_quick_form_encodes_as_binutils_does() {
     let mut checked = 0;
-    for name in quick::names() {
-        for value in 1..=8 {
-            let inst = Inst { opcode: name, operands: operands(&name[name.len() - 2..], value) };
+    for name in short::names() {
+        let test = name.starts_with("TST");
+        for value in if test { 0..=0 } else { 1..=8 } {
+            let class = if test { &name[name.len() - 1..] } else { &name[name.len() - 2..] };
+            let inst = Inst { opcode: name, operands: operands(class, value) };
             let text = print(&inst).unwrap();
-            let Some(want) = assembled(&text) else { return };
+            // the pin writes an absolute address as `$1234`, gas as `0x1234`
+            let Some(want) = assembled(&text.replace('$', "0x")) else { return };
             assert_eq!(encode(&inst).unwrap().bytes, want, "{name} #{value}: {text}");
             checked += 1;
         }
     }
-    assert_eq!(checked, 8 * quick::names().count());
+    let tests = short::names().filter(|name| name.starts_with("TST")).count();
+    assert_eq!(checked, 8 * (short::names().count() - tests) + tests);
 }
 
 fn text(
@@ -169,7 +180,7 @@ fn status(
     let qemu: PathBuf = support::qemu()?;
     let mut all = start("f", args);
     all.extend(items_with(&module(ir), "f", Cpu::M68000, Options::default()).expect("compiles"));
-    let path = support::unique_path("quick");
+    let path = support::unique_path("short");
     write_executable(&path, &executable(&all).unwrap()).unwrap();
     let code = support::run(&qemu, &["-cpu", "m68000"], &path);
     std::fs::remove_file(&path).ok();
@@ -178,7 +189,7 @@ fn status(
 }
 
 /// The values: each immediate from -9 to 10 added to a register and in memory
-/// gives the sum, through the quick form or not.
+/// gives the sum, through the short form or not.
 #[test]
 fn quick_and_plain_forms_compute_the_same_sums() {
     for value in -9..=10i64 {
@@ -190,6 +201,61 @@ fn quick_and_plain_forms_compute_the_same_sums() {
             if let Some(code) = status(&ir, &[100]) {
                 assert_eq!(code, (100 + value) as i32 & 0xFF, "100 + {value}");
             }
+        }
+    }
+}
+
+/// A compare with zero was `cmpi #0` in all sizes and places; it is `tst`,
+/// whose codes are the same.
+#[test]
+fn a_compare_with_zero_is_tst() {
+    for (ir, want) in [
+        (
+            "define i32 @f(i32 %x, i32 %y) {\n  %c = icmp eq i32 %x, 0\n  %r = select i1 %c, i32 %y, i32 5\n  ret i32 %r\n}",
+            "tst.l",
+        ),
+        (
+            "define i32 @f(ptr %p, i32 %y) {\n  %v = load i16, ptr %p\n  %c = icmp ne i16 %v, 0\n  %r = select i1 %c, i32 %y, i32 5\n  ret i32 %r\n}",
+            "tst.w",
+        ),
+        (
+            "define i32 @f(ptr %p, i32 %y) {\n  %v = load i8, ptr %p\n  %c = icmp sgt i8 %v, 0\n  %r = select i1 %c, i32 %y, i32 5\n  ret i32 %r\n}",
+            "tst.b",
+        ),
+    ] {
+        for cpu in [Cpu::M68000, Cpu::M68020] {
+            let out = text(ir, cpu);
+            assert!(out.contains(want) && !out.contains("cmpi"), "{cpu:?} want {want}:\n{out}");
+        }
+    }
+}
+
+/// `tst` must branch as `cmpi #0` did, for each condition and sign.
+#[test]
+fn tst_branches_on_every_condition_as_the_compare_did() {
+    for (cond, x, want) in [
+        ("eq", 0, 1),
+        ("eq", 3, 0),
+        ("ne", 3, 1),
+        ("ne", 0, 0),
+        ("slt", -1, 1),
+        ("slt", 0, 0),
+        ("sle", 0, 1),
+        ("sle", 1, 0),
+        ("sgt", 1, 1),
+        ("sgt", 0, 0),
+        ("sge", 0, 1),
+        ("sge", -1, 0),
+        ("ugt", -1, 1),
+        ("ugt", 0, 0),
+        ("ule", 0, 1),
+        ("ule", 5, 0),
+    ] {
+        let ir = format!(
+            "define i32 @f(i32 %x) {{\n  %c = icmp {cond} i32 %x, 0\n  %r = zext i1 %c to i32\n  ret i32 %r\n}}"
+        );
+        if let Some(code) = status(&ir, &[x]) {
+            assert_eq!(code, want, "{cond} {x}");
         }
     }
 }
