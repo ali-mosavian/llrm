@@ -1,0 +1,10 @@
+#title,Bit Manipulation (Dynamic Bit Count) Execution Times,page,10-19,notes,"¹ For entries in this column, add the effective address calculation time."
+Instruction,Size,Register,Memory¹
+BCHG,Byte,—,1(1/1)
+"""",Long,1(0/0),—
+BCLR,Byte,—,1(1/1)
+"""",Long,1(0/0),—
+BSET,Byte,—,1(1/1)
+"""",Long,1(0/0),—
+BTST,Byte,—,1(1/0)
+"""",Long,1(0/0),—

@@ -90,6 +90,7 @@ mod sub_sbb;
 mod sub_simplify;
 mod switch_dags;
 mod switches;
+mod target_node_undef_operand;
 mod token_factor;
 mod trunc_binop;
 mod type_actions;
