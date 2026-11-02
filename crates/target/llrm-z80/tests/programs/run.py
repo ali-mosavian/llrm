@@ -15,7 +15,7 @@ ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
 CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
-LOG = 0xE000  # the log pointer, then the entries
+LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
 CRT0 = f"""\t.module crt0
 \t.globl _main
 \t.area _HEADER (ABS)
@@ -104,11 +104,11 @@ def one(job):
         return name, "LINK", " ".join(undefined)[:140] or (k.stdout + k.stderr)[-100:]
     try:
         r = sh(["ucsim_z80", "-t", "Z80", "-q", "-w", "x.ihx", "-c", "-"], w,
-               f"run\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
+               f"sp_limit=0\nrun\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
     except subprocess.TimeoutExpired:
         return name, "HALT", f"no halt in {args.timeout} s"
     if "Halted" not in r.stdout:
-        return name, "HALT", r.stdout[-100:]
+        return name, "HALT", " ".join(l for l in r.stdout.splitlines() if "overflow" in l or "Erroneous" in l or "Stop" in l)[:120]
     got = reported(r.stdout)
     if got == want:
         return name, "PASS", f"{len(got)} values"
