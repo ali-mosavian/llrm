@@ -435,3 +435,13 @@ fn a_pass_flag_applies_to_given_options_and_unknown_ones_change_nothing() {
     assert!(!apply_pass_flag(&mut options, "-O2"));
     assert_eq!(format!("{options:?}"), before);
 }
+
+/// A pin `llc` runs its own CodeGenPrepare, so a shadow run leaves cgpaddr out
+/// to hand it the module before ours; the flag was an environment variable.
+#[test]
+fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
+    let mut options = Options::default();
+    assert!(options.cgpaddr);
+    assert!(apply_pass_flag(&mut options, "-fno-llrm-cgpaddr"));
+    assert!(!options.cgpaddr);
+}

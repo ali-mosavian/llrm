@@ -280,6 +280,14 @@ pub fn num_sign_bits(
     {
         return width;
     }
+    // `ComputeNumSignBits` of `SRA` by a constant: the operand's sign bits and
+    // the amount, up to the width.
+    if dag.opcode(value) == ISD::Sra
+        && let Some(amount) = dag.constant(dag.operand(value, 1))
+        && (0..u128::from(width)).contains(&amount)
+    {
+        return (num_sign_bits(dag, dag.operand(value, 0)) + amount as u32).min(width);
+    }
     if dag.opcode(value) == ISD::SignExtendInReg
         && let super::dag::NodeData::ValueType(inner) = dag.node(dag.operand(value, 1)).data
     {
