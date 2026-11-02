@@ -1237,6 +1237,15 @@ fn try_to_unroll_loop(
         return Unrolled::Unmodified;
     }
 
+    // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
+    // twice are interleaved past the stack and spill (fpbench, nbody -O3:
+    // slower than the loop, as is the pin's own unroll). Owner
+    // llrm-target-x86-m32, exit 2026-11-20.
+    if let Some(peak) = float_stack_overflow(run, lp) {
+        why(run, lp, &format!("{peak} floats live in a body, past half the float stack"));
+        return Unrolled::Unmodified;
+    }
+
     let eph = ephemeral_values(run, analyzed, lp);
     let uce = cost_estimator(run, lp, &eph, up.be_insns);
     if !uce.can_unroll() {
@@ -1396,6 +1405,26 @@ fn try_to_unroll_loop(
 }
 
 /// Whether the loop calls something the target lowers to a call.
+/// The most floats live at once in the body of `lp`, if the target computes
+/// them on a stack and twice that many do not fit it.
+fn float_stack_overflow(
+    run: &Run,
+    lp: Loop,
+) -> Option<usize> {
+    let depth = run.tti.fp_stack_depth()? as usize;
+    let blocks = lp.get_blocks();
+    let is_float = |value: llrm_mir::module::ValueId| {
+        llrm_mir::tti::Ty::of(&run.context.types, run.function.value(value).ty).is_some_and(|ty| ty.is_float())
+    };
+    if !blocks.iter().any(|&block| {
+        run.function.iter_block(block).any(|inst| run.function.instruction(inst).result.is_some_and(&is_float))
+    }) {
+        return None;
+    }
+    let peak = llrm_analysis::liveness::pressure_in(run.function, blocks, &is_float);
+    (2 * peak > depth).then_some(peak)
+}
+
 pub(crate) fn loop_has_calls(
     run: &Run,
     lp: Loop,

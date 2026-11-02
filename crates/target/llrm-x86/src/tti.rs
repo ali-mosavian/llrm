@@ -560,6 +560,10 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    fn fp_stack_depth(&self) -> Option<u32> {
+        (!self.sse2).then_some(8)
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }

@@ -468,6 +468,12 @@ pub trait Tti {
         (None, None)
     }
 
+    /// The depth of the stack scalar floats are computed on (x87's 8); none:
+    /// registers enough that the unroll need not mind it.
+    fn fp_stack_depth(&self) -> Option<u32> {
+        None
+    }
+
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
