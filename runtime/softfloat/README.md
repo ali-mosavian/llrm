@@ -66,3 +66,8 @@ Cycles per call with the shim on the Woz operands: add 506, sub 515, mul 1730, d
 ## m68k size vs compiler-rt (`tests/size_m68k.sh [CPU] [OPT]`)
 
 Both compiled by llrm-cc (keep/llrm-cc_soft + llc_soft_merged, 2026-11-02), text bytes per object. 68000 -O2: `sf32.c` (add, sub, mul, div, cmp, neg) 3148 B, `sf32_conv.c` 1274 B. At -Os that build panics on `sf32.c` (liverange "Cannot overlap d"); `sf32_conv.c` is 836 B. compiler-rt's addsf3, mulsf3, divsf3 and floatsisf do not compile with the same build (`CtLzZeroPoison` has no libcall, `BitCast` in the older one), so there is no compiler-rt column on m68k yet; compiler-rt's fixsfsi is 162 B.
+
+## binary64 (C)
+
+`src/sf64.c`: `__adddf3 __subdf3 __muldf3 __divdf3 __negdf2`, the compares (`__cmpdf2 __eqdf2 __nedf2 __ltdf2 __ledf2 __gedf2 __gtdf2 __unorddf2`), `__floatsidf __floatunsidf __floatdidf __floatundidf` and `__fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi`; `__extendsfdf2` and `__truncdfsf2` are in `sf32_conv64.c`. The binary32 core at 56-bit working width.
+Host oracle: `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c src/sf64.c src/sf32_conv.c && ./a.out [n]`; edges, random classes, rounding ties, int conversions. Each of: wrong product shift, tie rule, divide step count, sticky bit fails it (10^4..10^5 mismatches).
