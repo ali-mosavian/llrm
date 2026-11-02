@@ -32,3 +32,8 @@ Hand-written `__addsf3`/`__subsf3`: IEEE binary32, RNE, denormals, inf, NaN. Arg
 `tests/asm6502/run.sh [n] [ops]` runs all four ops; `bench.sh` prints bytes and cycles per call on the Woz comparison operands; `first.sh op n` shows the first failing record.
 Measured: add+sub 672 B, mul+div 609 B; cycles per call add 426, sub 435, mul 1615, div 2377. `src/6502/sf32_conv.s` adds the four int conversions (380 B; itof about 275 cycles, ftoi about 190 on the run.sh mix).
 `src/6502/sf32_explog.s` adds `expf`/`logf` as byte-coded programs over the asm arithmetic (1042 B code, 83 B BSS, about 25k cycles per call), bit-exact against src/mathf.c; `tests/asm6502/runm.sh [n]` checks them on sim65.
+
+## FP8 E5M2 (`src/6502/sf8.s`)
+
+`__fp8_add/sub/mul/div` (OCP E5M2: denormals, inf, NaN, round to nearest even), args rc2 and rc3, result A. `tests/asm6502/run8.sh` checks all 65536 pairs of each op against exact rational arithmetic on sim65: 0 mismatches.
+First version: 680 B for the four ops; cycles per call (mean over all pairs) add 395, sub 399, mul 370, div 413. Not yet tightened.
