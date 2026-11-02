@@ -1343,6 +1343,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (ISD::SignExtend, ISD::SignExtend | ISD::AnyExtend) => Some(self.dag.get_node(ISD::SignExtend, vt, &[x])),
             (ISD::AnyExtend, ISD::Truncate) => Some(self.any_ext_or_trunc(x, vt)),
             (ISD::ZeroExtend, ISD::Truncate) => {
+                // `zext nneg (trunc x)` of an `x` with sign bits to spare is
+                // `x`, or its `sext` where wider ([L16459][pin]): the sext
+                // of a load a `zext nneg` shares leaves no `movzx`.
+                //
+                // [pin]:
+                //     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16459
+                let (op_bits, mid_bits) = (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
+                if self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+                    && super::known_bits::num_sign_bits(self.dag, x) > op_bits - mid_bits
+                {
+                    let dest_bits = vt.size_in_bits();
+                    if op_bits == dest_bits {
+                        return Some(x);
+                    }
+                    if op_bits < dest_bits {
+                        return Some(self.dag.get_node(ISD::SignExtend, vt, &[x]));
+                    }
+                }
                 let wide = self.any_ext_or_trunc(x, vt);
                 let narrow = self.dag.value_type(n0);
                 let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), vt);

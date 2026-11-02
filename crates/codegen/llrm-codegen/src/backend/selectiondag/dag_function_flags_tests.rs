@@ -839,3 +839,33 @@ fn a_string_compare_read_in_a_later_block_is_exported() {
     let done = select_with_flags_answers(QB_COMPARE_READ_LATER);
     assert!(done.is_ok(), "{:?}", done.err());
 }
+
+const ZEXT_NNEG_BESIDE_SEXT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p) optsize {
+b1:
+  %v = load i16, ptr %p
+  %z = zext nneg i16 %v to i32
+  %s = sext i16 %v to i32
+  %neg = icmp slt i16 %v, 0
+  br i1 %neg, label %b2, label %b3
+b2:
+  %m = mul nsw i32 %s, 7
+  br label %b5
+b3:
+  %n = mul nuw nsw i32 %z, 5
+  br label %b5
+b5:
+  %r = phi i32 [ %m, %b2 ], [ %n, %b3 ]
+  ret i32 %r
+}
+";
+
+/// A `zext nneg` beside a `sext` of one load that a signed compare reads kept
+/// a `movzx` after the `movsx` load: parity/branch bq32 -Os, +2 B. The pin's
+/// `visitZERO_EXTEND` makes the `zext nneg` of the extended load's truncate the load.
+#[test]
+fn a_zext_nneg_of_a_load_a_signed_compare_reads_is_the_sext() {
+    let names = names(ZEXT_NNEG_BESIDE_SEXT).unwrap();
+    assert!(names.iter().any(|n| n == "movsx"), "premise: the sext is selected, got {names:?}");
+    assert!(!names.iter().any(|n| n == "movzx"), "the zext nneg is the sext: {names:?}");
+}
