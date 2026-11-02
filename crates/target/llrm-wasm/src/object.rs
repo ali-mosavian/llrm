@@ -12,6 +12,19 @@
 //! build has no WebAssembly target to state its list. Exit: DWARF for wasm, and
 //! the pin build with the target (undated, none planned).
 //!
+//! DEVIATE W23: a call naming an alias is a call of its aliasee (the text IR
+//! parser resolves the operand, llrm-mir `parse.rs`), so `user` calls `impl`
+//! and its `R_WASM_FUNCTION_INDEX_LEB` is against `impl`'s symbol; the pin
+//! keeps `call other` with the relocation against the alias symbol
+//! ([`GetGlobalAddressSymbol`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/WebAssembly/WebAssemblyMCInstLower.cpp#L71)
+//! prints the symbol of the global it is given). The alias symbol itself is the
+//! pin's: the aliasee's function index. Same linked behaviour for a non-weak
+//! alias; a weak alias, which a linker may replace, is refused by the parser.
+//! Exit: the parser keeps the alias operand and the call relocates against the
+//! alias, once the GlobalAlias emitters (object-refactor) are in, no later than
+//! 2026-11-20; `a_call_naming_an_alias_relocates_against_its_aliasee` pins the
+//! form until then and flips with it.
+//!
 //! # See also
 //! `WasmObjectWriter.cpp` (`writeObject`, `writeTypeSection`,
 //! `writeImportSection`, `writeFunctionSection`, `writeCodeSection`,
