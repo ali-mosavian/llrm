@@ -573,31 +573,30 @@ mulgo:	call	unp
 	ld	15(iy),a
 	ld	a,6(iy)
 	ld	16(iy),a
-	xor	a,a
-	ld	17(iy),a
-	ld	18(iy),a
-	ld	19(iy),a
-	ld	b,#24
+	ld	c,0(iy)		; the sum in d:h:l, the multiplicand's low half in bc, its top byte at 2(iy)
+	ld	b,1(iy)
+	ld	hl,#0
+	ld	d,h
+	ld	e,#24
 1$:	bit	0,14(iy)
 	jr	z,2$
-	ld	a,17(iy)
-	add	a,0(iy)
-	ld	17(iy),a
-	ld	a,18(iy)
-	adc	a,1(iy)
-	ld	18(iy),a
-	ld	a,19(iy)
+	add	hl,bc
+	ld	a,d
 	adc	a,2(iy)
-	ld	19(iy),a
+	ld	d,a
 	jr	3$
 2$:	or	a,a
-3$:	rr	19(iy)
-	rr	18(iy)
-	rr	17(iy)
+3$:	rr	d
+	rr	h
+	rr	l
 	rr	16(iy)
 	rr	15(iy)
 	rr	14(iy)
-	djnz	1$
+	dec	e
+	jr	nz,1$
+	ld	17(iy),l
+	ld	18(iy),h
+	ld	19(iy),d
 	ld	c,22(iy)	; the product has its top bit at 47 or 46: keep 27 bits, fold the rest into bit 0
 	ld	b,23(iy)
 	ld	e,#4
