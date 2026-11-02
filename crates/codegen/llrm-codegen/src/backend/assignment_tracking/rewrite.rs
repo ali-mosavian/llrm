@@ -80,7 +80,7 @@ pub fn rewrite(
     locs: &FunctionVarLocs,
 ) -> bool {
     let all: Vec<&VarLocInfo> =
-        locs.single_locs().iter().chain(locs.instructions().flat_map(|i| locs.locs_before(i))).collect();
+        locs.single_locs().iter().chain(locs.wedged().flat_map(|i| locs.locs_before(i))).collect();
     if all.iter().any(|one| one.expression.iter().any(|op| op_words(op).is_none())) {
         return false;
     }
@@ -100,7 +100,7 @@ pub fn rewrite(
     if let Some(first) = first {
         wanted.extend(locs.single_locs().iter().map(|one| (first, true, one)));
     }
-    for inst in locs.instructions() {
+    for inst in locs.wedged() {
         for one in locs.locs_before(inst) {
             match (in_cell(one), first) {
                 (Some(address), Some(first)) => {

@@ -429,7 +429,7 @@ impl FunctionVarLocs {
     }
 
     /// The instructions with locations before them, in order.
-    pub fn instructions(&self) -> impl Iterator<Item = InstId> + '_ {
+    pub fn wedged(&self) -> impl Iterator<Item = InstId> + '_ {
         self.before.keys().copied()
     }
 
@@ -1957,7 +1957,7 @@ done:\n  ret i32 %j\n}\n\
         let locs = run(LOOP);
         assert_eq!(locs.single_locs().len(), 1);
         assert_eq!(locs.single_locs()[0].expression, []);
-        assert_eq!(locs.instructions().count(), 0, "no wedge: {:?}", locs.instructions().collect::<Vec<_>>());
+        assert_eq!(locs.wedged().count(), 0, "no wedge: {:?}", locs.wedged().collect::<Vec<_>>());
     }
 
     /// The same loop with a `dbg_value` of `x` in the body: `x` is not
@@ -1968,7 +1968,7 @@ done:\n  ret i32 %j\n}\n\
         assert_ne!(text, LOOP);
         let locs = run(&text);
         assert!(locs.single_locs().is_empty());
-        assert!(locs.instructions().count() > 0);
+        assert!(locs.wedged().count() > 0);
     }
 
     const WIDE: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
@@ -1990,7 +1990,7 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
     #[test]
     fn the_bits_a_value_does_not_cover_are_stated_in_memory_again() {
         let locs = run(WIDE);
-        let all: Vec<&VarLocInfo> = locs.instructions().flat_map(|inst| locs.locs_before(inst)).collect();
+        let all: Vec<&VarLocInfo> = locs.wedged().flat_map(|inst| locs.locs_before(inst)).collect();
         let high = all.iter().find(|one| {
             expression_text(&one.expression) == "DW_OP_plus_uconst, 4, DW_OP_deref, DW_OP_LLVM_fragment, 32, 32"
         });
@@ -2108,7 +2108,7 @@ define i64 @f(i64 %w, i32 %n) {\nentry:\n  %x = alloca i64, align 8, !DIAssignID
         let locs = run(&text);
         let at =
             |name: &str| function.walk().find(|&(_, i)| function.instruction(i).opcode.mnemonic() == name).unwrap().1;
-        let seen: Vec<_> = locs.instructions().map(|inst| (inst, locs.locs_before(inst).len())).collect();
+        let seen: Vec<_> = locs.wedged().map(|inst| (inst, locs.locs_before(inst).len())).collect();
         assert_eq!(seen, [(at("br"), 1), (at("add"), 1)]);
         assert_eq!(locs.locs_before(at("br"))[0].expression, [DwOp::Deref]);
         assert_eq!(locs.locs_before(at("add"))[0].expression, []);
