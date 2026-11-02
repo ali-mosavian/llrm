@@ -17,7 +17,7 @@ DEF=; [ "$CPU" = 68000 ] || DEF="--defsym M68020=1"; [ "$CPU" = 68060 ] && DEF="
 $B-as -m$CPU $DEF -o $T/sf64s.o src/m68k/sf64.s
 # qemu runs what the CPU would trap on: the 68060 has no 64-bit mul/div, the 68000 no 32-bit mul/div or bitfields
 BAN=; [ "$CPU" = 68060 ] && BAN='(mul|div)[us]l [^ ]*,%d[0-7],%d'; [ "$CPU" = 68000 ] && BAN='(mul|div)[us]l|bf'
-[ -z "$BAN" ] || ! $B-objdump -d $T/sf64s.o | grep -E "	($BAN)" || { echo "$CPU: instruction it lacks"; exit 1; }
+[ -z "$BAN" ] || ! $B-objdump -d $T/sf64s.o | grep -E "^ *[0-9a-f]+:	[0-9a-f ]+	($BAN)" || { echo "$CPU: instruction it lacks"; exit 1; }
 [ "$MODE" = obj ] && { cp $T/sf64s.o "$3"; exit 0; }
 CF="-m$CPU -msoft-float -O2 -nostdlib -static -ffreestanding -Iinclude -I$T"
 for f in sf64 int64 int32; do timeout 900 $B-gcc $CF -c src/$f.c -o $T/$f.o; done

@@ -88,7 +88,7 @@ Clocks per call over `gen_vectors64.c`'s 3000 vectors (`cycles --exe`; 68000 `mu
 | mul | 2268 | 6175 | 18849 | 610 | 2323 | 3422 |
 | div | 2745 | 4550 | 37996 | 702 | 1968 | 20575 |
 
-Bytes: 2026 (68000), 1596 (68020), 1998 (68060); libgcc's add, sub, mul and div take 2088.
+Bytes: 2026 (68000), 1596 (68020), 1998 (68060); libgcc's add, sub, mul and div about 2088 (start of its object to `__negdf2`).
 
 ## binary64 (C)
 
