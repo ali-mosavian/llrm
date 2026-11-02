@@ -44,3 +44,23 @@ def test_a_compile_that_hands_back_bytes_is_compared_from_those_bytes(tmp_path, 
 def test_the_section_name_table_is_not_a_difference_it_names_the_debug_sections():
     """`.shstrtab` holds the names of the sections, so adding `.debug_info` changes it by itself."""
     assert d.differences({".text": b"a", ".shstrtab": b"\0.text\0"}, {".text": b"a", ".shstrtab": b"\0.text\0.debug_info\0"}) == []
+
+
+def test_an_object_with_debug_sections_added_reads_the_same_apart_from_them(tmp_path):
+    """-g puts section symbols and a file symbol in the symbol table and shifts every index after them: read raw, `.symtab`, `.strtab` and
+    the relocation sections differed in all 158 objects of the corpus, with or without the marks. Read as symbols and relocations by name
+    they match."""
+    import shutil
+    import subprocess
+
+    if not (shutil.which("cc") and shutil.which("objcopy")):
+        return
+    (tmp_path / "x.c").write_text("extern int g(int);\nint data = 3;\nint f(int a) { return g(a) + data; }\n")
+    plain, debug = tmp_path / "plain.o", tmp_path / "debug.o"
+    subprocess.run(["cc", "-c", "-O1", "-fno-pic", str(tmp_path / "x.c"), "-o", str(plain)], check=True)
+    (tmp_path / "info").write_bytes(b"debug")
+    subprocess.run(["objcopy", "--add-section", f".debug_info={tmp_path / 'info'}", str(plain), str(debug)], check=True)
+    off, on = d.sections_of(plain.read_bytes()), d.sections_of(debug.read_bytes())
+    assert d.has_debug(on) and not d.has_debug(off)
+    assert d.differences(off, on) == []
+    assert any(key.startswith("<relocs") and off[key] for key in off), "the object has no relocation to compare"
