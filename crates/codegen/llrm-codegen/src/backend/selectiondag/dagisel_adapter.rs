@@ -1211,6 +1211,9 @@ impl AddrDag for DagisAdapter<'_> {
                     flags: 0,
                 })
             }
+            NodeData::JumpTable(index) => {
+                Some(Wrapped { symbol: Symbol { kind: SymbolKind::JumpTable, id: index }, offset: 0, flags: 0 })
+            }
             _ => None,
         }
     }
@@ -1293,6 +1296,7 @@ impl AddrDag for DagisAdapter<'_> {
             }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
             SymbolKind::ConstantPool { .. } => (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id, disp)),
+            SymbolKind::JumpTable => (ISD::TargetJumpTable, NodeData::JumpTable(symbol.id)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))
