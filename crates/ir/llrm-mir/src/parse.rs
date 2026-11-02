@@ -438,6 +438,18 @@ impl Parser {
         Linkage::External
     }
 
+    /// `parseOptionalVisibility` (LLParser.cpp#L2288), which stands after the
+    /// linkage: `default`, `hidden` or `protected`. DEVIATE: read and dropped,
+    /// nothing reads a symbol's visibility yet; exit: the first object writer
+    /// that exports by it.
+    fn visibility(&mut self) {
+        for word in ["default", "hidden", "protected"] {
+            if self.eat_word(word) {
+                return;
+            }
+        }
+    }
+
     fn unnamed_addr(&mut self) -> UnnamedAddr {
         if self.eat_word("unnamed_addr") {
             UnnamedAddr::Global
@@ -487,6 +499,7 @@ impl Parser {
         self.expect_punct('=')?;
         let id = self.globals[&name];
         let linkage = self.linkage();
+        self.visibility();
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
         let externally_initialized = self.eat_word("externally_initialized");
@@ -569,6 +582,7 @@ impl Parser {
             early.push((kind, self.metadata_id(number)));
         }
         let linkage = self.linkage();
+        self.visibility();
         let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
         let returns = self.ty()?;

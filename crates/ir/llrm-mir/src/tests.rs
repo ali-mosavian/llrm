@@ -1350,3 +1350,17 @@ fn a_packed_named_struct_initializer_prints_packed() {
     let printed = round(text);
     assert!(printed.contains("global %s <{ i8 1, i16 2 }>"), "{printed}");
 }
+
+/// `@x = hidden global i32 0` and `define hidden void @f()` were refused
+/// ("expected `global` or `constant`, found `hidden`"): clang writes the
+/// visibility after the linkage, and the wasm sweep stopped on its IR.
+#[test]
+fn a_visibility_after_the_linkage_is_read() {
+    let text = format!(
+        "{DATALAYOUT}@x = hidden global i32 0\n@y = internal protected constant i32 1\n@z = default global i32 2\n\
+         define hidden void @f() {{\n  ret void\n}}\ndefine weak protected void @g() {{\n  ret void\n}}\n\
+         declare hidden void @h()\n"
+    );
+    let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    assert_eq!(module.globals.len(), 6);
+}
