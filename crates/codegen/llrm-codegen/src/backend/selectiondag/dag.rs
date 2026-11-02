@@ -547,12 +547,16 @@ impl SelectionDAG {
         work.push(node);
         while let Some(n) = work.pop() {
             // Chain and glue nodes stay: the builder keeps handles on some
-            // (the pin protects them with `HandleSDNode`).
+            // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
+            // token factor goes like any node (`RemoveDeadNodes`): kept, it
+            // stays a user of its operands, `visitTokenFactor` cannot merge
+            // them and the chains nest past `GatherAllAliases` depth 18.
             if n == self.root.node
                 || n == self.entry.node
                 || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
-                || self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE)
+                || (self.nodes[n as usize].opcode != ISD::TokenFactor
+                    && self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE))
             {
                 continue;
             }
