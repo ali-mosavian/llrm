@@ -40,6 +40,8 @@ pub enum MemObject {
     Global(String),
     /// A frame object.
     Slot(u32),
+    /// The function's constant pool: memory nothing writes.
+    ConstantPool,
 }
 
 /// What a load or store reaches (`MachineMemOperand`): its object and the byte
@@ -67,7 +69,7 @@ impl MemOperand {
     ) -> bool {
         fn object(memory: &MemOperand) -> Option<Object<&str>> {
             match &memory.object {
-                MemObject::Unknown => None,
+                MemObject::Unknown | MemObject::ConstantPool => None,
                 MemObject::Global(name) => Some(Object::Global(name.as_str())),
                 MemObject::Slot(slot) => Some(Object::Frame { id: i64::from(*slot), fixed: false }),
             }

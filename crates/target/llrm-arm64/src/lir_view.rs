@@ -212,6 +212,10 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                     | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
                     | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
             );
+            inst.invariant_load = matches!(
+                &op,
+                Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
+            );
             inst.cheap_as_move = matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }

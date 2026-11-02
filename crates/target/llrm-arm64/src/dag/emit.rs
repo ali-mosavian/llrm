@@ -1228,6 +1228,7 @@ impl Emitter<'_> {
             (NodeData::Global { symbol, .. }, ISD::TargetGlobalAddress) => {
                 Some(MemObject::Global(self.globals.get(*symbol)?.name.clone()))
             }
+            (NodeData::PoolIndex(..), ISD::TargetConstantPool) => Some(MemObject::ConstantPool),
             (NodeData::FrameIndex(index), ISD::TargetFrameIndex | ISD::FrameIndex) if *index >= 0 => {
                 Some(MemObject::Slot(*index as u32))
             }

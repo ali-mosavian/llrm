@@ -120,7 +120,7 @@ impl Policy<Wrapped> for Arm64 {
         let _ = at;
         let one = &insns[index];
         let inst = &one.inst;
-        inst.rematerializable
+        (inst.rematerializable || (inst.may_load && inst.invariant_load))
             // `CheapInstr && CreatesCopy`: a constant a phi takes would need a
             // copy.
             && !(inst.cheap_as_move && one.defs.iter().any(|value| facts.copied.contains(value)))
@@ -131,7 +131,7 @@ impl Policy<Wrapped> for Arm64 {
             && !(inst.call
                 || inst.terminator
                 || inst.barrier
-                || inst.may_load
+                || (inst.may_load && !inst.invariant_load)
                 || inst.may_store
                 || inst.side_effects
                 || inst.sets_flags
@@ -245,5 +245,33 @@ mod tests {
         for arm in [2, 3] {
             assert!(function.blocks[arm].insts.iter().any(|inst| inst.operands == vec![Operand::Use(made)]), "{arm}");
         }
+    }
+
+    /// A load of the constant pool in a loop stayed in it (`ldr d17, [x10,
+    /// lCPI@PAGEOFF]` every trip) where the pin loads it once before the loop
+    /// (`isDereferenceableInvariantLoad`): a load of memory nothing writes
+    /// moves with its page; one of other memory does not.
+    #[test]
+    fn a_load_of_the_constant_pool_moves_out_of_the_loop_and_other_loads_stay() {
+        let load = |dst: u32, invariant: bool| {
+            let mut inst = Inst::new(
+                Kind::Op("Load"),
+                vec![Operand::Def(Reg::Virt(dst)), Operand::Use(Reg::Virt(10)), Operand::Imm(3)],
+            );
+            inst.may_load = true;
+            inst.invariant_load = invariant;
+            inst
+        };
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut function = MFunction::<()>::new("f");
+        function.blocks = vec![
+            block(0, vec![page(10, "lCPI")]),
+            block(1, vec![load(11, true), load(12, false), back]),
+            block(2, vec![]),
+        ];
+        assert!(hoist(&mut function));
+        let loads = |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.may_load).count();
+        assert_eq!((loads(0), loads(1)), (1, 1), "{function:?}");
     }
 }
