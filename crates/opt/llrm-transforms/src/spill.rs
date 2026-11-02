@@ -156,15 +156,20 @@ pub struct Room {
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
+        Self::of_machine(outer.target())
+    }
+
+    /// What `target` holds.
+    pub fn of_machine(target: &dyn llrm_mir::target::Machine) -> Room {
         Room {
-            registers: outer.target().registers(),
-            across_call: outer.target().call_registers(),
-            far_access: outer.target().far_access_registers(),
-            segments: outer.target().segment_registers(),
-            addresses: outer.target().address_registers(),
-            two_address: outer.target().two_address(),
-            spaces: outer.target().spaces(),
-            index_scales: index_scales(&outer.target().address_forms()),
+            registers: target.registers(),
+            across_call: target.call_registers(),
+            far_access: target.far_access_registers(),
+            segments: target.segment_registers(),
+            addresses: target.address_registers(),
+            two_address: target.two_address(),
+            spaces: target.spaces(),
+            index_scales: index_scales(&target.address_forms()),
         }
     }
 

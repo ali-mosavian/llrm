@@ -1414,3 +1414,35 @@ fn an_i16_multiply_by_seven_is_a_chain_at_m16_not_an_imul() {
         .collect();
     assert!(!names.iter().any(|n| n.starts_with("imul") || n == "mul"), "an imul is left: {names:?}");
 }
+
+const I16_MULTIPLY_WITH_FULL_REGISTERS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d, i16 %e, i16 %x) {
+entry:
+  %m = mul i16 %x, 7
+  %s1 = add i16 %m, %a
+  %s2 = add i16 %s1, %b
+  %s3 = add i16 %s2, %c
+  %s4 = add i16 %s3, %d
+  %s5 = add i16 %s4, %e
+  ret i16 %s5
+}
+";
+
+/// recgcd -O2 (`i*7 + 3`, `i*5 + 2` beside an `i32` total) was 301 memory
+/// operands with `imul` and 901 with the chain: its `mov bx,si; shl bx,2`
+/// temporary was a register the loop did not have, and the total spilled in
+/// every iteration. Where the spill model has the registers full at a
+/// multiply, the chain's one extra register is a spill and the `imul` stays.
+#[test]
+fn an_i16_multiply_keeps_its_imul_where_the_chain_would_spill() {
+    let module = crate::testing::module(I16_MULTIPLY_WITH_FULL_REGISTERS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(names.iter().any(|n| n.starts_with("imul")), "the chain was taken at full registers: {names:?}");
+}

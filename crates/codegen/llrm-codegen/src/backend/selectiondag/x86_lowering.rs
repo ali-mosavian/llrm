@@ -1944,6 +1944,16 @@ fn combine_mul(
         return None;
     }
     let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
+    // DEVIATE SD441: the pin promotes an `i16` multiply to `i32`, where its
+    // cases are `lea`s of a scaled index; real mode has none, so the chain is
+    // the target's priced one (`priced_chain`, SD446), not the pin's cases,
+    // and not where it would spill (`mul_scratch`).
+    if vt == EVT::I16 {
+        if dag.node(node).flags.0 & SDNodeFlags::NO_MUL_CHAIN.0 != 0 {
+            return None;
+        }
+        return profile.and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
+    }
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {

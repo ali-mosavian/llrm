@@ -139,31 +139,38 @@ fn multiply_by_other_constants_is_leas_shifts_and_adds() {
 
 /// A 486 `imul r16,r16,imm` is 13 clocks: `histo` at -O2 priced `x*7+3` as
 /// one (+26% clocks against main's `shl/sub`). The pin leaves an `i16`
-/// multiply alone; a target whose multiply is dear (`i16_mul_chains`) gets the
-/// `i32` chains (7 is `(x << 3) - x`), and `minsize` keeps the `imul`.
+/// multiply alone; where `i16` is not promoted (`i16_mul_chains`) the chain is
+/// the target's priced one (SD446: the clocks it saves pay for its bytes at the
+/// block's frequency), never at `minsize`, and not for a multiply whose chain
+/// would spill (`NO_MUL_CHAIN`, `mul_scratch`).
 #[test]
-fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
-    let shape = |c: u128, chains: bool, min_size: bool| {
+fn an_i16_multiply_is_the_priced_chain_where_the_target_asks_and_an_imul_otherwise() {
+    use super::super::dag::SDNodeFlags;
+    use super::super::x86_lowering::MulPricing;
+    let m16 = crate::backend::cpu::tuned_for(&llrm_x86_m16::M16, "486", false).expect("a cpu");
+    let hot =
+        || MulPricing { cpu: m16, arch: &llrm_x86_m16::M16, freq: 8.0, milliclocks_per_byte: 500, by_clocks: false };
+    let product = |c: u128, kept: bool, chains: bool, min_size: bool, priced: bool| {
         let mut dag = dag();
         let x = load(&mut dag, EVT::I16, 1);
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
-        dag.set_root(product);
-        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains, profile: None };
-        DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
-        dag.opcode(dag.get_root())
-    };
-    // An `i16` has no `lea` pattern for `MUL_IMM`: a chain holding one still
-    // ends in an `imul` (recsum c -O2: `x*11` was `imul 5; add; add`).
-    let holds = |c: u128, op: ISD| {
-        let mut dag = dag();
-        let x = load(&mut dag, EVT::I16, 1);
-        let k = dag.get_constant(c, EVT::I16);
-        let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
+        if kept {
+            dag.add_flags(product, SDNodeFlags::NO_MUL_CHAIN);
+        }
         dag.set_root(product);
         let mut lowering =
-            X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: true, profile: None };
+            X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains, profile: priced.then(hot) };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
+        dag
+    };
+    let shape = |c: u128, kept: bool, chains: bool, min_size: bool, priced: bool| {
+        let dag = product(c, kept, chains, min_size, priced);
+        dag.opcode(dag.get_root())
+    };
+    // An `i16` has no `lea` pattern for `MUL_IMM`: a chain never holds one.
+    let holds = |c: u128, op: ISD| {
+        let dag = product(c, false, true, false, true);
         let mut todo = vec![dag.get_root()];
         while let Some(value) = todo.pop() {
             if dag.opcode(value) == op {
@@ -178,11 +185,13 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         assert!(!holds(c, ISD::Mul), "x*{c} kept a Mul");
     }
     for c in [7, 10, 12, 24, 3, 5, 9] {
-        assert_ne!(shape(c, true, false), ISD::Mul, "x*{c} stayed an imul");
-        assert_eq!(shape(c, false, false), ISD::Mul, "x*{c} left the default");
-        assert_eq!(shape(c, true, true), ISD::Mul, "x*{c} grew a minsize body");
+        assert_ne!(shape(c, false, true, false, true), ISD::Mul, "x*{c} stayed an imul");
+        assert_eq!(shape(c, false, false, false, true), ISD::Mul, "x*{c} left the default");
+        assert_eq!(shape(c, false, true, true, true), ISD::Mul, "x*{c} grew a minsize body");
+        assert_eq!(shape(c, false, true, false, false), ISD::Mul, "x*{c} had no price");
+        assert_eq!(shape(c, true, true, false, true), ISD::Mul, "x*{c} spilled for its chain");
     }
-    assert_eq!(shape(7, true, false), ISD::Sub);
+    assert_eq!(shape(7, false, true, false, true), ISD::Sub);
 }
 
 /// An `imul` by 43 is 26 clocks on a 486 at m16 where a chain is 16: the pin's
