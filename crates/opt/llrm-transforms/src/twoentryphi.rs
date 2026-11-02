@@ -35,6 +35,8 @@
 //!   clocks, x_crc32 1179 -> 175 B at 1.58x clocks (numbered trade row; exit
 //!   2026-11-20: price the loop-carried arm in the cost model so crc keeps the
 //!   select where the clocks pay). Owner llrm-target-x86-m32.
+//!   A boolean `and`/`or` select (`select x, y, false`) is no branch and is not
+//!   counted: the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -52,11 +54,11 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
-use llrm_mir::instructioncost::instruction_cost;
+use llrm_mir::instructioncost::{instruction_cost, select_cost, select_logic};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::tti::{CmpSel, Cost, CostKind, Tti, Ty};
+use llrm_mir::tti::{Cost, CostKind, Tti};
 
 use crate::edges;
 
@@ -346,10 +348,22 @@ pub fn folded(
             .fold(
                 Cost::FREE,
                 |all, &phi| {
-                    let ty = Ty::of(&context.types, function.instruction(phi).ty);
-                    all + ty.map_or(Cost::INVALID, |ty| {
-                        spec.tti.cmp_sel_cost(CmpSel::Select, ty, crate::speculate::cost_kind(function))
-                    })
+                    let ty = function.instruction(phi).ty;
+                    let arm = |from| arms(function, phi).into_iter().find(|&(_, one)| one == from).expect("an arm").0;
+                    let (on_true, on_false) = (arm(found.if_true), arm(found.if_false));
+                    // A boolean `and`/`or` is no branch.
+                    if select_logic(context, ty, on_true, on_false).is_some() {
+                        return all;
+                    }
+                    all + select_cost(
+                        context,
+                        spec.tti,
+                        ty,
+                        if_cond,
+                        on_true,
+                        on_false,
+                        crate::speculate::cost_kind(function),
+                    )
                 },
             );
         if (cost + selects).value > THRESHOLD * Cost::BASIC.value || !(cost + selects).valid {
