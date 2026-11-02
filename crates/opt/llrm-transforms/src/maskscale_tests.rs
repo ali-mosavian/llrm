@@ -249,7 +249,8 @@ done:
 /// steps 1 and 3, an odd start. One scaled counter, the same sum.
 #[test]
 fn narrow_counters_of_any_width_scale_and_step_merge() {
-    for (bits, shift, start, step, trips) in [(3, 4, 5, 1, 20), (5, 3, 9, 3, 33), (8, 7, 200, 1, 90), (6, 1, 1, 5, 40)] {
+    for (bits, shift, start, step, trips) in [(3, 4, 5, 1, 20), (5, 3, 9, 3, 33), (8, 7, 200, 1, 90), (6, 1, 1, 5, 40)]
+    {
         let (before, text) = m16(&narrow(bits, "zext", shift, start, step, trips, ""));
         agree(&before, &text);
         assert!(!text.contains(&format!("phi i{bits} ")), "{bits} {shift}: {text}");
@@ -274,7 +275,8 @@ fn a_second_use_of_the_narrow_counter_keeps_both() {
 }
 
 /// A trip counter that would not reach the scaled exit on the same trip
-/// (here the narrow counter's period is shorter than the trip count) keeps both.
+/// (here the narrow counter's period is shorter than the trip count) keeps
+/// both.
 #[test]
 fn a_trip_count_past_the_narrow_period_keeps_both() {
     let (before, text) = m16(&narrow(3, "zext", 13, 1, 1, 600, ""));

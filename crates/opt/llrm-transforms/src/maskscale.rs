@@ -39,8 +39,8 @@
 //!
 //! A narrow counter that `lsr` made of the mask (`zext i6 p to i16`, `shl 7`)
 //! beside the wide trip counter that tests the exit is merged the same way:
-//! one counter `p' = 2^7 * p` of the wide type, read through `and (2^6-1) * 2^7`,
-//! tests the exit at the scaled trip count. The trip counter is dropped.
+//! one counter `p' = 2^7 * p` of the wide type, read through `and (2^6-1) *
+//! 2^7`, tests the exit at the scaled trip count. The trip counter is dropped.
 //! Cost: for each narrow counter, one scan of its header's phis for the trip
 //! counter and of the counters' users (O(phis + uses) per loop, no re-solve).
 //!
@@ -433,7 +433,10 @@ fn merge(
     function.set_opcode(found.zext, Opcode::Binary(BinaryOp::And));
     function.set_operands(
         found.zext,
-        vec![Operand::Value(function.instruction(found.phi).result.expect("a phi")), int(context, found.wide, mask, found.width)],
+        vec![
+            Operand::Value(function.instruction(found.phi).result.expect("a phi")),
+            int(context, found.wide, mask, found.width),
+        ],
     );
     let read = function.instruction(found.zext).result.expect("an and");
     let shifted = function.instruction(found.shl).result.expect("a shl");
