@@ -296,6 +296,9 @@ pub struct Ranges {
     pub location: Vec<Located>,
     pub flow: Vec<Located>,
     pub notes: Vec<(u32, i64)>,
+    /// Every instruction's slot position and `Insn::id`, in code order: what
+    /// the writer joins on, since it knows no slot.
+    pub insns: Vec<(i64, u64)>,
 }
 
 /// The ranges of every variable over `edited` (see `Ranges`). `home` is the
@@ -325,6 +328,8 @@ pub fn ranges_of(
             notes.push((note, at(one.id())));
         }
     }
+    let insns: Vec<(i64, u64)> =
+        edited.blocks.iter().flat_map(|block| block.insns.iter()).map(|one| (at(one.id()), one.id())).collect();
     let end = lis.indexes.get_last_index().get_index();
     if llrm_support::env_flag!("LLRM_LDV_DEBUG") {
         eprintln!("LDVTABLE\t{}\t{:?}\tpins={:?}\tparents={:?}", edited.name, table, edited.pins, parents);
@@ -359,7 +364,7 @@ pub fn ranges_of(
         &flow,
         &crate::backend::livedebugvalues::Flow { stack_pointer: RegId::None, params: &params },
     );
-    Ranges { location, flow, notes }
+    Ranges { location, flow, notes, insns }
 }
 
 /// Prints, for `LLRM_LDV_DUMP`, the notes' slot positions (`LDVNOTE`) and the
@@ -679,5 +684,9 @@ mod tests {
         assert!(found.location.iter().any(|one| one.variable == 9 && one.at == register), "{:?}", found.location);
         assert!(found.flow.iter().any(|one| one.variable == 9 && one.at == register), "{:?}", found.flow);
         assert_eq!(found.notes.len(), 1);
+        let ids: Vec<u64> = found.insns.iter().map(|&(_, id)| id).collect();
+        assert_eq!(ids, body.blocks[0].insns.iter().map(|one| one.id()).collect::<Vec<_>>());
+        assert!(found.insns.windows(2).all(|pair| pair[0].0 < pair[1].0), "{:?}", found.insns);
+        assert_eq!(found.notes[0].1, found.insns[1].0, "a note stands at its instruction's slot");
     }
 }
