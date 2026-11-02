@@ -247,9 +247,10 @@ fn dag_select(
     name: &str,
     layout: &llrm_mir::datalayout::DataLayout,
     platform: Platform,
+    lines: bool,
 ) -> Result<crate::mfunc::MFunc, String> {
     let blocks = crate::dag::function::select_function_in(module, name, layout, platform)?;
-    crate::dag::emit::emit(name, &blocks)
+    crate::dag::emit::emit(name, &blocks, lines)
 }
 
 /// Every defined function of `program`'s one module, selected, allocated and
@@ -273,10 +274,10 @@ pub fn functions_with(
         let name = global.name.owned().ok_or("an unnamed function")?;
         let mut machine = match isel_mode() {
             IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
-            IselMode::Dag => dag_select(module, &name, &program.layout, platform),
+            IselMode::Dag => dag_select(module, &name, &program.layout, platform, lines),
             // A refusal of the DAG path falls back to the hand selector,
             // counted.
-            IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
+            IselMode::Shadow => dag_select(module, &name, &program.layout, platform, lines).or_else(|why| {
                 eprintln!("isel-shadow: @{name}: {why}");
                 crate::isel::selected(module, id, &program.layout, platform, lines)
             }),
