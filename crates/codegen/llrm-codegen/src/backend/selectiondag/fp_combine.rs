@@ -616,7 +616,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         None
     }
 
-    /// `visitSINT_TO_FP` and `visitFP_TO_SINT` of a constant.
+    /// `visitSINT_TO_FP` of a constant or a compare, and `visitFP_TO_SINT` of a
+    /// constant.
     pub(super) fn visit_fp_int_convert(
         &mut self,
         node: SDValue,
@@ -625,9 +626,29 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(node);
         if self.dag.opcode(node) == ISD::SIntToFp {
             let width = self.dag.value_type(n0).size_in_bits();
-            let bits = self.int_const(n0).filter(|_| width <= 64)?;
-            let value = ((bits << (128 - width)) as i128 >> (128 - width)) as i64;
-            return Some(self.dag.get_constant_fp(fp_value::from_signed(vt, value)?, vt));
+            if let Some(bits) = self.int_const(n0).filter(|_| width <= 64) {
+                let value = ((bits << (128 - width)) as i128 >> (128 - width)) as i64;
+                return Some(self.dag.get_constant_fp(fp_value::from_signed(vt, value)?, vt));
+            }
+            // fold (sint_to_fp (setcc x, y, cc)) -> (select (setcc x, y, cc),
+            // -1.0, 0.0) and the zero extended one with 1.0: a
+            // compare stays a test and a constant pick, where the
+            // conversion stored the bit to memory for `fild`.
+            let settled = !self.legal_operations() || self.fp_op_legal_or_custom(ISD::ConstantFP, vt);
+            let (test, negative) = match self.dag.opcode(n0) {
+                ISD::SetCC if self.dag.value_type(n0) == EVT::I1 => (n0, true),
+                ISD::ZeroExtend if self.dag.opcode(self.dag.operand(n0, 0)) == ISD::SetCC => {
+                    (self.dag.operand(n0, 0), false)
+                }
+                _ => return None,
+            };
+            if !settled {
+                return None;
+            }
+            let one = fp_value::from_integer(vt, 1)?;
+            let on_true = self.dag.get_constant_fp(if negative { fp_value::negate(vt, one)? } else { one }, vt);
+            let zero = self.fp_constant(0, vt)?;
+            return Some(self.dag.get_select(vt, test, on_true, zero));
         }
         let value = fp_value::to_signed(self.dag.value_type(n0), self.fp_bits(n0)?, vt.size_in_bits())?;
         Some(self.dag.get_constant(value as u128 & super::fold::mask(vt.size_in_bits()), vt))

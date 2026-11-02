@@ -231,3 +231,23 @@ fn a_divide_by_a_constant_is_a_multiply_when_the_reciprocal_is_exact_or_arcp() {
     assert_eq!(dag.opcode(root), ISD::FMul);
     assert_eq!(bits(&dag, dag.operand(root, 1)), Some((1.0f64 / 3.0).to_bits().into()));
 }
+
+/// `visitSINT_TO_FP` had no setcc fold: `sitofp i1 (fcmp)` was stored to memory
+/// and `fild`, 15 bytes of `seta/neg/movsx/mov/fiadd` where the pin picks -1.0
+/// or 0.0 (floats bq16 -Os, +2 B over main).
+#[test]
+fn a_converted_compare_is_a_pick_of_minus_one_or_zero() {
+    let mut dag = dag();
+    let (a, b) = (load(&mut dag, F64, 1), load(&mut dag, F64, 2));
+    let test = dag.get_setcc(EVT::I1, a, b, CondCode::SetGt);
+    let conv = dag.get_node(ISD::SIntToFp, F64, &[test]);
+    let root = combined(&mut dag, conv);
+    assert_eq!((dag.opcode(root), dag.operand(root, 0)), (ISD::Select, test));
+    assert_eq!(bits(&dag, dag.operand(root, 1)), Some((-1.0f64).to_bits().into()));
+    assert_eq!(bits(&dag, dag.operand(root, 2)), Some(0.0f64.to_bits().into()));
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[test]);
+    let conv = dag.get_node(ISD::SIntToFp, F64, &[wide]);
+    let root = combined(&mut dag, conv);
+    assert_eq!((dag.opcode(root), dag.operand(root, 0)), (ISD::Select, test));
+    assert_eq!(bits(&dag, dag.operand(root, 1)), Some(1.0f64.to_bits().into()));
+}
