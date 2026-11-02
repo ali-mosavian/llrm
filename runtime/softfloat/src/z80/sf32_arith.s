@@ -3,8 +3,9 @@
 ; address, popped by the caller; result low word in DE... as a long: HL low, DE high is the argument layout, and the
 ; result comes back as a long: low word in DE, high word in HL. Changes A BC DE HL IY and the flags; keeps IX and SP.
 ; Every NaN result is the quiet NaN 0x7fc00000. The work is done in a 24-byte frame addressed through IY:
-;   0..3 a, then the mantissa result   4..7 b   8 ea  9 eb  10 sign of a / of the result  11 sign of b  12 b's sign mask / na
-;   13 sticky  14..19 product or remainder  20 nb  22..23 spare
+;   0..3 a   4..7 b   8 ea  9 eb  10 sign of a / of the result  11 sign of b  12 b's sign mask / na
+;   13 quotient group count  14..15 product low bytes  20 nb  21 operation  22..23 mul/div exponent
+; Results are rounded from a 32-bit block in d:e:h:l (pack32): leading one at bit 31, l the guard byte, sticky in its bit 0.
 	.module sf32_arith
 	.area _CODE
 
@@ -105,218 +106,128 @@ swap:	ld	a,0(iy)
 	ld	8(iy),c
 	ld	9(iy),a
 noswap:
-	ld	a,3(iy)		; sign and mantissa of a, hidden one, three guard bits
+	ld	a,3(iy)		; signs: a's is the result's
 	and	a,#0x80
 	ld	10(iy),a
-	ld	a,2(iy)
-	and	a,#0x7f
-	ld	2(iy),a
-	ld	a,8(iy)
-	or	a,a
-	jr	nz,4$
-	ld	8(iy),#1
-	jr	5$
-4$:	set	7,2(iy)
-5$:	ld	3(iy),#0
 	ld	a,7(iy)
 	and	a,#0x80
 	ld	11(iy),a
-	ld	a,6(iy)
-	and	a,#0x7f
-	ld	6(iy),a
+	ld	c,8(iy)		; ea in c; a's block 2(iy):1(iy):0(iy) with the hidden one, guard byte 0
+	ld	a,c
+	or	a,a
+	jr	nz,4$
+	inc	c
+	jr	5$
+4$:	set	7,2(iy)
+5$:	ld	d,6(iy)		; b's block in d:e:h:l
+	ld	e,5(iy)
+	ld	h,4(iy)
+	ld	l,#0
 	ld	a,9(iy)
 	or	a,a
 	jr	nz,6$
-	ld	9(iy),#1
+	inc	a
 	jr	7$
-6$:	set	7,6(iy)
-7$:	ld	7(iy),#0
-	ld	b,#3
-8$:	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
-	sla	4(iy)
-	rl	5(iy)
-	rl	6(iy)
-	rl	7(iy)
-	djnz	8$
-	ld	a,8(iy)		; align b: shift right by ea - eb, lost bits folded into bit 0
-	sub	a,9(iy)
+6$:	set	7,d
+7$:	neg			; align b: shift right by ea - eb, lost bits folded into bit 0
+	add	a,c
 	jr	z,aligned
-	ld	b,a
-	ld	13(iy),#0
-	cp	a,#32
-	jr	c,9$
-	ld	b,#32
+	cp	a,#26
+	jr	c,8$
+	ld	de,#0		; b is all sticky
+	ld	hl,#1
+	jr	aligned
+8$:	ld	b,a
 9$:	ld	a,b
 	cp	a,#8
 	jr	c,11$
-	ld	a,13(iy)
-	or	a,4(iy)
-	ld	13(iy),a
-	ld	a,5(iy)
-	ld	4(iy),a
-	ld	a,6(iy)
-	ld	5(iy),a
-	ld	a,7(iy)
-	ld	6(iy),a
-	ld	7(iy),#0
+	ld	a,l
+	or	a,a
+	ld	l,h
+	jr	z,10$
+	set	0,l
+10$:	ld	h,e
+	ld	e,d
+	ld	d,#0
 	ld	a,b
 	sub	a,#8
 	ld	b,a
 	jr	9$
-11$:	ld	a,b
-	or	a,a
-	jr	z,13$
-12$:	srl	7(iy)
-	rr	6(iy)
-	rr	5(iy)
-	rr	4(iy)
-	jr	nc,14$
-	set	0,13(iy)
-14$:	djnz	12$
-13$:	ld	a,13(iy)		; the byte moves left whole bytes in it
-	or	a,a
+11$:	or	a,a
 	jr	z,aligned
-	set	0,4(iy)
+12$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,13$
+	set	0,l
+13$:	djnz	12$
 aligned:
 	ld	a,10(iy)
 	xor	a,11(iy)
 	jr	nz,dosub
-	ld	a,0(iy)
-	add	a,4(iy)
-	ld	0(iy),a
-	ld	a,1(iy)
-	adc	a,5(iy)
-	ld	1(iy),a
-	ld	a,2(iy)
-	adc	a,6(iy)
-	ld	2(iy),a
-	ld	a,3(iy)
-	adc	a,7(iy)
-	ld	3(iy),a
-	bit	3,3(iy)
-	jr	z,pk
-	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,15$
-	set	0,0(iy)
-15$:	inc	8(iy)
+	ld	a,h
+	add	a,0(iy)
+	ld	h,a
+	ld	a,e
+	adc	a,1(iy)
+	ld	e,a
+	ld	a,d
+	adc	a,2(iy)
+	ld	d,a
+	jr	nc,pk
+	rr	d		; carry out: one right, the lost bit joins the sticky bit
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,14$
+	set	0,l
+14$:	inc	c
 	jr	pk
-dosub:	ld	a,0(iy)
-	sub	a,4(iy)
-	ld	0(iy),a
+dosub:	xor	a,a		; a's block minus b's: |a| >= |b|
+	sub	a,l
+	ld	l,a
+	ld	a,0(iy)
+	sbc	a,h
+	ld	h,a
 	ld	a,1(iy)
-	sbc	a,5(iy)
-	ld	1(iy),a
+	sbc	a,e
+	ld	e,a
 	ld	a,2(iy)
-	sbc	a,6(iy)
-	ld	2(iy),a
-	ld	a,3(iy)
-	sbc	a,7(iy)
-	ld	3(iy),a
-	or	a,2(iy)
-	or	a,1(iy)
-	or	a,0(iy)
+	sbc	a,d
+	ld	d,a
+	or	a,e
+	or	a,h
+	or	a,l
 	jr	nz,16$
-	ld	hl,#0		; exact cancellation is +0
-	ld	d,h
-	ld	e,l
+	ld	h,a		; exact cancellation is +0
+	ld	l,a
 	jp	done
-16$:	bit	2,3(iy)		; normalize: the leading one back to bit 26, unless the exponent runs out
+16$:	ld	a,d		; normalize: whole bytes, then bits, while the exponent allows
+	or	a,a
+	jr	nz,17$
+	ld	a,c
+	cp	a,#9
+	jr	c,17$
+	sub	a,#8
+	ld	c,a
+	ld	d,e
+	ld	e,h
+	ld	h,l
+	ld	l,#0
+	jr	16$
+17$:	bit	7,d
 	jr	nz,pk
-	ld	a,8(iy)
+	ld	a,c
 	cp	a,#2
 	jr	c,pk
-	dec	8(iy)
-	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
-	jr	16$
+	dec	c
+	add	hl,hl
+	rl	e
+	rl	d
+	jr	17$
 pk:	ld	b,#0
-	ld	c,8(iy)
-; round and pack: bc = exponent (signed), 0..3(iy) the 27-bit mantissa, 10(iy) the sign
-packbc:	bit	7,b
-	jr	nz,low
-	ld	a,b
-	or	a,a
-	jp	nz,inf
-	ld	a,c
-	cp	a,#255
-	jp	nc,inf
-	or	a,a
-	jr	nz,roundp
-low:	ld	hl,#1		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
-	or	a,a
-	sbc	hl,bc
-	ld	a,h
-	or	a,a
-	ld	b,#32
-	jr	nz,17$
-	ld	a,l
-	cp	a,#32
-	jr	nc,17$
-	ld	b,a
-17$:	ld	13(iy),#0
-18$:	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,19$
-	set	0,13(iy)
-19$:	djnz	18$
-	bit	0,13(iy)
-	jr	z,20$
-	set	0,0(iy)
-20$:	ld	bc,#1
-roundp:	ld	l,0(iy)		; the mantissa in de:hl
-	ld	h,1(iy)
-	ld	e,2(iy)
-	ld	d,3(iy)
-	ld	a,l
-	and	a,#7
-	ld	13(iy),a	; the three guard bits
-	srl	d
-	rr	e
-	rr	h
-	rr	l
-	srl	d
-	rr	e
-	rr	h
-	rr	l
-	srl	d
-	rr	e
-	rr	h
-	rr	l
-	ld	a,13(iy)
-	cp	a,#5
-	jr	nc,up
-	cp	a,#4
-	jr	nz,noup
-	bit	0,l
-	jr	z,noup
-up:	inc	hl
-	ld	a,h
-	or	a,l
-	jr	nz,noup
-	inc	de
-noup:	ld	a,c		; add (e - 1) << 23 and the sign
-	dec	a
-	ld	b,a
-	srl	b
-	and	a,#1
-	rrca
-	add	a,e
-	ld	e,a
-	ld	a,b
-	adc	a,d
-	or	a,10(iy)
-	ld	d,a
-	jp	done
+	jp	pack32
 ; round and pack: bc = exponent (signed) of bit 31 of the block d:e:h:l (l the guard byte, sticky in its bit 0), 10(iy) the sign
 pack32:	bit	7,b
 	jr	nz,low32
@@ -822,8 +733,7 @@ flent:	ld	iy,#-24
 	or	a,h
 	or	a,l
 	jp	z,retzero32
-	ld	bc,#153		; 127 + 26: the exponent when the leading one is at bit 26
-	ld	13(iy),#0
+	ld	bc,#158		; 127 + 31: the exponent when the leading one is at bit 31
 2$:	ld	a,d		; a zero top byte moves up whole
 	or	a,a
 	jr	nz,3$
@@ -834,38 +744,14 @@ flent:	ld	iy,#-24
 	ld	a,c
 	sub	a,#8
 	ld	c,a
-	jr	nc,2$
-	dec	b
 	jr	2$
-3$:	ld	a,d		; above bit 26: shift right, the lost bits folded into bit 0 at the end
-	and	a,#0xf8
-	jr	z,5$
-4$:	srl	d
-	rr	e
-	rr	h
-	rr	l
-	jr	nc,6$
-	set	0,13(iy)
-6$:	inc	bc
-	ld	a,d
-	and	a,#0xf8
-	jr	nz,4$
-	jr	7$
-5$:	bit	2,d		; below: shift left
-	jr	nz,7$
+3$:	bit	7,d
+	jp	nz,pack32
 	add	hl,hl
 	rl	e
 	rl	d
-	dec	bc
-	jr	5$
-7$:	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
-	bit	0,13(iy)
-	jp	z,packbc
-	set	0,0(iy)
-	jp	packbc
+	dec	c
+	jr	3$
 
 	.globl __fixsfsi
 __fixsfsi:
