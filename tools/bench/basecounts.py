@@ -70,6 +70,7 @@ JUDGE_FILES = (
     "crates/target/llrm-x86-m32/vsgcc/harness.py",
     "crates/target/llrm-x86-m32/vsgcc/clocks.py",
     "tools/sizes.py",
+    "crates/target/llrm-x86/bench/padding.py",
     "tools/bench/flatcount.py",
 )
 
