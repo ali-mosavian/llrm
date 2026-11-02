@@ -32,9 +32,11 @@
 //! `coalesceStackAccess` are translated, and `StackSlotColoring::
 //! RemoveDeadStores` in `spiller::_identities_dropped`.
 //!
-//! DEVIATE D-G: a spilled phi value is not read from its home cell
+//! DEVIATE D-G: an integer phi value is not read from its home cell
 //! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
 //! once over the edited function. Costs memory operands where a home held.
+//! An x87 value with a home (`Tables::homes`) is read from it, and its spill
+//! stores nothing.
 //!
 //! DEVIATE D-C: a spill slot is a `Frame` cell per spilled register (one for
 //! the siblings of an original, D-F2), shared
@@ -92,6 +94,9 @@ pub struct Tables {
     /// clone inherits (`cloneVirtualRegister`).
     pub parents: RefCell<HashMap<u32, u32>>,
     pub wide_reads: RefCell<HashMap<u32, Vec<(crate::liveness::slotindex::SlotIndex, usize)>>>,
+    /// The x87 values the program also holds in a cell it writes
+    /// (`storedhomes::held`), by value: a spill of one reads that cell.
+    pub homes: RefCell<HashMap<u32, crate::model::ir::Mem>>,
 }
 
 impl Tables {
@@ -692,7 +697,13 @@ impl InlineSpiller<'_> {
         old: &[Arc<Insn>],
     ) -> Option<Vec<u32>> {
         let bytes = self.tables.float_bytes.borrow().get(&reg).copied().unwrap_or(8);
-        let cell = self.frame.cell(self.key, bytes).ok()?;
+        // The cell the program holds the value in, as wide as the spill would
+        // round it to, is read in place of a slot of its own.
+        let home = self.tables.homes.borrow().get(&self.original).filter(|cell| cell.width == bytes).cloned();
+        let cell = match &home {
+            Some(cell) => cell.clone(),
+            None => self.frame.cell(self.key, bytes).ok()?,
+        };
         if let [one] = old
             && one.group.is_none()
             && !one.defines.contains(&reg)
@@ -718,14 +729,27 @@ impl InlineSpiller<'_> {
         if reads {
             let mut reload = (*crate::backend::floatassign::_spill_home(new, cell.clone())).clone();
             (reload.at, reload.covers) = beside(&old[0]);
-            reload.spill_reload = true;
+            // A read of the program's cell is a plain load, not a slot's.
+            reload.spill_reload = home.is_none();
             lis.insert_instr_before(block, Some(renamed[0].id()), Arc::new(reload));
             self.reloads += 1;
         }
-        if writes {
+        // The program stores the value to its cell next: the spill store would
+        // write the same bytes twice.
+        let restored = home.as_ref().is_some_and(|cell| {
+            let after = lis.block_insns(block);
+            let last = renamed[renamed.len() - 1].id();
+            after.iter().position(|one| one.id() == last).is_some_and(|at| {
+                let values: Vec<u32> = old[old.len() - 1].copy_of().map(|(_, from)| from).into_iter().collect();
+                !values.is_empty() && crate::backend::storedhomes::stored_again(&after[at + 1..], cell, values, reg)
+            })
+        });
+        if writes && !restored {
             let last = &old[old.len() - 1];
             let (at, _) = beside(last);
-            let store = crate::backend::floatassign::_stored(new, &cell, at);
+            let mut store = (*crate::backend::floatassign::_stored(new, &cell, at)).clone();
+            store.spill_store = home.is_none();
+            let store = Arc::new(store);
             lis.insert_instr_after(block, renamed[renamed.len() - 1].id(), store);
             self.stores += 1;
         }
@@ -1569,7 +1593,14 @@ impl Spiller for InlineSpiller<'_> {
             self.homed.entry(self.key).or_default().push((reg, range.clone()));
         }
         self.keys.insert(reg, self.key);
-        if let Some(width) = self.tables.widths.borrow().get(&reg).copied().filter(|width| *width > 0) {
+        // A value read from the cell the program holds it in needs no slot.
+        let homed = self
+            .tables
+            .homes
+            .borrow()
+            .get(&self.original)
+            .is_some_and(|cell| self.tables.float_bytes.borrow().get(&reg) == Some(&cell.width));
+        if let Some(width) = self.tables.widths.borrow().get(&reg).copied().filter(|width| *width > 0 && !homed) {
             if self.frame.cell(self.key, width).is_err() {
                 self.failed = true;
                 return;
@@ -2019,6 +2050,114 @@ mod tests {
         assert!(lis.get_interval(1).range.empty(), "the source went with it (cleared for the queue to drop)");
         drop(spiller);
         assert_eq!(frame.slots.len(), 1, "one home: {:?}", frame.slots);
+    }
+
+    /// fpbench -O3 (m32): a phi held in a cell the program writes
+    /// (`!llrm.home`) was spilled to a slot of its own, so each result was
+    /// stored twice, `fst slot; fstp cell`. `%2` is a copy of `%1`, which the
+    /// program stores to the cell next: the spill of `%2` reads the cell and
+    /// stores nothing.
+    #[test]
+    fn test_a_spilled_value_the_program_stores_to_its_home_is_read_from_the_home_and_stores_nothing() {
+        let home = Mem::new(Some(Addr::new(Space::Frame, -8)), 8);
+        let source = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 8));
+        let insns = vec![
+            x87(0, Operation::FloatLoad, "fld", vec![held(1)], vec![source], vec![1], vec![]),
+            x87(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            x87(2, Operation::FloatStore, "fstp", vec![Loc::Mem(home.clone())], vec![held(1)], vec![], vec![1]),
+            x87(3, Operation::FloatArith, "fmul", vec![held(3)], vec![held(2), held(2)], vec![3], vec![2]),
+            x87(4, Operation::FloatStore, "fstp", vec![Loc::Mem(home.clone())], vec![held(3)], vec![], vec![3]),
+        ];
+        let body =
+            LirBody::new("home", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=3 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
+        let tables = Rc::new(Tables::default());
+        for value in 1..=3 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
+            tables.float_bytes.borrow_mut().insert(value, 8);
+            tables.widths.borrow_mut().insert(value, 10);
+        }
+        tables.homes.borrow_mut().insert(2, home.clone());
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
+        let after = lis.block_insns(0);
+        let to_home = |one: &Arc<Insn>| {
+            one.what.as_ref().is_some_and(|what| what.dests.iter().any(|place| *place == Loc::Mem(home.clone())))
+        };
+        let from_home = |one: &Arc<Insn>| {
+            one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| *place == Loc::Mem(home.clone())))
+        };
+        assert_eq!(after.iter().filter(|one| to_home(one)).count(), 2, "only the program's stores: {after:?}");
+        assert!(after.iter().all(|one| !one.spill_store && !one.spill_reload), "no slot access: {after:?}");
+        assert_eq!(after.iter().filter(|one| from_home(one)).count(), 1, "one reload of the home: {after:?}");
+        drop(spiller);
+        assert!(frame.slots.is_empty(), "no slot of its own: {:?}", frame.slots);
+    }
+
+    /// The home is the original's (`Tables::homes` is keyed by the value the
+    /// body had): `%2`, a split piece of `%9`, is spilled and takes it.
+    #[test]
+    fn test_a_split_sibling_of_a_homed_value_takes_the_home_of_its_original() {
+        let home = Mem::new(Some(Addr::new(Space::Frame, -8)), 8);
+        let source = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 8));
+        let insns = vec![
+            x87(0, Operation::FloatLoad, "fld", vec![held(1)], vec![source], vec![1], vec![]),
+            x87(1, Operation::Move, "mov", vec![held(2)], vec![held(1)], vec![2], vec![1]),
+            x87(2, Operation::FloatStore, "fstp", vec![Loc::Mem(home.clone())], vec![held(1)], vec![], vec![1]),
+            x87(3, Operation::FloatArith, "fmul", vec![held(3)], vec![held(2), held(2)], vec![3], vec![2]),
+            x87(4, Operation::FloatStore, "fstp", vec![Loc::Mem(home.clone())], vec![held(3)], vec![], vec![3]),
+        ];
+        let body =
+            LirBody::new("home", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=3 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 9);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = super::super::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false };
+        let tables = Rc::new(Tables::default());
+        for value in 1..=3 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
+            tables.float_bytes.borrow_mut().insert(value, 8);
+            tables.widths.borrow_mut().insert(value, 10);
+        }
+        tables.homes.borrow_mut().insert(9, home.clone());
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
+        let after = lis.block_insns(0);
+        let to_home = |one: &Arc<Insn>| {
+            one.what.as_ref().is_some_and(|what| what.dests.iter().any(|place| *place == Loc::Mem(home.clone())))
+        };
+        let from_home = |one: &Arc<Insn>| {
+            one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| *place == Loc::Mem(home.clone())))
+        };
+        assert_eq!(after.iter().filter(|one| to_home(one)).count(), 2, "only the program's stores: {after:?}");
+        assert!(after.iter().all(|one| !one.spill_store && !one.spill_reload), "no slot access: {after:?}");
+        assert_eq!(after.iter().filter(|one| from_home(one)).count(), 1, "one reload of the home: {after:?}");
+        drop(spiller);
+        assert!(frame.slots.is_empty(), "no slot of its own: {:?}", frame.slots);
     }
 
     /// `%3` is a snippet of `%2`: a copy of it that one instruction reads. The

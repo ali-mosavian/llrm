@@ -500,7 +500,19 @@ impl Flags {
 
     /// The pipeline's options: the level's, then each `-f`.
     pub fn pipeline(&self) -> pipeline::Options {
+        self.pipeline_with(false)
+    }
+
+    /// `pipeline`, for a target whose floats live on the x87 stack
+    /// (`Tuning::x87_stack_slots`): `Homes` is on by default there, so a
+    /// spilled phi reads the cell the program holds it in;
+    /// `-fno-llrm-homes` turns it off.
+    pub fn pipeline_with(
+        &self,
+        x87_stack: bool,
+    ) -> pipeline::Options {
         let mut options = self.level.options();
+        options.stored_homes = x87_stack;
         for &(pass, on) in &self.passes {
             PASSES[pass].1(&mut options, on);
         }
@@ -569,7 +581,7 @@ impl Flags {
             }
             other => other,
         };
-        super::Options {
+        let mut options = super::Options {
             object_format,
             debug_format,
             pipeline: self.pipeline(),
@@ -582,7 +594,13 @@ impl Flags {
             float_store: self.float_store,
             code_segment: self.code_segment.clone(),
             ..super::Options::new(machine, arch, selection)
+        };
+        // Where floats live on the x87 stack, a spilled phi reads the cell the
+        // program holds it in (`Homes`).
+        if options.cpu().is_ok_and(|cpu| cpu.target().tti().is_some_and(|tti| tti.x87_stack_slots().is_some())) {
+            options.pipeline = self.pipeline_with(true);
         }
+        options
     }
 }
 

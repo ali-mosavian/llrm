@@ -1244,6 +1244,11 @@ pub fn decide_with_split(
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
     let floats = crate::backend::floatassign::_floating_values(body);
+    // The x87 values a cell the program writes still holds (`!llrm.home`): a
+    // spill of one reads the cell.
+    for (value, cell) in crate::backend::storedhomes::held(body, &|value, _| floats.contains(&value)) {
+        tables.homes.borrow_mut().insert(value, cell);
+    }
     // A value named only as a byte is of the GR8 class, whose order names the
     // high bytes too (X86RegisterInfo.td); the others hold their root.
     let widest = crate::backend::widths::_widest(body);
