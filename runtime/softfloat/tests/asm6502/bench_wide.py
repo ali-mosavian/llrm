@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """bench_wide.py [N] [OPS]: mean and worst cycles per call of the 6502 f32 add/sub/mul/div, ours (sim65, one run per vector with the
 driver's start index and count patched into the binary) and llvm-mos (compiler-rt softfloat, mos-sim, clock read around each call),
-(OPS also itof utof ftoi ftou: the four conversions, one operand), on N random operand pairs from gen.py (its 361 special-value pairs dropped; fixed seed). Cycles are call minus a bare copy/rts."""
+(env SF_DEFS: extra ca65 flags for the library, e.g. -DSF_MUL_LUT=1; OPS also itof utof ftoi ftou: the four conversions, one operand), on N random operand pairs from gen.py (its 361 special-value pairs dropped; fixed seed). Cycles are call minus a bare copy/rts."""
 import os, re, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__)); I = os.path.join(here, '../../src/6502')
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
@@ -12,7 +12,7 @@ def sh(*a, **k): return subprocess.run(a, cwd=k.get('cwd', here), capture_output
 SYM = {'add': '__addsf3', 'sub': '__subsf3', 'mul': '__mulsf3', 'div': '__divsf3', 'itof': '__floatsisf', 'utof': '__floatunsisf', 'ftoi': '__fixsfsi', 'ftou': '__fixunssfsi'}
 CONV = ('itof', 'utof', 'ftoi', 'ftou')
 for f in ('sf32', 'sf32_muldiv', 'sf32_conv'):
-    assert sh('ca65', '-t', 'sim6502', '-I', I, '-DSTACKB=1', f'{I}/{f}.s', '-o', f'{T}/{f}.o').returncode == 0
+    assert sh('ca65', '-t', 'sim6502', '-I', I, '-DSTACKB=1', *os.environ.get('SF_DEFS', '').split(), f'{I}/{f}.s', '-o', f'{T}/{f}.o').returncode == 0
 # The stub returns 0 and the base run's one record expects 0, so the driver takes the same success path as in a library run (a failing record costs ~150 cycles in its report loop).
 # The base run links the library too (crt0 initializes its DATA and BSS before main) and calls the stub instead.
 open(f'{T}/stub.s', 'w').write('.export stub_op\nstub_op:\n lda #0\n ldx #0\n sta $82\n sta $83\n rts\n')
@@ -28,7 +28,7 @@ def ours(op):
     assert sh('ca65', '-t', 'sim6502', '-U', '-I', f'{T}/s', *(['-DEXACT=1'] if op in CONV else []), f'{here}/drv.s', '-o', f'{T}/drv_s.o').returncode == 0
     lib = [f'{T}/sf32.o', f'{T}/sf32_muldiv.o', f'{T}/sf32_conv.o']
     for k, objs in (('s', [f'{T}/stub.o'] + lib), ('r', lib)):
-        assert sh('ld65', '-t', 'sim6502', '-m', f'{T}/{k}.map', f'{T}/drv_s.o' if k == 's' else f'{T}/drv.o', *objs, 'sim6502.lib', '-o', f'{T}/{k}.bin').returncode == 0
+        assert sh('ld65', '-C', 'sim6502_lut.cfg', '-m', f'{T}/{k}.map', f'{T}/drv_s.o' if k == 's' else f'{T}/drv.o', *objs, 'sim6502.lib', '-o', f'{T}/{k}.bin').returncode == 0
     def ramsegs(k):
         m = open(f'{T}/{k}.map').read().split('Segment list:')[1]
         return {l.split()[0]: l.split()[3] for l in m.splitlines() if l.split()[:1] in (['DATA'], ['BSS'])}

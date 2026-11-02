@@ -21,6 +21,57 @@ e16lo = rc2             ; result exponent, signed 16 bit
 e16hi = rc3
 opf   = rc24            ; 0 multiply, 1 divide; special-value path only
 
+
+.ifdef SF_MUL_LUT
+; add (row byte) * M[j] into the sum at cell lo and the cells above it
+.macro QPROD j, lo
+    ldy rc20+j
+    sec
+    lda (rc2),y
+    sbc (rc6),y
+    tax
+    lda (rc4),y
+    sbc (rc24),y
+    tay
+    txa
+    clc
+    adc lo
+    sta lo
+    tya
+    QUP lo
+.endmacro
+.macro QUP lo                ; A + carry into the cell after lo, carry rippling up to rc19
+.if lo = rc23
+    adc rc16
+    sta rc16
+    bcc :+
+    inc rc17
+    bne :+
+    inc rc18
+    bne :+
+    inc rc19
+:
+.elseif lo = rc16
+    adc rc17
+    sta rc17
+    bcc :+
+    inc rc18
+    bne :+
+    inc rc19
+:
+.elseif lo = rc17
+    adc rc18
+    sta rc18
+    bcc :+
+    inc rc19
+:
+.else
+    adc rc19
+    sta rc19
+.endif
+.endmacro
+.endif
+
 .segment "CODE"
 
 sf_mul_c:
@@ -79,6 +130,109 @@ mulbody:
     txa
     sbc #0
     sta e16hi
+.ifdef SF_MUL_LUT
+; quarter squares: x*y = q1[x+y] - q2[255-x+y], q1[n] = n*n/4, q2[n] = (n-255)^2/4; nine 8x8 products, 6-byte sum
+; pointers (zero page, lo byte = the row's byte of a): rc2 q1 lo, rc4 q1 hi, rc6 q2 lo, rc24 q2 hi
+; sum P0 = mp0 (bss), P1 = rc23, P2..P5 = rc16..rc19
+    lda rc5                 ; sign, exponent, a's upper bytes: the pointers reuse their cells
+    BHI1_EOR
+    and #$80
+    pha
+    lda e16lo
+    pha
+    lda e16hi
+    pha
+    lda rc18
+    pha
+    lda rc17
+    pha
+    lda #>q1lo
+    sta rc3
+    lda #>q1hi
+    sta rc5
+    lda #>q2lo
+    sta rc7
+    lda #>q2hi
+    sta rc25
+    lda rc16
+    ldx #0
+    stx rc16
+    stx rc17
+    stx rc18
+    stx rc19
+    jsr qrow0
+    pla
+    jsr qptr
+    QPROD 0, rc23
+    QPROD 1, rc16
+    QPROD 2, rc17
+    pla
+    jsr qptr
+    QPROD 0, rc16
+    QPROD 1, rc17
+    QPROD 2, rc18
+    pla
+    sta e16hi
+    pla
+    sta e16lo
+    lda rc19
+    bmi :+                  ; product >= 2: exponent up
+    asl rc23                ; else one place left, as the shift-add leaves it
+    rol rc16
+    rol rc17
+    rol rc18
+    rol rc19
+    jmp :++
+:   inc e16lo
+    bne :+
+    inc e16hi
+:   lda rc23
+    ora mp0
+    beq :+
+    lda #1
+    ora rc16
+    sta rc16
+:   pla
+    sta rsg
+    jmp mdtail2
+qptr:
+    sta rc2
+    sta rc4
+    eor #$ff
+    sta rc6
+    sta rc24
+    rts
+qrow0:                      ; row 0 into the zeroed sum: its first product is stored, not added
+    jsr qptr
+    ldy rc20
+    sec
+    lda (rc2),y
+    sbc (rc6),y
+    sta mp0
+    lda (rc4),y
+    sbc (rc24),y
+    sta rc23
+    QPROD 1, rc23
+    QPROD 2, rc16
+    rts
+.pushseg
+.bss
+mp0: .res 1
+.segment "SFLUT"         ; page aligned (linker config)
+q1lo: .repeat 512, n
+    .byte <(n * n / 4)
+.endrepeat
+q1hi: .repeat 512, n
+    .byte >(n * n / 4)
+.endrepeat
+q2lo: .repeat 512, n
+    .byte <((n - 255) * (n - 255) / 4)
+.endrepeat
+q2hi: .repeat 512, n
+    .byte >((n - 255) * (n - 255) / 4)
+.endrepeat
+.popseg
+.else
     lda rc16                ; C - 1: each add enters with the multiplier bit (1) as its carry
     bne :++
     lda rc17
@@ -134,6 +288,7 @@ mfin:
 :   ora rc22
     sta rc16                ; guard byte with the sticky bit
     jmp mdtail
+.endif
 
 ; ---- divide: R = rc23, rc24, A (low first), D = rc20..22, quotient rc17..19, guard and sticky rc16 (the rounding block)
 divbody:
@@ -254,6 +409,7 @@ mdtail:
     BHI1_EOR
     and #$80
     sta rsg
+mdtail2:
     lda e16hi
     bmi mden
     bne mdinf
