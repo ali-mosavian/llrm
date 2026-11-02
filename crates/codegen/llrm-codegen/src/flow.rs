@@ -319,7 +319,22 @@ pub fn machine_with<'a>(
             if target.optimized { Vec::new() } else { UNOPTIMIZED.iter().map(|one| slot_of(one)).collect() };
         llrm_transforms::parity::check_backend(&built, &off)?;
     }
+    // A bisecting aid, after the parity check:
+    // `LLRM_SKIP_PHASES=Scheduler,LoopSlots` leaves those phases (by class
+    // name) out.
+    if let Some(skip) = llrm_support::env_var("LLRM_SKIP_PHASES").and_then(|names| names.to_str()) {
+        without_phases(&mut phases, skip);
+    }
     Ok(phases)
+}
+
+/// `phases` without those whose class name is in the comma-separated `skip`.
+fn without_phases<'a>(
+    phases: &mut Vec<Box<dyn LIRTransform + 'a>>,
+    skip: &str,
+) {
+    let names: Vec<&str> = skip.split(',').map(str::trim).collect();
+    phases.retain(|phase| !names.contains(&phase.class_name()));
 }
 
 /// Return a well-formed body or name the phase boundary that is not.
@@ -643,6 +658,32 @@ mod tests {
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");
     }
+    /// `LLRM_SKIP_PHASES=Keeps,Absent` drops the phase named, and a name no
+    /// phase has drops nothing: a bisect over phases needs the
+    /// list cut without a rebuild (grep bas O2: the pass that leaves a second
+    /// jump on one `test` could not be named from outside).
+    #[test]
+    fn test_skipped_phases_are_left_out_by_class_name() {
+        struct Other;
+        impl LIRTransform for Other {
+            fn class_name(&self) -> &'static str {
+                "Other"
+            }
+
+            fn transform(
+                &mut self,
+                body: LirBody,
+            ) -> Result<LirBody, String> {
+                Ok(body)
+            }
+        }
+        let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(Keeps), Box::new(Other)];
+        super::without_phases(&mut phases, "Keeps, Absent");
+        assert_eq!(phases.iter().map(|phase| phase.class_name()).collect::<Vec<_>>(), ["Other"]);
+        super::without_phases(&mut phases, "");
+        assert_eq!(phases.len(), 1);
+    }
+
     /// A phase that changes nothing.
     struct Keeps;
 
