@@ -16,11 +16,18 @@ const BODY: &str = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
     define void @move(ptr %d, ptr %s, i32 %n) {\n  call void @llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)\n  ret void\n}\n\
     define void @fill(ptr %d, i8 %v, i32 %n) {\n  call void @llvm.memset.p0.i32(ptr %d, i8 %v, i32 %n, i1 false)\n  ret void\n}\n";
 
-fn built(function_name: &str, target: &BuilderTarget) -> Result<String, &'static str> {
+fn built(
+    function_name: &str,
+    target: &BuilderTarget,
+) -> Result<String, &'static str> {
     built_from(BODY, function_name, target)
 }
 
-fn built_from(text: &str, function_name: &str, target: &BuilderTarget) -> Result<String, &'static str> {
+fn built_from(
+    text: &str,
+    function_name: &str,
+    target: &BuilderTarget,
+) -> Result<String, &'static str> {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module

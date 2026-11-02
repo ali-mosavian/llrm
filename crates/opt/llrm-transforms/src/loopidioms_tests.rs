@@ -1276,12 +1276,14 @@ fn through_the_loop_passes(text: &str) -> String {
 /// row in a loop (+135 clocks, +52 instructions, +73 memory operands over one
 /// memset of the array). The pin's loop pass manager deletes the inner loop the
 /// idiom made dead before it visits the parent, which then holds a memset in a
-/// loop and promotes it (`processLoopMemSet`).
+/// loop and promotes it (`processLoopMemSet`). At speed on the 486 the nest's
+/// row is inline dword stores (12 clocks a trip) against `rep stosd`'s 4 a
+/// dword (145 for the array, 96 for the nest: matmul nib -O2 +289 clocks), so
+/// the nest stays.
 #[test]
-fn a_nest_of_zero_stores_is_one_memset_once_the_inner_loop_is_deleted() {
+fn a_nest_of_zero_stores_stays_at_speed_once_the_inner_loop_is_deleted() {
     let after = through_the_loop_passes(ZEROED_NEST);
-    assert!(after.contains("i8 0, i16 128"), "{after}");
-    assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");
+    assert!(!after.contains("i8 0, i16 128"), "{after}");
 }
 
 /// An inner loop that computes something the function returns is not dead: it
@@ -1350,4 +1352,39 @@ fn the_memset_a_loop_promotes_is_priced_as_one_fill() {
     assert!(after(1).contains("i8 0, i16 128"), "a cheap fill merges the nest");
     let dear = after(100);
     assert!(!dear.contains("i8 0, i16 128"), "a fill dearer than its loop stays out\n{dear}");
+}
+
+/// matmul nib -O2: the row-zeroing nest priced its trip at two branches (a
+/// conditional and the jump back) where the code has one `jne`, so its loop
+/// looked 40 clocks dearer than it ran and a `rep stosd` of 145 clocks replaced
+/// a 96-clock loop (+289 clocks for -47 bytes). A jump to the next block is
+/// free in a trip.
+#[test]
+fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
+    let merges = |fill_clocks: i64| {
+        let clocks = crate::profit::OperationCosts {
+            fill: fill_clocks,
+            fill_cell: 0,
+            store: 1,
+            add: 1,
+            branch: 3,
+            ..Default::default()
+        };
+        let bytes =
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+        let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::loopidiom::pass::LoopIdiom::new());
+        manager.add(crate::loopidiom::pass::AfterDeletion {
+            deletion: crate::loopdeletion::LoopDeletion,
+            idiom: crate::loopidiom::pass::LoopIdiom::new(),
+        });
+        manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+        printed(&module).contains("i8 0, i16 128")
+    };
+    // The loop is 8 trips of 9 clocks (the branch 3, the step 1, the row's 5
+    // stores).
+    assert!(merges(60), "a fill under the loop's clocks is taken");
+    assert!(!merges(90), "a fill over the loop's clocks is not: the loop ran 72, not 96");
 }
