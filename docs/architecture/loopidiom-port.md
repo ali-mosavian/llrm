@@ -101,6 +101,9 @@ DEVIATEs. A deviation is kept only where it rests on something MIR or the target
 - D6. No `ScalarEvolution`: strides, counts and exit values come from `induction`/`counting`. Not a deviation to live with: a project-level dependency, sized separately.
 - D7. `getPopcntSupport` and the FFS cost as target hooks. Approved: x86 has no fast popcount before Nehalem (fact: `PSK_FastHardware` never holds on 486/P5). `ctlz`/`cttz` need MIR intrinsics and `bsf`/`bsr` selection, which i386 and later have: a later representation item, not never.
 - D9. `optimizeCRCLoopUsingClmul`: not translated. No carry-less multiply on any target here; the pin's `Auto` takes the table (`crc.rs`), as does `Table`; `Clmul` does nothing.
+- D10. At speed, a loop that stays for computed stores is cut only if the fill beats the stores it removes (`process.rs`). Pin: none. Owner w2; exit 2026-11-07: only where the target prices its fills (`price_fills`), the pin's rule elsewhere (nbody_fixed at m64 left its zero stores).
+- D11. At -Os, a loop of several stores stays one when a fill for each is more bytes (`process.rs`, lru). Pin: none. Owner w2; exit 2026-11-08: neither bytes nor clocks may grow (`w2/idiom-size-rate`), no fitted rate.
+- D12. At -Os, a copy of run-time length stays a loop when the `rep movs` is more bytes (`process.rs`; no libc `memcpy`). Pin: a call. Owner w2; exit 2026-11-08: priced from the sheet's `rep movs` row.
 
 (`isLibFuncEmittable` is LLVM's own rule, not a deviation: no `strlen` in the program's library, no call.)
 
