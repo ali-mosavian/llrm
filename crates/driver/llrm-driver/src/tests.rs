@@ -271,6 +271,31 @@ fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
     assert!(!listing.contains("qword"), "{listing}");
 }
 
+/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
+/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
+/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
+/// +12 B over the `rep stosq` the port had.
+#[test]
+fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+    let ir = |size: u32| {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @g = global [{size} x i8] zeroinitializer, align 16\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 {size}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |size: u32| {
+        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let large = listing(128);
+    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    let small = listing(32);
+    assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
+}
+
 /// A 16-byte copy of unaligned memory is `movups` load and store.
 #[test]
 fn an_unaligned_16_byte_copy_is_movups_at_m64() {

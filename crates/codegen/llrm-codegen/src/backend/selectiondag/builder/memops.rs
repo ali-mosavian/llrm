@@ -623,7 +623,11 @@ impl Builder<'_> {
         &self,
         length: u64,
         opt_size: bool,
+        zero: bool,
     ) -> bool {
+        if opt_size && zero && self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none() {
+            return self.sse_fill_is_longer(length);
+        }
         if !opt_size || self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }
@@ -642,6 +646,26 @@ impl Builder<'_> {
         let fill = trade.fill + length as i64 * trade.fill_cell;
         // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
+    }
+
+    /// DEVIATE SD541 (x86-64, tuned for size): a constant zero fill whose
+    /// `xorps` and 16-byte stores take more bytes than a `rep stosq` fill is
+    /// the fill. The pin counts stores (`MaxStoresPerMemsetOptSize`), so a
+    /// 128-byte clear is eight `movaps` there (pattern_fill -Os +50 B,
+    /// huffman_decode +12 B over the `rep stosq` this port had). The sizes are
+    /// the encodings at a `[rsp+disp8]` address: `xorps` 3, `movaps` store 5,
+    /// `mov qword [m], 0` 8, and the fill `xor eax, eax`, `lea rdi`, `mov ecx`,
+    /// `rep stosq` 15. Owner m64. Exit 2026-11-20: a store-cost hook on the
+    /// target description, as for SD223.
+    fn sse_fill_is_longer(
+        &self,
+        length: u64,
+    ) -> bool {
+        const FILL_BYTES_64: u64 = 2 + 5 + 5 + 3;
+        let Some(ops) = Self::mem_ops(length, 16, usize::MAX, self.volatile_memory) else { return false };
+        let wide = ops.iter().filter(|width| **width == 16).count() as u64;
+        let stored = if wide > 0 { 3 } else { 0 } + wide * 5 + (ops.len() as u64 - wide) * 8;
+        stored > FILL_BYTES_64
     }
 
     /// `getMemsetStores`: the fill value splatted to the widest operation,
@@ -1027,7 +1051,7 @@ impl Builder<'_> {
                     self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
+                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
                     _ => None,
