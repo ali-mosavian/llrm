@@ -473,3 +473,12 @@ fn a_phi_input_that_is_poison_defines_its_register() {
     .expect("compiles");
     assert!(asm.contains("ret"), "{asm}");
 }
+
+/// `store i1` was refused ("promote operand" of a `Store` of `i1`): the pin
+/// stores the bit, zero-extended in the register, as a byte.
+#[test]
+fn an_i1_store_is_a_byte_of_the_zero_extended_bit() {
+    let asm = dag_at("-O2", "define void @f(ptr %p, i1 %b) {\n  store i1 %b, ptr %p\n  ret void\n}\n")
+        .expect("the DAG path takes it");
+    assert!(asm.contains("and w") && asm.contains("strb w"), "{asm}");
+}

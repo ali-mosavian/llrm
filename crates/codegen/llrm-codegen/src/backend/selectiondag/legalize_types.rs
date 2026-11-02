@@ -1092,6 +1092,22 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[chain, cond, dest]);
                 SDValue { node: updated, res: 0 }
             }
+            ISD::Store if at == 1 && self.dag.value_type(self.dag.operand(node, 1)) == EVT::I1 => {
+                // `PromoteIntOp_STORE` of an `i1` and `LegalizeDAG`'s
+                // byte-sized truncating store: the bit
+                // zero-extended in the register
+                // (`getZeroExtendInReg`) and stored as a byte.
+                let (chain, value, ptr) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("a store has a memory operand")
+                };
+                let promoted = self.promoted_integer(value);
+                let wide = self.dag.value_type(promoted);
+                let one = self.dag.get_constant(1, wide);
+                let bit = self.dag.get_node(ISD::And, wide, &[promoted, one]);
+                self.dag.get_store(chain, bit, ptr, super::dag::MemInfo { mem_vt: EVT::I8, ..info })
+            }
             ISD::Store
                 if at == 1
                     && self.dag.value_type(self.dag.operand(node, 1)).is_integer()
