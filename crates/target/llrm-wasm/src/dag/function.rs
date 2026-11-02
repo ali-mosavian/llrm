@@ -19,6 +19,7 @@ use super::call::{CALL, WasmCalling};
 use super::pipeline::{Scheduled, select_block};
 use crate::dagisel::generated::ids::isd;
 use crate::dagisel::hooks::Cpu;
+use crate::features::Features;
 use crate::mir::ValType;
 use crate::{REGISTER_INFO, Width};
 
@@ -30,12 +31,19 @@ pub(crate) fn pointer(width: Width) -> EVT {
 }
 
 /// The calling `TargetNodes` borrows for `'static`, one per width.
-fn calling(width: Width) -> &'static WasmCalling {
-    static W32: WasmCalling = WasmCalling { pointer: EVT::I32 };
-    static W64: WasmCalling = WasmCalling { pointer: EVT::I64 };
-    match width {
-        Width::W32 => &W32,
-        Width::W64 => &W64,
+fn calling(
+    width: Width,
+    features: Features,
+) -> &'static WasmCalling {
+    static W32: WasmCalling = WasmCalling { pointer: EVT::I32, bulk_memory_opt: true };
+    static W32_NO_BULK: WasmCalling = WasmCalling { pointer: EVT::I32, bulk_memory_opt: false };
+    static W64: WasmCalling = WasmCalling { pointer: EVT::I64, bulk_memory_opt: true };
+    static W64_NO_BULK: WasmCalling = WasmCalling { pointer: EVT::I64, bulk_memory_opt: false };
+    match (width, features.has("bulk-memory-opt")) {
+        (Width::W32, true) => &W32,
+        (Width::W32, false) => &W32_NO_BULK,
+        (Width::W64, true) => &W64,
+        (Width::W64, false) => &W64_NO_BULK,
     }
 }
 
@@ -53,7 +61,10 @@ fn shift_amount_of(vt: EVT) -> EVT {
     EVT::integer(bits)
 }
 
-pub fn builder_target(width: Width) -> BuilderTarget {
+pub fn builder_target(
+    width: Width,
+    features: Features,
+) -> BuilderTarget {
     BuilderTarget {
         dag: DagConfig {
             pointer: pointer(width),
@@ -82,7 +93,7 @@ pub fn builder_target(width: Width) -> BuilderTarget {
             ret: ISD::Target(isd::RETURN),
             stack_pointer: if width == Width::W32 { "sp32" } else { "sp64" },
             big_endian: false,
-            calling: Some(calling(width)),
+            calling: Some(calling(width, features)),
         }),
         ..BuilderTarget::m64()
     }
@@ -179,6 +190,7 @@ pub fn select_function(
         .function()
         .filter(|one| !one.is_declaration())
         .ok_or_else(|| format!("@{name} has no body"))?;
+    let features = Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
     // The target's `TargetCalling` places every value; the builder reads none
     // of this.
     let convention = Convention {
@@ -190,7 +202,7 @@ pub fn select_function(
         stack_arguments: 0,
         first: 0,
     };
-    let target = builder_target(width);
+    let target = builder_target(width, features);
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
     let mut info = FunctionLoweringInfo::new(function);
@@ -216,7 +228,7 @@ pub fn select_function(
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (id, origin, mut one, phis) in group {
             let Scheduled { units, mem_refs, accesses } =
-                select_block(&mut one.dag, cpu, &info.jump_tables).map_err(|why| format!("{why:?}"))?;
+                select_block(&mut one.dag, cpu, features, &info.jump_tables).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
             selected.push(Selected {
                 id: id.0,

@@ -21,19 +21,6 @@
 use crate::asm_strings::find;
 use crate::mir::{Binding, Function, Operand, ValType};
 
-/// The features `llc -mtriple=wasm32` of LLVM 20.1.8 writes for the generic
-/// CPU.
-const TARGET_FEATURES: [&str; 8] = [
-    "bulk-memory",
-    "bulk-memory-opt",
-    "call-indirect-overlong",
-    "multivalue",
-    "mutable-globals",
-    "nontrapping-fptoint",
-    "reference-types",
-    "sign-ext",
-];
-
 const SECTION_TYPE: u8 = 1;
 const SECTION_IMPORT: u8 = 2;
 const SECTION_FUNCTION: u8 = 3;
@@ -535,7 +522,7 @@ fn introduce<'a>(
 pub fn write(
     functions: &[Encoded],
     data: &Data,
-    exceptions: bool,
+    features: crate::features::Features,
 ) -> Vec<u8> {
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
@@ -944,16 +931,15 @@ pub fn write(
     }
 
     payload.clear();
-    // Sorted by name: `exception-handling` follows `call-indirect-overlong`.
-    let mut features = TARGET_FEATURES.to_vec();
-    if exceptions {
-        features.insert(3, "exception-handling");
+    // No feature, no section.
+    let features: Vec<&str> = features.names().collect();
+    if !features.is_empty() {
+        uleb(&mut payload, features.len() as u64);
+        for feature in features {
+            payload.push(b'+');
+            name(&mut payload, feature);
+        }
+        custom(&mut out, "target_features", &payload);
     }
-    uleb(&mut payload, features.len() as u64);
-    for feature in features {
-        payload.push(b'+');
-        name(&mut payload, feature);
-    }
-    custom(&mut out, "target_features", &payload);
     out
 }

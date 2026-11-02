@@ -40,6 +40,7 @@ use crate::dagisel::generated::{wasm_wasm32, wasm_wasm64};
 use crate::dagisel::hooks::{Cpu, WasmHooks};
 use crate::dagisel::lowering::{WasmLowering, target_lowering};
 use crate::dagisel::post_ids;
+use crate::features::Features;
 use crate::reg;
 
 /// Wasm's physical registers in the pin's numbering: the stack-pointer global.
@@ -182,9 +183,10 @@ pub struct Scheduled {
 pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
+    features: Features,
     tables: &[Vec<u32>],
 ) -> Result<Scheduled, Refusal> {
-    let tli = target_lowering(cpu);
+    let tli = target_lowering(cpu, features);
     let mut lowering = WasmLowering { tables };
     DagCombiner::new(dag, &mut WasmCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).with_opt_none().run();
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
@@ -206,7 +208,7 @@ pub fn select_block(
         Cpu::Wasm32 => wasm_wasm32::TABLE,
         Cpu::Wasm64 => wasm_wasm64::TABLE,
     });
-    let mut hooks = WasmHooks::new(cpu, true);
+    let mut hooks = WasmHooks::new(cpu, features, true);
     let mut mem_refs = BTreeMap::new();
     let accesses = dag
         .nodes()

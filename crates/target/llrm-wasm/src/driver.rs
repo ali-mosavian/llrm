@@ -160,19 +160,21 @@ pub fn object(
 ) -> Result<Vec<u8>, String> {
     let module = prepared(text, width, options)?;
     let mut functions = Vec::new();
+    // `EmitTargetFeatures` reads the subtarget of the last function compiled.
+    let mut features = crate::features::Features::default();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
+        features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
         let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
-    Ok(crate::object::write(
-        &functions,
-        &data(&module, width)?,
-        options.exception_model == crate::dag::ExceptionModel::Wasm,
-    ))
+    if options.exception_model == crate::dag::ExceptionModel::Wasm {
+        features = features.with("exception-handling", true)?;
+    }
+    Ok(crate::object::write(&functions, &data(&module, width)?, features))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`
