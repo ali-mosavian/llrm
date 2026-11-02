@@ -381,9 +381,12 @@ impl Profile {
     /// 486 and the Pentium take three clocks for the extension and one for
     /// the byte load.
     ///
-    /// DEVIATE FB1 (owner x86-m16, 2026-11-02; permanent target tuning): the
-    /// pin widens on every x86 (X86FixupBWInsts.cpp L165, no feature gate);
-    /// x_strlen -O2 m32 spends 2 extra clocks per byte copied, +348 k clk over gcc.
+    /// DEVIATE FB1 (owner x86-m16, 2026-11-02; permanent per-CPU price from
+    /// the timing table): the pin widens on every x86, with no feature gate
+    /// ([`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L165)).
+    /// gcc keeps `mov dl,[buf+eax]` in x_strlen's copy loop; the pin's
+    /// `movzx edx,[buf+eax]` costs 2 extra clocks per byte copied, +348 k clk
+    /// at -O2 m32.
     pub fn widens_load(
         &self,
         width: u8,
