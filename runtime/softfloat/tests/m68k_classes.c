@@ -9,12 +9,17 @@ float __floatsisf(int32_t), __floatunsisf(uint32_t);
 int32_t __fixsfsi(float);
 uint32_t __fixunssfsi(float);
 
+#ifndef __m68k__
+#include <unistd.h>     /* hosted targets (x86 under Linux): the same harness through libc */
+static long sys3(long n, long a, long b, long c) { if (n == 4) return write(1, (void *)b, c); _exit((int)a); }
+#else
 static long sys3(long n, long a, long b, long c)
 {
     register long d0 __asm__("d0") = n, d1 __asm__("d1") = a, d2 __asm__("d2") = b, d3 __asm__("d3") = c;
     __asm__ volatile("trap #0" : "+d"(d0) : "d"(d1), "d"(d2), "d"(d3) : "memory");
     return d0;
 }
+#endif
 static void say(const char *s) { int n = 0; while (s[n]) n++; sys3(4, 1, (long)s, n); }
 static void dec(long v) { char b[12]; int i = 11; b[i] = 0; b[--i] = ' '; do { b[--i] = '0' + v % 10; v /= 10; } while (v); say(b + i); }
 static float b2f(uint32_t b) { union { uint32_t b; float f; } u; u.b = b; return u.f; }
@@ -56,4 +61,6 @@ int main(void)
     }
     return 0;
 }
+#ifdef __m68k__
 void _start(void) { int r = main(); sys3(1, r, 0, 0); for (;;) ; }
+#endif
