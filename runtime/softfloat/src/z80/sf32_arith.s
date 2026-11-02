@@ -648,49 +648,54 @@ divgo:	call	unp
 	add	hl,bc
 	ld	22(iy),l
 	ld	23(iy),h
-	ld	a,0(iy)		; remainder 14..17 starts as ma; the quotient grows in 0..3
-	ld	14(iy),a
-	ld	a,1(iy)
-	ld	15(iy),a
-	ld	a,2(iy)
-	ld	16(iy),a
-	xor	a,a
-	ld	17(iy),a
-	ld	0(iy),a
-	ld	1(iy),a
-	ld	2(iy),a
-	ld	3(iy),a
-	ld	b,#28
-1$:	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
-	ld	a,14(iy)
-	sub	a,4(iy)
-	ld	e,a
-	ld	a,15(iy)
-	sbc	a,5(iy)
-	ld	d,a
-	ld	a,16(iy)
+	ld	l,0(iy)		; remainder in d:hl starts as ma; the divisor's low half in bc, its top byte at 6(iy)
+	ld	h,1(iy)
+	ld	d,2(iy)
+	ld	c,4(iy)
+	ld	b,5(iy)
+	ld	13(iy),#4	; 28 quotient bits: a group of 4, then three of 8, each collected in e behind a sentinel
+	ld	e,#0x10
+11$:	or	a,a
+	sbc	hl,bc
+	ld	a,d
 	sbc	a,6(iy)
-	ld	c,a
-	ld	a,17(iy)
-	sbc	a,#0
-	jr	c,2$
-	ld	14(iy),e
-	ld	15(iy),d
-	ld	16(iy),c
-	ld	17(iy),a
-	set	0,0(iy)
-2$:	sla	14(iy)
-	rl	15(iy)
-	rl	16(iy)
-	rl	17(iy)
-	djnz	1$
-	ld	a,14(iy)
-	or	a,15(iy)
-	or	a,16(iy)
-	or	a,17(iy)
+	ld	d,a
+	jr	c,12$
+	scf
+	rl	e
+	jr	13$
+12$:	add	hl,bc		; too far: put it back, the bit is 0
+	ld	a,d
+	adc	a,6(iy)
+	ld	d,a
+	or	a,a
+	rl	e
+13$:	jr	c,15$		; the sentinel fell out: a group is complete
+14$:	add	hl,hl
+	rl	d
+	jr	nc,11$
+	or	a,a		; the remainder reached bit 24: above the divisor, the bit is 1
+	sbc	hl,bc
+	ld	a,d
+	sbc	a,6(iy)
+	ld	d,a
+	scf
+	rl	e
+	jr	13$
+15$:	ld	a,2(iy)		; the group joins the quotient from below
+	ld	3(iy),a
+	ld	a,1(iy)
+	ld	2(iy),a
+	ld	a,0(iy)
+	ld	1(iy),a
+	ld	0(iy),e
+	dec	13(iy)
+	jr	z,16$
+	ld	e,#1
+	jr	14$
+16$:	ld	a,h		; a remainder left over sets the sticky bit
+	or	a,l
+	or	a,d
 	jr	z,3$
 	set	0,0(iy)
 3$:	ld	c,22(iy)
