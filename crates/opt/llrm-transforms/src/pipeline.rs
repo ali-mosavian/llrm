@@ -1828,6 +1828,7 @@ impl Run {
             context: unit.context.clone(),
             datalayout: None,
             globals,
+            aliases: Vec::new(),
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),
