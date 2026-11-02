@@ -40,9 +40,10 @@
 //! `ConvertTruncs`; here only an integer constant is folded, anything else
 //! gets the instruction. Exit: none.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::lowering::Lowering;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
@@ -151,8 +152,8 @@ struct Promotion<'a> {
     type_size: u32,
     register_bits: u32,
     all_visited: HashSet<Node>,
-    safe_to_promote: HashSet<InstId>,
-    safe_wrap: HashSet<InstId>,
+    safe_to_promote: IdSet<InstId>,
+    safe_wrap: IdSet<InstId>,
     insts_to_remove: Ordered<InstId>,
 }
 
@@ -198,8 +199,8 @@ impl<'a> Promotion<'a> {
             type_size: 0,
             register_bits: tti.scalar_register_bits(),
             all_visited: HashSet::new(),
-            safe_to_promote: HashSet::new(),
-            safe_wrap: HashSet::new(),
+            safe_to_promote: IdSet::new(),
+            safe_wrap: IdSet::new(),
             insts_to_remove: Ordered::new(),
         }
     }
@@ -622,7 +623,7 @@ impl<'a> Promotion<'a> {
         let ext_ty = self.context.types.int(width);
         let mut new_insts: HashSet<Node> = HashSet::new();
         let mut promoted: HashSet<Node> = HashSet::new();
-        let mut trunc_tys: HashMap<InstId, Vec<Option<TypeId>>> = HashMap::new();
+        let mut trunc_tys: IdMap<InstId, Vec<Option<TypeId>>> = IdMap::new();
         let mut removed: Vec<InstId> = Vec::new();
 
         // Cache the original types of the values that will likely need
@@ -988,7 +989,7 @@ impl<'a> Promotion<'a> {
         let mut non_free_args = 0usize;
         let mut non_loop_sources = 0usize;
         let mut loop_sinks = 0usize;
-        let mut blocks: HashSet<BlockId> = HashSet::new();
+        let mut blocks: IdSet<BlockId> = IdSet::new();
         for node in visited.iter() {
             let block = match node {
                 Node::Inst(inst) => self.function.parent(inst),
