@@ -840,6 +840,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         target: None,
         indirect: false,
         table: Vec::new(),
+        table_id: None,
         repeat: false,
         pops: None,
     };
@@ -3065,6 +3066,7 @@ mod sweep_support {
             indirect,
             table: Vec::new(),
             repeat: false,
+            table_id: None,
             pops: None,
         }
     }

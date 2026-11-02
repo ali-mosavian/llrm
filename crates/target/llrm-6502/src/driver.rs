@@ -162,6 +162,7 @@ fn program(
 ) -> Result<Program, String> {
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text))).map_err(|error| error.to_string())?;
+    module.refuse_aliases("the 6502")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Mos.layout().datalayout;
     match module.datalayout.as_deref() {

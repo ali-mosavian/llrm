@@ -46,6 +46,7 @@ pub mod m68kisd {
     pub const XOR: ISD = ISD::Target(ids::XOR);
     pub const CALL: ISD = ISD::Target(ids::CALL);
     pub const RET: ISD = ISD::Target(ids::RET);
+    pub const TC_RETURN: ISD = ISD::Target(ids::TC_RETURN);
     pub const WRAPPER: ISD = ISD::Target(ids::Wrapper);
     pub const WRAPPER_PC: ISD = ISD::Target(ids::WrapperPC);
 }
@@ -220,6 +221,7 @@ impl Hooks for M68kLowering {
                 arg_vt: dag.value_type(value),
                 split: false,
                 variadic: false,
+                sret: false,
             })
             .collect();
         let callee = dag.get_target_external_symbol(EVT::I32, name);
@@ -229,7 +231,7 @@ impl Hooks for M68kLowering {
             root,
             callee,
             &outs,
-            &[In { vt: ret, pointer: false, arg_vt: ret, split: false }],
+            &[In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }],
         );
         values.first().copied()
     }

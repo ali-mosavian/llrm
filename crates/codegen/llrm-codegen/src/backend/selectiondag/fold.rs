@@ -308,7 +308,7 @@ impl SelectionDAG {
         flags: SDNodeFlags,
     ) -> Folded {
         // canonicalizeCommutativeBinop: constant to the right
-        if opcode.is_commutative_binop() && self.constant(n1).is_some() && self.constant(n2).is_none() {
+        if opcode.is_commutative_binop() && self.is_constant_int(n1) && !self.is_constant_int(n2) {
             std::mem::swap(&mut n1, &mut n2);
         }
         let n2_const = self.constant(n2);
@@ -660,6 +660,22 @@ impl SelectionDAG {
             return super::fp_value::quiet_nan(vt).map(|bits| self.get_constant_fp(bits, vt));
         }
         None
+    }
+
+    /// `isConstantIntBuildVectorOrConstantInt`: a constant, or a global
+    /// address whose offset folds (`isOffsetFoldingLegal`).
+    pub fn is_constant_int(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        if self.constant(value).is_some() {
+            return true;
+        }
+        let NodeData::Global { symbol, .. } = self.node(value).data else { return false };
+        self.config.global_addresses_constant
+            && self.opcode(value) == ISD::GlobalAddress
+            && self.config.offset_folding
+            && self.local_symbols.get(symbol as usize).copied().unwrap_or(true)
     }
 
     /// `FoldSymbolOffset`: `(add Sym, c)` and `(sub Sym, c)` as `Sym+c`.
