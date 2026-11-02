@@ -486,17 +486,18 @@ def net_times(measured: dict) -> dict:
 def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Path) -> dict:
     """The kernel's 486 clocks, from the emulator that prices the flat image (tools/bench/flatcount.py). The emulator counts every
     instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE, DOSBox's repeated string instructions counted as it does: flatcount.DOSBOX_REP_SLICE), and a price of another run is no price. Reported, not gated."""
-    if instructions > flatcount.LIMIT // 2:
+    limit = int(os.environ.get("LLRM_FLAT_LIMIT") or flatcount.LIMIT)  # raised for the cells the default cap cannot reach (grep: 642M instructions), the same for main and tip
+    if instructions > limit // 2:
         print(f"WARNING {key}: no clocks: {instructions} instructions are too many to emulate", file=sys.stderr)
         return {}
-    ran = flatcount.run(image, region.upper(), cwd)
+    ran = flatcount.run(image, region.upper(), cwd, limit)
     if ran.error or ran.region is None:
         print(f"WARNING {key}: no clocks: {ran.error}", file=sys.stderr)
         return {}
     if not flatcount.agrees(ran.region.instructions, instructions, ran.rep_iterations):
         print(f"WARNING {key}: no clocks: the emulator counted {ran.region.instructions} instructions, DOSBox {instructions}", file=sys.stderr)
         return {}
-    return {"clocks": ran.region.clocks}
+    return {"clocks": ran.region.clocks, **({"emu_limit": limit} if limit != flatcount.LIMIT else {})}
 
 
 def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:

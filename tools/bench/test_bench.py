@@ -1114,3 +1114,16 @@ def test_a_base_without_memory_operands_is_flagged_not_passed():
     """The base file lacked memory_operands, so the -Os strict memory check never ran and every row passed it: the gate compared one metric of two."""
     problems = bench.against("queens c -Os", {"instructions": 100, "memory_operands": 90}, {"instructions": 100})
     assert any("base has no memory_operands" in one for one in problems)
+
+
+def test_the_emulation_cap_can_be_raised_for_cells_the_default_cannot_reach(monkeypatch, tmp_path):
+    """grep bq32 runs 642M instructions: above the cap's half, so its clocks were missing on both sides and the cell was judged on the rest. LLRM_FLAT_LIMIT raises the cap for one run and the row says which."""
+    from types import SimpleNamespace
+
+    ran = SimpleNamespace(error=None, region=SimpleNamespace(instructions=642_000_000, clocks=1234), rep_iterations=0)
+    monkeypatch.setattr(bench.flatcount, "run", lambda image, region, cwd, limit=bench.flatcount.LIMIT: ran)
+    monkeypatch.setattr(bench.flatcount, "agrees", lambda *a: True)
+    monkeypatch.delenv("LLRM_FLAT_LIMIT", raising=False)
+    assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {}
+    monkeypatch.setenv("LLRM_FLAT_LIMIT", "2000000000")
+    assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {"clocks": 1234, "emu_limit": 2000000000}
