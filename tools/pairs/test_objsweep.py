@@ -173,3 +173,13 @@ def test_an_arm64_sweep_where_every_compile_is_refused_is_an_error_and_counts_wh
     args = type("A", (), {"old": str(tmp_path / "o" / "llrm-cc"), "new": str(tmp_path / "n" / "llrm-cc"), "jobs": 1})()
     assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 2
     assert "0 compared, 1 refused of 1" in capsys.readouterr().out
+
+
+def test_a_compile_runs_under_a_16_gb_address_space_limit(tmp_path):
+    """One unbounded llc grew to 217 GB and took the box: every compile of a sweep is bounded by `ulimit -v`."""
+    stub = tmp_path / "cc"
+    stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { ulimit -v > "$a"; next=; };; esac; done\nexit 0\n')
+    stub.chmod(0o755)
+    out = tmp_path / "x.o"
+    data, _ = objsweep.run_compiler([str(stub), "-o", str(out)], out, None)
+    assert data is not None and data.strip().isdigit() and int(data) <= 16 * 1024 * 1024, data

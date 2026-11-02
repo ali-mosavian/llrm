@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import os
 import re
+import resource
 import subprocess
 import sys
 import tempfile
@@ -59,12 +60,20 @@ def writer_results(directory: Path) -> dict[str, str]:
     return {file.name: hashlib.md5(file.read_bytes()).hexdigest()[:12] for pattern in ("*.bin", "*.err") for file in sorted(directory.glob(pattern))}
 
 
+MEMORY_LIMIT = 16 << 30
+
+
+def limit_memory() -> None:
+    """Each compile is bounded: one unbounded llc grew to 217 GB and took the box."""
+    resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
+
+
 def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None, environment: dict[str, str] | None = None) -> tuple[bytes | None, str]:
     """(object bytes, '') or (None, first line of stderr); fills `writers` with the other formats' md5s when given."""
     side = out.with_suffix(".writers")
     side.mkdir(exist_ok=True)
     env = {**(environment or os.environ), "LLRM_OBJECT_ALL_WRITERS": str(side)} if writers is not None else environment
-    done = subprocess.run(command, capture_output=True, text=True, timeout=600, env=env)
+    done = subprocess.run(command, capture_output=True, text=True, timeout=600, env=env, preexec_fn=limit_memory)
     if writers is not None:
         writers.update(writer_results(side))
     for file in side.glob("*"):
