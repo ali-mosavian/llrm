@@ -20,10 +20,12 @@
 //! 256..258 are segment overrides on an `i32`. Exit: none. Owner sdag-b.
 //! Review 2026-11-13.
 //!
-//! DEVIATE SD14: the floating types are always legal (x87 register classes);
-//! the pin's `SoftenFloat` and `ExpandFloat` arms are not translated. Reason:
-//! no target of ours lacks the x87. Exit: none. Owner sdag-b. Review
-//! 2026-11-13.
+//! DEVIATE SD14: the floating types are legal on a target with a float
+//! register class (x87); `with_soft_float` softens `f32` and `f64` to `i32`
+//! and `i64` (m68k without an FPU). `SoftenFloat` is translated for scalar
+//! arithmetic, conversions, compares, loads, stores, select and bitcast;
+//! `ExpandFloat` is not (no `f128`, no double-double). Exit: none. Owner
+//! sdag-b. Review 2026-11-13.
 //!
 //! # See also
 //! LLVM's `computeRegisterProperties`
