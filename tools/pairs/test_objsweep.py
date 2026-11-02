@@ -90,7 +90,7 @@ def test_the_debug_leg_compiles_with_each_debug_format_of_the_target(tmp_path):
     (tmp_path / "x.c").write_text("")
     log = tmp_path / "log"
     stub = tmp_path / "cc"
-    stub.write_text(f'#!/bin/sh\necho "$*" >> {log}\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ printf obj > "$a"; next=; }};; esac; done\n')
+    stub.write_text(f'#!/bin/sh\necho "$*" >> {log}\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ printf obj > "$a"; next=; }};; esac; done\nexit 0\n')
     stub.chmod(0o755)
     args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
     assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 0
@@ -121,3 +121,14 @@ def test_an_llrm_cc_is_asked_for_an_object_and_given_its_target(tmp_path, monkey
     seen = {target: objsweep.compile_one(str(stub), tmp_path / "x.c", target, "O2", tmp_path / "x.o")[0].decode() for target in ("m64", "m32", "m16")}
     assert all(" -c " in text.split("|")[0] + " " for text in seen.values()), seen
     assert [text.split("|")[1:] for text in seen.values()] == [["", ""], ["x86_32-wat", ""], ["x86_16-wat", "m16clang"]], seen
+
+
+def test_a_sweep_where_no_cell_compiles_is_no_evidence_not_a_pass(tmp_path, capsys):
+    """An m64 -g sweep printed "0 objects changed" with every cell failed on both sides, and was read as identity."""
+    (tmp_path / "x.c").write_text("")
+    stub = tmp_path / "cc"
+    stub.write_text("#!/bin/sh\necho 'error: 20 errors generated.' >&2\nexit 1\n")
+    stub.chmod(0o755)
+    args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
+    assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 2
+    assert "NO EVIDENCE" in capsys.readouterr().out

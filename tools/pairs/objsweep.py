@@ -140,7 +140,11 @@ def sweep(args, sources: list[Path], isel: str) -> int:
             else:
                 other = sorted(f for f in {*wa, *wb} if wa.get(f) != wb.get(f))
                 changed.append((name, len(a), len(b), other))
-    print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}")
+    compiled = same + len(changed)
+    print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}; {compiled} compiled on both sides")
+    if cells and not compiled:
+        # "0 changed" of cells that never compiled is no identity: the sweep must not pass.
+        print("objsweep: NO EVIDENCE: no cell compiled on both sides, so nothing was compared")
     for name, x, y, other in changed:
         print(f"  changed {name}: {x} -> {y} bytes ({y - x:+d})" + (f"; writers: {', '.join(other)}" if other else ""))
     print("split:")
@@ -150,7 +154,10 @@ def sweep(args, sources: list[Path], isel: str) -> int:
         print(f"  ONE-SIDED FAIL {name}: {why}")
     for name, why in both[:10]:
         print(f"  failed on both {name}: {why}")
+    if cells and not compiled:
+        return 2
     return 1 if changed or one_side else 0
+
 
 def sweep_arm64(args, sources: list[Path]) -> int:
     """The `.ll` files of --arm64 through `llrm-arm64-llc` beside OLD and beside NEW: the Mach-O and ELF objects of each must match."""
