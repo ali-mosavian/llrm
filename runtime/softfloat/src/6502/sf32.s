@@ -4,8 +4,8 @@
 ;
 ; The tricks: signs and exponents come out of two shifts (asl a / rol a leaves the exponent in A and the sign in
 ; the carry); a mantissa is three bytes plus a guard byte, the guard byte holds the rounding bits and a sticky bit
-; in its bit 0; alignment moves whole bytes, then at most seven single bits, with the lost bits found by one mask
-; test instead of a sticky test per bit; operands are never swapped (the block to shift is chosen by an X offset);
+; in its bit 0; alignment shifts at most four single bits (left into a fifth byte when that is shorter), then whole
+; bytes, with the lost bits found by one mask test instead of a sticky test per bit; operands are never swapped (the block to shift is chosen by an X offset);
 ; a negative difference is negated afterwards instead of comparing magnitudes; normalization counts bytes first.
 
 .setcpu "6502"

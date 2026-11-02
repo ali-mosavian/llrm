@@ -303,9 +303,8 @@ rnd32:	ld	a,l
 	jr	nz,nou32
 	inc	d
 	jr	nz,nou32
-	ld	d,#0x80		; the mantissa wrapped: 1.0 at the next exponent
+	ld	d,#0x80		; the mantissa wrapped: 1.0 at the next exponent (255 packs as inf)
 	inc	c
-	jr	z,inf
 nou32:	ld	l,h
 	ld	h,e
 	ld	a,d
@@ -793,7 +792,7 @@ divnrm:
 	ld	d,#1
 	dec	13(iy)
 	jr	nz,14$
-	ld	d,a		; guard byte from 2R against the divisor: 0, 1 (below half), 0x80 (half), 0x81 (above)
+	ld	d,a		; guard byte: 0 when R = 0, else 1 below half, 0x81 above (2R = D cannot happen)
 	or	a,h
 	or	a,l
 	jr	z,17$
@@ -805,10 +804,6 @@ divnrm:
 	sbc	a,e
 	ld	l,#1
 	jr	c,19$
-	or	a,h
-	or	a,l
-	ld	l,#0x80
-	jr	z,19$
 18$:	ld	l,#0x81
 	jr	19$
 17$:	ld	l,a

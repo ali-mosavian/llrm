@@ -3,9 +3,9 @@
 ;
 ; The tricks: mantissas are normalized once (denormals too) so both loops see 24-bit values with bit 23 set;
 ; multiply is Woz's shift-add on a 4-byte window (product top byte in A, one multiplier byte below it, which fills
-; with product bits), the add carry re-enters through the chain's carry; divide is a restoring loop whose quotient shifts into the same cells that become the
-; rounding block, the trial subtraction lives in A/X/Y and is committed only on success; the exponent is a signed
-; 16-bit sum that is range-checked once, in the shared tail.
+; with product bits), the add carry re-enters through the chain's carry; divide compares first and subtracts only
+; for a 1, R's top byte in A, 24 quotient bits in three sentinel groups (a ratio below 1 steps once first), guard and
+; sticky from 2R against D; the exponent is a signed 16-bit sum that is range-checked once, in the shared tail.
 
 .setcpu "6502"
 .include "sf32.inc"
@@ -462,13 +462,9 @@ qnext:
     lda rc16
     cmp rc20
 :   bcc qbelow
-    beq qhalf
 qabove:
     ldx #2
     lda #$81
-    bne qgs
-qhalf:
-    lda #$80
     bne qgs
 qbelow:
     lda #1
@@ -566,7 +562,7 @@ dgroup:                     ; the sentinel fell out: rc4 holds the group
     rol rc24
     rol a
     bcs dabove
-    cmp rc22
+    cmp rc22                ; 2R = D cannot happen: the quotient's odd part would divide ma's
     bne :+
     ldy rc24
     cpy rc21
@@ -574,12 +570,8 @@ dgroup:                     ; the sentinel fell out: rc4 holds the group
     ldy rc23
     cpy rc20
 :   bcc dbelow
-    beq dhalf
 dabove:
     lda #$81
-    bne dst
-dhalf:
-    lda #$80
     bne dst
 dbelow:
     ora rc24
