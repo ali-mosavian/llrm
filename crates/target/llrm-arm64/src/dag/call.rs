@@ -210,6 +210,15 @@ impl Aarch64Calling {
 }
 
 impl TargetCalling for Aarch64Calling {
+    /// `CCAssignFnForCall`: `ccc` and `fastcc` are AAPCS64; the pin has no
+    /// table for `coldcc` and the like.
+    fn supports_convention(
+        &self,
+        cc: u32,
+    ) -> bool {
+        matches!(cc, 0 | 8)
+    }
+
     /// `LowerFormalArguments` of a variadic function. Darwin's `va_list` is the
     /// address of the first unnamed stack slot. AAPCS64's is `stack`,
     /// `gr_top`, `vr_top`, `gr_offs`, `vr_offs` over save areas

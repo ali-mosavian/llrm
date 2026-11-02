@@ -143,6 +143,16 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether the hook places a call in calling convention `cc` (LLVM's
+    /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
+    /// as the pin's `CCAssignFnForCall` rejects what it has no table for.
+    fn supports_convention(
+        &self,
+        _cc: u32,
+    ) -> bool {
+        true
+    }
+
     /// Whether the target places these parts (`outs` the values sent, `ins` the
     /// values received); the builder refuses with the reason when it does not.
     fn accepts(

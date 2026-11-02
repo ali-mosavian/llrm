@@ -1524,6 +1524,11 @@ impl Builder<'_> {
         {
             return self.visit_target_intrinsic(instruction, info, found);
         }
+        if let Some(calling) = self.calling()
+            && !calling.supports_convention(info.calling_convention)
+        {
+            return Err(Refused("a calling convention the target's hook does not place"));
+        }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
             && direct
