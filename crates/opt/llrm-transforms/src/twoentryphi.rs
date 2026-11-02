@@ -5,7 +5,7 @@
 //! # LLVM structure
 //! | LLVM | here | |
 //! |---|---|---|
-//! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834) | `folded` | MIRROR; D1, D2, D5 |
+//! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834) | `folded` | MIRROR; D1, D2 |
 //! | [`GetIfCondition`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1784) | `if_condition` | MIRROR |
 //! | [`dominatesMergePoint`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L456) | `dominates_merge_point` | MIRROR; D3 |
 //! | [`computeSpeculationCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L434) | `instruction_cost` at `SizeAndLatency` | MIRROR |
@@ -27,12 +27,14 @@
 //! - D4. A hoisted instruction keeps the metadata kinds LLVM keeps
 //!   (`dropUBImplyingAttrsAndMetadata`) and loses the rest; there are no debug
 //!   records to drop.
-//! - D5. Where the target has no conditional move (`Tti::has_conditional_move`)
-//!   the selects the fold makes are priced like the hoisted code, against the
-//!   same budget. The pin charges none: a select is one instruction there.
-//!   Reason: here each is a branch (`selects.rs`), so gcd's `if (a > b) a -= b;
-//!   else b -= a;` became two selects and a loop of 239 clocks, 47 bytes. Exit:
-//!   none; the select's cost is the target's.
+//!
+//! - D5. Where a `select` is a branch (`Tti::has_cmov` false: the i486) the
+//!   fold's selects count against the threshold, which the pin's do not: the
+//!   arms' code then runs on both paths and the branch stays. gcc if-converts
+//!   only where a conditional move exists. x_isqrt -18%, x_mergesort -20%
+//!   clocks, x_crc32 1179 -> 175 B at 1.58x clocks (numbered trade row; exit
+//!   2026-11-20: price the loop-carried arm in the cost model so crc keeps the
+//!   select where the clocks pay). Owner llrm-target-x86-m32.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -50,11 +52,11 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
-use llrm_mir::instructioncost::{instruction_cost, select_cost, select_logic};
+use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::tti::{Cost, CostKind, Tti};
+use llrm_mir::tti::{CmpSel, Cost, CostKind, Tti, Ty};
 
 use crate::edges;
 
@@ -335,21 +337,22 @@ pub fn folded(
     {
         return changed;
     }
-    // D5. Without a conditional move each select is a branch again, so the
-    // selects count against the budget besides the code they hoist.
-    if !spec.tti.has_conditional_move() {
-        let kind = CostKind::SizeAndLatency;
-        let mut total = cost;
-        for phi in edges::phis(function, block) {
-            let ty = function.instruction(phi).ty;
-            let on_true = arms(function, phi).into_iter().find(|&(_, from)| from == found.if_true).expect("an arm").0;
-            let on_false = arms(function, phi).into_iter().find(|&(_, from)| from == found.if_false).expect("an arm").0;
-            // A boolean `and`/`or` is no branch.
-            if select_logic(context, ty, on_true, on_false).is_none() {
-                total = total + select_cost(context, spec.tti, ty, if_cond, on_true, on_false, kind);
-            }
-        }
-        if total.value > THRESHOLD * Cost::BASIC.value || !total.valid {
+    // D5. The pin does not price the selects against the threshold; where a
+    // select is a branch, folding runs the arms' code on both paths and still
+    // branches, so the selects count.
+    if !spec.tti.has_cmov() && !hoist.is_empty() {
+        let selects = edges::phis(function, block)
+            .iter()
+            .fold(
+                Cost::FREE,
+                |all, &phi| {
+                    let ty = Ty::of(&context.types, function.instruction(phi).ty);
+                    all + ty.map_or(Cost::INVALID, |ty| {
+                        spec.tti.cmp_sel_cost(CmpSel::Select, ty, crate::speculate::cost_kind(function))
+                    })
+                },
+            );
+        if (cost + selects).value > THRESHOLD * Cost::BASIC.value || !(cost + selects).valid {
             return changed;
         }
     }

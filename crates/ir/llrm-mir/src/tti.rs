@@ -422,6 +422,11 @@ pub trait Tti {
         false
     }
 
+    /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
+    fn has_cmov(&self) -> bool {
+        true
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -568,14 +573,6 @@ pub trait Tti {
         from: Ty,
         to: Ty,
     ) -> bool;
-
-    /// Whether the target has a conditional move. Without one a `select` is a
-    /// branch after all, and speculating the arms of an `if` into its block to
-    /// make one only adds work. The base class says yes; the pin's
-    /// `foldTwoEntryPHINode` never asks.
-    fn has_conditional_move(&self) -> bool {
-        true
-    }
 
     /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that
     /// makes the quotient and the remainder. The base class has none.

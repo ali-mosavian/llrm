@@ -298,7 +298,7 @@ fn check(
     // `llrm-cgen/reduce.py` cuts one down
     let source = match std::env::var("DIFF_FILE") {
         Ok(path) => std::fs::read_to_string(path).unwrap(),
-        Err(_) => program(seed, &Gen { opaque: true, ..Gen::new(DataModel::INT32) }),
+        Err(_) => program(seed, &Gen { opaque: true, walks: true, ..Gen::new(DataModel::INT32) }),
     };
     check_text(&seed.to_string(), &source, work)
 }
@@ -405,6 +405,10 @@ fn check_text(
             *INDEXED_FORMS.lock().unwrap().entry(mnemonic.to_owned()).or_insert(0usize) += 1;
             continue;
         }
+        // pops of the stack are not what the pointer walks make
+        if text.contains("%sp") {
+            continue;
+        }
         let direction = if text.contains(")+") {
             "(An)+"
         } else if text.contains("-(%a") {
@@ -412,8 +416,12 @@ fn check_text(
         } else {
             continue;
         };
-        let width = text.split_whitespace().next().unwrap_or("").trim_start_matches("move");
-        *INDEXED_FORMS.lock().unwrap().entry(format!("move{width} {direction}")).or_insert(0usize) += 1;
+        let key = if mnemonic.starts_with("move") && !mnemonic.starts_with("movem") {
+            format!("move{} {direction}", mnemonic.trim_start_matches("move"))
+        } else {
+            format!("{mnemonic} {direction}")
+        };
+        *INDEXED_FORMS.lock().unwrap().entry(key).or_insert(0usize) += 1;
         forms += 1;
     }
     if std::env::var_os("DIFF_STATIC").is_some() {
@@ -559,7 +567,7 @@ fn main() {
                     let Some(&seed) = seeds.get(at) else { break };
                     let outcome = std::panic::catch_unwind(|| check(seed, &work))
                         .unwrap_or_else(|_| Outcome::Reject("the compiler panicked".to_owned()));
-                    if matches!(outcome, Outcome::Ok) {
+                    if matches!(outcome, Outcome::Ok) && std::env::var_os("DIFF_KEEP_OK").is_none() {
                         let _ = std::fs::remove_dir_all(work.join(seed.to_string()));
                     }
                     results.lock().unwrap().push((seed, outcome));
@@ -603,6 +611,16 @@ fn main() {
         INDEXED_PROGRAMS.load(std::sync::atomic::Ordering::Relaxed),
         INDEXED_FORMS.lock().unwrap()
     );
+    // a corpus that never makes the forms the passes make agrees with anything
+    let folds = INDEXED_FORMS.lock().unwrap().keys().any(|key| !key.starts_with("move") && key.ends_with("(An)+"));
+    let looks = !matches!(std::env::var("DIFF_OPTIONS").as_deref(), Ok("raw" | "pinned"))
+        && std::env::var_os("DIFF_FILE").is_none();
+    if count >= 100 && looks && !folds {
+        println!(
+            "BLIND: no program has an arithmetic instruction with an (An)+ source; the generator's walks are not reaching it"
+        );
+        std::process::exit(1);
+    }
 }
 
 /// A looping program is killed at the limit and leaves nothing behind. The

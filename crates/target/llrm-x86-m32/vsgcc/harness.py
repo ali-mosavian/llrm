@@ -288,6 +288,9 @@ def _form_clocks(ins, taken, first_rep, multiplier):
         if k0 == OpKind.REGISTER and RegisterExt.is_segment_register(ins.op_register(0)):
             return clocks.clocks("pop_seg")
         return clocks.clocks("pop_m" if dst_mem else "pop_r")
+    if m in (Mnemonic.SHLD, Mnemonic.SHRD):
+        by_cl = ins.op_kind(2) == OpKind.REGISTER
+        return clocks.UNTABLED["shld_" + ("cl" if by_cl else "imm") + ("_mem" if dst_mem else "")]
     if m in SHIFTS:
         if k1 is not None and k1 == OpKind.REGISTER:
             return clocks.UNTABLED["shift_cl_mem" if dst_mem else "shift_cl"]

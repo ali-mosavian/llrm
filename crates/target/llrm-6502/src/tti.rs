@@ -116,7 +116,7 @@ impl Tti for Mos6502 {
 
     // The 6502 has no conditional move: `selects.rs` expands every select to a
     // branch.
-    fn has_conditional_move(&self) -> bool {
+    fn has_cmov(&self) -> bool {
         false
     }
 

@@ -157,6 +157,7 @@ impl<T: Target> Converted<T> {
             tii: &self.tii,
             tri: &self.tri,
             lane_pins: true,
+            size: false,
         }
     }
 }
@@ -1376,7 +1377,7 @@ pub fn allocate_greedy<T: Target>(
         converted.coalesce(registers, size);
     }
     let order = |value: u32| converted.order(value);
-    let inputs = converted.inputs(registers, &order);
+    let inputs = ShadowInputs { size, ..converted.inputs(registers, &order) };
     let mut frame = SpikeFrame::of(function);
     let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true)
         .ok_or_else(|| format!("{}: greedy refused", function.name))?;
