@@ -13,8 +13,12 @@ the frontend stays clang; cards compare library bytes separately from program by
 ## Plan
 1. Inventory (no build needed beyond the runtime): the libc symbols `runtime/qb` and `runtime/shared/posix` leave
    undefined, from the objects' undefined-symbol lists. Output: a table symbol / caller / WASI function it maps to.
-2. The platform libc for wasm32 is wasi-libc (musl-derived, WASI preview1). Fetch it pinned (sha256 recorded, outside the
-   repo); a download needs the user's yes (spike-fetch rule), so oversight asks first.
+2. The platform libc for wasm32 is wasi-libc (musl-derived, WASI preview1). Fetched 2026-11-02 with the user's yes
+   (05:25): wasi-sdk-34's `wasi-sysroot-34.0.tar.gz`, 119,283,116 bytes, sha256
+   `9d813544eeebe38b7b8f2244ed591de46b6db812c6dd1a257ff9f0d2a905a2be` (verified), extracted to
+   `~/scratch/wasi-sysroot-34/sysroot/wasi-sysroot-34.0` (outside the repo; wasi-libc 2e6fb9d8ee0c, llvm 23.1.0 headers;
+   targets wasm32-wasip1/-threads/wasip2/wasip3). The tarball carries no licence file; the wasi-libc repo has LICENSE,
+   LICENSE-APACHE, LICENSE-APACHE-LLVM and LICENSE-MIT. Nothing else is cleared to fetch.
 3. `llrm-cc` row `wasm32-wasi`: clang `--target=wasm32-wasi --sysroot=...`, `llc_program = "llrm-wasm-llc"`, object
    `wasm`, link `wasm-ld`, run `node`. The C-ABI lookup reads `llrm-NAME/src/machines/datalayout.toml`; wasm names it
    `datalayout32.toml`: add a `description_file` key to the row (one place) rather than copy the file.
