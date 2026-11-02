@@ -160,3 +160,16 @@ def test_an_arm64_debug_leg_over_sources_without_debug_info_is_no_evidence(tmp_p
     args = type("A", (), {"old": str(tmp_path / "o" / "llrm-cc"), "new": str(tmp_path / "n" / "llrm-cc"), "jobs": 1, "debug": True})()
     assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 2
     assert "NO EVIDENCE" in capsys.readouterr().out
+
+
+def test_an_arm64_sweep_where_every_compile_is_refused_is_an_error_and_counts_what_compared(tmp_path, capsys):
+    """Every .ll refused on both sides printed '0 changed; 0 identical' and returned 0: a sweep that compared nothing read as a pass."""
+    (tmp_path / "x.ll").write_text("")
+    for directory in ("o", "n"):
+        (tmp_path / directory).mkdir()
+        stub = tmp_path / directory / "llrm-arm64-llc"
+        stub.write_text("#!/bin/sh\necho refused >&2\nexit 1\n")
+        stub.chmod(0o755)
+    args = type("A", (), {"old": str(tmp_path / "o" / "llrm-cc"), "new": str(tmp_path / "n" / "llrm-cc"), "jobs": 1})()
+    assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 2
+    assert "0 compared, 1 refused of 1" in capsys.readouterr().out

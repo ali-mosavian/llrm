@@ -187,11 +187,15 @@ def sweep_arm64(args, sources: list[Path]) -> int:
                 same += 1
             else:
                 changed.append((source.stem, sorted(f for f in {*wa, *wb} if wa.get(f) != wb.get(f)) or ["object"]))
-    print(f"objsweep --arm64: {len(changed)} objects changed; {same} identical, {len(failed)} failed of {len(sources)}")
+    compared = same + len(changed)
+    print(f"objsweep --arm64: {compared} compared, {len(failed)} refused of {len(sources)}; {len(changed)} objects changed, {same} identical")
     for name, formats in changed:
         print(f"  changed {name}: {', '.join(formats)}")
     for name, why in failed[:10]:
         print(f"  failed {name}: {why}")
+    if not compared:
+        print("objsweep --arm64: NO EVIDENCE: no object compiled on both sides")
+        return 2
     return 1 if changed else 0
 
 
