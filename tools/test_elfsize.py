@@ -90,3 +90,13 @@ def test_uninitialised_data_is_counted_apart_from_initialised(tmp_path):
     obj = gcc_object(tmp_path, "int a[100]; int g = 3; int f(void) { return a[1] + g; }\n", "-O1", "-fno-pic")
     initialised, bss = sizes.data_bytes(obj)
     assert bss >= 400 and initialised >= 4 and initialised < 100
+
+
+def test_the_toolchains_property_note_is_not_program_data(tmp_path):
+    """gcc's `.note.gnu.property` (32 B, allocated) read as data: every gcc row of the x86_64 bench showed data_bytes 32 over clang's and ours."""
+    import sizes
+
+    obj = gcc_object(tmp_path, "int g = 3; int f(void) { return g; }\n", "-O1", "-fno-pic", "-fcf-protection=full")
+    out = subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True, check=True).stdout
+    assert ".note.gnu.property" in out
+    assert sizes.data_bytes(obj) == (4, 0)

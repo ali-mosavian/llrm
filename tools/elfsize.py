@@ -36,7 +36,7 @@ def code_bytes(path) -> int:
 
 
 def data_bytes(path) -> tuple[int, int]:
-    """(initialised, uninitialised) bytes of the object's allocated non-executable sections, without `.eh_frame` (unwind tables are not the program's data)."""
+    """(initialised, uninitialised) bytes of the object's allocated non-executable sections, without `.eh_frame` (unwind tables and the `.note*` the toolchain adds are not the program's data)."""
     with open(path, "rb") as file:
-        found = [s for s in sections(file.read()) if s[2] & SHF_ALLOC and not s[2] & SHF_EXECINSTR and s[0] != ".eh_frame"]
+        found = [s for s in sections(file.read()) if s[2] & SHF_ALLOC and not s[2] & SHF_EXECINSTR and s[0] != ".eh_frame" and not s[0].startswith(".note")]
     return sum(size for _, kind, _, size in found if kind != SHT_NOBITS), sum(size for _, kind, _, size in found if kind == SHT_NOBITS)
