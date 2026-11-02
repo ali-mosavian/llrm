@@ -656,7 +656,13 @@ impl Builder<'_> {
     /// the encodings at a `[rsp+disp8]` address: `xorps` 3, `movaps` store 5,
     /// `mov qword [m], 0` 8, and the fill `xor eax, eax`, `lea rdi`, `mov ecx`,
     /// `rep stosq` 15. Owner m64. Exit 2026-11-20: a store-cost hook on the
-    /// target description, as for SD223.
+    /// target description, as for SD223. The pin: [`getMemset`][memset] tries
+    /// the stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
+    ///
+    /// [memset]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L10376
+    /// [limit]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L2937
     fn sse_fill_is_longer(
         &self,
         length: u64,
