@@ -171,7 +171,7 @@ pub struct Flagged {
     pub exit_ne: bool,
     pub no_cmov: bool,
     pub x87_stack: bool,
-    /// `Tti::constant_code_bytes` of 16-bit code: `fldz` 2, `xor eax, eax` 3.
+    /// `Tti::constant_code_bytes` of 16-bit code: `fldz` 2, a pool load 4.
     pub priced_constants: bool,
 }
 
@@ -194,7 +194,6 @@ impl llrm_mir::tti::Tti for Flagged {
         bits: u64,
     ) -> Option<u32> {
         match ty {
-            tti::Ty::Int(32) if self.priced_constants && bits == 0 => Some(3),
             tti::Ty::Float if self.priced_constants => Some(if bits == 0 { 2 } else { 4 }),
             _ => None,
         }

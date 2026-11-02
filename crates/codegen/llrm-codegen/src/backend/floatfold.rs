@@ -473,12 +473,16 @@ fn _refolded(
         // never grows code built for size; one without takes neither worse.
         // The load goes and each fold adds a memory operand, so more than one
         // fold grows the count that code built for size, and a target with no
-        // exchange rate, may not.
+        // exchange rate, may not. A swap loads the cell in the loop, where the
+        // copy it replaces read none: a memory operand a trip, against one
+        // outside the loop (nbody nib -Os: +1200 executed).
         let folds = plan.iter().filter(|(_, planned)| matches!(planned, Planned::Fold(_))).count();
+        let swaps = plan.iter().any(|(_, planned)| matches!(planned, Planned::Swap { .. }));
+        let operands_kept = folds <= 1 && !swaps;
         let pays = if rate == 0 {
-            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0) && folds <= 1
+            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0) && operands_kept
         } else if cpu.size || cpu.min_size {
-            bytes > 0 && folds <= 1
+            bytes > 0 && operands_kept
         } else {
             saved * 1000 + bytes * rate > 0
         };
@@ -1354,6 +1358,16 @@ mod tests {
         assert_eq!(load.sources, [Loc::Mem(global(1, 0))]);
         let arithmetic = got.blocks[1].insns[1].what.clone().expect("the arithmetic");
         assert_eq!(arithmetic.sources[1], Loc::Mem(global(0, 0)));
+    }
+
+    /// nbody nib -Os: the swap loaded a cell in the inner loop where a copy of
+    /// the held value read none, 1200 memory operands more than main in a run.
+    /// Code built for size keeps the copy.
+    #[test]
+    fn test_a_loop_invariant_load_stays_held_in_code_built_for_size() {
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile");
+        let body = loop_reading(global(0, 0), global(1, 0), None, true);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fsubr+m", "fstp"]);
     }
 
     /// A loop that adds `fld1` to a loaded cell (`recfloat`'s `x * 0.5 + 1.0`):

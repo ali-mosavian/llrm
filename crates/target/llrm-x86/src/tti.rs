@@ -662,15 +662,11 @@ impl Tti for X86 {
         ty: Ty,
         bits: u64,
     ) -> Option<u32> {
-        // An operand-size prefix where the width is not the mode's.
-        let prefix = |width: u32| u32::from(width == if self.real_mode.is_some() { 32 } else { 16 });
         match ty {
-            // `xor r, r` is 2 bytes, `mov r, imm` the opcode and the immediate.
-            Ty::Int(width @ (8 | 16 | 32)) if bits == 0 => Some(2 + prefix(width)),
-            Ty::Int(8) => Some(2),
-            Ty::Int(width @ (16 | 32)) => Some(1 + width / 8 + prefix(width)),
             // `fldz`, `fld1`; any other float is a `fld [pool]`: opcode, mode
-            // and a 16 or 32-bit address.
+            // and a 16 or 32-bit address. An integer is not priced: `xor` or
+            // `mov` of 2 to 6 bytes is within what the merge of a collapsed
+            // chain repays (sieve m16 -Os grew 2 B declining a widened zero).
             Ty::Float | Ty::Double | Ty::X87 if self.x87_stack_slots().is_some() => {
                 let one = match ty {
                     Ty::Float => u64::from(1.0f32.to_bits()),

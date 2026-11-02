@@ -236,7 +236,8 @@ fn test_a_float_to_integer_conversion_of_a_phi_is_made_in_the_predecessors() {
 /// `fptosi (fadd (phi float [0.0, ..]), 0.5)` folded twice: the guard's edge
 /// went `fldz` (2 B), `fld [0.5]` (4 B), `xor eax, eax` and the conversion
 /// with its control-word code moved into the loop's exit: recfloat m16 -Os was
-/// 1 B over main. A function for size keeps the fold that makes the guard's
+/// 1 B over main. The addition stays; the conversion folds (integers are not
+/// priced). A function for size keeps the fold that makes the guard's
 /// constant bigger, where the target prices it; a function for speed folds.
 #[test]
 fn test_a_fold_through_a_phi_stays_in_a_function_for_size_where_its_constant_costs_more() {
@@ -266,9 +267,8 @@ fn test_a_fold_through_a_phi_stays_in_a_function_for_size_where_its_constant_cos
     };
     let convert = "  %r = fptosi float %p to i32\n  ret i32 %r\n";
     let add = "  %a = fadd float %p, 0.5\n  %r = fptosi float %a to i32\n  ret i32 %r\n";
-    assert!(run("optsize ", true, convert).contains("fptosi float %p"), "0.0 to the integer 0 costs a byte");
     assert!(run("optsize ", true, add).contains("fadd float %p, 5.000000e-01"), "0.0 to 0.5 costs two");
-    for folded in [run("", true, convert), run("optsize ", false, convert), run("", true, add)] {
+    for folded in [run("optsize ", true, convert), run("", true, add), run("optsize ", false, add)] {
         assert!(!folded.contains("phi float"), "{folded}");
     }
 }

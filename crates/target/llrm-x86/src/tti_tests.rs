@@ -370,11 +370,11 @@ fn test_the_x87_stack_slots_reach_the_unroll_query_only_without_sse2() {
     assert_eq!((slots("i486"), slots("pentium"), slots("core2")), (Some(8), Some(8), None));
 }
 
-/// A fold through a phi for size reads the bytes of the constants it swaps:
-/// recfloat m16 -Os moved `fldz` (2 B) to a pool load (4 B) and the integer 0
-/// (`xor eax, eax`, 3 B in 16-bit code) and came out 1 B over main.
+/// A fold through a phi for size reads the bytes of the float constants it
+/// swaps: recfloat m16 -Os moved `fldz` (2 B) to a pool load (4 B) and came
+/// out 1 B over main. Integers are not priced (sieve m16 -Os grew 2 B).
 #[test]
-fn test_constant_code_bytes_are_the_encodings_of_the_x87_and_integer_forms() {
+fn test_constant_code_bytes_are_the_encodings_of_the_x87_forms() {
     let real = crate::tti::RealMode {
         scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
         registers: 6,
@@ -391,24 +391,11 @@ fn test_constant_code_bytes_are_the_encodings_of_the_x87_and_integer_forms() {
     let bytes = |tti: &X86, ty, bits| tti.constant_code_bytes(ty, bits);
     let half = u64::from(0.5f32.to_bits());
     assert_eq!(
-        [
-            bytes(&flat, Ty::Int(32), 0),
-            bytes(&flat, Ty::Int(32), 7),
-            bytes(&flat, Ty::Float, 0),
-            bytes(&flat, Ty::Float, half),
-        ],
-        [Some(2), Some(5), Some(2), Some(6)]
+        [bytes(&flat, Ty::Float, 0), bytes(&flat, Ty::Float, half), bytes(&flat, Ty::Int(32), 0)],
+        [Some(2), Some(6), None]
     );
     let real = flat.in_real_mode(real);
-    assert_eq!(
-        [
-            bytes(&real, Ty::Int(32), 0),
-            bytes(&real, Ty::Int(16), 0),
-            bytes(&real, Ty::Float, 0),
-            bytes(&real, Ty::Float, half),
-        ],
-        [Some(3), Some(2), Some(2), Some(4)]
-    );
+    assert_eq!([bytes(&real, Ty::Float, 0), bytes(&real, Ty::Float, half)], [Some(2), Some(4)]);
     let sse = X86::of_cpu("core2").unwrap();
     assert_eq!(bytes(&sse, Ty::Float, 0), None, "floats are not on the stack");
 }

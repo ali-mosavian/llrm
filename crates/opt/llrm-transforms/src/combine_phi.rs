@@ -39,8 +39,11 @@
 //! folds (`foldOpIntoPhi` carries no cost): `fadd (phi float [0.0, %x]), 0.5`
 //! to `phi float [0.5, ..]` swaps `fldz` (2 B) for a pool load (4 B at m16)
 //! and moves the one addition; the instruction count does not change, so the
-//! constants are the net. Exit 2026-11-20: the pin's
-//! `TargetTransformInfo` prices a fold through a phi.
+//! constants are the net. X86 prices x87 constants only: a step of a chain
+//! whose later folds merge two phis (sieve m16 -Os: a zext, a shift and an
+//! xor become one phi) grows its own constants and shrinks the chain's, so a
+//! step-wise integer price declined a fold that pays. Exit 2026-11-20: the
+//! pin's `TargetTransformInfo` prices a fold through a phi.
 //!
 //! # Used by
 //! The `visit*` of the families that fold an operation into a phi
