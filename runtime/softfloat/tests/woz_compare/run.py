@@ -106,67 +106,73 @@ for op in OPS:
         if mode == 'call' and rc: res[op]['ours_wrong'] = rc
     res[op]['ours_cyc'] = (cyc['call'] - cyc['nocall']) / N
 
-# ---- spike fast32 (same Woz word layout), compiled by llrm-cc
-for op in OPS:
-    open(f'{T}/tables.h', 'w').write(open(f'{T}/fast_{op}.h').read())
-    w = sh('cc', '-O2', f'-DOP={OPS.index(op)}', f'-I{T}', f'{HERE}/fast_expect.c', f'{SF}/src/fast32.c', '-o', f'{T}/fe').returncode
-    wtab = sh(f'{T}/fe').stdout
-    open(f'{T}/tables.h', 'a').write(wtab)
-    sh(CC, '--target=6502-sim65', '-Os', '-S', f'-I{SF}/include', f'{SF}/src/fast32.c', '-o', f'{T}/fast32.s')
-    cyc = {}
-    for mode, d in (('call', [f'-DOP={OPS.index(op)}']), ('nocall', ['-DNOCALL'])):
-        sh(CC, '--target=6502-sim65', '-Os', '-S', *d, f'-I{T}', f'{HERE}/fast_main.c', '-o', f'{T}/m.s')
-        with open(f'{T}/p.s', 'w') as f:
-            f.write(''.join(l for l in open(f'{T}/m.s') if re.match(r'^rc\d+ = ', l)))
-            f.write('.export _main\n_main:\n  jsr main\n  rts\n')
-            for n in ('m', 'fast32'):
-                f.write(''.join(l for l in open(f'{T}/{n}.s') if not re.match(r'^rc\d+ = ', l)))
-            f.write(rtlines)
-        sh('cl65', '-t', 'sim6502', '-o', f'{T}/o.bin', f'{T}/p.s')
-        c, rc, _ = cycles(f'{T}/o.bin'); cyc[mode] = c
-        if mode == 'call' and rc: res[op]['fast_wrong'] = rc
-    res[op]['fast_cyc'] = (cyc['call'] - cyc['nocall']) / N
+# ---- fast variants, compiled by llrm-cc: the spike (own algorithm) and the translation of the original
+VARIANTS = {'spike': ('fast32.c', []), 'wozC': ('fast32_woz.c', ['-DFZW_NAME(n)=fz_##n'])}
+for var, (src, defs) in VARIANTS.items():
+    for op in OPS:
+        open(f'{T}/tables.h', 'w').write(open(f'{T}/fast_{op}.h').read())
+        sh('cc', '-O2', f'-DOP={OPS.index(op)}', *defs, f'-I{T}', f'{HERE}/fast_expect.c', f'{SF}/src/{src}', '-o', f'{T}/fe')
+        open(f'{T}/tables.h', 'a').write(sh(f'{T}/fe').stdout)
+        sh(CC, '--target=6502-sim65', '-Os', '-S', *defs, f'-I{SF}/include', f'{SF}/src/{src}', '-o', f'{T}/{var}.s')
+        cyc = {}
+        for mode, d in (('call', [f'-DOP={OPS.index(op)}']), ('nocall', ['-DNOCALL'])):
+            sh(CC, '--target=6502-sim65', '-Os', '-S', *d, f'-I{T}', f'{HERE}/fast_main.c', '-o', f'{T}/m.s')
+            with open(f'{T}/p.s', 'w') as f:
+                f.write(''.join(l for l in open(f'{T}/m.s') if re.match(r'^rc\d+ = ', l)))
+                f.write('.export _main\n_main:\n  jsr main\n  rts\n')
+                for n in ('m', var):
+                    f.write(''.join(l for l in open(f'{T}/{n}.s') if not re.match(r'^rc\d+ = ', l)))
+                f.write(rtlines)
+            sh('cl65', '-t', 'sim6502', '-o', f'{T}/o.bin', f'{T}/p.s')
+            c, rc, _ = cycles(f'{T}/o.bin'); cyc[mode] = c
+            if mode == 'call' and rc: res[op][var + '_wrong'] = rc
+        res[op][var + '_cyc'] = (cyc['call'] - cyc['nocall']) / N
 
 # ---- ours: bytes reachable from the entry (call graph over jsr, sizes from the ca65 listing)
 def listing(path, hdr):
     sh('ca65', '-U', '-l', path + '.lst', path, '-o', '/dev/null')
     return open(path + '.lst').read().split('\n')
-sizes = {}; calls = {}; defined = set()
-for src in (f'{T}/sf32.s', f'{T}/sf32_conv.s', f'{T}/fast32.s', f'{T}/rtfull.s'):
-    if src.endswith('rtfull.s'):
-        with open(src, 'w') as f:
-            f.write(''.join(l for l in open(f'{T}/sf32.s') if re.match(r'^rc\d+ = ', l))); f.write(rtlines)
-    L = listing(src, None); labs = []
-    for ln in L:
-        m = re.match(r'^([0-9A-F]{6})r\s+\d+\s+(.*)$', ln)
-        if not m: continue
-        off = int(m.group(1), 16); rest = m.group(2)
-        lm = re.match(r'^([A-Za-z_]\w*):', rest) if rest and not rest[0].isspace() else None
-        if lm: labs.append([lm.group(1), off, []])
-        jm = re.search(r'\bjsr\s+(\w+)', rest)
-        if jm and labs: labs[-1][2].append(jm.group(1))
-    end = max([int(re.match(r'^([0-9A-F]{6})r', l).group(1), 16) + len(re.findall(r' [0-9A-F]{2}(?= |$)', l[14:26])) for l in L if re.match(r'^[0-9A-F]{6}r\s+\d+\s+[0-9A-F]{2}', l)] + [0])
-    names = [l[0] for l in labs]
-    top = set(n for n in names if not any(n != m and n.startswith(m + '_') for m in names))
-    cur = None
-    for k, (n, off, cl) in enumerate(labs):
-        nxt = labs[k + 1][1] if k + 1 < len(labs) else end
-        if n in top: cur = n; sizes[cur] = 0; calls[cur] = set(); defined.add(cur)
-        if cur: sizes[cur] += max(0, nxt - off); calls[cur] |= set(cl)
-def closure(fn):
+def measure(paths):
+    sizes = {}; calls = {}
+    for src in paths:
+        L = listing(src, None); labs = []
+        for ln in L:
+            m = re.match(r'^([0-9A-F]{6})r\s+\d+\s+(.*)$', ln)
+            if not m: continue
+            off = int(m.group(1), 16); rest = m.group(2)
+            lm = re.match(r'^([A-Za-z_]\w*):', rest) if rest and not rest[0].isspace() else None
+            if lm: labs.append([lm.group(1), off, []])
+            jm = re.search(r'\bjsr\s+(\w+)', rest)
+            if jm and labs: labs[-1][2].append(jm.group(1))
+        end = max([int(re.match(r'^([0-9A-F]{6})r', l).group(1), 16) + len(re.findall(r' [0-9A-F]{2}(?= |$)', l[14:26])) for l in L if re.match(r'^[0-9A-F]{6}r\s+\d+\s+[0-9A-F]{2}', l)] + [0])
+        names = [l[0] for l in labs]
+        top = set(n for n in names if not any(n != m and n.startswith(m + '_') for m in names))
+        cur = None
+        for k, (n, off, cl) in enumerate(labs):
+            nxt = labs[k + 1][1] if k + 1 < len(labs) else end
+            if n in top: cur = n; sizes[cur] = 0; calls[cur] = set()
+            if cur: sizes[cur] += max(0, nxt - off); calls[cur] |= set(cl)
+    return sizes, calls
+def closure(fn, sc):
+    sizes, calls = sc
     seen, work = set(), [fn]
     while work:
         f = work.pop()
         if f in seen or f not in sizes: continue
         seen.add(f); work += list(calls[f])
-    return sum(sizes[f] for f in seen), sorted(seen)
+    return sum(sizes[f] for f in seen)
+with open(f'{T}/rtfull.s', 'w') as f:
+    f.write(''.join(l for l in open(f'{T}/sf32.s') if re.match(r'^rc\d+ = ', l))); f.write(rtlines)
+sc_ieee = measure([f'{T}/sf32.s', f'{T}/sf32_conv.s', f'{T}/rtfull.s'])
+sc_var = {v: measure([f'{T}/{v}.s', f'{T}/rtfull.s']) for v in VARIANTS}
 for op in OPS:
-    res[op]['ours_bytes'], res[op]['ours_fns'] = closure(OURS_FN[op])
-    res[op]['fast_bytes'], _ = closure(FAST_FN[op])
+    res[op]['ours_bytes'] = closure(OURS_FN[op], sc_ieee)
+    for v in VARIANTS: res[op][v + '_bytes'] = closure(FAST_FN[op], sc_var[v])
     res[op]['woz_bytes'] = woz_bytes[op]
 
-print('%-4s %7s %8s %7s %9s %9s %8s  %s' % ('op', 'Woz B', 'fast B', 'ieee B', 'Woz cyc', 'fast cyc', 'ieee cyc', 'Woz max err (rel; abs for f2i)'))
+print('%-4s %6s %6s %6s %6s | %7s %7s %7s %7s  %s' % ('op', 'WozB', 'wozC B', 'spikeB', 'ieee B', 'Woz cyc', 'wozC', 'spike', 'ieee', 'Woz err (rel; abs f2i)'))
 for op in OPS:
     r = res[op]
-    print('%-4s %7d %8d %7d %9.0f %9.0f %8.0f  %.2e%s%s' % (op, r['woz_bytes'], r['fast_bytes'], r['ours_bytes'], r['woz_cyc'], r['fast_cyc'], r['ours_cyc'], r['woz_err'], '  IEEE WRONG' if 'ours_wrong' in r else '', '  FAST WRONG' if 'fast_wrong' in r else ''))
+    bad = ''.join(' %s WRONG' % k for k in ('ours_wrong', 'spike_wrong', 'wozC_wrong') if k in r)
+    print('%-4s %6d %6d %6d %6d | %7.0f %7.0f %7.0f %7.0f  %.1e%s' % (op, r['woz_bytes'], r['wozC_bytes'], r['spike_bytes'], r['ours_bytes'], r['woz_cyc'], r['wozC_cyc'], r['spike_cyc'], r['ours_cyc'], r['woz_err'], bad))
 print('N=%d  workdir %s' % (N, T))

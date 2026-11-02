@@ -48,6 +48,11 @@ cp: lda (ptr),y
     sta fpregs,y
     dey
     bpl cp
+    lda #0                      ; E and SIGN are scratch, but FADD's first carry depends on the stale E: start each record clean
+    sta $FC
+    sta $FD
+    sta $FE
+    sta SIGN
 .ifndef NOCALL
     jsr target
 .endif
