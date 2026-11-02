@@ -61,6 +61,7 @@ static sf64 add_bits(sf64 a, sf64 b)
     if ((a & ~SIGN) < (b & ~SIGN)) { sf64 t = a; a = b; b = t; }
     int ea, eb;
     uint64_t ma = unpack(a, &ea) << 3, mb = unpack(b, &eb) << 3;
+    if (ea - eb > 54) return a; /* ed > 54: b is under a quarter of a's last place; 54 is not enough (2^k - 1.5 * 2^(k-54) rounds down) */
     mb = sf_shr_sticky64(mb, ea - eb);
     uint64_t sign = a & SIGN, m;
     if ((a ^ b) & SIGN) {
