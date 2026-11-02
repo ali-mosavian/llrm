@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use llrm_lir::registers::RegId;
+
+use super::env::TargetEnv;
 use super::{CoalescerEnv, JoinResult, join_copy, register_coalescer::State};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
@@ -968,4 +971,37 @@ fn test_a_copy_between_widths_is_left_where_the_target_has_no_sub_registers() {
     lis.interval(2);
     let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
     assert_eq!(result, JoinResult::Rejected);
+}
+
+fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
+    TargetEnv {
+        palettes: palettes.iter().map(|(value, registers)| (*value, registers.iter().copied().collect())).collect::<IndexMap<_, _>>().into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: Box::new(|_| true),
+        freq: Vec::new(),
+        regs: Some(body(&[]).regs()),
+    }
+}
+
+/// A target that names one register id for every width of it (m68k's
+/// allocator palettes: `d0` for a byte, a word and a long) hosts a narrow
+/// value in the wide one's register. The rule asked for a distinct, narrower id
+/// and refused all of them: the 53 of 89 "width differs" copies of s67 stayed
+/// and the join changed no byte of it.
+#[test]
+fn test_a_register_id_shared_by_two_widths_hosts_the_narrow_value() {
+    let env = env_with_palettes(&[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::BX, RegId::CX])]);
+    assert!(env.can_share_sub(2, 1));
+}
+
+/// A narrower view of the same root hosts it too (`ax` is the low part of
+/// `eax`); the high byte `ah` is not a low part.
+#[test]
+fn test_the_low_view_of_a_register_hosts_the_narrow_value_and_the_high_byte_does_not() {
+    let env = env_with_palettes(&[(1, &[RegId::EAX]), (2, &[RegId::AX]), (3, &[RegId::AH])]);
+    assert!(env.can_share_sub(2, 1));
+    assert!(!env.can_share_sub(3, 1));
 }

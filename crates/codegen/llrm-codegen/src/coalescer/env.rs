@@ -63,7 +63,8 @@ pub struct TargetEnv {
 impl TargetEnv {
     /// The registers `wide` may take whose low part `narrow` may take
     /// (`getMatchingSuperRegClass`): a register of `narrow`'s palette that is
-    /// the bottom bytes of the same root register.
+    /// the bottom bytes of the same root register, or the register itself
+    /// where the target names one id for every width of it.
     fn hosts(
         &self,
         wide: &BTreeSet<RegId>,
@@ -78,7 +79,6 @@ impl TargetEnv {
                     regs.root(small) == regs.root(big)
                         && low(small) & !low(big) == 0
                         && low(small).trailing_zeros() == low(big).trailing_zeros()
-                        && low(small) != low(big)
                 })
             })
             .collect()
