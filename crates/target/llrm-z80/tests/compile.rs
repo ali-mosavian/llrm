@@ -275,3 +275,33 @@ fn a_pair_copy_moves_only_the_halves_that_are_read() {
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld h, d") && !out.contains("ld l, e"), "{out}");
 }
+
+/// crc16: the pointer and the length fit in `hl` and `a` through the loops,
+/// but the allocator gave a short-lived byte to `h`, evicted the pointer and
+/// spilled both to the frame: 77 B against SDCC's 59. Spill-free needs no
+/// frame access. Waits for greedy's eviction order (greedy-anyisa, 11-08).
+#[test]
+#[ignore = "greedy evicts the long-lived pair for a short byte that has a free register"]
+fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
+    let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+}
+
+/// bsearch8: the base pointer and a bound spill (`ld l, -2(ix)`, `ld -3(ix), d`)
+/// in a loop with registers to spare: 68 B / 790 T against SDCC's 56 / 702.
+#[test]
+#[ignore = "greedy spills pair values in a loop with registers to spare"]
+fn a_search_loop_keeps_its_base_pointer_in_a_register() {
+    let out = text(include_str!("kernels/ir/bsearch8.ll"), "bsearch8", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix)"), "{out}");
+}
+
+/// scmp: two pointers read through `(hl)` are copied into `hl` on every trip
+/// (`ld l, e; ld h, d`, `ld l, c; ld h, b`): 41 B / 218 T against SDCC's
+/// 24 / 147. A pointer that is only ever read through `(hl)` lives in `hl`.
+#[test]
+#[ignore = "greedy has no hint to keep the pointers read through (hl) in hl"]
+fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("ld l, e") && !out.contains("ld l, c"), "{out}");
+}
