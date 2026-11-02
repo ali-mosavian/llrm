@@ -2231,3 +2231,48 @@ fn an_srem_loop_with_a_constant_trip_count_compiles_in_a_debug_build() {
         define i32 @main() {\n  %v = call i64 @f(i32 2000)\n  call void @report(i64 %v)\n  ret i32 0\n}\n";
     let _ = compiled(&flags(&["-O2"]), text, "main");
 }
+
+/// A dense switch at m64 is a table of 4-byte offsets in the read-only data.
+/// It was a `.data` section (writable) of `R_X86_64_PLT32` entries, the call
+/// kind: a PIE linked with `-z text` refused the one and the linker put a PLT
+/// stub behind the other. The pin's are `R_X86_64_PC32` in `.rodata`, each
+/// resolving to its slot's `block - table`.
+#[test]
+fn a_dense_switch_at_m64_is_a_read_only_table_of_pc_relative_entries() {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text += "d:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    let table = object.sections.iter().find(|one| one.role == llrm_object::Role::ROData).expect("a read-only section");
+    assert_eq!(table.image.len(), 8 * 4);
+    assert_eq!(table.relocs.len(), 8);
+    assert!(
+        table.relocs.iter().all(|one| one.pc_rel && one.kind == llrm_object::FixupKind::DATA_4),
+        "{:?}",
+        table.relocs
+    );
+    // `S + A - P` is `block - table`: the field holds `slot - table`.
+    for (k, reloc) in table.relocs.iter().enumerate() {
+        assert_eq!(reloc.at, 4 * k);
+        assert_eq!(reloc.addend, 4 * k as i64);
+    }
+}

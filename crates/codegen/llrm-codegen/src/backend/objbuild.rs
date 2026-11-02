@@ -513,8 +513,8 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     while let Some(index) = pending.pop() {
         for item in &units[index].2 {
             if let masm::Datum::Pointer(masm::Pointer { name, .. })
-                | masm::Datum::SegmentWord(name)
-                | masm::Datum::Difference(masm::Difference { name, .. }) = item
+            | masm::Datum::SegmentWord(name)
+            | masm::Datum::Difference(masm::Difference { name, .. }) = item
             {
                 reached.insert(_target(name).to_owned());
             }
@@ -775,13 +775,13 @@ pub fn _data(
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
             masm::Datum::SegmentWord(name) => segment.put(&[0, 0], &[Fixup::new(0, BASE, name.clone())]),
-            // `name - base`: the pc-relative fixup is `name - (slot + 4)`, the
-            // field the rest.
+            // `name - base`: the pc-relative fixup is `name - slot`, so the
+            // field holds `slot - base`.
             masm::Datum::Difference(masm::Difference { name, base }) => {
                 let slot = segment.image.len();
-                segment.put(&[0; 4], &[Fixup::new(0, relative(4), name.clone())]);
+                segment.put(&[0; 4], &[Fixup::new(0, Fix::pc_rel(4, 0), name.clone())]);
                 let table = symbols[base].1;
-                pack_into(&mut segment.image, slot, (slot + 4) as i64 - table as i64);
+                pack_into(&mut segment.image, slot, slot as i64 - table as i64);
             }
         }
     }
@@ -1587,20 +1587,26 @@ mod tests {
 
     /// A position-independent jump table's entry is `name - table` in four
     /// bytes: the slot is a pc-relative fixup to the code label, and its field
-    /// carries `slot + 4 - table`, so the linker's `S + A - P` is `name -
+    /// carries `slot - table`, so the linker's `S + A - P` is `name -
     /// table`. A pointer-wide absolute entry (a PIE refuses) was all there was.
     #[test]
     fn test_a_table_entry_is_a_pc_relative_difference_from_the_table() {
         let mut segment = Segment::new(".rodata", Role::Data, true);
         let mut symbols = IndexMap::default();
         let entry = |name: &str| masm::Datum::Difference(masm::Difference { name: name.into(), base: "$J1".into() });
-        let items = [masm::Datum::Bytes(vec![9, 9]), masm::Datum::Align(masm::Align { to: 4 }), label("$J1"), entry("L0"), entry("L1")];
+        let items = [
+            masm::Datum::Bytes(vec![9, 9]),
+            masm::Datum::Align(masm::Align { to: 4 }),
+            label("$J1"),
+            entry("L0"),
+            entry("L1"),
+        ];
         _data(&mut segment, 0, &items, &mut symbols, CodeModel::Flat64);
         assert_eq!(symbols["$J1"], (0, 4));
         assert_eq!(segment.image.len(), 12);
         let fixups: Vec<_> = segment.fixups.iter().map(|f| (f.at, f.name.as_str())).collect();
         assert_eq!(fixups, [(4, "L0"), (8, "L1")]);
-        assert_eq!(&segment.image[4..12], &[4, 0, 0, 0, 8, 0, 0, 0]);
+        assert_eq!(&segment.image[4..12], &[0, 0, 0, 0, 4, 0, 0, 0]);
     }
 
     /// A table jump through a register names its table by the jump's
@@ -1619,7 +1625,14 @@ mod tests {
         let procedure = procedure(
             "_f",
             false,
-            body("f", vec![block(0, vec![insn(0, jump)], vec![1, 2]).into(), block(1, vec![], vec![]).into(), block(2, vec![], vec![]).into()]),
+            body(
+                "f",
+                vec![
+                    block(0, vec![insn(0, jump)], vec![1, 2]).into(),
+                    block(1, vec![], vec![]).into(),
+                    block(2, vec![], vec![]).into(),
+                ],
+            ),
             0,
             vec![],
         );

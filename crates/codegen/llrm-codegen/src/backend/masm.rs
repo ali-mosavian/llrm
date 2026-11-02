@@ -570,6 +570,30 @@ pub fn jump_tables(
     out
 }
 
+/// The tables of `tables` (from [`jump_tables`]) that are position independent,
+/// each 4-aligned, and the others: a table of differences is never written, so
+/// it goes in the read-only data (`.rodata`) as the pin's.
+pub fn split_read_only(tables: Vec<Datum>) -> (Vec<Datum>, Vec<Datum>) {
+    let (mut read_only, mut writable) = (Vec::new(), Vec::new());
+    let mut group: Vec<Datum> = Vec::new();
+    let mut flush = |group: &mut Vec<Datum>| {
+        if matches!(group.get(1), Some(Datum::Difference(_))) {
+            read_only.push(Datum::Align(Align { to: 4 }));
+            read_only.append(group);
+        } else {
+            writable.append(group);
+        }
+    };
+    for datum in tables {
+        if matches!(datum, Datum::Object(_)) {
+            flush(&mut group);
+        }
+        group.push(datum);
+    }
+    flush(&mut group);
+    (read_only, writable)
+}
+
 pub fn datum(item: &Datum) -> Vec<String> {
     match item {
         Datum::Label(Label { name }) | Datum::Object(Label { name }) => vec![format!("{name} label byte")],

@@ -52,7 +52,13 @@ fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
     let index = dag.get_register(EVT::I64, 7);
     let branch = dag.get_node(ISD::BrJT, EVT::OTHER, &[chain, table, index]);
     dag.set_root(branch);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::BrInd);
     let target = dag.operand(root, 1);
@@ -60,7 +66,10 @@ fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
     let (entry, base) = (dag.operand(target, 0), dag.operand(target, 1));
     assert_eq!(dag.opcode(entry), ISD::Load);
     let NodeData::Mem(info) = dag.node(entry).data else { panic!("a load") };
-    assert_eq!((info.mem_vt, info.ext, info.base), (EVT::I32, Some(crate::backend::selectiondag::actions::LoadExt::SExtLoad), MemBase::JumpTable));
+    assert_eq!(
+        (info.mem_vt, info.ext, info.base),
+        (EVT::I32, Some(crate::backend::selectiondag::actions::LoadExt::SExtLoad), MemBase::JumpTable)
+    );
     assert_eq!((dag.opcode(base), dag.opcode(dag.operand(base, 0))), (x86isd::WRAPPER_RIP, ISD::TargetJumpTable));
     let address = dag.operand(entry, 1);
     let scaled = dag.operand(address, 1);
