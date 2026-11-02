@@ -61,9 +61,9 @@ ns: asl a0
     bne loop
     rts
 .endif
-.if VAR = 2
+.if (VAR = 2) .or (VAR = 5)
 ; pl:ph = x * y = sq(x+y) - sq(|x-y|), sq(n) = n*n/4 rounded down, tables of 512 entries in two pages each
-.macro MUL8 xa, yb
+.macro MUL8 xa, yb, low
 .local big, dif
     lda xa
     clc
@@ -72,15 +72,19 @@ ns: asl a0
     tax
     lda sqlo,x
     sta s0
+.if .not low
     lda sqhi,x
     sta s1
+.endif
     jmp dif
 big:
     tax
     lda sqlo+256,x
     sta s0
+.if .not low
     lda sqhi+256,x
     sta s1
+.endif
 dif:
     lda xa
     sec
@@ -93,9 +97,11 @@ dif:
     sec
     sbc sqlo,y
     sta pl
+.if .not low
     lda s1
     sbc sqhi,y
     sta ph
+.endif
 .endmacro
 .macro ADDP k
 .if k = 3
@@ -123,7 +129,7 @@ dif:
 .endif
 .endmacro
 mul32:
-    MUL8 a0, b0
+    MUL8 a0, b0, 0
     lda pl
     sta r0
     lda ph
@@ -131,23 +137,23 @@ mul32:
     lda #0
     sta r2
     sta r3
-    MUL8 a0, b1
+    MUL8 a0, b1, 0
     ADDP 1
-    MUL8 a1, b0
+    MUL8 a1, b0, 0
     ADDP 1
-    MUL8 a0, b2
+    MUL8 a0, b2, 0
     ADDP 2
-    MUL8 a1, b1
+    MUL8 a1, b1, 0
     ADDP 2
-    MUL8 a2, b0
+    MUL8 a2, b0, 0
     ADDP 2
-    MUL8 a0, b3
+    MUL8 a0, b3, VAR = 5
     ADDP 3
-    MUL8 a1, b2
+    MUL8 a1, b2, VAR = 5
     ADDP 3
-    MUL8 a2, b1
+    MUL8 a2, b1, VAR = 5
     ADDP 3
-    MUL8 a3, b0
+    MUL8 a3, b0, VAR = 5
     ADDP 3
     rts
 .segment "RODATA"
