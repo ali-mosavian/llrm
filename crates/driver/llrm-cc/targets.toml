@@ -221,12 +221,14 @@ llc_program = "llrm-m68k-llc"
 object = "asm"
 link = []
 
-# WebAssembly, 32-bit linear memory, freestanding: the object for `wasm-ld`. The platform libc row (wasm32-wasi, a
+# WebAssembly, 32-bit linear memory, freestanding: the object for `wasm-ld`. The pinned clang is built for x86 only, so
+# `LLRM_CLANG_WASM` names a clang with the WebAssembly target (clang 20 until the pin is built with it). The platform libc row (wasm32-wasi, a
 # fetched sysroot) is planned in docs/working/wasm-libc-plan.md.
 [wasm32]
 description = "wasm"
 description_file = "datalayout32.toml"
 triple = "wasm32-unknown-unknown"
+clang_env = "LLRM_CLANG_WASM"
 datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"
 clang = ["-target", "wasm32-unknown-unknown", "-ffreestanding"]
 llc = ["-filetype=obj"]
