@@ -198,6 +198,8 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
     if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
+        # The program is this module: only the kernel is linked to from outside (as a C helper is `static`), so the rest is internal, near, by value.
+        flags += ["--whole-program", "--export", variant.region]
     return flags
 
 
