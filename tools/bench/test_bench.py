@@ -1108,5 +1108,7 @@ def test_an_x86_64_row_above_the_base_fails_and_one_that_could_not_run_says_why(
     base = {"instructions": 1000, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0}
     assert bench.native_problems("fib c64 -O2", {**base, "code_bytes": 101}, base, []) == ["fib c64 -O2: code_bytes 101 > 100 (worse)"]
     assert bench.native_problems("fib c64 -O2", {**base, "instructions": 999}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1001}, base, []) == []  # the rounding of the mean
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1002}, base, []) == ["fib c64 -O2: instructions 1002 > 1001 (worse)"]
     assert bench.native_problems("fib c64 -O2", {"skip": "no perf"}, base, []) == []
     assert bench.native_problems("fib c64 -O2", {"error": "compile: x"}, base, []) == ["fib c64 -O2: compile: x"]

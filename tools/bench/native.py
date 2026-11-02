@@ -1,6 +1,6 @@
 """The x86_64-linux rows of the bench: each C program compiled by llrm-cc -m64 and, as reported columns, by gcc and clang, linked with one driver and
 the POSIX OS layer, run natively. `code_bytes`: the program's object, executable sections only (tools/sizes.py reads the ELF); `instructions`: the
-user-mode instructions of one run of `bench_main_`, the difference of 11 runs and 1 over 10, so the process start-up and the driver cancel."""
+user-mode instructions of one run of `bench_main_`, the difference of 101 runs and 1 over 100, so the process start-up and the driver cancel."""
 
 import os
 import re
@@ -37,21 +37,25 @@ def perf_missing() -> str | None:
     return None if done.returncode == 0 and "instructions" in done.stderr and "not supported" not in done.stderr else "perf cannot count instructions:u here"
 
 
-def instructions_of(executable: Path, argument: str, cwd: Path) -> int | None:
-    done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", str(executable), argument], capture_output=True, text=True, cwd=cwd)
-    for line in done.stderr.splitlines():
-        fields = line.split(",")
-        if len(fields) > 2 and fields[2].startswith("instructions") and fields[0].isdigit():
-            return int(fields[0])
-    return None
+def instructions_of(executable: Path, argument: str, cwd: Path, repeats: int = 7) -> int | None:
+    """User-mode instructions of `executable argument`: the median of `repeats` runs. An interrupt landing in the run moves the counter either way
+    (one binary read 200126 five times of six, 200127 once and 200116 once): the least would take the low outlier."""
+    found = []
+    for _ in range(repeats):
+        done = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", str(executable), argument], capture_output=True, text=True, cwd=cwd)
+        for line in done.stderr.splitlines():
+            fields = line.split(",")
+            if len(fields) > 2 and fields[2].startswith("instructions") and fields[0].isdigit():
+                found.append(int(fields[0]))
+    return sorted(found)[len(found) // 2] if found else None
 
 
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
-    """The command and environment that compile `source` to the object `out`: the same flags for every compiler; `main` becomes `bench_main_`, which the driver runs."""
-    flags = [f"-{opt}", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
+    """The command and environment that compile `source` to the object `out`: the same flags for every compiler, `-fno-pic` among them (llrm-cc -m64 without it writes rip-relative code: memcpy_runtime -Os 235 B against 209 B); `main` becomes `bench_main_`, which the driver runs."""
+    flags = [f"-{opt}", "-fno-pic", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
     if compiler == OURS:
         return [str(binary / "llrm-cc"), "-m64", *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
-    return [shutil.which(REPORTED[compiler]) or REPORTED[compiler], "-fno-pic", *flags], dict(os.environ)
+    return [shutil.which(REPORTED[compiler]) or REPORTED[compiler], *flags], dict(os.environ)
 
 
 def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt: str, work: Path, bench: Path) -> dict:
@@ -69,11 +73,11 @@ def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt:
     want = source.with_suffix(".out").read_text().splitlines()[:1]
     if ran.returncode != 0 or ran.stdout.split()[:1] != want[:1]:
         return {"error": f"prints {ran.stdout.split()[:1]}, want {want[:1]}"}
-    few, many = instructions_of(exe, "1", directory), instructions_of(exe, "11", directory)
+    few, many = instructions_of(exe, "1", directory), instructions_of(exe, "101", directory)
     if few is None or many is None or many <= few:
-        return {"error": f"instructions: {few} for one run, {many} for eleven"}
+        return {"error": f"instructions: {few} for one run, {many} for 101"}
     data, bss = sizes.data_bytes(obj)
-    return {"instructions": (many - few) // 10, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": round((many - few) / 100), "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], work: Path, bench: Path) -> dict[tuple[str, str, str], dict]:

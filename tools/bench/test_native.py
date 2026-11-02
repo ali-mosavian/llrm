@@ -41,8 +41,8 @@ def test_a_row_counts_one_run_of_the_program_not_the_start_up_or_the_driver(tmp_
     big_dir = program(tmp_path, "big", PROGRAM.replace("bench_f(20)", "bench_f(200)"), out="2646700\n")
     big = native.measure_one("gcc64", tmp_path, big_dir, big_dir / "big.c", "O1", tmp_path / "w", bench)
     assert "error" not in small and "error" not in big, (small, big)
-    assert abs(small["instructions"] - again["instructions"]) <= 2
-    assert big["instructions"] > 5 * small["instructions"]
+    assert abs(small["instructions"] - again["instructions"]) <= 1  # the rounding of a mean
+    assert big["instructions"] - small["instructions"] > 3 * 180  # 180 more iterations of a loop of at least three instructions
 
 
 def test_a_program_that_prints_the_wrong_value_is_an_error_not_a_count(tmp_path):
@@ -51,3 +51,21 @@ def test_a_program_that_prints_the_wrong_value_is_an_error_not_a_count(tmp_path)
     directory = program(tmp_path, out="1\n")
     row = native.measure_one("gcc64", tmp_path, directory, directory / "f.c", "O1", tmp_path / "w", tmp_path)
     assert "prints" in row.get("error", "") and "instructions" not in row
+
+
+def test_every_column_compiles_without_pic_so_the_columns_compare_like_with_like(tmp_path):
+    """llrm-cc -m64 without -fno-pic wrote rip-relative `lea reg, sym` code (memcpy_runtime -Os 235 B, grep 700 B) against gcc and clang at -fno-pic (209 B, 606 B)."""
+    for column in (native.OURS, *native.REPORTED):
+        command, _ = native.compile_command(column, tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)
+        assert "-fno-pic" in command, column
+
+
+def test_one_binary_measured_twice_reads_the_same_count_to_the_rounding(tmp_path):
+    """The first driver timed each run with rdtsc and insertion-sorted the timings: its own instruction count followed the noise, and one binary read 507, 499, 494 and 492 (173 without it)."""
+    if shutil.which("gcc") is None or native.perf_missing():
+        pytest.skip("needs gcc and perf")
+    directory = program(tmp_path)
+    native.measure_one("gcc64", tmp_path, directory, directory / "f.c", "O1", tmp_path / "w", tmp_path)
+    exe = tmp_path / "w" / "f.gcc64.O1"
+    counts = {round((native.instructions_of(exe, "101", directory) - native.instructions_of(exe, "1", directory)) / 100) for _ in range(5)}
+    assert max(counts) - min(counts) <= 1  # the count is a mean over 100 runs, rounded: one instruction is its resolution
