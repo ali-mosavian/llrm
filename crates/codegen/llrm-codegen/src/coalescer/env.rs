@@ -54,6 +54,10 @@ pub struct TargetEnv {
     /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
     /// runs once.
     pub freq: Vec<f32>,
+    /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI)`: the
+    /// target's own test of a definition worth making again. None: a move of
+    /// an immediate or an address as x86 names them.
+    pub remat: Option<Box<dyn Fn(&Insn) -> bool>>,
 }
 
 /// One side of a copy about to be joined.
@@ -80,6 +84,20 @@ pub struct Join {
 impl CoalescerEnv for TargetEnv {
     fn tuned_for_size(&self) -> bool {
         self.size
+    }
+
+    fn rematerializable(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        match &self.remat {
+            Some(shape) => insn.spread.is_empty() && insn.call.is_none() && shape(insn),
+            None => {
+                insn.spread.is_empty()
+                    && insn.call.is_none()
+                    && crate::greedy::remat::is_trivially_re_materializable(insn, false)
+            }
+        }
     }
 
     fn keeps(
@@ -191,6 +209,7 @@ pub fn coalesce(
     size: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
+    remat: Option<Box<dyn Fn(&Insn) -> bool>>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
     let aliases = pins
         .iter()
@@ -209,7 +228,7 @@ pub fn coalesce(
         .collect();
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq, remat };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);
