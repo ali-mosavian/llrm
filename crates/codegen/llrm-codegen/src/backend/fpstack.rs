@@ -1138,10 +1138,11 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
     order
 }
 
-/// Exchanges a body holds, each weighted by 8 for every loop it is inside
-/// (`floatalloc::_modes`' weight).
-fn weighted_exchanges(body: &LirBody) -> u64 {
-    let depth = crate::analysis::loops::depth(&body.blocks, Some(body.entry));
+/// Exchanges a body holds, each weighted by how often its block runs per call
+/// (`Frequency::of`: the branch probabilities, LLVM's
+/// `MachineBlockFrequencyInfo`).
+fn weighted_exchanges(body: &LirBody) -> f64 {
+    let frequency = crate::analysis::frequency::Frequency::of(body);
     body.blocks
         .iter()
         .map(|block| {
@@ -1149,8 +1150,8 @@ fn weighted_exchanges(body: &LirBody) -> u64 {
                 .insns
                 .iter()
                 .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Exchange))
-                .count() as u64;
-            exchanges * 8_u64.saturating_pow(depth.get(&block.at).copied().unwrap_or(0) as u32)
+                .count();
+            exchanges as f64 * frequency.block(block.at)
         })
         .sum()
 }
@@ -1160,11 +1161,11 @@ fn weighted_exchanges(body: &LirBody) -> u64 {
 /// DEVIATE 9: the first exit to reach a loop's header fixes its order and the
 /// latch pays every exchange that differs, a trip at a time. Where a latch
 /// shuffles, the function is converted again with the header taking the order
-/// the latch had, so the entry edge pays once instead; the smaller weighted
-/// count of exchanges (8 a loop deep) is kept. gcc's `better_edge` takes the
-/// order of the likelier predecessor, which for a header is the latch.
-/// x_nbody_f -O2 held six float values over its back edge and exchanged seven
-/// times a trip, four before. Exit: none.
+/// the latch had, so the entry edge pays once instead; the smaller count of
+/// exchanges, each weighted by its block's frequency, is kept. gcc's
+/// `better_edge` takes the order of the likelier predecessor, which for a
+/// header is the latch. x_nbody_f -O2 held six float values over its back edge
+/// and exchanged seven times a trip, four before. Exit: none.
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
