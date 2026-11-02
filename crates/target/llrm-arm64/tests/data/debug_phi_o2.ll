@@ -1,5 +1,5 @@
-; ModuleID = '/tmp/claude-1000/ph/phi.c'
-source_filename = "/tmp/claude-1000/ph/phi.c"
+; ModuleID = 'phi.c'
+source_filename = "phi.c"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
 target triple = "aarch64-unknown-linux-gnu"
 
@@ -41,7 +41,7 @@ attributes #0 = { nofree norecurse nosync nounwind memory(none) uwtable "frame-p
 !llvm.errno.tbaa = !{!16}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
-!1 = !DIFile(filename: "/tmp/claude-1000/ph/phi.c", directory: "/home/alim/scratch/w16-arm64/crates/target/llrm-arm64/tests/data", checksumkind: CSK_MD5, checksum: "29ebc02ebdf09a72665abbcd92166292")
+!1 = !DIFile(filename: "phi.c", directory: "/src", checksumkind: CSK_MD5, checksum: "29ebc02ebdf09a72665abbcd92166292")
 !2 = !{i32 7, !"Dwarf Version", i32 5}
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = !{i32 1, !"ptrauth-elf-got", i32 0}
@@ -62,7 +62,7 @@ attributes #0 = { nofree norecurse nosync nounwind memory(none) uwtable "frame-p
 !19 = !{!"omnipotent char", !20, i64 0}
 !20 = !{!"Simple C/C++ TBAA"}
 !21 = distinct !DISubprogram(name: "f", scope: !22, file: !22, line: 1, type: !23, scopeLine: 1, flags: DIFlagPrototyped | DIFlagAllCallsDescribed, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !26, keyInstructions: true)
-!22 = !DIFile(filename: "/tmp/claude-1000/ph/phi.c", directory: "", checksumkind: CSK_MD5, checksum: "29ebc02ebdf09a72665abbcd92166292")
+!22 = !DIFile(filename: "phi.c", directory: "", checksumkind: CSK_MD5, checksum: "29ebc02ebdf09a72665abbcd92166292")
 !23 = !DISubroutineType(types: !24)
 !24 = !{!25, !25, !25}
 !25 = !DIBasicType(name: "int", size: 32, encoding: DW_ATE_signed)
