@@ -192,6 +192,33 @@ pub trait TargetInstrInfo {
     ) -> bool;
 }
 
+/// `one` with the relocation flag cleared where it is a flat target's `lea reg,
+/// [rip + symbol]`: the address is re-made at any use (`LEA64r` of a global is
+/// rematerializable in the pin, X86InstrInfo.cpp
+/// isReallyTriviallyReMaterializable). The 16-bit fixups keep the flag.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L755>
+fn without_symbol_flag(
+    one: &Insn,
+    bits: u32,
+) -> std::borrow::Cow<'_, Insn> {
+    let address = one
+        .what
+        .as_ref()
+        .is_some_and(
+            |what| matches!(
+                (what.op, what.sources.as_slice()),
+                (Operation::Move, [Loc::Imm(imm)]) if imm.address.is_some()
+            ),
+        );
+    if bits >= 32 && address && one.symbol == Some(true) {
+        let mut flat = one.clone();
+        flat.symbol = Some(false);
+        std::borrow::Cow::Owned(flat)
+    } else {
+        std::borrow::Cow::Borrowed(one)
+    }
+}
+
 /// `X86InstrInfo` at the width and register classes of one compile.
 pub struct X86InstrInfo<'a> {
     pub bits: u32,
@@ -226,7 +253,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         &self,
         one: &Insn,
     ) -> bool {
-        super::inlinespiller::remat_shape(one)
+        super::inlinespiller::remat_shape(&without_symbol_flag(one, self.bits))
     }
 
     fn encoding_bytes(
@@ -243,7 +270,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         def: &Insn,
         invariant: bool,
     ) -> bool {
-        super::remat::is_trivially_re_materializable(def, invariant)
+        super::remat::is_trivially_re_materializable(&without_symbol_flag(def, self.bits), invariant)
     }
 
     fn argument_loads(

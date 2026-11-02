@@ -49,9 +49,11 @@
 //!
 //! Row CSE2 (was DEVIATE CSE2, retired 2026-10-25): a constant with no register
 //! operand is a candidate again. The address of a symbol stays out: the pin
-//! shares it and ours cannot make it again. 71 programs -O2 net 0 (lru -1,
-//! x_ll_div +1), -Os and m16 unchanged; the skip-edge zero of x_life waits on
-//! phi operands without a copy (DAG isel).
+//! shares it and ours cannot make it again. A flat target (m32, m64)
+//! shares it again since the allocator rematerializes it
+//! (`tii::without_symbol_flag`). 71 programs -O2 net 0 (lru -1, x_ll_div +1),
+//! -Os and m16 unchanged; the skip-edge zero of x_life waits on phi operands
+//! without a copy (DAG isel).
 //!
 //! DEVIATE CSE3 (owner w-1, exit 2026-11-08): both selectors mark a load
 //! invariant when it reads a constant global or says so (`!invariant.load`, a
@@ -116,6 +118,7 @@ impl LIRTransform for MachineCse {
 fn candidate(
     one: &Insn,
     classes: &RegisterClasses,
+    bits: u32,
 ) -> bool {
     let Some(what) = &one.what else { return false };
     // An instruction that reads the flags is not a candidate: `sbb v, v` after
@@ -145,9 +148,16 @@ fn candidate(
     if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Held(_)]) {
         return false;
     }
-    // A symbol's address stays out: it is a load of memory the pin shares and
-    // ours cannot make again (CSE2).
+    // A symbol's address stays out where ours cannot make it again (CSE2); a
+    // flat target's `lea reg, [rip + symbol]` is rematerialized, as the pin
+    // does.
+    let flat_address = bits >= 32
+        && matches!(
+            what.sources.as_slice(),
+            [Loc::Imm(imm)] if imm.address.is_some()
+        );
     if one.uses.is_empty()
+        && !flat_address
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -558,7 +568,7 @@ fn pre_candidate(
     regs: llrm_lir::registers::Regs,
     bits: u32,
 ) -> bool {
-    candidate(one, classes)
+    candidate(one, classes, bits)
         && !one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))))
         && !cheap(one)
         && !sets_flags(regs, bits, one)
@@ -775,7 +785,7 @@ pub fn shared(
         let number = walk.by_at[&at];
         let mut mine: Vec<Semantics> = Vec::new();
         for (index, one) in body.blocks[number].insns.iter().enumerate() {
-            if !candidate(one, classes) {
+            if !candidate(one, classes, body.bits) {
                 continue;
             }
             let Some(what) = one.what.as_ref() else { continue };
