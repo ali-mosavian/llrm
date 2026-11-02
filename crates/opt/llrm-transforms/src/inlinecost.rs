@@ -280,6 +280,9 @@ pub struct Site<'a> {
     pub sole_call_to_local: bool,
     /// The direct calls to the callee in the module.
     pub callee_calls: i64,
+    /// The callee has local linkage and its address is not taken: its body
+    /// goes once every call of it is inlined.
+    pub callee_dies: bool,
     /// The caller calls itself (`IsCallerRecursive`).
     pub caller_recursive: bool,
     pub caller_size: CallerSize,
@@ -2022,6 +2025,17 @@ impl<'a> Analyzer<'a> {
         (size * tti.call_code_size_percent() + 50) / 100
     }
 
+    /// Whether inlining leaves the module's code bigger. A callee that stays
+    /// grows it by its unfolded size less the call it replaces, per site. One
+    /// that dies with its calls (local, address not taken) is also removed:
+    /// all `k` calls inlined cost `k * size` against `size + k * call`, so
+    /// `(k - 1) * size > k * call` (two calls of a 19-unit callee, 10-unit
+    /// calls: 19 > 20 does not grow).
+    fn grows_the_code(&self) -> bool {
+        let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
+        if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call } else { size > call }
+    }
+
     /// D13: at speed, the clocks the call costs (the sheet's call, return and
     /// argument words, by the site's frequency over the caller's entry) are
     /// worth the bytes the copy adds, at the target's rate.
@@ -2057,7 +2071,7 @@ impl<'a> Analyzer<'a> {
                         && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
                 }
             })
-            && self.size_units > self.call_size()
+            && self.grows_the_code()
             && !self.growth_is_paid_for();
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
@@ -2339,6 +2353,7 @@ pub fn shadow(
                         && counts.get(&callee_id).copied() == Some(1)
                         && !addressed.contains(&callee_id),
                     callee_calls: counts.get(&callee_id).copied().unwrap_or(0),
+                    callee_dies: local_linkage(callee_global.linkage) && !addressed.contains(&callee_id),
                     caller_recursive,
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
@@ -2756,6 +2771,7 @@ pub fn decide(
             && context.counts.get(&callee_id).copied() == Some(1)
             && !context.addressed.contains(&callee_id),
         callee_calls: context.counts.get(&callee_id).copied().unwrap_or(0),
+        callee_dies: local_linkage(callee_global.linkage) && !context.addressed.contains(&callee_id),
         caller_recursive: context.recursive.contains(&caller_id),
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),

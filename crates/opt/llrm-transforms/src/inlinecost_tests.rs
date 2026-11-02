@@ -42,7 +42,7 @@ fn priced_with(
     tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> (i64, i64) {
     let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
-    priced_params(text, at, sole, size, tti, params)
+    priced_params(text, at, sole, size, tti, params, (if sole { 1 } else { 2 }, false))
 }
 
 fn priced_params(
@@ -52,6 +52,7 @@ fn priced_params(
     size: CallerSize,
     tti: Option<&dyn llrm_mir::tti::Tti>,
     params: InlineParams,
+    (calls, dies): (i64, bool),
 ) -> (i64, i64) {
     let module: Module = parsed(text);
     let layout = DataLayout::default();
@@ -73,7 +74,8 @@ fn priced_params(
         callee,
         callee_id,
         sole_call_to_local: sole,
-        callee_calls: if sole { 1 } else { 2 },
+        callee_calls: calls,
+        callee_dies: dies,
         caller_recursive: false,
         caller_size: size,
         relative_frequency: None,
@@ -378,7 +380,7 @@ b0:
             priced_call: Some(priced_call),
             ..InlineParams::from_level(2)
         };
-        let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&guarded), params);
+        let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&guarded), params, (2, false));
         cost < threshold
     };
     let (dear, cheap) = (
@@ -387,6 +389,42 @@ b0:
     );
     assert!(!at(cheap), "a call worth one clock does not pay for the bytes");
     assert!(at(dear), "a call worth a thousand clocks pays for them");
+}
+
+/// A callee that dies with its calls is removed when they are all inlined, so
+/// two calls of it grow the code only if `(2 - 1) * size > 2 * call`.
+/// stack_arrays_copy -Os m64 kept two calls of a static 70-trip loop pair
+/// (113 -> 170 B with the guard, 65 B inlined as main and the pin do).
+#[test]
+fn an_optsize_caller_inlines_a_dying_callee_when_all_its_calls_cost_no_more_than_the_callee_and_one_call() {
+    let text = format!(
+        "{GLOBAL}define i32 @callee(i32 %x) {{
+b0:
+  %a = load i32, ptr @g
+  %b = add i32 %a, %x
+  %c = mul i32 %b, %x
+  %d = add i32 %c, %a
+  store i32 %d, ptr @g
+  ret i32 %d
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+    );
+    let guarded = x86_real();
+    let params = || InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let verdict = |calls, dies| {
+        let (cost, threshold) =
+            priced_params(&text, 0, false, CallerSize::OptSize, Some(&guarded), params(), (calls, dies));
+        cost < threshold
+    };
+    assert!(!verdict(2, false), "premise: a callee that stays and outgrows its call is refused");
+    assert!(verdict(2, true), "two calls of a callee that dies cost less than the callee and one call");
+    assert!(!verdict(60, true), "sixty copies of it outgrow the callee and the calls");
 }
 
 /// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
@@ -482,6 +520,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             callee_id,
             sole_call_to_local: false,
             callee_calls: 2,
+            callee_dies: false,
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
@@ -524,6 +563,7 @@ fn an_interposable_callee_is_not_inlined() {
             callee_id,
             sole_call_to_local: false,
             callee_calls: 2,
+            callee_dies: false,
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
@@ -760,6 +800,7 @@ b0:
         callee_id,
         sole_call_to_local: true,
         callee_calls: 1,
+        callee_dies: false,
         caller_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
@@ -820,6 +861,7 @@ b0:
             callee_id,
             sole_call_to_local: true,
             callee_calls: 1,
+            callee_dies: false,
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
