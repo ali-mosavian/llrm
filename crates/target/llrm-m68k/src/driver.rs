@@ -94,9 +94,25 @@ pub fn assembly(
     cpu: Cpu,
     level: Level,
 ) -> Result<String, String> {
+    let dump = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
+    assembly_dumping(text, cpu, level, dump.as_deref())
+}
+
+/// [`assembly`], writing the mid-end's stages to `dump` (`N/NNN-stage.ll`, as
+/// every other target's `--dump DIR` and `LLRM_MIR_STAGES` do).
+pub fn assembly_dumping(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    dump: Option<&std::path::Path>,
+) -> Result<String, String> {
     let mut program = program(text)?;
     let options = MidEnd { library: Vec::new(), ..level.mid_end() };
-    llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
+    if let Some(dump) = dump {
+        std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
+    }
+    let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
+    llrm_transforms::pipeline::applied(&mut program, &applied)?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = &program.modules[0];
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), ..Options::default() };
