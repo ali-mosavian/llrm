@@ -10,35 +10,44 @@
 
 .setcpu "6502"
 .export sf_add_c, sf_sub_c, sf_round, sf_align, sf_retinf, sf_quiet
+.ifdef STACKB
+.export __addsf3, __subsf3, in89, out89
+.endif
 
 .include "sf32.inc"
 
 .segment "CODE"
 
 sf_sub_c:
+.ifdef STACKB
+__subsf3:
+.endif
     ldx #$80
     bne addcore
 sf_add_c:
+.ifdef STACKB
+__addsf3:
+.endif
     ldx #0
 addcore:
     txa
     pha                     ; subtract flag, kept on the stack until both operands are unpacked
-    lda rc8
+    BHI0
     asl a
-    lda rc9
+    BHI1
     rol a
     beq bden
     cmp #$ff
     bne :+
-    jmp special
+    jmp spent
 :   sta eb
-    lda rc8
+    BHI0
     ora #$80
     bne bman
 bden:
     lda #1
     sta eb
-    lda rc8
+    BHI0
     and #$7f
 bman:
     sta blkB+3
@@ -56,7 +65,7 @@ bman:
     beq aden
     cmp #$ff
     bne :+
-    jmp special
+    jmp spent
 :   sta ea
     lda rc4
     ora #$80
@@ -76,7 +85,7 @@ aman:
     and #$80
     sta sa
     pla
-    eor rc9
+    BHI1_EOR
     and #$80
     sta sb
 ; ---- align the operand with the smaller exponent
@@ -323,8 +332,46 @@ masks:
     .byte $01, $03, $07, $0f, $1f, $3f, $7f
 
 ; ---- inf and NaN operands: a in rc2..rc5, b in rc6..rc9, the subtract flag on the stack
+.ifdef STACKB
+spent:                      ; the rare path keeps the cores' convention: b's high bytes copied into rc8/rc9 and given back
+    pla
+    sta rc25
+    jsr in89
+    lda rc25
+    jsr special_a
+    jmp out89
+in89:
+    lda rc8
+    sta sv8
+    lda rc9
+    sta sv9
+    ldy #0
+    lda (rc0),y
+    sta rc8
+    iny
+    lda (rc0),y
+    sta rc9
+    rts
+out89:
+    sta rc4                 ; result bytes A:X:rc2:rc3 stay, rc4 is scratch
+    lda sv8
+    sta rc8
+    lda sv9
+    sta rc9
+    lda rc4
+    rts
+.bss
+sv8:    .res 1
+sv9:    .res 1
+.segment "CODE"
 special:
     pla
+special_a:
+.else
+spent:
+special:
+    pla
+.endif
     and #$80
     sta fl
     ldx #0

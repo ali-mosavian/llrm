@@ -11,6 +11,10 @@
 .include "sf32.inc"
 .import sf_round, sf_align, sf_retinf, sf_quiet
 .export sf_mul_c, sf_div_c
+.ifdef STACKB
+.export __mulsf3, __divsf3
+.import in89, out89
+.endif
 
 ; cells (rc16.. are free scratch in both routines)
 e16lo = rc2             ; result exponent, signed 16 bit
@@ -20,9 +24,15 @@ opf   = rc24            ; 0 multiply, 1 divide; special-value path only
 .segment "CODE"
 
 sf_mul_c:
+.ifdef STACKB
+__mulsf3:
+.endif
     lda #0
     beq mdentry
 sf_div_c:
+.ifdef STACKB
+__divsf3:
+.endif
     lda #1
 mdentry:
     sta opf
@@ -31,13 +41,24 @@ mdentry:
     beq mdsp
     sty rc25                ; normalization shift of a
     ldx #4
+.ifdef STACKB
+    jsr unpb
+.else
     jsr unp
+.endif
     beq mdsp
     lda opf
     beq mulbody
     jmp divbody
+.ifdef STACKB
+mdsp:
+    jsr in89
+    jsr mdspec
+    jmp out89
+.else
 mdsp:
     jmp mdspec
+.endif
 
 ; ---- multiply: C = rc16..18, M = rc20..22, P = rc19 (high) rc23 rc24 (low)
 mulbody:
@@ -62,16 +83,17 @@ mulbody:
     sta rc19
     sta rc23
     sta rc24
-    ldx #24
+    ldx #3                  ; three multiplier bytes, eight steps each, unrolled
     clc
 mloop:
+.repeat 8
     ror rc19
     ror rc23
     ror rc24
     ror rc22
     ror rc21
     ror rc20                ; carry = multiplier bit
-    bcc mnext
+    bcc :+
     clc
     lda rc24
     adc rc16
@@ -82,9 +104,12 @@ mloop:
     lda rc19
     adc rc18
     sta rc19
-mnext:
+:
+.endrepeat
     dex
-    bne mloop
+    beq mdone
+    jmp mloop
+mdone:
     bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
     ror rc19                ; product >= 2: shift once more, exponent up
     ror rc23
@@ -134,32 +159,33 @@ divbody:
     sta rc24
     lda rc18
     sta rc25
-    lda #0
-    sta rc17
-    sta rc18
-    sta rc19
-    lda #$40                ; sentinel: it reaches bit 32 and falls out of rc19 after exactly 26 quotient bits
-    sta rc16
+    lda #$40                ; the quotient's 26 bits come in groups of 2, 8, 8, 8, each collected in rc4 behind a sentinel bit
+    sta rc4
+    ldx #3                  ; the group goes to rc16+X
 dloop:
-    sec
+    lda rc25                ; compare first: the top byte nearly always decides, and only a quotient bit of 1 pays for the subtract
+    cmp rc22
+    bne dcmp
+    lda rc24
+    cmp rc21
+    bne dcmp
     lda rc23
+    cmp rc20
+dcmp:
+    bcc dno                 ; R < D: quotient bit 0 (carry clear)
+    lda rc23                ; carry is set: R - D, and the quotient bit 1 is the carry left by the last sbc
     sbc rc20
-    tax
+    sta rc23
     lda rc24
     sbc rc21
-    tay
+    sta rc24
     lda rc25
     sbc rc22
-    bcc dno                 ; R < D: quotient bit 0 (carry clear)
     sta rc25
-    sty rc24
-    stx rc23                ; quotient bit 1 (carry set)
 dno:
-    rol rc16
-    rol rc17
-    rol rc18
-    rol rc19
-    bcs ddone
+    rol rc4
+    bcs dgroup
+dnext:
     asl rc23
     rol rc24
     rol rc25
@@ -176,6 +202,14 @@ dno:
     sta rc25
     sec
     bcs dno
+dgroup:                     ; the sentinel fell out: rc4 holds the group
+    lda rc4
+    sta rc16,x
+    dex
+    bmi ddone
+    lda #1
+    sta rc4
+    bne dnext
 ddone:
     ldy #0                  ; sticky: any remainder
     lda rc23
@@ -208,7 +242,7 @@ dnd2:
 ; ---- shared tail: block rc16..19 normalized, e16 = biased exponent of its top bit, sign from rc5/rc9
 mdtail:
     lda rc5
-    eor rc9
+    BHI1_EOR
     and #$80
     sta rsg
     lda e16hi
@@ -237,6 +271,57 @@ mden:                       ; exponent <= 0: shift right by 1 - e, into the deno
     lda #1
     sta re
     jmp sf_round
+
+.ifdef STACKB
+; b without rc8/rc9: its low bytes in rc6:rc7, its high bytes in the caller's stack words; same results as unp at X = 4
+unpb:
+    ldy #0
+    lda (rc0),y
+    asl a
+    iny
+    lda (rc0),y
+    rol a
+    beq ubn
+    cmp #$ff
+    beq ubret
+    sta rc23
+    dey
+    lda (rc0),y
+    ora #$80
+    sta rc22
+    lda rc7
+    sta rc21
+    lda rc6
+    sta rc20
+    lda rc23
+ubret:
+    rts
+ubn:
+    dey
+    lda (rc0),y
+    and #$7f
+    sta rc22
+    ora rc7
+    ora rc6
+    beq ubret
+    lda rc7
+    sta rc21
+    lda rc6
+    sta rc20
+    lda #1
+    sta rc23
+ubl:
+    lda rc22
+    bmi ubok
+    asl rc20
+    rol rc21
+    rol rc22
+    iny
+    bne ubl
+ubok:
+    lda #1
+    rts
+.endif
 
 ; ---- unpack operand at offset X (0 a, 4 b): mantissa rc16+X.., exponent rc19+X, Y = normalization shift
 ; returns Z set for zero, inf or NaN (the special path), else A = exponent

@@ -1,4 +1,5 @@
 ; zero-page cells and block layout shared by sf32.s and sf32_muldiv.s
+rc0 = $80
 rc2 = $82
 rc3 = $83
 rc4 = $84
@@ -32,3 +33,29 @@ tm2  = rc7
 fl   = rc16             ; special path only: blocks are dead there
 ca   = rc17
 fx   = rc18
+
+; b's high two bytes: in rc8/rc9 (the cores' own convention) or, with STACKB, the caller's stack words at (rc0)+0 and +1
+.ifdef STACKB
+.macro BHI0
+    ldy #0
+    lda (rc0),y
+.endmacro
+.macro BHI1
+    ldy #1
+    lda (rc0),y
+.endmacro
+.macro BHI1_EOR
+    ldy #1
+    eor (rc0),y
+.endmacro
+.else
+.macro BHI0
+    lda rc8
+.endmacro
+.macro BHI1
+    lda rc9
+.endmacro
+.macro BHI1_EOR
+    eor rc9
+.endmacro
+.endif
