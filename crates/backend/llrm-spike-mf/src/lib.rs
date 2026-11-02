@@ -12,6 +12,7 @@
 pub mod cfg;
 pub mod commute;
 pub mod fold;
+pub mod livephys;
 pub mod mfunc;
 pub mod placement;
 pub mod regalloc;
