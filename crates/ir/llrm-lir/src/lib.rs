@@ -587,7 +587,9 @@ impl Semantics {
     pub fn machine_hash(&self) -> u64 {
         // The opcode: the mnemonic where there is one, else the operation.
         let mut hash = match &self.name {
-            Some(name) => name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)),
+            Some(name) => {
+                name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+            }
             None => self.op as u64,
         };
         let mut place = 0u32;
@@ -600,7 +602,8 @@ impl Semantics {
                 Loc::Reg(reg) => operand(reg.register.index() as u64, 1),
                 Loc::Imm(imm) => operand(imm.value as u64, 2),
                 // The pin's memory operand is five: base, scale, index,
-                // displacement and segment; a symbol is too hard, only its offset.
+                // displacement and segment; a symbol is too hard, only its
+                // offset.
                 Loc::Mem(cell) => {
                     operand(cell.through.index() as u64, 1);
                     operand(cell.scale as u64, 2);
