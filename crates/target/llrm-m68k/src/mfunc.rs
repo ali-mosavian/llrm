@@ -412,6 +412,21 @@ impl Emitter<'_> {
                 };
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::IMPLICIT_DEF` (10), which has no name in the pin's
+            // instruction table: the register of an undefined value. It is
+            // defined as zero here (an undefined value is any value) until the
+            // MIR has an undef.
+            ISD::Machine(10) => {
+                let (class, name) = match Class::of_type(n.values[0]) {
+                    Class::Dr8 => (Class::Dr8, "MOV8di"),
+                    _ => (Class::Dr32, "MOVI32ri"),
+                };
+                let desc =
+                    local::code_of(name).and_then(local::desc).ok_or_else(|| format!("{name}: no description"))?;
+                let dst = self.new_reg(class);
+                self.values.insert((node, 0), dst);
+                into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| {
                     let ops: Vec<String> = n
