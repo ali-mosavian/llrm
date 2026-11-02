@@ -270,34 +270,18 @@ retzero:
     rts
 
 ; ---- shift block (X = 0 for A, 4 for B) right by A bits (1..255); lost bits end up in bit 0 of the guard byte
+; k = A mod 8 bits first (k >= 5: 8 - k bits left into a fifth byte, one more byte to drop), then whole bytes
 sf_align:
+    cmp #26                 ; 26 or more: the top bit lands at or below guard bit 5, only the sticky bit matters
+    bcc :+
+    jmp alfar
+:   tay
+    and #7
+    beq albytes
+    cmp #5
+    bcs alleft
+    sty tm2
     tay
-    cpy #32
-    bcs alfar
-al8:
-    cpy #8
-    bcc albits
-    lda blkA+0,x            ; one byte: guard = m0, sticky if the old guard was not zero
-    beq :+
-    lda blkA+1,x
-    ora #1
-    bne :++
-:   lda blkA+1,x
-:   sta blkA+0,x
-    lda blkA+2,x
-    sta blkA+1,x
-    lda blkA+3,x
-    sta blkA+2,x
-    lda #0
-    sta blkA+3,x
-    tya
-    sec
-    sbc #8
-    tay
-    jmp al8
-albits:
-    tya
-    beq aldone
     lda masks-1,y           ; the bits about to fall out of the guard byte
     and blkA+0,x
     sta tmp
@@ -308,13 +292,85 @@ albits:
     dey
     bne :-
     lda tmp
+    beq :+
+    lda blkA+0,x
+    ora #1
+    sta blkA+0,x
+:   ldy tm2
+    lda #0
+    beq albytes
+alleft:
+    sty tm2
+    eor #7                  ; carry set: 8 - k
+    adc #0
+    tay
+    lda #0
+:   asl blkA+0,x
+    rol blkA+1,x
+    rol blkA+2,x
+    rol blkA+3,x
+    rol a
+    dey
+    bne :-
+    ldy tm2
+    sta tmp
+    tya
+    clc
+    adc #8
+    tay
+    lda tmp
+albytes:                    ; drop Y / 8 bytes, A comes in on top
+    sta tmp
+    tya
+    lsr a
+    lsr a
+    lsr a
+    beq aldone
+    cmp #2
+    bcc al1
+    beq al2
+    lda blkA+0,x            ; three
+    ora blkA+1,x
+    ora blkA+2,x
+    ldy blkA+3,x
+    sty blkA+0,x
+    ldy tmp
+    sty blkA+1,x
+    ldy #0
+    sty blkA+2,x
+    sty blkA+3,x
+    jmp alst
+al2:
+    lda blkA+0,x
+    ora blkA+1,x
+    ldy blkA+2,x
+    sty blkA+0,x
+    ldy blkA+3,x
+    sty blkA+1,x
+    ldy tmp
+    sty blkA+2,x
+    ldy #0
+    sty blkA+3,x
+    jmp alst
+al1:
+    lda blkA+0,x
+    ldy blkA+1,x
+    sty blkA+0,x
+    ldy blkA+2,x
+    sty blkA+1,x
+    ldy blkA+3,x
+    sty blkA+2,x
+    ldy tmp
+    sty blkA+3,x
+alst:
+    cmp #0
     beq aldone
     lda blkA+0,x
     ora #1
     sta blkA+0,x
 aldone:
     rts
-alfar:                      ; 32 bits or more: everything becomes the sticky bit
+alfar:                      ; everything becomes the sticky bit
     lda blkA+1,x
     ora blkA+2,x
     ora blkA+3,x
