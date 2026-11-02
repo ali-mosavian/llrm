@@ -129,6 +129,19 @@ pub trait TargetInstrInfo {
         1.0
     }
 
+    /// DEVIATE C5: the bytes `one` takes with `value` in `phys`, against a
+    /// register that costs it nothing extra: a prefix, a longer form. Greedy
+    /// takes the cheapest of the registers that are otherwise equal; the pin
+    /// takes the first. 0: no difference between registers.
+    fn encoding_bytes(
+        &self,
+        _one: &Insn,
+        _value: u32,
+        _phys: RegId,
+    ) -> i64 {
+        0
+    }
+
     /// The registers `one` is cheaper with, as (value, register): the target's
     /// `getRegAllocationHints` for the values `one` names.
     fn preferred_registers(
@@ -214,6 +227,15 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         one: &Insn,
     ) -> bool {
         super::inlinespiller::remat_shape(one)
+    }
+
+    fn encoding_bytes(
+        &self,
+        one: &Insn,
+        value: u32,
+        phys: RegId,
+    ) -> i64 {
+        one.what.as_ref().map_or(0, |what| llrm_x86::register_cost::register_extra_bytes(what, value, phys))
     }
 
     fn is_trivially_re_materializable(
@@ -558,9 +580,18 @@ pub(crate) fn is_encodable(
         Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
 
+    // A spill cell is made through the 16-bit frame register; a target whose
+    // frame register is wider addresses it through its own.
+    let wide_frame = regs.width_of(classes.frame).is_some_and(|width| width > 2);
+    let framed = |operand: Loc| match operand {
+        Loc::Mem(cell) if wide_frame && cell.through == crate::model::ir::FRAME => {
+            Loc::Mem(Mem { through: classes.frame, ..cell })
+        }
+        other => other,
+    };
     let probe = Semantics {
-        dests: what.dests.iter().map(&mut placed).collect(),
-        sources: what.sources.iter().map(&mut placed).collect(),
+        dests: what.dests.iter().map(&mut placed).map(framed).collect(),
+        sources: what.sources.iter().map(&mut placed).map(framed).collect(),
         ..what.clone()
     };
     Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())

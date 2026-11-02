@@ -364,7 +364,7 @@ class TimedOnlyTests(unittest.TestCase):
             obj.write_bytes(test_sizes.object_with(12))
             with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
-        self.assertEqual(got, {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40})
+        self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
 
     def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
         """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
@@ -1049,7 +1049,7 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     monkeypatch.setattr(bench.icount, "run", fake_run)
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
     monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
-    monkeypatch.setattr(bench.sizes, "code_bytes", lambda obj: 0)
+    monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
     bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
     assert seen["files"] == ["PHOTO.JPG"], seen
 
@@ -1083,7 +1083,7 @@ def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds
     more = {**base, "instructions": 11, "code_bytes": 113}
     assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
     assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
-    assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: instructions 11 > 10 (worse)", "a c -Os: code_bytes 113 > 100 (worse)"]
+    assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: code_bytes 113 > 100 (worse)"]
     assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]
 
 
@@ -1093,17 +1093,17 @@ def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(t
     tune.write_text("cache_line = 16\nline_fill_clocks = 5\n")
     monkeypatch.setattr(bench, "TUNE_486", tune)
     assert [bench.rate_for("bq32", opt) for opt in ("O2", "O3", "Os")] == [312, 312, 0]
-    assert bench.rate_for("bas", "O2") == 0
+    assert bench.rate_for("bas", "O2") == bench.m16_rate()  # the m16 sheet's own row, not the flat target's
     tune.write_text("cache_line = 16\n")
     assert bench.rate_for("bq32", "O2") == 0
 
 
-def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_only(tmp_path, monkeypatch):
-    """500 milliclocks/byte on every CPU column: the policy row, read where the compiler reads it; a sheet whose columns disagree prices nothing."""
+def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_and_o3(tmp_path, monkeypatch):
+    """500 milliclocks/byte on every CPU column: the policy row, read where the compiler reads it; a sheet whose columns disagree prices nothing. -O3 is a speed level too: bq16 O3 read strict (0) and showed 11 FAILs the rate clears."""
     sheet = tmp_path / "timings.times"
     sheet.write_text("cache_line - = =\nspeed_milliclocks_per_byte 500 500 500\n")
     monkeypatch.setattr(bench, "M16_TIMINGS", sheet)
-    assert [bench.rate_for(language, opt) for language, opt in (("c", "O2"), ("bq16", "O2"), ("c", "Os"), ("c", "O3"))] == [500, 500, 0, 0]
+    assert [bench.rate_for(language, opt) for language, opt in (("c", "O2"), ("bq16", "O2"), ("c", "Os"), ("c", "O3"), ("bq16", "O3"))] == [500, 500, 0, 500, 500]
     sheet.write_text("speed_milliclocks_per_byte 500 250\n")
     assert bench.rate_for("c", "O2") == 0
     sheet.write_text("cache_line - =\n")
@@ -1146,3 +1146,13 @@ def test_a_leg_with_cells_that_did_not_build_exits_nonzero_and_names_them(tmp_pa
     assert "NOHEAD 1 cells did not build:" in out and "p/c/O2: build: jwasm" in out
     with mock.patch.object(bench, "measure_all", return_value={("p", "c", "Os"): measured[("p", "c", "Os")]}), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "Os", "--json", str(tmp_path / "ok.json"), "p"]):
         assert bench.main() == 0
+
+
+def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
+    """qmove Os memops +1 failed a cell that was 8 B smaller and 13 clocks faster. Now: (1) -8 B, -13 clocks, memops +1 passes; (2) +1 B fails; (3) bytes and clocks equal, memops +1 fails; (4) a cell without clocks is strict on every metric."""
+    base = {"instructions": 10, "memory_operands": 4, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0, "clocks": 50}
+    assert bench.against("a c -Os", {**base, "memory_operands": 5, "code_bytes": 92, "clocks": 37}, base) == []
+    assert bench.against("a c -Os", {**base, "code_bytes": 101, "clocks": 37}, base) == ["a c -Os: code_bytes 101 > 100 (worse)"]
+    assert bench.against("a c -Os", {**base, "memory_operands": 5}, base) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+    untimed = {k: v for k, v in base.items() if k != "clocks"}
+    assert bench.against("a c -Os", {**untimed, "memory_operands": 5, "code_bytes": 92}, untimed) == ["a c -Os: memory_operands 5 > 4 (worse)"]
