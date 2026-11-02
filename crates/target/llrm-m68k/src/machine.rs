@@ -36,6 +36,15 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::default()))
     }
 
+    /// The pin's `M68kTargetLowering` does not override
+    /// `allowsMisalignedMemoryAccesses`: no.
+    fn allows_misaligned_access(
+        &self,
+        _bits: u32,
+    ) -> bool {
+        false
+    }
+
     fn spaces(&self) -> Spaces {
         Spaces::FLAT
     }

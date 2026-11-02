@@ -5,12 +5,12 @@
 //!
 //! # How it works
 //! Constants: stores of integer constants to adjacent cells of one object are
-//! one store of their bytes, little-endian, when the bytes are a legal integer
-//! (`getConsecutiveStores` finds the run of cells of one width, the widest
-//! legal prefix is taken, and a store made is a candidate again, so a byte pair
-//! and a word beside it become a dword). A load of any of the cells, another
-//! store, a call or a volatile store ends the span; stores that overlap leave
-//! the object alone.
+//! one store of their bytes (in the layout's byte order), when the bytes are a
+//! legal integer (`getConsecutiveStores` finds the run of cells of one width,
+//! the widest legal prefix is taken, and a store made is a candidate again, so
+//! a byte pair and a word beside it become a dword). A load of any of the
+//! cells, another store, a call or a volatile store ends the span; stores that
+//! overlap leave the object alone.
 //!
 //! Loads:
 //! In straight-line code, a store of a value another instruction loaded, the
@@ -52,8 +52,9 @@
 //!
 //! DEVIATE M2 (no number): no vector types, no rotate of a reversed pair, no
 //! truncating store; the target has none of them for integers here
-//! (`TLI.isTypeLegal` is `largest_legal_integer`), and a load or store of
-//! any alignment is fast on x86.
+//! (`TLI.isTypeLegal` is `largest_legal_integer`). `allowsMemoryAccess` is the
+//! target's `allows_misaligned_access` (true on x86) and the alignment of the
+//! first access, as the pin asks it of the first store in the chain.
 //!
 //! # Example
 //! A struct of two words copied field by field in 16-bit code is a dword load
@@ -74,6 +75,7 @@ use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::{Declared, Outer};
+use llrm_mir::target::Machine;
 use llrm_support::hash::IndexMap;
 
 use crate::profit::OperationCosts;
@@ -94,6 +96,8 @@ struct Pair {
     dst_low: i64,
     /// Bytes copied.
     width: i64,
+    /// The alignment of the narrower of the load and the store, in bytes.
+    align: u64,
 }
 
 /// The cell `pointer` names: its object and the displacement in it.
@@ -108,10 +112,35 @@ fn cell(
     Some((root, reference.disp))
 }
 
+/// The alignment of an access of `ty` that names `align` (none: the type's ABI
+/// alignment), in bytes.
+fn access_align(
+    unit: &Unit,
+    align: Option<u64>,
+    ty: Option<llrm_mir::types::TypeId>,
+) -> u64 {
+    align.or_else(|| ty.map(|ty| unit.layout.align(&unit.context.types, ty))).unwrap_or(1)
+}
+
+/// `allowsMemoryAccess` of one access of `bytes` where the first of the
+/// accesses it replaces has alignment `align`: the access is at its type's ABI
+/// alignment, or the target takes a misaligned one.
+fn takes(
+    unit: &Unit,
+    target: &dyn Machine,
+    bytes: i64,
+    align: u64,
+) -> bool {
+    let bits = (bytes * 8) as u32;
+    align >= unit.layout.align(&unit.context.types, unit.context.types.int(bits))
+        || target.allows_misaligned_access(bits)
+}
+
 /// The wider copies the span's pairs make: runs of adjacent cells of one
 /// width, each cut into the widest legal integers.
 fn chunks(
     unit: &Unit,
+    target: &dyn Machine,
     span: &[Pair],
     reads: &[Operand],
     legal: u32,
@@ -148,7 +177,11 @@ fn chunks(
                 // The widest prefix whose bytes are a legal integer.
                 let take = (2..=rest.len())
                     .rev()
-                    .find(|&count| matches!(width * count as u32, 16 | 32 | 64) && width * count as u32 <= legal);
+                    .find(
+                        |&count| matches!(width * count as u32, 16 | 32 | 64)
+                            && width * count as u32 <= legal
+                            && takes(unit, target, i64::from(width * count as u32 / 8), rest[0].align),
+                    );
                 let Some(take) = take else {
                     rest.remove(0);
                     continue;
@@ -297,7 +330,7 @@ pub fn merged_copies(
                     }
                     None => std::mem::take(span),
                 };
-                plan.extend(chunks(&unit, &kept, reads, legal));
+                plan.extend(chunks(&unit, outer.target(), &kept, reads, legal));
                 span.clear();
                 reads.clear();
                 for value in put.drain(..) {
@@ -340,6 +373,11 @@ pub fn merged_copies(
                         };
                         let bits = unit.int_bits(Operand::Value(value)).expect("an integer");
                         let width = bits / 8;
+                        let ty = unit.operand_type(Operand::Value(value));
+                        let Opcode::Store { align: store_align, .. } = op.opcode else { unreachable!("a store") };
+                        let Opcode::Load { align: load_align, .. } = function.instruction(load).opcode else {
+                            unreachable!("a load")
+                        };
                         let source = function.instruction(load).operands[0];
                         let (Some((src, src_low)), Some((dst, dst_low))) =
                             (cell(&unit, source, width), cell(&unit, op.operands[1], width))
@@ -358,6 +396,7 @@ pub fn merged_copies(
                             src_low,
                             dst_low,
                             width: i64::from(width),
+                            align: access_align(&unit, load_align, ty).min(access_align(&unit, store_align, ty)),
                         });
                     }
                     _ if memory::speculatable(unit.context, callees, function, inst) => {}
@@ -449,6 +488,8 @@ struct Constant {
     value: u128,
     /// The pointer of the lowest cell.
     pointer: Operand,
+    /// The alignment of the store of the lowest cell, in bytes.
+    align: u64,
 }
 
 /// A store of an integer constant to a cell of an object.
@@ -458,7 +499,7 @@ fn constant(
     order: usize,
 ) -> Option<Constant> {
     let op = unit.function.instruction(inst);
-    let Opcode::Store { volatile: false, .. } = op.opcode else { return None };
+    let Opcode::Store { volatile: false, align } = op.opcode else { return None };
     let (value, pointer) = (op.operands[0], op.operands[1]);
     let bits = unit.int_bits(value).filter(|bits| matches!(bits, 8 | 16 | 32))?;
     let value = unit.int_constant(value)?;
@@ -472,6 +513,7 @@ fn constant(
         high: low + i64::from(bits / 8),
         value: value & ((1u128 << bits) - 1),
         pointer,
+        align: access_align(unit, align, unit.operand_type(op.operands[0])),
     })
 }
 
@@ -509,6 +551,7 @@ fn smaller(
 /// start at a multiple of their size, and the stores made are candidates again.
 fn constants_merged(
     unit: &Unit,
+    target: &dyn Machine,
     group: Vec<Constant>,
     legal: u32,
     stored: &IndexMap<(u128, u32), usize>,
@@ -539,6 +582,7 @@ fn constants_merged(
                         matches!(bits, 16 | 32 | 64)
                             && bits <= i64::from(legal)
                             && cells[at].low % (width * count as i64) == 0
+                            && takes(unit, target, width * count as i64, cells[at].align)
                             && (!size || smaller(unit, costs, &cells[at..at + count], width * count as i64, stored))
                     },
                 );
@@ -547,10 +591,14 @@ fn constants_merged(
                 continue;
             };
             let low = cells[at].low;
+            let total = cells[at + take - 1].high - low;
             let mut value = 0u128;
             let mut stores = Vec::new();
             for one in &cells[at..at + take] {
-                value |= one.value << (8 * (one.low - low) as u32);
+                // The lowest address is the lowest bits on a little-endian
+                // target, the highest on a big-endian one.
+                let shift = if unit.layout.big_endian { total - (one.high - low) } else { one.low - low };
+                value |= one.value << (8 * shift as u32);
                 stores.extend(one.stores.iter().copied());
             }
             let latest = cells[at..at + take].iter().max_by_key(|one| one.order).expect("a run has cells");
@@ -564,6 +612,7 @@ fn constants_merged(
                 high: cells[at + take - 1].high,
                 value,
                 pointer: cells[at].pointer,
+                align: cells[at].align,
             };
             cells.splice(at..at + take, [merged]);
             changed = true;
@@ -628,7 +677,7 @@ pub fn merged_constants(
                     continue;
                 }
                 plan.extend(
-                    constants_merged(&unit, group, legal, &stored, &costs, size)
+                    constants_merged(&unit, outer.target(), group, legal, &stored, &costs, size)
                         .into_iter()
                         .filter(|one| one.stores.len() > 1),
                 );

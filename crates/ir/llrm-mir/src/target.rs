@@ -147,6 +147,17 @@ pub trait Machine {
         self.tuning().size_milliclocks_per_byte
     }
 
+    /// `TargetLowering::allowsMisalignedMemoryAccesses` (fast): whether an
+    /// access of `bits` at an alignment below its type's ABI alignment is
+    /// taken. The pin's default is no and x86 and arm64 say yes, so yes here;
+    /// a strict-alignment target (M68k) says no.
+    fn allows_misaligned_access(
+        &self,
+        _bits: u32,
+    ) -> bool {
+        true
+    }
+
     /// What each operation costs in code bytes, for a decision made for
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {
