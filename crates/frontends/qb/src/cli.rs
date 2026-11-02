@@ -59,7 +59,6 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
     let mut wasm32 = false;
-    let mut wasm_exceptions = false;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -122,7 +121,6 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 });
                 flags.take(&["-m64".to_owned()], &mut 0)?;
             }
-            "--wasm-exceptions" => wasm_exceptions = true,
             "--wasm32" => {
                 wasm32 = true;
                 flags.take(&["-m32".to_owned()], &mut 0)?;
@@ -158,7 +156,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.pow_libcall = !llrm_target::layout::states_extended_float(&object_layout);
     let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
-        wasm_exceptions: wasm32 && wasm_exceptions,
+        wasm_exceptions: wasm32,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
     // A host (ELF, Mach-O) has no handler of the runtime's for the fault.

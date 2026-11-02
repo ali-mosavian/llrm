@@ -221,3 +221,14 @@ def test_code_bytes_counts_text_only_not_the_unwind_tables_the_pin_emits(tmp_pat
     assert done.returncode == 0, done.stderr
     monkeypatch.setattr(harness, "OUT", tmp_path)
     assert harness.code_bytes("p", "pinllc") == 100
+
+
+def test_data_bytes_counts_the_constants_gcc_keeps_in_rodata_not_only_text(tmp_path, monkeypatch):
+    """The m32 table's bytes were .text only: gcc's 12 B of .rodata.cst4 in fpbench was invisible and llrm's constants in _DATA likewise, though the order was .text plus data."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\n.fill 100,1,0x90\n.section .rodata.cst4,\"aM\",@progbits,4\n.long 1,2,3\n.data\n.long 1\n.bss\n.fill 64\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.gccO2.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    assert harness.data_bytes("p", "gccO2") == 16

@@ -975,4 +975,21 @@ mod tests {
         assert_eq!(order(&objects, false), [1, 4, 3, 2, 0]);
         assert_eq!(order(&objects, true), [0, 2, 3, 4, 1], "no frame pointer: the hottest is laid last, nearest SP");
     }
+
+    /// A function addressed from the stack pointer got the hole layout because
+    /// its spill and control-word cells were counted near the frame register:
+    /// they moved to the top of the frame, `[esp+168]` and `[esp+170]` with a
+    /// four-byte displacement each (nbody m32 -Os, 13 bytes over gcc). From the
+    /// stack pointer the bottom of the frame is near.
+    #[test]
+    fn test_a_cell_at_the_bottom_of_a_stack_pointer_frame_is_near_and_one_at_the_top_is_far() {
+        use crate::backend::assemble::far_frame;
+        let mut made = machined(reading(&[(-168, -168), (-8, -8)]));
+        made.reserve = 168;
+        assert_eq!(far_frame(&made, false), 1, "from the frame register the cell at the bottom is far");
+        assert_eq!(far_frame(&made, true), 1, "from the stack pointer the cell at the top is far");
+        let mut bottom = machined(reading(&[(-168, -168)]));
+        bottom.reserve = 168;
+        assert_eq!(far_frame(&bottom, true), 0, "from the stack pointer the bottom cell is near");
+    }
 }

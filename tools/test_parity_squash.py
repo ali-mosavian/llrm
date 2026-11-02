@@ -477,6 +477,22 @@ def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(t
     assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
 
 
+def test_precheck_refuses_a_pr_whose_crate_dir_has_no_manifest_so_one_pr_cannot_sink_a_batch(tmp_path, monkeypatch):
+    """#6317 added only crates/target/llrm-z80/bench/*: the workspace glob crates/*/* failed "failed to load manifest for workspace member" for every batch holding it, and cost #6259's batch a round. Its own REFUSED line names the dir."""
+    def fake_git(*args, cwd=None):
+        if args[0] == "diff":
+            return "crates/target/llrm-z80/bench/a.bas\ncrates/target/llrm-x86-m16/src/lib.rs\ndocs/x.md\n"
+        if args[0] == "ls-tree":
+            return "" if "llrm-z80" in args[-1] else args[-1] + "\n"
+        return ""
+    dev = tmp_path / "wt"
+    dev.mkdir()
+    monkeypatch.setattr(ps, "git", fake_git)
+    info = {"headRefOid": "head6317", "body": "", "baseRefName": ps.BRANCH}
+    line = ps.precheck("6317", dev=dev, checks=Tree(set(), set()).checks(), merge=Tree(set(), set()).merge, deletions=lambda *a: [], info=info, cache=tmp_path / "c.json", base_sha="base")
+    assert line.startswith("6317: REFUSED: crate-manifest") and "crates/target/llrm-z80" in line and "llrm-x86-m16" not in line, line
+
+
 def test_a_red_head_file_no_longer_excuses_an_unformatted_pr_file_but_the_fix_passes(tmp_path, monkeypatch):
     """The user's order: tools/fmt.sh applies to every PR. precheck had excused any fmt failure the head already had (92 files of parity were unformatted that way): a PR that leaves a head-red file unformatted is refused,
     the PR that formats it passes, and a new red file is named as before. Ratchets keep the old excuse."""
@@ -1909,15 +1925,14 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 
 
-def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
-    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
-    assert "wccq" not in ps.bins_command(tmp_path)
+def test_the_rebuild_asks_for_no_legacy_feature_even_when_the_directory_holds_a_leftover_llrm_c(tmp_path):
+    """A leftover llrm-c in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
     (tmp_path / "llrm-c").write_text("")
-    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+    assert "--features" not in ps.bins_command(tmp_path)
 
 
-def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
-    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+def test_the_link_and_behavioural_build_asks_for_no_legacy_feature(tmp_path, monkeypatch):
+    """_build_release must build with `--bins` alone: the wccq feature goes with the Watcom frontend."""
     (tmp_path / "release").mkdir()
     (tmp_path / "release" / "llrm-c").write_text("")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
@@ -1926,7 +1941,7 @@ def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
     ps._build_release()
-    assert ran and "wccq" in ran[0], ran
+    assert ran and "wccq" not in " ".join(ran[0]), ran
 
 
 def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):

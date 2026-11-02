@@ -24,10 +24,10 @@
 # CHECK-LABEL: _changed proc
 # CHECK-NOT: rep
 # CHECK: _changed endp
-# The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b): two string moves.
+# The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b). c is never read here, so its stores go: one string move.
 # CHECK-LABEL: _two_stores proc
-# CHECK: rep stos
 # CHECK: rep movs
+# CHECK-NOT: mov word ptr $var_c
 # CHECK: _two_stores endp
 # CHECK-LABEL: _strides proc
 # CHECK-NOT: rep

@@ -199,7 +199,8 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
         let product = mul_by(&mut dag, x, 43);
         dag.set_root(product);
         let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-        let pricing = MulPricing { cpu: m16, arch: &llrm_x86_m16::M16, freq, milliclocks_per_byte: rate };
+        let pricing =
+            MulPricing { cpu: m16, arch: &llrm_x86_m16::M16, freq, milliclocks_per_byte: rate, by_clocks: false };
         let mut lowering = X86Lowering {
             cmov: false,
             sse2: false,

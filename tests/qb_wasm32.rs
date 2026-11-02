@@ -176,19 +176,16 @@ fn a_frame_and_a_key_leave_the_programs_locals_alone() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-/// ON ERROR cannot land on wasm32 (no unwinding): an error that reaches a
-/// handler stops the program with a named failure, not by running on past it or
-/// by a bare trap. Gorillas' SCREEN 9 and PALETTE probes raise nothing, so it
-/// never lands.
+/// An error that reaches a handler lands in it and the program goes on from
+/// there; with the `setjmp` stub it stopped with "ON ERROR landed: longjmp is
+/// not supported on wasm32".
 #[test]
-fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
+fn an_error_that_reaches_a_handler_lands_in_it() {
     let dir =
         built("onerror", "ON ERROR GOTO Handler\nERROR 5\nPRINT \"went on\"\nEND\nHandler:\nPRINT \"handled\"\nEND\n");
-    let ran = run_raw(&dir, "onerror", &[]);
-    let (out, err) = (String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
-    assert!(!out.contains("went on") && !out.contains("handled"), "{out:?}");
-    assert!(err.contains("ON ERROR landed: longjmp is not supported on wasm32"), "{err}");
-    assert_ne!(ran.status.code(), Some(0));
+    let (text, code) = run(&dir, "onerror", &[]);
+    assert_eq!(text.trim_end(), "handled");
+    assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -364,6 +361,21 @@ fn power_programs_stay_within_a_few_ulps_of_the_x87_digits() {
     }
 }
 
+/// CURRENCY as text (currency_text_pds71) did not instantiate: B$PECY, B$PSCY,
+/// B$STCY, B$RDCY, B$FMKC and B$FCVC had no flat definition.
+#[test]
+fn currency_text_matches_the_microsoft_output_on_wasm32() {
+    let source = std::fs::read_to_string(root().join("tests/run/qb/currency_text_pds71.bas")).unwrap();
+    let dir = built("curtext", &source);
+    let (text, code) =
+        run(&dir, "curtext", &["--script", "12.5\\r-0.0001, 922337203685477.5807\\r3\\r", "--gap", "30"]);
+    let want = std::fs::read_to_string(root().join("tests/run/qb/currency_text_pds71.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&text), trimmed(&want));
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// CLEAR called B$SCLR, which no flat runtime defined: a program with CLEAR did
 /// not instantiate. It zeroes the module's variables, from a table the compiler
 /// lists them in, and accepts a stack size it cannot change.
@@ -401,13 +413,36 @@ fn clear_closes_the_open_files_on_wasm32() {
 /// branches back into the function (RESUME NEXT, RESUME 0), which a `catch`
 /// cannot do, so the function runs inside a dispatch loop.
 #[test]
-fn on_error_lands_with_wasm_exceptions() {
+fn on_error_lands_on_wasm32() {
     let source = "ON ERROR GOTO h\nPRINT \"a\"\nERROR 5\nPRINT \"b\"\nERROR 6\nPRINT \"c\"\nEND\n\
         h:\nPRINT \"err\"; ERR\nRESUME NEXT\n";
-    let dir = built_with("eh_land", source, "--wasm-exceptions");
+    let dir = built("eh_land", source);
     let (text, code) = run(&dir, "eh_land", &[]);
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["a", "err", "5", "b", "err", "6", "c"], "{text}");
     assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A currency read from text is exact (a double holds 16 digits, not 19), the
+/// fifth place rounds half away from zero, and a magnitude past the type is
+/// Overflow.
+#[test]
+fn currency_reads_exactly_and_overflows_past_the_type_on_wasm32() {
+    let dir = built(
+        "cyexact",
+        "DIM c AS CURRENCY, d AS CURRENCY, e AS CURRENCY\nREAD c, d, e\nPRINT c; d; e\nDATA 922337203685477.5807, -922337203685477.5808, 1.00005\nEND\n",
+    );
+    let (text, code) = run(&dir, "cyexact", &[]);
+    assert_eq!(
+        text.split_whitespace().collect::<Vec<_>>(),
+        ["922337203685477.5807", "-922337203685477.5808", "1.0001"]
+    );
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+    let dir = built("cyover", "DIM c AS CURRENCY\nREAD c\nPRINT c\nDATA 922337203685477.5808\nEND\n");
+    let (text, code) = run(&dir, "cyover", &[]);
+    assert!(text.starts_with("Overflow"), "{text:?}");
+    assert_eq!(code, Some(255));
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -418,6 +453,20 @@ fn clear_in_a_procedure_is_an_illegal_function_call_on_wasm32() {
     let (text, code) = run(&dir, "clearsub", &[]);
     assert!(text.starts_with("Illegal function call"), "{text:?}");
     assert_eq!(code, Some(255));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// DATESERIAL did not instantiate (B$DTSR). A month or day out of range
+/// carries, and a year of 0 to 99 is 19xx.
+#[test]
+fn dateserial_counts_days_from_1899_12_30_and_carries_on_wasm32() {
+    let dir = built(
+        "dateser",
+        "' dialect: vbdos\nPRINT DATESERIAL(1992, 2, 29); DATESERIAL(1992, 14, 1); DATESERIAL(1992, 3, 0); DATESERIAL(95, 1, 1); DATESERIAL(1900, 1, 1)\nEND\n",
+    );
+    let (text, code) = run(&dir, "dateser", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["33663", "34001", "33663", "34700", "2"]);
+    assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -432,6 +481,55 @@ fn a_dynamic_array_can_be_redimensioned_after_clear_on_wasm32() {
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["0", "3"]);
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// ON LOCAL ERROR did not instantiate (B$OEGP). A handler that is never needed
+/// is registered and the program runs on.
+#[test]
+fn on_local_error_registers_and_the_program_runs_on_wasm32() {
+    let dir = built(
+        "localreg",
+        "' dialect: pds71\nDECLARE SUB top ()\ntop\nPRINT \"done\"\nEND\nSUB top\nON LOCAL ERROR GOTO th\nPRINT \"in\"\nEXIT SUB\nth:\nRESUME NEXT\nEND SUB\n",
+    );
+    let (text, code) = run(&dir, "localreg", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "done"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A procedure's ON LOCAL ERROR handler takes the error and resumes: the
+/// ownf_local and resumelocals_local programs did not link (B$OEGP) and then
+/// ended at the first error.
+#[test]
+fn on_local_error_lands_in_its_handler_on_wasm32() {
+    let dir = built(
+        "locland",
+        "' dialect: pds71\nDECLARE SUB top ()\ntop\nPRINT \"done\"\nEND\nSUB top\nON LOCAL ERROR GOTO th\nPRINT \"in\"\nERROR 5\nPRINT \"after\"\nEXIT SUB\nth:\nPRINT \"err\"; ERR\nRESUME NEXT\nEND SUB\n",
+    );
+    let (text, code) = run(&dir, "locland", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "err", "5", "after", "done"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The ON LOCAL ERROR programs ended at their first error with "ON ERROR
+/// landed: longjmp is not supported" while a handler landed through the
+/// `setjmp` stub. Built as they are, they print what the DOS build prints.
+#[test]
+fn the_on_local_error_programs_print_their_expected_output_on_wasm32() {
+    for name in ["ownf_local_pds71", "ownf_local_vbdos", "resumelocals_local"] {
+        let path = root().join(format!("tests/run/qb/{name}.bas"));
+        let mut source = std::fs::read(&path).unwrap();
+        source.extend_from_slice(b"\r\nEND\r\n");
+        let dir = built(name, &String::from_utf8_lossy(&source));
+        let (text, code) = run(&dir, name, &[]);
+        let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+        let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+        let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+        assert_eq!(kept, rows[rows.len() - kept.len()..], "{name}");
+        assert_eq!(code, Some(0), "{name}");
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
 
 /// A fixed-length string and the fields of a TYPE variable are zero after
@@ -465,9 +563,76 @@ fn a_host_ending_gets_through_a_catch_all() {
 #[test]
 fn clear_then_a_closed_channel_lands_in_the_handler_on_wasm32() {
     let path = root().join("tests/differential/conformance/qb45/q45cl66.bas");
-    let dir = built_with("cl66", &std::fs::read_to_string(path).unwrap(), "--wasm-exceptions");
+    let dir = built("cl66", &std::fs::read_to_string(path).unwrap());
     let (text, code) = run(&dir, "cl66", &[]);
     assert_eq!(text.trim_end(), "PASS clear");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// OUT and INP reached the DAC's ports as x86 `in`/`out` nodes the wasm
+/// backend cannot select (`OUT &H3C8, 7` alone: `Legalize(Unsupported { op:
+/// Target(24586) })`). They are calls of the runtime's `qb_port_out` and
+/// `qb_port_in`, which keep the DAC's index and component protocol: three
+/// 6-bit components a colour, the index moving on after the third.
+#[test]
+fn the_dac_ports_read_back_what_was_written_on_wasm32() {
+    let dir = built(
+        "dacports",
+        "OUT &H3C8, 7\nOUT &H3C9, 1: OUT &H3C9, 2: OUT &H3C9, 3\nOUT &H3C9, 70\nOUT &H3C9, 5: OUT &H3C9, 6\n\
+         OUT &H3C7, 7\nPRINT INP(&H3C9); INP(&H3C9); INP(&H3C9); INP(&H3C9); INP(&H3C9); INP(&H3C9)\nPRINT INP(&H3C7); INP(&H1234)\nEND\n",
+    );
+    let (text, code) = run(&dir, "dacports", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["1", "2", "3", "6", "5", "6", "3", "255"], "{text}");
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// palette_using_pds71 sets and reads the DAC through ports and PALETTE USING;
+/// it did not build.
+#[test]
+fn palette_using_prints_the_bc_output_on_wasm32() {
+    let path = root().join("tests/run/qb/palette_using_pds71.bas");
+    let dir = built_with("paluse", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
+    let (text, code) = run(&dir, "paluse", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// PDS 7.1 prints a DOUBLE with 15 digits, rounded half up; the runtime had
+/// QB 4.5's 16 for every dialect, so 999999999999999.5 printed as itself where
+/// PDS 7.1 BC prints `1D+15`, and 922337203685477.625 as `.6` where it prints
+/// `922337203685478`. The rows are from a probe of 64 doubles under PDS 7.1 BC
+/// (~/scratch/fout-probe/BC_pds71.TXT); a rule of exact half-up at 15 digits
+/// fits all 64.
+#[test]
+fn pds_prints_a_double_with_15_digits_on_wasm32() {
+    let path = root().join("tests/run/qb/fout_pds15_pds71.bas");
+    let dir = built_with("foutpds", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
+    let (text, code) = run(&dir, "foutpds", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The other dialects keep QB 4.5's 16 digits (pow_unrolled.out has
+/// 999999999999999.5).
+#[test]
+fn qb45_prints_a_double_with_16_digits_on_wasm32() {
+    let dir = built_with(
+        "foutqb",
+        "DIM x AS DOUBLE\nx = 999999999999999#\nPRINT x + .5#\nPRINT x + .125#\nEND\n",
+        "--dialect qb45",
+    );
+    let (text, code) = run(&dir, "foutqb", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["999999999999999.5", "999999999999999.1"]);
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }

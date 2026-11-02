@@ -6,7 +6,7 @@ Every stage is O(n) in the blocks and instructions of a function (one pass over 
 
 | # | Stage | Pin (permalinks) | Fail-first test |
 |---|-------|------------------|-----------------|
-| 0 | `ExceptionModel` on the wasm driver; `wasm_exceptions` (`--wasm-exceptions`) keeps the invokes for the backend | | `the_wasm_exception_model_refuses_unwinding_and_leaves_the_rest_alone`, `wasm_exceptions_keep_the_landing_pads_for_the_backend` |
+| 0 | `ExceptionModel` on the wasm driver; `wasm_exceptions` (set for every `--wasm32` build) keeps the invokes for the backend | | `the_wasm_exception_model_refuses_unwinding_and_leaves_the_rest_alone`, `wasm_exceptions_keep_the_landing_pads_for_the_backend` |
 | 1 | `INTRINSIC_*` ISD nodes and `TargetCalling::intrinsic`; wasm names the 7 `llvm.wasm.*` EH intrinsics (shared: llrm-sdag `isd.rs`, llrm-codegen selectiondag) | | `a_function_the_target_names_an_intrinsic_is_an_intrinsic_node` |
 | 2 | Dropped. [WasmEHPrepare.cpp:207:207](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/WasmEHPrepare.cpp#L207) collects `catchpad`/`cleanuppad` blocks and returns at [L223:223](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/WasmEHPrepare.cpp#L223) when there are none: a `landingpad` function (QB's) is untouched. Pin `llc` on `tests/eh/one_invoke.ll` prints `try`, `catch_all`, no `catch`, no `wasm.landingpad.index` | | |
 | 3 | Unwind edges and EH pads in the wasm MIR. The builder's DAG is already the pin's (the pin skips `EH_LABEL` on wasm, [lowerStartEH:9133](https://github.com/ali-mosavian/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L9133)): `emit` adds the pad as a successor and an `EH_LABEL` at its head | | `an_unwind_edge_is_not_an_edge` |
@@ -50,16 +50,16 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
 | W18 | No `hoistCatches`, `catchret`/`cleanupret` replacement, `THROW_REF`, `try_table` | a frontend with typed catches or funclet pads |
 | W20 | `eh_reentry` has no pin counterpart: the pin asserts on a pad that branches back into a `try`'s body, which C++ never makes | none |
 
-## ON ERROR programs (28 under `tests/run/qb`, built with `--wasm-exceptions` and each header's flags, run under node)
+## ON ERROR programs (28 under `tests/run/qb`, built with each header's flags, run under node)
 
 - Match their `.out` (22): bounds divmod erlnum farchk hugechk intrinsics_errors_{pds71,qb45,vbdos} onerr onrange
   ownf_err_{pds71,qb45,vbdos} range_exp range_log_trig range_on_error range_power resdiv resnext resume0
   resume_next_print_last resumelocals
-- Need #6293 (`B_OEGP` import; link error now) (3): ownf_local_pds71, ownf_local_vbdos, resumelocals_local
+- ON LOCAL ERROR (3, `B_OEGP` from #6293): ownf_local_pds71, ownf_local_vbdos, resumelocals_local
 - Do not build, unrelated (3): currency_arith_pds71, currency_convert_pds71 (x86_fp80 `LRint` in the mid-end),
   palette_using_pds71 (`Target(24586)` legalize). None touches EH.
 
-The `setjmp` stub goes once wasm32 uses exceptions by default (after #6293 and a full wasm sweep).
+wasm32 always uses exceptions: the `setjmp` stub, its header and the flag are gone.
 
 ## Pin on a re-entering pad
 
