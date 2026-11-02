@@ -57,6 +57,14 @@ Executed instructions: main 485,835,518; parity +2,383,382 (+0.49%); head
 +2,816,018 (+0.58%), so this charge adds +432,636 (+0.09%). The parity loss
 is row DFACES-DYN-1, not LU1's.
 
+DEVIATE LU6: a stack slot's address that is the only base register of an
+address formula takes no register where `Tti::frame_address_is_free` (x86:
+`[bp+disp]`, `[esp+disp]`); the pin counts it. With the loop-carried budget cut
+(LU3b), the slots of two frame arrays cost two registers and LSR walked two
+pointers over one index (fpbench nib, +4 B). Exit: the pin's cost of a frame
+index once its x86 TTI is checked against `isLegalAddressingMode`, by
+2026-11-20.
+
 DEVIATE: the target hooks have no access type or address space on the
 legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
 neither. `getPreferredAddressingMode` is none on x86; the post-indexed

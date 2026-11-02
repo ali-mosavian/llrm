@@ -754,6 +754,13 @@ impl Cost {
                 }
             }
         }
+        // DEVIATE LU6: a stack slot alone under an address is its frame
+        // register and a displacement, so it takes no register; the pin counts
+        // it (x86 `isLegalAddressingMode` sees an alloca as a base register).
+        if lu.kind == Kind::Address && f.base_regs.len() == 1 && r.tti.frame_address_is_free() && is_stack_slot(r, reg)
+        {
+            return;
+        }
         self.c.num_regs += 1;
 
         // Favor registers that need no setup in the preheader.
@@ -857,4 +864,14 @@ pub fn setup_cost(
         }
         _ => 0,
     }
+}
+
+/// Whether `s` is the address of a stack slot: an `alloca`.
+fn is_stack_slot(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    let Some(Operand::Value(v)) = r.se.unknown_value(s) else { return false };
+    let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
+    matches!(r.cx.function.instruction(def).opcode, Opcode::Alloca { .. })
 }

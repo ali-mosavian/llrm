@@ -376,7 +376,13 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0], &[3]]), results(&before, &[&[0], &[3]]), "{after}");
-    assert!(after.contains("getelementptr i8, ptr %0, i16 2"), "{after}");
+    // A byte offset stepped by 2 off the frame slot (`[bp+si+disp]`) or a
+    // pointer stepped by 2: both are 16-bit addresses; the `shl` is not
+    // formed.
+    assert!(
+        after.contains("getelementptr i8, ptr %0, i16 2") || after.contains("getelementptr i8, ptr %p, i16 %0"),
+        "{after}"
+    );
     assert!(!after.contains(" shl nuw nsw i16 %i, 1"), "{after}");
 }
 
@@ -1271,5 +1277,68 @@ v69:
   br i1 %exitcond2, label %exit, label %v69
 exit:
   ret void
+}
+";
+
+/// fpbench nib: two arrays on the frame under three more live values made LSR
+/// price the frame bases as registers and walk two pointers (`lea bx`,
+/// `lea si`, `add bx, 4`) where main addressed `[bp+si-96]` and `[bp+si-72]`
+/// off one index (+4 B at -O2).
+#[test]
+fn frame_arrays_share_one_index_under_pressure() {
+    let mut module = parsed(&format!("{DOS}{FRAME_LOOP}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("phi ptr"), "{after}");
+}
+
+const FRAME_LOOP: &str = "
+declare void @bad()
+define i32 @f() {
+b1:
+  %a = alloca [24 x i8]
+  %b = alloca [24 x i8]
+  br label %b73
+b73:
+  %v70 = phi i16 [ %v85, %b79 ], [ 0, %b1 ]
+  %v71 = phi i32 [ %v93, %b79 ], [ 0, %b1 ]
+  %v72 = getelementptr inbounds nuw [4 x i8], ptr %b, i16 %v70
+  %v73 = load float, ptr %v72
+  %v74 = fmul float %v73, 6.400000e+01
+  %v75 = fcmp oge float %v74, 0xC1E0000000000000
+  %v76 = fcmp olt float %v74, 0x41E0000000000000
+  %v77 = and i1 %v75, %v76
+  br i1 %v77, label %b75, label %b76
+b75:
+  %v78 = getelementptr inbounds nuw [4 x i8], ptr %a, i16 %v70
+  %v79 = load float, ptr %v78
+  %v80 = fmul float %v79, 6.400000e+01
+  %v81 = fcmp oge float %v80, 0xC1E0000000000000
+  %v82 = fcmp olt float %v80, 0x41E0000000000000
+  %v83 = and i1 %v81, %v82
+  br i1 %v83, label %b79, label %b80
+b76:
+  call void @bad()
+  unreachable
+b79:
+  %v84 = fptosi float %v74 to i32
+  %v85 = add nuw nsw i16 %v70, 1
+  %v86 = zext nneg i16 %v85 to i32
+  %v87 = mul i32 %v84, %v86
+  %v88 = fptosi float %v80 to i32
+  %v89 = add nuw nsw i16 %v70, 7
+  %v90 = zext nneg i16 %v89 to i32
+  %v91 = mul i32 %v88, %v90
+  %v92 = add i32 %v87, %v71
+  %v93 = add i32 %v92, %v91
+  %exitcond = icmp eq i16 %v85, 6
+  br i1 %exitcond, label %b72, label %b73
+b72:
+  ret i32 %v93
+b80:
+  call void @bad()
+  unreachable
 }
 ";

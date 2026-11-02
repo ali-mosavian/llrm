@@ -217,7 +217,7 @@ impl Collection<'_, '_> {
             }
         }
         let mut solution = Vec::new();
-        let mut solution_cost = Cost::new();
+        let mut solution_cost;
         loop {
             solution.clear();
             solution_cost = Cost::new();

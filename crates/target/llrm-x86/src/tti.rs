@@ -989,6 +989,12 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
     }
 
+    /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
+    /// it.
+    fn frame_address_is_free(&self) -> bool {
+        true
+    }
+
     /// 64 in long mode, else 32 (also at m16, on a 386 or later).
     fn gpr_bits(&self) -> u32 {
         if self.quad { 64 } else { 32 }

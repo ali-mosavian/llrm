@@ -828,6 +828,13 @@ pub trait Tti {
         8
     }
 
+    /// Whether a stack slot's address is a displacement off the frame register
+    /// in an addressing mode, so as the base of an address it costs no
+    /// register of its own.
+    fn frame_address_is_free(&self) -> bool {
+        false
+    }
+
     /// The bits one general-purpose register holds: an `i32` takes one at 32,
     /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
     fn gpr_bits(&self) -> u32 {
