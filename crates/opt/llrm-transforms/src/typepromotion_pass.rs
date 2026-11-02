@@ -15,6 +15,7 @@
 //! zero extended once, the tree changes type in place, and each sink gets a
 //! `trunc` back where it needs the original type.
 //!
+//! # Example
 //! ```text
 //!  before                            after
 //!  %c = phi i16 [0, %a], [%n, %b]    %c = phi i32 [0, %a], [%n, %b]
