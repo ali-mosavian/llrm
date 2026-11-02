@@ -34,9 +34,9 @@
 //!   only where a conditional move exists. x_isqrt -18%, x_mergesort -20%
 //!   clocks, x_crc32 1179 -> 175 B at 1.58x clocks (numbered trade row; exit
 //!   2026-11-20: price the loop-carried arm in the cost model so crc keeps the
-//!   select where the clocks pay). Owner llrm-target-x86-m32.
-//!   A boolean `and`/`or` select (`select x, y, false`) is no branch and is not
-//!   counted: the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
+//!   select where the clocks pay). Owner llrm-target-x86-m32. A boolean
+//!   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
+//!   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -343,29 +343,16 @@ pub fn folded(
     // select is a branch, folding runs the arms' code on both paths and still
     // branches, so the selects count.
     if !spec.tti.has_cmov() && !hoist.is_empty() {
-        let selects = edges::phis(function, block)
-            .iter()
-            .fold(
-                Cost::FREE,
-                |all, &phi| {
-                    let ty = function.instruction(phi).ty;
-                    let arm = |from| arms(function, phi).into_iter().find(|&(_, one)| one == from).expect("an arm").0;
-                    let (on_true, on_false) = (arm(found.if_true), arm(found.if_false));
-                    // A boolean `and`/`or` is no branch.
-                    if select_logic(context, ty, on_true, on_false).is_some() {
-                        return all;
-                    }
-                    all + select_cost(
-                        context,
-                        spec.tti,
-                        ty,
-                        if_cond,
-                        on_true,
-                        on_false,
-                        crate::speculate::cost_kind(function),
-                    )
-                },
-            );
+        let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {
+            let ty = function.instruction(phi).ty;
+            let arm = |from| arms(function, phi).into_iter().find(|&(_, one)| one == from).expect("an arm").0;
+            let (on_true, on_false) = (arm(found.if_true), arm(found.if_false));
+            // A boolean `and`/`or` is no branch.
+            if select_logic(context, ty, on_true, on_false).is_some() {
+                return all;
+            }
+            all + select_cost(context, spec.tti, ty, if_cond, on_true, on_false, crate::speculate::cost_kind(function))
+        });
         if (cost + selects).value > THRESHOLD * Cost::BASIC.value || !(cost + selects).valid {
             return changed;
         }

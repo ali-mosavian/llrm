@@ -93,7 +93,8 @@ impl<T: Target> Converted<T> {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
-                    // an instruction is priced once however many operands name the value
+                    // an instruction is priced once however many operands name
+                    // the value
                     let extra = side
                         .uses
                         .iter()

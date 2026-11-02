@@ -20,7 +20,8 @@
 //! - [`drop_cancelling_transfers`]: `tya; tay` and its three twins: the second
 //!   moves what the first just moved.
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
-//!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces both.
+//!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
+//!   both.
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
 //!
 //! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
@@ -292,7 +293,8 @@ fn writes_cell(
     matches!(
         inst.op,
         Op::Sta | Op::Stx | Op::Sty | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror
-    ) && inst.operand == *cell
+    )
+        && inst.operand == *cell
 }
 
 /// Whether register `bit` (A, X or Y) is written before it is read, along every
@@ -344,9 +346,7 @@ fn dead_from(
                 (stored == Some(bit) || indexed(if bit == Registers::X { Index::X } else { Index::Y }), false)
             }
             (Op::Cpx | Op::Inx | Op::Dex, Registers::X) | (Op::Cpy | Op::Iny | Op::Dey, Registers::Y) => (true, false),
-            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => {
-                (true, false)
-            }
+            (Op::Adc | Op::And | Op::Ora | Op::Eor | Op::Sbc | Op::Cmp | Op::Pha, Registers::A) => (true, false),
             (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, Registers::A) => {
                 (matches!(inst.operand, Operand::Acc | Operand::None), false)
             }
@@ -371,18 +371,20 @@ fn dead_from(
                 | Op::Clv,
                 _,
             ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
-            (Op::Lda | Op::Ldx | Op::Ldy, _) => {
-                (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false)
-            }
+            (Op::Lda | Op::Ldx | Op::Ldy, _) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Jmp, _) => {
-                return inst.target().is_some_and(|label| {
-                    lines.iter().position(|l| *l == Line::Label(label.to_owned())).is_some_and(|to| {
-                        dead_from(lines, to, bit, seen)
-                    })
-                });
+                return inst
+                    .target()
+                    .is_some_and(
+                        |label| lines
+                            .iter()
+                            .position(|l| *l == Line::Label(label.to_owned()))
+                            .is_some_and(|to| dead_from(lines, to, bit, seen)),
+                    );
             }
             (op, _) if op.opposite().is_some() || op == Op::Bra => {
-                let target = inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
+                let target =
+                    inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
                 let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen));
                 if op == Op::Bra {
                     return taken;
@@ -520,8 +522,24 @@ fn carry_branch(
         let Line::Inst(before) = &asm.lines[shift] else { return None };
         match before.op {
             op if shape.shifts.contains(&op) && before.operand.is_cell() => break &before.operand,
-            Op::Lda | Op::Ldx | Op::Ldy | Op::Tax | Op::Tay | Op::Txa | Op::Tya | Op::Eor | Op::And | Op::Ora
-            | Op::Nop | Op::Inx | Op::Iny | Op::Dex | Op::Dey | Op::Sta | Op::Stx | Op::Sty
+            Op::Lda
+            | Op::Ldx
+            | Op::Ldy
+            | Op::Tax
+            | Op::Tay
+            | Op::Txa
+            | Op::Tya
+            | Op::Eor
+            | Op::And
+            | Op::Ora
+            | Op::Nop
+            | Op::Inx
+            | Op::Iny
+            | Op::Dex
+            | Op::Dey
+            | Op::Sta
+            | Op::Stx
+            | Op::Sty
                 if unchanged(before) => {}
             _ => return None,
         }
@@ -544,8 +562,10 @@ fn carry_branch(
             break match &source {
                 Source::Register(bit) => *bit == stored,
                 Source::Cell(cell) => {
-                    matches!(asm.lines.get(back.checked_sub(1)?)?, Line::Inst(source)
-                        if source.op == load && source.operand == **cell)
+                    matches!(
+                        asm.lines.get(back.checked_sub(1)?)?,
+                        Line::Inst(source) if source.op == load && source.operand == **cell
+                    )
                 }
             };
         }

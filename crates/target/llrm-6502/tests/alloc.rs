@@ -2850,7 +2850,8 @@ fn a_sign_test_of_the_cell_just_shifted_is_a_branch_on_the_carry() {
     assert_eq!(pass(branch_on_shift_carry, other), other, "rc4 holds rc5, not rc3");
     let written = "  lda rc3\n  sta rc4\n  inc rc3\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
     assert_eq!(pass(branch_on_shift_carry, written), written, "rc3 changed after the copy");
-    let register = "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  txa\n  bmi l\n  lda rc6\nl:\n  tya\n  rts\n";
+    let register =
+        "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  txa\n  bmi l\n  lda rc6\nl:\n  tya\n  rts\n";
     assert_eq!(
         pass(branch_on_shift_carry, register),
         "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  bcs l\n  lda rc6\nl:\n  tya\n  rts\n",
@@ -2865,7 +2866,8 @@ fn a_sign_test_of_the_cell_just_shifted_is_a_branch_on_the_carry() {
 #[test]
 fn a_low_bit_test_of_the_cell_just_shifted_right_is_a_branch_on_the_carry() {
     use llrm_6502::peephole::branch_on_shift_carry;
-    let cell = "  lda rc2\n  sta rc4\n  lsr rc3\n  ror rc4\n  lda rc2\n  and #1\n  bne l\n  ldx rc3\nl:\n  lda rc4\n  rts\n";
+    let cell =
+        "  lda rc2\n  sta rc4\n  lsr rc3\n  ror rc4\n  lda rc2\n  and #1\n  bne l\n  ldx rc3\nl:\n  lda rc4\n  rts\n";
     assert_eq!(
         pass(branch_on_shift_carry, cell),
         "  lda rc2\n  sta rc4\n  lsr rc3\n  ror rc4\n  bcs l\n  ldx rc3\nl:\n  lda rc4\n  rts\n"

@@ -868,7 +868,8 @@ fn an_lfsr_step_branches_on_the_carry_of_its_right_shift() {
          %t = trunc i16 %r to i8\n  ret i8 %t\n}",
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    let step: String = text.lines().skip_while(|l| *l != "lfsr:").take_while(|l| !l.contains("rts")).collect::<Vec<_>>().join("\n");
+    let step: String =
+        text.lines().skip_while(|l| *l != "lfsr:").take_while(|l| !l.contains("rts")).collect::<Vec<_>>().join("\n");
     assert!(step.contains("bcc") || step.contains("bcs"), "no branch on the carry:\n{step}");
     assert!(!step.contains("and #1"), "the bit is tested again:\n{step}");
     assert_eq!(exit_code_of(&text, "high_of_odd"), 0xBD, "{text}");
