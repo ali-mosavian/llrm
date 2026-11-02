@@ -197,6 +197,36 @@ fn an_unsigned_overflow_op_the_target_expands_is_the_wrapped_op_and_a_compare() 
     assert_eq!(overflow(ISD::UAddO, Some(0xFFFF)), (CondCode::SetNe, ISD::Register, true, false));
 }
 
+/// A `UMulO` the target expands was refused next ("convert node to libcall",
+/// Z80 `overflow_builtins`). `expandMULO`: by a power of two a shift and its
+/// shift back compared with the operand; otherwise the high half of the
+/// product (here `forceExpandWideMUL`, as `i32` is not a type) compared with 0.
+#[test]
+fn an_unsigned_multiply_with_overflow_the_target_expands_is_a_shift_or_a_high_half() {
+    let i16 = EVT::Simple(MVT::I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    tli.set_operation_action(ISD::UMulO, MVT::I16, Action::Expand);
+    let overflow = |b: Option<u128>| {
+        let mut dag = dag();
+        let a = dag.get_register(i16, 1);
+        let b = match b {
+            Some(value) => dag.get_constant(value, i16),
+            None => dag.get_register(i16, 2),
+        };
+        let both = dag.get_node_multi(ISD::UMulO, &[i16, EVT::I8], &[a, b]);
+        dag.set_root(SDValue { node: both.node, res: 1 });
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::SetCC);
+        let NodeData::CondCode(cc) = dag.node(dag.operand(root, 2)).data else { panic!("no code") };
+        let (left, right) = (dag.operand(root, 0), dag.operand(root, 1));
+        (cc, dag.opcode(left), dag.opcode(right) == ISD::Constant, right == a)
+    };
+    assert_eq!(overflow(Some(8)), (CondCode::SetNe, ISD::Srl, false, true));
+    let (cc, _, zero, _) = overflow(None);
+    assert_eq!((cc, zero), (CondCode::SetNe, true));
+}
+
 /// `frem`, `fsin` and `lrint` marked `LibCall` were refused ("convert node to
 /// libcall"): only the two-operand integer routines were translated. The call
 /// takes every operand of the node, and `lrint` of a double returns an integer.
