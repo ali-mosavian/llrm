@@ -580,9 +580,17 @@ pub(crate) fn is_encodable(
         Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
 
+    // A spill cell is made through the 16-bit frame register; long mode and
+    // flat mode address it through the target's own.
+    let framed = |operand: Loc| match operand {
+        Loc::Mem(cell) if bits >= 32 && cell.through == crate::model::ir::FRAME => {
+            Loc::Mem(Mem { through: classes.frame, ..cell })
+        }
+        other => other,
+    };
     let probe = Semantics {
-        dests: what.dests.iter().map(&mut placed).collect(),
-        sources: what.sources.iter().map(&mut placed).collect(),
+        dests: what.dests.iter().map(&mut placed).map(framed).collect(),
+        sources: what.sources.iter().map(&mut placed).map(framed).collect(),
         ..what.clone()
     };
     Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
