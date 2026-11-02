@@ -1,4 +1,5 @@
-//! A full unroll on a float stack is the pin's: no cap by the stack depth.
+//! A full unroll on a float stack is the pin's, unless it would hold more
+//! read-and-written float locations than the stack has slots.
 
 mod common;
 
@@ -30,4 +31,33 @@ fn a_chain_of_few_floats_is_still_copied_out() {
     let source = "double c[8];\ndouble f(double x)\n{\n    double p = 0;\n    int k;\n    for (k = 0; k < 8; k++) p = p * x + c[k];\n    return p;\n}\n";
     let count = adds(source);
     assert!(count >= 8, "{count} fadd: the chain stayed a loop");
+}
+
+/// bq32 nbody -O3: the force loops, unrolled as the pin does, made 17
+/// loop-carried doubles for 8 slots: 50 + 65 spills, +9..11% clocks over
+/// main. Twelve in-place updates are more than the stack holds: a loop.
+#[test]
+fn updating_more_floats_than_the_stack_holds_stays_a_loop() {
+    let source = "double v[12];\nvoid f(double k)\n{\n    int i;\n    for (i = 0; i < 12; i++) v[i] = v[i] * k + 1.0;\n}\n";
+    let count = adds(source);
+    assert!(count < 12, "{count} fadd: the 12 updates were copied out");
+}
+
+/// Eight fit the stack: the unroll the pin does.
+#[test]
+fn updating_as_many_floats_as_the_stack_holds_is_copied_out() {
+    let source = "double v[8];\nvoid f(double k)\n{\n    int i;\n    for (i = 0; i < 8; i++) v[i] = v[i] * k + 1.0;\n}\n";
+    let count = adds(source);
+    assert!(count >= 8, "{count} fadd: the 8 updates stayed a loop");
+}
+
+/// bq32 nbody -O3: no loop of the time step held more than 8 in-place floats
+/// (8, 8, 6, 4), yet together they carried 17 across it. Two loops of six
+/// updates each, in one outer loop, are 12 for the outer loop's pass: both
+/// stay loops (counted per loop, both were copied out).
+#[test]
+fn loops_that_together_update_more_floats_than_the_stack_holds_stay_loops() {
+    let source = "double u[6], w[6];\nvoid f(double k, int n)\n{\n    int t, i;\n    for (t = 0; t < n; t++) {\n        for (i = 0; i < 6; i++) u[i] = u[i] * k + 1.0;\n        for (i = 0; i < 6; i++) w[i] = w[i] * k + 1.0;\n    }\n}\n";
+    let count = adds(source);
+    assert!(count < 12, "{count} fadd: the 12 updates were copied out");
 }

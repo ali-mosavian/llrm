@@ -39,6 +39,18 @@
 //!   changes in no other. logical_value.c (main 25, here 155), split_loops.c
 //!   and int64_division.c need the cost analysis held to a bar too, which grew
 //!   matmul.nib 390 to 562 bytes: open.
+//! - U10 A complete unroll on a float stack (`Tti::x87_stack_slots`) is refused
+//!   where, once copied out, the nest reads and writes more distinct float
+//!   locations in one pass of its outermost loop than the stack has slots. The
+//!   pin's `shouldFullUnroll` prices the copies' instructions and what folds
+//!   (`UnrolledCost`) and nothing of the registers the result needs; its
+//!   scalar promotion then holds each constant-address location in a register
+//!   across the outer loop, and the pin's own `llc` spills them (bq32 nbody
+//!   -O3: 17 carried doubles in 8 slots; ours 50 + 65 spills, the pin's `llc`
+//!   on the same IR 41 + 74, gcc -O3 on the C source 12 + 10). The exit is a
+//!   register-pressure term in the pin's cost model or in promotion; none
+//!   exists in the pin. Exit 2026-11-20. Pin:
+//!   [`computeUnrollCount`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1016).
 //!
 //! # Example
 //! A loop of four trips becomes four copies; the induction variable's
@@ -869,6 +881,87 @@ fn add_cost_recursively(
     }
 }
 
+/// The distinct float memory locations the nest of `lp` both reads and writes
+/// in one pass of its outermost loop, once `lp` is copied out `trips` times:
+/// an access whose address advances with a loop of the nest reaches as many as
+/// the trips of those loops multiply to, one that does not move reaches one,
+/// any other none. Unrolled they are constant addresses, and a location read
+/// and written is what promotion keeps in a register across the outermost
+/// loop; one only read or only written holds none.
+fn float_locations_unrolled(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    trips: u32,
+) -> usize {
+    let mut se = ScalarEvolution::new();
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let header = lp.get_header();
+    let scope = lp.get_outermost_loop();
+    let scope_header = scope.get_header();
+    let mut read = llrm_support::hash::HashSet::<u32>::default();
+    let mut written = llrm_support::hash::HashSet::<u32>::default();
+    let mut weight = llrm_support::hash::HashMap::<u32, usize>::default();
+    for &block in scope.get_blocks() {
+        for inst in run.function.iter_block(block) {
+            let operation = run.function.instruction(inst);
+            let (is_store, value_ty, address) = match operation.opcode {
+                Opcode::Load { .. } => (false, Some(operation.ty), operation.operands[0]),
+                Opcode::Store { .. } => {
+                    (true, run.function.operand_type(run.context, operation.operands[0]), operation.operands[1])
+                }
+                _ => continue,
+            };
+            let is_float = value_ty
+                .is_some_and(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty).is_some_and(|ty| ty.is_float()));
+            if !is_float {
+                continue;
+            }
+            let address = se.get_scev(&cx, address);
+            // Each loop of the nest the address advances with multiplies the
+            // locations by its trips; one of unknown trips, or the outermost
+            // (a new location every pass), holds none.
+            let mut reach = 1usize;
+            let mut rest = address;
+            let mut counted = true;
+            while let Some(level) = se.addrec_header(rest) {
+                let level_trips = if level == header {
+                    trips
+                } else if level == scope_header {
+                    0
+                } else {
+                    // A loop of varying trips (a triangle) reaches at most its maximum.
+                    match se.get_small_constant_trip_count(&cx, level) {
+                        0 => se.get_small_constant_max_trip_count(&cx, level),
+                        exact => exact,
+                    }
+                };
+                if level_trips == 0 || !scope.get_blocks().contains(&level) {
+                    counted = false;
+                    break;
+                }
+                reach = reach.saturating_mul(level_trips as usize);
+                rest = se.addrec_start(rest);
+            }
+            if !counted || !se.is_loop_invariant(&cx, rest, Some(scope_header)) {
+                continue;
+            }
+            weight.insert(address.0, reach);
+            if is_store { written.insert(address.0) } else { read.insert(address.0) };
+        }
+    }
+    read.intersection(&written).map(|address| weight[address]).sum()
+}
+
 /// `shouldFullUnroll`.
 fn should_full_unroll(
     run: &mut Run,
@@ -882,6 +975,20 @@ fn should_full_unroll(
     debug_assert!(full_unroll_trip_count != 0, "should be non-zero!");
     if full_unroll_trip_count > up.full_unroll_max_count {
         return None;
+    }
+
+    // DEVIATE U10: on a float stack, a full unroll whose nest reads and writes
+    // more distinct float locations than the stack holds makes them constant
+    // addresses that promotion turns into loop-carried values the stack
+    // cannot keep (bq32 nbody -O3: 17 carried doubles in 8 slots, 50 + 65
+    // spills; unrolled as the pin does, gcc -O3 spills 12 + 10). Owner
+    // llrm-target-x86-m32, exit 2026-11-20.
+    if let Some(slots) = run.tti.x87_stack_slots() {
+        let held = float_locations_unrolled(run, analyzed, lp, full_unroll_trip_count);
+        if held > slots as usize {
+            why(run, lp, &format!("{held} float locations read and written once unrolled, past the {slots}-slot float stack"));
+            return None;
+        }
     }
 
     // When computing the unrolled size, note that BEInsns are not replicated

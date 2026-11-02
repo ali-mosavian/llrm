@@ -74,7 +74,7 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 fn tuning() -> llrm_mir::target::Tuning {
-    llrm_mir::target::Tuning { multiply_by_clocks: true, ..llrm_mir::target::Tuning::PIN }
+    llrm_mir::target::Tuning { multiply_by_clocks: true, x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN }
 }
 
 impl M32 {
@@ -592,6 +592,8 @@ mod tests {
         };
         let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
         assert_eq!(tti.unroll_threshold_overrides(), (None, None));
+        // The x87 stack the unroll counts float values against.
+        assert_eq!(tti.x87_stack_slots(), Some(8));
     }
 
     /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86
