@@ -1,16 +1,7 @@
 ; ca65 driver: runs __addsf3 or __subsf3 (OP) over vec, exit code = failures (max 255); first failing record index in $c0
-.import __addsf3, __subsf3, __mulsf3, __divsf3
 .export _main, vec
 .include "vec.inc"
-.ifdef SUBOP
-OP = __subsf3
-.elseif .defined(MULOP)
-OP = __mulsf3
-.elseif .defined(DIVOP)
-OP = __divsf3
-.else
-OP = __addsf3
-.endif
+.include "op.inc"
 rc2 = $82
 ptr = $a0
 cnt = $a2
@@ -53,6 +44,9 @@ loop:
     lda rc2+1
     sta $d3
     ; NaN expectation: any NaN passes
+.ifdef EXACT
+    jmp exact
+.endif
     lda $e3
     cmp #$7f
     bne exact
