@@ -916,20 +916,62 @@ fn xalu_flags(
     node: u32,
 ) -> Option<(SDValue, SDValue, u128)> {
     let op = SDValue { node, res: 0 };
-    let (opcode, code) = match dag.opcode(op) {
-        ISD::SAddO => (a64::ADDS, cc::VS),
-        ISD::UAddO => (a64::ADDS, cc::HS),
-        ISD::SSubO => (a64::SUBS, cc::VS),
-        ISD::USubO => (a64::SUBS, cc::LO),
-        _ => return None,
-    };
     let vt = dag.value_type(op);
     if vt != EVT::I32 && vt != EVT::I64 {
         return None;
     }
     let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+    let (opcode, code) = match dag.opcode(op) {
+        ISD::SAddO => (a64::ADDS, cc::VS),
+        ISD::UAddO => (a64::ADDS, cc::HS),
+        ISD::SSubO => (a64::SUBS, cc::VS),
+        ISD::USubO => (a64::SUBS, cc::LO),
+        op @ (ISD::SMulO | ISD::UMulO) => return Some(multiply_flags(dag, op == ISD::SMulO, vt, lhs, rhs)),
+        _ => return None,
+    };
     let value = dag.get_node_multi(ISD::Target(opcode), &[vt, EVT::I32], &[lhs, rhs]);
     Some((SDValue { node: value.node, res: 0 }, SDValue { node: value.node, res: 1 }, code))
+}
+
+/// `getAArch64XALUOOp` for the multiplies: an `i32` product is made in 64
+/// bits and checked to fit (`cmp x, w, sxtw`; `tst x, #0xffffffff00000000`);
+/// an `i64` one is checked against the high half (`smulh`/`umulh`).
+fn multiply_flags(
+    dag: &mut SelectionDAG,
+    signed: bool,
+    vt: EVT,
+    lhs: SDValue,
+    rhs: SDValue,
+) -> (SDValue, SDValue, u128) {
+    let flags_of = |node: SDValue| SDValue { node: node.node, res: 1 };
+    if vt == EVT::I32 {
+        let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
+        let (lhs, rhs) = (dag.get_node(extend, EVT::I64, &[lhs]), dag.get_node(extend, EVT::I64, &[rhs]));
+        let product = dag.get_node(ISD::Mul, EVT::I64, &[lhs, rhs]);
+        let value = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+        let flags = if signed {
+            let widened = dag.get_node(ISD::SignExtend, EVT::I64, &[value]);
+            flags_of(dag.get_node_multi(ISD::Target(a64::SUBS), &[EVT::I64, EVT::I32], &[product, widened]))
+        } else {
+            let upper = dag.get_constant(0xFFFF_FFFF_0000_0000, EVT::I64);
+            flags_of(dag.get_node_multi(ISD::Target(a64::ANDS), &[EVT::I64, EVT::I32], &[product, upper]))
+        };
+        return (value, flags, cc::NE);
+    }
+    let value = dag.get_node(ISD::Mul, EVT::I64, &[lhs, rhs]);
+    let flags = if signed {
+        let upper = dag.get_node(ISD::MulHS, EVT::I64, &[lhs, rhs]);
+        let sixty_three = dag.get_constant(63, EVT::I64);
+        // The shifted half is the second operand, so the shift folds into
+        // the compare.
+        let lower = dag.get_node(ISD::Sra, EVT::I64, &[value, sixty_three]);
+        flags_of(dag.get_node_multi(ISD::Target(a64::SUBS), &[EVT::I64, EVT::I32], &[upper, lower]))
+    } else {
+        let upper = dag.get_node(ISD::MulHU, EVT::I64, &[lhs, rhs]);
+        let zero = dag.get_constant(0, EVT::I64);
+        flags_of(dag.get_node_multi(ISD::Target(a64::SUBS), &[EVT::I64, EVT::I32], &[zero, upper]))
+    };
+    (value, flags, cc::NE)
 }
 
 /// `LowerXALUO` for the add and subtract forms: the value of `ADDS`/`SUBS` and
@@ -954,7 +996,7 @@ fn is_xalu_overflow(
     value.res == 1
         && matches!(
             dag.opcode(op),
-            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO
         )
         && matches!(dag.value_type(op), EVT::I32 | EVT::I64)
 }

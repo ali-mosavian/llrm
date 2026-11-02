@@ -302,3 +302,17 @@ fn a_constant_fill_within_the_limit_is_q_stores_not_a_call() {
     assert!(asm.contains("stp q"), "{asm}");
     assert!(!asm.contains("_memset"), "{asm}");
 }
+
+/// An `i16` overflow intrinsic was refused ("promote result" of `SAddO`,
+/// `SMulO`): the arithmetic is done in 32 bits and the flag is whether the
+/// result is the extension of its low half (`overflow_builtins` fell to the
+/// hand selector).
+#[test]
+fn an_i16_overflow_check_is_promoted() {
+    for (name, narrow) in [("sadd", "i16"), ("uadd", "i16"), ("smul", "i16"), ("umul", "i16"), ("ssub", "i8")] {
+        let body = format!(
+            "declare {{ {narrow}, i1 }} @llvm.{name}.with.overflow.{narrow}({narrow}, {narrow})\ndefine i1 @f({narrow} %a, {narrow} %b) {{\n  %r = call {{ {narrow}, i1 }} @llvm.{name}.with.overflow.{narrow}({narrow} %a, {narrow} %b)\n  %o = extractvalue {{ {narrow}, i1 }} %r, 1\n  ret i1 %o\n}}\n"
+        );
+        dag_at("-O2", &body).unwrap_or_else(|why| panic!("{name}: {why}"));
+    }
+}
