@@ -101,7 +101,7 @@ impl Tracker {
         if let Some((place, start, _)) = self.open.remove(&var)
             && start < at
         {
-            self.closed.push(Located { variable: var.variable, piece: var.piece, start, end: at, at: place });
+            self.closed.push(Located { variable: var.variable, piece: var.piece, start, end: at, at: place, held: false });
         }
     }
 
@@ -485,7 +485,7 @@ pub fn flow_of(
             written.extend(one.clobbers.iter().copied());
             written.extend(one.delivers.iter().map(|(_, register)| *register));
             if !written.is_empty() {
-                events.push((here, 0, Event::Def { written, mask: None, livein: one.arrival() }));
+                events.push((here, 1, Event::Def { written, mask: None, livein: one.arrival() }));
             }
             let root = |value: u32| target.parents.get(&value).copied().unwrap_or(value);
             let register = |value: &u32| placed.get(value).copied();
@@ -494,12 +494,12 @@ pub fn flow_of(
                 // value back.
                 (_, [stored]) if one.spill_store => {
                     if let (Some(from), Some(slot)) = (register(stored), (target.home)(root(*stored))) {
-                        events.push((here, 2, Event::Spill { from, slot }));
+                        events.push((here, 3, Event::Spill { from, slot }));
                     }
                 }
                 ([loaded], _) if one.spill_reload => {
                     if let (Some(into), Some(slot)) = (register(loaded), (target.home)(root(*loaded))) {
-                        events.push((here, 2, Event::Reload { slot, into }));
+                        events.push((here, 3, Event::Reload { slot, into }));
                     }
                 }
                 ([dest], [src])
@@ -514,7 +514,7 @@ pub fn flow_of(
                         });
                         events.push((
                             here,
-                            1,
+                            2,
                             Event::Copy {
                                 dest,
                                 src: from,
@@ -530,7 +530,10 @@ pub fn flow_of(
         let (low, high) = (i64::from(start.get_index()), i64::from(end.get_index()));
         for one in located.iter().filter(|one| (low..high).contains(&one.start)) {
             let place = (one.at != Where::Undef).then_some(one.at);
-            events.push((one.start, 3, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
+            // A note of a value already held goes before the instruction's
+            // own writes (the pin's `DBG_VALUE` precedes it).
+            let phase = if one.held { 0 } else { 4 };
+            events.push((one.start, phase, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
         }
         events.sort_by_key(|(here, phase, _)| (*here, *phase));
         blocks.push(FlowBlock {
@@ -754,7 +757,7 @@ mod tests {
         let (first, second) = (slot(&lis, &define), slot(&lis, &copy));
         let placed: IndexMap<u32, RegId> =
             [(1, reg(3)), (2, reg(5))].into_iter().map(|(v, p)| (v, as_reg(p))).collect();
-        let located = [Located { variable: 9, piece: None, start: first, end: second + 100, at: at(3) }];
+        let located = [Located { variable: 9, piece: None, start: first, end: second + 100, at: at(3), held: false }];
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|register| register == reg(5) };
         let blocks = flow_of(&body, &mut lis, &placed, &located, &target);
@@ -786,7 +789,7 @@ mod tests {
         let mut lis = LiveIntervals::new(&body);
         let first = i64::from(lis.indexes.get_instruction_index(define.id()).get_index());
         let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(3))].into_iter().collect();
-        let located = [Located { variable: 9, piece: None, start: first, end: first + 100, at: at(3) }];
+        let located = [Located { variable: 9, piece: None, start: first, end: first + 100, at: at(3), held: false }];
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|_| false };
         let found = extend(
@@ -797,6 +800,38 @@ mod tests {
         let end = i64::from(lis.indexes.get_mbb_range(0).1.get_index());
         assert_eq!((found[0].start, found[0].end, found[0].at), (first, end, at(3)));
     }
+    /// A note of a value already in a register, placed before the
+    /// instruction that overwrites it, was ordered after that write and
+    /// reopened the register for the new value: the parameter read as the
+    /// local that replaced it, from the write on.
+    #[test]
+    fn flow_of_puts_a_held_values_note_before_the_write_at_its_position() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let first = Arc::new(Insn::new(0, None, None, vec![1], vec![]));
+        let second = Arc::new(Insn::new(0, None, None, vec![2], vec![1]));
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::clone(&first), Arc::clone(&second)]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let write = i64::from(lis.indexes.get_instruction_index(second.id()).get_index());
+        let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(3))].into_iter().collect();
+        let located = [Located { variable: 9, piece: None, start: write, end: write + 100, at: at(3), held: true }];
+        let parents = HashMap::default();
+        let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|_| false };
+        let found = extend(
+            &flow_of(&body, &mut lis, &placed, &located, &target),
+            &Flow { stack_pointer: reg(9), params: &BTreeSet::new() },
+        );
+        assert!(found.iter().all(|one| one.end <= write), "{found:?}");
+    }
+
     fn entry_tracker(params: &[u32]) -> Tracker {
         Tracker::entering(0, &Locs::default(), &params.iter().copied().collect(), true)
     }
