@@ -1269,6 +1269,7 @@ entry:
     // @f: %c and %d live across the divide with four registers, two fixed.
     assert_eq!(cost("f", Default::default()), 0, "four registers hold c, d and the divide's operands");
     assert!(cost("f", fixed) > 0, "c and d cannot sit in ax and dx across the divide");
-    // @g: only %a, read again after the divide, lives across it; it fits the two that are left.
+    // @g: only %a, read again after the divide, lives across it; it fits the
+    // two that are left.
     assert_eq!(cost("g", fixed), 0, "one value across the divide fits");
 }

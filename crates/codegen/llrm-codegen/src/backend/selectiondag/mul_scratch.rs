@@ -6,9 +6,10 @@
 //! besides the result: an `imul r,r,imm` or the three-operand form needs
 //! none. Where the registers are full at that point the extra one is a spill.
 //! `keep_imul` asks the one spill model (`llrm_transforms::spill`) what the
-//! function spills with one more register wanted at each such multiply and
-//! keeps the `imul` of those where it spills more than without: the clocks
-//! the chain saves do not pay for the memory operands it adds.
+//! function spills with one more register wanted at each such multiply, prices
+//! it in clocks (its stores and loads, weighted by the block's frequency) and
+//! keeps the `imul` of those multiplies whose chain no longer wins
+//! (`arithmetic::multiply_chain`).
 //!
 //! # Provides
 //! `keep_imul`.
@@ -55,14 +56,12 @@ pub fn keep_imul(
             let Some(16) = context.types.int_bits(function.value(result).ty) else { continue };
             let [Operand::Value(_), Operand::Constant(constant)] = op.operands[..] else { continue };
             let ConstantKind::Int(bits) = context.get(constant).kind else { continue };
-            let Ok(Some(chain)) =
-                arithmetic::chain_at_speed(bits as u16 as i16 as i64, 2, cpu, arch, freq, milliclocks_per_byte)
-            else {
-                continue;
-            };
+            let number = bits as u16 as i16 as i64;
+            let free = arithmetic::MulGoal::Priced { freq, milliclocks_per_byte, spill_clocks: 0.0 };
+            let Ok(Some(chain)) = arithmetic::multiply_chain(number, 2, cpu, arch, free) else { continue };
             let registers = chain_temporaries(&chain);
             if registers > 0 {
-                candidates.push((inst, result, registers));
+                candidates.push((inst, result, registers, number, freq));
             }
         }
     }
@@ -85,10 +84,19 @@ pub fn keep_imul(
     let pressure = spill::Pressure::of(context, function, room.index_scales);
     let view = || spill::View::over(&pressure, context, layout, function, room, &across);
     let base = view().forecast(&costs, &frequency).cost;
-    for (inst, result, registers) in candidates {
+    for (inst, result, registers, number, freq) in candidates {
         let with = view().with_scratch(inst, registers).forecast(&costs, &frequency).cost;
-        llrm_support::debug!("mulscratch", "{result:?}: {registers} more register(s), price {base} -> {with}");
-        if with > base {
+        let spill_clocks = (with - base) as f64 / profit::UNIT as f64;
+        let goal = arithmetic::MulGoal::Priced { freq, milliclocks_per_byte, spill_clocks };
+        let kept = !matches!(
+            arithmetic::multiply_chain(number, 2, cpu, arch, goal),
+            Ok(Some(_))
+        );
+        llrm_support::debug!(
+            "mulscratch",
+            "{result:?}: {registers} more register(s), spill {spill_clocks} clk ({base} -> {with}), imul {kept}"
+        );
+        if kept {
             found.insert(result);
         }
     }

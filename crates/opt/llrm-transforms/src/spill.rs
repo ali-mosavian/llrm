@@ -1204,7 +1204,10 @@ pub fn sites(
             },
             segments: Point { registers: room.segments, residents: held(before) },
             before: Point {
-                registers: room.registers - fixed_by(function, inst, room) - transient(inst, before) - copied(function, inst, past, room, counted),
+                registers: room.registers
+                    - fixed_by(function, inst, room)
+                    - transient(inst, before)
+                    - copied(function, inst, past, room, counted),
                 residents: residents(before),
             },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),

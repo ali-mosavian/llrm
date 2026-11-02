@@ -149,44 +149,52 @@ pub fn chain_bytes(
         .sum()
 }
 
-/// The chain for a multiply by `number` where it takes fewer clocks than
-/// `imul r,r,imm` on the CPU's table, whatever its bytes (gcc's `synth_mult`
-/// at speed).
-pub fn chain_by_clocks<'a>(
-    number: i64,
-    width: i64,
-    cpu: impl Into<ProfileOrName<'a>>,
-) -> Result<Option<Vec<(&'static str, i64)>>, String> {
-    let target = targets::profile(cpu)?;
-    let found = if width == 4 { cheapest_chain(number, target)? } else { cheapest_narrow_chain(number, target)? };
-    let Some((chain, clocks)) = found else { return Ok(None) };
-    let prefix = if width == 4 { dword_prefix(target) } else { 0 };
-    Ok((immediate_multiply(target, number)? + prefix - clocks > 0).then_some(chain))
+/// What decides a constant multiply's chain against the target's `imul`: the
+/// one decision every target and level takes (DEVIATE M1, SD446).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MulGoal {
+    /// The fewest clocks on the CPU's table, whatever the bytes (gcc's
+    /// `synth_mult` at speed).
+    Clocks,
+    /// The clocks the chain saves, in a block `freq` times as hot as the
+    /// entry, pay for its extra bytes at `milliclocks_per_byte` and for
+    /// `spill_clocks`: what the register it needs beyond `imul`'s costs in
+    /// stores and loads, already weighted by the block's frequency. A rate of
+    /// 0 is dominance: the chain must not be larger.
+    Priced { freq: f64, milliclocks_per_byte: i64, spill_clocks: f64 },
+    /// Bytes first, as -Os: the chain stands only where it is no longer and no
+    /// slower than the `imul`. Not yet decided here: the `imul`.
+    Bytes,
 }
 
-/// The chain for a multiply by `number` of `width` bytes in a block `freq`
-/// times as hot as the entry, where the clocks it saves over `imul r,r,imm`
-/// pay for the bytes it adds at `milliclocks_per_byte` (the target's rate at
-/// speed): `saved * freq * 1000 >= extra_bytes * rate`. None where the rate
-/// is 0: the target does not trade bytes for clocks.
-pub fn chain_at_speed<'a>(
+/// The chain for a multiply by `number` of `width` bytes that `goal` accepts
+/// over `imul r,r,imm` on the CPU's table; None where it keeps the `imul`.
+pub fn multiply_chain<'a>(
     number: i64,
     width: i64,
     cpu: impl Into<ProfileOrName<'a>>,
     arch: &dyn llrm_target::Target,
-    freq: f64,
-    milliclocks_per_byte: i64,
-) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    goal: MulGoal,
+) -> Result<Option<Chain>, String> {
     let target = targets::profile(cpu)?;
-    if milliclocks_per_byte <= 0 {
+    if goal == MulGoal::Bytes {
         return Ok(None);
     }
     let found = if width == 4 { cheapest_chain(number, target)? } else { cheapest_narrow_chain(number, target)? };
     let Some((chain, clocks)) = found else { return Ok(None) };
     let prefix = if width == 4 { dword_prefix(target) } else { 0 };
     let saved = immediate_multiply(target, number)? + prefix - clocks;
-    let extra = chain_bytes(&chain, width, arch) - arch.multiply_immediate_bytes(number, width);
-    Ok((saved > 0 && saved as f64 * freq * 1000.0 >= (extra * milliclocks_per_byte) as f64).then_some(chain))
+    let pays = match goal {
+        MulGoal::Clocks => saved > 0,
+        MulGoal::Priced { freq, milliclocks_per_byte, spill_clocks } => {
+            let extra = chain_bytes(&chain, width, arch) - arch.multiply_immediate_bytes(number, width);
+            saved > 0
+                && (saved as f64 * freq - spill_clocks) * 1000.0 >= (extra * milliclocks_per_byte.max(0)) as f64
+                && (milliclocks_per_byte > 0 || extra <= 0)
+        }
+        MulGoal::Bytes => false,
+    };
+    Ok(pays.then_some(chain))
 }
 
 /// What a dword instruction costs beyond a word one where the target's own
@@ -399,7 +407,7 @@ fn positive_chains<'a>(
     Ok(best)
 }
 
-type Chain = Vec<(&'static str, i64)>;
+pub type Chain = Vec<(&'static str, i64)>;
 
 #[cfg(test)]
 thread_local! {
@@ -576,7 +584,16 @@ mod tests {
     #[test]
     fn test_a_chain_is_taken_where_saved_clocks_times_frequency_pay_the_bytes() {
         let m16 = targets::tuned_for(&llrm_x86_m16::M16, "486", false).unwrap();
-        let at = |width, freq, rate| chain_at_speed(43, width, m16, &llrm_x86_m16::M16, freq, rate).unwrap();
+        let at = |width, freq, rate| {
+            multiply_chain(
+                43,
+                width,
+                m16,
+                &llrm_x86_m16::M16,
+                MulGoal::Priced { freq, milliclocks_per_byte: rate, spill_clocks: 0.0 },
+            )
+            .unwrap()
+        };
         assert!(at(4, 1.0, 500).is_none(), "once: 43 clocks' worth of bytes is not saved");
         assert!(at(4, 8.0, 500).is_some(), "in a loop");
         assert!(at(4, 1000.0, 0).is_none(), "no rate: bytes and clocks are not traded");

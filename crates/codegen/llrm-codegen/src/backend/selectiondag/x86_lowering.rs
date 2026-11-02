@@ -2015,7 +2015,7 @@ fn combine_mul(
     new_mul
 }
 
-/// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it
+/// `x * c` as the chain `arithmetic::multiply_chain` accepts (the clocks it
 /// saves pay for its bytes at the block's frequency; the search is cached per
 /// constant, O(1) here), built from shifts, adds, subtracts and
 /// the `lea` forms. An `i16` has no `lea`: the narrow chain.
@@ -2039,12 +2039,12 @@ fn priced_chain(
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
-    let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+    let goal = if by_clocks {
+        arithmetic::MulGoal::Clocks
     } else {
-        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
-    }
-    .ok()??;
+        arithmetic::MulGoal::Priced { freq, milliclocks_per_byte, spill_clocks: 0.0 }
+    };
+    let chain = arithmetic::multiply_chain(c, width, cpu, arch, goal).ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
