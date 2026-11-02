@@ -25,6 +25,9 @@ pub struct CpuTable {
     pub jump_table: Option<i64>,
     /// Bytes of a line of the first-level data cache.
     pub cache_line: Option<i64>,
+    /// Thousandths of a clock one byte of code is worth at speed, where the
+    /// target states a policy rate (m16); `None` where the rate is derived.
+    pub speed_milliclocks_per_byte: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -142,6 +145,7 @@ impl Timings {
                     ("scalars", "clear_ratio_size") => table.clear_ratio_size = Some(number()?),
                     ("scalars", "jump_table") => table.jump_table = Some(number()?),
                     ("scalars", "cache_line") => table.cache_line = Some(number()?),
+                    ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
@@ -224,6 +228,20 @@ mod tests {
         assert_eq!(Timings::parse("cpus a b\ndefault_cpu b\n").unwrap().default_cpu(), Some("b"));
         assert_eq!(Timings::parse("cpus a\ndefault_cpu z\n").unwrap_err(), "timings.times: default_cpu z is no column");
         assert_eq!(Timings::parse("cpus a\nalu 1 2\n").unwrap_err(), "timings.times:2: 2 values for 1 CPUs");
+    }
+
+    /// The rate a target states as policy is a row the compiler and the judge
+    /// both read; a CPU with a dash has none.
+    #[test]
+    fn a_cpu_states_the_byte_rate_or_none() {
+        let timings = Timings::parse("cpus a b\nspeed_milliclocks_per_byte 500 -\n").unwrap();
+        assert_eq!(
+            (
+                timings.cpu("a").unwrap().speed_milliclocks_per_byte,
+                timings.cpu("b").unwrap().speed_milliclocks_per_byte
+            ),
+            (Some(500), None)
+        );
     }
 
     #[test]
