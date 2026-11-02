@@ -269,3 +269,19 @@ fn fmuladd_is_one_fused_multiply_add() {
     assert!(asm.contains("fmadd d0, d0, d1, d2"), "{asm}");
     assert!(!asm.contains("fmul"), "{asm}");
 }
+
+/// A 16-bit loop counter was masked for every compare (`subs wzr, w1, w11,
+/// uxth`): the pin's TypePromotion makes it an `i32` in the IR, as `crc` in
+/// the bench needs (705 instructions for the pin's 506).
+#[test]
+fn a_narrow_loop_counter_is_compared_unmasked() {
+    let body = "define i64 @f(i64 %x, i16 zeroext %lim) {\n\
+b0:\n  br label %b1\n\
+b1:\n  %c = phi i16 [ 0, %b0 ], [ %n, %b1 ]\n  %v = phi i64 [ %x, %b0 ], [ %w, %b1 ]\n\
+  %h = lshr i64 %v, 1\n  %w = xor i64 %h, 3988292384\n\
+  %n = add nuw nsw i16 %c, 1\n  %k = icmp samesign ult i16 %c, %lim\n  br i1 %k, label %b1, label %b2\n\
+b2:\n  ret i64 %w\n}\n";
+    let asm = dag_at("-O2", body).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!asm.contains("uxth"), "{asm}");
+    assert!(asm.contains("subs"), "{asm}");
+}

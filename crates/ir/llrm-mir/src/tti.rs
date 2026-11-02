@@ -323,6 +323,12 @@ pub trait Tti {
         false
     }
 
+    /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
+    /// where the target does not say.
+    fn scalar_register_bits(&self) -> u32 {
+        0
+    }
+
     /// `getRegisterBitWidth(FixedWidthVector)`: the bits of the widest vector
     /// register, 0 where the target has none (and the SLP vectorizer is off).
     fn vector_register_bits(&self) -> u32 {
