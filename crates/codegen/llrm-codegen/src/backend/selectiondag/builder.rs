@@ -1700,8 +1700,11 @@ impl Builder<'_> {
             argument,
             Operand::Value(result) if self.function.users(result).into_iter().count() == 1
         );
+        // Only where the argument goes to the stack: at m64 a float travels in
+        // an xmm register, and as a dword it was `movd xmm0, xmm0`.
         if sole
             && self.has_opt_size()
+            && self.target.dag.pointer != EVT::I64
             && self.dag.value_type(value) == EVT::Simple(MVT::F32)
             && self.dag.opcode(value) == ISD::Load
         {

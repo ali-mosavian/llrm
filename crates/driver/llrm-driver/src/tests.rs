@@ -254,6 +254,22 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// Two floats read from memory and passed on in `xmm0`/`xmm1` at -Os were
+/// "Semantics movd" refusals at m64 (`movd xmm0, xmm0`, a copy of one xmm
+/// register to itself): parity/qmove -Os with `-fno-inline-functions`.
+#[test]
+fn floats_loaded_and_passed_on_compile_at_m64_os() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @x = global float 1.0\n@y = global float 2.0\n\
+                declare void @g(float, float)\n\
+                define void @f() optsize {\n  %a = load volatile float, ptr @x\n  %b = load volatile float, ptr @y\n  \
+                call void @g(float %a, float %b)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.lines().any(|line| line.trim().starts_with("movd")), "no movd between xmm registers\n{listing}");
+}
+
 /// A `{ i64, i48 }` (a packed struct of 14 bytes) crossed the DAG selector as
 /// an `i48`, which nothing legalized: torture 20131127-1 was refused at -m64,
 /// "Unsupported CopyToReg Int(48) promote operand".
