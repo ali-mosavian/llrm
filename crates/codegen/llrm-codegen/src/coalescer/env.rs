@@ -55,6 +55,8 @@ pub struct TargetEnv {
     /// Whether a copy into or out of a lane above the low one is joined
     /// ([`CoalescerEnv::can_share_lane`]). Off: such a copy stays.
     pub joins_lanes: bool,
+    /// DEVIATE CO1: join the copies of loop-carried values first.
+    pub carried_first: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
@@ -292,6 +294,10 @@ impl CoalescerEnv for TargetEnv {
 
     fn joins_sub_registers(&self) -> bool {
         self.joins_sub_registers
+    }
+
+    fn joins_carried_first(&self) -> bool {
+        self.carried_first
     }
 
     fn tuned_for_size(&self) -> bool {
@@ -552,6 +558,7 @@ pub fn coalesce(
     joins_pinned_copies: bool,
     joins_sub_registers: bool,
     joins_lanes: bool,
+    carried_first: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
@@ -584,6 +591,7 @@ pub fn coalesce(
         joins_pinned_copies,
         joins_sub_registers,
         joins_lanes,
+        carried_first,
         aliases,
         should_join,
         freq,

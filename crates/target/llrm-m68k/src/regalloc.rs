@@ -85,6 +85,10 @@ impl Target for M68kRegisters {
         root == reg::SP || root == reg::A6
     }
 
+    fn joins_carried_first() -> bool {
+        true
+    }
+
     fn caller_saved() -> Vec<RegId> {
         CALLER_SAVED.to_vec()
     }

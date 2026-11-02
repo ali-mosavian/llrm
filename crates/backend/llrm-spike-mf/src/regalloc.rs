@@ -184,6 +184,15 @@ pub trait Target {
         true
     }
 
+    /// DEVIATE CO1: whether the copies of a value live across a loop's back
+    /// edge are joined before the others. The pin takes the split edge first
+    /// (the block of a phi copy), so the incoming value joins the phi result
+    /// before the carried chain does and the chain keeps a copy per trip.
+    /// Exit: 2026-11-12, or the pin's order.
+    fn joins_carried_first() -> bool {
+        false
+    }
+
     /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
     /// register coalescer in the pin) orders the function before allocation.
     /// Here false: a target opts in once its numbers say so.
