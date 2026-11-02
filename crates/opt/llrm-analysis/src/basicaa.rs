@@ -30,9 +30,11 @@
 //! # Provides
 //! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
+use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
 use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::valuetracking::{compute_constant_range, compute_known_bits};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
 use crate::capturetracking::CaptureComponents;
@@ -57,10 +59,22 @@ const MAX_LOOKUP: usize = 6;
 pub(crate) struct Decomposed {
     base: Operand,
     offset: i128,
-    /// `(index value, scale)`, a scale never zero.
-    vars: Vec<(Operand, i128)>,
+    /// The variable indices, a scale never zero.
+    vars: Vec<VariableGepIndex>,
     inbounds: bool,
     nuw: bool,
+}
+
+/// `VariableGEPIndex` (BasicAliasAnalysis.cpp:533,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L533>),
+/// without the casts `CastedValue` carries (the value is the cast's result
+/// until `GetLinearExpression` is translated).
+#[derive(Clone, Copy, Debug)]
+struct VariableGepIndex {
+    value: Operand,
+    scale: i128,
+    /// `IsNSW`: `value * scale` does not wrap signed.
+    nsw: bool,
 }
 
 /// A load or store's place as `DecomposeGEPExpression` finds it: the object its
@@ -391,16 +405,21 @@ impl<'a> BasicAA<'a> {
                     let (constant, variable) =
                         self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
                     found.offset += constant;
+                    // `LE.mul(Scale, NUW, NUSW)`: the index wraps no signed
+                    // where the GEP says so.
+                    let nsw = one.flags.contains(Flags::INBOUNDS) || one.flags.contains(Flags::NUSW);
                     for (at, scale) in variable {
                         let (index, scale) = (one.operands[1 + at], scale as i128);
-                        match found.vars.iter().position(|(had, _)| *had == index) {
+                        match found.vars.iter().position(|had| had.value == index) {
                             Some(have) => {
-                                found.vars[have].1 += scale;
-                                if found.vars[have].1 == 0 {
+                                // "We cannot guarantee no-wrap for the merge."
+                                found.vars[have].scale += scale;
+                                found.vars[have].nsw = false;
+                                if found.vars[have].scale == 0 {
                                     found.vars.remove(have);
                                 }
                             }
-                            None if scale != 0 => found.vars.push((index, scale)),
+                            None if scale != 0 => found.vars.push(VariableGepIndex { value: index, scale, nsw }),
                             None => {}
                         }
                     }
@@ -1039,18 +1058,19 @@ impl<'a> BasicAA<'a> {
         // d1 - d2.
         d1.nuw &= d1.offset >= d2.offset;
         d1.offset -= d2.offset;
-        for (value, scale) in d2.vars.iter().copied() {
-            match d1.vars.iter().position(|(had, _)| *had == value) {
+        for src in d2.vars.iter().copied() {
+            match d1.vars.iter().position(|had| had.value == src.value) {
                 Some(have) => {
-                    if d1.vars[have].1 != scale {
-                        d1.nuw &= d1.vars[have].1 >= scale;
-                        d1.vars[have].1 -= scale;
+                    if d1.vars[have].scale != src.scale {
+                        d1.nuw &= d1.vars[have].scale >= src.scale;
+                        d1.vars[have].scale -= src.scale;
+                        d1.vars[have].nsw = false;
                     } else {
                         d1.vars.remove(have);
                     }
                 }
                 None => {
-                    d1.vars.push((value, -scale));
+                    d1.vars.push(VariableGepIndex { scale: -src.scale, ..src });
                     d1.nuw = false;
                 }
             }
@@ -1117,16 +1137,69 @@ impl<'a> BasicAA<'a> {
             return AliasResult::NoAlias;
         }
         let (Some(bytes1), Some(bytes2)) = (size1.value(), size2.value()) else { return AliasResult::MayAlias };
-        // The variable part is a multiple of the GCD of the scales (a scale
-        // without nsw is known only down to its lowest set bit).
-        let gcd = d1.vars.iter().map(|(_, scale)| 1i128 << scale.unsigned_abs().trailing_zeros().min(100)).fold(0, gcd);
+        let (gcd, offset_range) = self.analyze_variable_offsets(&d1);
         if gcd > 0 {
             let modulus = d1.offset.rem_euclid(gcd);
             if modulus >= i128::from(bytes2) && gcd - modulus >= i128::from(bytes1) {
                 return AliasResult::NoAlias;
             }
         }
+        // The ranges of potentially accessed bytes are disjoint.
+        if let Some(range) = offset_range {
+            let width = range.width;
+            let range1 = range.add(&ConstantRange::new(width, 0, u128::from(bytes1)));
+            let range2 = ConstantRange::new(width, 0, u128::from(bytes2));
+            if range1.intersect_with(&range2, PreferredRangeType::Smallest).is_empty_set() {
+                return AliasResult::NoAlias;
+            }
+        }
         AliasResult::MayAlias
+    }
+}
+
+impl BasicAA<'_> {
+    /// `analyzeVariableOffsets`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1937>):
+    /// the GCD the variable offset is a multiple of and the range it lies in
+    /// (`None` when a width exceeds the range type).
+    fn analyze_variable_offsets(
+        &self,
+        gep: &Decomposed,
+    ) -> (i128, Option<ConstantRange>) {
+        let width = self.unit.layout.pointer(0).index_bits;
+        let (context, function) = (self.unit.context, self.unit.function);
+        let mut common = 0i128;
+        let mut range =
+            (width <= 128).then(|| ConstantRange::single(width, gep.offset as u128 & u128::MAX >> (128 - width)));
+        for index in &gep.vars {
+            let known = compute_known_bits(context, function, index.value, 0, None);
+            // `ScaleForGCD`: without nsw only the lowest set bit of the scale
+            // is known.
+            let mut scale_gcd = if index.nsw {
+                index.scale.unsigned_abs()
+            } else {
+                1u128 << index.scale.unsigned_abs().trailing_zeros().min(100)
+            };
+            let var_tz = known.count_min_trailing_zeros();
+            if var_tz > 0 {
+                let max_shift = width.saturating_sub(128 - scale_gcd.leading_zeros() + 1);
+                scale_gcd <<= var_tz.min(max_shift).min(100);
+            }
+            common = gcd(common, scale_gcd as i128);
+            let Some(total) = range.as_ref() else { continue };
+            let unsigned = compute_constant_range(context, function, index.value, false, 0, None);
+            let by_bits = ConstantRange::from_known_bits(&known, true);
+            let mut one = if unsigned.width == by_bits.width {
+                unsigned.intersect_with(&by_bits, PreferredRangeType::Signed)
+            } else {
+                unsigned
+            };
+            one = one.sext_or_trunc(width);
+            let scale = ConstantRange::single(width, index.scale as u128 & u128::MAX >> (128 - width));
+            one = if index.nsw { one.smul_sat(&scale) } else { one.smul_fast(&scale) };
+            range = Some(total.add(&one));
+        }
+        (common, range)
     }
 }
 

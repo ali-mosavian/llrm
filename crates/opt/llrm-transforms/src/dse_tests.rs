@@ -719,3 +719,14 @@ fn test_an_unknown_pointer_does_not_observe_a_private_cell() {
     );
     assert!(!after.contains("store"), "{after}");
 }
+
+/// A load at `slot + zext(i16) + 8` cannot read the 4 bytes at `slot + 4`:
+/// the index range is `[0, 65535]`. Ours had no index ranges, kept the store
+/// (fpbench at O3: 42 stores where the pin leaves 34).
+#[test]
+fn test_a_load_past_a_ranged_index_does_not_observe_an_earlier_cell() {
+    let after = ran(
+        "define float @f(i16 %n, float %v) {\nb0:\n  %a = alloca [6 x float], align 4\n  %p1 = getelementptr inbounds i8, ptr %a, i32 4\n  store float %v, ptr %p1, align 4\n  %i = zext i16 %n to i32\n  %q = getelementptr i8, ptr %a, i32 %i\n  %q8 = getelementptr i8, ptr %q, i32 8\n  %r = load float, ptr %q8, align 4\n  ret float %r\n}\n",
+    );
+    assert!(!after.contains("store"), "{after}");
+}
