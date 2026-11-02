@@ -2474,6 +2474,9 @@ pub fn emit_in(
             (Loc::Reg(into), Loc::Imm(imm)) => load(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Mem(cell)) => move_from(into.register, cell, at),
             (Loc::Mem(cell), Loc::Reg(outof)) => move_into(cell, outof.register, at),
+            // Long mode has no store of a symbol's address: `mov qword [m],
+            // imm32` takes an absolute one.
+            (Loc::Mem(_), Loc::Imm(imm)) if at.bits == 64 && imm.address.is_some() => None,
             (Loc::Mem(cell), Loc::Imm(imm)) => store_imm(cell, imm.value, at),
             _ => None,
         };

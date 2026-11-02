@@ -53,3 +53,19 @@ fn a_global_address_feeding_a_phi_is_shared() {
     assert_eq!(text.matches("offset counts").count(), 1, "{text}");
     assert_eq!(text.matches("offset data").count(), 1, "{text}");
 }
+
+/// tests/run/c/huffman_decode at -m64 -Os stopped compiling ("no field for
+/// Imm(... address ...)") once a shared address was spilled: the spill fold
+/// turned its definition into `mov qword [slot], offset sym`, a store the
+/// object writer cannot encode in long mode.
+#[test]
+fn a_spilled_global_address_is_not_folded_into_a_store() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), include_str!("run/c/huffman_decode.c")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .current_dir(scratch.path())
+        .args(["-m64", "-Os", "-c", "-o", "a.o", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
