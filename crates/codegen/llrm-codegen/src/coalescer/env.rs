@@ -28,7 +28,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 use super::driver;
 use super::pair::CoalescerEnv;
@@ -54,6 +54,35 @@ pub struct TargetEnv {
     /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
     /// runs once.
     pub freq: Vec<f32>,
+    /// The target's registers, for a join of a value into the wide value it is
+    /// the low part of ([`CoalescerEnv::can_share_sub`]); none where the
+    /// target builds no copy between values of two widths.
+    pub regs: Option<Regs>,
+}
+
+impl TargetEnv {
+    /// The registers `wide` may take whose low part `narrow` may take
+    /// (`getMatchingSuperRegClass`): a register of `narrow`'s palette that is
+    /// the bottom bytes of the same root register.
+    fn hosts(
+        &self,
+        wide: &BTreeSet<RegId>,
+        narrow: &BTreeSet<RegId>,
+    ) -> BTreeSet<RegId> {
+        let Some(regs) = &self.regs else { return BTreeSet::new() };
+        let low = |register: RegId| regs.lanes(register);
+        wide.iter()
+            .copied()
+            .filter(|&big| {
+                narrow.iter().any(|&small| {
+                    regs.root(small) == regs.root(big)
+                        && low(small) & !low(big) == 0
+                        && low(small).trailing_zeros() == low(big).trailing_zeros()
+                        && low(small) != low(big)
+                })
+            })
+            .collect()
+    }
 }
 
 /// One side of a copy about to be joined.
@@ -113,6 +142,35 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn can_share_sub(
+        &self,
+        narrow: u32,
+        wide: u32,
+    ) -> bool {
+        if let (Some(x), Some(y)) = (self.pins.get(&narrow), self.pins.get(&wide)) {
+            if self.regs.as_ref().is_none_or(|regs| regs.root(*x) != regs.root(*y)) {
+                return false;
+            }
+        }
+        let palettes = self.palettes.borrow();
+        match (palettes.get(&wide), palettes.get(&narrow)) {
+            (Some(big), Some(small)) => !self.hosts(big, small).is_empty(),
+            _ => self.regs.is_some(),
+        }
+    }
+
+    fn narrow_sub(
+        &self,
+        wide: u32,
+        narrow: u32,
+    ) {
+        let mut palettes = self.palettes.borrow_mut();
+        let Some(small) = palettes.get(&narrow).cloned() else { return };
+        if let Some(big) = palettes.get(&wide).cloned() {
+            palettes.insert(wide, self.hosts(&big, &small));
+        }
+    }
+
     fn should_coalesce(
         &self,
         lis: &LiveIntervals,
@@ -136,7 +194,10 @@ impl CoalescerEnv for TargetEnv {
                 .collect();
             JoinSide { value, palette: palette.clone(), uses }
         };
-        let joined = x.intersection(y).copied().collect();
+        // A partial pair's `src` is the narrow value: the joined value takes
+        // the wide registers that have its registers as their low part.
+        let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
+        let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
         (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
@@ -209,7 +270,16 @@ pub fn coalesce(
         .collect();
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
+    let env = TargetEnv {
+        palettes: palettes.into(),
+        pins,
+        size,
+        keep_pinned: true,
+        aliases,
+        should_join,
+        freq,
+        regs: Some(regs),
+    };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);

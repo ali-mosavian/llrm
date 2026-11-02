@@ -586,6 +586,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         aliases: Default::default(),
         should_join: Box::new(|_| true),
         freq: Vec::new(),
+        regs: None,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -810,4 +811,161 @@ fn test_a_copy_of_an_undefined_value_to_itself_becomes_an_implicit_def() {
         first.what.as_ref().and_then(|what| what.name.clone()).as_deref(),
         Some(crate::processimpdefs::IMPLICIT_DEF)
     );
+}
+
+struct SubRegisters;
+
+impl CoalescerEnv for SubRegisters {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_sub(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+    ) -> bool {
+        true
+    }
+}
+
+fn held_at(
+    value: u32,
+    width: u32,
+) -> Loc {
+    Loc::Held(Held { value, width })
+}
+
+/// `dst := mov src` between two widths.
+fn copy_at(
+    dst: (u32, u32),
+    src: (u32, u32),
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![held_at(dst.0, dst.1)],
+        sources: vec![held_at(src.0, src.1)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![dst.0], vec![src.0]))
+}
+
+fn def_at(
+    value: u32,
+    width: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![held_at(value, width)],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value: 7, width, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![value], vec![]))
+}
+
+fn read_at(
+    value: u32,
+    width: u32,
+) -> Arc<Insn> {
+    let what = Semantics { name: Some("use".into()), sources: vec![held_at(value, width)], ..Semantics::new(Operation::Nothing) };
+    Arc::new(Insn::new(0, None, Some(what), vec![], vec![value]))
+}
+
+/// `value := add value, 1` at one width: a read-modify-write.
+fn add_at(
+    value: u32,
+    width: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("add".into()),
+        dests: vec![held_at(value, width)],
+        sources: vec![held_at(value, width), Loc::Imm(crate::model::ir::Imm { value: 1, width, address: None })],
+        ..Semantics::new(Operation::Nothing)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![value], vec![value]))
+}
+
+/// `v1:4 := def; v2:2 := mov v1:4; read v2:2`, the truncating copy of a
+/// sub-register extract (s67 on m68k: 53 of the 89 copies the join left were
+/// "width differs"): the copy goes and the read names `v1` at two bytes.
+/// Before, a copy between widths was never a pair, so every one stayed.
+#[test]
+fn test_a_truncating_copy_is_joined_into_the_wide_value() {
+    let (wide, c, r) = (def_at(1, 4), copy_at((2, 2), (1, 4)), read_at(2, 2));
+    let was = body(&[(&[wide, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 2, "the copy is gone");
+    assert_eq!(kept[1].uses, vec![1], "the read names the wide value");
+    assert_eq!(kept[1].what.as_ref().unwrap().sources, vec![held_at(1, 2)], "at the narrow width");
+    assert!(!lis.has_interval(2));
+    assert_consistent(&lis, &was, 1);
+}
+
+/// The any-extend copy `v2:4 := mov v1:2` joins the narrow `v1` into `v2`.
+#[test]
+fn test_an_extending_copy_is_joined_into_the_wide_value() {
+    let (narrow, c, r) = (def_at(1, 2), copy_at((2, 4), (1, 2)), read_at(2, 4));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!((kept[0].defines.clone(), kept[1].uses.clone()), (vec![2], vec![2]));
+    assert!(kept[0].partial_defs.is_empty(), "nothing of v2 is live before the narrow def");
+    assert_consistent(&lis, &was, 1);
+}
+
+/// `v2:2 := add v2:2, 1` after the join reads the wide value it is the low
+/// part of: it is a partial def, and the value is live into it
+/// (`updateRegDefsUses`, `Reads`).
+#[test]
+fn test_a_narrow_read_modify_write_of_a_joined_value_is_a_partial_def() {
+    let (wide, c, add, r) = (def_at(1, 4), copy_at((2, 2), (1, 4)), add_at(2, 2), read_at(2, 2));
+    let was = body(&[(&[wide, Arc::clone(&c), Arc::clone(&add), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept[1].partial_defs, vec![1]);
+    assert_consistent(&lis, &was, 1);
+}
+
+/// A pair of two widths is never flipped, whatever the intervals' sizes: the
+/// narrow value is the one merged (`!CP.isPartial()`). The wide `v1` is the
+/// shorter here.
+#[test]
+fn test_a_partial_pair_keeps_the_wide_value_whatever_the_sizes() {
+    let (wide, c) = (def_at(1, 4), copy_at((2, 2), (1, 4)));
+    let was = body(&[(&[wide, Arc::clone(&c), read_at(2, 2), read_at(2, 2), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert!(kept.iter().skip(1).all(|one| one.uses == vec![1]), "every read names v1");
+}
+
+/// A target whose registers have no low views joins no copy between widths.
+#[test]
+fn test_a_copy_between_widths_is_left_where_the_target_has_no_sub_registers() {
+    let (wide, c, r) = (def_at(1, 4), copy_at((2, 2), (1, 4)), read_at(2, 2));
+    let was = body(&[(&[wide, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
 }

@@ -32,7 +32,7 @@
 
 use std::cmp::Ordering;
 
-use super::pair::{CoalescerEnv, full_copy};
+use super::pair::{CoalescerEnv, move_copy};
 use super::register_coalescer::{JoinResult, State, join_copy};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::InstrKey;
@@ -73,7 +73,7 @@ fn is_split_edge(
     }
     lis.block_insns(block)
         .iter()
-        .all(|one| full_copy(one).is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Jump))
+        .all(|one| move_copy(one).is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Jump))
 }
 
 /// `isLocalCopy`: the copy defines or uses a value that lives in one block.
@@ -81,7 +81,7 @@ fn is_local_copy(
     lis: &mut LiveIntervals,
     copy: InstrKey,
 ) -> bool {
-    let Some((dst, src)) = full_copy(lis.instr(copy)) else { return false };
+    let Some((dst, src)) = move_copy(lis.instr(copy)) else { return false };
     let (src, dst) = (lis.interval_rc(src.value), lis.interval_rc(dst.value));
     lis.interval_is_in_one_mbb(&src).is_some() || lis.interval_is_in_one_mbb(&dst).is_some()
 }
@@ -92,7 +92,7 @@ fn is_terminal_reg(
     reg: u32,
     copy: InstrKey,
 ) -> bool {
-    lis.operands(reg).iter().all(|one| one.instr == copy || full_copy(lis.instr(one.instr)).is_none())
+    lis.operands(reg).iter().all(|one| one.instr == copy || move_copy(lis.instr(one.instr)).is_none())
 }
 
 /// `applyTerminalRule`.
@@ -101,7 +101,7 @@ fn apply_terminal_rule(
     copy: InstrKey,
     block: usize,
 ) -> bool {
-    let Some((dst, src)) = full_copy(lis.instr(copy)) else { return false };
+    let Some((dst, src)) = move_copy(lis.instr(copy)) else { return false };
     if !is_terminal_reg(lis, dst.value, copy) {
         return false;
     }
@@ -113,7 +113,7 @@ fn apply_terminal_rule(
         if other == copy {
             continue;
         }
-        let Some((other_dst, other_src)) = full_copy(lis.instr(other)) else { continue };
+        let Some((other_dst, other_src)) = move_copy(lis.instr(other)) else { continue };
         let at = lis.indexes.get_instruction_index(other);
         if lis.indexes.get_mbb_from_index(&at) != block {
             continue;
@@ -212,7 +212,7 @@ impl Coalescer<'_> {
         // forward.
         let prev_size = self.work.len();
         let copies: Vec<InstrKey> =
-            self.lis.block_insns(block).iter().filter(|one| full_copy(one).is_some()).map(|one| one.id()).collect();
+            self.lis.block_insns(block).iter().filter(|one| move_copy(one).is_some()).map(|one| one.id()).collect();
         let (mut local_terminals, mut global_terminals) = (Vec::new(), Vec::new());
         for copy in copies {
             let terminal = apply_terminal_rule(self.lis, copy, block);
