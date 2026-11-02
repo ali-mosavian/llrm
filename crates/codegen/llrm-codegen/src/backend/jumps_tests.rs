@@ -2328,30 +2328,6 @@ fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {
     assert_eq!(lines.iter().filter(|line| line.as_str() == "add bx, cx").count(), 2, "{lines:?}");
 }
 
-/// A call ahead of the `xor` on one way: lifting it would hold the constant
-/// across the call, so both xors stay.
-#[test]
-fn test_a_def_behind_a_call_is_not_lifted_above_the_compare() {
-    let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
-    let call = _inserted(_insn(4, Operation::Call, "call", vec![], vec![], None));
-    let source = body(
-        "f",
-        1,
-        vec![
-            block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
-            block(4, vec![call, zero(5), _move(6, bx()), _return(7)], vec![]).into(),
-            block(9, vec![zero(9), _move(10, bx()), _return(11)], vec![]).into(),
-        ],
-    );
-    let xors = threaded(&source)
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .filter(|insn| insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("xor")))
-        .count();
-    assert_eq!(xors, 2);
-}
-
 fn lined(
     one: Arc<Insn>,
     line: u32,

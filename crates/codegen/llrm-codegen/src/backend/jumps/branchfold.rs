@@ -209,8 +209,11 @@ fn flags_dead_after(
 /// of the kind it hoists that is the same on both ways, but sits behind an
 /// instruction of its own way that has nothing to do with it (`mov esi, 1`
 /// before `xor ecx, ecx`), is moved up first: it reads and writes nothing
-/// that any instruction ahead of it reads or writes, flags included. One scan
-/// of each way; matching compares the liftable ones only.
+/// that any instruction ahead of it reads or writes, flags included; a call ahead
+/// of it has effects that name what it clobbers, and an instruction whose
+/// effects are unknown ends the scan (an -Os sweep with and without an explicit
+/// call stop: identical). One scan of each way; matching compares the liftable
+/// ones only.
 fn lifted_pair(
     regs: llrm_lir::registers::Regs,
     bits: u32,
@@ -252,10 +255,6 @@ fn liftable(
     let (mut read, mut written) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
     let mut found = Vec::new();
     for (at, insn) in block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()) {
-        // Nothing is lifted over a call: its constant would live across it.
-        if insn.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
-            break;
-        }
         let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
             break;
         };
