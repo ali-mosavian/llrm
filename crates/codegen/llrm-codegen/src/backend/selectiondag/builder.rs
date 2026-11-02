@@ -815,6 +815,9 @@ impl Builder<'_> {
         if vt == MVT::Far.into() {
             return Ok((EVT::I16, 2));
         }
+        if self.target.soft_float && vt.is_floating_point() {
+            return self.parts(EVT::integer(vt.size_in_bits()));
+        }
         self.parts(vt)
     }
 
@@ -2596,6 +2599,11 @@ impl Builder<'_> {
         vt: EVT,
         pointer: bool,
     ) -> Result<SDValue, Refused> {
+        // A softened float lives in the registers of the integer of its width.
+        if self.target.soft_float && vt.is_floating_point() {
+            let bits = self.copy_from_reg(reg, EVT::integer(vt.size_in_bits()), false)?;
+            return Ok(self.dag.get_node(ISD::BitCast, vt, &[bits]));
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {
@@ -2631,6 +2639,10 @@ impl Builder<'_> {
         extend: ISD,
     ) -> Result<(), Refused> {
         let vt = self.dag.value_type(value);
+        if self.target.soft_float && vt.is_floating_point() {
+            let bits = self.dag.get_node(ISD::BitCast, EVT::integer(vt.size_in_bits()), &[value]);
+            return self.copy_leaf_to_register(bits, reg, extend);
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {

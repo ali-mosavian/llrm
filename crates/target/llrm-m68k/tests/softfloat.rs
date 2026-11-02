@@ -61,3 +61,29 @@ fn a_double_is_its_high_word_first() {
     let out = text("define double @f(double %a) { ret double %a }", "f", Cpu::M68020).expect("compiles");
     assert!(out.contains("move.l\t(4,%sp), %d0") && out.contains("move.l\t(8,%sp), %d1"), "{out}");
 }
+
+/// A float live across blocks (a loop's accumulator, a phi) panicked the
+/// compiler: `CopyToReg` of an `f64` was not softened. It travels in the
+/// registers of the integer of its width and the add is still the call.
+#[test]
+fn a_float_live_across_blocks_is_carried_as_integer_registers() {
+    let ir = "define double @f(ptr %p, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [0, %entry], [%i1, %loop]
+  %acc = phi double [0.0, %entry], [%acc1, %loop]
+  %q = getelementptr double, ptr %p, i32 %i
+  %v = load double, ptr %q
+  %acc1 = fadd double %acc, %v
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, %n
+  br i1 %c, label %loop, label %done
+done:
+  ret double %acc1
+}";
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text(ir, "f", cpu).unwrap_or_else(|error| panic!("{cpu:?}: {error}"));
+        assert!(out.contains("jsr\t__adddf3"), "{cpu:?}: no call of __adddf3:\n{out}");
+    }
+}
