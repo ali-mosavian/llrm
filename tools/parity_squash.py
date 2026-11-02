@@ -1110,7 +1110,7 @@ def new_lib_failures(
     on_merged=None,
     on_head=None,
 ) -> set[str]:
-    """The failing lib tests of the crates `files` change (not their dependants) on the merged tree that the head, checked out where `on_head` runs them again, passes: a red test in a
+    """The failing lib tests of the crates `files` change and of every crate that depends on one (with the scan crate) on the merged tree that the head, checked out where `on_head` runs them again, passes: a red test in a
     changed crate. #3578 landed four of them because the fast path builds the tests (cargo check --all-targets) and runs none. `on_merged(packages)` -> failing `unit <pkg>::<test>`
     names; `on_head(by_package)` -> those of them that also fail on the head (exact names, only the failing ones are run there)."""
     smoke = parity_smoke_module()
