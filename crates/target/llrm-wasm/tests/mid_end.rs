@@ -31,8 +31,10 @@ entry:
 ";
 
 /// The function ended in an explicit `return` before its `end`, as `-O2` kept
-/// the pin's `WebAssemblyPeephole` out: one executed instruction and one byte
-/// more than clang's per call, in every function.
+/// the pin's `WebAssemblyPeephole` out: one byte more per function than
+/// clang's (fib: 157 B against 153 B over four functions). Executed
+/// instructions are the same either way: `wasm-interp --trace` counts the
+/// `return` or the `end` once.
 #[test]
 fn the_final_return_falls_through_at_o2_and_not_at_o0() {
     let text = |level| assembly(SUM, Width::W32, Options { level, ..Options::default() }).unwrap();
