@@ -160,6 +160,10 @@ pub fn encode_instruction(
     if inst.opcode == crate::mir::EH_LABEL {
         return;
     }
+    // The implicit return is the function's last `end`.
+    if inst.opcode == crate::dagisel::post_ids::FALLTHROUGH_RETURN {
+        return;
+    }
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no encoding", inst.opcode));
     let binary = asm.binary;
     if binary < 1 << 8 {

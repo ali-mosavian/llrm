@@ -22,6 +22,7 @@ pub mod lower_br_unless;
 pub mod machine;
 pub mod mir;
 pub mod object;
+pub mod peephole;
 pub mod phi_elimination;
 pub mod print;
 pub mod reg_numbering;

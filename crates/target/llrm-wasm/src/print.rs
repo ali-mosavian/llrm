@@ -159,6 +159,8 @@ pub fn function_in(
         [Operand::Imm(label)] if i.opcode == crate::mir::EH_LABEL => {
             with_comment(&format!(".Ltmp{}:", tmp + label), "# EH_LABEL")
         }
+        // `EmitInstruction` of `FALLTHROUGH_RETURN`: only the comment.
+        _ if i.opcode == crate::dagisel::post_ids::FALLTHROUGH_RETURN => with_comment("", "# fallthrough-return"),
         _ => format!("\t{}", instruction(f, i)),
     }));
     labels.tmp += f.blocks.iter().flatten().filter(|inst| inst.opcode == crate::mir::EH_LABEL).count() as i64;

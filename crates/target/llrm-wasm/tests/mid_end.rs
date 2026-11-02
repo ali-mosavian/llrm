@@ -22,3 +22,21 @@ fn a_stack_slot_is_a_local_at_o2_and_not_at_o0() {
     assert!(text(Level::O0).contains("i32.store"));
     assert!(!text(Level::O2).contains("i32.store"), "{}", text(Level::O2));
 }
+
+const SUM: &str = "define i32 @f(i32 %x, i32 %y) {
+entry:
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+";
+
+/// The function ended in an explicit `return` before its `end`, as `-O2` kept
+/// the pin's `WebAssemblyPeephole` out: one executed instruction and one byte
+/// more than clang's per call, in every function.
+#[test]
+fn the_final_return_falls_through_at_o2_and_not_at_o0() {
+    let text = |level| assembly(SUM, Width::W32, Options { level, ..Options::default() }).unwrap();
+    assert!(text(Level::O0).contains("\treturn"), "{}", text(Level::O0));
+    assert!(text(Level::O2).contains("# fallthrough-return"), "{}", text(Level::O2));
+    assert!(!text(Level::O2).contains("\treturn"), "{}", text(Level::O2));
+}
