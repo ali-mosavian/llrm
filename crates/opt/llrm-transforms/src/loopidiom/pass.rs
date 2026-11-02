@@ -198,3 +198,43 @@ impl FunctionPass for LoopIdiom {
         }
     }
 }
+
+/// `LoopDeletion` and then `LoopIdiom` again on the loops it freed.
+///
+/// DEVIATE (owner w2, 2026-11-02; exit: a per-loop pass adaptor): the pin's
+/// loop pass manager runs LoopIdiom, IndVarSimplify and LoopDeletion on a
+/// nest's inner loop before it visits the parent
+/// (PassBuilderPipelines.cpp:737-753), so a loop whose body is only the
+/// memset its inner loop became is a loop the idiom pass sees as a memset in a
+/// loop (`processLoopMemSet`, LoopIdiomRecognize.cpp:897). The slots here run
+/// each pass over every loop in turn, and the dead inner loop is still there
+/// when the parent is visited. The second visit runs only when a loop was
+/// deleted.
+pub struct AfterDeletion {
+    pub deletion: crate::loopdeletion::LoopDeletion,
+    pub idiom: LoopIdiom,
+}
+
+impl FunctionPass for AfterDeletion {
+    fn name(&self) -> &'static str {
+        "loopdeletion"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-deletion")
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let deleted = self.deletion.run(unit, analyses);
+        if deleted.are_all_preserved() {
+            return deleted;
+        }
+        analyses.invalidate(unit.function, &deleted);
+        self.idiom.run(unit, analyses);
+        PreservedAnalyses::none()
+    }
+}

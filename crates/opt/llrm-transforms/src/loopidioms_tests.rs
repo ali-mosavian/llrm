@@ -1207,3 +1207,88 @@ fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
     let after = printed(&module);
     assert!(after.matches("call void @llvm.memset").count() == 4, "{after}");
 }
+
+const ZEROED_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer
+define void @f() {
+b0:
+  br label %o
+o:
+  %i = phi i16 [ 0, %b0 ], [ %in, %ol ]
+  br label %j
+j:
+  %jj = phi i16 [ 0, %o ], [ %jn, %j ]
+  %p = getelementptr [8 x [8 x i16]], ptr @a, i16 0, i16 %i, i16 %jj
+  store i16 0, ptr %p
+  %jn = add nuw nsw i16 %jj, 1
+  %jd = icmp eq i16 %jn, 8
+  br i1 %jd, label %ol, label %j
+ol:
+  %in = add nuw nsw i16 %i, 1
+  %id = icmp eq i16 %in, 8
+  br i1 %id, label %b2, label %o
+b2:
+  ret void
+}
+";
+
+/// The same nest whose inner loop also sums, and the sum is returned.
+const LIVE_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer
+define i16 @f() {
+b0:
+  br label %o
+o:
+  %i = phi i16 [ 0, %b0 ], [ %in, %ol ]
+  %s0 = phi i16 [ 0, %b0 ], [ %s1, %ol ]
+  br label %j
+j:
+  %jj = phi i16 [ 0, %o ], [ %jn, %j ]
+  %s = phi i16 [ %s0, %o ], [ %sn, %j ]
+  %p = getelementptr [8 x [8 x i16]], ptr @a, i16 0, i16 %i, i16 %jj
+  store i16 0, ptr %p
+  %sn = add i16 %s, 1
+  %jn = add nuw nsw i16 %jj, 1
+  %jd = icmp eq i16 %jn, 8
+  br i1 %jd, label %ol, label %j
+ol:
+  %s1 = phi i16 [ %sn, %j ]
+  %in = add nuw nsw i16 %i, 1
+  %id = icmp eq i16 %in, 8
+  br i1 %id, label %b2, label %o
+b2:
+  ret i16 %s1
+}
+";
+
+fn through_the_loop_passes(text: &str) -> String {
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::loopidiom::pass::LoopIdiom::new());
+    manager.add(crate::loopidiom::pass::AfterDeletion {
+        deletion: crate::loopdeletion::LoopDeletion,
+        idiom: crate::loopidiom::pass::LoopIdiom::new(),
+    });
+    manager.run_module(&mut module, machine).unwrap();
+    printed(&module)
+}
+
+/// matmul nib -O2: the zero loops of an 8 by 8 array were eight memsets of a
+/// row in a loop (+135 clocks, +52 instructions, +73 memory operands over one
+/// memset of the array). The pin's loop pass manager deletes the inner loop the
+/// idiom made dead before it visits the parent, which then holds a memset in a
+/// loop and promotes it (`processLoopMemSet`).
+#[test]
+fn a_nest_of_zero_stores_is_one_memset_once_the_inner_loop_is_deleted() {
+    let after = through_the_loop_passes(ZEROED_NEST);
+    assert!(after.contains("i8 0, i16 128"), "{after}");
+    assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");
+}
+
+/// An inner loop that computes something the function returns is not dead: it
+/// stays, and so does the outer loop.
+#[test]
+fn a_nest_whose_inner_loop_is_live_stays_a_nest() {
+    let after = through_the_loop_passes(LIVE_NEST);
+    assert!(!after.contains("i8 0, i16 128"), "{after}");
+    assert!(after.contains("phi"), "{after}");
+}

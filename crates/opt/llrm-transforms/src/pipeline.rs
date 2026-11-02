@@ -917,7 +917,16 @@ pub(crate) fn llvm_order(
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
-                slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
+                slot(
+                    "loopdeletion@749",
+                    Box::new(crate::loopidiom::pass::AfterDeletion {
+                        deletion: loopdeletion::LoopDeletion,
+                        idiom: crate::loopidiom::pass::LoopIdiom {
+                            for_size: size,
+                            ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                        },
+                    }),
+                ),
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
