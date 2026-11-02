@@ -16,11 +16,12 @@ const BODY: &str = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
     define void @move(ptr %d, ptr %s, i32 %n) {\n  call void @llvm.memmove.p0.p0.i32(ptr %d, ptr %s, i32 %n, i1 false)\n  ret void\n}\n\
     define void @fill(ptr %d, i8 %v, i32 %n) {\n  call void @llvm.memset.p0.i32(ptr %d, i8 %v, i32 %n, i1 false)\n  ret void\n}\n";
 
-fn built(
-    function_name: &str,
-    target: &BuilderTarget,
-) -> Result<String, &'static str> {
-    let module = llrm_mir::parse::module(BODY).unwrap_or_else(|error| panic!("{error}"));
+fn built(function_name: &str, target: &BuilderTarget) -> Result<String, &'static str> {
+    built_from(BODY, function_name, target)
+}
+
+fn built_from(text: &str, function_name: &str, target: &BuilderTarget) -> Result<String, &'static str> {
+    let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module
         .functions()
@@ -192,4 +193,16 @@ fn a_16_byte_clear_at_m64_is_two_qword_stores() {
     .map(|built| built.dag.dump())
     .unwrap_or_else(|why| panic!("{}", why.0));
     assert_eq!(dump.matches("store (s64)").count(), 2, "{dump}");
+}
+
+/// A constant clear for size, with no `memset` in the runtime, was `rep stosb`:
+/// a clock per byte, 512 clocks for matmul.nib's three arrays (+669 clocks at
+/// -Os). It is `rep stos` of whole pointer-width units at that alignment.
+#[test]
+fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
+    let module = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
+        declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)\n\
+        define void @clear(ptr align 4 %d) optsize {\n  call void @llvm.memset.p0.i32(ptr align 4 %d, i8 0, i32 256, i1 false)\n  ret void\n}\n";
+    let dump = built_from(module, "clear", &BuilderTarget::m32().with_libcalls(&[])).expect("builds");
+    assert!(dump.contains("$ecx, Constant:i32<64>") && dump.contains("ValueType:ch:i32"), "{dump}");
 }

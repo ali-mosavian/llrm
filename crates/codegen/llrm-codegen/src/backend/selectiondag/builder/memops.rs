@@ -948,6 +948,17 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
                     }
+                    // for size, whole pointer-width units at that alignment: a
+                    // `rep stosb` runs a clock per byte (matmul.nib -Os +669)
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && !self.runtime_has("memset")
+                            && alignment >= self.pointer_bytes()
+                            && bytes % self.pointer_bytes() == 0 =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
+                    }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
@@ -1591,6 +1602,10 @@ impl Builder<'_> {
     /// (`emitConstantSizeRepmovs` takes `i64` at 8-byte alignment on x86-64).
     fn string_block(&self) -> u64 {
         u64::from(self.target.dag.pointer.size_in_bits() / 8).max(4)
+    }
+
+    fn pointer_bytes(&self) -> u64 {
+        u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
     /// `emitConstantSizeRepstos`.
