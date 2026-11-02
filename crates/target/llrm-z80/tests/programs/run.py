@@ -84,7 +84,7 @@ def one(job):
         return name, "CLANG", (c.stderr.strip().splitlines() or [""])[-1][:100]
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
     ll.write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
-    p = sh([args.llc, "-S", f"-O{args.level}", "-o", str(w / "p.s"), str(ll)], w)
+    p = sh([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w)
     if p.returncode:
         why = [l for l in p.stderr.splitlines() if "REFUSED" in l or "llrm-z80-llc" in l]
         return name, "REFUSED", (why or [p.stderr.strip()[-100:]])[0][:140]
@@ -119,6 +119,7 @@ def main():
     ap.add_argument("--llc", default=os.path.expanduser("~/scratch/z80-sweep/tgt/debug/llrm-z80-llc"))
     ap.add_argument("--clang", default=os.environ.get("LLRM_PIN_CLANG", os.path.expanduser("~/scratch/llvm-build/bin/clang")))
     ap.add_argument("--level", default="2")
+    ap.add_argument("--llc-level", help="the backend's level when it differs from clang's")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--json")
