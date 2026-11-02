@@ -364,7 +364,7 @@ class TimedOnlyTests(unittest.TestCase):
             obj.write_bytes(test_sizes.object_with(12))
             with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
-        self.assertEqual(got, {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40})
+        self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
 
     def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
         """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
@@ -1089,7 +1089,7 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     monkeypatch.setattr(bench.icount, "run", fake_run)
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
     monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
-    monkeypatch.setattr(bench.sizes, "code_bytes", lambda obj: 0)
+    monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
     bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
     assert seen["files"] == ["PHOTO.JPG"], seen
 
@@ -1101,3 +1101,17 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
     fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
     if "files" in fed:  # else the corpus is not cached here
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
+
+
+def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_padding_at_a_size_level():
+    """Counting code without alignment padding must not hide records it could not read, nor padding where none is expected (-Os)."""
+    got = {
+        ("a", "c", "O2"): {"code_bytes": 5, "align_bytes": 9},
+        ("a", "c", "Os"): {"code_bytes": 50, "align_bytes": 3, "align_unread": 4},
+        ("b", "c", "Os"): {"code_bytes": 7, "align_bytes": 0, "align_unread": 7},
+    }
+    assert bench.align_lines(got) == [
+        "ALIGN-UNREAD 2 cells count 11 bytes whole (data inside code: not decoded for padding)",
+        "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
+        "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
+    ]
