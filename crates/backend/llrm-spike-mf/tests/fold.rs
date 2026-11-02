@@ -239,3 +239,18 @@ fn an_instruction_that_sets_flags_hoists_only_where_they_are_dead() {
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["compare", "branch 2"]));
 }
+
+/// m68k seed 227 returned 56 for 85: both ways began with a copy that is a
+/// `move` into a data register, which ran ahead of the branch, between the
+/// `sne` and the `beq` that read one compare's codes, and the branch took the
+/// `move`'s.
+#[test]
+fn a_copy_that_sets_flags_stays_below_the_branch_that_reads_them() {
+    let copy = |to| Inst::new(Kind::Copy, vec![Operand::Def(v(to)), Operand::Use(v(0))]);
+    let mut set = op("set", vec![Operand::Def(v(3))]);
+    set.reads_flags = true;
+    let mut function = guard(compare(0), [vec![copy(1), ret()], vec![copy(2), ret()]]);
+    function.blocks[0].insts.insert(1, set);
+    branch_fold_hoisting::<Two>(&mut function, &registers());
+    assert_eq!(first_block(&function), names(&["compare", "set", "branch 2"]));
+}

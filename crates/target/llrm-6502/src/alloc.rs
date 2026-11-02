@@ -78,6 +78,7 @@ thread_local! {
     static SHARED_SAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
+    static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -197,6 +198,40 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     fn root(register: RegId) -> RegId {
         register
+    }
+
+    /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
+    }
+
+    fn moves_lanes(inst: &Inst) -> bool {
+        matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
+    }
+
+    /// A byte cell: `lda cell; pha` on entry, `pla; sta cell` on exit.
+    fn csr_first_use_cost() -> u32 {
+        4
+    }
+
+    fn csr_cost_scale() -> u32 {
+        100
+    }
+
+    fn csr_spill_first() -> bool {
+        true
+    }
+
+    /// A zero-page byte costs more per use than `A`, `X` and `Y`: an
+    /// instruction on a cell is a byte longer and a clock slower than the
+    /// same on a register, and a transfer is two clocks against three.
+    fn register_cost(register: RegId) -> u8 {
+        let first = reg::RC0.index();
+        u8::from((first..first + usize::from(imaginary())).contains(&register.index()))
+    }
+
+    fn spill_clobbers() -> Vec<RegId> {
+        if STACK { vec![reg::Y] } else { Vec::new() }
     }
 
     /// `rc0` and `rc1` are the software stack pointer.
@@ -1675,12 +1710,14 @@ impl<const STACK: bool> Jump for Mos<STACK> {
 }
 
 /// The physical registers the run of copies just before the return sets: the
-/// result.
+/// result. The frame is released between the copies of a result that does not
+/// need `a`, and those of the rest.
 fn results(insts: &[Inst]) -> Vec<RegId> {
     let mut out = Vec::new();
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
+            (Kind::Op("ADJSP"), _) => {}
             _ => break,
         }
     }
@@ -1891,15 +1928,17 @@ pub fn parallel_move(
                 // reads it, or only cycles of cells are left. Park the value
                 // on the stack and read it from there (two moves at most, so
                 // one parked value).
-                let free = |i: usize, pending: &[(RegId, Option<RegId>)]| {
-                    !pending.iter().enumerate().any(|(j, (_, s))| j != i && *s == Some(pending[i].0))
-                };
-                let parked = if (0..pending.len()).any(|i| free(i, &pending)) {
+                let parked = if pending.iter().any(|(_, s)| *s == Some(reg::A)) {
                     out.push_str("  pha\n");
                     reg::A
                 } else {
-                    let (d, _) = pending[0];
-                    writeln!(out, "  lda {}\n  pha", register_name(d)).unwrap();
+                    // no move reads `a`: a cell another move reads is held up
+                    let (d, _) = *pending
+                        .iter()
+                        .find(|(d, _)| pending.iter().any(|(_, s)| *s == Some(*d)))
+                        .expect("a blocked sequence without `a` has a cycle");
+                    move_byte(out, reg::A, d, false, None);
+                    out.push_str("  pha\n");
                     d
                 };
                 for (_, s) in pending.iter_mut().filter(|(_, s)| *s == Some(parked)) {
@@ -2120,6 +2159,12 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     }
 }
 
+/// Whether the emitted line stores a register: neither `a` nor the flags
+/// change.
+fn is_store(line: &str) -> bool {
+    matches!(line.trim().split_once(' '), Some(("sta" | "stx" | "sty", _)))
+}
+
 /// Whether the emitted line leaves the zero and sign flags describing what `a`
 /// now holds.
 fn sets_nz_of_a(line: &str) -> bool {
@@ -2146,7 +2191,7 @@ fn emit_with<const STACK: bool>(
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
-    let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
@@ -2440,7 +2485,7 @@ fn emit_with<const STACK: bool>(
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
                     if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
-                        && out.lines().last().is_some_and(sets_nz_of_a) => {}
+                        && out.lines().rev().find(|line| !is_store(line)).is_some_and(sets_nz_of_a) => {}
                 (Kind::Op("CMP"), [_, _, second]) => {
                     let text = match second {
                         Operand::Imm(value) => format!("#{value}"),
@@ -2466,23 +2511,15 @@ fn emit_with<const STACK: bool>(
                     let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
                     let load = |out: &mut String, value: &Operand, at: Option<RegId>| match (value, at) {
                         (Operand::Imm(v), _) => writeln!(out, "  lda #{v}").unwrap(),
+                        // a value already in `a`
+                        (_, Some(r)) if r == reg::A => {}
                         (_, Some(r)) if r == reg::X => out.push_str("  txa\n"),
                         (_, Some(r)) if r == reg::Y => out.push_str("  tya\n"),
                         (_, Some(r)) => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                         (_, None) => unreachable!(),
                     };
-                    let mut read = inst
-                        .operands
-                        .iter()
-                        .filter_map(
-                            |o| match o {
-                                Operand::Use(Reg::Virt(_)) => Some(at(match o {
-                                    Operand::Use(r) => *r,
-                                    _ => unreachable!(),
-                                })),
-                                _ => None,
-                            },
-                        );
+                    let mut read =
+                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
                     let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
                     let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
                     // `a` holds the compare's left side: `lda lhs; cmp rhs`
@@ -2780,4 +2817,79 @@ fn relax(text: &str) -> String {
         }
     }
     out
+}
+
+/// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
+/// measure against.
+fn spike_asked() -> bool {
+    SPIKE.with(|one| one.get()) || std::env::var_os("LLRM_6502_SPIKE").is_some()
+}
+
+/// `f` with the spike allocator doing the allocation: the tests of its spill
+/// policy (a slot, not a callee-saved cell) run on it until it is deleted.
+pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
+    let before = SPIKE.with(|one| one.replace(true));
+    let result = f();
+    SPIKE.with(|one| one.set(before));
+    result
+}
+
+/// The function allocated: by the shared greedy allocator, which this target
+/// moves onto (`Target::register_allocator`), else by the spike allocator.
+///
+/// A function greedy cannot take is an error, not a quiet fall back to the
+/// spike allocator: that hid 600 failures in 300 differential programs.
+fn allocate<const STACK: bool>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
+    // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
+    let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();
+    if only.as_deref() == Some("?") {
+        eprintln!("FUNCTION {}", function.name);
+    }
+    let wanted = only.as_deref().is_none_or(|names| names == "?" || names.split(',').any(|n| n == function.name));
+    if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
+        for (at, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                eprintln!(
+                    "in bb{at}.{i}: {:?} {:?}{}{}",
+                    inst.kind,
+                    inst.operands,
+                    if inst.sets_flags { " SF" } else { "" },
+                    if inst.reads_flags { " RF" } else { "" }
+                );
+            }
+        }
+    }
+    if spike_asked() || !wanted {
+        return allocate_spilling::<Mos<STACK>>(function, 0);
+    }
+    allocate_greedy::<Mos<STACK>>(function)
+}
+
+/// `function` allocated by greedy (`llrm_spike_mf::tolir::allocate_greedy`).
+fn allocate_greedy<T: Target<Class = Class>>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    use llrm_lir::registers::Regs;
+    let size = TUNING.with(|t| t.get()) == Tuning::SIZE;
+    let (assignment, slots) = llrm_spike_mf::tolir::allocate_greedy::<T>(function, Regs(&crate::REGISTER_INFO), size)?;
+    if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
+        for (at, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                eprintln!(
+                    "bb{at}.{i}: {:?} {:?}{}{}",
+                    inst.kind,
+                    inst.operands,
+                    if inst.sets_flags { " SF" } else { "" },
+                    if inst.reads_flags { " RF" } else { "" }
+                );
+            }
+        }
+    }
+    if std::env::var_os("LLRM_6502_CHECK").is_some() {
+        llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &assignment)?;
+    }
+    Ok((assignment, slots))
 }

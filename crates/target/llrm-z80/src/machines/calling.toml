@@ -1,0 +1,47 @@
+# The Z80 convention, after SDCC 4.5.0's `--sdcccall 1` (read off its output): a byte in A, then L, H, E, D, C, B;
+# a word in HL, then DE, BC; a byte result in A, a word in DE, a long in HL:DE (HL high). Whatever does not fit goes
+# on the stack, the caller popping it. IX is the frame register and the callee keeps it.
+# DEVIATE from SDCC: its second argument is in L or DE by the first one's width (f(u8, u16): DE); here a word takes
+# the first free pair, HL. Its callee pops the stack arguments; here the caller does. Unpriced: no T-state or byte
+# figure on the corpus yet. Interop with SDCC-built objects is not a goal for the CP/M .COM first target (our own
+# runtime, no SDCC library). Exit: price both on the corpus once emission exists (by 2026-11-05), else follow SDCC.
+default = "z80"
+private = "z80"
+
+[abi.z80]
+convention = "z80"
+
+[z80]
+cc = "cdecl"
+slot_bytes = 1
+order = "left-to-right"
+cleanup = "caller"
+argument_registers = ["a", "l", "h", "e", "d", "c", "b"]
+wide_pairs = [["l", "h"], ["e", "d"], ["c", "b"]]
+backfill = true
+return_address_bytes = 2
+first_argument_offset = 4
+frame = "ix"
+frame_optional = true
+stack = "sp"
+preserved = [["ix", "ix"], ["sp", "sp"]]
+clobbered = ["a", "bc", "de", "hl", "iy", "flags"]
+entry_state = []
+promotion = "slot"
+wide_slots = 2
+variadic_float = "double"
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "hl"
+aggregate_pointer_returned = "de"
+aggregate_pointer_popped_by = "caller"
+
+[z80.symbol]
+elf = "*"
+
+[z80.result]
+1 = ["a"]
+2 = ["e", "d"]
+4 = ["e", "d", "l", "h"]
+pointer = ["e", "d"]

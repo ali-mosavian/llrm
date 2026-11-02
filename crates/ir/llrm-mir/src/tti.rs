@@ -450,6 +450,15 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
+    /// which a tree-recursive function's copies of itself are chosen by
+    /// price: each level of copies is made while the clocks it saves, at
+    /// `speed_milliclocks_per_byte`, are worth the bytes it adds. None: the
+    /// bounds of `recursive_inlining` are the rule.
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {

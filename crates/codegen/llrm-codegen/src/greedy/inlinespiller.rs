@@ -88,6 +88,9 @@ pub struct Tables {
     /// (slot, block): a call loses a family member's high half only where a
     /// wide read can follow (`CallMasks`). A value in no family is wide.
     pub family: RefCell<HashMap<u32, u32>>,
+    /// The value each clone was made from, for a caller whose classes the
+    /// clone inherits (`cloneVirtualRegister`).
+    pub parents: RefCell<HashMap<u32, u32>>,
     pub wide_reads: RefCell<HashMap<u32, Vec<(crate::liveness::slotindex::SlotIndex, usize)>>>,
 }
 
@@ -98,6 +101,7 @@ impl Tables {
         new: u32,
         from: u32,
     ) {
+        self.parents.borrow_mut().insert(new, from);
         let root = self.family.borrow().get(&from).copied();
         if let Some(root) = root {
             self.family.borrow_mut().insert(new, root);

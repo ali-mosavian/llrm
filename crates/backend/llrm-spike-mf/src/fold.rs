@@ -35,7 +35,7 @@
 use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 
-use crate::mfunc::{Inst, MFunction, Operand, Reg};
+use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target};
 use crate::sink::{Jump, flags_live_after, safe_to_move};
 
@@ -531,7 +531,13 @@ impl Effects {
                 _ => {}
             }
         }
-        if inst.sets_flags {
+        let copy_sets_flags = match inst.operands[..] {
+            [Operand::Def(to), Operand::Use(from)] if inst.kind == Kind::Copy => {
+                T::copy_sets_flags(T::root(resolve(to, assignment)), T::root(resolve(from, assignment)))
+            }
+            _ => false,
+        };
+        if inst.sets_flags || copy_sets_flags {
             effects.defs.push(Place::Flags);
         }
         if inst.reads_flags {
