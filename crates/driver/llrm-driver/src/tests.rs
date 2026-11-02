@@ -2276,3 +2276,39 @@ fn a_dense_switch_at_m64_is_a_read_only_table_of_pc_relative_entries() {
         assert_eq!(reloc.addend, 4 * k as i64);
     }
 }
+
+/// The same table through the Mach-O and COFF writers: each takes it (the
+/// entries are `S + A - P` against the code, as in ELF), and COFF's fields are
+/// the `slot + 4 - table` its `REL32` adds the code's address to.
+#[test]
+fn a_dense_switch_table_is_written_in_mach_o_and_coff_too() {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text += "d:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let write = |format| {
+        llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m64::M64),
+        )
+        .unwrap()
+    };
+    assert!(write(llrm_target::object::Format::MachO).windows(7).any(|window| window == b"__const"));
+    let coff = write(llrm_target::object::Format::Coff);
+    let fields: Vec<u8> = (1..=8u32).flat_map(|k| (4 * k).to_le_bytes()).collect();
+    assert!(coff.windows(fields.len()).any(|window| window == fields.as_slice()), "the .rdata fields");
+}
