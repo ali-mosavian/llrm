@@ -1127,6 +1127,10 @@ def main() -> int:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
         args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
     print("HARNESS", basecounts.harness_digest())
+    unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
+    if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
+        print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")
+        return 1
     if args.record:
         import measure
 

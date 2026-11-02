@@ -1133,3 +1133,16 @@ def test_a_base_that_executed_zero_instructions_is_no_base():
     """parity/control Os read 0 instructions on main (the kernel folded away) and its 158 B was handed to the compare as the base: the head's +108 B looked like a regression of a program that never ran."""
     problems = bench.against("parity/control bq16 -Os", {"instructions": 147, "code_bytes": 285}, {"instructions": 0, "code_bytes": 157})
     assert any("INVALID BASE" in one for one in problems)
+
+
+def test_a_leg_with_cells_that_did_not_build_exits_nonzero_and_names_them(tmp_path, capsys):
+    """w9's dist had no jwasm: all 4 cells were 'build: jwasm: not found', the leg wrote a JSON of errors and exited 0, and the corpus driver logged rc=0."""
+    from unittest import mock
+
+    measured = {("p", "c", "O2"): {"error": "build: jwasm: sh: 1: exec: /d/jwasm: not found"}, ("p", "c", "Os"): {"code_bytes": 9, "data_bytes": 0, "bss_bytes": 0}}
+    with mock.patch.object(bench, "measure_all", return_value=measured), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "O2", "Os", "--json", str(tmp_path / "leg.json"), "p"]):
+        assert bench.main() == 1
+    out = capsys.readouterr().out
+    assert "NOHEAD 1 cells did not build:" in out and "p/c/O2: build: jwasm" in out
+    with mock.patch.object(bench, "measure_all", return_value={("p", "c", "Os"): measured[("p", "c", "Os")]}), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "Os", "--json", str(tmp_path / "ok.json"), "p"]):
+        assert bench.main() == 0
