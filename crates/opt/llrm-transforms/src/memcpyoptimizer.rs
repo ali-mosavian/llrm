@@ -389,7 +389,8 @@ fn try_merging_into_memset(
             }
             let found = if let Some((value, pointer)) = simple_store(function, at) {
                 // A store of the same byte at a constant offset from the start.
-                (bytewise(&unit, value, x87_stack) == Some(byte)).then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
+                (bytewise(&unit, value, x87_stack) == Some(byte))
+                    .then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
             } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
                 let same = match byte {
                     Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),

@@ -243,18 +243,17 @@ fn _sunk(
             let reader = movable
                 .then(|| {
                     (at + 1..insns.len()).find(|&later| {
-                        insns[later].what.as_ref().is_some_and(
-                            |made| made.sources.iter().any(|arg| matches!(arg, Loc::Held(held) if held.value == value)),
-                        )
+                        insns[later].what.as_ref().is_some_and(|made| {
+                            made.sources.iter().any(|arg| matches!(arg, Loc::Held(held) if held.value == value))
+                        })
                     })
                 })
                 .flatten();
             // One instruction reads it, once or twice (`x * x`).
             let reads_there = |reader: usize| {
-                insns[reader]
-                    .what
-                    .as_ref()
-                    .map_or(0, |made| made.sources.iter().filter(|arg| matches!(arg, Loc::Held(h) if h.value == value)).count())
+                insns[reader].what.as_ref().map_or(0, |made| {
+                    made.sources.iter().filter(|arg| matches!(arg, Loc::Held(h) if h.value == value)).count()
+                })
             };
             let Some(reader) =
                 reader.filter(|&reader| reader > at + 1 && uses.get(&value) == Some(&reads_there(reader)))

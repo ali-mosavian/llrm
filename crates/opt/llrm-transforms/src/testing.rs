@@ -281,8 +281,9 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 
 impl llrm_mir::target::Machine for Tuned {
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.x87_stack)
-            .then(|| std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, x87_stack: self.x87_stack }) as _)
+        (self.exit_ne || self.x87_stack).then(|| {
+            std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, x87_stack: self.x87_stack }) as _
+        })
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
