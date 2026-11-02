@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 139 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 140 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -16,6 +16,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 139 documen
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
+| assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. |  | [assignment_tracking](assignment_tracking.md) |
 | bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
 | bodyfacts | Facts about the definitions of a body's values that the passes around the allocator ask: which values are literals, addresses or copies, which loads of a cell hold until their last use, and what may write a cell. | `spiller`, `ssaspill`, `constrain`, `floatassign`, `peep`, `greedy::remat`. | [bodyfacts](bodyfacts.md) |
 | booleans | Setcc chains the target's cost table prices above a branch, made selects for `selects::lowered` to branch. | Inside `selects::priced`, after the selects of the module were folded and | [booleans](booleans.md) |

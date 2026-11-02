@@ -274,6 +274,14 @@ pub trait Machine {
         None
     }
 
+    /// The width in bits of the index an indexed addressing mode adds to a base
+    /// register, where the target has one narrower than its pointers (the
+    /// 6502's `lda (base),y`: 8); `None` for a target that adds a full offset.
+    /// Loop passes that split a pointer into a base and an index read it.
+    fn index_register_bits(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether an I/O access to a port in the inclusive range `ports` may
     /// read or write memory. By default any may.
     fn port_touches_memory(
