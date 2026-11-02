@@ -162,3 +162,49 @@ fn test_a_fmuladd_with_a_zero_factor_and_a_finite_non_negative_other_folds_to_it
         "x may be infinite or NaN: the call stays: {kept}"
     );
 }
+
+/// `@f(i1 %c, float %v, float %w)` with the guard's edge carrying constants
+/// into `m`, whose body is `tail`, after the float visitors alone.
+fn guarded(tail: &str) -> String {
+    let mut module = parsed(&format!(
+        "declare float @llvm.fmuladd.f32(float, float, float)\n\
+         define float @f(i1 %c, float %v, float %w) {{\nentry:\n  br i1 %c, label %loop, label %m\n\n\
+         loop:\n  %x = fadd float %v, 1.0\n  %y = fadd float %w, 1.0\n  br label %m\n\n\
+         m:\n  %p = phi float [ 2.0, %entry ], [ %x, %loop ]\n  %q = phi float [ 3.0, %entry ], [ %y, %loop ]\n{tail}}}\n"
+    ));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// x_nbody_f -O2 on the pin: `e` after the loops is a sum of squares of the
+/// loop's values, merged with the guard's constants. The pin moves each
+/// operation into the predecessors (`foldBinOpIntoSelectOrPhi`,
+/// `foldBinopWithPhiOperands`) so the guard's edge folds to a constant and the
+/// values live out of the loop only on its exit; ours kept ten float phis over
+/// the whole loop and ran 30458 instructions against main's 30406.
+#[test]
+fn test_float_arithmetic_on_phis_with_a_constant_edge_is_made_in_the_predecessors() {
+    let out = guarded("  %a = fmul float %p, %p\n  %b = fmul float %q, %q\n  %r = fadd float %a, %b\n  ret float %r\n");
+    assert!(out.contains("1.300000e+01"), "the guard's edge folds to 4 + 9: {out}");
+    assert!(!out.contains("phi float [ 2.000000e+00"), "{out}");
+}
+
+/// `fsub` and `fdiv` of two phis are `foldBinopWithPhiOperands`' too.
+#[test]
+fn test_a_subtraction_and_a_division_of_phis_are_made_in_the_predecessors() {
+    let sub = guarded("  %r = fsub float %p, %q\n  ret float %r\n");
+    assert!(sub.contains("-1.000000e+00"), "{sub}");
+    let div = guarded("  %r = fdiv float %q, %p\n  ret float %r\n");
+    assert!(div.contains("1.500000e+00"), "{div}");
+}
+
+/// The pin's tail of `visitCallInst` folds a speculatable intrinsic into a phi
+/// argument: the Horner step `fmuladd(p, p, q)` of the exit sum.
+#[test]
+fn test_a_fmuladd_on_phis_is_made_in_the_predecessors() {
+    let out = guarded("  %r = call float @llvm.fmuladd.f32(float %p, float %p, float %q)\n  ret float %r\n");
+    assert!(out.contains("7.000000e+00"), "the guard's edge folds to 2*2+3: {out}");
+}

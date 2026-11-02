@@ -11,8 +11,10 @@
 //!
 //! DEVIATE 1: the `-X / C --> X / -C` arm and `foldFDivConstantDividend`,
 //! `foldFDivPowDivisor` and the sqrt/exp rules of `visitFDiv`, and everything
-//! in `visitFAdd` and `visitFMul` after `SimplifyAssociativeOrCommutative`, are
-//! not translated.
+//! in `visitFAdd` and `visitFMul` after `foldBinopWithPhiOperands` and
+//! `foldBinOpIntoSelectOrPhi`, are not translated; `visitFRem` and the select
+//! arm of the intrinsic tail of `visitCallInst` (the `fmuladd` phi fold) are
+//! absent.
 //!
 //! DEVIATE 3: `visitFSub` stops after `X - (-Y) --> X + Y`: the
 //! `foldFNegIntoConstant`, `foldFBinOpOfIntCasts`, cast-of-fneg, `fmul`/`fdiv`
@@ -50,7 +52,15 @@ pub fn visit_fadd_or_fmul(
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
     }
-    if simplify_associative_or_commutative(c, inst) { Visit::Changed } else { Visit::None }
+    if simplify_associative_or_commutative(c, inst) {
+        return Visit::Changed;
+    }
+    // DEVIATE 1: foldVectorBinop.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return phi;
+    }
+    c.fold_bin_op_into_select_or_phi(inst)
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
@@ -62,6 +72,11 @@ pub fn visit_fsub(
 ) -> Visit {
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
+    }
+    // DEVIATE 1: foldVectorBinop.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return phi;
     }
     let instruction = c.function.instruction(inst).clone();
     let (op0, op1) = (instruction.operands[0], instruction.operands[1]);
@@ -96,7 +111,7 @@ pub fn visit_fmuladd(
     let instruction = c.function.instruction(call).clone();
     let [a, b, addend, ..] = instruction.operands[..] else { return Visit::None };
     let env = c.env;
-    let Some(product) = llrm_mir::simplify::simplify_binop_with_flags_at(
+    let product = llrm_mir::simplify::simplify_binop_with_flags_at(
         c.context,
         env.globals,
         env.layout,
@@ -107,10 +122,31 @@ pub fn visit_fmuladd(
         instruction.flags,
         a,
         b,
-    ) else {
-        return Visit::None;
-    };
+    );
+    let Some(product) = product else { return fold_intrinsic_into_phi(c, call) };
     c.replace_with_binop(call, BinaryOp::FAdd, product, addend, instruction.flags)
+}
+
+/// The tail of `visitCallInst` for a speculatable intrinsic
+/// ([L4558](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L4558)):
+/// an argument that is a phi takes the call into its incoming values, so an
+/// operation on loop values after a guarded loop is made where the loop is
+/// left and folds on the guard's edge. The select arm is not translated.
+fn fold_intrinsic_into_phi(
+    c: &mut Combiner,
+    call: InstId,
+) -> Visit {
+    let operands = c.function.instruction(call).operands.to_vec();
+    for operand in operands {
+        let Some(def) = c.definition_of(operand) else { continue };
+        if c.function.instruction(def).opcode == Opcode::Phi {
+            let found = c.fold_op_into_phi(call, def, false);
+            if !matches!(found, Visit::None) {
+                return found;
+            }
+        }
+    }
+    Visit::None
 }
 
 /// `m_FNeg(Y)`: `fneg Y`, or `fsub -0.0, Y`.
@@ -155,6 +191,11 @@ pub fn visit_fdiv(
     // simplifyFDivInst
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
+    }
+    // DEVIATE 1: foldVectorBinop.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return phi;
     }
     fold_fdiv_constant_divisor(c, inst)
 }
