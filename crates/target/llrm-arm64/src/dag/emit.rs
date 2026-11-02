@@ -52,6 +52,7 @@ fn opcode_name(code: u32) -> Option<&'static str> {
             super::call::MEMCPY_Q => Some("LLRM_MEMCPY_Q"),
             super::call::MEMMOVE_Q => Some("LLRM_MEMMOVE_Q"),
             super::call::MEMSET_Q => Some("LLRM_MEMSET_Q"),
+            super::call::SAVE_Q => Some("LLRM_SAVE_Q"),
             _ => None,
         })
 }
@@ -1099,6 +1100,24 @@ impl Emitter<'_> {
         }
     }
 
+    /// `str q<n>, [slot, #offset]`: an unnamed `q` argument register saved
+    /// whole.
+    fn save_q(
+        &mut self,
+        id: u32,
+    ) -> Result<(), String> {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let number = self.dag.constant(node.ops[2]).ok_or("a saved q register of no number")? as u32;
+        let offset = self.dag.constant(node.ops[3]).ok_or("a saved q register of no offset")? as u64;
+        let addr = self.pointer_at(node.ops[1], offset)?;
+        self.ops.push(Op::I(Inst::Store {
+            mem: Memory::Fp { bytes: 16, reg: Vreg(number) },
+            addr,
+            mmo: MemOperand::default(),
+        }));
+        Ok(())
+    }
+
     /// A fresh register to carry `bytes` of a block.
     fn piece(
         &mut self,
@@ -1402,6 +1421,7 @@ impl Emitter<'_> {
                     }
                     "ADJCALLSTACKUP" => return Ok(()),
                     "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
+                    "LLRM_SAVE_Q" => return self.save_q(id),
                     "BL" | "BLR" => return self.call(id, name),
                     "TCRETURNdi" | "TCRETURNri" | "TCRETURNriBTI" => return self.tail_call(id, name),
                     _ => {}

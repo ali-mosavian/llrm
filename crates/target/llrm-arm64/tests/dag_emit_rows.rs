@@ -424,3 +424,35 @@ fn linux_stack_arguments_are_eight_byte_slots_extended_by_attribute() {
     assert!(asm.contains("ldrsb w") && asm.contains("[sp, #8]"), "{asm}");
     assert!(asm.contains("[sp, #16]"), "{asm}");
 }
+
+const VARIADIC_BODY: &str = "declare void @llvm.va_start.p0(ptr)\ndeclare void @llvm.va_end.p0(ptr)\n\
+declare void @llvm.va_copy.p0.p0(ptr, ptr)\n\
+define i32 @f(i32 %n, ...) {\n  %ap = alloca [32 x i8], align 8\n  %cp = alloca [32 x i8], align 8\n  call void @llvm.va_start.p0(ptr %ap)\n\
+  call void @llvm.va_copy.p0.p0(ptr %cp, ptr %ap)\n  %p = load ptr, ptr %cp\n  %v = load i32, ptr %p\n  call void @llvm.va_end.p0(ptr %ap)\n  ret i32 %v\n}\n";
+
+/// A variadic callee on Linux was refused ("va_start at m64 outside the entry
+/// block") and fell to the hand selector. AAPCS64 saves `x1`..`x7` and
+/// `q0`..`q7` (`SaveVarArgRegisters`) and writes the five-field `va_list`;
+/// `va_copy` copies its 32 bytes.
+#[test]
+fn a_linux_variadic_callee_saves_its_registers_and_fills_the_va_list() {
+    let asm = linux_dag(VARIADIC_BODY).expect("the DAG path takes it");
+    for expected in ["stp x1, x2,", "str x7,", "stp q0, q1,", "stp q6, q7,"] {
+        assert!(asm.contains(expected), "no `{expected}` in:\n{asm}");
+    }
+    // `gr_offs` -56 (`x1`..`x7` left) and `vr_offs` -128 (`q0`..`q7` all left)
+    // are the two 4-byte words of one merged store: `movn x, #55` and `movk
+    // #65408, lsl #32`.
+    assert!(asm.contains("#55") && asm.contains("#65408"), "no gr_offs/vr_offs words in:\n{asm}");
+}
+
+/// Darwin's `va_list` is the address of the first unnamed stack slot, which the
+/// DAG path also refused.
+#[test]
+fn a_darwin_variadic_callee_stores_the_address_of_its_first_stack_argument() {
+    let asm = dag_at("-O2", VARIADIC_BODY).expect("the DAG path takes it");
+    assert!(
+        asm.contains("add x9, sp, #64") && asm.contains("str x9, [sp, #32]"),
+        "no stack-argument address in:\n{asm}"
+    );
+}

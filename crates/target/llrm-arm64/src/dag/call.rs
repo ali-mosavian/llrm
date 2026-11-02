@@ -17,8 +17,8 @@
 //! A float part takes `s0`..`s7`/`d0`..`d7` apart from the integer registers,
 //! or 4/8 bytes of stack.
 //!
-//! DEVIATE SD526: not translated are `f16`/`fp128` and vectors, `sret` (`x8`),
-//! HFAs, `byval`, varargs, a tail call that needs stack arguments or an
+//! DEVIATE SD526: not translated are `f16`/`fp128` and vectors, HFAs, `byval`,
+//! a tail call that needs stack arguments or an
 //! argument area of a different size, and a callee reached through the GOT;
 //! `accepts` refuses what it can see. Exit: B3.
 //!
@@ -28,7 +28,9 @@
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, LiveIn, Out, Site, TargetCalling};
+use llrm_codegen::backend::selectiondag::target_calling::{
+    Ext, FixedObject, In, LiveIn, Out, Site, StackObject, TargetCalling, VaWord, VariadicArea,
+};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_lir::registers::RegId;
 use llrm_sdag::actions::LoadExt;
@@ -177,6 +179,11 @@ pub const MEMCPY_Q: u32 = 0xF001;
 pub const MEMMOVE_Q: u32 = 0xF002;
 pub const MEMSET_Q: u32 = 0xF003;
 
+/// Stores the whole `q` register of an unnamed argument to a frame object
+/// (`SaveVarArgRegisters`' `f128` store): the DAG has no vector type, and a
+/// copy through a `d` register would drop the upper half.
+pub const SAVE_Q: u32 = 0xF004;
+
 #[derive(Debug, Default)]
 pub struct Aarch64Calling {
     /// AAPCS64 of Linux rather than Darwin's.
@@ -203,6 +210,78 @@ impl Aarch64Calling {
 }
 
 impl TargetCalling for Aarch64Calling {
+    /// `LowerFormalArguments` of a variadic function. Darwin's `va_list` is the
+    /// address of the first unnamed stack slot. AAPCS64's is `stack`,
+    /// `gr_top`, `vr_top`, `gr_offs`, `vr_offs` over save areas
+    /// `SaveVarArgRegisters` fills with the `x` and `q` registers the named
+    /// arguments left.
+    fn variadic_area(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        ins: &[In],
+        fixed: FixedObject,
+        stack: StackObject,
+        live_in: LiveIn,
+    ) -> Option<VariadicArea> {
+        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
+        let (locations, named) = place(&parts, self.linux);
+        let first = fixed(8, named.next_multiple_of(8) as i64, true);
+        let stack_word = VaWord::Frame { index: first, offset: 0 };
+        if !self.linux {
+            return Some(VariadicArea { chain, words: vec![(0, 8, stack_word)], size: 8 });
+        }
+        let used = |registers: &[RegId]| {
+            locations.iter().filter(|l| matches!(l, Location::Register(r) if registers.contains(r))).count() as u32
+        };
+        let gprs = used(&X) + used(&W);
+        let fprs = used(&S) + used(&D);
+        let (gr_size, vr_size) = (8 * (8 - gprs), 16 * (8 - fprs));
+        let mut chain = chain;
+        let mut gr_top = VaWord::Constant(0);
+        if gr_size > 0 {
+            let index = stack(gr_size, 8);
+            for (at, number) in (gprs..8).enumerate() {
+                let value = dag.get_copy_from_reg(chain, live_in(X[number as usize]), EVT::I64);
+                let base = dag.get_frame_index(EVT::I64, index);
+                let step = dag.get_constant(at as u128 * 8, EVT::I64);
+                let address = dag.get_node(ISD::Add, EVT::I64, &[base, step]);
+                let info = MemInfo {
+                    mem_vt: EVT::I64,
+                    align: 8,
+                    volatile: false,
+                    base: MemBase::Stack(index),
+                    ext: None,
+                    space: 0,
+                    ordering: None,
+                };
+                chain = dag.get_store(chain, value, address, info);
+            }
+            gr_top = VaWord::Frame { index, offset: i64::from(gr_size) };
+        }
+        let mut vr_top = VaWord::Constant(0);
+        if vr_size > 0 {
+            let index = stack(vr_size, 16);
+            for (at, number) in (fprs..8).enumerate() {
+                // The register is a live-in of the function.
+                live_in(D[number as usize]);
+                let frame = dag.get_target_frame_index(EVT::I64, index);
+                let q = dag.get_constant_with(u128::from(number), EVT::I64, true, false);
+                let offset = dag.get_constant_with(at as u128 * 16, EVT::I64, true, false);
+                chain = dag.get_node(ISD::Machine(SAVE_Q), EVT::OTHER, &[chain, frame, q, offset]);
+            }
+            vr_top = VaWord::Frame { index, offset: i64::from(vr_size) };
+        }
+        let words = vec![
+            (0, 8, stack_word),
+            (8, 8, gr_top),
+            (16, 8, vr_top),
+            (24, 4, VaWord::Constant(-i64::from(gr_size))),
+            (28, 4, VaWord::Constant(-i64::from(vr_size))),
+        ];
+        Some(VariadicArea { chain, words, size: 32 })
+    }
+
     fn emit_memcpy(
         &self,
         dag: &mut SelectionDAG,

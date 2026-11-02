@@ -1133,6 +1133,7 @@ impl Builder<'_> {
         calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
         let mut offsets = Vec::new();
+        let first_object = self.info.next_stack_object();
         let mut live_in = |reg: RegId| {
             let vreg = self.info.new_reg();
             self.live_ins.push((reg, vreg));
@@ -1143,6 +1144,24 @@ impl Builder<'_> {
             -(offsets.len() as i32)
         };
         let parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        // `SaveVarArgRegisters`: the save areas are stack objects made after
+        // the allocas', numbered from the next frame index.
+        let mut requests: Vec<(u32, u32)> = Vec::new();
+        let area = if self.module.signature(self.function.ty).2 {
+            let mut stack = |size: u32, align: u32| {
+                requests.push((size, align));
+                first_object + requests.len() as i32 - 1
+            };
+            calling.variadic_area(&mut self.dag, entry, &ins, &mut make_object, &mut stack, &mut live_in)
+        } else {
+            None
+        };
+        for (size, align) in requests {
+            self.info.new_stack_object(size, align);
+        }
+        if let Some(area) = &area {
+            self.dag.set_root(area.chain);
+        }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
@@ -1161,7 +1180,9 @@ impl Builder<'_> {
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
             }
         }
-        if self.module.signature(self.function.ty).2 {
+        if let Some(area) = area {
+            self.info.variadic_area = Some(area);
+        } else if self.module.signature(self.function.ty).2 {
             if let Some(buffer) = calling.variadic_buffer(&mut self.dag, ins.len()) {
                 let reg = self.info.new_reg();
                 let root = self.root();

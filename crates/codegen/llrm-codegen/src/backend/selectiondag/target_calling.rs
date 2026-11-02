@@ -80,6 +80,31 @@ pub struct In {
 /// argument, immutable; the frame index.
 pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
 
+/// `CreateStackObject`: size and alignment; the frame index.
+pub type StackObject<'a> = &'a mut dyn FnMut(u32, u32) -> i32;
+
+/// A value `va_start` writes into the `va_list`.
+#[derive(Clone, Copy, Debug)]
+pub enum VaWord {
+    /// The address of a frame object plus an offset.
+    Frame {
+        index: i32,
+        offset: i64,
+    },
+    Constant(i64),
+}
+
+/// What a variadic function's entry made for `va_start`
+/// (`SaveVarArgRegisters`): the chain after the register stores, and the words
+/// of the list as (byte offset in the list, width in bytes, value). `size` is
+/// the list's size, which `va_copy` copies.
+#[derive(Clone, Debug)]
+pub struct VariadicArea {
+    pub chain: SDValue,
+    pub words: Vec<(u32, u32, VaWord)>,
+    pub size: u32,
+}
+
 /// A live-in register: the virtual register the function receives `reg` in.
 pub type LiveIn<'a> = &'a mut dyn FnMut(RegId) -> u32;
 
@@ -191,6 +216,21 @@ pub trait TargetCalling: Debug + Sync {
         fixed: FixedObject,
         live_in: LiveIn,
     ) -> Vec<SDValue>;
+
+    /// `LowerFormalArguments` of a variadic function whose `va_list` holds
+    /// words over register save areas or the stack arguments: the stores that
+    /// save the unnamed argument registers and the words `va_start` writes.
+    fn variadic_area(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _ins: &[In],
+        _fixed: FixedObject,
+        _stack: StackObject,
+        _live_in: LiveIn,
+    ) -> Option<VariadicArea> {
+        None
+    }
 
     /// `LowerFormalArguments` of a variadic function: the pointer to the buffer
     /// its variadic arguments are in, an extra parameter after the `fixed`
