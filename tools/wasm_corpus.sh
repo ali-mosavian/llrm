@@ -2,6 +2,7 @@
 # tools/wasm_corpus.sh LEVEL FILE.c...: per program, the code-section bytes and the instructions executed (wasm-interp --trace) of
 # llrm-cc -target wasm32 and of the pin's clang at -LEVEL, and whether `report` saw the same values.
 #   LLRM_CLANG_WASM  the pin clang built with the WebAssembly target (default: $HOME/scratch/llvm-build-clang-wasm/bin/clang)
+#   WASM_CPU         -mcpu for both sides (mvp: the secondary column; default: the pin's generic)
 # The stub is the same bytes on both sides: `run` calls main and answers a hash of what main reported.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -9,6 +10,7 @@ clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
 llrm_cc=${LLRM_CC:-$root/target/release/llrm-cc}
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 level=$1; shift
+cpu=${WASM_CPU:+-mcpu=$WASM_CPU}
 cat > "$out/stub.c" <<'EOF'
 int __main_void(void) __attribute__((weak));
 int __main_argc_argv(int, char **) __attribute__((weak));
@@ -35,9 +37,9 @@ count() {
 printf '%-22s %9s %9s %12s %12s  %s\n' program llrm_B clang_B llrm_instr clang_instr result
 for f in "$@"; do
   n=$(basename "$f" .c)
-  LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 "$llrm_cc" "-$level" -c "$f" -I"$root/bench" -o "$out/$n.l.o" 2> "$out/$n.err" ||
+  LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -o "$out/$n.l.o" 2> "$out/$n.err" ||
     { printf '%-22s llrm-cc FAIL: %s\n' "$n" "$(head -c 90 "$out/$n.err" | tr '\n' ' ')"; continue; }
-  "$clang" --target=wasm32 -ffreestanding "-$level" -c "$f" -I"$root/bench" -o "$out/$n.c.o" 2> /dev/null ||
+  "$clang" --target=wasm32 -ffreestanding "-$level" $cpu -c "$f" -I"$root/bench" -o "$out/$n.c.o" 2> /dev/null ||
     { printf '%-22s clang FAIL\n' "$n"; continue; }
   read -r lv li <<< "$(count "$out/$n.l.o")"
   read -r cv ci <<< "$(count "$out/$n.c.o")"
