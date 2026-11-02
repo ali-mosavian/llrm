@@ -43,6 +43,7 @@ tmp  = rc6
 tm2  = rc7
 fl   = rc16             ; special path only: blocks are dead there
 ca   = rc17
+fx   = rc18
 
 .segment "CODE"
 
@@ -223,18 +224,22 @@ byteloop:                   ; top byte clear: move up a whole byte while the exp
     sta blkA+0
     lda blkA+3
     beq byteloop
-bitnorm:
+bitnorm:                    ; top byte in A, exponent in X, shift left while the top bit is clear and the exponent allows
+    ldx re
     lda blkA+3
-    bmi round
-    lda re
-    cmp #2
-    bcc round               ; exponent 1: the result is denormal
-    dec re
+    bmi bndone
+bnloop:
+    cpx #2
+    bcc bndone              ; exponent 1: the result is denormal
+    dex
     asl blkA+0
     rol blkA+1
     rol blkA+2
-    rol blkA+3
-    jmp bitnorm
+    rol a
+    bpl bnloop
+bndone:
+    sta blkA+3
+    stx re
 ; ---- round to nearest even on the guard byte, pack
 round:
     lda blkA+0
@@ -354,51 +359,21 @@ special:
     pla
     and #$80
     sta fl
-    ldx #0                  ; class of a: 0 finite, 1 inf, 2 nan
-    lda rc5
-    and #$7f
-    cmp #$7f
-    bne ca_done
-    lda rc4
-    bpl ca_done
-    inx
-    lda rc4
-    and #$7f
-    ora rc3
-    ora rc2
-    beq ca_done
-    inx
-ca_done:
-    stx ca
     ldx #0
-    lda rc9
-    and #$7f
-    cmp #$7f
-    bne cb_done
-    lda rc8
-    bpl cb_done
-    inx
-    lda rc8
-    and #$7f
-    ora rc7
-    ora rc6
-    beq cb_done
-    inx
-cb_done:
+    jsr cls
+    sty ca
+    ldx #4
+    jsr cls                 ; Y = class of b
     lda ca
     cmp #2
     bne :+
-    lda rc4
-    ora #$40
-    sta rc4
-    jmp reta
-:   cpx #2
+    ldx #0
+    beq quiet
+:   cpy #2
     bne :+
-    lda rc8
-    ora #$40
-    sta rc8
-    jmp retb
-:   cpx #1
+    ldx #4
+    bne quiet
+:   cpy #1
     bne reta                ; b finite: a is the infinity
     lda ca
     beq retb                ; a finite, b infinite
@@ -413,21 +388,48 @@ cb_done:
     lda #0
     tax
     rts
+quiet:
+    lda rc4,x
+    ora #$40
+    sta rc4,x
+    lda #0
+    sta fx
+    beq retx
 reta:
-    ldy rc2
-    ldx rc3
-    lda rc4
+    ldx #0
+    stx fx
+    beq retx
+retb:
+    ldx #4
+    lda fl
+    sta fx
+retx:                       ; return operand at offset X, sign flipped by fx
+    lda rc5,x
+    eor fx
+    sta rc5,x
+    ldy rc2,x
+    lda rc3,x
+    sta tmp
+    lda rc4,x
     sta rc2
-    lda rc5
+    lda rc5,x
     sta rc3
+    ldx tmp
     tya
     rts
-retb:
-    lda rc8
-    sta rc2
-    lda rc9
-    eor fl
-    sta rc3
-    ldx rc7
-    lda rc6
-    rts
+; class of the operand at offset X (0 a, 4 b) in Y: 0 finite, 1 inf, 2 nan
+cls:
+    ldy #0
+    lda rc5,x
+    and #$7f
+    cmp #$7f
+    bne cx
+    lda rc4,x
+    bpl cx
+    iny
+    and #$7f
+    ora rc3,x
+    ora rc2,x
+    beq cx
+    iny
+cx: rts
