@@ -8,6 +8,7 @@ uint32_t sfb_mulsi3(uint32_t, uint32_t); uint32_t sfb_udivsi3(uint32_t, uint32_t
 int32_t sfb_divsi3(int32_t, int32_t); int32_t sfb_modsi3(int32_t, int32_t);
 u64 sfb_muldi3(u64, u64); u64 sfb_udivdi3(u64, u64); u64 sfb_umoddi3(u64, u64);
 i64 sfb_divdi3(i64, i64); i64 sfb_moddi3(i64, i64);
+u64 sfb_ashldi3(u64, int); u64 sfb_lshrdi3(u64, int); i64 sfb_ashrdi3(i64, int);
 
 static u64 rng = 0x2545F4914F6CDD1Dull;
 static u64 rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
@@ -50,6 +51,14 @@ int main(int argc, char **argv)
         i64 lr = !lb ? la : (la == INT64_MIN && lb == -1) ? 0 : la % lb;
         CK("divdi3", sfb_divdi3(la, lb), lq, a, b);
         CK("moddi3", sfb_moddi3(la, lb), lr, a, b);
+        for (int k = 0; k < 4; k++) {
+            int c = k == 3 ? (int)(rnd() % 80) : (int)(b & 63);   /* also 64..79: defined here as 0 or sign */
+            if (k == 1) c = (int)((b >> 8) & 63);
+            if (k == 2) c = i % 64;
+            CK("ashldi3", sfb_ashldi3(a, c), c >= 64 ? 0 : a << c, a, c);
+            CK("lshrdi3", sfb_lshrdi3(a, c), c >= 64 ? 0 : a >> c, a, c);
+            CK("ashrdi3", sfb_ashrdi3(la, c), c >= 64 ? (la < 0 ? -1 : 0) : la >> c, a, c);
+        }
     }
     printf("vectors=%ld per op=%ld fails=%ld\n", n, cnt, fails);
     return fails != 0;

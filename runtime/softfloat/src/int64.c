@@ -93,3 +93,35 @@ i64 SFB_NAME(moddi3)(i64 n, i64 d)
     udivmod(na ? neg(a) : a, nb ? neg(b) : b, &r);
     return (i64)join(na ? neg(r) : r);
 }
+
+/* Shifts: libgcc's (value, int count) signatures. A count of 64 or more gives 0, or the sign for the arithmetic shift. */
+u64 SFB_NAME(ashldi3)(u64 x, int n)
+{
+    pair a = split(x), r = { 0, 0 };
+    if ((unsigned)n >= 64) return 0;
+    if (n >= 32) r.hi = a.lo << (n - 32);
+    else if (n) { r.lo = a.lo << n; r.hi = (a.hi << n) | (a.lo >> (32 - n)); }
+    else r = a;
+    return join(r);
+}
+
+u64 SFB_NAME(lshrdi3)(u64 x, int n)
+{
+    pair a = split(x), r = { 0, 0 };
+    if ((unsigned)n >= 64) return 0;
+    if (n >= 32) r.lo = a.hi >> (n - 32);
+    else if (n) { r.hi = a.hi >> n; r.lo = (a.lo >> n) | (a.hi << (32 - n)); }
+    else r = a;
+    return join(r);
+}
+
+i64 SFB_NAME(ashrdi3)(i64 x, int n)
+{
+    pair a = split((u64)x), r;
+    uint32_t sign = (uint32_t)((int32_t)a.hi >> 31);
+    if ((unsigned)n >= 64) { r.lo = r.hi = sign; }
+    else if (n >= 32) { r.lo = (uint32_t)((int32_t)a.hi >> (n - 32)); r.hi = sign; }
+    else if (n) { r.hi = (uint32_t)((int32_t)a.hi >> n); r.lo = (a.lo >> n) | (a.hi << (32 - n)); }
+    else r = a;
+    return (i64)join(r);
+}
