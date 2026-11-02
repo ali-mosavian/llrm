@@ -26,13 +26,15 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
 use super::driver;
 use super::pair::CoalescerEnv;
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::model::lir::LirBody;
+use crate::liveness::slotindex::InstrKey;
+use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
 /// The registers each value may take, and the ones that are fixed.
@@ -40,11 +42,58 @@ pub struct TargetEnv {
     pub palettes: RefCell<IndexMap<u32, BTreeSet<RegId>>>,
     pub pins: IndexMap<u32, RegId>,
     pub size: bool,
+    /// A join leaves a pinned value standing ([`CoalescerEnv::keeps`]): for a
+    /// caller whose pins are values of their own, not constraints on an
+    /// instruction.
+    pub keep_pinned: bool,
+    /// For each pinned value, the pinned values on overlapping registers.
+    pub aliases: IndexMap<u32, Vec<u32>>,
+    /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
+    pub should_join: Box<dyn Fn(&Join) -> bool>,
+    /// The frequency of each block relative to the entry block
+    /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
+    /// runs once.
+    pub freq: Vec<f32>,
+}
+
+/// One side of a copy about to be joined.
+pub struct JoinSide {
+    pub value: u32,
+    /// The registers it may take.
+    pub palette: BTreeSet<RegId>,
+    /// The instructions that name it, the copy apart, with the frequency of
+    /// their block: what the join would leave a narrower class to serve.
+    pub uses: Vec<(Arc<Insn>, f32)>,
+}
+
+/// What `shouldCoalesce` is asked: the two sides of the copy and the
+/// registers the joined value may take (the palettes' common ones).
+pub struct Join {
+    pub one: JoinSide,
+    pub other: JoinSide,
+    pub joined: BTreeSet<RegId>,
+    /// The frequency of the copy's block: what one copy the join removes
+    /// saves.
+    pub copy_frequency: f32,
 }
 
 impl CoalescerEnv for TargetEnv {
     fn tuned_for_size(&self) -> bool {
         self.size
+    }
+
+    fn keeps(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.keep_pinned && self.pins.contains_key(&value)
+    }
+
+    fn aliases(
+        &self,
+        value: u32,
+    ) -> Vec<u32> {
+        self.aliases.get(&value).cloned().unwrap_or_default()
     }
 
     fn can_share(
@@ -62,6 +111,33 @@ impl CoalescerEnv for TargetEnv {
             (Some(x), Some(y)) => x.intersection(y).next().is_some(),
             _ => true,
         }
+    }
+
+    fn should_coalesce(
+        &self,
+        lis: &LiveIntervals,
+        copy: InstrKey,
+        src: u32,
+        dst: u32,
+    ) -> bool {
+        let palettes = self.palettes.borrow();
+        let (Some(x), Some(y)) = (palettes.get(&src), palettes.get(&dst)) else { return true };
+        let freq = |key: InstrKey| {
+            let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
+            self.freq.get(block).copied().unwrap_or(1.0)
+        };
+        let side = |value: u32, palette: &BTreeSet<RegId>| {
+            let mut seen = crate::support::hash::HashSet::default();
+            let uses = lis
+                .operands(value)
+                .iter()
+                .filter(|op| op.instr != copy && seen.insert(op.instr))
+                .map(|op| (Arc::clone(lis.instr(op.instr)), freq(op.instr)))
+                .collect();
+            JoinSide { value, palette: palette.clone(), uses }
+        };
+        let joined = x.intersection(y).copied().collect();
+        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
     fn narrow(
@@ -103,6 +179,41 @@ pub fn joined(
     // The allocator starts from these (`take_handed_over_edited_to`).
     crate::liveness::liveintervals::hand_over(lis, &after);
     after
+}
+
+/// `body` with its copies joined, for a caller that states the palettes and
+/// pins itself (a target whose registers are not x86 classes). The palettes
+/// come back narrowed to what each surviving value may take.
+pub fn coalesce(
+    body: &LirBody,
+    palettes: IndexMap<u32, BTreeSet<RegId>>,
+    pins: IndexMap<u32, RegId>,
+    size: bool,
+    regs: llrm_lir::registers::Regs,
+    should_join: Box<dyn Fn(&Join) -> bool>,
+) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
+    let aliases = pins
+        .iter()
+        .map(|(value, register)| {
+            let others = pins
+                .iter()
+                .filter(|(other, theirs)| {
+                    *other != value
+                        && regs.root(**theirs) == regs.root(*register)
+                        && regs.lanes(**theirs) & regs.lanes(*register) != 0
+                })
+                .map(|(other, _)| *other)
+                .collect();
+            (*value, others)
+        })
+        .collect();
+    let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+    let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
+    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
+    let depths = crate::analysis::intervals::depths_shared(body);
+    let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
+    let after = joined(body, &env, &depth);
+    (after, env.palettes.into_inner())
 }
 
 /// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A

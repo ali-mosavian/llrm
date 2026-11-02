@@ -32,7 +32,9 @@
 //! scale for an index), still fits the address and the encoding it had: a
 //! frame cell is left, and so is a displacement that would grow from one byte
 //! to the full width. `step` is read by the test and the phi only, and `i`
-//! by no instruction outside the loop. The phi becomes `j` starting at
+//! by no instruction outside the loop. A copy of `i` that only feeds `and c, M`
+//! is a reader too when `K` is a multiple of `2^b`, `b` the bits `M` spans:
+//! then `(i - K) & M == i & M`. The phi becomes `j` starting at
 //! `start - K`, the test is gone.
 //!
 //! Bytes: the compare goes (2 or 3 B); the start is a `mov` of an immediate
@@ -128,6 +130,51 @@ fn shifted(
         return None;
     }
     Some(out)
+}
+
+/// Whether `insns[n]`, `d := and i, M` or a copy `c := mov i` whose next reader
+/// is `c := and c, M`, reads `i` as the shift by `shift` leaves it:
+/// `(i - shift) & M == i & M`. That holds when `shift` is a multiple of `2^b`,
+/// `b` the bits `M` spans (a borrow out of the low `b` bits is the only way
+/// the subtraction reaches a bit of `M`; `shift & M == 0` is not enough:
+/// `8 - 4` clears bit 3).
+fn copy_for_a_mask(
+    insns: &[Arc<Insn>],
+    n: usize,
+    index: u32,
+    shift: i64,
+) -> bool {
+    let Some(w) = insns[n].what.as_ref() else { return false };
+    // `d := and i, M` itself.
+    if let ([Loc::Held(dest)], [Loc::Held(source), Loc::Imm(mask)]) = (w.dests.as_slice(), w.sources.as_slice()) {
+        return w.op == Operation::Binary
+            && w.name.as_deref() == Some("and")
+            && source.value == index
+            && dest.value != index
+            && mask.address.is_none()
+            && mask.value > 0
+            && shift % (1_i64 << (i64::BITS - mask.value.leading_zeros())) == 0;
+    }
+    let ([Loc::Held(copy)], [Loc::Held(from)]) = (w.dests.as_slice(), w.sources.as_slice()) else { return false };
+    if w.op != Operation::Move || from.value != index || copy.value == index {
+        return false;
+    }
+    let Some(next) = insns[n + 1..].iter().find(|one| names(one, copy.value)) else { return false };
+    let Some(nw) = next.what.as_ref() else { return false };
+    let ([Loc::Held(dest)], [Loc::Held(source), Loc::Imm(mask)]) = (nw.dests.as_slice(), nw.sources.as_slice()) else {
+        return false;
+    };
+    if nw.op != Operation::Binary
+        || nw.name.as_deref() != Some("and")
+        || dest.value != copy.value
+        || source.value != copy.value
+        || mask.address.is_some()
+        || mask.value <= 0
+    {
+        return false;
+    }
+    let bits = i64::BITS - mask.value.leading_zeros();
+    shift % (1_i64 << bits) == 0
 }
 
 /// Whether `one` reads `value`: as it lists its uses or in an operand.
@@ -257,6 +304,7 @@ pub fn zeroed(body: &LirBody) -> LirBody {
         let mut feasible = true;
         let mut edits: Vec<(i64, usize, Arc<Insn>)> = Vec::new();
         let mut index_reads_outside = false;
+        let mut masked: Vec<(i64, usize)> = Vec::new();
         let mut stepped_reads = 0;
         for block in &out.blocks {
             let inside_loop = inside.contains(&block.at);
@@ -276,6 +324,11 @@ pub fn zeroed(body: &LirBody) -> LirBody {
                 }
                 if one.what.is_none() {
                     feasible = false;
+                    continue;
+                }
+                if copy_for_a_mask(&block.insns, n, index.value, bound.value) {
+                    masked.push((block.at, n));
+                    edits.push((block.at, n, Arc::clone(one)));
                     continue;
                 }
                 let mut edited = (**one).clone();
@@ -420,7 +473,14 @@ pub fn zeroed(body: &LirBody) -> LirBody {
                 if let Some((_, edited)) = edits.iter().find(|(m, _)| *m == n) {
                     let mut e = (**edited).clone();
                     let ew = e.what.as_mut().unwrap();
+                    let masked_copy = masked.contains(&(block.at, n));
                     for loc in ew.dests.iter_mut().chain(ew.sources.iter_mut()) {
+                        if masked_copy
+                            && let Loc::Held(h) = loc
+                            && h.value == index.value
+                        {
+                            h.value = j;
+                        }
                         if let Loc::Mem(cell) = loc {
                             for part in [&mut cell.base, &mut cell.index] {
                                 if let Some(h) = part {
@@ -517,6 +577,18 @@ mod tests {
         branch: &str,
         extra: Option<Arc<Insn>>,
     ) -> LirBody {
+        counted_to(9, disp, plain, step, branch, extra.into_iter().collect())
+    }
+
+    /// `counted` with the bound `bound` and `extra` instructions in the loop.
+    fn counted_to(
+        bound: i64,
+        disp: i64,
+        plain: bool,
+        step: (&str, Vec<Loc>),
+        branch: &str,
+        extra: Vec<Arc<Insn>>,
+    ) -> LirBody {
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let cell = Loc::Mem(if plain {
@@ -530,7 +602,7 @@ mod tests {
         let mut loop_insns = vec![insn(10, Operation::Extend, "movzx", vec![held(3)], vec![cell], vec![3], vec![2])];
         loop_insns.extend(extra);
         loop_insns.push(insn(11, Operation::Unary, step.0, vec![held(4)], step.1, vec![4], vec![2]));
-        loop_insns.push(insn(12, Operation::Binary, "sub", vec![held(5)], vec![held(4), imm(9)], vec![5], vec![4]));
+        loop_insns.push(insn(12, Operation::Binary, "sub", vec![held(5)], vec![held(4), imm(bound)], vec![5], vec![4]));
         loop_insns.push(insn(13, Operation::Branch, branch, vec![], vec![], vec![], vec![]));
         loop_insns.push(insn(14, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]));
         let mut head = block(1, vec![1, 2], loop_insns);
@@ -636,5 +708,53 @@ mod tests {
         let call = insn(15, Operation::Call, "call", vec![], vec![], vec![], vec![2]);
         let done = zeroed(&counted(100, false, inc(), "jne", Some(call)));
         assert_eq!(names(&done, 1), ["movzx", "call", "inc", "sub", "jne", "jmp"]);
+    }
+
+    /// `c := mov i; c := and c, M` as the loop keeps it for `i & M`.
+    fn masked(mask: i64) -> Vec<Arc<Insn>> {
+        vec![
+            insn(15, Operation::Move, "mov", vec![held(6)], vec![held(2)], vec![6], vec![2]),
+            insn(16, Operation::Binary, "and", vec![held(6)], vec![held(6), imm(mask)], vec![6], vec![6]),
+        ]
+    }
+
+    /// textfill's `and i, 14` kept the index and a `cmp` (main: 4000 is a
+    /// multiple of 16, so the masked bits do not change): the bound goes and
+    /// the copy reads `j`. Any loop that masks a counter does the same.
+    #[test]
+    fn test_a_copy_that_is_only_masked_reads_the_zero_ending_index() {
+        let done = zeroed(&counted_to(64, 100, false, inc(), "jne", masked(0x3c)));
+        assert_eq!(names(&done, 1), ["movzx", "mov", "and", "inc", "jne", "jmp"], "the compare is gone");
+        let Some(Loc::Held(from)) = done.blocks[1].insns[1].what.as_ref().map(|w| w.sources[0].clone()) else {
+            panic!("a copy")
+        };
+        assert_ne!(from.value, 2, "the copy reads the new index, not the old one");
+    }
+
+    /// `(i - 4) & 8` is not `i & 8` (8 - 4 clears bit 3) although `4 & 8` is
+    /// zero: a bound that is not a multiple of the mask's span keeps the
+    /// compare and the index.
+    #[test]
+    fn test_a_mask_the_subtraction_can_borrow_into_is_left_alone() {
+        let done = zeroed(&counted_to(4, 100, false, inc(), "jne", masked(8)));
+        assert_eq!(names(&done, 1), ["movzx", "mov", "and", "inc", "sub", "jne", "jmp"]);
+    }
+
+    /// textfill's own form: `d := and i, M` reads the index directly.
+    #[test]
+    fn test_an_and_of_the_index_reads_the_zero_ending_index() {
+        let and = insn(15, Operation::Binary, "and", vec![held(6)], vec![held(2), imm(0x3c)], vec![6], vec![2]);
+        let done = zeroed(&counted_to(64, 100, false, inc(), "jne", vec![and]));
+        assert_eq!(names(&done, 1), ["movzx", "and", "inc", "jne", "jmp"], "the compare is gone");
+    }
+
+    /// A copy that is read before it is masked needs the real index.
+    #[test]
+    fn test_a_copy_read_before_its_mask_is_left_alone() {
+        let mut loop_extra = masked(0x3c);
+        loop_extra
+            .insert(1, insn(17, Operation::Binary, "add", vec![held(7)], vec![held(7), held(6)], vec![7], vec![7, 6]));
+        let done = zeroed(&counted_to(64, 100, false, inc(), "jne", loop_extra));
+        assert_eq!(names(&done, 1), ["movzx", "mov", "add", "and", "inc", "sub", "jne", "jmp"]);
     }
 }

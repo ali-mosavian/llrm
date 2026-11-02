@@ -29,7 +29,7 @@ fn root(
     })
 }
 
-fn is_data(register: RegId) -> bool {
+pub(crate) fn is_data(register: RegId) -> bool {
     [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7].contains(&register)
 }
 

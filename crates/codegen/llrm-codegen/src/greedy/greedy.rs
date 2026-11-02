@@ -255,13 +255,17 @@ impl AllocationOrder {
         vrm: &VirtRegMap,
         order: Vec<RegId>,
         hints: &BTreeMap<u32, Vec<Hint>>,
+        target_hints: &[RegId],
         root: &dyn Fn(RegId) -> RegId,
     ) -> Self {
         let mut found: Vec<RegId> = Vec::new();
-        for hint in hints.get(&virt).into_iter().flatten() {
+        let copy_hints = hints.get(&virt).into_iter().flatten().copied();
+        // the target's hints come after the copies' (`getRegAllocationHints`
+        // of Thumb2 appends to the default ones)
+        for hint in copy_hints.chain(target_hints.iter().map(|r| Hint::Phys(*r))) {
             let phys = match hint {
-                Hint::Virt(v) => vrm.get_phys(*v),
-                Hint::Phys(r) => Some(*r),
+                Hint::Virt(v) => vrm.get_phys(v),
+                Hint::Phys(r) => Some(r),
             };
             // Don't add the same reg twice; check Phys is in the allocation
             // order.
@@ -321,6 +325,25 @@ pub trait GreedyEnv: SpillWeightEnv {
         &self,
         virt: u32,
     ) -> Vec<RegId>;
+    /// `RegClassInfo.isProperSubClass(MRI->getRegClass(VirtReg))`: a larger
+    /// class exists, so isolating one instruction can move its piece to it.
+    fn is_proper_subclass(
+        &self,
+        _virt: u32,
+    ) -> bool {
+        false
+    }
+    /// Whether `insn` narrows `virt` below the larger class its own has
+    /// (`getNumAllocatableRegsForConstraints` against the super class's
+    /// count): an instruction that does not has nothing to gain from a piece
+    /// of its own.
+    fn constrains(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> bool {
+        true
+    }
     /// `RegClassInfo.getNumAllocatableRegs(RC)`.
     fn num_allocatable_regs(
         &self,
@@ -350,6 +373,14 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> Option<RegId> {
         None
     }
+    /// `getRegAllocationHints`' target part: the registers `insn` is cheaper
+    /// with, as (value, register).
+    fn preferred_registers(
+        &self,
+        _insn: &crate::model::lir::Insn,
+    ) -> Vec<(u32, RegId)> {
+        Vec::new()
+    }
     /// `RegCosts[phys]` (`TargetRegisterInfo::getRegisterCosts`, the
     /// registers' `CostPerUse`): X86 sets none (D133902 dropped R8-R15's).
     fn reg_cost(
@@ -363,6 +394,19 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
+    /// `TRI->getCSRCostScale(MF)`: the percentage of the first-use cost
+    /// charged.
+    fn csr_cost_scale(&self) -> u32 {
+        DEFAULT_CSR_COST_SCALE
+    }
+    /// DEVIATE CSR3: whether a range that would take a callee-saved register
+    /// for the first time is spilled instead when its spill costs less than
+    /// that use, at any stage before `RS_Spill` (LLVM takes the register
+    /// once no pre-split pays). Off for every target but one whose save and
+    /// restore cost more than a spill. Exit: none, a target knob.
+    fn csr_spill_first(&self) -> bool {
+        false
+    }
 }
 
 /// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
@@ -371,7 +415,7 @@ const NO_COST_LIMIT: u8 = u8::MAX;
 
 /// `-regalloc-csr-cost-scale` / `TRI->getCSRCostScale(MF)`: the percentage of
 /// the first-use cost the allocator charges (X86 takes the default).
-const CSR_COST_SCALE: u32 = 30;
+const DEFAULT_CSR_COST_SCALE: u32 = 30;
 
 /// `DefaultEvictionAdvisor::isUnusedCalleeSavedReg`
 /// (RegAllocEvictionAdvisor.cpp): `phys` is a callee-saved register no
@@ -388,14 +432,11 @@ pub(crate) fn is_unused_callee_saved_reg(
 /// pop (`first_use` entry executions) scaled by `CSR_COST_SCALE` percent.
 fn csr_cost_of(
     first_use: u32,
+    scale: u32,
     entry: u64,
 ) -> BlockFrequency {
     let cost = BlockFrequency(u64::from(first_use) * entry);
-    if CSR_COST_SCALE < 100 {
-        cost * BranchProbability::new(CSR_COST_SCALE, 100)
-    } else {
-        cost / BranchProbability::new(100, CSR_COST_SCALE)
-    }
+    if scale < 100 { cost * BranchProbability::new(scale, 100) } else { cost / BranchProbability::new(100, scale) }
 }
 
 /// What `RAGreedy` gives a spiller to work with (`LiveRangeEdit`'s world).
@@ -769,7 +810,11 @@ impl<'a> RAGreedy<'a> {
                 let split = self.lis.interval_rc(reg);
                 assert!(!self.matrix.vrm.has_phys(reg), "Register already assigned");
                 if self.lis.reg_nodbg_empty(reg) {
-                    assert!(split.empty(), "Non-empty but used interval");
+                    // LLVM asserts `split.empty()` here, with assertions on
+                    // only; a release build removes the
+                    // interval. A region split can leave the
+                    // complement a phi-only range around a loop, with nothing
+                    // to hold.
                     self.lis.remove_interval(reg);
                     continue;
                 }
@@ -900,8 +945,33 @@ impl<'a> RAGreedy<'a> {
             &self.matrix.vrm,
             self.env.allocation_order(self.class_reg(virt)),
             &self.hints,
+            &self.target_hints(virt),
             &|reg| self.matrix.root(reg),
         )
+    }
+
+    /// The target's hints for `virt`: the register each instruction naming it
+    /// is cheaper with, the one the busiest uses want first.
+    fn target_hints(
+        &self,
+        virt: u32,
+    ) -> Vec<RegId> {
+        let mut wanted: Vec<(RegId, f32)> = Vec::new();
+        for operand in self.lis.operands(virt) {
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
+            for (value, reg) in self.env.preferred_registers(self.lis.instr(operand.instr)) {
+                if value != virt {
+                    continue;
+                }
+                match wanted.iter_mut().find(|(one, _)| *one == reg) {
+                    Some((_, weight)) => *weight += freq,
+                    None => wanted.push((reg, freq)),
+                }
+            }
+        }
+        wanted.sort_by(|a, b| b.1.total_cmp(&a.1));
+        wanted.into_iter().map(|(reg, _)| reg).collect()
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.
@@ -940,7 +1010,13 @@ impl<'a> RAGreedy<'a> {
         }
         // Most registers have 0 additional cost (RegCosts): nothing cheaper to
         // try.
-        Some(phys)
+        let cost = self.env.reg_cost(phys);
+        if cost == 0 {
+            return Some(phys);
+        }
+        // `phys` is available at a cost: evict interference from a cheaper
+        // alternative, if a lighter range holds one.
+        Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
     }
 
     /// `isUrgentEviction` (RegAllocEvictionAdvisor.cpp#L146): an unspillable
@@ -1269,7 +1345,7 @@ impl<'a> RAGreedy<'a> {
         self.csr_cost = BlockFrequency(0);
         let Some(split) = &self.split else { return };
         let entry = split.mbfi.get_entry_freq().get_frequency();
-        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), entry);
+        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), self.env.csr_cost_scale(), entry);
     }
 
     /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
@@ -1288,6 +1364,7 @@ impl<'a> RAGreedy<'a> {
     ) -> Option<RegId> {
         let stage = self.extra.get_stage(virt.reg());
         let csr_cost = self.csr_cost;
+        let spill_first = self.env.csr_spill_first();
         let ss = self.split.as_mut()?;
         let mut splitter = Splitter {
             lis: &mut self.lis,
@@ -1306,6 +1383,10 @@ impl<'a> RAGreedy<'a> {
             }
             // We are going to spill, set CostPerUseLimit to 1 to make sure that
             // we will not use a callee-saved register in tryEvict.
+            *cost_per_use_limit = 1;
+            return None;
+        }
+        if spill_first && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost) {
             *cost_per_use_limit = 1;
             return None;
         }
@@ -1644,7 +1725,7 @@ mod tests {
     fn test_a_first_use_of_a_callee_saved_register_costs_thirty_percent_of_two_entries() {
         // BranchProbability is 31-bit fixed point: 30/100 of 2000 rounds to
         // 599.
-        let cost = csr_cost_of(2, 1000).get_frequency();
+        let cost = csr_cost_of(2, DEFAULT_CSR_COST_SCALE, 1000).get_frequency();
         assert!(cost.abs_diff(600) <= 1, "{cost}");
     }
 

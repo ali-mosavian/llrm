@@ -559,7 +559,7 @@ fn main() {
                     let Some(&seed) = seeds.get(at) else { break };
                     let outcome = std::panic::catch_unwind(|| check(seed, &work))
                         .unwrap_or_else(|_| Outcome::Reject("the compiler panicked".to_owned()));
-                    if matches!(outcome, Outcome::Ok) {
+                    if matches!(outcome, Outcome::Ok) && std::env::var_os("DIFF_KEEP_OK").is_none() {
                         let _ = std::fs::remove_dir_all(work.join(seed.to_string()));
                     }
                     results.lock().unwrap().push((seed, outcome));

@@ -82,3 +82,7 @@ REC-1 update (2026-11-01, x86-m16): the real-mode target takes no recursion by d
 ## Tail-recursion elimination at m16 -Os (w9, 2026-10-26)
 
 `recchop` is 158 B on main, 169 B on parity `19a593cf2`, 153 B with `-fno-optimize-sibling-calls`: the pin's `TailCallElim` makes the last `chop` a loop and three values (`lo`, `mid`, the sum) cross the other call. Over the whole c/nib/qb corpus at -Os m16 (`sz4.py`, with and without the flag): the pass shrinks 33 program variants by 1725 B and grows 24 by 390 B, net -1335 B. Its growers are `recchop` (+16), `idiv_loop_os` (+27), `flat_arith` (+22), `tail_calls` (+13), `frames` (+7), `rectwo`, `fib`, `quicksort.nib`; no single property separates them from the winners (`bintree`, `recsum`, `recgcd`, `recfloat`, `quicksort.c`). A gate on the pass would give up the wins; the growth is spill code in the loop it makes, which the allocation rows own. Not a DEVIATE.
+
+## REC-1 priced copies (2026-11-01, owner w9)
+
+`Tti::priced_self_inlining` replaces the literals 14 and 2 at m16 real mode: a level of self-copies is made while its saved call clocks are worth its bytes at `speed_milliclocks_per_byte`. The first level must pay `COPY_MARGIN` (4) times over. The margin is a fit, a tracker row: key fib, frames, rectwo (growth/gain 0.21 or less) against quicksort, bintree, recchop (0.28 or more). Replacement: a margin from the sheet's loop trips and call price, by 2026-11-13.
