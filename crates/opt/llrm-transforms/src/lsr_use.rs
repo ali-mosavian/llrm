@@ -644,6 +644,10 @@ impl Cost {
         if lu.kind == Kind::ICmpZero && !f.has_zero_end() && !r.tti.can_macro_fuse_cmp() {
             self.c.insns += 1;
         }
+        // A counter that ends at zero pays the target's zero test.
+        if lu.kind == Kind::ICmpZero && f.has_zero_end() {
+            self.c.insns += r.tti.zero_test_cost();
+        }
         // Each new addrec adds one instruction.
         self.c.insns += self.c.add_rec_cost - prev_add_rec;
         // The base adds are instructions for unfolded registers.

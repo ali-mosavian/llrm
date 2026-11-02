@@ -768,6 +768,15 @@ pub trait Tti {
         false
     }
 
+    /// Instructions the exit test of a counter that ends at zero costs beyond
+    /// the step: 0 where the step's flags (or a branch on the register) end
+    /// the loop, 1 where the zero has to be tested by its own instruction
+    /// (z80's 16-bit `inc`). A counter that does not end at zero pays the
+    /// compare instead.
+    fn zero_test_cost(&self) -> u32 {
+        0
+    }
+
     /// The registers an address can be formed from by the target's cheapest
     /// address form (m16: bx, si, di); the general registers where any
     /// register serves.
