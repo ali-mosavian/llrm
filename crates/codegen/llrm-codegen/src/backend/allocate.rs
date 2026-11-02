@@ -297,6 +297,23 @@ pub fn greedy_rewritten(
     // `MachineRegisterInfo::getRegClass` is all `RAGreedy` reads of isel.
     let confined = crate::backend::regclass::classes(&current, &empty, segments, classes);
     let sets = crate::backend::regclass::Sets::of(classes);
+    let size = crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get);
+    let sized_tri = size.then(|| {
+        let bytes = targets::profile(cpu).ok()?.target().size_costs();
+        let one = |n: i64| u32::try_from(n).ok();
+        Some(crate::greedy::targetinfo::X86SizeRegisterInfo(crate::greedy::targetinfo::SizeBytes {
+            push: one(bytes.push)?,
+            pop: one(bytes.pop)?,
+            load: one(bytes.load)?,
+            store: one(bytes.store)?,
+            constant: one(bytes.constant)?,
+            extended_prefix: 1,
+        }))
+    });
+    let tri: &dyn crate::greedy::targetinfo::TargetRegisterInfo = match sized_tri.as_ref().and_then(Option::as_ref) {
+        Some(sized) => sized,
+        None => &crate::greedy::targetinfo::X86RegisterInfo,
+    };
     let inputs = crate::greedy::shadow::ShadowInputs {
         body: &current,
         registers: classes.registers,
@@ -308,8 +325,8 @@ pub fn greedy_rewritten(
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
         tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
-        tri: &crate::greedy::targetinfo::X86RegisterInfo,
-        size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
+        tri,
+        size,
         lane_pins: false,
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };

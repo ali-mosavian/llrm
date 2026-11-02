@@ -409,6 +409,19 @@ pub trait GreedyEnv: SpillWeightEnv {
     fn csr_spill_first(&self) -> bool {
         false
     }
+    /// DEVIATE CSR5: where code is sized in bytes, whether spilling `virt`
+    /// (`reads` instructions read it, `writes` write it) is shorter than the
+    /// first use of the callee-saved `phys`, counted in static bytes, not
+    /// frequency. None: the pin's rule. Exit: none, a target knob.
+    fn csr_spill_costs_less(
+        &self,
+        _virt: u32,
+        _phys: RegId,
+        _reads: u32,
+        _writes: u32,
+    ) -> Option<bool> {
+        None
+    }
 }
 
 /// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
@@ -1438,6 +1451,16 @@ impl<'a> RAGreedy<'a> {
             original: &self.original,
             hints: &mut self.hints,
         };
+        if virt.is_spillable() {
+            let (reads, writes) = splitter.static_accesses(virt);
+            if splitter.env.csr_spill_costs_less(virt.reg(), phys, reads, writes) == Some(true) {
+                // A split would only make the register this range is not
+                // worth: spill it.
+                splitter.extra.set_stage(virt.reg(), LiveRangeStage::Spill);
+                *cost_per_use_limit = 1;
+                return None;
+            }
+        }
         if stage == LiveRangeStage::Spill && virt.is_spillable() {
             // We choose spill over using the CSR for the first time if the
             // spill cost is lower than CSRCost.

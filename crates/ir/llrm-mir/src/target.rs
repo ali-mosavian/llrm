@@ -355,6 +355,9 @@ pub struct OperationCosts {
     /// cheaper of `n` pops (`pop` each) and one `adjust` of the stack
     /// pointer.
     pub pop: i64,
+    /// `push` of a register, and a register set to a constant.
+    pub push: i64,
+    pub constant: i64,
     pub adjust: i64,
     /// What a return popping its callee's arguments costs more than a plain
     /// one.
@@ -499,6 +502,8 @@ impl Default for OperationCosts {
             return_: 1,
             argument: 2,
             pop: 1,
+            push: 1,
+            constant: 1,
             adjust: 1,
             return_pops: 0,
             float_add: 1,
