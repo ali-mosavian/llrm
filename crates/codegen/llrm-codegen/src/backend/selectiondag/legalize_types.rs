@@ -1130,17 +1130,30 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Store
                 if at == 1
                     && self.dag.value_type(self.dag.operand(node, 1)).is_integer()
-                    && self.dag.value_type(self.dag.operand(node, 1)).size_in_bits() % 8 == 0 =>
+                    && matches!(
+                        self.dag.value_type(self.dag.operand(node, 1)).size_in_bits(),
+                        1 | 8 | 16 | 32 | 64 | 128
+                    ) =>
             {
                 // `PromoteIntOp_STORE`: a truncating store of the promoted
-                // value.
+                // value (of an `i1`, which `LegalizeDAG` widens to a byte).
                 let (chain, value, ptr) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
                 let NodeData::Mem(info) = self.dag.node(node).data else {
                     unreachable!("a store has a memory operand")
                 };
                 let promoted = self.promoted_integer(value);
-                self.dag.get_store(chain, promoted, ptr, info)
+                if self.dag.value_type(value) == EVT::I1 {
+                    // A one-bit memory is a byte with the upper bits zero
+                    // (`LegalizeDAG`'s truncating store of a non-byte width:
+                    // `getZeroExtendInReg`, then the byte-sized store).
+                    let wide = self.dag.value_type(promoted);
+                    let one = self.dag.get_constant(1, wide);
+                    let bit = self.dag.get_node(ISD::And, wide, &[promoted, one]);
+                    self.dag.get_store(chain, bit, ptr, super::dag::MemInfo { mem_vt: EVT::I8, ..info })
+                } else {
+                    self.dag.get_store(chain, promoted, ptr, info)
+                }
             }
             op => {
                 return Err(LegalizeError::Unsupported {
