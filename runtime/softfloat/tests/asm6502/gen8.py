@@ -1,7 +1,7 @@
 # usage: gen8.py op chunk -> ca65 table for a in [16*chunk, 16*chunk+16), b in 0..255 (OCP FP8 E5M2, RNE; any NaN passes as $7e)
 import sys
 from fractions import Fraction as F
-op, chunk = sys.argv[1], int(sys.argv[2])
+op, chunk = (sys.argv[1], int(sys.argv[2])) if len(sys.argv) > 2 else ('mul', 0)
 import os
 M = int(os.environ.get('FP8_M', 2)); E = 7 - M
 SPECIAL = int(os.environ.get('FP8_SPECIAL', 1)); DENORM = int(os.environ.get('FP8_DENORM', 1))
@@ -55,7 +55,8 @@ def ref(a, b):
     if inf(y): return 0x80 if neg else 0
     if y == 0: return QNAN if (x == 0 and SPECIAL) else ((INF | 0x80) if neg else INF)
     return rnd(F(x) / F(y), neg)
-print("A0 = %d" % (16 * chunk))
-print("exp8:")
-for a in range(16 * chunk, 16 * chunk + 16):
-    print("  .byte " + ",".join(str(ref(a, b)) for b in range(256)))
+if __name__ == '__main__':
+    print("A0 = %d" % (16 * chunk))
+    print("exp8:")
+    for a in range(16 * chunk, 16 * chunk + 16):
+        print("  .byte " + ",".join(str(ref(a, b)) for b in range(256)))

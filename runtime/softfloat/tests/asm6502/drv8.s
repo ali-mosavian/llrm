@@ -7,8 +7,12 @@ FP8_M = 2
 .endif
 INF = ((1 << (7 - FP8_M)) - 1) << FP8_M
 QNAN = INF | (1 << (FP8_M - 1))
+.ifndef rc2
 rc2 = $82
+.endif
+.ifndef rc3
 rc3 = $83
+.endif
 ptr = $a0
 fail = $a4
 got = $a5

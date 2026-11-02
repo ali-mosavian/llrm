@@ -52,3 +52,8 @@ E5M2 sizes: 560 B everything; 438 B without inf/NaN; 541 B without denormals; 41
 | f2i | 51 / 913 | 611 / 1238 | same code / ~190 |
 
 Not measured yet: m68k, m16/m32 and z80 against libgcc/compiler-rt/SDCC (needs the per-target runners and a free buildslot); the generic C columns come from the older pb3 build. No FP8 baseline exists in compiler-rt or libgcc.
+
+## Table-driven FP8 multiply (`src/6502/sf8_mul_tab.s`)
+
+`__fp8_mul_t`: one 16 KB lookup of the exact magnitude code (inf and NaN included, `tools/gen_fp8_mul_table.py` makes `fp8_mul_tab.inc`), sign by xor. 39 B of code, 46 cycles per call against 337 for the loop version (`sf8.s`), 0 mismatches on all 65536 pairs. The size is the table: it is only worth it where ROM is cheap. Add and sub cannot use the same trick (sign-aware, 64 KB).
+`src/sf8.c` is the portable C version of the same algorithm (`tests/host_fp8.c`: exhaustive against double arithmetic on the host). `tests/asm6502/bench8c.sh` runs it compiled for the 6502.
