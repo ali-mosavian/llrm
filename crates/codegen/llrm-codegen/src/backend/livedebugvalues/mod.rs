@@ -400,6 +400,16 @@ pub fn flow_of(
         let mut events: Vec<(i64, u8, Event)> = Vec::new();
         for one in body.blocks[position].insns.iter() {
             let here = i64::from(lis.indexes.get_instruction_index(one.id()).get_index());
+            // A copy of a register onto itself is removed when the allocator's
+            // choices are written (`VirtRegRewriter`): it writes nothing.
+            let identity = one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move)
+                && matches!(
+                    (one.defines.as_slice(), one.uses.as_slice()),
+                    ([dest], [src]) if placed.get(dest).is_some() && placed.get(dest) == placed.get(src)
+                );
+            if identity {
+                continue;
+            }
             let mut written: Vec<RegId> = one.defines.iter().filter_map(|value| placed.get(value).copied()).collect();
             written.extend(one.clobbers.iter().copied());
             written.extend(one.delivers.iter().map(|(_, register)| *register));
@@ -409,7 +419,8 @@ pub fn flow_of(
             let root = |value: u32| target.parents.get(&value).copied().unwrap_or(value);
             let register = |value: &u32| placed.get(value).copied();
             match (one.defines.as_slice(), one.uses.as_slice()) {
-                // A store of a register the spiller wrote, and a load of a value back.
+                // A store of a register the spiller wrote, and a load of a
+                // value back.
                 (_, [stored]) if one.spill_store => {
                     if let (Some(from), Some(slot)) = (register(stored), (target.home)(root(*stored))) {
                         events.push((here, 2, Event::Spill { from, slot }));
@@ -424,7 +435,8 @@ pub fn flow_of(
                     if one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move) =>
                 {
                     if let (Some(dest), Some(from)) = (register(dest), register(src)) {
-                        // The source dies here when its interval ends within this instruction.
+                        // The source dies here when its interval ends within
+                        // this instruction.
                         let here_index = lis.indexes.get_instruction_index(one.id());
                         let dies = lis.interval(*src).segments.last().is_some_and(|segment| {
                             crate::liveness::slotindex::SlotIndex::is_earlier_equal_instr(&segment.end, &here_index)
@@ -432,7 +444,12 @@ pub fn flow_of(
                         events.push((
                             here,
                             1,
-                            Event::Copy { dest, src: from, src_dies: dies, dest_callee_saved: (target.callee_saved)(dest) },
+                            Event::Copy {
+                                dest,
+                                src: from,
+                                src_dies: dies,
+                                dest_callee_saved: (target.callee_saved)(dest),
+                            },
                         ));
                     }
                 }
@@ -664,7 +681,8 @@ mod tests {
         let mut lis = LiveIntervals::new(&body);
         let slot = |lis: &LiveIntervals, one: &Insn| i64::from(lis.indexes.get_instruction_index(one.id()).get_index());
         let (first, second) = (slot(&lis, &define), slot(&lis, &copy));
-        let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(5))].into_iter().map(|(v, p)| (v, as_reg(p))).collect();
+        let placed: IndexMap<u32, RegId> =
+            [(1, reg(3)), (2, reg(5))].into_iter().map(|(v, p)| (v, as_reg(p))).collect();
         let located = [Located { variable: 9, piece: None, start: first, end: second + 100, at: at(3) }];
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|register| register == reg(5) };
@@ -672,5 +690,37 @@ mod tests {
         let found = extend(&blocks, reg(9));
         let places: Vec<Where> = found.iter().map(|one| one.at).collect();
         assert_eq!(places, [at(3), at(5)], "{found:?}");
+    }
+
+    /// A copy of a register onto itself is removed after allocation; it must
+    /// not end the range of the variable in the register. It did, and the
+    /// variable was nowhere from the copy on.
+    #[test]
+    fn flow_of_leaves_the_variable_in_a_register_copied_onto_itself() {
+        use std::sync::Arc;
+
+        use crate::model::ir::{Operation, Semantics};
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let define = Arc::new(Insn::new(0, None, None, vec![1], vec![]));
+        let copy = Arc::new(Insn::new(0, None, Some(Semantics::new(Operation::Move)), vec![2], vec![1]));
+        let last = Arc::new(Insn::new(0, None, None, vec![], vec![2]));
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::clone(&define), copy, last]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let first = i64::from(lis.indexes.get_instruction_index(define.id()).get_index());
+        let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(3))].into_iter().collect();
+        let located = [Located { variable: 9, piece: None, start: first, end: first + 100, at: at(3) }];
+        let parents = HashMap::default();
+        let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|_| false };
+        let found = extend(&flow_of(&body, &mut lis, &placed, &located, &target), reg(9));
+        assert_eq!(found.len(), 1, "{found:?}");
+        let end = i64::from(lis.indexes.get_mbb_range(0).1.get_index());
+        assert_eq!((found[0].start, found[0].end, found[0].at), (first, end, at(3)));
     }
 }

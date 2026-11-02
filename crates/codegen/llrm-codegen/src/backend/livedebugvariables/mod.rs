@@ -217,6 +217,51 @@ pub fn positioned(
     out
 }
 
+/// Extends each value's stretches over the registers its copies were made
+/// into (`UserValue::addDefsFromCopies`): a value copied into another register
+/// is held there too, over that register's stretches, and a copy of a copy is
+/// followed. `table` is keyed by the allocator's registers, as `segments_of`
+/// leaves it.
+///
+/// DEVIATE: the pin takes the copy destination's one value; a register here
+/// that several values share gives the source all of its stretches.
+/// O(copies x chain length + segments).
+pub fn add_copies(
+    body: &LirBody,
+    table: &mut BTreeMap<u32, Vec<Segment>>,
+    parents: &HashMap<u32, u32>,
+) {
+    let root = |value: u32| parents.get(&value).copied().unwrap_or(value);
+    let copies: Vec<(u32, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move))
+        .filter_map(|one| match (one.defines.as_slice(), one.uses.as_slice()) {
+            ([dest], [source]) if !one.spill_store && !one.spill_reload => Some((root(*source), root(*dest))),
+            _ => None,
+        })
+        .filter(|(source, dest)| source != dest)
+        .collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &(source, dest) in &copies {
+            let Some(found) = table.get(&dest).cloned() else { continue };
+            let list = table.entry(source).or_default();
+            for segment in found {
+                if !list.contains(&segment) {
+                    list.push(segment);
+                    changed = true;
+                }
+            }
+        }
+    }
+    for list in table.values_mut() {
+        list.sort_by_key(|segment| (segment.start, segment.end));
+    }
+}
+
 /// Re-keys `table` (by the allocator's registers) by the number a note names
 /// a value with: the register the instruction defining the value writes first
 /// (what `masm` marks as the value's place; the entry's, one per register it
@@ -276,8 +321,13 @@ pub fn dump(
             eprintln!("LDVPOS\t{:?}", one);
         }
     }
+    add_copies(edited, &mut table, parents);
     let table = by_note_value(edited, &table, parents);
-    let located = locate(&positioned(edited, &lis), &table, i64::from(end), true);
+    let notes = positioned(edited, &lis);
+    let located = locate(&notes, &table, i64::from(end), true);
+    // LiveDebugVariables knows no entry values: where no place holds the
+    // value it says nothing, and LiveDebugValues does the rest.
+    let bare = locate(&notes, &table, i64::from(end), false);
     // The pin's LiveDebugValues over those ranges: the stack pointer is not
     // known to this report, so no register is spared a call's mask (none is
     // given).
@@ -286,7 +336,7 @@ pub fn dump(
         home: &|value| frame.home(value),
         callee_saved: &|register| saved.contains(&register),
     };
-    let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &located, &target);
+    let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &bare, &target);
     for one in crate::backend::livedebugvalues::extend(&flow, RegId::None) {
         eprintln!("VLD\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
@@ -504,6 +554,35 @@ mod tests {
         let table = BTreeMap::from([(21, vec![seg(0, 5, reg(1))]), (22, vec![seg(0, 6, reg(2))])]);
         let found = by_note_value(&body, &table, &HashMap::default());
         assert_eq!(found, BTreeMap::from([(7, vec![seg(0, 5, reg(1))]), (8, vec![seg(0, 6, reg(2))])]));
+    }
+
+    /// A value copied into another register is held there too, and a copy of
+    /// a copy as well: the stretches of a variable ended where the value moved.
+    #[test]
+    fn a_value_is_held_in_the_registers_its_copies_were_made_into() {
+        use std::sync::Arc;
+
+        use crate::model::ir::{Operation, Semantics};
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let mov = |dest: u32, source: u32| {
+            Arc::new(Insn::new(0, None, Some(Semantics::new(Operation::Move)), vec![dest], vec![source]))
+        };
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![mov(2, 1), mov(3, 2)]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut table = BTreeMap::from([
+            (1, vec![seg(0, 10, reg(1))]),
+            (2, vec![seg(10, 20, reg(2))]),
+            (3, vec![seg(20, 30, reg(3))]),
+        ]);
+        add_copies(&body, &mut table, &HashMap::default());
+        assert_eq!(table[&1], [seg(0, 10, reg(1)), seg(10, 20, reg(2)), seg(20, 30, reg(3))]);
+        assert_eq!(table[&2], [seg(10, 20, reg(2)), seg(20, 30, reg(3))]);
     }
 
     /// A value spilled to a cell is in the cell over the stretches the spiller
