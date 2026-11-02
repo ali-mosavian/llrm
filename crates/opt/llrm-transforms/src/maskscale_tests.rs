@@ -144,3 +144,64 @@ fn a_target_without_the_cost_keeps_the_counter() {
         run(&ring(3, 5, 1023, "[4 x i8]", "eq", 30003, ""), std::rc::Rc::new(llrm_mir::target::Neutral));
     assert_eq!(before, text);
 }
+
+/// The outer loop of c's `tile` after `lsr`: `(y + 61) & 63` is an i6 counter
+/// read as `zext`, `shl 7`, beside the i16 trip counter that tests the exit.
+/// Real mode then ran `movzx; and; shl` per trip and two counters (+131
+/// clocks, +53 instructions over main). One scaled counter holds both:
+/// start 61 * 128, step 128, `and 8064`, exit (61 + 25) * 128 = 11008.
+fn tile(
+    extra: &str,
+    exit: i64,
+) -> String {
+    format!(
+        "define i32 @f() {{
+entry:
+  %buf = alloca [8192 x i8], align 2
+  br label %loop
+loop:
+  %p = phi i6 [ -3, %entry ], [ %pn, %loop ]
+  %q = phi i16 [ 0, %entry ], [ %qn, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %s2, %loop ]
+  %z = zext i6 %p to i16
+  %o = shl nuw nsw i16 %z, 7
+  %g = getelementptr i8, ptr %buf, i16 %o
+  %v = load i16, ptr %g, align 2
+  %w = sext i16 %v to i32
+  %s2 = add nsw i32 %s, %w
+{extra}  %qn = add nuw nsw i16 %q, 1
+  %c = icmp eq i16 %qn, {exit}
+  %pn = add nsw i6 %p, 1
+  br i1 %c, label %done, label %loop
+done:
+  ret i32 %s2
+}}
+"
+    )
+}
+
+#[test]
+fn a_narrow_counter_and_the_trip_counter_become_one_scaled_counter() {
+    let (before, text) = m16(&tile("", 25));
+    agree(&before, &text);
+    assert!(!text.contains(" i6 "), "{text}");
+    assert_eq!(text.matches("phi i16").count(), 1, "{text}");
+    assert!(text.contains("[ 7808, %entry ]"), "{text}");
+    assert!(text.contains("and i16 %p, 8064"), "{text}");
+    assert!(text.contains("icmp eq i16 %pn, 11008"), "{text}");
+}
+
+/// A second reader of the trip counter sees its unscaled value.
+#[test]
+fn a_second_use_of_the_trip_counter_keeps_both() {
+    let (before, text) = m16(&tile("  %x = zext i16 %q to i32\n  %y = add i32 %x, %s2\n", 25));
+    assert_eq!(before, text);
+}
+
+/// 600 trips of a counter that wraps every 512: the scaled counter would hit
+/// the exit value on trip 88, so the pair stays.
+#[test]
+fn a_trip_count_past_the_scaled_period_keeps_both() {
+    let (before, text) = m16(&tile("", 600));
+    assert_eq!(before, text);
+}

@@ -37,6 +37,11 @@
 //! From the unit test `the_ring_counter_is_the_byte_offset` in
 //! `maskscale_tests.rs`.
 //!
+//! A narrow counter that `lsr` made of the mask (`zext i6 p to i16`, `shl 7`)
+//! beside the wide trip counter that tests the exit is merged the same way:
+//! one counter `p' = 2^7 * p` of the wide type, read through `and (2^6-1) * 2^7`,
+//! tests the exit at the scaled trip count. The trip counter is dropped.
+//!
 //! # Runs
 //! After `lsr` and `differences`, in the strength slot
 //! ([`crate::pipeline::strength_slot`]); option `maskscale`.
@@ -223,6 +228,225 @@ fn matched(
     Some(Ring { phi, start_slot, next, and, geps, icmp, exit, mask, step, start, width, shift })
 }
 
+/// A narrow counter read as `zext; shl` beside a wide trip counter: the pieces
+/// to merge them into one scaled counter.
+struct Merge {
+    phi: InstId,
+    start_slot: usize,
+    next: InstId,
+    zext: InstId,
+    shl: InstId,
+    trip_phi: InstId,
+    trip_next: InstId,
+    icmp: InstId,
+    tested_after: bool,
+    wide: llrm_mir::types::TypeId,
+    width: u32,
+    narrow: u32,
+    shift: u32,
+    start: u128,
+    step: u128,
+    exit: u128,
+}
+
+/// The only user of `value`, if it has one.
+fn sole_user(
+    function: &Function,
+    value: llrm_mir::module::ValueId,
+) -> Option<llrm_mir::module::Use> {
+    let mut users = function.users(value).iter();
+    let (one, None) = (users.next()?, users.next()) else { return None };
+    Some(*one)
+}
+
+/// `phi` as a [`Merge`] if it is the narrow counter described above, else none.
+fn merged(
+    context: &Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &Function,
+    phi: InstId,
+) -> Option<Merge> {
+    let one = function.instruction(phi);
+    let narrow = context.types.int_bits(one.ty).filter(|&bits| (2..=32).contains(&bits))?;
+    let &[a, Operand::Block(block_a), b, Operand::Block(block_b)] = &one.operands[..] else { return None };
+    let (start_slot, start, next, latch) = match (constant(context, a), constant(context, b)) {
+        (Some(start), None) => (0, start, def(function, b)?, block_b),
+        (None, Some(start)) => (2, start, def(function, a)?, block_a),
+        _ => return None,
+    };
+    let header = function.parent(phi)?;
+    let counter = one.result?;
+    let add = function.instruction(next);
+    if add.opcode != Opcode::Binary(BinaryOp::Add) || function.parent(next) != Some(latch) {
+        return None;
+    }
+    let &[base, step] = &add.operands[..] else { return None };
+    if base != Operand::Value(counter) || sole_user(function, add.result?).map(|one| one.user) != Some(phi) {
+        return None;
+    }
+    let step = wrap(constant(context, step)?, narrow);
+
+    // Read by its add and one `zext` to the wide type; that read only by one
+    // `shl` by a constant, read only as the index of byte `gep`s.
+    let mut zext = None;
+    for user in function.users(counter).iter() {
+        match function.instruction(user.user).opcode {
+            _ if user.user == next => {}
+            Opcode::Cast(llrm_mir::opcode::CastOp::ZExt) if zext.is_none() => zext = Some(user.user),
+            _ => return None,
+        }
+    }
+    let zext = zext?;
+    let wide = function.instruction(zext).ty;
+    let width = context.types.int_bits(wide).filter(|&bits| bits > narrow && bits <= 64)?;
+    let shl = sole_user(function, function.instruction(zext).result?)?;
+    let shl_op = function.instruction(shl.user);
+    let (Opcode::Binary(BinaryOp::Shl), 0) = (&shl_op.opcode, shl.index) else { return None };
+    let shift = u32::try_from(constant(context, shl_op.operands[1])?).ok()?;
+    let mask = wrap(u128::MAX, narrow);
+    if shift == 0 || narrow + shift > width || (mask << shift) >= 1u128 << (width - 1) {
+        return None;
+    }
+    for user in function.users(shl_op.result?).iter() {
+        let Opcode::GetElementPtr { source } = function.instruction(user.user).opcode else { return None };
+        if user.index != 1
+            || function.instruction(user.user).operands.len() != 2
+            || layout.alloc_size(&context.types, source) != 1
+        {
+            return None;
+        }
+    }
+
+    // The wide trip counter of the loop: constant start and step, read by its
+    // add and the exit test only.
+    let header_phis: Vec<InstId> = function
+        .iter_block(header)
+        .filter(|&inst| inst != phi && function.instruction(inst).opcode == Opcode::Phi)
+        .collect();
+    header_phis.into_iter().find_map(|trip_phi| {
+        let q = function.instruction(trip_phi);
+        if q.ty != wide {
+            return None;
+        }
+        let &[c, Operand::Block(block_c), d, Operand::Block(block_d)] = &q.operands[..] else { return None };
+        let (trip_start, trip_next) = match (constant(context, c), constant(context, d)) {
+            (Some(start), None) if block_d == latch && block_c != latch => (start, def(function, d)?),
+            (None, Some(start)) if block_c == latch && block_d != latch => (start, def(function, c)?),
+            _ => return None,
+        };
+        let qadd = function.instruction(trip_next);
+        let &[qbase, qstep] = &qadd.operands[..] else { return None };
+        if qadd.opcode != Opcode::Binary(BinaryOp::Add)
+            || function.parent(trip_next) != Some(latch)
+            || qbase != Operand::Value(q.result?)
+        {
+            return None;
+        }
+        let trip_step = wrap(constant(context, qstep)?, width);
+        let trip_after = qadd.result?;
+        let mut icmp = None;
+        for user in function.users(q.result?).iter() {
+            match function.instruction(user.user).opcode {
+                _ if user.user == trip_next => {}
+                Opcode::ICmp(_) if icmp.is_none() => icmp = Some((user.user, false)),
+                _ => return None,
+            }
+        }
+        for user in function.users(trip_after).iter() {
+            match function.instruction(user.user).opcode {
+                Opcode::Phi if user.user == trip_phi => {}
+                Opcode::ICmp(_) if icmp.is_none() => icmp = Some((user.user, true)),
+                _ => return None,
+            }
+        }
+        let (icmp, tested_after) = icmp?;
+        let test = function.instruction(icmp);
+        let &[tested, limit] = &test.operands[..] else { return None };
+        let limit = wrap(constant(context, limit)?, width);
+        let Opcode::ICmp(predicate) = test.opcode else { return None };
+        let mut readers = function.users(test.result?).iter();
+        let (Some(branch), None) = (readers.next(), readers.next()) else { return None };
+        let (hit, miss) = match function.instruction(branch.user).operands[..] {
+            [_, Operand::Block(taken), Operand::Block(other)] => match predicate {
+                IntPredicate::Eq => (taken, other),
+                IntPredicate::Ne => (other, taken),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if function.parent(icmp) != Some(latch)
+            || function.parent(branch.user) != Some(latch)
+            || miss != header
+            || hit == header
+            || tested != Operand::Value(if tested_after { trip_after } else { q.result? })
+        {
+            return None;
+        }
+        // The trip the wide counter exits on, and the scaled counter's first
+        // hit of the scaled test value: the same trip.
+        let offset = if tested_after { trip_step } else { 0 };
+        let trips = first_hit(trip_step, limit.wrapping_sub(offset).wrapping_sub(trip_start), width)?;
+        let scaled_step = wrap(step << shift, width);
+        let scaled_start = wrap(start << shift, width);
+        let scaled_offset = if tested_after { scaled_step } else { 0 };
+        let exit = wrap(scaled_start.wrapping_add(scaled_step.wrapping_mul(trips)).wrapping_add(scaled_offset), width);
+        let gap = exit.wrapping_sub(scaled_offset).wrapping_sub(scaled_start);
+        if first_hit(scaled_step, gap, width) != Some(trips) {
+            return None;
+        }
+        Some(Merge {
+            phi,
+            start_slot,
+            next,
+            zext,
+            shl: shl.user,
+            trip_phi,
+            trip_next,
+            icmp,
+            tested_after,
+            wide,
+            width,
+            narrow,
+            shift,
+            start,
+            step,
+            exit,
+        })
+    })
+}
+
+fn merge(
+    context: &Context,
+    function: &mut Function,
+    found: &Merge,
+) {
+    let scaled = |value: u128| int(context, found.wide, value << found.shift, found.width);
+    function.set_type(found.phi, found.wide);
+    function.set_type(found.next, found.wide);
+    function.set_operand(found.phi, found.start_slot, scaled(found.start));
+    function.set_operand(found.next, 1, scaled(found.step));
+    function.set_flags(found.next, Flags::default());
+    // The read: `zext; shl` is the masked, scaled counter.
+    let mask = wrap(u128::MAX, found.narrow) << found.shift;
+    function.set_opcode(found.zext, Opcode::Binary(BinaryOp::And));
+    function.set_operands(
+        found.zext,
+        vec![Operand::Value(function.instruction(found.phi).result.expect("a phi")), int(context, found.wide, mask, found.width)],
+    );
+    let read = function.instruction(found.zext).result.expect("an and");
+    let shifted = function.instruction(found.shl).result.expect("a shl");
+    function.replace_all_uses_with(shifted, Operand::Value(read));
+    // The exit test moves to the scaled counter; the trip counter goes.
+    let counter = function.instruction(found.phi).result.expect("a phi");
+    let after = function.instruction(found.next).result.expect("an add");
+    // The add may follow the test it now feeds.
+    function.move_to(found.next, llrm_mir::edit::Position::Before(found.icmp)).expect("the add moves in its block");
+    function.set_operand(found.icmp, 0, Operand::Value(if found.tested_after { after } else { counter }));
+    function.set_operand(found.icmp, 1, int(context, found.wide, found.exit, found.width));
+    function.erase(found.shl).expect("the shl is unused");
+    function.erase_all(&[found.trip_phi, found.trip_next]).expect("the trip counter is unused");
+}
+
 fn int(
     context: &Context,
     like: llrm_mir::types::TypeId,
@@ -280,7 +504,19 @@ impl FunctionPass for MaskScale {
         for ring in &rings {
             rewrite(unit.context, unit.function, ring);
         }
-        if rings.is_empty() {
+        let merges: Vec<Merge> = {
+            let function = &*unit.function;
+            function
+                .walk()
+                .map(|(_, inst)| inst)
+                .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+                .filter_map(|phi| merged(unit.context, unit.layout, function, phi))
+                .collect()
+        };
+        for found in &merges {
+            merge(unit.context, unit.function, found);
+        }
+        if rings.is_empty() && merges.is_empty() {
             PreservedAnalyses::all()
         } else {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
