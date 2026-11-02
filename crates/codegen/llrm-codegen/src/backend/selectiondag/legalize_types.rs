@@ -48,6 +48,8 @@ use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 use super::x86_lowering::{ES, x86isd};
 
+mod soften;
+
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NodeId {
@@ -236,6 +238,12 @@ impl<'a> TypeLegalizer<'a> {
                     }
                     return Ok(true);
                 }
+                TypeAction::SoftenFloat => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.soften_float_result(value)?;
+                    }
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -258,6 +266,7 @@ impl<'a> TypeLegalizer<'a> {
                 _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
+                TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);

@@ -49,3 +49,14 @@ fn far_expands_to_two_words_at_m16_only() {
     let m32 = std::panic::catch_unwind(|| TargetLoweringInfo::x86_32().type_action(MVT::Far.into()));
     assert!(m32.is_err());
 }
+
+/// A target without an FPU softens `f32` to `i32` and `f64` to `i64`, which
+/// then expands on a 32-bit target (`SoftenFloat`); x86 keeps its floats.
+#[test]
+fn a_soft_float_target_softens_f32_and_f64() {
+    let soft = TargetLoweringInfo::new(&[MVT::I8, MVT::I16, MVT::I32], false).with_soft_float();
+    assert_eq!(conv(&soft, MVT::F32.into()), (TypeAction::SoftenFloat, EVT::I32));
+    assert_eq!(conv(&soft, MVT::F64.into()), (TypeAction::SoftenFloat, EVT::I64));
+    assert_eq!(conv(&soft, EVT::I64), (TypeAction::ExpandInteger, EVT::I32));
+    assert_eq!(conv(&TargetLoweringInfo::x86_32(), MVT::F64.into()), (TypeAction::Legal, MVT::F64.into()));
+}

@@ -39,6 +39,8 @@ pub enum TypeAction {
     Legal,
     PromoteInteger,
     ExpandInteger,
+    /// `TypeSoftenFloat`: the float is carried as an integer of its width.
+    SoftenFloat,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -50,6 +52,9 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
+    /// No FPU: `f32` and `f64` are carried as `i32` and `i64`
+    /// (`TypeSoftenFloat`).
+    soft_float: bool,
     /// `getScalarShiftAmountTy`.
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
@@ -89,7 +94,19 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+        TargetLoweringInfo { integers, far, soft_float: false, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+    }
+
+    /// The target has no FPU: `f32` and `f64` are softened to integers and
+    /// their operations are library calls.
+    pub fn with_soft_float(mut self) -> TargetLoweringInfo {
+        self.soft_float = true;
+        self
+    }
+
+    /// Floats are softened.
+    pub fn is_soft_float(&self) -> bool {
+        self.soft_float
     }
 
     /// A shift's amount has the type of the value shifted
@@ -155,6 +172,8 @@ impl TargetLoweringInfo {
                 assert!(self.far, "this target has no far pointer");
                 (TypeAction::ExpandInteger, EVT::I16)
             }
+            EVT::Simple(MVT::F32) if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
+            EVT::Simple(MVT::F64) if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
             EVT::Simple(mvt) => match INTEGERS.iter().position(|&int| int == mvt) {
                 Some(at) => {
                     let (action, to) = self.integers[at];
