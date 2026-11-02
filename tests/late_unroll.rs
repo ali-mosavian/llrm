@@ -109,16 +109,13 @@ fn movsx_count(level: &str) -> usize {
     String::from_utf8_lossy(&output.stdout).matches("movsx").count()
 }
 
+/// bench_tile (8-trip loops) at -O2: the pin's bar unrolls it (4271 clocks
+/// against 8321 rolled; best of gcc/clang is 4271). A flat 0 bar at -O2 kept it
+/// a loop (m32 decides on speed at -O2).
 #[test]
-fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o3() {
-    let loads = movsx_count("-O3");
-    assert!(loads >= 40, "the 40 loads are copied out ({loads} movsx)");
-}
-
-/// m32's table holds the full unroll to the code that does not grow below -O3
-/// (bench_tile 149 B against gcc's 161 and clang's 507 at -O2).
-#[test]
-fn test_the_same_loop_stays_rolled_at_o2() {
-    let loads = movsx_count("-O2");
-    assert!(loads < 40, "the loop is kept ({loads} movsx)");
+fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o2_and_o3() {
+    for level in ["-O2", "-O3"] {
+        let loads = movsx_count(level);
+        assert!(loads >= 40, "{level}: the 40 loads are copied out ({loads} movsx)");
+    }
 }
