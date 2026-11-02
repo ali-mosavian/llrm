@@ -594,6 +594,7 @@ impl Builder<'_> {
         &self,
         length: u64,
         opt_size: bool,
+        zero: bool,
     ) -> bool {
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
@@ -601,8 +602,17 @@ impl Builder<'_> {
         let dwords = length / 4;
         let words = u64::from(length % 4 >= 2);
         let bytes = u64::from(length % 2 == 1);
-        let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
-        let stored = setup + dwords * each + words * 5 + bytes * 4;
+        // From two dwords on a register holds the value (`xor ecx, ecx` 3 B,
+        // `mov ecx, imm32` 6) and each store is that register's 4, 3 or 3
+        // bytes; a lone dword is `mov dword ptr [m], imm32`. A 10-byte clear
+        // is 14 bytes of stores against 16 of fill (the object's, measured).
+        let shared = dwords > 1;
+        let (each, setup, word, byte) = match (shared, zero) {
+            (true, true) => (4, 3, 3, 3),
+            (true, false) => (4, 6, 3, 3),
+            (false, _) => (8, 0, 5, 4),
+        };
+        let stored = setup + dwords * each + words * word + bytes * byte;
         if stored <= FILL_BYTES {
             return false;
         }
@@ -991,7 +1001,7 @@ impl Builder<'_> {
                     self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
+                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
                     _ => None,
