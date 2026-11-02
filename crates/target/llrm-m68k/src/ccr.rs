@@ -57,3 +57,28 @@ pub fn tested_by(code: i64) -> Option<u32> {
 pub fn tested_by_name(name: &str) -> Option<u32> {
     DIALECT.conditions.iter().find(|(one, _)| one == name).map(|(_, flags)| *flags)
 }
+
+/// Pairs of conditions that hold of the same operands of a compare when the
+/// operands change places: `a < b` is `b > a`. The rest (`mi`, `pl`, `vs`,
+/// `vc`) read flags that depend on the order.
+const SWAPPED: [(&str, &str); 6] = [("lt", "gt"), ("le", "ge"), ("cs", "hi"), ("ls", "cc"), ("eq", "eq"), ("ne", "ne")];
+
+/// The condition that holds on swapped operands where `name` held.
+pub fn swapped_name(name: &str) -> Option<&'static str> {
+    SWAPPED
+        .iter()
+        .find_map(
+            |&(a, b)| match name {
+                _ if name == a => Some(b),
+                _ if name == b => Some(a),
+                _ => None,
+            },
+        )
+}
+
+/// [`swapped_name`] for a condition code (an `M68k::CondCode`).
+pub fn swapped_code(code: i64) -> Option<i64> {
+    let name = &DIALECT.conditions.get(usize::try_from(code).ok()?)?.0;
+    let swapped = swapped_name(name)?;
+    DIALECT.conditions.iter().position(|(one, _)| one == swapped).map(|at| at as i64)
+}

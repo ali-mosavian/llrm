@@ -56,11 +56,15 @@ pub struct Options {
     /// Keep only the first `k` statements of `test`: the way a mismatch is cut
     /// down.
     pub limit: Option<usize>,
+    /// Loops that read a local array through a pointer stepped after each
+    /// read (`*w++`): what a backend turns into post-increment loads. Off,
+    /// the programs are the ones generated before the option existed.
+    pub walks: bool,
 }
 
 impl Options {
     pub const fn new(model: DataModel) -> Options {
-        Options { model, opaque: false, signed: true, limit: None }
+        Options { model, opaque: false, signed: true, limit: None, walks: false }
     }
 }
 
@@ -391,7 +395,7 @@ impl Gen {
     ) {
         let pad = "  ".repeat(indent);
         for _ in 0..count {
-            match self.rng.below(12) {
+            match self.rng.below(if self.options.walks { 13 } else { 12 }) {
                 0..=4 => {
                     if let Some(v) = self.assign_target(scope) {
                         let e = self.expr(v.ty, 3, scope);
@@ -449,6 +453,36 @@ impl Gen {
                     writeln!(out, "{pad}default: ;").unwrap();
                     self.stmts(1, 0, scope, indent + 1, out);
                     writeln!(out, "{pad}}}").unwrap();
+                }
+                12 => {
+                    if let (Some(a), Some(v)) =
+                        (scope.arrays.get(self.rng.below(scope.arrays.len().max(1))), self.assign_target(scope))
+                    {
+                        let (name, ty, len) = (a.name.clone(), a.ty, a.len);
+                        let wide = v.ty.wide();
+                        let step = if self.rng.chance(50) {
+                            format!(
+                                "{0} = ({1})({0} {2} ({3})*w++);",
+                                v.name,
+                                self.c(v.ty),
+                                ["+", "-", "&", "|", "^"][self.rng.below(5)],
+                                wide
+                            )
+                        } else {
+                            format!(
+                                "if (({wide})*w++ {op} ({wide}){name}) {name} = ({ty})({name} + 1);",
+                                op = ["<", ">", "<=", ">=", "==", "!="][self.rng.below(6)],
+                                name = v.name,
+                                ty = self.c(v.ty),
+                            )
+                        };
+                        writeln!(
+                            out,
+                            "{pad}{{ const {} *w = {name}; unsigned char n = {len}; while (n--) {{ {step} }} }}",
+                            self.c(ty)
+                        )
+                        .unwrap();
+                    }
                 }
                 9 if scope.has_struct => {
                     let e = self.expr(Ty::U8, 2, scope);
