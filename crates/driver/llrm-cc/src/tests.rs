@@ -143,14 +143,17 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
 
 #[test]
 fn the_opt_level_reaches_the_arm64_backend() {
-    // With `llc_level = false` on the arm64-macos row -O0..-Os never reached
+    // With `llc_level = false` on an arm64 row -O0..-Os never reached
     // llrm-arm64-llc: a size or speed measured through llrm-cc at any level
-    // was the backend's default.
+    // was the backend's default (arm64-linux and arm64-glibc ran every -O level
+    // through the -O2 mid-end: 116 qemu counts that were four copies of one).
     let table = targets(TARGETS).unwrap();
-    for (flag, level) in [("-O0", "-O0"), ("-O1", "-O1"), ("-Os", "-Os")] {
-        let one = built(&format!("{flag} -c x.c"));
-        let args = llc_args(&table["arm64-macos"], &one, Path::new("x.ll"), Path::new("x.o"));
-        assert_eq!(args.first().map(String::as_str), Some(level), "{args:?}");
+    for row in ["arm64-macos", "arm64-linux", "arm64-glibc"] {
+        for (flag, level) in [("-O0", "-O0"), ("-O1", "-O1"), ("-Os", "-Os")] {
+            let one = built(&format!("{flag} -c x.c"));
+            let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.o"));
+            assert_eq!(args.first().map(String::as_str), Some(level), "{row}: {args:?}");
+        }
     }
 }
 
