@@ -726,6 +726,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
+            ISD::CtLz | ISD::CtLzZeroPoison => self.expand_ctlz(node).map(|result| vec![result]),
+            ISD::CtTz | ISD::CtTzZeroPoison => self.expand_cttz(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
@@ -786,6 +788,87 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let sign = self.dag.get_node(ISD::Sra, vt, &[x, amount]);
         let flipped = self.dag.get_node(ISD::Xor, vt, &[x, sign]);
         self.dag.get_node(ISD::Sub, vt, &[flipped, sign])
+    }
+
+    /// `TargetLowering::expandCTLZ` ([L10926][pin]), scalar: the other count
+    /// where it is legal, else the bits smeared down and `ctpop` of their
+    /// complement.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L10926
+    fn expand_ctlz(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let mut op = self.dag.operand(node, 0);
+        let bits = vt.size_in_bits();
+        if self.dag.opcode(node) == ISD::CtLzZeroPoison && self.tli.is_operation_legal_or_custom(ISD::CtLz, vt) {
+            return Some(self.dag.get_node(ISD::CtLz, vt, &[op]));
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::CtLzZeroPoison, vt) {
+            let bool_vt = self.tli.types.set_cc_result_type(vt);
+            let count = self.dag.get_node(ISD::CtLzZeroPoison, vt, &[op]);
+            let zero = self.dag.get_constant(0, vt);
+            let is_zero = self.dag.get_setcc(bool_vt, op, zero, CondCode::SetEq);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_select(vt, is_zero, width, count));
+        }
+        let mut i = 0;
+        while (1u32 << i) < bits {
+            let amount = self.dag.get_constant(1 << i, EVT::I8);
+            let shifted = self.dag.get_node(ISD::Srl, vt, &[op, amount]);
+            op = self.dag.get_node(ISD::Or, vt, &[op, shifted]);
+            i += 1;
+        }
+        let flipped = self.dag.get_not(op, vt);
+        Some(self.dag.get_node(ISD::CtPop, vt, &[flipped]))
+    }
+
+    /// `TargetLowering::expandCTTZ` ([L11041][pin]), scalar: `ctpop(~x & (x -
+    /// 1))`, or `bits - ctlz(~x & (x - 1))` where only `ctlz` is legal.
+    /// DEVIATE: no `CTTZTableLookup` (the de Bruijn table the pin tries
+    /// first when neither `ctpop` nor `ctlz` is legal); the `ctpop`
+    /// expansion is used. Exit: the table translated.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L11041
+    fn expand_cttz(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let op = self.dag.operand(node, 0);
+        let bits = vt.size_in_bits();
+        if self.dag.opcode(node) == ISD::CtTzZeroPoison && self.tli.is_operation_legal_or_custom(ISD::CtTz, vt) {
+            return Some(self.dag.get_node(ISD::CtTz, vt, &[op]));
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::CtTzZeroPoison, vt) {
+            let bool_vt = self.tli.types.set_cc_result_type(vt);
+            let count = self.dag.get_node(ISD::CtTzZeroPoison, vt, &[op]);
+            let zero = self.dag.get_constant(0, vt);
+            let is_zero = self.dag.get_setcc(bool_vt, op, zero, CondCode::SetEq);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_select(vt, is_zero, width, count));
+        }
+        let use_ctlz = self.tli.is_operation_legal(ISD::CtLz, vt) && !self.tli.is_operation_legal(ISD::CtPop, vt);
+        if use_ctlz && self.dag.opcode(node) == ISD::CtTzZeroPoison {
+            let negated = self.dag.get_negative(op, vt);
+            let lowest = self.dag.get_node(ISD::And, vt, &[op, negated]);
+            let count = self.dag.get_node(ISD::CtLzZeroPoison, vt, &[lowest]);
+            let top = self.dag.get_constant(u128::from(bits - 1), vt);
+            return Some(self.dag.get_node(ISD::Xor, vt, &[count, top]));
+        }
+        let not = self.dag.get_not(op, vt);
+        let one = self.dag.get_constant(1, vt);
+        let below = self.dag.get_node(ISD::Sub, vt, &[op, one]);
+        let trailing = self.dag.get_node(ISD::And, vt, &[not, below]);
+        if use_ctlz {
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            let count = self.dag.get_node(ISD::CtLz, vt, &[trailing]);
+            return Some(self.dag.get_node(ISD::Sub, vt, &[width, count]));
+        }
+        Some(self.dag.get_node(ISD::CtPop, vt, &[trailing]))
     }
 
     /// `TargetLowering::expandCTPOP` ([L10830][pin]), scalar: the parallel
