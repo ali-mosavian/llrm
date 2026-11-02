@@ -433,7 +433,6 @@ impl SelectionDAG {
 
         if self.opcode(n2) == ISD::Undef {
             let both = self.opcode(n1) == ISD::Undef;
-            let width = vt.size_in_bits();
             let value = match opcode {
                 ISD::Xor if both => Some(self.get_constant(0, vt)),
                 ISD::Xor | ISD::Add | ISD::PtrAdd | ISD::Sub => Some(n2),
@@ -444,8 +443,8 @@ impl SelectionDAG {
                 ISD::Or | ISD::SAddSat | ISD::UAddSat | ISD::UMax => {
                     Some(if both { n2 } else { self.get_all_ones_constant(vt) })
                 }
-                ISD::SMax => Some(if both { n2 } else { self.get_constant(mask(width - 1), vt) }),
-                ISD::SMin => Some(if both { n2 } else { self.get_constant(1u128 << (width - 1), vt) }),
+                ISD::SMax => Some(if both { n2 } else { self.get_constant(mask(vt.size_in_bits() - 1), vt) }),
+                ISD::SMin => Some(if both { n2 } else { self.get_constant(1u128 << (vt.size_in_bits() - 1), vt) }),
                 _ => None,
             };
             if let Some(value) = value {

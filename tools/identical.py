@@ -109,21 +109,23 @@ def stale(binary: str, rev: str, what: str, root: Path = ROOT) -> str | None:
     return None
 
 
-def bench_compiles(work: Path, levels: tuple[str, ...] = BENCH_LEVELS) -> dict[str, tuple[str, list[str]]]:
-    """Name -> (tool, arguments): every compile of llrm's own the bench harness makes of each program in each language, with the
+def bench_compiles(work: Path, levels: tuple[str, ...] = BENCH_LEVELS) -> dict[str, tuple[str, list[str], dict[str, str]]]:
+    """Name -> (tool, arguments, environment the harness adds): every compile of llrm's own the bench harness makes of each program in each language, with the
     harness's flags (`bench.compiles`, the one place they are spelled), at each of `levels`. The programs of vsgcc and tests/run are
     compiled with other flags than the bench's (-fno-inline-functions, a volatile pointer to the kernel), so a change to what the bench
     measures was 'identical' on a corpus that never compiled it so."""
     sys.path.insert(0, str(HERE / "bench"))
     import bench  # imported here: it needs the emulators and the built binaries
 
-    found: dict[str, tuple[str, list[str]]] = {}
+    found: dict[str, tuple[str, list[str], dict[str, str]]] = {}
     for directory in bench.benchmarks([]):
         for variant in bench.variants(directory):
             for opt in levels:
                 stem = f"{variant.name.replace('/', '_')}.{variant.language}.{opt}"
                 for n, (tool, arguments, _) in enumerate(bench.compiles(variant, opt, work, stem)):
-                    found[f"bench/{variant.name}/{variant.language}/{opt}#{n}"] = (tool, arguments)
+                    # the harness builds a C row for the Watcom target (LLRM_CC_TARGET); without it llrm-cc compiles for the host and `__huge` is a syntax error
+                    added = {k: v for k, v in bench.c_environment(variant).items() if os.environ.get(k) != v}
+                    found[f"bench/{variant.name}/{variant.language}/{opt}#{n}"] = (tool, arguments, added)
     if len({name.split("#")[0] for name in found}) < KNOWN_BENCH:
         sys.exit(f"identical: {len(found)} bench compiles, {KNOWN_BENCH} programs are known")
     return found
@@ -131,7 +133,7 @@ def bench_compiles(work: Path, levels: tuple[str, ...] = BENCH_LEVELS) -> dict[s
 
 def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -> tuple[str, str, str | None]:
     """One compile by `old` and by `new` (the tool beside each llrm-c): the objects are the same bytes. `arguments` end in `-o OBJ`."""
-    name, level, tool, arguments = job
+    name, level, tool, arguments, *added = job
     outs = []
     for tag, compiler in (("old", old), ("new", new)):
         out = work / f"{name.replace('/', '_')}{level}.{tag}.obj"
@@ -141,6 +143,9 @@ def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -
             if tag == "new"
             else {k: v for k, v in os.environ.items() if not k.startswith("LLRM_CHECK_")}
         )
+        env = {**env, **(added[0] if added else {})}
+        if tool == "llrm-cc" and Path(compiler).name == "llrm-llc":  # the bench's C rows: llrm-cc over the backend under test, as for llrm-c
+            env["LLRM_LLC"] = str(compiler)
         at = len(arguments) - 1 - arguments[::-1].index("-o")
         command = [str(Path(compiler).with_name(tool)), *arguments[:at], "-o", str(out), *arguments[at + 2 :]]
         if tool == "llrm-c" and Path(compiler).name == "llrm-llc":  # the backend is the subject: llrm-cc compiles, with it
@@ -189,7 +194,7 @@ def main() -> int:
             jobs = [job for job in jobs if job[0].removeprefix("run/").split("#")[0] not in unbuilt]
         if not args.no_bench:
             benches = bench_compiles(work)
-            jobs += [(name, "", tool, arguments) for name, (tool, arguments) in benches.items()]
+            jobs += [(name, "", tool, arguments, added) for name, (tool, arguments, added) in benches.items()]
             files = files | {name: None for name in benches}
         with ThreadPoolExecutor(args.jobs) as pool:
             results = list(pool.map(lambda job: same(job, args.old, args.new, work), jobs))

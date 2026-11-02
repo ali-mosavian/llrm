@@ -28,7 +28,7 @@ def test_the_culprit_search_runs_log_n_probes():
 
 def test_a_squash_subject_names_its_pr_and_a_body_its_owner():
     assert postland.pr_of("fix(gate): the sigterm test waits (#1755)") == 1755
-    assert postland.pr_of("merge: origin/feat/parity") is None
+    assert postland.pr_of("merge: origin/release/next") is None
     assert postland.owner_of("TL;DR: x\n\nOwner: bench-instruments-2206\n") == "bench-instruments-2206"
     assert postland.owner_of("no owner here") == "unknown"
 

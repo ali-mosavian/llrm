@@ -156,9 +156,11 @@ impl Fact {
             | Fact::AllowReciprocal
             | Fact::Invariant
             | Fact::Unroll(_)
+            | Fact::NoFarAllocation
             | Fact::MustProgress
             | Fact::NoRecurse
             | Fact::NoIpa
+            | Fact::Access(_)
             | Fact::Range(_) => true,
         }
     }
@@ -565,6 +567,21 @@ mod tests {
             // `willNotOverflow` has shown the math cannot wrap at that width.
             // It reads no flag off an existing instruction.
             "combine_narrow.rs",
+            // InstCombineAndOrXor.cpp's `foldCastedBitwiseLogic` reads the
+            // `nuw`/`nsw` of the two truncs it merges: `trunc nuw` of an and
+            // needs one operand `nuw`, of an or both, and `nsw` needs both.
+            // The flags go on the new trunc only, which the logic result
+            // proves; the old truncs keep theirs.
+            "combine_casted_logic.rs",
+            // The memcpy loop builds its two `gep inbounds i8, p, 1` from the
+            // copy's own pointers; it reads no flag off an existing
+            // instruction.
+            "memloops.rs",
+            // TypePromotion.cpp's `isPromotedResultSafe` takes `nuw` of an
+            // add, sub, mul or shl as proof it cannot wrap, and `PromoteTree`
+            // drops `nsw` off a trunc to i1 that is not also `nuw`. It sets no
+            // flag.
+            "typepromotion_pass.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

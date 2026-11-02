@@ -1,0 +1,10 @@
+# Atari 8-bit, XEX binary. CHECKED BY BUILD ONLY: ZP from cc65's atari config ($82), program at
+# $2000; the file is assembled, linked and its chunk headers are tested, nothing here runs an Atari.
+# zero_page = 26: cc65's own ZP segment for this target is $0082 size $007E (ours takes the first 26) (/usr/share/cc65/cfg/atari.cfg:13); the program must assume: OS vectors and the display list are not touched; no VBI handler of the program uses $82..$9B.
+[platform]
+name = "atari8"
+status = "built"
+load_address = 0x2000
+imag_base = 0x82
+zero_page = 26
+soft_stack = 0x8000

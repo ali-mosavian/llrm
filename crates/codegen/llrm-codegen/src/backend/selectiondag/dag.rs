@@ -31,6 +31,13 @@ impl SDNodeFlags {
     pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
     pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
     pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
+    /// DEVIATE PAIR1 (no pin counterpart: the pin's pointers are one word
+    /// wide): a `BUILD_PAIR` of a far pointer's offset and selector, and the
+    /// `or` its expansion makes. Exit: none; the pin has no far pointer.
+    pub const PAIR_FAR: SDNodeFlags = SDNodeFlags(8192);
+    /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
+    /// convention returns or passes in two registers (`dx:ax`).
+    pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
 
     pub fn union(
         self,
@@ -112,6 +119,9 @@ pub struct MemInfo {
     /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
     /// (`fs` 257, `gs` 256) the IR's pointer names.
     pub space: u32,
+    /// The ordering of an atomic access
+    /// (`MachineMemOperand::getSuccessOrdering`); none for a plain one.
+    pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -150,9 +160,48 @@ pub enum BooleanContents {
     Undefined,
 }
 
+/// What a target charges for the operations a divide by a constant is made of
+/// or replaced by: the divide's own price, and the multiply-high sequence's
+/// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
+/// alone).
+#[derive(Clone, Debug)]
+pub struct DivPrices {
+    /// The target's own operand size in bytes: a value of another width runs
+    /// under the prefix.
+    pub operand: i64,
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    /// Percent of the divide's price the multiply-high sequence must exceed it
+    /// by: below the spread of the sheet's own prices the pin's sequence
+    /// stays.
+    pub margin: i64,
+    /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
+    /// the selector emits for it (`Machine::multiply_by`).
+    pub product: Option<ProductPrice>,
+}
+
+/// A price by the constant `d`.
+#[derive(Clone)]
+pub struct ProductPrice(pub std::rc::Rc<dyn Fn(i64) -> i64>);
+
+impl std::fmt::Debug for ProductPrice {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("ProductPrice")
+    }
+}
+
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
@@ -161,15 +210,38 @@ pub struct DagConfig {
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
     pub dso_local_symbols: bool,
+    /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
+    /// index in its address at 64 bits, as an absolute `disp32`, where
+    /// position-independent code reaches it from `%rip` alone.
+    pub absolute_symbols: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// Prices that decide `isIntDivCheap` per divisor and width; see
+    /// [`DivPrices`].
+    pub div_prices: Option<DivPrices>,
+    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
+    /// `sdiv` by a power of two stays an `sdiv`.
+    pub sdiv_pow2_stays: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// `computeKnownBitsForTargetNode`: what the target knows of one of its
+    /// nodes, given the known bits of operand `n`; `None` for a node it
+    /// says nothing about.
+    pub known_bits_for_target_node: Option<TargetKnownBits>,
+    /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
+    /// other end.
+    pub big_endian: bool,
+    /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
+    pub fma_faster: bool,
 }
+
+/// See [`DagConfig::known_bits_for_target_node`].
+pub type TargetKnownBits =
+    fn(&SelectionDAG, SDValue, &dyn Fn(usize) -> super::known_bits::KnownBits) -> Option<super::known_bits::KnownBits>;
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
@@ -179,9 +251,15 @@ impl Default for DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
             dso_local_symbols: false,
+            absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_prices: None,
+            sdiv_pow2_stays: false,
             fp_extended: false,
+            known_bits_for_target_node: None,
+            big_endian: false,
+            fma_faster: false,
         }
     }
 }
@@ -280,8 +358,9 @@ pub struct SelectionDAG {
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
     /// The SysV x86-64 `va_list`'s other fields: the register save area's
-    /// frame index and `gp_offset`, the bytes of it the named arguments took.
-    pub var_args_save: Option<(i32, u32)>,
+    /// frame index, `gp_offset` (the bytes of it the named integer arguments
+    /// took) and `fp_offset` (48 plus 16 a named vector argument).
+    pub var_args_save: Option<(i32, u32, u32)>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -389,6 +468,17 @@ impl SelectionDAG {
         &self.config
     }
 
+    /// The jump table is position independent (`EK_LabelDifference32`, its
+    /// address a symbol operand folded into the jump's address): 64-bit code.
+    /// DEVIATE: the pin folds the table into the address at any width
+    /// ([`matchWrapper`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2022),
+    /// `jmpl *.LJTI0_0(,%eax,4)` at 32 bits). Reason: that changes the m16
+    /// and m32 output, which this change keeps as it was. Exit: the switch
+    /// lowering at m32 (x86-m32), 2026-11-20, with its own rows.
+    pub fn relative_jump_tables(&self) -> bool {
+        self.config.pointer == EVT::I64
+    }
+
     /// How many results of other nodes read `value`'s node (`use_size`).
     pub fn use_count(
         &self,
@@ -493,7 +583,10 @@ impl SelectionDAG {
         if node == self.root.node
             || node == self.entry.node
             || self.is_deleted(node)
-            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store)
+            || !matches!(
+                self.nodes[node as usize].opcode,
+                ISD::Load | ISD::Store | ISD::BrCond
+            )
         {
             return;
         }
@@ -929,7 +1022,7 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode {
-            order: self.cur_order,
+            order: if has_no_ir_order(opcode) { 0 } else { self.cur_order },
             opcode,
             values: values.to_vec(),
             ops: ops.to_vec(),
@@ -989,6 +1082,15 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(vt.is_floating_point(), "FP constant of {vt:?}");
         self.intern(ISD::ConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
+    }
+
+    /// `getTargetConstantFP`: a float constant a pattern takes as an immediate.
+    pub fn get_target_constant_fp(
+        &mut self,
+        bits: u128,
+        vt: EVT,
+    ) -> SDValue {
+        self.intern(ISD::TargetConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
     pub fn get_all_ones_constant(
@@ -1150,6 +1252,55 @@ impl SelectionDAG {
         store
     }
 
+    /// `getIndexedLoad`: `load` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the loaded value, the new base and the chain.
+    pub fn get_indexed_load(
+        &mut self,
+        load: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(load).data else { panic!("an indexed load of a load") };
+        let vt = self.value_type(load);
+        let chain = self.operand(load, 0);
+        let result = self.intern(
+            if post { ISD::LoadPost } else { ISD::LoadPre },
+            &[vt, self.value_type(base), EVT::OTHER],
+            &[chain, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
+    /// `getIndexedStore`: `store` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the new base and the chain.
+    pub fn get_indexed_store(
+        &mut self,
+        store: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(store).data else { panic!("an indexed store of a store") };
+        let (chain, value) = (self.operand(store, 0), self.operand(store, 1));
+        let result = self.intern(
+            if post { ISD::StorePost } else { ISD::StorePre },
+            &[self.value_type(base), EVT::OTHER],
+            &[chain, value, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
     /// `getAtomic` of `ATOMIC_SWAP`: the old value at `ptr` and a chain,
     /// `value` stored.
     pub fn get_atomic_swap(
@@ -1169,6 +1320,103 @@ impl SelectionDAG {
         );
         self.volatile_accesses.insert(swap.node);
         swap
+    }
+
+    /// `getAtomic` of an `ATOMIC_LOAD_*` read-modify-write: the old value at
+    /// `ptr` and a chain, `value` combined into the memory by `op`.
+    pub fn get_atomic_rmw(
+        &mut self,
+        op: ISD,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        debug_assert!(matches!(
+            op,
+            ISD::AtomicLoadAdd
+                | ISD::AtomicLoadSub
+                | ISD::AtomicLoadAnd
+                | ISD::AtomicLoadClr
+                | ISD::AtomicLoadOr
+                | ISD::AtomicLoadXor
+        ));
+        let vt = self.value_type(value);
+        let node =
+            self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP`
+    /// when `flag` is none: the old value at `ptr`, the success flag of
+    /// type `flag` if asked for, and a chain.
+    pub fn get_atomic_cmp_swap(
+        &mut self,
+        flag: Option<EVT>,
+        chain: SDValue,
+        ptr: SDValue,
+        expected: SDValue,
+        new: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(expected);
+        let (op, types) = match flag {
+            Some(flag) => (ISD::AtomicCmpSwapWithSuccess, vec![vt, flag, EVT::OTHER]),
+            None => (ISD::AtomicCmpSwap, vec![vt, EVT::OTHER]),
+        };
+        let node = self.intern(op, &types, &[chain, ptr, expected, new], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `ATOMIC_FENCE`: only a chain. The ordering (LLVM's numbering) and the
+    /// scope are target constants, as `SelectionDAGBuilder::visitFence`
+    /// builds them.
+    pub fn get_atomic_fence(
+        &mut self,
+        chain: SDValue,
+        ordering: u8,
+        single_thread: bool,
+    ) -> SDValue {
+        let ordering = self.get_constant_with(u128::from(ordering), EVT::I64, true, false);
+        let scope = self.get_constant_with(u128::from(!single_thread), EVT::I64, true, false);
+        self.intern(ISD::AtomicFence, &[EVT::OTHER], &[chain, ordering, scope], SDNodeFlags::default(), NodeData::None)
+    }
+
+    /// `getAtomic` of `ATOMIC_LOAD`: the value at `ptr` and a chain.
+    pub fn get_atomic_load(
+        &mut self,
+        vt: EVT,
+        chain: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node =
+            self.intern(ISD::AtomicLoad, &[vt, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_STORE`: only a chain. The operands are `(chain,
+    /// value, ptr)`, as `SelectionDAGBuilder::visitAtomicStore` builds
+    /// them.
+    pub fn get_atomic_store(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(
+            ISD::AtomicStore,
+            &[EVT::OTHER],
+            &[chain, value, ptr],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        self.volatile_accesses.insert(node.node);
+        node
     }
 
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
@@ -1208,7 +1456,7 @@ impl SelectionDAG {
                 &[low, step],
                 SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
             );
-            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
+            return self.get_node_flags(ISD::BuildPair, vt, &[moved, high], SDNodeFlags::PAIR_FAR);
         }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
@@ -1226,6 +1474,21 @@ impl SelectionDAG {
             self.get_node(ISD::Truncate, vt, &[value])
         } else {
             self.get_node(ISD::ZeroExtend, vt, &[value])
+        }
+    }
+
+    pub fn get_any_ext_or_trunc(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::AnyExtend, vt, &[value])
         }
     }
 
@@ -1383,6 +1646,15 @@ impl SelectionDAG {
         index: u32,
     ) -> SDValue {
         self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
+    }
+
+    /// `getTargetJumpTable`.
+    pub fn get_target_jump_table(
+        &mut self,
+        vt: EVT,
+        index: u32,
+    ) -> SDValue {
+        self.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
     }
 
     pub fn get_register_mask(&mut self) -> SDValue {
@@ -1603,4 +1875,36 @@ impl Iterator for LiveUsers<'_> {
             }
         }
     }
+}
+
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being
+/// visited (`ConstantSDNode`, `FrameIndexSDNode`, `RegisterSDNode`,
+/// `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an
+/// empty one). The scheduler reads 0 as "no order" and ranks such a node
+/// differently from an ordered one.
+fn has_no_ir_order(opcode: ISD) -> bool {
+    use ISD::*;
+    matches!(
+        opcode,
+        Constant
+            | TargetConstant
+            | ConstantFP
+            | TargetConstantFP
+            | Register
+            | RegisterMask
+            | JumpTable
+            | TargetJumpTable
+            | SrcValue
+            | ExternalSymbol
+            | TargetExternalSymbolNode
+            | FrameIndex
+            | TargetFrameIndex
+            | ConstantPool
+            | TargetConstantPool
+            | BasicBlock
+            | ValueType
+            | CondCodeNode
+            | Undef
+            | Poison
+    )
 }

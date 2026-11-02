@@ -1,0 +1,4 @@
+#title,Table 8-13. Move Peripheral Instruction Execution Times,page,8-10,notes,
+Instruction,Size,Register → Memory,Memory → Register
+MOVEP,Word,16(2/2),16(4/0)
+,Long,24(2/4),24(6/0)

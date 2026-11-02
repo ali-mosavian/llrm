@@ -19,20 +19,23 @@ impl Machine for X8664 {
     const BITS: u8 = 64;
     const NUMBER: u16 = 0x8664;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, width, from, baked) = match (reloc.kind, reloc.pc_rel) {
-            (FixupKind::DATA_8, false) => (ADDR64, 8, 0, 0),
+        let (kind, baked) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_8, false) => (ADDR64, 0),
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/MCTargetDesc/X86WinCOFFObjectWriter.cpp#L83
-            (FixupKind::DATA_4, false) if reloc.spec == Fix::S_IMGREL => (ADDR32NB, 4, 0, 0),
-            (FixupKind::DATA_4, false) => (ADDR32, 4, 0, 0),
+            (FixupKind::DATA_4, false) if reloc.spec == Fix::S_IMGREL => (ADDR32NB, 0),
+            (FixupKind::DATA_4, false) => (ADDR32, 0),
             // LLVM writes REL32 only, never REL32_n: the distance past the
             // field's end goes into the field (`FixedValue += 4` in
             // WinCOFFObjectWriter), so equal totals are one object.
-            (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
-            (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
-            (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
-            (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
+            (FixupKind::DATA_4, true) => (REL32, 4),
+            (fixup::BRANCH_4, true) => (REL32, 4),
+            (FixupKind::SECREL_2, _) => (SECTION, 0),
+            (FixupKind::SECREL_4, _) => (SECREL, 0),
             (fixup::SEGMENT_BASE, _) => {
                 return Err(Unsupported("a segment selector has no COFF relocation".into()));
             }
@@ -41,7 +44,7 @@ impl Machine for X8664 {
             }
             other => return Err(Unsupported(format!("COFF x86-64 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from, baked })
+        Ok(Relocation { kind, baked })
     }
 }
 
@@ -54,7 +57,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 mod tests {
     use std::process::Command;
 
-    use llrm_object::ObjectTarget;
+    use llrm_debug::DebugObjectTarget;
     use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -79,7 +82,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 
@@ -199,16 +201,15 @@ mod tests {
     /// and RBP (334) is its frame: llvm-readobj reads them back.
     #[test]
     fn debug_information_names_the_amd64_machine_and_eight_byte_pointers() {
-        use llrm_object::debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
+        use llrm_debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
         let Ok(dump) = which("llvm-readobj") else { return eprintln!("skipped: no llvm-readobj") };
+        let target = llrm_debug::DebugTarget::of(64).with_registers(
+            "rbp",
+            "",
+            vec![llrm_debug::Register { name: "rbp".into(), bits: 64, dwarf: Some(6), codeview: Some(334) }],
+        );
         let info = Info {
-            frame_register: "rbp".into(),
-            registers: vec![llrm_object::debug::Register {
-                name: "rbp".into(),
-                bits: 64,
-                dwarf: Some(6),
-                codeview: Some(334),
-            }],
+            target: Some(target),
             code: vec![Range { section: 0, offset: 0, length: 4 }],
             types: vec![
                 Type::Scalar(Scalar::Int { bytes: 4, signed: true }),
@@ -231,14 +232,16 @@ mod tests {
                 }],
                 blocks: Vec::new(),
                 frame: Vec::new(),
+                all_calls: false,
+                calls: Vec::new(),
             }],
             ..Info::default()
         };
-        let mut made = object(vec![text(vec![0x90; 4], vec![])], vec![defined("f", 0)]);
-        made.debug = Some(info);
+        let made = object(vec![text(vec![0x90; 4], vec![])], vec![defined("f", 0)]);
+        let debug = Some(info);
         let scratch = tempfile::tempdir().unwrap();
         let path = scratch.path().join("f.obj");
-        std::fs::write(&path, crate::mc::X86Objects.write_object("coff", &made).unwrap()).unwrap();
+        std::fs::write(&path, crate::mc::X86Objects.write_described("coff", &made, debug.as_ref()).unwrap()).unwrap();
         let said = Command::new(dump).arg("--codeview").arg(&path).output().unwrap();
         let text = String::from_utf8_lossy(&said.stdout);
         for wanted in [

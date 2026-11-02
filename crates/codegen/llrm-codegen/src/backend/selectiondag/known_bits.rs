@@ -51,11 +51,55 @@ impl KnownBits {
         (self.zero | self.one) == mask(self.width)
     }
 
-    fn intersect(
+    pub fn intersect(
         self,
         other: KnownBits,
     ) -> KnownBits {
         KnownBits { zero: self.zero & other.zero, one: self.one & other.one, width: self.width }
+    }
+
+    /// `KnownBits::getMaxValue`.
+    fn max_value(&self) -> u128 {
+        !self.zero & mask(self.width)
+    }
+
+    /// `KnownBits::makeGE`: the bits `self` has when it is known to be at least
+    /// `value`.
+    fn make_ge(
+        &self,
+        value: u128,
+    ) -> KnownBits {
+        let all = mask(self.width);
+        // The leading bit positions where the value is known to be less than or
+        // equal to `value`.
+        let leading = (self.zero | value) & all;
+        let n = (leading << (128 - self.width)).leading_ones().min(self.width);
+        let low = self.width - n;
+        let masked = value & !mask(low) & all;
+        KnownBits { zero: self.zero, one: self.one | masked, width: self.width }
+    }
+
+    /// `KnownBits::umax`.
+    pub fn umax(
+        self,
+        other: KnownBits,
+    ) -> KnownBits {
+        if self.one >= other.max_value() {
+            return self;
+        }
+        if other.one >= self.max_value() {
+            return other;
+        }
+        self.make_ge(other.one).intersect(other.make_ge(self.one))
+    }
+
+    /// `KnownBits::umin`: `umax` of the flipped ranges.
+    pub fn umin(
+        self,
+        other: KnownBits,
+    ) -> KnownBits {
+        let flip = |k: KnownBits| KnownBits { zero: k.one, one: k.zero, width: k.width };
+        flip(flip(self).umax(flip(other)))
     }
 }
 
@@ -112,6 +156,8 @@ fn walk(
             }
         }
         ISD::Select => operand(1).intersect(operand(2)),
+        ISD::UMax => operand(0).umax(operand(1)),
+        ISD::UMin => operand(0).umin(operand(1)),
         // `AssertZext`: the bits at and above the asserted type are zero.
         ISD::AssertZext => {
             let inner = operand(0);
@@ -190,7 +236,13 @@ fn walk(
             };
             KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
         }
-        _ => KnownBits::unknown(width),
+        _ => dag.config().known_bits_for_target_node.and_then(|known| known(dag, value, &operand)).map_or_else(
+            || KnownBits::unknown(width),
+            |mut found| {
+                found.width = width;
+                found
+            },
+        ),
     }
 }
 
@@ -220,6 +272,21 @@ pub fn num_sign_bits(
     {
         let extra = u32::from(dag.opcode(value) == ISD::AssertSext);
         return width - asserted.size_in_bits() + extra;
+    }
+    // `ComputeNumSignBits` of `SETCC`: all bits where it returns 0 or -1.
+    if dag.opcode(value) == ISD::SetCC
+        && value.res == 0
+        && dag.config().boolean_contents == BooleanContents::ZeroOrNegativeOne
+    {
+        return width;
+    }
+    // `ComputeNumSignBits` of `SRA` by a constant: the operand's sign bits and
+    // the amount, up to the width.
+    if dag.opcode(value) == ISD::Sra
+        && let Some(amount) = dag.constant(dag.operand(value, 1))
+        && (0..u128::from(width)).contains(&amount)
+    {
+        return (num_sign_bits(dag, dag.operand(value, 0)) + amount as u32).min(width);
     }
     if dag.opcode(value) == ISD::SignExtendInReg
         && let super::dag::NodeData::ValueType(inner) = dag.node(dag.operand(value, 1)).data

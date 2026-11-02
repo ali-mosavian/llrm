@@ -49,6 +49,8 @@ pub struct X86 {
     /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
     /// of the profiles has.
     pub macro_fusion: bool,
+    /// `FeatureCMOV` (X86.td): the i386, i486, pentium, k5 and k6 have none.
+    pub cmov: bool,
     /// Long mode: the integer registers are 64 bits wide (`is64Bit`).
     pub quad: bool,
     /// What real mode's addressing and register file make of the hooks LSR
@@ -86,6 +88,12 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
+    /// DEVIATE REC-1: the ceilings of the priced copies of a function in
+    /// itself (`Tti::priced_self_inlining`); none: `recursive_inlining`.
+    pub priced_self_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -103,10 +111,25 @@ impl X86 {
         if self.quad { 64 } else { 32 }
     }
 
+    /// The profile of the baseline cpu of `triple`'s architecture: the 32-bit
+    /// ones by their `-march` (`i686` is `pentiumpro`), `x86_64` long mode.
+    pub fn of_triple(triple: &str) -> Option<X86> {
+        let cpu = match triple.split('-').next()? {
+            "x86_64" => "x86-64",
+            "i386" => "i386",
+            "i486" => "i486",
+            "i586" => "pentium",
+            "i686" => "pentiumpro",
+            _ => return None,
+        };
+        X86::of_cpu(cpu)
+    }
+
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                cmov: !matches!(cpu, "i386" | "i486" | "pentium" | "k5" | "k6"),
                 sse1: false,
                 sse2: false,
                 macro_fusion: false,
@@ -115,6 +138,7 @@ impl X86 {
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             "core2" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
@@ -125,6 +149,7 @@ impl X86 {
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
             "x86-64" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
@@ -513,8 +538,40 @@ impl Tti for X86 {
         self.tuning.inline_threshold
     }
 
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_milliclocks_per_byte
+    }
+
+    fn multiply_by_clocks(&self) -> bool {
+        self.tuning.multiply_by_clocks
+    }
+
+    fn has_cmov(&self) -> bool {
+        self.cmov
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.tuning.x87_stack_slots.filter(|_| !self.sse2)
+    }
+
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_partial_threshold
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.tuning.unswitch_threshold
+    }
+
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.recursive_inlining
+    }
+
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.priced_self_inlining
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
@@ -529,6 +586,14 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
     }
 
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
+    }
+
+    fn speed_inline_by_code_size(&self) -> bool {
+        self.tuning.inline_size_guard_at_speed
+    }
+
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
     /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
     /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
@@ -539,6 +604,18 @@ impl Tti for X86 {
 
     fn float_code_size_percent(&self) -> i64 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits))
     }
 
     fn is_type_legal(
@@ -922,6 +999,10 @@ impl Tti for X86 {
     }
 
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn mirrors_conditional_counters(&self) -> bool {
         self.real_mode.is_some()
     }
 

@@ -5,7 +5,7 @@ inputs:
     description: pin or m16.
     required: true
   artifact:
-    description: '"true": also upload the tree as an artifact (toolchain.yml), for a pull request into main, which cannot read the caches saved on feat/parity (toolchain/clangfetch.sh).'
+    description: '"true": also upload the tree as an artifact (toolchain.yml), for a pull request into main, which cannot read the caches saved on release/next (toolchain/clangfetch.sh).'
     default: "false"
 runs:
   using: composite

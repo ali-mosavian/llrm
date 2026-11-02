@@ -28,9 +28,15 @@
 //!   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
 //!   registers of each block of the loop).
 //!
-//! DEVIATE ML2: no preheader is made where a loop has none; no load folded
-//! into its reader is taken apart (`ExtractHoistableLoad`); no CSE of the
-//! hoisted value (`MayCSE`).
+//! Not ported, priced at no yield (release/next 34d21c9f34, every C, nib and
+//! BASIC program at -Os and -O2, counters in a throwaway build):
+//! `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
+//! and level without a preheader hold 0 hoistable instructions;
+//! `ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
+//! flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
+//! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
+//! outside a block that runs every trip, where the `constant` path above
+//! already hoists what the allocator can make again.
 //!
 //! # Example
 //! A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
@@ -52,13 +58,12 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::analysis::loops as loopy;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::licm_core as licm;
 use crate::backend::liveness;
 use crate::model::ir::{Loc, Mem, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::{HashMap, HashSet};
 
 pub struct MachineLicm {
     pub classes: Rc<RegisterClasses>,
@@ -173,17 +178,164 @@ fn candidate(
         && !crate::backend::machinesink::as_cheap_as_a_move(one)
 }
 
+/// An x86 instruction as the shared pass reads it.
+#[derive(Clone)]
+struct Wrapped(Arc<Insn>);
+
+impl licm::Inst for Wrapped {
+    fn defines(&self) -> &[u32] {
+        &self.0.defines
+    }
+
+    fn uses(&self) -> &[u32] {
+        &self.0.uses
+    }
+
+    fn is_copy(&self) -> bool {
+        self.0
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::Move
+                    && matches!(
+                        (what.dests.as_slice(), what.sources.as_slice()),
+                        ([Loc::Held(_)], [Loc::Held(_)])
+                    ),
+            )
+    }
+
+    fn is_move(&self) -> bool {
+        self.0.what.as_ref().is_some_and(|what| what.op == Operation::Move)
+    }
+
+    fn is_meta(&self) -> bool {
+        self.0.is_meta()
+    }
+
+    fn is_jump(&self) -> bool {
+        self.0.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
+    }
+}
+
+/// The x86 half of the pass: which instructions move (`IsLICMCandidate`,
+/// `IsProfitableToHoist`, the x87 constants, the flags).
+struct X86<'a> {
+    body: &'a LirBody,
+    classes: &'a RegisterClasses,
+    regs: llrm_lir::registers::Regs,
+    floating: std::collections::BTreeSet<u32>,
+    control_word_written: bool,
+    /// The loop being walked.
+    calls: bool,
+    floats_named: usize,
+    named: usize,
+    loads: bool,
+}
+
+impl licm::Policy<Wrapped> for X86<'_> {
+    fn begin(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+    ) {
+        self.named = facts.named.iter().filter(|value| !self.floating.contains(value)).count();
+        self.floats_named = facts.named.iter().filter(|value| self.floating.contains(value)).count();
+        // An x87 value cannot be live across a call (`floatassign` does not
+        // spill across one), and the stack holds `float_stack` values.
+        let inside = || facts.blocks.iter().filter(|block| facts.inside.contains(&block.at));
+        self.calls = inside().any(|block| {
+            block.insns.iter().any(|one| {
+                one.0.call.is_some()
+                    || one.0.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
+            })
+        });
+        // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
+        // the loop, its inner loops among it.
+        self.loads = !inside().any(|block| block.insns.iter().any(|one| keeps_loads(&one.0)));
+    }
+
+    fn movable(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+        at: i64,
+        insns: &[Wrapped],
+        index: usize,
+    ) -> bool {
+        let one = &insns[index].0;
+        let value = one.defines.first().copied();
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        // An x87 constant is hoisted where the control word is constant and the
+        // stack has room (`constant_load`).
+        if constant_load(one) {
+            return !self.control_word_written && !self.calls && self.floats_named < self.body.float_stack;
+        }
+        let loads_here = self.loads && (facts.every_trip)(at);
+        let limit = self.classes.available.len();
+        let mut movable = candidate(one, self.classes, loads_here)
+            && value.is_some_and(|value| !self.floating.contains(&value))
+            && self.named < limit;
+        // `IsProfitableToHoist`: "Trivially rematerializable instructions
+        // should always be hoisted providing the register allocator can just
+        // pull them down again", unless a copy in the loop takes the value.
+        let constant = value.is_some_and(|value| {
+            one.uses.is_empty()
+                && facts.defs.get(&value) == Some(&1)
+                && !facts.copied.contains(&value)
+                && !self.floating.contains(&value)
+                && one.defines.len() == 1
+                && one.call.is_none()
+                && one.group.is_none()
+                && one.clobbers.is_empty()
+                && one.requires.is_empty()
+                && one.delivers.is_empty()
+                && crate::greedy::remat::is_trivially_re_materializable(one, false)
+        });
+        if constant && !movable {
+            return true;
+        }
+        if movable {
+            let (regs, bits) = (self.regs, self.body.bits);
+            let effect = liveness::effect(regs, bits, one);
+            let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
+            let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")
+                || effect.as_ref().is_some_and(|effect| flags(&effect.all_reads()));
+            let sets = effect.as_ref().is_none_or(|effect| flags(&effect.writes));
+            if reads {
+                movable = false;
+            } else if sets {
+                // Flags set here must not be read below, in the block.
+                for later in &insns[index + 1..] {
+                    match liveness::effect(regs, bits, &later.0) {
+                        Some(next) if flags(&next.all_reads()) => {
+                            movable = false;
+                            break;
+                        }
+                        Some(next) if flags(&next.writes) => break,
+                        Some(_) => {}
+                        None if later.0.what.as_ref().is_some_and(|what| {
+                            what.op == Operation::Move
+                                || what.op == Operation::Jump
+                                || matches!(what.name.as_deref(), Some("jcxz" | "jecxz" | "loop"))
+                        }) => {}
+                        None => {
+                            movable = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        movable
+    }
+}
+
 /// `body` with the loop-invariant computations in the preheaders.
 pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
-    let found = loopy::loops(&body.blocks, Some(body.entry));
-    if found.is_empty() {
-        return body.clone();
-    }
-    let floating = crate::backend::regclass::floating(body);
     let control_word_written = body
         .insns()
         .iter()
@@ -194,266 +346,47 @@ pub fn hoisted(
                     |what| what.op == Operation::FloatStore && matches!(what.name.as_deref(), Some("fisttp" | "fistt")),
                 ),
         );
-    let dominance = loopy::dominance(&body.blocks, Some(body.entry));
-    let mut blocks: Vec<crate::model::lir::Block> = body.blocks.clone();
-    let place: HashMap<i64, usize> = blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
-    // Where each value is defined: the block, by position.
-    let mut defined: HashMap<u32, i64> = HashMap::default();
-    for block in &blocks {
-        for phi in block.phis.iter() {
-            defined.insert(phi.result, block.at);
-        }
-        for one in block.insns.iter() {
-            for &value in &one.defines {
-                defined.insert(value, block.at);
-            }
-        }
-    }
-    // The values one instruction defines: a constant made twice is not hoisted.
-    let mut defs: HashMap<u32, usize> = HashMap::default();
-    for block in &blocks {
-        for one in block.insns.iter() {
-            for &value in &one.defines {
-                *defs.entry(value).or_default() += 1;
-            }
-        }
-    }
-    let mut order: Vec<&loopy::Loop> = found.iter().collect();
-    order.sort_by_key(|one| one.body.to_set().len());
-    let mut changed = false;
-    for lp in order {
-        let inside = lp.body.to_set();
-        let outside_entries: Vec<i64> = blocks
-            .iter()
-            .filter(|block| !inside.contains(&block.at) && block.succ.contains(&lp.header))
-            .map(|block| block.at)
-            .collect();
-        let [pre] = outside_entries[..] else { continue };
-        let pre_at = place[&pre];
-        if blocks[pre_at].succ.len() != 1 {
-            continue;
-        }
-        // The values the loop reads from outside, and its phis: the registers
-        // it holds across its trips, which the hoisted one joins.
-        let named: HashSet<u32> = inside
-            .iter()
-            .flat_map(|at| {
-                let block = &blocks[place[at]];
-                block
-                    .insns
-                    .iter()
-                    .flat_map(|one| one.uses.iter().copied())
-                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
-                    .chain(block.phis.iter().map(|phi| phi.result))
-                    .collect::<Vec<_>>()
-            })
-            .filter(|value| !floating.contains(value))
-            .collect();
-        // `HasLoopPHIUse`: the values a copy in the loop reads; a cheap
-        // instruction whose value a copy takes would make one more copy.
-        let copied: HashSet<u32> = inside
-            .iter()
-            .flat_map(|at| blocks[place[at]].insns.iter())
-            .filter(|one| {
-                one.what
-                    .as_ref()
-                    .is_some_and(
-                        |what| what.op == Operation::Move
-                            && matches!(
-                                (what.dests.as_slice(), what.sources.as_slice()),
-                                ([Loc::Held(_)], [Loc::Held(_)])
-                            ),
-                    )
-            })
-            .flat_map(|one| one.uses.iter().copied())
-            .collect();
-        let copied = {
-            // `HasLoopPHIUse`: a def a phi of the loop (or of an exit block,
-            // for any of its predecessors) takes, directly or through copies
-            // in the loop: the join of a state machine takes a constant from
-            // each case, and 262 of them hoisted were live across all the
-            // loop.
-            let mut taken = copied;
-            let exits = inside
+    let blocks: Vec<licm::Block<Wrapped>> = body
+        .blocks
+        .iter()
+        .map(|block| licm::Block {
+            at: block.at,
+            succ: block.succ.to_vec(),
+            phis: block
+                .phis
                 .iter()
-                .flat_map(|at| blocks[place[at]].succ.iter().copied())
-                .filter(|to| !inside.contains(to) && place.contains_key(to));
-            for at in inside.iter().copied().chain(exits) {
-                for phi in blocks[place[&at]].phis.iter() {
-                    taken.extend(phi.incoming.iter().map(|(_, value)| *value));
-                }
-            }
-            let copies: Vec<(u32, Vec<u32>)> = inside
-                .iter()
-                .flat_map(|at| blocks[place[at]].insns.iter())
-                .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Move))
-                .filter_map(|one| Some((*one.defines.first()?, one.uses.to_vec())))
-                .collect();
-            while copies
-                .iter()
-                .any(|(result, uses)| taken.contains(result) && uses.iter().any(|value| taken.insert(*value)))
-            {
-            }
-            taken
-        };
-        let limit = classes.available.len();
-        // An x87 value cannot be live across a call (`floatassign` does not
-        // spill across one), and the stack holds `float_stack` values.
-        let calls = inside
-            .iter()
-            .any(
-                |at| blocks[place[at]].insns.iter().any(|one| {
-                    one.call.is_some()
-                        || one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
-                }),
-            );
-        let floats_named = inside
-            .iter()
-            .flat_map(|at| {
-                let block = &blocks[place[at]];
-                block
-                    .insns
-                    .iter()
-                    .flat_map(|one| one.uses.iter().copied())
-                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
-                    .chain(block.phis.iter().map(|phi| phi.result))
-                    .collect::<Vec<_>>()
-            })
-            .filter(|value| floating.contains(value))
-            .collect::<HashSet<u32>>()
-            .len();
-        // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
-        // the loop, its inner loops among it.
-        let loads = !inside.iter().any(|at| blocks[place[at]].insns.iter().any(|one| keeps_loads(one)));
-        // `IsGuaranteedToExecute`: the header, or a block over every exiting
-        // block.
-        let exiting: Vec<i64> =
-            inside.iter().copied().filter(|at| blocks[place[at]].succ.iter().any(|to| !inside.contains(to))).collect();
-        let every_trip = |at: i64| at == lp.header || exiting.iter().all(|&out| dominance.dominates(at, out));
-        let mut moved: Vec<Arc<Insn>> = Vec::new();
-        let mut hoisted_values: HashSet<u32> = HashSet::default();
-        loop {
-            let mut any = false;
-            for at in blocks.iter().map(|block| block.at).filter(|at| inside.contains(at)).collect::<Vec<_>>() {
-                let number = place[&at];
-                let loads_here = loads && every_trip(at);
-                let mut keep: Vec<Arc<Insn>> = Vec::new();
-                let insns: Vec<Arc<Insn>> = blocks[number].insns.iter().cloned().collect();
-                for (index, one) in insns.iter().enumerate() {
-                    let value = one.defines.first().copied();
-                    let invariant = one.uses.iter().all(|used| {
-                        hoisted_values.contains(used) || defined.get(used).is_none_or(|home| !inside.contains(home))
-                    });
-                    let flags = |lanes: &crate::backend::lanes::Lanes| {
-                        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-                    };
-                    // An x87 constant is hoisted where the control word is
-                    // constant and the stack has room (`constant_load`).
-                    if constant_load(one) {
-                        if !control_word_written && !calls && floats_named < body.float_stack {
-                            hoisted_values.extend(value);
-                            moved.push(Arc::clone(one));
-                            any = true;
-                        } else {
-                            keep.push(Arc::clone(one));
-                        }
-                        continue;
-                    }
-                    let mut movable = candidate(one, classes, loads_here)
-                        && invariant
-                        && value.is_some_and(|value| !floating.contains(&value))
-                        && named.len() < limit;
-                    // `IsProfitableToHoist`: "Trivially rematerializable
-                    // instructions should always be hoisted providing the
-                    // register allocator can just pull them down again", unless
-                    // a copy in the loop takes the value.
-                    let constant = value.is_some_and(|value| {
-                        one.uses.is_empty()
-                            && defs.get(&value) == Some(&1)
-                            && !copied.contains(&value)
-                            && !floating.contains(&value)
-                            && one.defines.len() == 1
-                            && one.call.is_none()
-                            && one.group.is_none()
-                            && one.clobbers.is_empty()
-                            && one.requires.is_empty()
-                            && one.delivers.is_empty()
-                            && crate::greedy::remat::is_trivially_re_materializable(one, false)
-                    });
-                    if constant && !movable {
-                        hoisted_values.extend(value);
-                        moved.push(Arc::clone(one));
-                        any = true;
-                        continue;
-                    }
-                    if movable {
-                        let effect = liveness::effect(regs, body.bits, one);
-                        let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
-                        let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")
-                            || effect.as_ref().is_some_and(|effect| flags(&effect.all_reads()));
-                        let sets = effect.as_ref().is_none_or(|effect| flags(&effect.writes));
-                        if reads {
-                            movable = false;
-                        } else if sets {
-                            // Flags set here must not be read below, in the
-                            // block.
-                            for later in &insns[index + 1..] {
-                                match liveness::effect(regs, body.bits, later) {
-                                    Some(next) if flags(&next.all_reads()) => {
-                                        movable = false;
-                                        break;
-                                    }
-                                    Some(next) if flags(&next.writes) => break,
-                                    Some(_) => {}
-                                    None if later.what.as_ref().is_some_and(|what| {
-                                        what.op == Operation::Move
-                                            || what.op == Operation::Jump
-                                            || matches!(what.name.as_deref(), Some("jcxz" | "jecxz" | "loop"))
-                                    }) => {}
-                                    None => {
-                                        movable = false;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if movable {
-                        hoisted_values.extend(value);
-                        moved.push(Arc::clone(one));
-                        any = true;
-                    } else {
-                        keep.push(Arc::clone(one));
-                    }
-                }
-                if keep.len() != blocks[number].insns.len() {
-                    blocks[number] = blocks[number].with_insns(keep);
-                }
-            }
-            if !any {
-                break;
-            }
-        }
-        if moved.is_empty() {
-            continue;
-        }
-        changed = true;
-        for one in &moved {
-            for &value in &one.defines {
-                defined.insert(value, pre);
-            }
-        }
-        let mut insns: Vec<Arc<Insn>> = blocks[pre_at].insns.iter().cloned().collect();
-        let end = insns.iter().rposition(|one| !one.is_meta()).filter(|&last| {
-            insns[last].what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
-        });
-        let at = end.unwrap_or(insns.len());
-        for (offset, one) in moved.into_iter().enumerate() {
-            insns.insert(at + offset, one);
-        }
-        blocks[pre_at] = blocks[pre_at].with_insns(insns);
-    }
-    if changed { body.with_blocks(blocks) } else { body.clone() }
+                .map(|phi| licm::Phi {
+                    result: phi.result,
+                    incoming: phi.incoming.iter().map(|(_, value)| *value).collect(),
+                })
+                .collect(),
+            insns: block.insns.iter().cloned().map(Wrapped).collect(),
+        })
+        .collect();
+    let mut policy = X86 {
+        body,
+        classes,
+        regs,
+        floating: crate::backend::regclass::floating(body),
+        control_word_written,
+        calls: false,
+        floats_named: 0,
+        named: 0,
+        loads: false,
+    };
+    let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
+    let blocks: Vec<crate::model::lir::Block> = body
+        .blocks
+        .iter()
+        .zip(moved)
+        .map(|(block, after)| {
+            let insns: Vec<Arc<Insn>> = after.insns.into_iter().map(|one| one.0).collect();
+            let same = insns.len() == block.insns.len()
+                && insns.iter().zip(block.insns.iter()).all(|(a, b)| Arc::ptr_eq(a, b));
+            if same { block.clone() } else { block.with_insns(insns) }
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]
@@ -672,5 +605,39 @@ mod tests {
         };
         assert_eq!(run(true), (1, 2), "the phi's copy stays");
         assert_eq!(run(false), (2, 1), "no phi takes it: hoisted");
+    }
+
+    /// m64 nbody_single at -O1/-O2: `mov r64, offset sym` made on every trip of
+    /// a loop was kept there, three per trip, against the pin's one before the
+    /// loop (+18% executed): `floating` took every value wider than 4 bytes
+    /// for a float, an 8-byte address among them.
+    #[test]
+    fn test_a_symbol_address_of_eight_bytes_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let address = Loc::Imm(llrm_lir::Imm {
+            value: 0,
+            width: 8,
+            address: Some(llrm_lir::Addr::new(llrm_lir::Space::Segment, 0)),
+        });
+        let constant = insn(10, Operation::Move, "mov", vec![wide(10)], vec![address], vec![10], vec![]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![constant, branch(11)]).into(),
+                block(2, vec![], vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
     }
 }

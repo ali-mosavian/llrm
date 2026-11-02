@@ -12,11 +12,36 @@ impl Machine for MadeUp {
     const NUMBER: u16 = 183;
     const ADDEND: bool = true;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &MadeUpBackend
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         match reloc.kind {
-            MADE_UP => Ok(Relocation { kind: 0x1234, width: 4, from: 0 }),
+            MADE_UP => Ok(Relocation { kind: 0x1234, width: 4 }),
             other => Err(Unsupported(format!("{other:?}"))),
         }
+    }
+}
+
+/// A target with one field kind of its own, which only its backend can
+/// describe.
+struct MadeUpBackend;
+
+impl llrm_object::assembler::AsmBackend for MadeUpBackend {
+    fn kind_info(
+        &self,
+        kind: llrm_object::FixupKind,
+    ) -> llrm_object::FixupKindInfo {
+        if kind == MADE_UP { llrm_object::FixupKindInfo { name: "made_up", offset: 0, bits: 32 } } else { kind.info() }
+    }
+
+    fn write_nop_data(
+        &self,
+        _: &mut Vec<u8>,
+        _: usize,
+    ) -> bool {
+        false
     }
 }
 
@@ -43,7 +68,6 @@ fn object(fix: Fix) -> Object {
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     }
 }
 

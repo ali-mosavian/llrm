@@ -1,0 +1,11 @@
+#title,Table 8-9. Conditional Instruction Execution Times,page,8-7,notes,
+Instruction,Displacement,Branch Taken,Branch Not Taken
+Bcc,Byte,10(2/0),8(1/0)
+,Word,10(2/0),12(2/0)
+BRA,Byte,10(2/0),—
+,Word,10(2/0),—
+BSR,Byte,18(2/2),—
+,Word,18(2/2),—
+DBcc,cc true,—,12(2/0)
+,"cc false, Count Not Expired",10(2/0),—
+,"cc false, Counter Expired",—,14(3/0)

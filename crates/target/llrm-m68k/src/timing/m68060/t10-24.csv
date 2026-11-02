@@ -1,0 +1,42 @@
+#title,Miscellaneous Instruction Execution Times,page,10-23 to 10-24,notes,"¹ For these entries, add the effective address calculation time. ² For the CPUSH instruction, the operand write figure refers to line-sized transfers."
+Instruction,Size,Register,Memory,Reg -> Dest,Source -> Reg
+ANDI to CCR,Byte,1(0/0),—,—,—
+CHK,Word,2(0/0),2(1/0)¹,—,—
+"""",Long,2(0/0),2(1/0)¹,—,—
+CINVA,—,—,<=17(0/0),—,—
+CINVL,—,—,<=18(0/0),—,—
+CINVP,—,—,<=274(0/0),—,—
+CPUSHA,—,—,<=5394(0/512)²,—,—
+CPUSHL,—,—,<=26(0/1)²,—,—
+CPUSHP,—,—,<=2838(0/256)²,—,—
+EORI to CCR,Byte,1(0/0),—,—,—
+EXG,Long,1(0/0),—,—,—
+EXT,Word,1(0/0),—,—,—
+"""",Long,1(0/0),—,—,—
+EXTB,Long,1(0/0),—,—,—
+LINK,Word,2(0/1),—,—,—
+"""",Long,2(0/1),—,—,—
+LPSTOP,Word,15(0/1),—,—,—
+MOVE from CCR,Word,1(0/0),1(0/1)¹,—,—
+MOVE to CCR,Word,1(0/0),1(1/0)¹,—,—
+MOVE from USP,Long,1(0/0),—,—,—
+MOVE to USP,Long,2(0/0),—,—,—
+"MOVEC (SFC,DFC,USP,VBR,PCR)",Long,—,—,12(0/0),11(0/0)
+"MOVEC (CACR,TC,TTR,BUSCR,URP,SRP)",Long,—,—,15(0/0),14(0/0)
+NOP,—,9(0/0),—,—,—
+ORI to CCR,Byte,1(0/0),—,—,—
+PACK,—,2(0/0),2(1/1),—,—
+PLPA (ATC hit),,15(0/0),—,—,—
+PLPA (ATC miss),—,28(0/0),—,—,—
+PFLUSH,—,18(0/0),—,—,—
+PFLUSHN,—,18(0/0),—,—,—
+PFLUSHAN,—,33(0/0),—,—,—
+PFLUSHA,—,33(0/0),—,—,—
+RESET,—,520(0/0),—,—,—
+STOP,Word,8(0/0),—,—,—
+SWAP,Word,1(0/0),—,—,—
+TRAPF,—,1(0/0),—,—,—
+TRAPcc,—,1(0/0),—,—,—
+TRAPV,—,1(0/0),—,—,—
+UNLK,—,1(1/0),—,—,—
+UNPK,—,2(0/0),2(1/1),—,—

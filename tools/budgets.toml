@@ -307,15 +307,6 @@ why = "measured 13.8 -> 34.0 Minstr (x2.47)"
 [[debt]]
 kind = "steps"
 axis = "branches"
-name = "lir optimizephis"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 6.5 -> 21.1 Minstr (x3.27)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
 name = "lir machinelicm"
 ratio = 3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -339,6 +330,15 @@ ratio = 4.3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 57.3 -> 232.3 Minstr (x4.06)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir combine@768"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 44.3 -> 183.6 Minstr (x4.15): the second combine instance; inline-then-simplify per caller is quadratic on a call chain in the pin too (opt -O2 on the clang IR of chain at N=32/64/128: 131.5 / 472.8 / 1805.2 Minstr, x3.6 and x3.8 per doubling)"
 
 [[debt]]
 kind = "steps"
@@ -722,7 +722,7 @@ why = "measured 2.8 -> 8.6 Minstr (x3.09)"
 kind = "steps"
 axis = "cases"
 name = "mir cvp@669"
-ratio = 2.8
+ratio = 3.0
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 124.6 -> 322.6 -> 15.2 (4N) Minstr (x2.59)"
@@ -1320,6 +1320,15 @@ ratio = 4.3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 57.3 -> 232.4 Minstr (x4.05)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir combine@768"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 44.3 -> 183.6 Minstr (x4.15): the second combine instance; inline-then-simplify per caller is quadratic on a call chain in the pin too (opt -O2 on the clang IR of chain at N=32/64/128: 131.5 / 472.8 / 1805.2 Minstr, x3.6 and x3.8 per doubling)"
 
 [[debt]]
 kind = "steps"

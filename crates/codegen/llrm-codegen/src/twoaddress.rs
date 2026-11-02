@@ -38,14 +38,14 @@
 //! TwoAddressInstructionPass.cpp#L801, #L1402): no copy of `a` is made, so the
 //! result can join a loop's register while `a` stays in its own.
 //!
-//! DEVIATE TA-4 (no exit while the target reads addresses through a prefix): a
-//! dword or 16-bit result of a `lea` at m16 is the 32-bit prefixed form
-//! (`lea ecx, [eax-1]`), which costs a prefix byte where the pin's `LEA32r` has
-//! none, and the 16-bit address registers (BX/BP, SI/DI) are not used; there
-//! the adds and subs convert and the shifts stay the peephole's, which fuses
-//! them with the add after them (`ThreeAddress::AddSub`).
-//! `upperzero::wide_roots` does not count a `lea` cell: it is arithmetic, not
-//! an address read.
+//! Where the target's dword address form is behind a prefix (m16;
+//! `Profile::three_address`, from the target's address forms) a dword or 16-bit
+//! result of a `lea` is the 32-bit prefixed form (`lea ecx, [eax-1]`), a byte
+//! longer than the pin's `LEA32r`, and the 16-bit address registers (BX/BP,
+//! SI/DI) are not used. There the adds and subs convert and the shifts stay the
+//! peephole's, which fuses them with the add after them
+//! (`ThreeAddress::AddSub`). `upperzero::wide_roots` does not count a `lea`
+//! cell: it is arithmetic, not an address read.
 //!
 //! `isProfitableToConv3Addr`: a source that dies is also converted when the
 //! sum is to end in a register other than the one the source arrives in

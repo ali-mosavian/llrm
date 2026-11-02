@@ -33,7 +33,7 @@
 //! | [`InvertBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1879) | `inverted` | MIRROR |
 //! | `simplifycfg-branch-fold-threshold` (2), `-bonus-inst-threshold` (1), `-branch-fold-common-dest-vector-multiplier` (2) | `FOLD_THRESHOLD`, `BONUS_THRESHOLD`, `VECTOR_MULTIPLIER` | MIRROR |
 //!
-//! - D1. No pseudo probes, no `minsize` (the cost kind is size and latency).
+//! - D1. No pseudo probes (a `minsize` function is priced as `CodeSize`).
 //! - D2. The MIR has no branch weights or `!unpredictable`: the fold is never
 //!   held back for a predictable branch, and no weights are computed.
 //! - D3. No debug locations. The bonus instructions lose the metadata that can
@@ -45,7 +45,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::tti::{ArithOp, CostKind, OperandInfo, Ty};
+use llrm_mir::tti::{ArithOp, OperandInfo, Ty};
 use llrm_mir::valuetracking::Query;
 use llrm_support::hash::HashMap;
 
@@ -195,8 +195,9 @@ pub fn folded(
         let ty = Ty::of(&context.types, cond_ty);
         if let Some(ty) = ty {
             let op = if plan.join == Join::Or { ArithOp::Or } else { ArithOp::And };
-            let mut cost =
-                spec.tti.arithmetic_cost(op, ty, CostKind::SizeAndLatency, OperandInfo::ANY, OperandInfo::ANY);
+            let mut cost = spec
+                .tti
+                .arithmetic_cost(op, ty, crate::speculate::cost_kind(function), OperandInfo::ANY, OperandInfo::ANY);
             let invertible = has_one_use(function, pcondition)
                 && matches!(
                     pcondition,
@@ -207,7 +208,7 @@ pub fn folded(
                     + spec.tti.arithmetic_cost(
                         ArithOp::Xor,
                         ty,
-                        CostKind::SizeAndLatency,
+                        crate::speculate::cost_kind(function),
                         OperandInfo::ANY,
                         OperandInfo::ANY,
                     );
@@ -250,7 +251,7 @@ pub fn folded(
             &spec.outer.globals,
             function,
             inst,
-            CostKind::SizeAndLatency,
+            crate::speculate::cost_kind(function),
         );
         if !price.valid || price.value != 0 {
             bonus += count;

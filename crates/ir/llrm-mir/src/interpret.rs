@@ -573,7 +573,7 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
-            Intrinsic::LRint => {
+            Intrinsic::LRint | Intrinsic::LLRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {
                     FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
@@ -641,10 +641,13 @@ impl<'m> Machine<'m> {
             }
             Intrinsic::LifetimeStart
             | Intrinsic::LifetimeEnd
+            | Intrinsic::InvariantEnd
             | Intrinsic::Assume
             | Intrinsic::Prefetch
             | Intrinsic::FakeUse => void,
             Intrinsic::Expect => argument(0),
+            // The scope is a token no code reads: the address it covers.
+            Intrinsic::InvariantStart => argument(1),
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => {

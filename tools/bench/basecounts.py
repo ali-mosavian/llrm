@@ -27,7 +27,7 @@ ROOT = HERE.parents[1]
 CACHE = Path(os.environ.get("LLRM_BENCH_BASE_DIR") or Path.home() / ".cache/llrm/bench-base")
 # The rows the compiler under test makes: the reference compilers' (bas, ow, bcc, ...) do not move with it.
 OURS = ("bas", "c", "nib", "bq16", "bq32")
-COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_bytes")
+COUNTERS = ("instructions", "memory_operands", "clocks", "code_bytes", "data_bytes", "bss_bytes")
 # Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
 WAIVERS = "tools/bench/waivers"
 
@@ -59,27 +59,49 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     return path
 
 
-HASH_VERSION = 2  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT
+HASH_VERSION = 3  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT; 3: and the judge's files
+# What turns a run into counts and clocks. A program's hash includes them, so a change to the judge makes every program "edited": the base's rows are
+# measured again with the head's judge over the base compiler (with_edited), and a clock is never compared across two judges (the m16 multiplier fix
+# moved 67 of 342 cells' clocks, jpeg_fixed +4..5%, against a base that was measured by the old icount.py).
+JUDGE_FILES = (
+    "crates/target/llrm-x86-m16/bench/icount.py",
+    "crates/target/llrm-x86-m16/src/timings.times",
+    "crates/target/llrm-x86-m32/src/timings.times",
+    "crates/target/llrm-x86-m32/vsgcc/harness.py",
+    "crates/target/llrm-x86-m32/vsgcc/clocks.py",
+    "tools/sizes.py",
+    "crates/target/llrm-x86/bench/padding.py",
+    "tools/bench/flatcount.py",
+)
 
 
 def _is_input(name: str) -> bool:
     return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
 
 
-def _hash(files: list[tuple[str, bytes]]) -> str:
-    digest = hashlib.sha256()
+def _hash(files: list[tuple[str, bytes]], judge: bytes = b"") -> str:
+    digest = hashlib.sha256(judge)
     for name, data in sorted(files):
         digest.update(name.encode() + b"\0" + data)
     return digest.hexdigest()[:12]
 
 
+def judge_digest(read) -> bytes:
+    """The judge's files (`read(path)` returns their bytes, or None where the tree has none) as one digest."""
+    digest = hashlib.sha256()
+    for name in JUDGE_FILES:
+        digest.update(name.encode() + b"\0" + (read(name) or b"") + b"\0")
+    return digest.digest()
+
+
 def programs(root: Path = ROOT) -> dict[str, str]:
     """Each benchmark's hash: its sources and settings (not its baseline, the waivers or what a run is checked against). A row of a program
     that differs between the base and the head compares two programs, not two compilers, and is not judged."""
+    judge = judge_digest(lambda name: (root / name).read_bytes() if (root / name).is_file() else None)
     out = {}
     for settings in sorted((root / "bench").glob("**/bench.toml")):
         files = [(path.name, path.read_bytes()) for path in settings.parent.iterdir() if path.is_file() and _is_input(path.name)]
-        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files)
+        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files, judge)
     return out
 
 
@@ -89,13 +111,29 @@ def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
     by_dir: dict[str, list[str]] = {}
     for path in listing:
         by_dir.setdefault(str(Path(path).parent), []).append(path)
+    def blob(name):
+        done = subprocess.run(["git", "cat-file", "blob", f"{sha}:{name}"], cwd=root, capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    judge = judge_digest(blob)
     out = {}
     for directory, paths in sorted(by_dir.items()):
         if f"{directory}/bench.toml" not in paths:
             continue
         files = [(Path(path).name, subprocess.run(["git", "cat-file", "blob", f"{sha}:{path}"], cwd=root, capture_output=True, check=True).stdout) for path in paths if _is_input(Path(path).name)]
-        out[str(Path(directory).relative_to("bench"))] = _hash(files)
+        out[str(Path(directory).relative_to("bench"))] = _hash(files, judge)
     return out
+
+
+def rebased(base: dict, overlay: dict, was: dict[str, str], now: dict[str, str]) -> dict:
+    """`base` (bench.py's --json rows) with the rows of every program edited since the base replaced by `overlay`, the base compiler's rows
+    on the head's sources. Refuses an edited program the overlay lacks: parity/qlight c read 15 clocks on main against 460 now because main
+    was measured on its own, constant-argument qlight.c, and the list called that a regression."""
+    edited = {name for name in now if name in was and was[name] != now[name]}
+    missing = sorted(edited - {key.rsplit("/", 2)[0] for key in overlay})
+    if missing:
+        raise SystemExit("the base ran other sources than the head's: no rows of the base compiler on the head's " + ", ".join(missing))
+    return {key: value for key, value in base.items() if key.rsplit("/", 2)[0] not in edited} | overlay
 
 
 def rows_of(raw: dict) -> dict[tuple[str, str, str], dict]:
@@ -139,13 +177,28 @@ def base_counts(
     return have, hashes
 
 
+def unstable_cells(first: dict, second: dict) -> list[str]:
+    """The cells of ours that two runs of one compiler disagree on, one line each. A baseline is trusted only when a second run of the same
+    tree reproduces it: code and data bytes do not move with timing, so a difference is another build, a stale cache or another program."""
+    problems = []
+    for key in sorted(first.keys() & second.keys()):
+        if key[1] not in OURS:
+            continue
+        a, b = first[key], second[key]
+        moved = [f"{counter} {a.get(counter)} vs {b.get(counter)}" for counter in sorted(a.keys() | b.keys()) if a.get(counter) != b.get(counter)]
+        if moved:
+            problems.append(f"UNSTABLE {label(key)}: {', '.join(moved)}")
+    return problems
+
+
 def waivers(root: Path = ROOT) -> list[dict]:
-    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
+    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
+    a failure once a row is no longer worse than the base."""
     out = []
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
-            out.append({**row, "reason": data.get("reason", ""), "file": path.name})
+            out.append({**row, "reason": data.get("reason", ""), "file": path.name, "exception": data.get("exception", False)})
     return out
 
 
@@ -195,6 +248,9 @@ def waived_lines(rows: list[tuple], waived: list[dict], stale: list[str]) -> tup
         per_file[one[0]] = per_file.get(one[0], 0) + 1
     lines = [f"WAIVED {len(rows)} rows of {len(waived)} waivers (limit = measured): " + (", ".join(f"{f} {n}" for f, n in sorted(per_file.items())) or "none")]
     problems = ["WAIVERS: none was applied and none is stale: the waivers are not being read"] if waived and not rows and not stale else []
+    excepted = {w["file"] for w in waived if w.get("exception")}
+    lines += [f"EXCEPTION {one[0]}: {one[1]} {one[2]} {one[3]} -> {one[4]}" for one in rows if one[0] in excepted]
+    problems += [f"EXCEPTION {one} is no longer worse than the base: delete it" for one in stale if one.split(":", 1)[0] in excepted]
     return lines, problems
 
 

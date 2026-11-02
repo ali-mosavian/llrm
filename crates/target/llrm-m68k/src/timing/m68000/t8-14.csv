@@ -1,0 +1,13 @@
+#title,Table 8-14. Exception Processing Execution Times,page,8-11,notes,+ Add effective address calculation time. | * The interrupt acknowledge cycle is assumed to take four clock periods. | ** Indicates the time from when RESET and HALT are first sampled as negated to when instruction execution starts.
+Exception,Periods
+Address Error,50(4/7)
+Bus Error,50(4/7)
+CHK Instruction,40(4/3)+
+Divide by Zero,38(4/3)+
+Illegal Instruction,34(4/3)
+Interrupt,44(5/3)*
+Privilege Violation,34(4/3)
+RESET**,40(6/0)
+Trace,34(4/3)
+TRAP Instruction,34(4/3)
+TRAPV Instruction,34(5/3)

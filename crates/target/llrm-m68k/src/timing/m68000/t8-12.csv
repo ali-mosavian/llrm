@@ -1,0 +1,27 @@
+#title,Table 8-12. Miscellaneous Instruction Execution Times,page,8-10,notes,+Add effective address calculation time.
+Instruction,Size,Register,Memory
+ANDI to CCR,Byte,20(3/0),—
+ANDI to SR,Word,20(3/0),—
+CHK (No Trap),—,10(1/0)+,—
+EORI to CCR,Byte,20(3/0),—
+EORI to SR,Word,20(3/0),—
+ORI to CCR,Byte,20(3/0),—
+ORI to SR,Word,20(3/0),—
+MOVE from SR,—,6(1/0),8(1/1)+
+MOVE to CCR,—,12(1/0),12(1/0)+
+MOVE to SR,—,12(2/0),12(2/0)+
+EXG,—,6(1/0),—
+EXT,Word,4(1/0),—
+,Long,4(1/0),—
+LINK,—,16(2/2),—
+MOVE from USP,—,4(1/0),—
+MOVE to USP,—,4(1/0),—
+NOP,—,4(1/0),—
+RESET,—,132(1/0),—
+RTE,—,20(5/0),—
+RTR,—,20(2/0),—
+RTS,—,16(4/0),—
+STOP,—,4(0/0),—
+SWAP,—,4(1/0),—
+TRAPV,—,4(1/0),—
+UNLK,—,12(3/0),—

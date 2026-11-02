@@ -47,7 +47,16 @@ pub fn module(module: &Module) -> String {
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(at, one, module.global_metadata.get(&(at as u32)))),
+            .map(
+                |(at, one)| {
+                    printer.variable(
+                        at,
+                        one,
+                        module.global_metadata.get(&(at as u32)),
+                        one.name.owned().and_then(|name| module.sections.get(&name)),
+                    )
+                },
+            ),
     );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
@@ -231,6 +240,12 @@ pub fn fingerprint(function: &Function) -> u128 {
                         digest.write_u8(2);
                         operand(&mut digest, at);
                     }
+                    DebugWhat::Args(list) => {
+                        digest.write_u8(6);
+                        for &one in function.debug_args(list) {
+                            operand(&mut digest, one);
+                        }
+                    }
                     DebugWhat::Piece { value, offset, bytes } => {
                         digest.write_u8(3);
                         operand(&mut digest, value);
@@ -238,6 +253,15 @@ pub fn fingerprint(function: &Function) -> u128 {
                     }
                     DebugWhat::GonePiece { offset, bytes } => (4u8, offset, bytes).hash(&mut digest),
                     DebugWhat::Gone => digest.write_u8(5),
+                    DebugWhat::Assign { value, address, id, address_expression } => {
+                        digest.write_u8(7);
+                        value.is_some().hash(&mut digest);
+                        address.is_some().hash(&mut digest);
+                        for one in value.into_iter().chain(address) {
+                            operand(&mut digest, one);
+                        }
+                        (id, address_expression).hash(&mut digest);
+                    }
                 }
             }
             let instruction = function.instruction(inst);
@@ -470,6 +494,7 @@ impl Printer<'_> {
         at: usize,
         global: &GlobalValue,
         attached: Option<&Vec<(String, MetadataId)>>,
+        section: Option<&String>,
     ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
@@ -485,10 +510,11 @@ impl Printer<'_> {
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
+        let section = section.map(|one| format!(", section \"{one}\"")).unwrap_or_default();
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
         let attached: String =
             attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
-        format!("{} = {}{align}{attached}\n", self.globals[at], words.join(" "))
+        format!("{} = {}{section}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(
@@ -592,6 +618,17 @@ impl Printer<'_> {
                             self.typed(function, slots, at),
                             record.variable.0
                         ),
+                        DebugWhat::Args(list) => writeln!(
+                            out,
+                            "  #dbg_value(!DIArgList({}), !{}{extra})",
+                            function
+                                .debug_args(list)
+                                .iter()
+                                .map(|&one| self.typed(function, slots, one))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            record.variable.0
+                        ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
                             out,
                             "  #dbg_piece({}, !{}, {offset}, {bytes})",
@@ -602,6 +639,17 @@ impl Printer<'_> {
                             writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0)
                         }
                         DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
+                        DebugWhat::Assign { value, address, id, address_expression } => writeln!(
+                            out,
+                            "  #dbg_assign({}, !{}, !{}, !{}, {}, !{}, !{})",
+                            value.map_or_else(|| "i1 poison".to_owned(), |one| self.typed(function, slots, one)),
+                            record.variable.0,
+                            record.expression.map_or(0, |one| one.0),
+                            id.0,
+                            address.map_or_else(|| "ptr poison".to_owned(), |one| self.typed(function, slots, one)),
+                            address_expression.0,
+                            record.location.map_or(0, |one| one.0)
+                        ),
                     };
                 }
                 out.push_str("  ");

@@ -116,6 +116,7 @@ spelled!(
 pub const LANGUAGE: &str = "llrm.dbg.language";
 pub const TYPES: &str = "llrm.dbg.types";
 pub const FUNCTIONS: &str = "llrm.dbg.functions";
+pub const DECLARATIONS: &str = "llrm.dbg.declarations";
 pub const GLOBALS: &str = "llrm.dbg.globals";
 pub const FILE: &str = "llrm.dbg.file";
 /// The attachment naming an `llvm.dbg.declare`'s variable.
@@ -154,6 +155,18 @@ pub struct Function {
     pub name: String,
     pub r#type: MetadataId,
     pub parameters: Vec<(i64, String, MetadataId)>,
+    /// The frontend described every call the function makes
+    /// (`DIFlagAllCallsDescribed`).
+    pub all_calls: bool,
+}
+
+/// A function the unit calls and does not define: MIR's `function`, its
+/// source `name` and procedure `type`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Declaration {
+    pub function: String,
+    pub name: String,
+    pub r#type: MetadataId,
 }
 
 /// A variable `offset` bytes into MIR's `global`; `scope` the function
@@ -371,9 +384,28 @@ pub fn add_function(
         .collect();
     let parameters = list(module, parameters);
     let flag = int(module, i64::from(one.module));
-    let id =
-        node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag]);
+    let all_calls = int(module, i64::from(one.all_calls));
+    let id = node(
+        module,
+        vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag, all_calls],
+    );
     named(module, FUNCTIONS, id);
+}
+
+pub fn add_declaration(
+    module: &mut Module,
+    one: &Declaration,
+) {
+    let id = node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type)]);
+    named(module, DECLARATIONS, id);
+}
+
+pub fn declarations(module: &Module) -> Vec<Declaration> {
+    let read = |id: MetadataId| {
+        let one = Reader::of(module, id)?;
+        Some(Declaration { function: one.text(0)?, name: one.text(1)?, r#type: one.node(2)? })
+    };
+    listed(module, DECLARATIONS).filter_map(read).collect()
 }
 
 /// The module's source language.
@@ -426,6 +458,7 @@ pub fn functions(module: &Module) -> Vec<Function> {
             r#type: one.node(2)?,
             parameters: one.list(3, |parameter| Some((parameter.int(0)?, parameter.text(1)?, parameter.node(2)?)))?,
             module: one.int(4)? != 0,
+            all_calls: one.int(5).is_some_and(|flag| flag != 0),
         })
     };
     listed(module, FUNCTIONS).filter_map(read).collect()
@@ -657,6 +690,7 @@ mod tests {
             name: "F".into(),
             r#type: pt,
             parameters: vec![(1, "n".into(), int16)],
+            all_calls: false,
         };
         add_function(&mut module, &function);
         assert_eq!(functions(&module), [function]);

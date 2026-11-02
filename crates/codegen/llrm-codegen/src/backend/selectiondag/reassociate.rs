@@ -7,7 +7,8 @@
 //!
 //! DEVIATE SD211: the node flags (`nuw`, `disjoint`) the pin carries to the new
 //! nodes are dropped, and the compare-pair rule for `and`/`or` of `setcc`s
-//! is not translated. Exit: flags on the combiner's node builder. Owner w12.
+//! runs only where `reassociate_compare_pairs` says so (x86 judged later).
+//! Exit: flags on the combiner's node builder. Owner w12.
 //! Review 2026-12-10.
 //!
 //! # See also
@@ -137,6 +138,23 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     if exists(self, found, n00).is_none() {
                         return Some(self.dag.get_node(opc, vt, &[found, n00]));
                     }
+                }
+            }
+            // `(or (or a, b), c)` of compares where `c` and `b` share a
+            // predicate: pair those two.
+            if matches!(opc, ISD::And | ISD::Or)
+                && self.hooks.reassociate_compare_pairs()
+                && [n1, n00, n01].iter().all(|&v| self.dag.opcode(v) == ISD::SetCC)
+            {
+                let code = |this: &Self, v: SDValue| this.dag.node(this.dag.operand(v, 2)).data;
+                let (cc1, cc00, cc01) = (code(self, n1), code(self, n00), code(self, n01));
+                if cc1 == cc00 && cc1 != cc01 {
+                    let inner = self.dag.get_node(opc, vt, &[n00, n1]);
+                    return Some(self.dag.get_node(opc, vt, &[inner, n01]));
+                }
+                if cc1 == cc01 && cc1 != cc00 {
+                    let inner = self.dag.get_node(opc, vt, &[n01, n1]);
+                    return Some(self.dag.get_node(opc, vt, &[inner, n00]));
                 }
             }
         }

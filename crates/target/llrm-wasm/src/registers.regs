@@ -1,0 +1,11 @@
+# wasm registers, in the format of x86-m32's registers.regs. Ids are numbered by line from 1.
+# The physical registers are the frame and stack-pointer registers in their 32- and 64-bit forms (FP32,
+# FP64, SP32, SP64 of WebAssemblyRegisterInfo.td); every other register is virtual and becomes a local. The
+# registers.regs format has one frame and one stack root: the 32-bit pair holds the roles until wasm64 is built.
+#
+# name bits root lane classes dwarf codeview
+@scratch
+sp32 32 sp32 0 reserved,stack,int,base - -
+sp64 64 sp64 0 reserved,int,base - -
+fp32 32 fp32 0 reserved,frame,int,base - -
+fp64 64 fp64 0 reserved,int,base - -

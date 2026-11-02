@@ -2854,6 +2854,15 @@ impl DomTree {
         if !self.is_reachable(b) {
             return true;
         }
+        // A phi is dominated only if the definition dominates every possible
+        // use in its block: an earlier phi of that block does not
+        // (`dominates(Value *, Instruction *)`, [L123][phi]).
+        //
+        // [phi]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L123
+        if function.instruction(user).opcode == crate::opcode::Opcode::Phi {
+            return false;
+        }
         function.comes_before(def, user)
     }
 

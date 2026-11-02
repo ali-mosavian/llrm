@@ -9,9 +9,11 @@ description = "llrm's HIR, MIR, optimizer, x86 backend, OMF object support and B
 llrm-support = { workspace = true }
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
+llrm-sdag = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }

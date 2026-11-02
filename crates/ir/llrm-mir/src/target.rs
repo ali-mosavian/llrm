@@ -24,13 +24,43 @@ pub struct Tuning {
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size; 0: bytes alone decide.
     pub size_milliclocks_per_byte: i64,
+    /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
+    /// clocks are not traded.
+    pub speed_milliclocks_per_byte: i64,
+    /// A multiply by a constant at speed is the chain of fewest clocks the
+    /// CPU's table gives, with no byte term (gcc's `synth_mult` at
+    /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
+    /// for its bytes.
+    pub multiply_by_clocks: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
     pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
+    /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
+    /// the pass's own, 150.
+    pub unroll_partial_threshold: Option<u32>,
+    /// How many values the x87 register stack holds (8) where floats live
+    /// there (a target without SSE2 floating point); none: floats are not
+    /// held on a stack. The loop unroll caps its copies by it.
+    pub x87_stack_slots: Option<u32>,
+    /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
+    /// (loop size times copies) a candidate must stay under; none: 50.
+    pub unswitch_threshold: Option<i64>,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
+    /// Two compares joined by `and`/`or` stay two branches at every level, as
+    /// the pin does at optsize; false: the pin's cost rule decides.
+    pub split_merged_conditions: bool,
+    /// The inliner's D11 bound (a callee that stays must not grow the code)
+    /// also holds a caller optimized for speed; false: the pin's threshold
+    /// alone decides there.
+    pub inline_size_guard_at_speed: bool,
+    /// A constant offset of an address is a displacement the access folds;
+    /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
+    /// is refused (it costs the displacement). false: the pin's.
+    pub keep_constant_displacements: bool,
 }
 
 impl Tuning {
@@ -43,9 +73,17 @@ impl Tuning {
         max_stores_per_memmove: 8,
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
+        speed_milliclocks_per_byte: 0,
+        multiply_by_clocks: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
+        unroll_partial_threshold: None,
+        x87_stack_slots: None,
+        unswitch_threshold: None,
         inline_threshold: None,
+        split_merged_conditions: false,
+        inline_size_guard_at_speed: false,
+        keep_constant_displacements: false,
     };
 }
 
@@ -87,6 +125,13 @@ pub trait Machine {
     /// code reading them; none: the base class's answers.
     fn lowering(&self) -> Option<std::rc::Rc<dyn crate::lowering::Lowering>> {
         None
+    }
+
+    /// Whether a loop that stores one word or dword to every cell of an object
+    /// is a `memset.pattern` fill at -Os, which isel makes `rep stosw` or
+    /// `rep stosd` (DEVIATE: the pin leaves it a loop).
+    fn fills_by_pattern(&self) -> bool {
+        false
     }
 
     /// The target's tuning limits: the pin's values, with this target's
@@ -234,6 +279,14 @@ pub trait Machine {
         None
     }
 
+    /// The width in bits of the index an indexed addressing mode adds to a base
+    /// register, where the target has one narrower than its pointers (the
+    /// 6502's `lda (base),y`: 8); `None` for a target that adds a full offset.
+    /// Loop passes that split a pointer into a base and an index read it.
+    fn index_register_bits(&self) -> Option<u32> {
+        None
+    }
+
     /// Whether an I/O access to a port in the inclusive range `ports` may
     /// read or write memory. By default any may.
     fn port_touches_memory(
@@ -270,6 +323,15 @@ pub struct OperationCosts {
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
+    /// The same on a dword where the target's own word is smaller
+    /// (`imul`/`idiv` r32 in real mode, before the operand-size prefix);
+    /// equal to `multiply`/`divide` elsewhere.
+    pub multiply_long: i64,
+    pub divide_long: i64,
+    /// Percent by which a constant divide's multiply-high sequence must cost
+    /// more than the divide for the divide to stay (`isIntDivCheap`,
+    /// priced); 0 where the target states none.
+    pub divide_margin: i64,
     pub shift: i64,
     pub address: i64,
     /// An address advanced in a space whose displacement carries into its
@@ -354,6 +416,8 @@ pub struct OperationCosts {
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
+    /// Clocks to fill one such line from memory; 0: not stated.
+    pub line_fill_clocks: i64,
 }
 
 impl OperationCosts {
@@ -420,6 +484,9 @@ impl Default for OperationCosts {
             add: 1,
             multiply: 1,
             divide: 1,
+            multiply_long: 1,
+            divide_long: 1,
+            divide_margin: 0,
             shift: 1,
             address: 1,
             carry: 1,
@@ -461,6 +528,7 @@ impl Default for OperationCosts {
             pieces_clear_size: 0,
             jump_table: 0,
             cache_line: 0,
+            line_fill_clocks: 0,
         }
     }
 }
@@ -653,7 +721,11 @@ mod tests {
         assert_eq!((pin.max_stores_per_memcpy, pin.max_stores_per_memcpy_opt_size), (8, 4));
         assert_eq!((pin.max_stores_per_memmove, pin.max_stores_per_memmove_opt_size), (8, 4));
         assert_eq!(pin.size_milliclocks_per_byte, 0);
-        assert_eq!((pin.unroll_threshold, pin.unroll_max_percent_threshold_boost), (None, None));
+        assert_eq!(
+            (pin.unroll_threshold, pin.unroll_max_percent_threshold_boost, pin.unroll_partial_threshold),
+            (None, None, None)
+        );
+        assert_eq!(pin.x87_stack_slots, None);
         assert_eq!(pin.inline_threshold, None);
     }
 }

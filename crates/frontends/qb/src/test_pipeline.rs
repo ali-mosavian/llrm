@@ -131,7 +131,11 @@ fn test_a_reference_parameter_is_dereferenceable() {
     let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout());
     let text = llrm_mir::print::module(&emitted[0].module);
     let define = text.lines().find(|line| line.starts_with("define") && line.contains("@S(")).expect("SUB s");
-    assert!(define.contains("ptr dereferenceable(18) %0, ptr dereferenceable(4) %1, i16 %2"), "{define}");
+    assert!(
+        define
+            .contains("ptr dereferenceable(18) nonnull noundef %0, ptr dereferenceable(4) nonnull noundef %1, i16 %2"),
+        "{define}"
+    );
 }
 
 /// B$SCMP's result is the machine flags, read by comparisons alone: combine

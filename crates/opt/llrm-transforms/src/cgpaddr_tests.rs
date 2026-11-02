@@ -201,6 +201,7 @@ impl llrm_mir::target::Machine for Flat {
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         Some(std::rc::Rc::new(llrm_x86::tti::X86 {
+            cmov: false,
             sse1: false,
             sse2: false,
             macro_fusion: false,

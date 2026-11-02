@@ -1,4 +1,4 @@
-//! `-g`: build a module's debug information as [`llrm_object::debug::Info`],
+//! `-g`: build a module's debug information as [`llrm_debug::Info`],
 //! the format-neutral model each object format's writer encodes.
 //!
 //! # How it works
@@ -85,9 +85,10 @@
 
 use std::collections::BTreeSet;
 
+use llrm_debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
-use llrm_object::debug::{self as model, DebugOptions, Info, Kind, Location, Variable};
+use llrm_x86::callsites;
 
 use crate::backend::objbuild::Segment;
 use crate::backend::{globals, masm};
@@ -104,6 +105,16 @@ pub struct Procedure {
     pub module: bool,
     /// Its parameters' names, in the order the source declares them.
     pub parameters: Vec<String>,
+    /// The frontend described every call it makes.
+    pub all_calls: bool,
+}
+
+/// A function the unit calls and does not define, by its symbol.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Declaration {
+    pub name: String,
+    pub r#type: model::TypeId,
+    pub symbol: String,
 }
 
 /// A variable in data; `scope` the symbol of the procedure declaring it.
@@ -139,11 +150,14 @@ pub struct Debug {
     /// pushes (near, far): what its frame rows are read from.
     pub frame: Option<(RegId, RegId, [i64; 2])>,
     pub registers: Vec<model::Register>,
+    /// The machine as a debug writer reads it, without its register file.
+    pub target: llrm_debug::DebugTarget,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
     pub nodes: IndexMap<MetadataId, model::TypeId>,
     /// By each procedure's symbol.
     pub procedures: IndexMap<String, Procedure>,
+    pub declarations: Vec<Declaration>,
     pub globals: Vec<Global>,
     /// The unit's source file where the frontend named one: its name, and the
     /// MD5 of its text.
@@ -254,15 +268,41 @@ fn typed(
     })
 }
 
-/// `module`'s debug information for `arch`, each global and function by the
+/// What a machine tells the debug information: the width of a near address,
+/// its register file as text, the frame registers of 32-bit code where it has
+/// them, and the machine as a debug writer reads it.
+pub struct Machine {
+    pub near_bits: u32,
+    pub registers_text: String,
+    pub frame: Option<(RegId, RegId, [i64; 2])>,
+    pub target: llrm_debug::DebugTarget,
+}
+
+impl Machine {
+    pub fn of(arch: &dyn llrm_target::Target) -> Self {
+        let registers = arch.frame_registers();
+        Self {
+            near_bits: arch.object().bitness,
+            registers_text: arch.registers_text(),
+            frame: Some((
+                registers.pointer,
+                registers.stack,
+                [arch.return_address_bytes(false), arch.return_address_bytes(true)],
+            )),
+            target: arch.debug_target(),
+        }
+    }
+}
+
+/// `module`'s debug information for `machine`, each global and function by the
 /// symbol `names` gives it; None without any.
 pub fn described(
     module: &llrm_mir::Module,
     names: &IndexMap<(Space, i64), String>,
     producer: model::Producer,
-    arch: &dyn llrm_target::Target,
+    machine: &Machine,
 ) -> Result<Option<Debug>, String> {
-    let near = arch.object().bitness;
+    let near = machine.near_bits;
     let functions = di::functions(module);
     let globals = di::globals(module);
     if functions.is_empty() && globals.is_empty() {
@@ -295,8 +335,14 @@ pub fn described(
                 r#type: node(function.r#type)?,
                 module: function.module,
                 parameters: function.parameters.iter().map(|(_, name, _)| name.clone()).collect(),
+                all_calls: function.all_calls,
             },
         );
+    }
+    let mut declarations = Vec::new();
+    for one in di::declarations(module) {
+        let Some(at) = symbol(&one.function) else { continue };
+        declarations.push(Declaration { name: one.name, r#type: node(one.r#type)?, symbol: at });
     }
     let mut out = Vec::new();
     for global in globals {
@@ -309,17 +355,14 @@ pub fn described(
             scope: global.scope.as_deref().and_then(&symbol),
         });
     }
-    let file = llrm_target::registers::parse(&arch.registers_text())?;
+    let file = llrm_target::registers::parse(&machine.registers_text)?;
     let frame_register = llrm_target::registers::of_class(&file, "frame")
         .first()
         .map(|one| (*one).to_owned())
         .ok_or("the target's register file has no frame register")?;
     let return_register =
         llrm_target::registers::of_class(&file, "pc").first().map(|one| (*one).to_owned()).unwrap_or_default();
-    let frame = Some({
-        let registers = arch.frame_registers();
-        (registers.pointer, registers.stack, [arch.return_address_bytes(false), arch.return_address_bytes(true)])
-    });
+    let frame = machine.frame;
     let file_copy = file.clone();
     let registers = file
         .into_iter()
@@ -343,9 +386,11 @@ pub fn described(
         return_register,
         frame,
         registers,
+        target: machine.target.clone(),
         types,
         nodes,
         procedures,
+        declarations,
         globals: out,
         source: di::file(module).map(|(name, md5)| (name, md5.and_then(|hex| unhexed(&hex)))),
         scopes: Scopes::of(module),
@@ -594,11 +639,41 @@ fn unhexed(hex: &str) -> Option<Vec<u8>> {
 /// Where one value is, as the model says it.
 fn located(at: super::valuetrack::Where) -> Location {
     match at {
+        super::valuetrack::Where::Entry(register) => Location::EntryValue(format!("{register:?}").to_lowercase()),
+        super::valuetrack::Where::Expr(expr, places) => {
+            let mut places = places.into_iter();
+            let args = expr
+                .args
+                .iter()
+                .map(|arg| match arg {
+                    crate::model::lir::NoteArg::Value(_) => {
+                        let place = places.next().expect("a place for each value argument");
+                        let bytes = if let masm::Place::Cell { bytes, .. } = place { bytes } else { 0 };
+                        (located(super::valuetrack::Where::Place(place)), bytes)
+                    }
+                    crate::model::lir::NoteArg::Constant(value) => (Location::Constant(*value), 0),
+                })
+                .collect();
+            Location::Expression { args, ops: expr.ops.clone(), value: expr.value }
+        }
         super::valuetrack::Where::Place(masm::Place::Register(register)) => {
             Location::Register(format!("{register:?}").to_lowercase())
         }
         super::valuetrack::Where::Place(masm::Place::Cell { disp, .. }) => Location::Frame { disp },
         super::valuetrack::Where::Constant(value) => Location::Constant(value),
+        // A value in a cell plus a constant is read at the cell's width.
+        super::valuetrack::Where::Offset(masm::Place::Cell { disp, bytes }, add) => Location::Expression {
+            args: vec![(Location::Frame { disp }, bytes)],
+            ops: if add >= 0 {
+                vec![ExprOp::Arg(0), ExprOp::PlusUconst(add as u64)]
+            } else {
+                vec![ExprOp::Arg(0), ExprOp::Constu(add.unsigned_abs()), ExprOp::Minus]
+            },
+            value: true,
+        },
+        super::valuetrack::Where::Offset(place, add) => {
+            Location::Offset(Box::new(located(super::valuetrack::Where::Place(place))), add)
+        }
     }
 }
 
@@ -613,7 +688,7 @@ fn stable(
     if last.1 < until || ranges.windows(2).any(|pair| pair[0].1 != pair[1].0) {
         return None;
     }
-    let place = first.2.iter().copied().find(|place| {
+    let place = first.2.iter().cloned().find(|place| {
         matches!(place, super::valuetrack::Where::Place(_)) && ranges.iter().all(|one| one.2.contains(place))
     })?;
     Some((first.0, place))
@@ -637,7 +712,7 @@ fn combined(
     for pair in edges.windows(2) {
         let (from, to) = (pair[0], pair[1]);
         let at = |ranges: &Vec<(usize, usize, super::valuetrack::Where)>| {
-            ranges.iter().find(|&&(a, b, _)| a <= from && to <= b).map(|&(.., place)| place)
+            ranges.iter().find(|(a, b, _)| *a <= from && to <= *b).map(|(.., place)| place.clone())
         };
         let location =
             if let Some(whole) = parts.iter().find(|(piece, _)| piece.is_none()).and_then(|(_, ranges)| at(ranges)) {
@@ -672,6 +747,49 @@ fn combined(
     out
 }
 
+/// The calls of the function whose code is `code[start..end]` of its segment,
+/// and whether every call it makes is among them.
+fn call_sites(
+    debug: &Debug,
+    info: &Info,
+    described: &Procedure,
+    code: &Segment,
+    (start, end): (usize, usize),
+    bits: u32,
+) -> (bool, Vec<callsites::Call>) {
+    if !described.all_calls || debug.target.call_arguments.is_empty() {
+        return (false, Vec::new());
+    }
+    let count = |r#type: model::TypeId| match info.types.get(r#type) {
+        Some(model::Type::Procedure { parameters, .. }) => parameters.len(),
+        _ => 0,
+    };
+    let wanted = |symbol: Option<&str>| {
+        let Some(symbol) = symbol else { return 0 };
+        match debug.declarations.iter().find(|one| one.symbol == symbol) {
+            Some(one) => count(one.r#type),
+            None => debug.procedures.get(symbol).map_or(0, |one| count(one.r#type)),
+        }
+    };
+    let fixups: Vec<(usize, &str)> = code
+        .fixups
+        .iter()
+        .filter(|one| (start..end).contains(&one.at))
+        .map(|one| (one.at - start, one.name.as_str()))
+        .collect();
+    let found = callsites::scan(
+        &code.image[start..end],
+        bits,
+        &fixups,
+        &debug.target.call_arguments,
+        &debug.target.call_preserved,
+        count(described.r#type),
+        &wanted,
+    );
+    let calls = found.calls.into_iter().map(|one| callsites::Call { offset: start + one.offset, ..one }).collect();
+    (!found.tail_call, calls)
+}
+
 /// `module`'s debug information for the object `source`, its code laid out in
 /// `segments` (a procedure's is the one `symbols` puts it in) at `symbols`,
 /// each symbol at its index in `ids`; only what a symbol still defines is
@@ -699,9 +817,14 @@ pub fn laid_out(
     let mut info = Info {
         options: DebugOptions { format: debug.format, dialect: debug.dialect, producer: debug.producer },
         language: debug.language,
-        frame_register: debug.frame_register.clone(),
-        return_register: debug.return_register.clone(),
-        registers: debug.registers.clone(),
+        target: Some(llrm_debug::DebugTarget {
+            registers: std::sync::Arc::new(llrm_debug::RegisterFile {
+                registers: debug.registers.clone(),
+                frame: debug.frame_register.clone(),
+                return_register: debug.return_register.clone(),
+            }),
+            ..debug.target.clone()
+        }),
         files: vec![match &debug.source {
             Some((name, md5)) => model::File {
                 // CodeView looks for a file by the name it is given, beside
@@ -712,11 +835,16 @@ pub fn laid_out(
                 } else {
                     name.clone()
                 },
-                checksum: md5.clone().map(|bytes| (llrm_object::debug::ChecksumKind::Md5, bytes)),
+                checksum: md5.clone().map(|bytes| (llrm_debug::ChecksumKind::Md5, bytes)),
             },
             None => model::File { name: source.to_owned(), checksum: None },
         }],
         types: debug.types.clone(),
+        declarations: debug
+            .declarations
+            .iter()
+            .map(|one| model::Declaration { name: one.name.clone(), r#type: one.r#type, external: true })
+            .collect(),
         ..Info::default()
     };
     // The register the code would address a cell by is the one pushed below the
@@ -730,6 +858,7 @@ pub fn laid_out(
         .filter(|one| one.scope.is_none() && defined(&one.symbol))
         .map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement))
         .collect();
+    let mut pending: Vec<Vec<callsites::Call>> = Vec::new();
     for procedure in &module.procedures {
         let (Some(described), Some(&(section, start))) =
             (debug.procedures.get(&procedure.name), symbols.get(&procedure.name))
@@ -863,6 +992,7 @@ pub fn laid_out(
                             bias,
                             &procedure.body.notes,
                             &marks,
+                            debug.target.entry_values,
                         )
                     };
                     let parts: Vec<_> = found
@@ -884,6 +1014,7 @@ pub fn laid_out(
                         }
                         _ => None,
                     };
+                    let is_single = single.is_some();
                     let entries: Vec<(model::Range, Location)> = match single {
                         Some(Some((from, place))) => vec![(
                             model::Range { section, offset: start + from, length: end - start - from },
@@ -896,7 +1027,10 @@ pub fn laid_out(
                                 .map(|(piece, ranges)| {
                                     (
                                         piece,
-                                        ranges.into_iter().map(|(from, to, places)| (from, to, places[0])).collect(),
+                                        ranges
+                                            .into_iter()
+                                            .map(|(from, to, places)| (from, to, places[0].clone()))
+                                            .collect(),
                                     )
                                 })
                                 .collect(),
@@ -907,7 +1041,7 @@ pub fn laid_out(
                         })
                         .collect(),
                     };
-                    if single.is_some() {
+                    if is_single {
                         // A cell is a frame variable like any other.
                         if let [(_, Location::Frame { disp })] = &entries[..] {
                             variables.push(Variable {
@@ -1058,6 +1192,8 @@ pub fn laid_out(
         }
         let (variables, blocks) =
             in_blocks(&debug.scopes, &code.lines, (section, start, end), variables.into_iter().zip(scoped).collect());
+        let (all_calls, found) = call_sites(debug, &info, described, code, (start, end), procedure.body.bits);
+        pending.push(found);
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],
@@ -1069,8 +1205,66 @@ pub fn laid_out(
             variables,
             blocks,
             frame: frame.unwrap_or_default(),
+            all_calls,
+            calls: Vec::new(),
         });
     }
+    // A call names its callee by symbol: a declaration, or a function of the
+    // unit.
+    for (at, calls) in pending.into_iter().enumerate() {
+        let section = info.functions[at].ranges[0].section;
+        info.functions[at].calls = calls
+            .into_iter()
+            .map(|call| {
+                let origin = call
+                    .symbol
+                    .as_deref()
+                    .and_then(
+                        |name| debug
+                            .declarations
+                            .iter()
+                            .position(|one| one.symbol == name)
+                            .map(model::CallOrigin::Declaration)
+                            .or_else(|| {
+                                let id = ids.get(name)?;
+                                info.functions.iter().position(|one| one.symbol == *id).map(model::CallOrigin::Function)
+                            }),
+                    );
+                model::CallSite {
+                    section,
+                    offset: call.offset,
+                    origin,
+                    parameters: call
+                        .parameters
+                        .into_iter()
+                        .map(|(register, value)| model::CallParameter {
+                            value: match value {
+                                callsites::Value::Constant(one) => model::CallValue::Constant(one),
+                                callsites::Value::Entry => model::CallValue::Entry(register.clone()),
+                                callsites::Value::Register(name, offset) => model::CallValue::Register { name, offset },
+                            },
+                            register,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+    }
+    // Only a callee a call site names is declared: a unit without call sites
+    // is the unit it was.
+    let used: BTreeSet<usize> = info
+        .functions
+        .iter()
+        .flat_map(|one| &one.calls)
+        .filter_map(|call| if let Some(model::CallOrigin::Declaration(at)) = call.origin { Some(at) } else { None })
+        .collect();
+    let kept: Vec<usize> = used.into_iter().collect();
+    for call in info.functions.iter_mut().flat_map(|one| one.calls.iter_mut()) {
+        if let Some(model::CallOrigin::Declaration(at)) = &mut call.origin {
+            *at = kept.iter().position(|one| one == at).expect("kept");
+        }
+    }
+    info.declarations = kept.iter().map(|&at| info.declarations[at].clone()).collect();
     // The code of each segment that has a procedure: from the first to its last
     // byte.
     for section in starts.iter().map(|&(section, _)| section).collect::<std::collections::BTreeSet<_>>() {
@@ -1092,11 +1286,36 @@ pub fn laid_out(
 
 #[cfg(test)]
 mod tests {
+    use llrm_debug::{ExprOp, Location};
     use llrm_lir::registers::RegId;
 
     use super::super::masm::Place;
     use super::super::valuetrack::Where;
-    use super::stable;
+    use super::{located, stable};
+
+    /// A value in a cell plus a constant was refused by the DWARF writer ("said
+    /// for a value in a register"): the variable had no location. It is the
+    /// cell read at its width, plus the constant.
+    #[test]
+    fn a_cell_plus_a_constant_is_an_expression() {
+        let cell = Place::Cell { disp: -8, bytes: 4 };
+        assert_eq!(
+            located(Where::Offset(cell, 12)),
+            Location::Expression {
+                args: vec![(Location::Frame { disp: -8 }, 4)],
+                ops: vec![ExprOp::Arg(0), ExprOp::PlusUconst(12)],
+                value: true,
+            }
+        );
+        assert_eq!(
+            located(Where::Offset(cell, -3)),
+            Location::Expression {
+                args: vec![(Location::Frame { disp: -8 }, 4)],
+                ops: vec![ExprOp::Arg(0), ExprOp::Constu(3), ExprOp::Minus],
+                value: true,
+            }
+        );
+    }
 
     fn reg(register: llrm_lir::registers::RegId) -> Where {
         Where::Place(Place::Register(register))

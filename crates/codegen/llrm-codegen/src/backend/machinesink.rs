@@ -84,9 +84,11 @@
 //! (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
 //! in its block grew switch.c 16 B at m16 -Os. Exit: none.
 //!
-//! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
-//! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
-//! instruction has none).
+//! Not ported, and not a deviation on x86 (#2903): `PerformSinkAndFold` runs
+//! in the pin only where the target sets `EnableSinkAndFold` (AArch64, RISC-V,
+//! LoongArch; `TargetPassConfig.h:136`, false by default), `SinkInstsIntoCycle`
+//! is off by default, and an instruction here has no debug values. A target
+//! here that enables sink-and-fold gets it as a per-target hook, default off.
 //!
 //! # Example
 //! `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
@@ -591,11 +593,36 @@ impl Sinker {
         // spelled through is not a read of one.
         let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
+        // DEVIATE (segment-reads): an access through the default data segment
+        // names no register in the pin (`MOV32rm` carries `$noreg`), so its
+        // load sinks; here it reads DS. Not while a later instruction of the
+        // block sets DS. A load of a global stayed above the branch that used
+        // it only on one arm (`mov edx,[g]` for `cmp [g],0`).
+        let default_segment = one.what.as_ref().is_some_and(|what| {
+            let mut places = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .filter_map(
+                    |place| match place {
+                        Loc::Mem(mem) => Some(mem),
+                        _ => None,
+                    },
+                );
+            places.clone().next().is_some()
+                && places.all(|mem| {
+                    mem.addr.as_ref().is_none_or(|addr| addr.segment == llrm_lir::registers::RegId::None.iced())
+                })
+        }) && !self.insns[block][index + 1..].iter().any(|later| {
+            liveness::effect(self.regs, self.bits, later)
+                .is_none_or(|found| found.writes.iter().any(|&(register, _)| self.regs.is_data_segment(register)))
+        });
         let physical_reads = reads
             .iter()
             .any(
                 |&(register, _)| register != llrm_lir::registers::RegId::None
-                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register))),
+                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register)))
+                    && !(default_segment && self.regs.is_data_segment(register)),
             );
         if physical_reads || physical(&effect.writes) || flags(&reads) {
             return true;

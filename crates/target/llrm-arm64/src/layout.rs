@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::frame::Lowered;
+use crate::jumptable::Table;
 use crate::mc::inst::{Inst, Target};
 
 pub(crate) fn label_of(inst: &Inst) -> Option<&str> {
@@ -64,7 +65,10 @@ fn forwards(blocks: &[Lowered]) -> HashMap<String, String> {
     out
 }
 
-pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
+pub fn fold(
+    mut blocks: Vec<Lowered>,
+    tables: &mut [Table],
+) -> Vec<Lowered> {
     if blocks.is_empty() {
         return blocks;
     }
@@ -90,11 +94,17 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
     for at in 0..blocks.len() - 1 {
         let ends = matches!(
             blocks[at].insts.last(),
-            Some(Inst::Branch { link: false, .. } | Inst::Ret { .. } | Inst::Brk { .. })
+            Some(
+                Inst::Branch { link: false, .. }
+                    | Inst::BranchReg { link: false, .. }
+                    | Inst::Ret { .. }
+                    | Inst::Brk { .. }
+            )
         );
         if !ends {
             let next = blocks[at + 1].label.clone();
             blocks[at].insts.push(Inst::Branch { link: false, target: Target::Label(next) });
+            blocks[at].locs.push(None);
         }
     }
     // The entry is never forwarded away.
@@ -106,12 +116,28 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
             retarget(inst, &forward);
         }
     }
+    for entry in tables.iter_mut().flat_map(|table| table.entries.iter_mut()) {
+        if let Some(found) = forward.get(entry.as_str()) {
+            *entry = found.clone();
+        }
+    }
+    let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, placed by following fall-through chains.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let successors = |at: usize| -> Vec<usize> {
         let block = &blocks[at];
-        let out: Vec<usize> =
-            block.insts.iter().filter_map(label_of).filter_map(|label| index.get(label).copied()).collect();
+        let mut out: Vec<usize> = Vec::new();
+        for inst in &block.insts {
+            match inst {
+                // The jump through a table goes to every entry.
+                Inst::Label(base) => {
+                    if let Some(table) = table_of.get(base.as_str()) {
+                        out.extend(table.entries.iter().filter_map(|label| index.get(label.as_str()).copied()));
+                    }
+                }
+                _ => out.extend(label_of(inst).and_then(|label| index.get(label).copied())),
+            }
+        }
         let _ = at;
         out
     };
@@ -148,11 +174,12 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
     // unconditional one is the inverse conditional.
     for at in 0..ordered.len() {
         let next = ordered.get(at + 1).map(|block| block.label.clone());
-        let insts = &mut ordered[at].insts;
+        let Lowered { insts, locs, .. } = &mut ordered[at];
         if let (Some(Inst::Branch { link: false, target: Target::Label(label) }), Some(next)) = (insts.last(), &next)
             && label == next
         {
             insts.pop();
+            locs.pop();
         }
         if insts.len() >= 2
             && let (
@@ -163,7 +190,10 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
         {
             let (cond, go) = (cond.inverted(), go.clone());
             insts.truncate(insts.len() - 2);
+            let place = locs.get(locs.len() - 2).copied().flatten();
+            locs.truncate(locs.len() - 2);
             insts.push(Inst::BranchCond { cond, target: Target::Label(go) });
+            locs.push(place);
         }
     }
     ordered

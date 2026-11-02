@@ -4,6 +4,9 @@
 //! a libc that reads 8). Needs the fork's clang (`LLRM_CLANG_M16`) and the Open
 //! Watcom headers (`LLRM_OW`).
 
+#[path = "common/target_dir.rs"]
+mod target_dir;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -19,7 +22,10 @@ fn listing(
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", target)
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-S", "-o"])
         .arg(&s)
         .arg(&c)

@@ -43,6 +43,8 @@ fn inline_with(
         recursive: recursive(module).contains(&id(module, caller)),
         self_inlining: None,
         peeling: false,
+        depth: MAX_INLINE_RECURSIVE_DEPTH,
+        callee: i64::MAX,
     };
     let mut changed = false;
     loop {
@@ -612,7 +614,14 @@ fn self_inlined(ops: usize) -> (usize, i64) {
     };
     let available = [(name, itself)].into_iter().collect();
     let frequencies = SparseIdMap::default();
-    let by = Caller { layout: &layout, recursive: true, self_inlining: Some(&frequencies), peeling: false };
+    let by = Caller {
+        layout: &layout,
+        recursive: true,
+        self_inlining: Some(&frequencies),
+        peeling: false,
+        depth: MAX_INLINE_RECURSIVE_DEPTH,
+        callee: i64::MAX,
+    };
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function, metadata) = module.function_and_metadata_mut("down").unwrap();
     expanded_all(context, function, &by, &available, None, &mut declared, metadata).unwrap();

@@ -144,6 +144,17 @@ pub trait SpillWeightEnv {
     ) -> bool;
     /// `LIS.getRegMaskSlots()`: where a call destroys registers.
     fn reg_mask_slots(&self) -> Vec<SlotIndex>;
+    /// What one reference to `reg` in `instr` adds to its weight, as a
+    /// multiple of LLVM's one: a target whose instruction takes the operand
+    /// from memory as cheaply (`fadd m`) says less, one that pays a copy to
+    /// read it from a register says more.
+    fn reference_weight(
+        &self,
+        _instr: &crate::model::lir::Insn,
+        _reg: u32,
+    ) -> f32 {
+        1.0
+    }
     /// `TRI.getSpillWeightScaleFactor(RC)` of the value's register class.
     fn spill_weight_scale(
         &self,
@@ -370,7 +381,8 @@ impl<'a> VirtRegAuxInfo<'a> {
                 }
                 // Calculate instr weight.
                 weight =
-                    get_spill_weight(writes, reads, self.env.block_freq_relative_to_entry(block), self.opt_for_size);
+                    get_spill_weight(writes, reads, self.env.block_freq_relative_to_entry(block), self.opt_for_size)
+                        * self.env.reference_weight(&insn, li.reg());
                 // Give extra weight to what looks like a loop induction
                 // variable update.
                 if writes && is_exiting && is_live_out_of_mbb(li, block, lis) {
@@ -469,6 +481,8 @@ mod tests {
 
     struct Env {
         freq: Vec<f32>,
+        /// What a reference weighs (`reference_weight`): 1 as in LLVM.
+        reference: f32,
     }
 
     impl SpillWeightEnv for Env {
@@ -518,6 +532,14 @@ mod tests {
             1.0
         }
 
+        fn reference_weight(
+            &self,
+            _instr: &Insn,
+            _reg: u32,
+        ) -> f32 {
+            self.reference
+        }
+
         fn is_allocatable(
             &self,
             _reg: RegId,
@@ -555,7 +577,7 @@ mod tests {
     fn test_a_weight_is_the_block_frequencies_of_its_references_over_size_and_the_constant() {
         let body = body(vec![vec![insn(vec![1], vec![])], vec![insn(vec![], vec![1]), insn(vec![], vec![1])]]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 4.0] };
+        let env = Env { freq: vec![1.0, 4.0], reference: 1.0 };
         let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
@@ -564,13 +586,28 @@ mod tests {
         assert!((li.weight() - 9.0 / 448.0).abs() < 1e-6, "{}", li.weight());
     }
 
+    /// A target that reads an operand from memory as cheaply as from a register
+    /// says a reference weighs less: the value is worth less to keep.
+    #[test]
+    fn test_a_target_can_weigh_a_reference_less_than_the_pin_does() {
+        let body = body(vec![vec![insn(vec![1], vec![])], vec![insn(vec![], vec![1]), insn(vec![], vec![1])]]);
+        let weight = |reference| {
+            let mut lis = LiveIntervals::new(&body);
+            let env = Env { freq: vec![1.0, 4.0], reference };
+            let original = HashMap::default();
+            VirtRegAuxInfo::new(&env, &original).calculate_spill_weights_and_hints(&mut lis);
+            lis.interval(1).weight()
+        };
+        assert!((weight(0.5) - weight(1.0) / 2.0).abs() < 1e-6, "{} {}", weight(0.5), weight(1.0));
+    }
+
     /// A value that lives for one instruction and is not live over a call is
     /// not worth spilling: it is marked not spillable.
     #[test]
     fn test_a_tiny_interval_is_not_spillable() {
         let body = body(vec![vec![insn(vec![1], vec![]), insn(vec![], vec![1])], vec![]]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 1.0] };
+        let env = Env { freq: vec![1.0, 1.0], reference: 1.0 };
         let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
@@ -593,7 +630,7 @@ mod tests {
         });
         let body = body(vec![vec![Arc::new(copy), insn(vec![], vec![1])], vec![]]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 1.0] };
+        let env = Env { freq: vec![1.0, 1.0], reference: 1.0 };
         let original = HashMap::default();
         let aux = VirtRegAuxInfo::new(&env, &original);
         let li = (*lis.interval_rc(1)).clone();
@@ -614,7 +651,7 @@ mod tests {
             vec![],
         ]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 1.0] };
+        let env = Env { freq: vec![1.0, 1.0], reference: 1.0 };
         let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);

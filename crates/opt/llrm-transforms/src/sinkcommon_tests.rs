@@ -187,3 +187,114 @@ e:
 ";
     check(TEXT, TEXT, &[]);
 }
+
+/// `sunk` over `text` on `tti`, printed.
+fn sunk_on(
+    tti: &dyn llrm_mir::tti::Tti,
+    text: &str,
+) -> String {
+    let options = Options { speculate_blocks: false, sink_common_insts: true, ..Default::default() };
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified_with(&options, context, &spec, &mut declared, function);
+    printed(&module)
+}
+
+/// Two arms load `[p+2]` and `[p+4]`. The pin sinks one load behind a phi of
+/// the offsets; where the target keeps constant offsets as displacements
+/// (`keep_constant_displacements`) it stays two loads. qbsp `r_point_leaf` at
+/// m16 -O2 paid +6 bytes and +36 clocks for the sunk form (an add, a register).
+#[test]
+fn test_two_loads_at_constant_offsets_stay_two_loads_where_the_target_keeps_displacements() {
+    let text = "define i16 @f(ptr %p, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = getelementptr inbounds nuw i8, ptr %p, i16 2
+  %x = load i16, ptr %a
+  br label %e
+
+b2:
+  %b = getelementptr inbounds nuw i8, ptr %p, i16 4
+  %y = load i16, ptr %b
+  br label %e
+
+e:
+  %r = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+  ret i16 %r
+}
+";
+    let pin = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let keep = pin
+        .clone()
+        .with_tuning(llrm_mir::target::Tuning { keep_constant_displacements: true, ..llrm_mir::target::Tuning::PIN });
+    let loads = |text: &str| text.matches("= load i16").count();
+    assert_eq!(loads(&sunk_on(&pin, text)), 1, "premise: the pin sinks the load");
+    assert_eq!(loads(&sunk_on(&keep, text)), 2, "the displacements were turned into a phi");
+}
+
+/// The same two shapes with stores (`s.a = x` / `s.b = x` behind a branch) and
+/// three arms: the constant offsets stay displacements, the pin's sink makes
+/// one store at a phi of the offsets.
+#[test]
+fn test_stores_at_constant_offsets_stay_stores_where_the_target_keeps_displacements() {
+    let text = "define void @f(ptr %p, i16 %v, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = getelementptr inbounds nuw i8, ptr %p, i16 2
+  store i16 %v, ptr %a
+  br label %e
+
+b2:
+  %b = getelementptr inbounds nuw i8, ptr %p, i16 6
+  store i16 %v, ptr %b
+  br label %e
+
+e:
+  ret void
+}
+";
+    let pin = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let keep = pin
+        .clone()
+        .with_tuning(llrm_mir::target::Tuning { keep_constant_displacements: true, ..llrm_mir::target::Tuning::PIN });
+    let stores = |text: &str| text.matches("store i16").count();
+    assert_eq!(stores(&sunk_on(&pin, text)), 1, "premise: the pin sinks the store");
+    assert_eq!(stores(&sunk_on(&keep, text)), 2, "the displacements were turned into a phi");
+}
+
+/// A different base in each arm is not a constant offset: it is still sunk
+/// (a phi of pointers), so the lever only holds displacements.
+#[test]
+fn test_loads_through_different_bases_are_still_sunk_where_the_target_keeps_displacements() {
+    let text = "define i16 @f(ptr %p, ptr %q, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = getelementptr inbounds nuw i8, ptr %p, i16 2
+  %x = load i16, ptr %a
+  br label %e
+
+b2:
+  %b = getelementptr inbounds nuw i8, ptr %q, i16 2
+  %y = load i16, ptr %b
+  br label %e
+
+e:
+  %r = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+  ret i16 %r
+}
+";
+    let keep = llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { keep_constant_displacements: true, ..llrm_mir::target::Tuning::PIN });
+    assert_eq!(sunk_on(&keep, text).matches("= load i16").count(), 1);
+}

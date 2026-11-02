@@ -186,7 +186,7 @@ def test_the_base_is_read_again_at_the_merge_call(tmp_path):
 
 def make_pair(tmp_path):
     """A git repo with a cargo workspace and two branches off one base, each compiling beside the base, not together: A makes `undef` take `&mut Context`
-    (and fixes its caller), B adds a second caller with a `&Context`. origin/feat/parity is A, landed."""
+    (and fixes its caller), B adds a second caller with a `&Context`. origin/release/next is A, landed."""
     import subprocess as sp
 
     def run(*cmd):
@@ -211,7 +211,7 @@ def make_pair(tmp_path):
     (tmp_path / "lib/src/lib.rs").write_text("pub struct Context;\npub fn undef(_c: &mut Context) {}\n")
     (tmp_path / "app/src/lib.rs").write_text("pub fn fold(c: &mut lib::Context) { lib::undef(c); }\n")
     run("git", "commit", "-q", "-am", "a changes the signature")
-    run("git", "update-ref", "refs/remotes/origin/feat/parity", "HEAD")
+    run("git", "update-ref", "refs/remotes/origin/release/next", "HEAD")
     return run
 
 
@@ -221,10 +221,10 @@ def test_two_prs_that_compile_apart_and_not_together_are_refused_the_second_time
 
     make_pair(tmp_path)
     head = subprocess.run(["git", "rev-parse", "b"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
-    why = ps.merged_refusals(head, base="origin/feat/parity", check=parity_smoke.workspace_check, cwd=tmp_path)
+    why = ps.merged_refusals(head, base="origin/release/next", check=parity_smoke.workspace_check, cwd=tmp_path)
     assert why and "does not build as a whole" in why[0], why
     alone = subprocess.run(["git", "rev-parse", "base~0"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
-    assert ps.merged_refusals(alone, base="origin/feat/parity", check=parity_smoke.workspace_check, cwd=tmp_path) == []
+    assert ps.merged_refusals(alone, base="origin/release/next", check=parity_smoke.workspace_check, cwd=tmp_path) == []
 
 
 def test_a_second_landing_waits_for_the_first_one_to_release_the_lock(tmp_path):
@@ -466,7 +466,7 @@ def run_precheck(tmp_path, monkeypatch, tree, number="2836", **extra):
     dev.mkdir(exist_ok=True)
     monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
     monkeypatch.setattr(ps, "ensure_bins", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a dist build")))
-    info = {"headRefOid": f"head{number}", "body": "", "baseRefName": "feat/parity"}
+    info = {"headRefOid": f"head{number}", "body": f"problems: 0 @ head{number}", "baseRefName": ps.BRANCH}
     return ps.precheck(number, dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / f"cache{number}.json", base_sha="base", **extra)
 
 
@@ -475,6 +475,22 @@ def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(t
     line = run_precheck(tmp_path, monkeypatch, Tree(set(), set(), {"ratchet:seeded_maps"}))
     assert line.startswith("2836: REFUSED: ratchet:seeded_maps"), line
     assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
+
+
+def test_precheck_refuses_a_pr_whose_crate_dir_has_no_manifest_so_one_pr_cannot_sink_a_batch(tmp_path, monkeypatch):
+    """#6317 added only crates/target/llrm-z80/bench/*: the workspace glob crates/*/* failed "failed to load manifest for workspace member" for every batch holding it, and cost #6259's batch a round. Its own REFUSED line names the dir."""
+    def fake_git(*args, cwd=None):
+        if args[0] == "diff":
+            return "crates/target/llrm-z80/bench/a.bas\ncrates/target/llrm-x86-m16/src/lib.rs\ndocs/x.md\n"
+        if args[0] == "ls-tree":
+            return "" if "llrm-z80" in args[-1] else args[-1] + "\n"
+        return ""
+    dev = tmp_path / "wt"
+    dev.mkdir()
+    monkeypatch.setattr(ps, "git", fake_git)
+    info = {"headRefOid": "head6317", "body": "", "baseRefName": ps.BRANCH}
+    line = ps.precheck("6317", dev=dev, checks=Tree(set(), set()).checks(), merge=Tree(set(), set()).merge, deletions=lambda *a: [], info=info, cache=tmp_path / "c.json", base_sha="base")
+    assert line.startswith("6317: REFUSED: crate-manifest") and "crates/target/llrm-z80" in line and "llrm-x86-m16" not in line, line
 
 
 def test_a_red_head_file_no_longer_excuses_an_unformatted_pr_file_but_the_fix_passes(tmp_path, monkeypatch):
@@ -502,7 +518,7 @@ def test_a_precheck_verdict_is_cached_per_pr_head_and_feat_parity_sha(tmp_path, 
     dev = tmp_path / "wt"
     dev.mkdir()
     monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
-    info = {"headRefOid": "abc", "body": "", "baseRefName": "feat/parity"}
+    info = {"headRefOid": "abc", "body": "problems: 0 @ abc", "baseRefName": ps.BRANCH}
     args = dict(dev=dev, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info=info, cache=tmp_path / "cache.json")
     assert ps.precheck("5", base_sha="p1", **args) == "5: PASS" and ps.precheck("5", base_sha="p1", **args) == "5: PASS" and len(merges) == 1
     assert ps.precheck("5", base_sha="p2", **args) == "5: PASS" and len(merges) == 2
@@ -1560,14 +1576,14 @@ def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squa
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
     git("remote", "add", "origin", str(origin))
-    git("branch", "-M", "feat/parity")
-    git("push", "-q", "origin", "feat/parity")
+    git("branch", "-M", "release/next")
+    git("push", "-q", "origin", "release/next")
     git("checkout", "-q", "-b", "pr")
     (work / "pr.txt").write_text("x\n")
     git("add", ".")
     git("commit", "-qm", "pr")
     head = git("rev-parse", "HEAD")
-    sha, why = ps.sync_docs_head(head, "pr", "origin/feat/parity", work)
+    sha, why = ps.sync_docs_head(head, "pr", "origin/release/next", work)
     assert why == "" and sha and sha != head, (sha, why)
     assert git("--git-dir", str(origin), "rev-parse", "refs/heads/pr") == sha, "pushed to the PR's branch"
     assert git("--git-dir", str(origin), "show", f"{sha}:docs/a.md") == "generated"
@@ -1595,7 +1611,7 @@ def test_an_alone_slot_logs_the_base_it_checked_out(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(ps, "_alone_checkout", lambda work, ref, repo=None: base.append(_repo_with_commit(work)))
     monkeypatch.setattr(ps, "alone_refusals", lambda *a, **k: [])
     monkeypatch.setattr(ps, "keep_refused_evidence", lambda *a, **k: None)
-    ps._alone_in_scratch("deadbeef", "origin/feat/parity")
+    ps._alone_in_scratch("deadbeef", "origin/release/next")
     assert f"alone: slot 0 base {base[0][:9]}" in capsys.readouterr().err
 
 
@@ -1664,7 +1680,7 @@ def test_target_facts_is_a_scanner_every_batch_runs():
 
 
 def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
-    """11:04: the culprit probe ran `git diff origin/feat/parity...<head of #5183>`, a head pushed after the batch's fetch: 'Invalid symmetric difference', the merge-batch process died with no LANDED line."""
+    """11:04: the culprit probe ran `git diff origin/release/next...<head of #5183>`, a head pushed after the batch's fetch: 'Invalid symmetric difference', the merge-batch process died with no LANDED line."""
     def sh(cwd, *a):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
@@ -1909,15 +1925,14 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 
 
-def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
-    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
-    assert "wccq" not in ps.bins_command(tmp_path)
+def test_the_rebuild_asks_for_no_legacy_feature_even_when_the_directory_holds_a_leftover_llrm_c(tmp_path):
+    """A leftover llrm-c in coord-ps-target made the rebuild pass `--features wccq`, a feature that goes with the Watcom frontend."""
     (tmp_path / "llrm-c").write_text("")
-    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+    assert "--features" not in ps.bins_command(tmp_path)
 
 
-def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
-    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+def test_the_link_and_behavioural_build_asks_for_no_legacy_feature(tmp_path, monkeypatch):
+    """_build_release must build with `--bins` alone: the wccq feature goes with the Watcom frontend."""
     (tmp_path / "release").mkdir()
     (tmp_path / "release" / "llrm-c").write_text("")
     monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
@@ -1926,7 +1941,7 @@ def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
     ps._build_release()
-    assert ran and "wccq" in ran[0], ran
+    assert ran and "wccq" not in " ".join(ran[0]), ran
 
 
 def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
@@ -2077,3 +2092,139 @@ def test_the_tests_get_the_clang_of_the_trees_own_pin(tmp_path):
     env = {"LLRM_CLANG_M16": "/old/clang"}
     ps.with_pinned_clang(env, tmp_path / "tree", tmp_path / "by")
     assert env["LLRM_CLANG_M16"] == "/old/clang", "no build for the sha: the runner's value stays"
+
+
+def test_a_compiler_pr_without_a_judge_line_is_not_refused_and_the_warning_is_printed(tmp_path, monkeypatch, capsys):
+    """The user relaxed the rule: the refusal held until the head changed and stalled the queue (30 PRs waited on judge lines). The PR lands; 'WARN: no judge line for <head>' stays visible."""
+    head = "a" * 40
+    tree = Tree(set(), set())
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    info = {"headRefOid": head, "baseRefName": ps.BRANCH, "files": [{"path": "crates/opt/src/lib.rs"}]}
+    for n, body in enumerate(("", None, "problems: 3 @ " + head, "problems: 0", "problems: 0 @ " + "b" * 40)):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS", (body, line)
+        assert f"{n}: WARN: no judge line for {head}" in capsys.readouterr().err, body
+
+
+def test_a_pr_with_the_judge_line_for_its_head_warns_nothing_and_an_edited_description_is_read_again(tmp_path, monkeypatch, capsys):
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH}
+    assert ps.judge_line_warning("1", {**info, "body": "TL;DR\nproblems: 0 @ " + "h" * 40 + "\nOwner: w6"}) is None
+    assert ps.judge_line_warning("1", {**info, "body": "problems: 0 \uff20 " + "h" * 40}) is None, "the full-width at sign the order was written with: a present line is still parsed"
+    assert ps.judge_line_warning("1", {**info, "body": "x"}).startswith("1: WARN: no judge line for " + "h" * 40)
+    assert ps.judge_line_warning("1", {**info, "body": "problems: 0 @ " + "h" * 40}) is None, "an edited description is read again at every call"
+
+
+def test_a_pr_that_touches_no_compiler_path_gets_no_warning(tmp_path, monkeypatch):
+    """Tools-only and docs-only PRs cannot move the bench judge: no warning either."""
+    head = "c" * 40
+    info = {"headRefOid": head, "baseRefName": ps.BRANCH, "body": ""}
+    tools_only = [{"path": "tools/parity_squash.py"}, {"path": "docs/working/pr-rules.md"}]
+    assert ps.judge_line_warning("1", {**info, "files": tools_only}) is None
+    assert ps.judge_line_warning("1", {**info, "files": [*tools_only, {"path": "crates/opt/src/lib.rs"}]}).startswith("1: WARN: no judge line for")
+    assert ps.judge_line_warning("1", {**info, "files": [{"path": "Cargo.lock"}]}) is not None
+    assert ps.judge_line_warning("1", info) is not None, "no file list read: the rule applies"
+
+
+def test_the_integration_branch_is_release_next_and_a_pr_on_feat_parity_is_refused(tmp_path, monkeypatch):
+    """The integration branch was hard-coded as feat/parity in 14 places; it is one value, LAND_BRANCH, default release/next."""
+    assert ps.BRANCH == "release/next" and ps.BASE == "origin/release/next"
+    tree = Tree(set(), set())
+    assert run_precheck(tmp_path, monkeypatch, tree, number="6097") == "6097: PASS", "a PR based on release/next is accepted"
+    head = "d" * 40
+    body = "problems: 0 @ " + head
+    old = ps.precheck("1", info={"headRefOid": head, "baseRefName": "feat/parity", "body": body}, cache=tmp_path / "c.json", base_sha="base")
+    assert old == "1: REFUSED: targets feat/parity, not release/next"
+
+
+def test_land_branch_sets_the_integration_branch_for_the_python_and_the_scripts():
+    env = {**os.environ, "LAND_BRANCH": "feat/other"}
+    py = subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.BRANCH, p.BASE)"], cwd=Path(__file__).parent, env=env, capture_output=True, text=True, check=True)
+    assert py.stdout.split() == ["feat/other", "origin/feat/other"]
+    sh = subprocess.run(["bash", "-c", '. "$1"; echo $LAND_BRANCH', "_", str(Path(__file__).parent / "landing" / "branch.sh")], env=env, capture_output=True, text=True, check=True)
+    assert sh.stdout.strip() == "feat/other"
+    unset = {k: v for k, v in os.environ.items() if k != "LAND_BRANCH"}
+    sh = subprocess.run(["bash", "-c", '. "$1"; echo $LAND_BRANCH', "_", str(Path(__file__).parent / "landing" / "branch.sh")], env=unset, capture_output=True, text=True, check=True)
+    assert sh.stdout.strip() == "release/next"
+
+
+def test_no_tool_defaults_to_the_old_integration_branch():
+    """behavioural, postland, precheck_pr, sweep_hourly, readiness, pindiff, parity_smoke, qcport_sweep, nightly_integration and prepush kept a literal origin/feat/parity default after the switch."""
+    root = Path(__file__).parent
+    stale = [f"{p.relative_to(root)}:{n}" for p in root.rglob("*.py") if ".venv" not in p.parts and not p.name.startswith("test_") and p != Path(__file__)
+             for n, line in enumerate(p.read_text().splitlines(), 1) if "feat/parity" in line.split("#")[0] and ('"origin/feat/parity' in line or ' "feat/parity"' in line or "origin/feat/parity\"" in line)]
+    assert stale == []
+
+
+def test_a_pr_that_changes_pass_code_without_a_complexity_line_warns_and_one_with_it_does_not(tmp_path, monkeypatch, capsys):
+    """The 10-31 rule: a new or changed pass states its complexity. Warn only: the PR still passes the precheck."""
+    pass_file = {"path": "crates/opt/llrm-transforms/src/licm.rs"}
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH, "files": [pass_file]}
+    assert ps.complexity_warning("7", {**info, "body": "TL;DR\nOwner: w6"}).startswith("7: WARN: pass code changed and the description has no `Complexity:`")
+    assert ps.complexity_warning("7", {**info, "body": None}) is not None
+    assert ps.complexity_warning("7", {**info, "body": "Complexity: O(n) per loop, the pin's bound"}) is None
+    assert ps.complexity_warning("7", {**info, "body": "x", "files": [{"path": "crates/opt/llrm-transforms/src/licm_tests.rs"}, {"path": "docs/x.md"}]}) is None, "tests and docs are not pass code"
+    assert ps.complexity_warning("7", {"body": "x"}) is None, "no file list read: nothing to name"
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    tree = Tree(set(), set())
+    for n, body in enumerate(("x", "Complexity: O(n)")):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS", "a warning never blocks"
+        assert (f"{n}: WARN: pass code changed and the description has no `Complexity:`" in capsys.readouterr().err) == (n == 0)
+
+
+def test_a_pass_pr_without_a_class_and_two_programs_warns_and_one_with_both_does_not(tmp_path, monkeypatch, capsys):
+    """The 10-31 rule: no row-shaped patch. A pass PR names the class it covers and at least two programs it helps; warn only."""
+    info = {"headRefOid": "h" * 40, "baseRefName": ps.BRANCH, "files": [{"path": "crates/opt/llrm-transforms/src/licm.rs"}]}
+    both = "Class: loop-invariant float loads\nPrograms: nbody, mandel"
+    assert ps.generality_warning("7", {**info, "body": "Complexity: O(n)"}) == "7: WARN: pass code changed and the description lacks a `Class:` line (the class it covers) and a `Programs:` line naming at least two programs it helps"
+    assert "`Programs:`" in ps.generality_warning("7", {**info, "body": "Class: x\nPrograms: sieve"}), "one program is a one-row patch"
+    assert "`Class:`" in ps.generality_warning("7", {**info, "body": "Programs: a, b"})
+    assert ps.generality_warning("7", {**info, "body": both}) is None
+    assert ps.generality_warning("7", {**info, "body": "x", "files": [{"path": "docs/x.md"}]}) is None
+    monkeypatch.setattr(ps, "git", lambda *args, cwd=None: "")
+    tree = Tree(set(), set())
+    for n, body in enumerate(("x", both)):
+        line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
+        assert line == f"{n}: PASS"
+        assert (f"{n}: WARN: pass code changed and the description lacks a `Class:`" in capsys.readouterr().err) == (n == 0)
+
+
+def fake_gh(state="MERGED", head="w6/some-work", cross=False, delete_rc=0):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"state": state, "headRefName": head, "isCrossRepository": cross}), stderr="")
+        return SimpleNamespace(returncode=delete_rc, stdout="", stderr="")
+
+    return run, calls
+
+
+def deletes(calls):
+    return [c for c in calls if c[:4] == ["gh", "api", "-X", "DELETE"]]
+
+
+def test_a_landed_prs_head_branch_is_deleted_because_the_runner_pushes_to_release_next_itself_and_github_never_deletes_it():
+    """Merged branches piled up (the runner lands by pushing to release/next, so GitHub's delete-on-merge never fires)."""
+    run, calls = fake_gh()
+    assert "deleted" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)
+    assert [c[-1] for c in deletes(calls)] == ["repos/{owner}/{repo}/git/refs/heads/w6/some-work"]
+
+
+def test_a_head_branch_is_kept_when_github_has_not_marked_the_pr_merged_because_deleting_it_would_close_the_pr_unmerged():
+    run, calls = fake_gh(state="OPEN")
+    assert "kept" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None, tries=3)
+    assert deletes(calls) == []
+
+
+@pytest.mark.parametrize("head,cross", [("release/next", False), ("main", False), ("their-fork-branch", True)])
+def test_the_integration_branches_and_forks_are_never_deleted(head, cross):
+    run, calls = fake_gh(head=head, cross=cross)
+    assert "kept" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)
+    assert deletes(calls) == []
+
+
+def test_a_failed_delete_is_reported_not_raised_because_the_landing_is_already_done():
+    run, calls = fake_gh(delete_rc=1)
+    assert "not deleted" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)

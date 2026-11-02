@@ -1039,3 +1039,31 @@ b0:
     assert!(!aa.mod_ref_instructions(ended, load_a) && aa.mod_ref_instructions(ended, load_b));
     assert!(!aa.mod_set_call(store, ended), "a store to %a against a call that touches %b");
 }
+
+/// MemorySSA.cpp#L298: an `invariant.start` shows up as a def that touches
+/// the memory it covers, but it is a marker and clobbers no query. A call after
+/// it was clobbered by it (the call's attributes against the start's).
+#[test]
+fn test_an_invariant_start_clobbers_no_later_call() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @ext(ptr)
+
+define void @f(ptr %q, ptr %p) {
+b0:
+  %s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  call void @ext(ptr %p)
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let mssa = Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses, unit.function));
+    let aa = AliasQuery::new(&unit, &accesses);
+    let insts: Vec<_> = unit.function.iter_block(crate::testing::block(unit.function, "b0")).collect();
+    let (start, ext) = (insts[0], insts[1]);
+    let def = mssa.get_memory_access(start).expect("the start is a def");
+    assert!(!super::walker::instruction_clobbers_query(&mssa, &aa, def, None, Some(ext)), "a marker clobbers nothing");
+}

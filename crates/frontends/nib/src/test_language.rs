@@ -3717,3 +3717,17 @@ fn repr_c_packs_to_the_targets_alignment() {
             .contains("pack is 1 or 2")
     );
 }
+
+/// examples/level.nib at -m32 was refused as invalid HIR ("projection exceeds
+/// place"): a packed 3-byte record copied whole projected a dword, a word
+/// wider than the record.
+#[test]
+fn test_a_record_narrower_than_a_word_copies_whole_with_valid_hir_at_m32() {
+    let source = "@repr(\"c16\", pack=1)\nstruct Face:\n    plane: u16\n    side: u8\n\n\
+                  fn make() -> Face:\n    return Face(plane=1, side=2)\n\n\
+                  fn use_it() -> u8:\n    let copy = make()\n    return copy.side\n";
+    let module = super::parse(super::lex(source).expect("lexes")).expect("parses");
+    let frontend = crate::Frontend::for_target(&llrm_x86_m32::M32).unwrap();
+    let hir = super::compile_module(module, "t", &frontend).expect("compiles");
+    codec::decode(&hir).expect("valid HIR");
+}

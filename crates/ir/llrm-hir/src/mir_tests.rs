@@ -318,11 +318,62 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
-        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"),
+        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !10\n"),
         "{text}"
     );
     assert!(
-        text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"),
+        text.contains("!1 = !{!\"place\", !5, i64 0}\n") && text.contains("!9 = !{!\"allocation.0\", !3, i64 0}\n"),
+        "{text}"
+    );
+}
+
+/// SORT's loop reloaded its array parameter's descriptor words every trip: the
+/// accesses through a parameter's pointer carried no `!tbaa`, so an element
+/// store might have written them. A descriptor word is tagged `place`; an
+/// element of an array no function-local place owns, the generic `allocation`.
+#[test]
+fn a_parameter_arrays_descriptor_and_elements_are_tagged_apart() {
+    use llrm_mir::facts::{Fact, Region};
+
+    use crate::facts::{Builder, Subject};
+    use crate::model::{AddressKind, IndirectPlace};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset| {
+        Operand::IndirectPlace(IndirectPlace {
+            base,
+            offset,
+            r#type: 1,
+            volatile: false,
+            origin: None,
+            allocation: None,
+            member: None,
+        })
+    };
+    let instructions = vec![
+        Instruction::new(1, Op::Load, vec![3], vec![indirect(1, 2)]),
+        Instruction::new(2, Op::Store, vec![], vec![indirect(2, 0), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "FILL", 0, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    program.modules[0].types.push(far);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Access(Region::Descriptor));
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Access(Region::Element));
+    program.modules[0].facts = facts.finish();
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains(", !tbaa !2\n"), "{text}");
+    assert!(text.contains("!4\n"), "{text}");
+    assert!(
+        text.lines().any(|line| line.contains("load i16") && line.ends_with("!tbaa !2"))
+            && text.lines().any(|line| line.contains("store i16") && line.ends_with("!tbaa !4")),
         "{text}"
     );
 }
@@ -964,9 +1015,9 @@ fn a_languages_promises_reach_mir() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !11\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
     assert!(text.contains(body), "{text}");
-    assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
+    assert!(text.contains("!10 = !{!\"int2\", !9, i64 0}\n!11 = !{!10, !10, i64 0}"), "{text}");
 }
 
 /// An exported object is defined, a literal private, and another module's
@@ -2138,4 +2189,23 @@ fn test_lowering_reserves_the_functions_instructions() {
     let (_, lowered) = emitted.module.function_mut("DIFF%").expect("lowered");
     assert_eq!(lowered.instruction_count(), 10);
     assert_eq!(lowered.instruction_capacity(), 10);
+}
+
+/// A relocation's addend was always an `i16` index (`getelementptr (i8, ptr @s,
+/// i16 8)`), whatever the pointer: on a flat 32-bit target the backends took it
+/// for a sign-extended 16-bit offset and the 64-bit one patched the text. The
+/// offset is as wide as the near pointer.
+#[test]
+fn a_relocation_addend_is_as_wide_as_the_near_pointer() {
+    use crate::model::{AddressKind, DataObject, DataRelocation};
+    let mut object = DataObject::new(3, "payload", vec![0, 0, 0, 0, 0, 0, 0, 0]);
+    object.relocations = vec![DataRelocation { at: 0, target: 3, addend: 8, address: AddressKind::Near, code: false }];
+    for (description, index) in [(FLAT, "i32 8)"), (REAL, "i16 8)")] {
+        let mut program = program(difference());
+        program.modules[0].data = vec![object.clone()];
+        let layout = Layout::parse(description).unwrap();
+        let emitted = crate::mir::emit(&program, &layout).remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains(&format!("@payload, {index}")), "{text}");
+    }
 }

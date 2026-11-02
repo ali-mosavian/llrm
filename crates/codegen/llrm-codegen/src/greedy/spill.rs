@@ -10,11 +10,11 @@
 //! other range, so the weight calculation marks them not spillable and the
 //! allocator gives them a register by evicting, or by recoloring.
 //!
-//! DEVIATE (no number yet, S1b): the reload and the store are placeholder
-//! instructions that name the new register and nothing else (no frame cell, no
-//! x86 form); folding a reload into its user (`foldMemoryOperand`),
-//! rematerialization (`reMaterializeAll`), spill hoisting and sibling sharing
-//! of stack slots are not translated.
+//! This is the placeholder spiller (`Mode::Simple`): the reload and the store
+//! name the new register and nothing else (no frame cell, no x86 form). The
+//! allocator that ships writes spills through `inlinespiller.rs`, which has
+//! `foldMemoryOperand`, rematerialization (`remat.rs`) and spill hoisting
+//! (`hoistspill.rs`); sibling sharing of stack slots is not translated.
 //!
 //! # Example
 //! `%7` read at 48 and written at 64: two new registers, `[reload, 48r)` and

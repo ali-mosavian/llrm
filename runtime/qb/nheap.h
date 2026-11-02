@@ -29,6 +29,7 @@ typedef void (*LhMoved)(void *data, int delta);
 void lh_on_move(enum LhType type, LhMoved moved);
 
 void nh_init(char *first, char *top);
+void nh_clear(void);
 void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file);
 void lh_free(void *data);
 void lh_compact(void);

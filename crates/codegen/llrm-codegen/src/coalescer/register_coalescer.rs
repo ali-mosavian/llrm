@@ -151,6 +151,9 @@ pub fn join_copy(
     let Some(mut cp) = CoalescerPair::set_registers(&copy_insn, env) else {
         return JoinResult::Rejected;
     };
+    if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
     let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy));
     // Dead code elimination. This really should be handled by MachineDCE, but
     // sometimes dead copies slip through, and we can't generate invalid live
@@ -182,9 +185,22 @@ pub fn join_copy(
         lis.remove_instr(block, copy);
         return JoinResult::Joined;
     }
-    // When possible, let DstReg be the larger interval.
-    if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
+    // When possible, let DstReg be the larger interval; a kept value stays.
+    let (keeps_src, keeps_dst) = (env.keeps(cp.src_reg()), env.keeps(cp.dst_reg()));
+    if keeps_src != keeps_dst {
+        if keeps_src {
+            cp.flip();
+        }
+    } else if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
         cp.flip();
+    }
+    // A value joined into a pinned one takes the units of its register: no
+    // range on an overlapping register may meet it.
+    if env.keeps(cp.dst_reg()) {
+        let joining = lis.interval(cp.src_reg()).clone();
+        if env.aliases(cp.dst_reg()).into_iter().any(|other| lis.interval(other).overlaps(&joining)) {
+            return JoinResult::Rejected;
+        }
     }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {

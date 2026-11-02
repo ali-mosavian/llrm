@@ -180,6 +180,9 @@ pub struct InlineParams {
     /// `AllowRecursiveCall`: a callee that calls itself is priced, not
     /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
     pub allow_recursive_call: bool,
+    /// With `allow_recursive_call`, the largest recursive callee (`gcc_insns`)
+    /// priced rather than refused.
+    pub recursive_callee_limit: i64,
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
@@ -212,6 +215,7 @@ impl InlineParams {
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
             allow_recursive_call: false,
+            recursive_callee_limit: i64::MAX,
             last_call_to_static: true,
             tti: Tti::Generic,
         }
@@ -1463,7 +1467,10 @@ impl<'a> Analyzer<'a> {
         };
         // `F == Call.getCalledFunction()`: "This flag will fully abort the
         // analysis" unless the params allow a recursive call (:2481).
-        if target == self.site.callee_id && !self.params.allow_recursive_call {
+        if target == self.site.callee_id
+            && (!self.params.allow_recursive_call
+                || crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit)
+        {
             self.is_recursive_call = true;
             return false;
         }
@@ -2003,9 +2010,14 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size != CallerSize::Speed
-            && !self.site.sole_call_to_local
-            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
+        let grows = !self.site.sole_call_to_local
+            && self.site.tti.is_some_and(|tti| {
+                if self.site.caller_size == CallerSize::Speed {
+                    tti.speed_inline_by_code_size()
+                } else {
+                    tti.opt_size_inline_by_code_size()
+                }
+            })
             && self.size_units > self.call_size();
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
@@ -2620,7 +2632,11 @@ pub fn sites_with_trials(
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
         let worth = blocked
             && trials.is_some()
-            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+            && if size == CallerSize::Speed {
+                !always_only
+            } else {
+                goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee)
+            };
         if !decision.inline && !worth {
             continue;
         }

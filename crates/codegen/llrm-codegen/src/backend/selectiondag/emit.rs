@@ -53,14 +53,14 @@ use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
 use llrm_support::hash::HashMap;
 
-use super::dag::{NodeData, SDValue, SelectionDAG};
+use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::{EVT, MVT};
 use super::opcodes::OpcodeMap;
 use super::schedule::Unit;
 use crate::backend::isel::{_read, _written};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, Phi};
+use crate::model::lir::{Insn, PairKind, Phi};
 
 /// Why a node was not emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -476,6 +476,7 @@ pub fn emit_in(
                     }
                 }
             }
+            emitter.mark_pair(node, before);
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }
@@ -631,6 +632,18 @@ fn fold_immediate_pushes(
 /// address no instruction encodes (`mov [sp+2], ax` stopped 32 QCport modules
 /// from assembling).
 ///
+/// The constant a store of the minsize patterns writes: `and [m], 0` stores 0,
+/// `or [m], -1` stores -1 (the pin's `classifyInstruction` converts both).
+fn constant_store(what: &Semantics) -> Option<i64> {
+    let [Loc::Mem(_)] = &what.dests[..] else { return None };
+    let Some(Loc::Imm(imm)) = what.sources.get(1) else { return None };
+    match (what.op, what.name.as_deref()) {
+        (Operation::Binary, Some("and")) if imm.value == 0 => Some(0),
+        (Operation::Binary, Some("or")) if imm.value == -1 => Some(-1),
+        _ => None,
+    }
+}
+
 /// A floating argument cannot be pushed (`fstp` stores to memory): an area with
 /// one is stored through a register that holds the stack pointer, `mov bx, sp`
 /// and `fstp [bx+k]`, as the old selector does.
@@ -687,8 +700,14 @@ fn pushed_arguments(
         let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
             .filter(|&place| is_store(&insns[place]))
             .inspect(|&place| {
-                // Only a move of a word or a dword can be a push.
-                if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move) {
+                // Only a move of a word or a dword can be a push, or the
+                // `and`/`or` the minsize patterns store 0 and -1 with
+                // (`classifyInstruction`).
+                if insns[place]
+                    .what
+                    .as_ref()
+                    .is_some_and(|what| what.op != Operation::Move && constant_store(what).is_none())
+                {
                     // DEVIATE SD405: tuned for size, a popped x87 store is
                     // made with its own area (below); the stackifier pops it.
                     if split_wide.is_some() && is_float_store(&insns[place]) {
@@ -829,7 +848,10 @@ fn pushed_arguments(
                 pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(store), old.defines.clone(), uses)));
                 continue;
             }
-            let source = what.sources[0].clone();
+            let source = match constant_store(what) {
+                Some(value) => Loc::Imm(Imm { value, width: width as u32, address: None }),
+                None => what.sources[0].clone(),
+            };
             let uses = old.uses.clone();
             let halves = match (&source, split_wide) {
                 (Loc::Imm(imm), Some(word)) => word_halves(imm, word).map(|halves| (halves, word)),
@@ -1077,6 +1099,29 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// The join a `PAIR_FAR`/`PAIR_LONG` node selected to is its last
+    /// instruction.
+    fn mark_pair(
+        &mut self,
+        node: u32,
+        before: usize,
+    ) {
+        let flags = self.dag.node(SDValue { node, res: 0 }).flags;
+        let kind = if flags.has(SDNodeFlags::PAIR_FAR) {
+            PairKind::Far
+        } else if flags.has(SDNodeFlags::PAIR_LONG) {
+            PairKind::Long
+        } else {
+            return;
+        };
+        let Some(block) = self.blocks.last_mut() else { return };
+        if block.insns.len() > before
+            && let Some(last) = block.insns.last_mut()
+        {
+            *last = Arc::new(Insn { pair: Some(kind), ..(**last).clone() });
+        }
+    }
+
     fn mark_invariant_loads(
         &mut self,
         before: usize,
@@ -1208,6 +1253,15 @@ impl Emitter<'_, '_> {
                     }
                     NodeData::PhysReg(register) if register == self.ctx.stack_pointer => {
                         self.sp_values.insert(result);
+                        // A read the chain orders (`stacksave`) is the pointer
+                        // now, not where its value is used.
+                        if self.dag.has_users(SDValue { node: n, res: 1 }) {
+                            let width = width_of(self.ctx.map.scalar_sse(), self.dag, result);
+                            let held = self.fresh(width);
+                            let sp = Reg { register, width };
+                            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(sp)]);
+                            self.values.insert(result, held.value);
+                        }
                     }
                     // The x87 result of a call: the stack's top (`FP0`), which
                     // the stackifier reads as an unnamed load of no cell
@@ -3152,6 +3206,26 @@ impl Emitter<'_, '_> {
                 self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Mem(cell)], ..what });
                 Ok(Some(()))
             }
+            // A jump through a register that holds a table entry's address
+            // (the position-independent table of 64-bit code): the table is
+            // the one the register's sum was made from.
+            "JMP64r" => {
+                let table = self
+                    .jump_table_behind(node.ops[0], 8)
+                    .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
+                let Loc::Held(target) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
+                };
+                let jump = self.jump_table(table)?;
+                let what = Semantics {
+                    indirect: true,
+                    table: jump.targets,
+                    table_id: Some(jump.id),
+                    ..Semantics::new(Operation::Jump)
+                };
+                self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Held(target)], ..what });
+                Ok(Some(()))
+            }
             "MOV32ImmSExti8" => {
                 let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
@@ -3753,7 +3827,19 @@ impl Emitter<'_, '_> {
             {
                 return Err(EmitError::Unsupported("an address of registers of two widths at m16".to_owned()));
             }
-            let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 { 4 } else { 2 };
+            let disp_width = if wide && self.ctx.address_mode == AddrMode::Real16 {
+                // A base register leaves mod 00/01 to the encoder: the dword
+                // displacement is for the index alone (`[index*scale +
+                // disp32]`).
+                match (base.is_some(), disp) {
+                    (false, _) => 4,
+                    (true, 0) => 0,
+                    (true, -128..=127) => 1,
+                    (true, _) => 4,
+                }
+            } else {
+                2
+            };
             return Ok(Mem { base, index, scale, offset: disp, disp_width, ..Mem::new(Some(address), cell_width) });
         }
         Ok(Mem { base, index, scale, offset: disp, ..Mem::new(None, cell_width) })
@@ -3836,6 +3922,22 @@ impl Emitter<'_, '_> {
         };
         let addr = addr.map(|addr| if index.is_some() { Addr { base: through.iced(), ..addr } } else { addr });
         Ok(Mem { addr, through, index, scale, ..cell })
+    }
+
+    /// The jump table `value` is made from: the `TargetJumpTable` among the
+    /// operands `depth` levels down.
+    fn jump_table_behind(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<u32> {
+        if let NodeData::JumpTable(table) = self.dag.node(value).data {
+            return Some(table);
+        }
+        if depth == 0 {
+            return None;
+        }
+        self.dag.node(value).ops.iter().find_map(|&op| self.jump_table_behind(op, depth - 1))
     }
 
     fn jump_table(
@@ -3954,7 +4056,7 @@ impl Emitter<'_, '_> {
         }
         // The stack pointer itself as a value (`mov edi, esp`, the first byval
         // argument's address): a copy of the register.
-        if self.sp_values.contains(&value) {
+        if self.sp_values.contains(&value) && !self.values.contains_key(&value) {
             let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
             let held = self.fresh(width);
             let sp = Reg { register: self.ctx.stack_pointer, width };

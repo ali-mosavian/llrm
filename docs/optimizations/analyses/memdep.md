@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memdep.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memdep.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memdep.rs sha256:3f81677a20caec4e745dcd2d68a01e5eb4fc1c9299a742235284ff263c0187bf -->
+<!-- src: crates/opt/llrm-analysis/src/memdep.rs sha256:66a30d8e3adbe495f165118b62db1e95d81cc235de74e325e66490808fe2a100 -->
 
 # memdep
 
@@ -41,10 +41,9 @@ b0: store i16 1, ptr %p     ; <- Def of the load below (must alias)
 docs/architecture/gvn-port.md (stage 2).
 
 DEVIATE, permanent (MIR lacks the construct):
-1. Atomics, fences, `va_arg`, masked loads and stores,
-   `invariant.start`/`end`: MIR has none, so the ordering and fence arms of
-   `GetLocation` and of the scan are absent. A volatile access has no
-   location (it is `isUnordered` false).
+1. Atomics, fences, `va_arg`, masked loads and stores: MIR has none, so the
+   ordering and fence arms of `GetLocation` and of the scan are absent. A
+   volatile access has no location (it is `isUnordered` false).
 2. `getInvariantGroupPointerDependency` (and with it `NonLocalDefsCache`,
    only it fills): MIR has no `invariant.group`. A query on an instruction
    that carries one panics, `test_invariant_group_metadata_is_refused`.

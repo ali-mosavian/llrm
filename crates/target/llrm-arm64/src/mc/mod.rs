@@ -16,6 +16,7 @@ pub mod visit;
 #[cfg(test)]
 pub(crate) mod tests;
 
+use llrm_debug::{DebugObjectTarget, Info};
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// arm64's object writers.
@@ -27,14 +28,37 @@ impl ObjectTarget for Arm64Objects {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported> {
-        let expanded;
-        let object = match (format, &object.debug) {
-            ("elf" | "macho", Some(info)) => {
-                expanded = llrm_dwarf::expanded(object, info)?;
-                &expanded
-            }
-            _ => object,
+        self.write_described(format, object, None)
+    }
+
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo> {
+        matches!(format, "macho" | "elf").then_some(AsmInfo {
+            pref_align: false,
+            hosted: true,
+            unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
+            dwarf_relocs_across_sections: format != "macho",
+        })
+    }
+}
+
+impl DebugObjectTarget for Arm64Objects {
+    fn write_described(
+        &self,
+        format: &str,
+        object: &Object,
+        debug: Option<&Info>,
+    ) -> Result<Vec<u8>, Unsupported> {
+        let dwarf = llrm_dwarf::Dwarf {
+            relocs_across_sections: self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
         };
+        let expanded = match format {
+            "elf" | "macho" => llrm_debug::expanded(object, debug, &dwarf)?,
+            _ => std::borrow::Cow::Borrowed(object),
+        };
+        let object = &*expanded;
         match format {
             "macho" if !object.frames.is_empty() => llrm_macho::write(&with_unwind(object)?, &macho::Arm64MachO),
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),
@@ -48,17 +72,12 @@ impl ObjectTarget for Arm64Objects {
         }
     }
 
-    fn asm_info(
+    fn debug_caps(
         &self,
-        format: &str,
-    ) -> Option<AsmInfo> {
-        matches!(format, "macho" | "elf").then_some(AsmInfo {
-            pref_align: false,
-            hosted: true,
-            location_ranges: true,
-            cfa_locations: true,
-            unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
-        })
+        _: &str,
+        _: llrm_debug::Format,
+    ) -> llrm_debug::DebugCaps {
+        llrm_dwarf::CAPS
     }
 }
 

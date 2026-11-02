@@ -3,8 +3,8 @@
 //! (`ForwardStoreValueToDirectLoad`).
 //!
 //! DEVIATE SD216: the rest of `visitLOAD` (alignment inference, indexed and
-//! sliced loads) is not translated, and the forwarding has no big-endian,
-//! vector, float or same-size bitcast cases (x86 is little-endian and the
+//! sliced loads) is not translated, and the forwarding has no vector, float
+//! or same-size bitcast cases (the
 //! combiner holds no vectors or float memory types of another size). Exit:
 //! those ports. Owner w10. Review 2026-11-13.
 //!
@@ -97,6 +97,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let NodeData::Mem(ld) = self.dag.node(node).data else { return None };
         let (store, offset) = self.unique_store_feeding(node)?;
         let NodeData::Mem(st) = self.dag.node(store).data else { return None };
@@ -112,7 +115,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if ![ld_type, ld_mem, st_type, st_mem].iter().all(|vt| vt.is_integer()) {
             return None;
         }
-        // Little endian: offset 0 is the stored value's least significant byte.
+        // Normalize for endianness: offset 0 is then the stored value's least
+        // significant byte.
+        let store_bits = |vt: EVT| i64::from(vt.size_in_bits().div_ceil(8) * 8);
+        let offset =
+            if self.dag.config().big_endian { (store_bits(st_mem) - store_bits(ld_mem)) / 8 - offset } else { offset };
         // Check that the stored value covers all bits that are loaded.
         let covers = offset >= 0 && offset * 8 + i64::from(ld_mem.size_in_bits()) <= i64::from(st_mem.size_in_bits());
         if !covers {

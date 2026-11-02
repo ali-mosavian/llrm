@@ -136,6 +136,18 @@ pub struct Wrapped {
 /// The DAG queries and constructors the address matchers need on top of
 /// [`Dag`].
 pub trait AddrDag: Dag {
+    /// `computeKnownBits(value).Zero`, within the value's width. A DAG with no
+    /// known-bits analysis answers [`known_zero`], the structural subset
+    /// (SD40).
+    fn known_zero_bits(
+        &self,
+        value: SDValue,
+    ) -> u64
+    where
+        Self: Sized,
+    {
+        known_zero(self, value, 0)
+    }
     /// `SelectionDAG::isADDLike`: an `OR` of disjoint bits, or an `XOR` with
     /// the sign bit.
     fn is_add_like(
@@ -828,7 +840,10 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
             isd::SUB => {
                 let backup = *am;
-                if self.match_address_recursively(self.operand(n, 0), am, depth + 1) || am.index_reg.is_some() {
+                if self.match_address_recursively(self.operand(n, 0), am, depth + 1)
+                    || am.index_reg.is_some()
+                    || self.is_rip_relative(am)
+                {
                     *am = backup;
                 } else if !self.fold_sub_rhs(n, am, &backup) {
                     return false;

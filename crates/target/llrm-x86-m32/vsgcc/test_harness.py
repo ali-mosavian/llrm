@@ -1,4 +1,5 @@
 """Regression tests of the instrument: each name says what went wrong and what it produced."""
+import os
 import json
 from pathlib import Path
 
@@ -146,6 +147,25 @@ def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
     assert "bench_io.h" not in listed and "programs.py" in (HERE / "run.sh").read_text()
 
 
+def test_ctime_times_the_programs_programs_py_lists_and_no_file():
+    """`ctime.py` listed `ls bench` and timed `bench_io.h` as a program: the run stopped before writing ctime.json."""
+    import importlib
+    import ctime
+    importlib.reload(ctime)
+    names = sorted(ctime.programs.sources())
+    assert names and "bench_io.h" not in names and all(ctime.cmds(n) for n in names), names
+
+
+def test_levels_time_gives_llrm_cc_its_tree_and_skips_programs_gcc_cannot_build(monkeypatch):
+    """`levels_time.py` ran llrm-cc without LLRM_OW (the -O0 bench/bintree compile exited 1) and handed gcc bench/jpeg_fixed, which needs bench_io.h."""
+    import levels_time
+    monkeypatch.delenv("LLRM_OW", raising=False)
+    levels_time.setup()
+    assert os.environ.get("LLRM_OW")
+    names = levels_time.bench_sources()
+    assert "bintree" in names and "jpeg_fixed" not in names, sorted(names)
+
+
 def test_every_x87_encoding_has_a_clock_price():
     """#1659 made an unpriced x87 instruction an error, and `frndint` (Open Watcom's float-to-int, in floats and fpbench) was
     one: tools/bench died on those programs and main's gate failed. Every encoding of D8-DF, 16- and 32-bit, is priced."""
@@ -201,3 +221,14 @@ def test_code_bytes_counts_text_only_not_the_unwind_tables_the_pin_emits(tmp_pat
     assert done.returncode == 0, done.stderr
     monkeypatch.setattr(harness, "OUT", tmp_path)
     assert harness.code_bytes("p", "pinllc") == 100
+
+
+def test_data_bytes_counts_the_constants_gcc_keeps_in_rodata_not_only_text(tmp_path, monkeypatch):
+    """The m32 table's bytes were .text only: gcc's 12 B of .rodata.cst4 in fpbench was invisible and llrm's constants in _DATA likewise, though the order was .text plus data."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\n.fill 100,1,0x90\n.section .rodata.cst4,\"aM\",@progbits,4\n.long 1,2,3\n.data\n.long 1\n.bss\n.fill 64\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.gccO2.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    assert harness.data_bytes("p", "gccO2") == 16

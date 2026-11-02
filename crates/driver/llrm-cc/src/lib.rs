@@ -106,6 +106,8 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -364,14 +366,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             // clang writes the debug metadata, the backend the format `flag`
             // names.
             if !build.clang.iter().any(|one| one == "-g") {
-                // No `#dbg_assign`: the importer reads `#dbg_value` and
-                // `#dbg_declare` only.
-                build
-                    .clang
-                    .extend(
-                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
-                            .map(str::to_owned),
-                    );
+                // The backend makes the `#dbg_assign`s itself
+                // (`AssignmentTrackingPass`).
+                build.clang.extend(["-g", "-fdebug-compilation-dir=."].map(str::to_owned));
             }
             build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {

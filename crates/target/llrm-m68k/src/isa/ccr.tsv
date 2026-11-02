@@ -1,0 +1,26 @@
+# Condition codes each instruction leaves, as M68000PRM (the "Condition Codes:" block of its page) gives them.
+# Symbols: * set according to the result (N, Z) or to the operation (X, V, C); - unaffected; 0 cleared; 1 set;
+# U undefined; ~ Z cleared if the result is nonzero, else unchanged (extended-precision forms).
+# tests/ccr.rs runs each row under qemu: it is the second reader of the manual.
+# mnemonic	X	N	Z	V	C	page
+add	*	*	*	*	*	ADD
+addx	*	*	~	*	*	ADDX
+and	-	*	*	0	0	AND
+asr	*	*	*	*	*	ASL, ASR
+eor	-	*	*	0	0	EOR
+eori	-	*	*	0	0	EORI
+ext	-	*	*	0	0	EXT, EXTB
+lsl	*	*	*	0	*	LSL, LSR
+lsr	*	*	*	0	*	LSL, LSR
+move	-	*	*	0	0	MOVE
+muls	-	*	*	*	0	MULS
+mulu	-	*	*	*	0	MULU
+neg	*	*	*	*	*	NEG
+negx	*	*	~	*	*	NEGX
+not	-	*	*	0	0	NOT
+or	-	*	*	0	0	OR
+rol	-	*	*	0	*	ROL, ROR
+ror	-	*	*	0	*	ROL, ROR
+sub	*	*	*	*	*	SUB
+subx	*	*	~	*	*	SUBX
+swap	-	*	*	0	0	SWAP
