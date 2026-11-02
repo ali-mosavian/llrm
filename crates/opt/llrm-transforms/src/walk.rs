@@ -224,6 +224,7 @@ impl ProgramPass for Walk {
             self.inline.limit != 0,
             program.target.tti().as_deref(),
         );
+        let byte_costs = program.target.size_costs();
         let mut params = crate::inlinecost::InlineParams {
             allow_recursive_call: recursion.is_some(),
             recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
@@ -236,8 +237,8 @@ impl ProgramPass for Walk {
                     clocks: costs.call + costs.return_,
                     per_argument: costs.argument,
                     milliclocks_per_byte: tti.speed_milliclocks_per_byte(),
-                    bytes_per_unit: program.target.size_costs().add,
                 });
+                params.byte_costs = Some(&byte_costs);
             }
         }
         // The target's tuning table.
@@ -859,7 +860,7 @@ const TRIAL_CALLER: usize = 300;
 /// carrying its operand-size prefix, a divide by a constant its multiply-high
 /// sequence. The `CodeSize` units of the cost model count instructions of
 /// the pin's x86, not bytes of a 16-bit encoding.
-fn function_bytes(
+pub(crate) fn function_bytes(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     costs: &llrm_mir::target::OperationCosts,

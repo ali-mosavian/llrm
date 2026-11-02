@@ -374,18 +374,23 @@ b0:
 ";
     let guarded = x86_real()
         .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_speed: true, ..llrm_mir::target::Tuning::PIN });
+    let bytes = {
+        use llrm_mir::target::Machine;
+        llrm_x86_m16::Dos::default().size_costs()
+    };
     let at = |priced_call| {
         let params = InlineParams {
             compute_full_inline_cost: true,
             priced_call: Some(priced_call),
+            byte_costs: Some(&bytes),
             ..InlineParams::from_level(2)
         };
         let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&guarded), params, (2, false));
         cost < threshold
     };
     let (dear, cheap) = (
-        PricedCall { clocks: 1000, per_argument: 6, milliclocks_per_byte: 500, bytes_per_unit: 4 },
-        PricedCall { clocks: 1, per_argument: 0, milliclocks_per_byte: 500, bytes_per_unit: 4 },
+        PricedCall { clocks: 1000, per_argument: 6, milliclocks_per_byte: 500 },
+        PricedCall { clocks: 1, per_argument: 0, milliclocks_per_byte: 500 },
     );
     assert!(!at(cheap), "a call worth one clock does not pay for the bytes");
     assert!(at(dear), "a call worth a thousand clocks pays for them");

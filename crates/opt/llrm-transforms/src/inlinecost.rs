@@ -168,7 +168,7 @@ const COLD_CC: u32 = 9;
 /// `InlineParams` (InlineCost.h:200-240) as `getInlineParams` makes them
 /// (InlineCost.cpp:3376-3433, 3435).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct InlineParams {
+pub struct InlineParams<'a> {
     pub default_threshold: i64,
     pub hint_threshold: i64,
     pub opt_size_hint_threshold: i64,
@@ -196,6 +196,9 @@ pub struct InlineParams {
     /// caller's growth to the code (`Tti::speed_inline_by_code_size`): growth
     /// is allowed where the call's clocks pay for the bytes.
     pub priced_call: Option<PricedCall>,
+    /// With `priced_call`, the target's code bytes by operation
+    /// (`Machine::size_costs`), which price the copy.
+    pub byte_costs: Option<&'a llrm_mir::target::OperationCosts>,
 }
 
 /// What a call costs in clocks beyond its own instruction, and what a byte of
@@ -207,9 +210,6 @@ pub struct PricedCall {
     /// Each argument word pushed and read back.
     pub per_argument: i64,
     pub milliclocks_per_byte: i64,
-    /// Bytes of code one `CodeSize` unit of the callee comes to: the target's
-    /// ALU instruction (`size_costs().add`).
-    pub bytes_per_unit: i64,
 }
 
 /// The cost model of the target (D2): the generic one is what `opt` has
@@ -222,7 +222,7 @@ pub enum Tti {
     Basic,
 }
 
-impl InlineParams {
+impl InlineParams<'_> {
     /// `getInlineParams(Threshold)`.
     pub fn new(threshold: i64) -> Self {
         Self {
@@ -241,6 +241,7 @@ impl InlineParams {
             last_call_to_static: true,
             tti: Tti::Generic,
             priced_call: None,
+            byte_costs: None,
         }
     }
 
@@ -474,7 +475,7 @@ enum Simple {
 /// one analysis of one site.
 struct Analyzer<'a> {
     site: &'a Site<'a>,
-    params: InlineParams,
+    params: InlineParams<'a>,
     context: &'a Context,
     callee: &'a Function,
     // CallAnalyzer state.
@@ -516,7 +517,7 @@ struct Analyzer<'a> {
 impl<'a> Analyzer<'a> {
     fn new(
         site: &'a Site<'a>,
-        params: InlineParams,
+        params: InlineParams<'a>,
     ) -> Self {
         Self {
             site,
@@ -2045,7 +2046,10 @@ impl<'a> Analyzer<'a> {
         };
         let arguments = self.site.caller.instruction(self.site.call).operands.len().saturating_sub(1) as i64;
         let clocks = (price.clocks + arguments * price.per_argument) as f64 * self.site.relative_frequency.unwrap_or(1.0);
-        let growth = ((self.size_units - self.call_size()) * price.bytes_per_unit) as f64;
+        let Some(bytes) = self.params.byte_costs else { return false };
+        let growth = (crate::walk::function_bytes(self.site.module, self.site.layout, bytes, self.callee)
+            - bytes.call_overhead(arguments as usize))
+        .max(0) as f64;
         price.milliclocks_per_byte > 0 && growth * price.milliclocks_per_byte as f64 <= clocks * 1000.0
     }
 
@@ -2087,7 +2091,7 @@ impl<'a> Analyzer<'a> {
 /// always or never to be inlined.
 pub fn inline_cost(
     site: &Site,
-    params: InlineParams,
+    params: InlineParams<'_>,
 ) -> InlineCost {
     if let Some(decision) = attribute_decision(site) {
         return match decision {
@@ -2313,7 +2317,7 @@ pub fn shadow(
     layout: &DataLayout,
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
-    params: InlineParams,
+    params: InlineParams<'_>,
 ) {
     for (at, global) in module.globals.iter().enumerate() {
         let GlobalKind::Function(caller) = &global.kind else { continue };
@@ -2620,7 +2624,7 @@ pub fn sites(
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
-    params: InlineParams,
+    params: InlineParams<'_>,
     size: CallerSize,
     always_only: bool,
     tti: Option<&dyn llrm_mir::tti::Tti>,
@@ -2654,7 +2658,7 @@ pub fn sites_with_trials(
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
-    params: InlineParams,
+    params: InlineParams<'_>,
     size: CallerSize,
     always_only: bool,
     tti: Option<&dyn llrm_mir::tti::Tti>,
@@ -2723,7 +2727,7 @@ pub struct DecideContext<'a> {
     /// The functions whose address is taken.
     pub addressed: &'a BTreeSet<GlobalId>,
     pub recursive: &'a BTreeSet<GlobalId>,
-    pub params: InlineParams,
+    pub params: InlineParams<'a>,
     pub size: CallerSize,
     /// `-fno-inline-functions`: only `alwaysinline` is inlined.
     pub always_only: bool,
