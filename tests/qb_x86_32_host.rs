@@ -3,8 +3,9 @@
 //! by `cc -m32` and run natively. The runtime is C: the object calls it by the
 //! C family, not by Open Watcom's registers (which the DOS flat target's
 //! runtime is written for), and every procedure frames itself.
-//! A machine without 32-bit libc development files fails here by name; it does
-//! not skip.
+//! A machine without 32-bit libc development files (`cc -m32` cannot include
+//! errno.h) prints `SKIPPED: why` and passes, and fails where
+//! `LLRM_REQUIRE_LIBC32` is set (tools/gate/tiers.toml, capability `libc32`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,30 @@ use std::process::Command;
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Whether `cc -m32` can compile against the host's libc headers; when not,
+/// says so on stderr, and fails where `LLRM_REQUIRE_LIBC32` is set.
+fn host_links_32_bit() -> bool {
+    let probe = Command::new("cc")
+        .args(["-m32", "-x", "c", "-", "-o", "/dev/null"])
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            std::io::Write::write_all(
+                child.stdin.as_mut().unwrap(),
+                b"#include <errno.h>\nint main(void) { return 0; }\n",
+            )?;
+            child.wait()
+        });
+    if probe.is_ok_and(|status| status.success()) {
+        return true;
+    }
+    let reason = "needs 32-bit libc development files (`cc -m32` cannot include errno.h)";
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
+    assert!(std::env::var_os("LLRM_REQUIRE_LIBC32").is_none(), "LLRM_REQUIRE_LIBC32 is set, and: {reason}");
+    false
 }
 
 /// Compiles `source`, links it with the runtime, runs it with `environment`;
@@ -89,6 +114,9 @@ fn run(
 /// the stack held and the program crashed (SIGSEGV).
 #[test]
 fn print_hello_runs_natively_on_x86_32() {
+    if !host_links_32_bit() {
+        return;
+    }
     assert_eq!(run("hello32", b"PRINT \"HELLO\"\nEND\n", &[]).trim_end(), "HELLO");
 }
 
@@ -97,6 +125,9 @@ fn print_hello_runs_natively_on_x86_32() {
 /// places them in its image of that memory.
 #[test]
 fn peek_of_the_pc_low_memory_runs_on_x86_32() {
+    if !host_links_32_bit() {
+        return;
+    }
     let source = b"DEF SEG = 0\r\nPOKE &H417, 5\r\nPRINT PEEK(&H417)\r\nEND\r\n";
     assert_eq!(run("peek32", source, &[]).trim(), "5");
 }
@@ -107,6 +138,9 @@ fn peek_of_the_pc_low_memory_runs_on_x86_32() {
 /// B$ENRA).
 #[test]
 fn nibbles_reaches_its_first_level_on_x86_32() {
+    if !host_links_32_bit() {
+        return;
+    }
     let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
         eprintln!("QB45_DEMOS_DIR is not set: NIBBLES is not in the tree");
         return;
@@ -124,6 +158,9 @@ fn nibbles_reaches_its_first_level_on_x86_32() {
 /// arithmetic on the x87 and the menu text.
 #[test]
 fn gorilla_reaches_its_menu_on_x86_32() {
+    if !host_links_32_bit() {
+        return;
+    }
     let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
         eprintln!("QB45_DEMOS_DIR is not set: GORILLA is not in the tree");
         return;
