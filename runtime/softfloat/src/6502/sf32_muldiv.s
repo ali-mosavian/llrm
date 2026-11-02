@@ -255,8 +255,11 @@ qrow0:                      ; row 0 into the zeroed sum: its first product is st
     sta rc24
     ldx #$fd                ; rc23,x walks the multiplier bytes rc20..rc22 (zero-page wrap)
     clc
+mbyte:
+    ldy #2                  ; two passes of four bits per byte; nothing here touches the carry
+    sty rc25
 mloop:
-.repeat 8
+.repeat 4
     ror a
     ror rc23
     ror rc24
@@ -273,10 +276,11 @@ mloop:
     adc rc18
 :
 .endrepeat
+    dec rc25
+    bne mloop
     inx
-    beq :+
-    jmp mloop
-:   bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
+    bne mbyte
+    bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
     ror a                   ; product >= 2: shift once more, exponent up
     ror rc23
     ror rc24
@@ -657,31 +661,7 @@ ubn:
     sta rc20
     lda #1
     sta rc23
-ubw:
-    lda rc22                ; a zero top byte moves up whole
-    bne ubl
-    lda rc21
-    sta rc22
-    lda rc20
-    sta rc21
-    lda #0
-    sta rc20
-    tya
-    clc
-    adc #8
-    tay
-    bne ubw
-ubl:
-    lda rc22
-    bmi ubok
-    asl rc20
-    rol rc21
-    rol rc22
-    iny
-    bne ubl
-ubok:
-    lda #1
-    rts
+    jmp unw                 ; X = 4: unp's normalization
 .endif
 
 ; ---- unpack operand at offset X (0 a, 4 b): mantissa rc16+X.., exponent rc19+X, Y = normalization shift
