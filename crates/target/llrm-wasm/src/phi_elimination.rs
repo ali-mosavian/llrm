@@ -143,7 +143,7 @@ pub fn split_phi_edges(f: &mut Function) -> bool {
 }
 
 /// A block of one `BR` between `pred` and `block`, laid out after `pred`.
-fn split_edge(
+pub(crate) fn split_edge(
     f: &mut Function,
     pred: usize,
     block: usize,

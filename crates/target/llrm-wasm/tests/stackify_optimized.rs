@@ -319,3 +319,39 @@ fn the_stores_of_a_memset_on_a_stack_object_take_their_offsets() {
     assert!(f.contains("i64.store\t24"), "{text}");
     assert_eq!(f.matches("i32.add").count(), 1, "{text}");
 }
+
+const EXIT_CONSTANT: &str = "declare i1 @g(i32)
+declare i1 @h(i32)
+declare void @k(i32)
+define i32 @f() {
+entry:
+  br label %l
+l:
+  %i = phi i32 [ 0, %entry ], [ %i1, %m ]
+  %a = call i1 @g(i32 %i)
+  br i1 %a, label %e, label %m
+m:
+  %i1 = add i32 %i, 1
+  %c = call i1 @h(i32 %i1)
+  br i1 %c, label %l, label %e
+e:
+  %r = phi i32 [ %i, %l ], [ 32, %m ]
+  %s = mul i32 %r, 3
+  %t = add i32 %s, 7
+  call void @k(i32 %t)
+  ret i32 %t
+}
+";
+
+/// The constant a loop-exit edge feeds a phi was set on every iteration,
+/// before the latch's branch (mandel O2: 439,218 instructions against the
+/// pin's 411,831). The pin's MachineSink splits the edge and sinks the
+/// constant into the new block.
+#[test]
+fn a_constant_for_a_loop_exit_phi_is_set_on_the_exit_edge() {
+    let text = asm(EXIT_CONSTANT, Level::O2);
+    let f = body(&text, "f");
+    let constant = f.find("i32.const\t32").expect("the constant");
+    let end_loop = f.find("end_loop").expect("the loop");
+    assert!(constant > end_loop, "{text}");
+}

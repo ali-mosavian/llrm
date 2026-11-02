@@ -5,23 +5,28 @@
 //!
 //! Runs on the wasm MIR in SSA form, before phi elimination, as in the pin.
 //!
-//! DEVIATE 1: no critical-edge splitting. The pin splits an edge when the
-//! target has several predecessors and does not take the instruction as it
-//! is; here that instruction stays. Exit: the shared machine function (W15),
-//! no later than 2026-11-13.
+//! An edge into a block with several predecessors is split when the
+//! instruction cannot sink along it as it is and splitting is worth it
+//! (`PostponeSplitCriticalEdge`); the instruction sinks into the new block on
+//! the next round.
 //!
-//! DEVIATE 2: a load never sinks into a block with several predecessors (the
+//! DEVIATE 1: a load never sinks into a block with several predecessors (the
 //! pin looks for a store between the two blocks, `hasStoreBetween`); the
 //! register-pressure case of `isProfitableToSinkTo` is "not profitable"; the
 //! successors are ordered by loop depth where the pin uses block frequency;
-//! a function with an irreducible loop is left alone (`FixIrreducible` runs
-//! later here). Exit: the shared live intervals and block frequencies (S4), no
-//! later than 2026-11-20.
+//! an edge is "unlikely" (`SplitEdgeProbabilityThreshold`) when it leaves a
+//! loop, where the pin reads `MachineBranchProbabilityInfo`; the
+//! `CEMergeCandidates` merge of equal copies is left out; a function with an
+//! irreducible loop is left alone (`FixIrreducible` runs later here). Exit:
+//! the shared live intervals, block frequencies and branch probabilities
+//! (S4), no later than 2026-11-20.
 //!
 //! # See also
 //! `MachineSinking::{ProcessBlock, SinkInstruction, FindSuccToSinkTo,
 //! isProfitableToSinkTo, AllUsesDominatedByBlock}`,
 //! `MachineInstr::isSafeToMove`.
+
+use std::collections::HashSet;
 
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::loopinfo::LoopInfo;
@@ -29,7 +34,7 @@ use llrm_mir::module::BlockId;
 
 use crate::cfg::Cfg;
 use crate::dagisel::generated::instrinfo::{desc, flag};
-use crate::mir::{EH_LABEL, Function, IMPLICIT_DEF, Inst, Operand, PHI, VReg};
+use crate::mir::{EH_LABEL, Function, IMPLICIT_DEF, Inst, Operand, PHI, VReg, is_copy};
 
 /// A read of a register: the block of the instruction and, for a `PHI`, the
 /// predecessor the value comes from (where the read happens).
@@ -50,51 +55,43 @@ struct Sink {
     eh_pad: Vec<bool>,
     uses: Vec<Vec<Use>>,
     defs: Vec<u32>,
+    /// `CEBCandidates`: the edges already considered this round.
+    considered: HashSet<(usize, usize)>,
+    /// `ToSplit`: the edges to split at the end of the round.
+    to_split: Vec<(usize, usize)>,
 }
 
 /// Sinks instructions into the successors that use them. Whether anything
 /// moved.
 pub fn machine_sink(f: &mut Function) -> bool {
-    let cfg = Cfg::of(f);
-    let (tree, loops) = cfg.analyses();
-    if cfg.irreducible_edge(&tree).is_some() {
-        return false;
-    }
-    let n = f.blocks.len();
-    let mut post = PostDomTree::new();
-    post.recalculate(&cfg);
-    let mut succs: Vec<Vec<usize>> = Vec::with_capacity(n);
-    let mut pred_count = vec![0; n];
-    for to in &f.succs {
-        let mut seen: Vec<usize> = Vec::new();
-        for &s in to {
-            if !seen.contains(&s) {
-                seen.push(s);
-                pred_count[s] += 1;
-            }
-        }
-        succs.push(seen);
-    }
-    let mut children = vec![Vec::new(); n];
-    for b in 0..n {
-        if let Some(up) = tree.immediate_dominator(BlockId(b as u32)) {
-            children[up.0 as usize].push(b);
-        }
-    }
-    let eh_pad = (0..n).map(|b| f.is_eh_pad(b)).collect();
-    let mut sink = Sink { succs, pred_count, tree, post, loops, children, eh_pad, uses: Vec::new(), defs: Vec::new() };
-    sink.index_registers(f);
     let mut ever = false;
-    loop {
+    // Each round recomputes the analyses, as the pin's `run` does.
+    for _ in 0..f.blocks.len() + 8 {
+        let Some(mut sink) = Sink::of(f) else { return ever };
         let mut changed = false;
-        for b in 0..n {
+        for b in 0..f.blocks.len() {
             changed |= sink.process_block(f, b);
         }
+        // From the last predecessor back, so the blocks still to split keep
+        // their numbers.
+        let mut edges = std::mem::take(&mut sink.to_split);
+        edges.sort_unstable_by(|a, b| b.cmp(a));
+        for at in 0..edges.len() {
+            let (pred, block) = edges[at];
+            crate::phi_elimination::split_edge(f, pred, block);
+            for later in &mut edges[at + 1..] {
+                if later.1 > pred {
+                    later.1 += 1;
+                }
+            }
+        }
+        changed |= !edges.is_empty();
         if !changed {
             return ever;
         }
         ever = true;
     }
+    ever
 }
 
 /// `MachineInstr::isSafeToMove`; `saw_store` is the pin's `SawStore`.
@@ -133,6 +130,52 @@ fn is_safe_to_move(
 }
 
 impl Sink {
+    /// The analyses of `f`, None when it has an irreducible loop.
+    fn of(f: &Function) -> Option<Sink> {
+        let cfg = Cfg::of(f);
+        let (tree, loops) = cfg.analyses();
+        if cfg.irreducible_edge(&tree).is_some() {
+            return None;
+        }
+        let n = f.blocks.len();
+        let mut post = PostDomTree::new();
+        post.recalculate(&cfg);
+        let mut succs: Vec<Vec<usize>> = Vec::with_capacity(n);
+        let mut pred_count = vec![0; n];
+        for to in &f.succs {
+            let mut seen: Vec<usize> = Vec::new();
+            for &s in to {
+                if !seen.contains(&s) {
+                    seen.push(s);
+                    pred_count[s] += 1;
+                }
+            }
+            succs.push(seen);
+        }
+        let mut children = vec![Vec::new(); n];
+        for b in 0..n {
+            if let Some(up) = tree.immediate_dominator(BlockId(b as u32)) {
+                children[up.0 as usize].push(b);
+            }
+        }
+        let eh_pad = (0..n).map(|b| f.is_eh_pad(b)).collect();
+        let mut sink = Sink {
+            succs,
+            pred_count,
+            tree,
+            post,
+            loops,
+            children,
+            eh_pad,
+            uses: Vec::new(),
+            defs: Vec::new(),
+            considered: HashSet::new(),
+            to_split: Vec::new(),
+        };
+        sink.index_registers(f);
+        Some(sink)
+    }
+
     fn index_registers(
         &mut self,
         f: &Function,
@@ -312,6 +355,82 @@ impl Sink {
         false
     }
 
+    /// `PostponeSplitCriticalEdge`: note the edge to split when that is worth
+    /// it and legal.
+    fn postpone_split_critical_edge(
+        &mut self,
+        f: &Function,
+        from: usize,
+        at: usize,
+        to: usize,
+        break_phi_edge: bool,
+    ) {
+        if self.is_worth_breaking_critical_edge(f, from, at, to)
+            && self.is_legal_to_break_critical_edge(from, to, break_phi_edge)
+            && !self.to_split.contains(&(from, to))
+        {
+            self.to_split.push((from, to));
+        }
+    }
+
+    /// `isWorthBreakingCriticalEdge`.
+    fn is_worth_breaking_critical_edge(
+        &mut self,
+        f: &Function,
+        from: usize,
+        at: usize,
+        to: usize,
+    ) -> bool {
+        // Already considered this round: go ahead, so several cheap
+        // instructions sink into the same block.
+        if !self.considered.insert((from, to)) {
+            return true;
+        }
+        let inst = &f.blocks[from][at];
+        let cheap = is_copy(inst.opcode) || desc(inst.opcode).is_some_and(|info| info.has(flag::CHEAP_AS_A_MOVE));
+        if !cheap {
+            return true;
+        }
+        // An edge out of a loop is unlikely (`SplitEdgeProbabilityThreshold`).
+        if self.loops.get_loop_for(BlockId(from as u32)).is_some_and(|l| !l.contains(BlockId(to as u32))) {
+            return true;
+        }
+        // Cheap, but its only-use source is defined here, so both may sink.
+        inst.operands.iter().any(|operand| match *operand {
+            Operand::Use(r) => {
+                self.uses[r as usize].len() == 1 && f.blocks[from][..at].iter().any(|i| i.defs().any(|d| d == r))
+            }
+            _ => false,
+        })
+    }
+
+    /// `isLegalToBreakCriticalEdge`.
+    fn is_legal_to_break_critical_edge(
+        &self,
+        from: usize,
+        to: usize,
+        break_phi_edge: bool,
+    ) -> bool {
+        if from == to || !self.succs[from].contains(&to) {
+            return false;
+        }
+        // The back edge of a loop stays whole.
+        let (from_loop, to_loop) = (self.loops.get_loop_for(BlockId(from as u32)), self.loops.get_loop_for(BlockId(to as u32)));
+        if from_loop.is_some() && from_loop == to_loop && from_loop.is_some_and(|l| l.get_header().0 as usize == to) {
+            return false;
+        }
+        // The new block must dominate every use: all other predecessors of
+        // `to` are dominated by `to` (unless the uses are the PHIs).
+        if !break_phi_edge {
+            for pred in 0..self.succs.len() {
+                if pred != from && self.succs[pred].contains(&to) && !self.dominates(to, pred) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// `SinkInstruction`.
     fn sink_instruction(
         &mut self,
@@ -331,14 +450,18 @@ impl Sink {
         let may_load = desc(inst.opcode).is_some_and(|info| info.has(flag::MAY_LOAD));
         let mut break_phi_edge = false;
         let Some(to) = self.find_succ(&defs, b, b, &mut break_phi_edge, 0) else { return false };
-        if break_phi_edge {
-            return false;
-        }
+        // A block with several predecessors: sink along the edge if it is
+        // safe, else try to break it.
         if self.pred_count[to] > 1 {
             let header = self.loops.get_loop_for(BlockId(to as u32)).is_some_and(|l| l.get_header().0 as usize == to);
             if may_load || !self.dominates(b, to) || header {
+                self.postpone_split_critical_edge(f, b, at, to, break_phi_edge);
                 return false;
             }
+        }
+        if break_phi_edge {
+            self.postpone_split_critical_edge(f, b, at, to, break_phi_edge);
+            return false;
         }
         let inst = f.blocks[b].remove(at);
         for operand in &inst.operands {
