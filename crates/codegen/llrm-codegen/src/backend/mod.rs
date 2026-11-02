@@ -161,6 +161,7 @@ pub mod floatalloc;
 pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
+pub mod fmuladd;
 pub mod fpconvert;
 pub mod fpcopyprop;
 pub mod fpregs;
