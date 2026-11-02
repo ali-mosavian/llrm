@@ -164,6 +164,227 @@ mulbody:
     txa
     sbc #0
     sta e16hi
+.ifdef SF_MUL_NIB
+; nibble products: x*y = nibt[x << 4 | y] (symmetric, so (c & $f0) | n indexes c's high nibble times n without shifts);
+; n*c = lo + 16*hi per byte, so every term lands byte aligned in E (weight 1) or O (weight 16); P = E + 16*O
+; E = rc2..rc7 (P0..P5), O = nibo (bss), nibble cells rc16..rc19
+    lda rc5
+    BHI1_EOR
+    and #$80
+    pha
+    lda e16lo
+    pha
+    lda e16hi
+    pha
+    ldx #2
+:   lda rc16,x              ; multiplicand nibbles: low ones in place, high ones masked
+    and #$0f
+    sta nibcl,x
+    lda rc16,x
+    and #$f0
+    sta nibch,x
+    dex
+    bpl :-
+    lda #0
+    ldx #5
+:   sta rc2,x
+    sta nibo,x
+    dex
+    bpl :-
+    inx
+nrow:                       ; multiplier byte X: a = low nibble, h = high nibble
+    lda rc20,x
+    and #$0f
+    sta rc16
+    asl a
+    asl a
+    asl a
+    asl a
+    sta rc17                ; a << 4
+    lda rc20,x
+    and #$f0
+    sta rc18                ; h << 4
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    sta rc19
+; E[x+i] += a * lo(c_i)
+    clc
+    lda rc17
+    ora nibcl+0
+    tay
+    lda rc2+0,x
+    adc nibt,y
+    sta rc2+0,x
+    lda rc17
+    ora nibcl+1
+    tay
+    lda rc2+1,x
+    adc nibt,y
+    sta rc2+1,x
+    lda rc17
+    ora nibcl+2
+    tay
+    lda rc2+2,x
+    adc nibt,y
+    sta rc2+2,x
+    bcc :+
+    inc rc2+3,x
+    bne :+
+    inc rc2+4,x
+    bne :+
+    inc rc2+5,x
+:
+; O[x+i] += a * hi(c_i)
+    clc
+    lda nibch+0
+    ora rc16
+    tay
+    lda nibo+0,x
+    adc nibt,y
+    sta nibo+0,x
+    lda nibch+1
+    ora rc16
+    tay
+    lda nibo+1,x
+    adc nibt,y
+    sta nibo+1,x
+    lda nibch+2
+    ora rc16
+    tay
+    lda nibo+2,x
+    adc nibt,y
+    sta nibo+2,x
+    bcc :+
+    inc nibo+3,x
+    bne :+
+    inc nibo+4,x
+    bne :+
+    inc nibo+5,x
+:
+; O[x+i] += h * lo(c_i)
+    clc
+    lda rc18
+    ora nibcl+0
+    tay
+    lda nibo+0,x
+    adc nibt,y
+    sta nibo+0,x
+    lda rc18
+    ora nibcl+1
+    tay
+    lda nibo+1,x
+    adc nibt,y
+    sta nibo+1,x
+    lda rc18
+    ora nibcl+2
+    tay
+    lda nibo+2,x
+    adc nibt,y
+    sta nibo+2,x
+    bcc :+
+    inc nibo+3,x
+    bne :+
+    inc nibo+4,x
+    bne :+
+    inc nibo+5,x
+:
+; E[x+i+1] += h * hi(c_i)
+    clc
+    lda nibch+0
+    ora rc19
+    tay
+    lda rc2+1,x
+    adc nibt,y
+    sta rc2+1,x
+    lda nibch+1
+    ora rc19
+    tay
+    lda rc2+2,x
+    adc nibt,y
+    sta rc2+2,x
+    lda nibch+2
+    ora rc19
+    tay
+    lda rc2+3,x
+    adc nibt,y
+    sta rc2+3,x
+    bcc :+
+    inc rc2+4,x
+    bne :+
+    inc rc2+5,x
+    bne :+
+    inc rc2+6,x
+:
+    inx
+    cpx #3
+    beq :+
+    jmp nrow
+:   ldy #4                  ; E += 16 * O
+:   asl nibo
+    rol nibo+1
+    rol nibo+2
+    rol nibo+3
+    rol nibo+4
+    rol nibo+5
+    dey
+    bne :-
+    clc
+    ldx #0
+:   lda rc2,x
+    adc nibo,x
+    sta rc2,x
+    inx
+    txa
+    eor #6
+    bne :-
+    lda rc7                 ; block P5..P2, sticky P1 | P0
+    sta rc19
+    lda rc6
+    sta rc18
+    lda rc5
+    sta rc17
+    lda rc4
+    sta rc16
+    ldx #1
+    lda rc19
+    bmi :+                  ; product >= 2: exponent up (X = 1)
+    dex
+    asl rc3                 ; else one place left, as the shift-add leaves it
+    rol rc16
+    rol rc17
+    rol rc18
+    rol rc19
+:   lda rc3                 ; sticky before e16 takes rc2/rc3 back
+    ora rc2
+    beq :+
+    lda #1
+    ora rc16
+    sta rc16
+:   pla
+    sta e16hi
+    pla
+    sta e16lo
+    txa
+    beq :+
+    inc e16lo
+    bne :+
+    inc e16hi
+:   pla
+    sta rsg
+    jmp mdtail2
+.pushseg
+.bss
+nibcl: .res 3
+nibch: .res 3
+nibo:  .res 6
+.segment "SFLUT"
+nibt: .repeat 256, i
+    .byte (i >> 4) * (i & 15)
+.endrepeat
+.popseg
+.else
 .ifdef SF_MUL_LUT
 ; quarter squares: x*y = q1[x+y] - q2[255-x+y], q1[n] = n*n/4, q2[n] = (n-255)^2/4; nine 8x8 products, 6-byte sum
 ; pointers (zero page, lo byte = the row's byte of a): rc2 q1 lo, rc4 q1 hi, rc6 q2 lo, rc24 q2 hi
@@ -302,6 +523,7 @@ mfin:
 :   ora rc22
     sta rc16                ; guard byte with the sticky bit
     jmp mdtail
+.endif
 .endif
 
 ; ---- divide: R = rc23, rc24, A (low first), D = rc20..22, quotient rc17..19, guard and sticky rc16 (the rounding block)
