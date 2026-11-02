@@ -182,6 +182,7 @@ pub fn select_function(
     name: &str,
     width: Width,
     unwinding: bool,
+    optimize: bool,
 ) -> Result<Vec<Selected>, String> {
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -228,7 +229,8 @@ pub fn select_function(
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (id, origin, mut one, phis) in group {
             let Scheduled { units, mem_refs, accesses } =
-                select_block(&mut one.dag, cpu, features, &info.jump_tables).map_err(|why| format!("{why:?}"))?;
+                select_block(&mut one.dag, cpu, features, &info.jump_tables, optimize)
+                    .map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
             selected.push(Selected {
                 id: id.0,

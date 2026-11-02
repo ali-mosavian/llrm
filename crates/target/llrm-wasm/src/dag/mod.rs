@@ -105,11 +105,12 @@ pub fn compile_function(
     options: Options,
 ) -> Result<Function, String> {
     let unwinding = options.exception_model == ExceptionModel::Wasm;
-    let blocks = function::select_function(module, name, width, unwinding)?;
+    let blocks = function::select_function(module, name, width, unwinding, options.level != crate::driver::Level::O0)?;
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
     f.nothrow = non_throwing(module);
+    f.callee_memory = callee_memory(module);
     f.personality = unwinding
         && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc
@@ -148,8 +149,11 @@ pub fn compile_function(
     if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
         remove_unreachable_blocks(&mut f);
     }
+    if options.level != crate::driver::Level::O0 {
+        crate::optimize_live_intervals::optimize_live_intervals(&mut f);
+    }
     if options.stackify {
-        reg_stackify(&mut f);
+        reg_stackify(&mut f, options.level != crate::driver::Level::O0);
     }
     cfg_sort(&mut f);
     cfg_stackify(&mut f)?;
@@ -167,6 +171,19 @@ pub fn compile_function(
         }
     }
     Ok(f)
+}
+
+/// What each function of `module` reads and writes (`doesNotAccessMemory`,
+/// `onlyReadsMemory`); a callee that is no function of it is assumed to do
+/// both.
+fn callee_memory(module: &Module) -> std::collections::HashMap<String, (bool, bool)> {
+    module
+        .functions()
+        .filter_map(|(_, global, function)| {
+            let effects = llrm_mir::memory::stated(&function.attrs);
+            Some((global.name.owned()?, (effects.reads, effects.writes)))
+        })
+        .collect()
 }
 
 /// The callees `WebAssembly::mayThrow` takes as not throwing: functions marked

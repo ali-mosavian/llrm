@@ -259,8 +259,19 @@ impl Emitter<'_> {
                     let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];
-                        inst.mem =
-                            Some(Mem { size: u64::from(info.mem_vt.size_in_bits() / 8), align: u64::from(info.align) });
+                        let ordered = info.volatile
+                            || info.ordering.is_some_and(|o| {
+                                !matches!(
+                                    o,
+                                    llrm_mir::opcode::AtomicOrdering::Unordered
+                                        | llrm_mir::opcode::AtomicOrdering::Monotonic
+                                )
+                            });
+                        inst.mem = Some(Mem {
+                            size: u64::from(info.mem_vt.size_in_bits() / 8),
+                            align: u64::from(info.align),
+                            ordered,
+                        });
                     }
                     out.push(inst);
                 }

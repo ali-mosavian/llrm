@@ -53,6 +53,11 @@ impl ValType {
         self.pick([post::LOCAL_TEE_I32, post::LOCAL_TEE_I64, post::LOCAL_TEE_F32, post::LOCAL_TEE_F64])
     }
 
+    /// `getTeeOpcode`.
+    pub fn tee(self) -> u16 {
+        self.pick([post::TEE_I32, post::TEE_I64, post::TEE_F32, post::TEE_F64])
+    }
+
     /// `COPY`.
     pub fn copy(self) -> u16 {
         self.pick([post::COPY_I32, post::COPY_I64, post::COPY_F32, post::COPY_F64])
@@ -117,6 +122,9 @@ impl Operand {
 pub struct Mem {
     pub size: u64,
     pub align: u64,
+    /// `!MachineMemOperand::isUnordered()`: volatile, or atomic above
+    /// monotonic.
+    pub ordered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,6 +247,9 @@ pub struct Function {
     /// The callees that never throw (`Function::doesNotThrow`, and the
     /// libcalls `mayThrow` lists).
     pub nothrow: std::collections::HashSet<String>,
+    /// What each callee does to memory, as `(reads, writes)`: `memory(...)`,
+    /// `readnone` and `readonly` of the module's functions.
+    pub callee_memory: std::collections::HashMap<String, (bool, bool)>,
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,

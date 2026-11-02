@@ -29,7 +29,7 @@ use llrm_codegen::backend::selectiondag::dagisel_adapter::{DagisAdapter, PinRegi
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
-use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue, SelectionDAG, TargetLowering};
 use llrm_dagisel::dag::{Dag, SDValue as PinValue};
 use llrm_dagisel::interp::{Outcome, Selector};
 
@@ -179,24 +179,37 @@ pub struct Scheduled {
     pub accesses: BTreeMap<u32, MemInfo>,
 }
 
+/// One `DAGCombiner` run: `OptLevel == None` only at `-O0`.
+fn combine(
+    dag: &mut SelectionDAG,
+    level: CombineLevel,
+    tli: &TargetLowering,
+    optimize: bool,
+) {
+    let mut hooks = WasmCombines;
+    let combiner = DagCombiner::new(dag, &mut hooks, level).with_tli(tli);
+    if optimize { combiner } else { combiner.with_opt_none() }.run();
+}
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling.
 pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     features: Features,
     tables: &[Vec<u32>],
+    optimize: bool,
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu, features);
     let mut lowering = WasmLowering { tables };
-    DagCombiner::new(dag, &mut WasmCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).with_opt_none().run();
+    combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, optimize);
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
         eprintln!("{}", dag.dump());
     }
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut WasmCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).with_opt_none().run();
+    combine(dag, CombineLevel::AfterLegalizeTypes, &tli, optimize);
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut WasmCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).with_opt_none().run();
+    combine(dag, CombineLevel::AfterLegalizeDag, &tli, optimize);
 
     // `LLRM_DAGDUMP=all`: each block's DAG as selection sees it, as the x86
     // driver does.

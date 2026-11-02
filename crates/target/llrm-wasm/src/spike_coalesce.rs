@@ -90,7 +90,7 @@ fn class(ty: ValType) -> Class {
     }
 }
 
-fn name_of(opcode: u16) -> &'static str {
+pub(crate) fn name_of(opcode: u16) -> &'static str {
     use crate::dagisel::opcode_names::OPCODE_NAMES;
     OPCODE_NAMES.binary_search_by_key(&opcode, |&(id, _)| id).map_or("UNNAMED", |at| OPCODE_NAMES[at].1)
 }
