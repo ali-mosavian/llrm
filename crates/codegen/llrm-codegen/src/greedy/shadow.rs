@@ -268,6 +268,24 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tii.encoding_bytes(insn, virt, phys)
     }
 
+    fn csr_spill_costs_less(
+        &self,
+        virt: u32,
+        phys: RegId,
+        reads: u32,
+        writes: u32,
+    ) -> Option<bool> {
+        let bytes = self.tri.size_bytes()?;
+        let hold = bytes.save_restore(phys);
+        // A rematerialized value is made again at each use but one, which
+        // takes the place of its definition.
+        Some(if self.orders.remat.borrow().contains(&virt) {
+            reads.saturating_sub(1) * bytes.constant < hold
+        } else {
+            reads * bytes.load + writes * bytes.store < hold
+        })
+    }
+
     fn reg_cost(
         &self,
         phys: RegId,
