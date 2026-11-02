@@ -370,6 +370,11 @@ fn successor_overwrites_flags(
         if one.is_meta() {
             continue;
         }
+        // A call or a return reads no flag (the pin's `CALL` and `RET` have no
+        // EFLAGS use).
+        if one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Return)) {
+            return true;
+        }
         let Some((reads, writes)) = flags(one) else { return false };
         if !reads.is_disjoint(&pending) {
             return false;
@@ -379,7 +384,9 @@ fn successor_overwrites_flags(
             return true;
         }
     }
-    false
+    // A block that leaves the function (a return or a tail jump) reads no flag
+    // after it: they are dead there, as in the pin's live-in check of EFLAGS.
+    block.succ.is_empty()
 }
 
 /// `PeepholeOptimizer`'s `foldImmediate` (`X86InstrInfo::foldImmediateImpl`,
@@ -911,6 +918,34 @@ mod tests {
         );
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         body
+    }
+
+    /// The successors return: no flag is read after them, so the shift's flags
+    /// answer the branch (`x = a << 5; if (x) u(); else v();` with tail calls:
+    /// `shl; test; je` where the pin has `shl; je`).
+    #[test]
+    fn test_a_shift_before_a_branch_whose_successors_leave_the_function_is_the_compare() {
+        let leaves = |at: i64| LirBlock::new(at, vec![insn(at, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let block = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "shl", vec![held(2)], vec![held(1), imm(5)], vec![2], vec![1]),
+                    insn(1, Operation::Compare, "test", vec![], vec![held(2), held(2)], vec![], vec![2, 2]),
+                    insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![block.into(), leaves(1).into(), leaves(2).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        assert_eq!(names(&compared(&body), true), ["shl", "jne"]);
     }
 
     /// `v3 := sub v1, v2; jl` with nothing reading `v3` (a compare `EmitCmp`
