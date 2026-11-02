@@ -109,18 +109,18 @@ def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_p
     assert show({**base, "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "mine"}) == "mine"
 
 
-def test_only_six_builds_hold_a_slot_at_once(tmp_path):
-    """Eight slots ran the host at load 83-100 of 32 cores with ~23 sessions building (2026-10-27) and starved the landing runner: six slots (one 4-core range each), a seventh command waits."""
+def test_only_seven_builds_hold_a_slot_at_once(tmp_path):
+    """Eight slots ran the host at load 83-100 of 32 cores with ~23 sessions building (2026-10-27) and starved the landing runner: seven slots (one 4-core range each), an eighth command waits."""
     import time
 
     script = str(Path(__file__).resolve().parent / "buildslot")
     log = tmp_path / "starts"
     env = {k: v for k, v in {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots")}.items() if k != "BUILDSLOTS"}
-    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(7)]
+    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(8)]
     for p in procs:
         p.wait(timeout=60)
     starts = sorted(float(x) for x in log.read_text().split())
-    assert len(starts) == 7 and starts[6] - starts[0] >= 1.8 and starts[5] - starts[0] < 1.0, starts
+    assert len(starts) == 8 and starts[7] - starts[0] >= 1.8 and starts[6] - starts[0] < 1.0, starts
 
 
 def test_waiters_get_a_slot_in_arrival_order_and_a_priority_ticket_jumps_the_queue(tmp_path):
@@ -158,3 +158,28 @@ def test_each_slot_runs_on_its_own_cores_and_never_shares_one(tmp_path):
     assert all(len(c) == 4 for c in cores), cores
     assert len(set().union(*cores)) == 24, cores  # six disjoint ranges
     assert not set().union(*cores) & set(range(4, 8)) | set().union(*cores) & set(range(28, 32)), cores  # gate legs and the user keep theirs
+
+
+def test_the_seventh_slot_on_the_gate_cores_is_not_offered_while_a_gate_leg_holds_the_lock(tmp_path):
+    """Cores 4-7 are the gate legs'; the seventh slot uses them only when no leg holds the lock file, so a build never lands under a timed leg."""
+    import time
+
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    lock = tmp_path / "gate-leg.lock"
+    env = {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots"), "BUILDSLOT_GATE_LOCK": str(lock), "BUILDSLOT_POLL": "0.1"}
+    env.pop("BUILDSLOTS", None)
+
+    def seventh_start(locked):
+        lock.unlink(missing_ok=True)
+        lock.touch() if locked else None
+        log = tmp_path / f"starts-{locked}"
+        procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; taskset -cp $$ | sed 's/.*: //' >> {log}.cpu; sleep 2"], env=env) for _ in range(7)]
+        for p in procs:
+            p.wait(timeout=60)
+        starts = sorted(float(x) for x in log.read_text().split())
+        return starts[6] - starts[0], (tmp_path / f"starts-{locked}.cpu").read_text().split()
+
+    wait_locked, cpus_locked = seventh_start(True)
+    wait_free, cpus_free = seventh_start(False)
+    assert wait_locked >= 1.8 and "4-7" not in cpus_locked, (wait_locked, cpus_locked)
+    assert wait_free < 1.0 and "4-7" in cpus_free, (wait_free, cpus_free)
