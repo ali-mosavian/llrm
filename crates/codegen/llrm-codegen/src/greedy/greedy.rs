@@ -70,12 +70,12 @@ use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::SlotIndex;
 use crate::support::hash::{HashMap, HashSet};
 
-/// `-lcr-max-depth` (RegAllocGreedy.cpp#L95).
 thread_local! {
     /// `MF->getFunction().hasOptSize()` for the body being allocated.
     pub static OPT_SIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// `-lcr-max-depth` (RegAllocGreedy.cpp#L95).
 pub const LAST_CHANCE_RECOLORING_MAX_DEPTH: u32 = 5;
 /// `-lcr-max-interf` (RegAllocGreedy.cpp#L99).
 pub const LAST_CHANCE_RECOLORING_MAX_INTERFERENCE: usize = 8;
