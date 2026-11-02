@@ -85,6 +85,11 @@ pub struct RegisterClasses {
     frame_after: Option<RegId>,
     /// The pressure sets and limits of the target, where it has them.
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
+    /// The target has no segments: a symbol's address is a plain constant.
+    pub flat: bool,
+    /// A symbol is reached from the instruction pointer, so its address is
+    /// made by a `lea`, not a move of an immediate (`object.pc_relative`).
+    pub pc_relative: bool,
 }
 
 impl RegisterClasses {
@@ -169,6 +174,8 @@ impl RegisterClasses {
             registers: llrm_lir::registers::Regs(arch.registers()),
             frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
+            flat: arch.layout().segment_bytes().is_none(),
+            pc_relative: arch.object().pc_relative,
         };
         classes.status_word = classes.found_status_word();
         classes

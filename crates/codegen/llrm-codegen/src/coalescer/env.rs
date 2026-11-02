@@ -214,6 +214,7 @@ pub fn coalesce(
     size: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
+    cheap_addresses: bool,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
     let aliases = pins
         .iter()
@@ -240,7 +241,7 @@ pub fn coalesce(
         aliases,
         should_join,
         freq,
-        cheap_addresses: body.bits != 64,
+        cheap_addresses,
     };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();

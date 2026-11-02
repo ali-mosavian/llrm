@@ -340,6 +340,11 @@ fn fpr_order() -> Vec<RegId> {
 impl AllocTarget for Arm64 {
     type Class = Class;
 
+    /// `pc_relative = true` in both platforms' `machines/object*.toml`.
+    fn symbol_by_pc() -> bool {
+        true
+    }
+
     fn meet(
         one: Class,
         other: Class,
@@ -486,5 +491,15 @@ mod tests {
         assert_eq!(copy.operands[1], Operand::Use(LirReg::Phys(crate::reg::V0)));
         assert_eq!(from_lir(LirReg::Phys(crate::reg::X5), Class::Gpr), Reg::Gpr(Gpr(5)));
         assert_eq!(from_lir(LirReg::Phys(crate::reg::V3), Class::Fpr), Reg::Fpr(Vreg(3)));
+    }
+
+    /// The allocator's `symbol_by_pc` is what both platforms' descriptions say.
+    #[test]
+    fn both_platforms_reach_a_symbol_from_the_program_counter() {
+        use crate::machine::Platform;
+        assert!(<Arm64 as AllocTarget>::symbol_by_pc());
+        for platform in [Platform::Darwin, Platform::Linux] {
+            assert!(platform.object_description().contains("pc_relative = true"), "{platform:?}");
+        }
     }
 }

@@ -118,7 +118,6 @@ impl LIRTransform for MachineCse {
 fn candidate(
     one: &Insn,
     classes: &RegisterClasses,
-    bits: u32,
 ) -> bool {
     let Some(what) = &one.what else { return false };
     // An instruction that reads the flags is not a candidate: `sbb v, v` after
@@ -151,7 +150,7 @@ fn candidate(
     // A symbol's address stays out where ours cannot make it again (CSE2); a
     // flat target's `lea reg, [rip + symbol]` is rematerialized, as the pin
     // does.
-    let flat_address = bits >= 32
+    let flat_address = classes.flat
         && matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_some()
@@ -580,7 +579,7 @@ fn pre_candidate(
     regs: llrm_lir::registers::Regs,
     bits: u32,
 ) -> bool {
-    candidate(one, classes, bits)
+    candidate(one, classes)
         && !one.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))))
         && !cheap(one)
         && !sets_flags(regs, bits, one)
@@ -797,7 +796,7 @@ pub fn shared(
         let number = walk.by_at[&at];
         let mut mine: Vec<Semantics> = Vec::new();
         for (index, one) in body.blocks[number].insns.iter().enumerate() {
-            if !candidate(one, classes, body.bits) {
+            if !candidate(one, classes) {
                 continue;
             }
             let Some(what) = one.what.as_ref() else { continue };

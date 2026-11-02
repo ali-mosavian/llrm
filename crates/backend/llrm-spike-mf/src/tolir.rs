@@ -121,6 +121,7 @@ impl<T: Target> Converted<T> {
                     copy_frequency: join.copy_frequency,
                 })
             }),
+            !T::symbol_by_pc(),
         );
         for (value, order) in self.orders.iter_mut() {
             if let Some(allowed) = palettes.get(value) {

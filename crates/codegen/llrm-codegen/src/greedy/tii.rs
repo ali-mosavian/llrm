@@ -199,7 +199,7 @@ pub trait TargetInstrInfo {
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L755>
 fn without_symbol_flag(
     one: &Insn,
-    bits: u32,
+    flat: bool,
 ) -> std::borrow::Cow<'_, Insn> {
     let address = one
         .what
@@ -210,7 +210,7 @@ fn without_symbol_flag(
                 (Operation::Move, [Loc::Imm(imm)]) if imm.address.is_some()
             ),
         );
-    if bits >= 32 && address && one.symbol == Some(true) {
+    if flat && address && one.symbol == Some(true) {
         let mut flat = one.clone();
         flat.symbol = Some(false);
         std::borrow::Cow::Owned(flat)
@@ -253,7 +253,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         &self,
         one: &Insn,
     ) -> bool {
-        super::inlinespiller::remat_shape(&without_symbol_flag(one, self.bits))
+        super::inlinespiller::remat_shape(&without_symbol_flag(one, self.classes.flat))
     }
 
     fn encoding_bytes(
@@ -270,7 +270,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         def: &Insn,
         invariant: bool,
     ) -> bool {
-        super::remat::is_trivially_re_materializable(&without_symbol_flag(def, self.bits), invariant)
+        super::remat::is_trivially_re_materializable(&without_symbol_flag(def, self.classes.flat), invariant)
     }
 
     fn argument_loads(

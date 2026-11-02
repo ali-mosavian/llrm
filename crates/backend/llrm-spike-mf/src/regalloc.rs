@@ -67,6 +67,12 @@ pub trait Target {
     fn root(register: RegId) -> RegId;
     /// A root no allocator hands out (the frame and stack pointers).
     fn reserved(root: RegId) -> bool;
+    /// A symbol's address is made from the program counter (a `lea` or
+    /// `adrp`), not by moving an immediate: the coalescer does not remake it
+    /// at a use. The description's `object.pc_relative`.
+    fn symbol_by_pc() -> bool {
+        false
+    }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
     /// Whether two allocatable registers share storage (a pair and its
