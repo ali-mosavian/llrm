@@ -38,7 +38,9 @@ fn a_mask_keeps_its_immediate_form_and_its_value() {
         let ir =
             format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert!(asm.contains(&format!("and.l\t#{mask},")), "mask {mask}: {asm}");
+        // A mask of ones above bit 15 is the word `and` (`narrow.rs`).
+        let form = if mask < 0 { format!("and.w\t#{},", mask & 0xFFFF) } else { format!("and.l\t#{mask},") };
+        assert!(asm.contains(&form), "mask {mask}: {asm}");
         if let Some(code) = status(&ir, &[0x85], Options::default()) {
             assert_eq!(code, ((0x85 & mask) + 0x85) & 0xFF, "mask {mask}: {asm}");
         }
@@ -654,11 +656,11 @@ define i32 @f(ptr %d, ptr %s) {{
     )
 }
 
-/// An inline struct copy is the pin's moves with displacements, `(4,%a0)`;
-/// `(An)+` chains were a rewrite of them, and what is read from the destination
-/// afterwards is read at its own displacement.
+/// An inline struct copy is the pin's moves with displacements, `(4,%a0)`, and
+/// `(An)+` moves by default, where what is read from the destination afterwards
+/// is read at its displacement less what the pointer stepped.
 #[test]
-fn an_inline_copy_keeps_the_pins_displacements() {
+fn an_inline_copy_is_post_increment_moves_unless_pinned() {
     for bytes in [8, 24, 32] {
         let after = format!(
             "  %p = getelementptr i8, ptr %d, i32 {}
@@ -671,7 +673,7 @@ fn an_inline_copy_keeps_the_pins_displacements() {
         );
         let ir = copy_of(bytes, &after);
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
-        assert!(!asm.contains("%a0)+") && !asm.contains("%a1)+"), "{bytes}: {asm}");
+        assert!(asm.contains(")+, (%a") && asm.contains(")+"), "{bytes}: {asm}");
         let pinned = text_with(&module(&ir), "f", Cpu::M68000, Options::PINNED).unwrap();
         assert!(!pinned.contains(")+"), "{pinned}");
     }

@@ -54,6 +54,11 @@ struct Writeback {
     base: &'static str,
     /// A memory source of an arithmetic instruction (`ADD32dj`), not a move.
     source: bool,
+    /// A move from `(An)+` to memory (`MOV32po`, `MOV32oo`): a load and the
+    /// store of its value, `drops` leading results being the updated bases.
+    memory_move: bool,
+    /// How many leading operands are updated bases the printed row lacks.
+    drops: usize,
 }
 
 macro_rules! writeback {
@@ -66,6 +71,8 @@ macro_rules! writeback {
             drop: if $load { 1 } else { 0 },
             base: $name,
             source: false,
+            memory_move: false,
+            drops: 1,
         }),*]
     };
 }
@@ -102,7 +109,30 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             drop: defs,
             base,
             source: true,
+            memory_move: false,
+            drops: 1,
         });
+    }
+    // a load through `(An)+` stored at once: the pin's move from `(An)+` to an
+    // `(An)`, `(d,An)` or `(An)+` destination, with the bases it updates
+    for bits in ["8", "16", "32"] {
+        for (to, updates) in [('j', 0), ('p', 0), ('o', 1)] {
+            let printed = leak(format!("MOV{bits}{to}o"));
+            if code_of_pin(printed).is_none() {
+                continue;
+            }
+            all.push(Writeback {
+                name: leak(format!("{printed}_WB")),
+                prints_as: printed,
+                load: true,
+                pre: false,
+                drop: 0,
+                base: printed,
+                source: false,
+                memory_move: true,
+                drops: updates + 1,
+            });
+        }
     }
     all
 });
@@ -165,6 +195,12 @@ pub fn source_rows() -> impl Iterator<Item = &'static str> {
     WRITEBACKS.iter().filter(|one| one.source).map(|one| one.prints_as)
 }
 
+/// The instructions that move from `(An)+` to memory, by the name they print
+/// as.
+pub fn memory_move_rows() -> impl Iterator<Item = &'static str> {
+    WRITEBACKS.iter().filter(|one| one.memory_move).map(|one| one.prints_as)
+}
+
 /// The width in bits of a post-increment load into a data register.
 pub fn post_load_bits(name: &str) -> Option<&'static str> {
     let one = WRITEBACKS.iter().find(|one| one.name == name)?;
@@ -173,10 +209,19 @@ pub fn post_load_bits(name: &str) -> Option<&'static str> {
 }
 
 /// The instruction a writeback prints as, with the operand to drop (the
-/// updated base, which the tied base operand already names once allocated).
-pub fn printed_as(name: &str) -> Option<(&'static str, usize)> {
+/// updated base, which the tied base operand already names once allocated) and
+/// how many operands from there.
+pub fn printed_as(name: &str) -> Option<(&'static str, usize, usize)> {
     let one = WRITEBACKS.iter().find(|one| one.name == name)?;
-    Some((one.prints_as, one.drop))
+    Some((one.prints_as, one.drop, one.drops))
+}
+
+/// The load-and-store writeback for the store `user` of a loaded value
+/// (`MOV32pd` is `MOV32po_WB`, `MOV32od_WB` is `MOV32oo_WB`).
+pub fn store_twin(user: &str) -> Option<&'static str> {
+    let stem = user.strip_suffix("_WB").unwrap_or(user);
+    let stem = stem.strip_suffix('d').or_else(|| stem.strip_suffix('r'))?;
+    WRITEBACKS.iter().find(|one| one.memory_move && one.prints_as.strip_suffix('o') == Some(stem)).map(|one| one.name)
 }
 
 static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
@@ -186,7 +231,27 @@ static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
             let base = instrinfo::desc(code_of_pin(one.base).expect("a writeback of a known instruction"))
                 .expect("a described instruction");
             let mut operands = Vec::new();
-            if one.source {
+            if one.memory_move {
+                // the updated bases, then the pin's operands: the source base
+                // is its last, and the destination's is tied the same way
+                let last = base.operands.len() - 1;
+                let register = OperandDesc { kind: 2, tied_to: -1, ..base.operands[last] };
+                let to_update = one.drops == 2;
+                let dst_base = last - 1;
+                if to_update {
+                    operands.push(register);
+                }
+                operands.push(register);
+                for (at, operand) in base.operands.iter().enumerate() {
+                    operands.push(if at == last {
+                        OperandDesc { tied_to: one.drops as i8 - 1, ..*operand }
+                    } else if to_update && at == dst_base {
+                        OperandDesc { tied_to: 0, ..*operand }
+                    } else {
+                        *operand
+                    });
+                }
+            } else if one.source {
                 // the results, the updated base, the sources, then the base:
                 // the base is the pin's last operand
                 let last = base.operands.len() - 1;
@@ -211,7 +276,7 @@ static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
             }
             InstrDesc {
                 num_operands: operands.len() as u8,
-                num_defs: base.num_defs + 1,
+                num_defs: base.num_defs + one.drops as u8,
                 operands: Box::leak(operands.into_boxed_slice()),
                 ..*base
             }
