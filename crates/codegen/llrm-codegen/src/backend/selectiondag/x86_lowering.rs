@@ -149,8 +149,9 @@ pub struct X86Lowering<'a> {
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
     /// At `optsize` (-Os, not `minsize`): the target whose encodings decide
-    /// between an `imul` and the pin's chain by bytes (DEVIATE SD447).
-    pub size_bytes: Option<&'a dyn llrm_target::Target>,
+    /// between an `imul` and the pin's chain by bytes and clocks (DEVIATE
+    /// SD447).
+    pub size_bytes: Option<MulPricing<'a>>,
 }
 
 /// The sheet, the target and the block a constant multiply is priced against.
@@ -1930,7 +1931,7 @@ fn combine_mul(
     min_size: bool,
     i16_chains: bool,
     profile: Option<MulPricing<'_>>,
-    size_bytes: Option<&dyn llrm_target::Target>,
+    size_bytes: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 && vt != EVT::I64 && !(vt == EVT::I16 && i16_chains) {
@@ -2008,19 +2009,23 @@ fn combine_mul(
             new_mul = Some(dag.get_node(ISD::Sub, vt, &[shifted, twice]));
         }
     }
-    // DEVIATE SD447: at `optsize` the chain stays only if it is fewer bytes
-    // than the `imul` (ties go to the fewer instructions, which is the `imul`
-    // for a chain of two or more).
-    if let (Some(arch), Some(chain)) = (size_bytes, new_mul) {
+    // DEVIATE SD447: at `optsize` the `imul` replaces the chain only if it is
+    // fewer bytes and not slower on the target's sheet; a byte tie or a slower
+    // `imul` keeps the chain.
+    if let (Some(MulPricing { arch, cpu, .. }), Some(chain)) = (size_bytes, new_mul) {
         let width_bytes = (width / 8) as i64;
         // A last shift by 1 to 3 whose only reader is an add is a scale of
         // that add's `lea` or address (the pin keeps the multiply by 3, 5 or 9
         // last for it): it costs no instruction.
         let scale_folds = dag.users(node).count() == 1
             && dag.users(node).next().map(|user| dag.opcode(SDValue { node: user, res: 0 })) == Some(ISD::Add);
-        let (bytes, steps) = chain_encoding(dag, chain, x, arch, width_bytes, scale_folds);
+        let (bytes, _) = chain_encoding(dag, chain, x, arch, width_bytes, scale_folds);
         let imul = arch.multiply_immediate_bytes(signed as i64, width_bytes);
-        if imul < bytes || (imul == bytes && steps > 1) {
+        let chain_is_faster = crate::backend::arithmetic::chain_by_clocks(signed as i64, width_bytes.min(4), cpu)
+            .ok()
+            .flatten()
+            .is_some();
+        if imul < bytes && !chain_is_faster {
             return None;
         }
     }

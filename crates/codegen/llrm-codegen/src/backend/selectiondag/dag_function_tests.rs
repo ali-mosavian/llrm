@@ -733,13 +733,14 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
 /// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
 /// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`
-/// only, so at m32 -Os the pin's chain stood; DEVIATE SD447 now keeps the
-/// `imul` wherever its encoding is shorter than the chain's (gcc -Os does):
-/// `x * 24` is 3 bytes against `shl` and `lea`'s 6, `x * 7` 3 against 5. A
-/// single `lea` (`x * 3`) is as long as the `imul` and stays a `lea`. At
-/// speed the chain stands.
+/// only, so at m32 -Os the pin's chain stood; DEVIATE SD447 keeps the
+/// `imul` where its encoding is shorter than the chain's and the sheet does
+/// not price it slower (gcc -Os does): m16 `x * 24` is 3 bytes against 6. On
+/// the 486 the `imul` is slower, so m32 keeps the chain. A single `lea`
+/// (`x * 3`) is as long as the `imul` and stays a `lea`. At speed the chain
+/// stands.
 #[test]
-fn at_os_a_multiply_by_a_constant_is_an_imul_where_it_is_the_shorter_encoding() {
+fn at_os_a_multiply_by_a_constant_is_an_imul_only_where_it_is_shorter_and_not_slower() {
     let names = |pointer: &str, size: bool, factor: u32| {
         let module = crate::testing::module(&format!(
             "target datalayout = \"e-p:{pointer}:{pointer}-i64:32-n8:16:32\"
@@ -760,10 +761,12 @@ define i32 @f(i32 %a) {{
     assert_eq!((count(&speed, "imul"), count(&speed, "shl")), (0, 1), "speed: lea and shift");
     let m16 = names("16", true, 24);
     assert_eq!((count(&m16, "imul"), count(&m16, "shl")), (1, 0), "m16 -Os: {m16:?}");
+    // The 486's imul is 13-42 clocks: the shorter imul is slower than the
+    // chain, which stays (histo's `dat(i) * 7` cost +23% clocks for 2 B).
     let m32 = names("32", true, 24);
-    assert_eq!((count(&m32, "imul"), count(&m32, "shl")), (1, 0), "m32 -Os x*24: {m32:?}");
+    assert_eq!((count(&m32, "imul"), count(&m32, "shl")), (0, 1), "m32 -Os x*24: {m32:?}");
     let seven = names("32", true, 7);
-    assert_eq!(count(&seven, "imul"), 1, "m32 -Os x*7: {seven:?}");
+    assert_eq!(count(&seven, "imul"), 0, "m32 -Os x*7 stays a chain: {seven:?}");
     let three = names("32", true, 3);
     assert_eq!((count(&three, "imul"), count(&three, "lea")), (0, 1), "m32 -Os x*3: {three:?}");
 }

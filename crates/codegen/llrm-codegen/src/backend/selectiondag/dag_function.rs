@@ -1095,7 +1095,9 @@ fn selected_in(
                 cmov: tli.can_use_cmov(),
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
-                size_bytes: (cpu.size && !cpu.min_size && !bytes_beat_clocks).then_some(arch),
+                size_bytes: (cpu.size && !cpu.min_size && !bytes_beat_clocks).then_some(
+                    super::x86_lowering::MulPricing { cpu, arch, freq: 1.0, milliclocks_per_byte: 0, by_clocks: true },
+                ),
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                 profile: if mul_by_clocks {
                     Some(super::x86_lowering::MulPricing {
