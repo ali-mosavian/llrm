@@ -1232,3 +1232,76 @@ define void @g(i56 %v) {
     assert_eq!(bytes("f", true), 7, "loaded");
     assert_eq!(bytes("g", false), 7, "stored");
 }
+
+/// `x * 10 + y` on `i64` stayed an `imul` and an `add` where the pin's
+/// `combineMul` builds `lea (x+4x)` and `lea (y+2t)`: `combineMul` ran for
+/// `i32` and `i16` only. tests/run/c/huffman_decode.c -O1 m64 was +8 B and
+/// its loop-carried values lived across a longer range than the pin's.
+#[test]
+fn an_m64_multiply_by_a_lea_constant_is_a_lea_chain_not_an_imul() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x, i64 %y) {
+entry:
+  %a = mul nuw nsw i64 %x, 10
+  %b = add i64 %a, %y
+  ret i64 %b
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "imul"), "an imul is left: {names:?}");
+    assert_eq!(names.iter().filter(|n| *n == "lea").count(), 2, "{names:?}");
+}
+
+/// `(x << 3) - x + y` on `i64` was `shl`, `sub`, `add` (three instructions
+/// and a copy) where the pin's `combineAdd` hidden-LEA fold makes it
+/// `lea (y + 8x)`; `sub x`: the fold ran for `i32` only. `x * 7 + y` and
+/// `x * 31 + y * 7` (bench shift_int64_variable) were each a byte-count
+/// larger and a register longer.
+#[test]
+fn an_m64_shift_minus_x_plus_y_is_a_lea_and_a_sub() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x, i64 %y) {
+entry:
+  %s = shl i64 %x, 3
+  %d = sub i64 %s, %x
+  %b = add i64 %d, %y
+  ret i64 %b
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(!names.iter().any(|n| n == "shl" || n == "add"), "no shift or add is left: {names:?}");
+    assert_eq!(names.iter().filter(|n| *n == "lea").count(), 1, "{names:?}");
+}
+
+/// The pin's `combineMul` returns first at `minsize` (-Oz), and not at -Os
+/// (`optsize` only): `x * 10` stays one `imul` at -Oz and is a lea chain at
+/// -Os.
+#[test]
+fn an_m64_multiply_by_a_constant_stays_an_imul_at_minsize_only() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x) {
+entry:
+  %a = mul i64 %x, 10
+  ret i64 %a
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let names = |size: bool, min_size: bool| {
+        let mut cpu =
+            crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu").clone();
+        cpu.size = size || min_size;
+        cpu.min_size = min_size;
+        let done = selected(&module, "f", &llrm_x86_m64::M64, &cpu, &[]).expect("selected");
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    assert!(names(true, false).iter().all(|n| n != "imul"), "-Os: a chain: {:?}", names(true, false));
+    assert!(names(true, true).iter().any(|n| n == "imul"), "-Oz: one imul: {:?}", names(true, true));
+}

@@ -1207,7 +1207,7 @@ fn combine_add(
     node: SDValue,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 {
+    if vt != EVT::I32 && vt != EVT::I64 {
         return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
     }
     // `m_Add` matches either operand as the difference.
@@ -1927,7 +1927,7 @@ fn combine_mul(
     profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
+    if vt != EVT::I32 && vt != EVT::I64 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -1943,7 +1943,11 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
+    let signed = match vt {
+        EVT::I16 => i128::from(bits as u16 as i16),
+        EVT::I64 => i128::from(bits as u64 as i64),
+        _ => i128::from(bits as u32 as i32),
+    };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
@@ -2000,7 +2004,8 @@ fn combine_mul(
     }
     // DEVIATE SD446: where the pin keeps `imul`, the sheet's cheaper chain.
     if new_mul.is_none() {
-        new_mul = profile.and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
+        new_mul =
+            profile.filter(|_| vt != EVT::I64).and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
     }
     new_mul
 }
