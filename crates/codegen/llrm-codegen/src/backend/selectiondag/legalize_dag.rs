@@ -972,7 +972,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
+            // Only when the target has a native extending load from the smaller
+            // type (`TLI.isLoadLegal(.., EXTLOAD)`); AArch64 expands it.
+            MVT::F64
+                if self.tli.should_shrink_fp_constant(mvt)
+                    && self.tli.load_ext_action(super::actions::LoadExt::ExtLoad, MVT::F64, MVT::F32)
+                        == Action::Legal =>
+            {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {
