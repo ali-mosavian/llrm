@@ -27,11 +27,11 @@ for level in args.levels.split(","):
     rows = {}
     for line in out.stdout.splitlines():
         cells = [c.strip() for c in line.strip("|").split("|")]
-        if len(cells) == 7 and cells[0] not in ("kernel", "---"):
+        if len(cells) == 10 and cells[0] not in ("kernel", "---"):
             rows[cells[0]] = cells
     runs.append(rows)
 verdict = lambda ours, theirs: "win" if ours < theirs else "tie" if ours == theirs else "LOSE"
-print(f"| kernel | ours B (level) | ours T (level) | SDCC B | SDCC T | B | T |\n|---|---|---|---|---|---|---|")
+print(f"| kernel | ours B (level) | ours T (level) | ours insn (level) | SDCC B | SDCC T | SDCC insn | B | T | insn |\n|---|---|---|---|---|---|---|---|---|---|")
 for name in runs[0]:
     cells = [run[name] for run in runs]
     if any(not c[1].isdigit() for c in cells):
@@ -40,6 +40,7 @@ for name in runs[0]:
     levels = args.levels.split(",")
     b = min(range(len(cells)), key=lambda i: int(cells[i][1]))
     t = min(range(len(cells)), key=lambda i: int(cells[i][2]))
-    sb, st = int(cells[0][3]), int(cells[0][4])
-    ob, ot = int(cells[b][1]), int(cells[t][2])
-    print(f"| {name} | {ob} (-O{levels[b]}) | {ot} (-O{levels[t]}) | {sb} | {st} | {verdict(ob, sb)} | {verdict(ot, st)} |")
+    n = min(range(len(cells)), key=lambda i: int(cells[i][3]))
+    sb, st, sn = int(cells[0][4]), int(cells[0][5]), int(cells[0][6])
+    ob, ot, on = int(cells[b][1]), int(cells[t][2]), int(cells[n][3])
+    print(f"| {name} | {ob} (-O{levels[b]}) | {ot} (-O{levels[t]}) | {on} (-O{levels[n]}) | {sb} | {st} | {sn} | {verdict(ob, sb)} | {verdict(ot, st)} | {verdict(on, sn)} |")

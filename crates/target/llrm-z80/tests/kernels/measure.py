@@ -123,7 +123,7 @@ def baseline(path):
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) == 5 and re.match(r"\d+ / \d+ / \d+", cells[1]):
             rows = [tuple(int(x) for x in c.split(" / ")) for c in cells[1:] if c != "FAIL"]
-            best[cells[0]] = (min(r[0] for r in rows), min(r[1] for r in rows))
+            best[cells[0]] = (min(r[0] for r in rows), min(r[1] for r in rows), min(r[2] for r in rows))
     return best
 
 
@@ -183,12 +183,12 @@ def main():
         (t0, i0, _), (t1, i1, got) = times
         mask = 0xFFFF if ret == "i16" else 0xFF
         if got & mask != expect & mask:
-            print(f"| {name} | WRONG: got {got & mask:#x}, hand-derived {expect & mask:#x} | | | | | |")
+            print(f"| {name} | WRONG: got {got & mask:#x}, hand-derived {expect & mask:#x} | | | | | | | | |")
             continue
         size = code_size(f"{w}/k.rel") + runtime_bytes(w, graph, open(f"{w}/k.s").read())
-        b, t = sdcc.get(name, (None, None))
+        b, t, n = sdcc.get(name, (None, None, None))
         verdict = lambda ours, theirs: "" if theirs is None else ("win" if ours < theirs else "tie" if ours == theirs else "LOSE")
-        print(f"| {name} | {size} | {t1 - t0} | {b} | {t} | {verdict(size, b)} | {verdict(t1 - t0, t)} |")
+        print(f"| {name} | {size} | {t1 - t0} | {i1 - i0} | {b} | {t} | {n} | {verdict(size, b)} | {verdict(t1 - t0, t)} | {verdict(i1 - i0, n)} |")
 
 
 main()
