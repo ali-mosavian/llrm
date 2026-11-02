@@ -1,11 +1,15 @@
 """The readme's dot listings are what the compilers print now, less the comments.
 
     uv run --project tools --with pytest python -m pytest tests/test_readme.py
+
+A listing that moved because the compiler improved is rewritten by `PYTHONPATH=. uv run --project tools python tests/test_readme.py --update`.
 """
 
 import os
 import re
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -64,7 +68,8 @@ def test_a_readme_listing_is_what_the_compiler_prints(target, name, backend, tmp
     text = (ROOT / "readme.md").read_text()
     found = re.search(rf"`-target {re.escape(target)}`:\n\n```asm\n(.*?)\n```", text, re.S)
     assert found, f"the readme shows no listing for -target {target}"
-    assert _renumbered(_uncommented(found.group(1))) == _renumbered(_uncommented(_listing(target, name, tmp_path / "out.asm")))
+    now = _listing(target, name, tmp_path / "out.asm")
+    assert _renumbered(_uncommented(found.group(1))) == _renumbered(_uncommented(now)), "the listing moved; run PYTHONPATH=. uv run --project tools python tests/test_readme.py --update"
 
 
 def test_the_readme_source_is_the_example_file():
@@ -72,3 +77,18 @@ def test_the_readme_source_is_the_example_file():
     text = (ROOT / "readme.md").read_text()
     shown = re.search(r"```c\n(.*?)\n```", text, re.S).group(1)
     assert shown.strip() == (DOT / "dot.c").read_text().replace("\r", "").strip()
+
+
+def _update() -> None:
+    """Rewrites each `-target` listing in the readme to what the compiler prints now."""
+    text = (ROOT / "readme.md").read_text()
+    for target, name, _backend in CASES:
+        with tempfile.TemporaryDirectory() as tmp:
+            now = _listing(target, name, Path(tmp) / "out.asm")
+        text = re.sub(rf"(`-target {re.escape(target)}`:\n\n```asm\n).*?(\n```)", lambda found: found.group(1) + now + found.group(2), text, count=1, flags=re.S)
+    (ROOT / "readme.md").write_text(text)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--update"]:
+        _update()
