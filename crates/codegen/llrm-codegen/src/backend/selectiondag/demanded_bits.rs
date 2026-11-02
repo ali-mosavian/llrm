@@ -501,6 +501,22 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let lhs_demanded =
                     if opcode == ISD::Mul { low & mask(width - k1.zero.trailing_ones().min(width)) } else { low };
                 self.sdb(op0, lhs_demanded, depth + 1, false, tlo)?;
+                // `ShrinkDemandedOp`: the operation at a narrower type whose
+                // casts are free, when nothing else reads the wide result.
+                if self.dag.has_one_use(op.node) {
+                    let mut small_bits = length.next_power_of_two();
+                    while small_bits < width {
+                        let small = EVT::integer(small_bits);
+                        if self.hooks.is_shrink_type_free(small, vt) {
+                            let t0 = self.dag.get_node(ISD::Truncate, small, &[op0]);
+                            let t1 = self.dag.get_node(ISD::Truncate, small, &[op1]);
+                            let narrow = self.dag.get_node(opcode, small, &[t0, t1]);
+                            let wide = self.dag.get_node(ISD::AnyExtend, vt, &[narrow]);
+                            return Self::combine_to(tlo, op, wide);
+                        }
+                        small_bits = (small_bits + 1).next_power_of_two();
+                    }
+                }
                 if opcode != ISD::Mul && !self.dag.is_opaque(op1) {
                     if let Some(c) = self.dag.constant(op1) {
                         let high = all & !low;

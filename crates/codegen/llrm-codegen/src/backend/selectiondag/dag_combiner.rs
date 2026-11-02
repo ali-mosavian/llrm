@@ -217,6 +217,18 @@ pub trait CombineHooks {
         false
     }
 
+    /// `ShrinkDemandedOp`'s test of a narrower type: `isTruncateFree(op,
+    /// small)` and `isZExtFree(small, vt)`. DEVIATE (A64-SHRINK1): false by
+    /// default, the pin asks every target; a target says so once its hooks
+    /// are read. Exit: x86, m68k, 6502, z80, wasm judged.
+    fn is_shrink_type_free(
+        &self,
+        _small: EVT,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the
     /// only modes made) for an access of `vt`. x86 has no indexed forms.
     fn is_indexed_legal(

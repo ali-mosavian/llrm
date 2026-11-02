@@ -173,6 +173,18 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)` (an integer narrowing)
+    /// and `isZExtFree(EVT, EVT)` (32 to 64 bits only, as a `w` write clears
+    /// the upper half):
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L17540>
+    fn is_shrink_type_free(
+        &self,
+        small: EVT,
+        vt: EVT,
+    ) -> bool {
+        small.is_integer() && vt.is_integer() && small.size_in_bits() == 32 && vt.size_in_bits() == 64
+    }
+
     fn reassociate_compare_pairs(&self) -> bool {
         true
     }
