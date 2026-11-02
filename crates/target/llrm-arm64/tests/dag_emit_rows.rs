@@ -234,3 +234,15 @@ fn a_store_and_the_step_of_its_pointer_are_one_post_indexed_store() {
     assert!(stepping.contains("], #2"), "{asm}");
     assert!(!volatile.contains("], #"), "{asm}");
 }
+
+/// The update of a pointer two blocks below its load (the search loop of
+/// queens, past a conditional exit) is merged as in the pin, where the scan
+/// follows a successor with one predecessor.
+#[test]
+fn a_pointer_step_below_a_conditional_exit_is_merged_into_the_load() {
+    let text = include_str!("data/queens_place.ll");
+    // The function is `internal` and unused: left so, nothing is emitted.
+    let body = text[text.find("define").expect("a function")..].replacen("define internal ", "define ", 1);
+    let asm = dag_at("-O2", &body).unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.lines().any(|line| line.contains("ldr w") && line.contains("], #4")), "{asm}");
+}

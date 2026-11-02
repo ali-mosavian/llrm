@@ -314,7 +314,7 @@ pub fn functions_with(
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
         let blocks = crate::pairs::fold(blocks);
-        let blocks = crate::ldst_update::fold(blocks);
+        let blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
         out.push(crate::emit::Function {
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),

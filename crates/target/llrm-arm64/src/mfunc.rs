@@ -562,3 +562,20 @@ mod verify_tests {
         assert_eq!(undefined_reads(&function), vec![]);
     }
 }
+
+/// The registers `function` leaves live: those it returns and passes to a tail
+/// call.
+pub fn returned_registers(function: &MFunc) -> Vec<Reg> {
+    let mut out = Vec::new();
+    for block in &function.blocks {
+        for op in block.ops.iter() {
+            if let Op::Return { uses, tail } = op {
+                out.extend(uses.iter().copied());
+                if let Some(Callee::Register(register)) = tail {
+                    out.push(Reg::Gpr(*register));
+                }
+            }
+        }
+    }
+    out
+}
