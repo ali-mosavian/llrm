@@ -443,3 +443,13 @@ def test_a_recorded_base_without_a_harness_digest_is_measured_again_not_compared
     rows, _ = bc.base_counts("s1", ["O2"], **args)
     assert made == [["O2"]] and rows[("fib", "c", "O2")]["instructions"] == 2, "the unverified file was used"
     assert "NOBASE 1 recorded rows of s1" in capsys.readouterr().out
+
+
+def test_a_cell_with_no_clocks_on_either_side_is_named_not_read_as_equal():
+    """grep bq32 -Os runs 642M instructions, too many to emulate: no clocks in the head or the base. The cell was judged on the rest and nothing said its clocks were never compared."""
+    counted = {"instructions": 5, "code_bytes": 2}
+    row_with = dict(counted, clocks=9)
+    measured = {("grep", "bq32", "Os"): counted, ("fib", "bq32", "Os"): row_with}
+    base = {("grep", "bq32", "Os"): counted, ("fib", "bq32", "Os"): row_with}
+    lines = bc.coverage_detail(measured, base, {"grep", "fib"})
+    assert "NOCLOCKS both sides: grep bq32 -Os" in lines

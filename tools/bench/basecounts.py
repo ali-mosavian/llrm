@@ -317,7 +317,9 @@ def coverage_detail(measured: dict, base: dict, same: set[str]) -> list[str]:
     lines.append(f"CELLS total: {sum(map(len, judged.values()))} cells over {len(set().union(*judged.values()))} programs" if judged else "CELLS total: 0 cells over 0 programs")
     nobase = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key not in base]
     nohead = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(base) if key[1] in OURS and key[0] in same and (key[1], key[2]) in levels and key not in measured]
-    return lines + ([f"NOBASE {len(nobase)} cells: {', '.join(nobase)}"] if nobase else []) + ([f"NOHEAD {len(nohead)} cells: {', '.join(nohead)}"] if nohead else [])
+    noclocks = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key in base and "clocks" not in measured[key] and "clocks" not in base[key]
+                and not any(one in row for row in (measured[key], base[key]) for one in ("error", "skip", "known", "xpass"))]
+    return lines + ([f"NOCLOCKS both sides: {', '.join(noclocks)}"] if noclocks else []) + ([f"NOBASE {len(nobase)} cells: {', '.join(nobase)}"] if nobase else []) + ([f"NOHEAD {len(nohead)} cells: {', '.join(nohead)}"] if nohead else [])
 
 
 def stale_summary(stale: list[str]) -> list[str]:
