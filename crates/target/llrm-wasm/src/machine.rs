@@ -182,6 +182,25 @@ impl Tti for Wasm {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    /// A `sext` or `zext` of a load is free when the extending load is legal
+    /// (`BasicTTIImplBase::getCastInstrCost`, `isLoadExtLegal`): wasm has
+    /// `i32.load8_u`, `i64.load32_s` and the rest, for every integer pair
+    /// but from `i1` (`Promote`). `Basic` charged each one.
+    fn cast_of_load_cost(
+        &self,
+        op: CastKind,
+        to: Ty,
+        from: Ty,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        let legal = matches!(op, CastKind::SExt | CastKind::ZExt)
+            && matches!(
+                (from, to),
+                (Ty::Int(8 | 16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
+            );
+        legal.then_some(Cost::FREE)
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,
@@ -191,5 +210,22 @@ impl Tti for Wasm {
         right: OperandInfo,
     ) -> Cost {
         Basic.arithmetic_cost(op, ty, kind, left, right)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `zext` of a loaded byte cost one unit, where the pin prices it at none
+    /// (`i32.load8_u` is legal): crc's rolled loop read 387 against the pin's
+    /// 378, which with a shift merged early tipped `-O3` into unrolling it.
+    #[test]
+    fn an_extension_of_a_load_the_target_has_is_free() {
+        let cost = |op, to, from| Wasm.cast_of_load_cost(op, to, from, CostKind::SizeAndLatency);
+        assert_eq!(cost(CastKind::ZExt, Ty::Int(32), Ty::Int(8)), Some(Cost::FREE));
+        assert_eq!(cost(CastKind::SExt, Ty::Int(64), Ty::Int(32)), Some(Cost::FREE));
+        assert_eq!(cost(CastKind::ZExt, Ty::Int(32), Ty::Int(1)), None);
+        assert_eq!(cost(CastKind::Trunc, Ty::Int(8), Ty::Int(32)), None);
     }
 }
