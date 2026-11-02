@@ -310,6 +310,17 @@ fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
     assert!(!out.contains("ld l, e") && !out.contains("ld l, c"), "{out}");
 }
 
+/// scmp copied `bc` into `hl` (`ld l, c; ld h, b`) on every trip only to
+/// `ld a, (hl)`: 2 B and 8 T-states a trip that `ld a, (bc)` does not take. A
+/// pointer copied into `hl` just to load into or store from `a`, with `hl`
+/// dead after, is read through its own pair.
+#[test]
+fn a_pointer_copied_into_hl_only_to_load_a_is_read_through_its_own_pair() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ld a, (bc)"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

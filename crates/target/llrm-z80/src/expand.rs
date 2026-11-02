@@ -170,6 +170,9 @@ impl Printer<'_> {
         from: RegId,
         rest: &[Inst],
     ) -> Result<(), String> {
+        if to == reg::HL && is_pair(from) && self.through_own_pair(from, rest)? {
+            return Ok(());
+        }
         match (is_pair(to), is_pair(from)) {
             // iy has no halves the Z80 can move: through the stack
             _ if to == reg::IY && is_pair(from) => {
@@ -209,6 +212,36 @@ impl Printer<'_> {
             _ => return Err(format!("a copy of {} to {}", name(from), name(to))),
         }
         Ok(())
+    }
+
+    /// A pointer copied into `hl` only for the next instruction to load into
+    /// or store from `a`, with `hl` dead after it, is read through its own
+    /// pair (`ld a, (bc)`): no copy. Emits the access and skips the
+    /// instruction; false when the pattern does not hold.
+    fn through_own_pair(
+        &mut self,
+        from: RegId,
+        rest: &[Inst],
+    ) -> Result<bool, String> {
+        let Some(next) = rest.first() else { return Ok(false) };
+        let load = match next.kind {
+            Kind::Op("LD8rm") => true,
+            Kind::Op("LD8mr") => false,
+            _ => return Ok(false),
+        };
+        if self.register(next, 0)? != reg::A || self.register(next, 1)? != reg::HL {
+            return Ok(false);
+        }
+        let after =
+            self.liveness
+                .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 2);
+        if after.is_live(&REGISTER_INFO, reg::HL) {
+            return Ok(false);
+        }
+        let pair = pointer(from)?;
+        self.push(if load { format!("ld a, ({pair})") } else { format!("ld ({pair}), a") });
+        self.skip = 1;
+        Ok(true)
     }
 
     /// `PACK pair, lo, hi`: two byte moves, ordered so that neither reads a
