@@ -414,6 +414,34 @@ struct Lane {
     readers: Vec<usize>,
 }
 
+impl Lane {
+    /// The defs a write has an output edge to: a dead write comes after the
+    /// live def alone (`addPhysRegDeps`), so it never walks the dead defs
+    /// standing before it.
+    fn output_defs(
+        &self,
+        dead: bool,
+    ) -> &[usize] {
+        if dead { self.live_def.as_slice() } else { &self.defs }
+    }
+
+    /// Records a write at `later`. A dead write leaves the defs and readers
+    /// standing: a later write still comes after the readers of the live def
+    /// before it.
+    fn write(
+        &mut self,
+        later: usize,
+        dead: bool,
+    ) {
+        if !dead {
+            self.defs.clear();
+            self.readers.clear();
+            self.live_def = Some(later);
+        }
+        self.defs.push(later);
+    }
+}
+
 /// The graph of `insns`, one region (every instruction schedulable).
 pub fn graph(
     insns: &[Arc<Insn>],
@@ -489,13 +517,7 @@ pub fn graph(
                 for bit in bits_of(writes) {
                     // No output edge between two dead defs (`addPhysRegDeps`).
                     let this_dead = dead[later] >> bit & 1 == 1;
-                    // A dead write is ordered after the live def only, the dead
-                    // defs standing before it being the ones it has no edge to.
-                    if this_dead {
-                        edges.extend(by_lane[bit].live_def.map(|earlier| (earlier, 1)));
-                    } else {
-                        edges.extend(by_lane[bit].defs.iter().map(|&earlier| (earlier, 1)));
-                    }
+                    edges.extend(by_lane[bit].output_defs(this_dead).iter().map(|&earlier| (earlier, 1)));
                     edges.extend(by_lane[bit].readers.iter().map(|&earlier| (earlier, 0)));
                 }
             }
@@ -534,16 +556,7 @@ pub fn graph(
                 by_lane[bit].readers.push(later);
             }
             for bit in bits_of(writes) {
-                // A dead write leaves the defs and readers standing: a later
-                // write still comes after the readers of the
-                // live def before it.
-                let entry = &mut by_lane[bit];
-                if dead[later] >> bit & 1 == 0 {
-                    entry.defs.clear();
-                    entry.readers.clear();
-                    entry.live_def = Some(later);
-                }
-                entry.defs.push(later);
+                by_lane[bit].write(later, dead[later] >> bit & 1 == 1);
             }
         } else {
             unknown = Some(later);
@@ -1138,7 +1151,7 @@ pub fn scheduled(
 mod tests {
     use std::sync::Arc;
 
-    use super::{graph, regions};
+    use super::{Lane, graph, regions};
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
 
@@ -1199,12 +1212,26 @@ mod tests {
     /// A write whose flags nothing reads joined the defs standing in its
     /// lane, and every later write scanned them all for the live def to order
     /// after: a region of 40,000 flag-writing instructions took seconds
-    /// (machinesched `graph` 12.9 M scans of 4,290 instructions).
+    /// (machinesched `graph` 12.9 M scans of 4,290 instructions). The edges
+    /// came out right, so the count of defs a dead write looks at is the
+    /// witness, not the time (a limit in seconds failed at load 91).
     #[test]
-    fn test_a_long_run_of_dead_flag_writes_builds_its_graph_in_linear_time() {
-        use super::graph;
+    fn test_a_dead_write_looks_at_one_def_however_many_stand_before_it() {
+        let mut lane = Lane::default();
+        lane.write(0, false);
+        for later in 1..5_000 {
+            lane.write(later, true);
+        }
+        assert_eq!(lane.output_defs(true).len(), 1);
+        assert_eq!(lane.output_defs(true).first(), Some(&0));
+        assert_eq!(lane.output_defs(false).len(), 5_000);
+    }
+
+    /// A run of flag writes still yields one node each.
+    #[test]
+    fn test_a_long_run_of_dead_flag_writes_builds_its_graph() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
-        let insns: Vec<_> = (0..40_000u32)
+        let insns: Vec<_> = (0..2_000u32)
             .map(|k| {
                 let at = i64::from(k);
                 insn(
@@ -1216,10 +1243,7 @@ mod tests {
             })
             .collect();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let started = std::time::Instant::now();
-        let found = graph(&insns, regs, 16);
-        assert_eq!(found.preds.len(), insns.len());
-        assert!(started.elapsed().as_millis() < 1000, "{:?} for 40,000 adds", started.elapsed());
+        assert_eq!(graph(&insns, regs, 16).preds.len(), insns.len());
     }
 
     /// `copy_constrain` scanned the whole region for each value's ranges and
