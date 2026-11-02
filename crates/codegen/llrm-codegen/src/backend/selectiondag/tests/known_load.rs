@@ -108,3 +108,40 @@ fn a_shift_by_an_unknown_amount_left_keeps_no_known_zero_bits() {
     let sra = dag.get_node(ISD::Sra, EVT::I32, &[b, a]);
     assert_eq!(known_bits(&dag, sra), super::super::known_bits::KnownBits::unknown(32));
 }
+
+fn sign_known_zero(
+    dag: &SelectionDAG,
+    v: SDValue,
+) -> bool {
+    known_bits(dag, v).zero >> 31 & 1 == 1
+}
+
+/// The pin passes a node's no-signed-wrap flag to `KnownBits::add`: two
+/// non-negative operands cannot sum to a negative one. Flags were ignored, so
+/// `(a & 0x7FFFFFFF) + (b & 0x7FFFFFFF)` had an unknown sign bit. (One DAG per
+/// case: the nodes are shared whatever their flags.)
+#[test]
+fn an_add_with_no_signed_wrap_of_non_negative_operands_is_non_negative() {
+    let sum = |flags| {
+        let mut dag = dag();
+        let a = masked(&mut dag, 7, 0x7FFF_FFFF);
+        let b = masked(&mut dag, 8, 0x7FFF_FFFF);
+        let add = dag.get_node_flags(ISD::Add, EVT::I32, &[a, b], flags);
+        sign_known_zero(&dag, add)
+    };
+    assert!(!sum(SDNodeFlags::default()), "premise: a wrapping add may be negative");
+    assert!(sum(SDNodeFlags::NO_SIGNED_WRAP));
+}
+
+/// `x * x` with no signed wrap is non-negative (the pin's MUL case).
+#[test]
+fn a_square_with_no_signed_wrap_is_non_negative() {
+    let square = |flags| {
+        let mut dag = dag();
+        let x = dag.get_register(EVT::I32, 7);
+        let mul = dag.get_node_flags(ISD::Mul, EVT::I32, &[x, x], flags);
+        sign_known_zero(&dag, mul)
+    };
+    assert!(!square(SDNodeFlags::default()), "premise: a wrapping square may be negative");
+    assert!(square(SDNodeFlags::NO_SIGNED_WRAP));
+}

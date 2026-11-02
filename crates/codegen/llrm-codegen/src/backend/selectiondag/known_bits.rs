@@ -19,7 +19,7 @@
 
 use llrm_mir::knownbits::Bits;
 
-use super::dag::{BooleanContents, SDValue, SelectionDAG};
+use super::dag::{BooleanContents, SDNodeFlags, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::ISD;
 use super::x86_lowering::x86isd;
@@ -151,6 +151,7 @@ fn walk(
     }
     let operand = |at: usize| walk(dag, dag.operand(value, at), depth + 1);
     let opcode = dag.opcode(value);
+    let flag = |wanted: SDNodeFlags| dag.node(value).flags.0 & wanted.0 != 0;
     match opcode {
         ISD::SetCC if value.res == 0 => {
             // A compare is 0 or 1 where the target's boolean contents say so.
@@ -194,17 +195,11 @@ fn walk(
             // The new high bits are zero.
             KnownBits { zero: inner.zero | (all & !mask(inner.width)), one: inner.one, width }
         }
-        ISD::Add => {
-            // `KnownBits::computeForAddSub` without a carry in.
-            let (lhs, rhs) = (operand(0), operand(1));
-            let max = |k: KnownBits| !k.zero & all;
-            let sum_zero = max(lhs).wrapping_add(max(rhs)).wrapping_add(0) & all;
-            let sum_one = lhs.one.wrapping_add(rhs.one) & all;
-            let carry_zero = !(sum_zero ^ lhs.zero ^ rhs.zero);
-            let carry_one = sum_one ^ lhs.one ^ rhs.one;
-            let known = (lhs.zero | lhs.one) & (rhs.zero | rhs.one) & (carry_zero | carry_one) & all;
-            KnownBits { zero: !sum_zero & known, one: sum_one & known, width }
-        }
+        // The pin also passes SelfAdd (`x + x` that is not undef or poison),
+        // which needs the undef query this DAG lacks: never set.
+        ISD::Add => binary(operand(0), operand(1), |a, b| {
+            Bits::add(a, b, flag(SDNodeFlags::NO_SIGNED_WRAP), flag(SDNodeFlags::NO_UNSIGNED_WRAP), false)
+        }),
         ISD::SignExtend => {
             let inner = operand(0);
             let high = all & !mask(inner.width);
@@ -223,7 +218,9 @@ fn walk(
         // The pin's `SHL`: `KnownBits::shl`, then the minimum shift amount's
         // low bits (which `KnownBits::shl` already sets). Node flags are not
         // modelled, so no-wrap is false.
-        ISD::Shl => binary(operand(0), operand(1), |a, b| Bits::shl(a, b, false, false, b.is_non_zero())),
+        ISD::Shl => binary(operand(0), operand(1), |a, b| {
+            Bits::shl(a, b, flag(SDNodeFlags::NO_UNSIGNED_WRAP), flag(SDNodeFlags::NO_SIGNED_WRAP), b.is_non_zero())
+        }),
         // `computeKnownBits` of a `ZEXTLOAD`: the bits above the memory type.
         ISD::Load if value.res == 0 => match &dag.node(value).data {
             super::dag::NodeData::Mem(info) if info.ext == Some(super::actions::LoadExt::ZExtLoad) => {
@@ -235,19 +232,28 @@ fn walk(
             let inner = operand(0);
             KnownBits { zero: inner.zero, one: inner.one, width }
         }
-        ISD::Srl => binary(operand(0), operand(1), |a, b| Bits::lshr(a, b, false, false)),
-        ISD::Sra => binary(operand(0), operand(1), |a, b| Bits::ashr(a, b, false, false)),
+        ISD::Srl => binary(operand(0), operand(1), |a, b| Bits::lshr(a, b, false, flag(SDNodeFlags::EXACT))),
+        ISD::Sra => binary(operand(0), operand(1), |a, b| Bits::ashr(a, b, false, flag(SDNodeFlags::EXACT))),
         ISD::Mul => {
             // The pin sets SelfMultiply only for a self-product that
             // `isGuaranteedNotToBeUndefOrPoison`; there is no such query here,
             // so it is never set.
-            binary(operand(1), operand(0), |a, b| Bits::mul(a, b, false))
+            let mut known = binary(operand(1), operand(0), |a, b| Bits::mul(a, b, false));
+            // A no-signed-wrap product of a number with itself is
+            // non-negative, where the sign is not already known negative.
+            if flag(SDNodeFlags::NO_SIGNED_WRAP)
+                && dag.operand(value, 0) == dag.operand(value, 1)
+                && known.one >> (width - 1) & 1 == 0
+            {
+                known.zero |= 1u128 << (width - 1);
+            }
+            known
         }
         ISD::MulHU => binary(operand(1), operand(0), Bits::mulhu),
         ISD::MulHS => binary(operand(1), operand(0), Bits::mulhs),
-        ISD::Sub => binary(operand(0), operand(1), |a, b| Bits::sub(a, b, false, false)),
-        ISD::UDiv => binary(operand(0), operand(1), |a, b| Bits::udiv(a, b, false)),
-        ISD::SDiv => binary(operand(0), operand(1), |a, b| Bits::sdiv(a, b, false)),
+        ISD::Sub => binary(operand(0), operand(1), |a, b| Bits::sub(a, b, flag(SDNodeFlags::NO_SIGNED_WRAP), flag(SDNodeFlags::NO_UNSIGNED_WRAP))),
+        ISD::UDiv => binary(operand(0), operand(1), |a, b| Bits::udiv(a, b, flag(SDNodeFlags::EXACT))),
+        ISD::SDiv => binary(operand(0), operand(1), |a, b| Bits::sdiv(a, b, flag(SDNodeFlags::EXACT))),
         ISD::URem => binary(operand(0), operand(1), Bits::urem),
         ISD::SRem => binary(operand(0), operand(1), Bits::srem),
         ISD::SMax => binary(operand(0), operand(1), Bits::smax),
