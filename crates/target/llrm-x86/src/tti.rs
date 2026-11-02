@@ -657,6 +657,37 @@ impl Tti for X86 {
             .then(|| self.cast_cost(CastKind::SIToFP, dst, Ty::Int(32), kind))
     }
 
+    fn constant_code_bytes(
+        &self,
+        ty: Ty,
+        bits: u64,
+    ) -> Option<u32> {
+        // An operand-size prefix where the width is not the mode's.
+        let prefix = |width: u32| u32::from(width == if self.real_mode.is_some() { 32 } else { 16 });
+        match ty {
+            // `xor r, r` is 2 bytes, `mov r, imm` the opcode and the immediate.
+            Ty::Int(width @ (8 | 16 | 32)) if bits == 0 => Some(2 + prefix(width)),
+            Ty::Int(8) => Some(2),
+            Ty::Int(width @ (16 | 32)) => Some(1 + width / 8 + prefix(width)),
+            // `fldz`, `fld1`; any other float is a `fld [pool]`: opcode, mode
+            // and a 16 or 32-bit address.
+            Ty::Float | Ty::Double | Ty::X87 if self.x87_stack_slots().is_some() => {
+                let one = match ty {
+                    Ty::Float => u64::from(1.0f32.to_bits()),
+                    _ => 1.0f64.to_bits(),
+                };
+                Some(if bits == 0 || bits == one {
+                    2
+                } else if self.real_mode.is_some() {
+                    4
+                } else {
+                    6
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn indexed_store_cost(
         &self,
         kind: CostKind,

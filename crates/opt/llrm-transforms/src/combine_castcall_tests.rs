@@ -32,6 +32,7 @@ fn combined(text: &str) -> String {
         },
         false,
         &mut declared,
+        None,
     );
     printed(&module)
 }

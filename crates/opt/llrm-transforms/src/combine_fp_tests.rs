@@ -232,3 +232,44 @@ fn test_a_float_to_integer_conversion_of_a_phi_is_made_in_the_predecessors() {
     assert!(out.contains("phi i32 [ 0, %entry ]"), "the guard's edge is the integer 0: {out}");
     assert!(!out.contains("fptosi float %p"), "{out}");
 }
+
+/// `fptosi (fadd (phi float [0.0, ..]), 0.5)` folded twice: the guard's edge
+/// went `fldz` (2 B), `fld [0.5]` (4 B), `xor eax, eax` and the conversion
+/// with its control-word code moved into the loop's exit: recfloat m16 -Os was
+/// 1 B over main. A function for size keeps the fold that makes the guard's
+/// constant two bytes bigger, where the target prices it; one byte it takes
+/// (sieve m16 -Os grew 2 B declining a zero widened to i32); a function for
+/// speed folds.
+#[test]
+fn test_a_fold_through_a_phi_stays_in_a_function_for_size_where_its_constant_costs_more() {
+    let run = |attrs: &str, priced: bool, tail: &str| {
+        let mut module = parsed(&format!(
+            "define i32 @f(i1 %c, float %v) {attrs}{{\nentry:\n  br i1 %c, label %loop, label %m\n\n\
+             loop:\n  %x = fadd float %v, 1.0\n  br label %m\n\n\
+             m:\n  %p = phi float [ 0.0, %entry ], [ %x, %loop ]\n{tail}}}\n"
+        ));
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let tti = crate::testing::Flagged { priced_constants: priced, x87_stack: true, ..Default::default() };
+        let (context, function) = module.function_mut("f").expect("@f");
+        crate::combine::combine_with_sinking(
+            context,
+            &globals,
+            &Default::default(),
+            &metadata,
+            &DataLayout::default(),
+            function,
+            visit,
+            false,
+            &mut llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len()),
+            Some(&tti),
+        );
+        printed(&module)
+    };
+    let convert = "  %r = fptosi float %p to i32\n  ret i32 %r\n";
+    let add = "  %a = fadd float %p, 0.5\n  %r = fptosi float %a to i32\n  ret i32 %r\n";
+    assert!(run("optsize ", true, add).contains("fadd float %p, 5.000000e-01"), "0.0 to 0.5 costs two");
+    for folded in [run("optsize ", true, convert), run("", true, add), run("optsize ", false, add)] {
+        assert!(!folded.contains("phi float"), "{folded}");
+    }
+}

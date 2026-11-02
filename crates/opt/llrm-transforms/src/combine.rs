@@ -342,6 +342,9 @@ pub struct Env<'a> {
     pub sinking: bool,
     /// `BackEdges`, computed on the first ask (`computeBackEdges`).
     pub back_edges: std::cell::OnceCell<std::collections::BTreeSet<(BlockId, BlockId)>>,
+    /// The target's prices, where the pass has them: a fold for size reads
+    /// the constants it swaps.
+    pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
 
 /// `InstCombinerImpl`: the function being combined, the worklist, and the
@@ -626,8 +629,9 @@ pub fn combine(
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut Declared,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> bool {
-    combine_with_sinking(context, globals, callees, metadata, layout, function, visit, true, declared)
+    combine_with_sinking(context, globals, callees, metadata, layout, function, visit, true, declared, tti)
 }
 
 /// `combine` with the `visit*` of a test, and no sinking: a test of one
@@ -657,7 +661,18 @@ pub(crate) fn combine_with_declared(
     visit: fn(&mut Combiner, InstId) -> Visit,
     declared: &mut Declared,
 ) -> bool {
-    combine_with_sinking(context, globals, &Callees::default(), metadata, layout, function, visit, false, declared)
+    combine_with_sinking(
+        context,
+        globals,
+        &Callees::default(),
+        metadata,
+        layout,
+        function,
+        visit,
+        false,
+        declared,
+        None,
+    )
 }
 
 pub(crate) fn combine_with_sinking(
@@ -670,11 +685,12 @@ pub(crate) fn combine_with_sinking(
     visit: fn(&mut Combiner, InstId) -> Visit,
     sinking: bool,
     declared: &mut Declared,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
     // those visited so far.
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
-    let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default() };
+    let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default(), tti };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);

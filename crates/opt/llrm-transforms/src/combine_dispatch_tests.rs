@@ -17,7 +17,7 @@ fn combined(
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared);
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared, None);
     printed(&module)
 }
 
@@ -181,7 +181,7 @@ fn a_sext_of_a_flags_compare_stays_a_compare() {
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared);
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared, None);
     let out = printed(&module);
     assert!(out.contains("icmp slt i16 %v, 0") && out.contains("sext i1"), "{out}");
     assert!(!out.contains("ashr"), "{out}");

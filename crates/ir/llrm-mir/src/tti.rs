@@ -392,6 +392,19 @@ pub trait Tti {
         None
     }
 
+    /// Bytes of the code that puts the constant `bits` (a float's IEEE bits)
+    /// of `ty` in a register, for a build for size to compare the constants a
+    /// fold would swap (X86: `xor eax, eax` is 3 bytes in 16-bit code, `fldz`
+    /// 2); none: the target does not price it and the fold is not held back.
+    fn constant_code_bytes(
+        &self,
+        ty: Ty,
+        bits: u64,
+    ) -> Option<u32> {
+        let _ = (ty, bits);
+        None
+    }
+
     /// The cost of a store whose address is a GEP with a non-constant index,
     /// for a target that prices it apart from other stores (X86: "a store
     /// with index and scale costs 2 uops", for every kind but throughput);

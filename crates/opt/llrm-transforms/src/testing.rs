@@ -171,6 +171,8 @@ pub struct Flagged {
     pub exit_ne: bool,
     pub no_cmov: bool,
     pub x87_stack: bool,
+    /// `Tti::constant_code_bytes` of 16-bit code: `fldz` 2, `xor eax, eax` 3.
+    pub priced_constants: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -184,6 +186,18 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn x87_stack_slots(&self) -> Option<u32> {
         self.x87_stack.then_some(8)
+    }
+
+    fn constant_code_bytes(
+        &self,
+        ty: tti::Ty,
+        bits: u64,
+    ) -> Option<u32> {
+        match ty {
+            tti::Ty::Int(32) if self.priced_constants && bits == 0 => Some(3),
+            tti::Ty::Float if self.priced_constants => Some(if bits == 0 { 2 } else { 4 }),
+            _ => None,
+        }
     }
 
     fn cmp_sel_cost(
@@ -282,7 +296,12 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 impl llrm_mir::target::Machine for Tuned {
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         (self.exit_ne || self.x87_stack).then(|| {
-            std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, x87_stack: self.x87_stack }) as _
+            std::rc::Rc::new(Flagged {
+                exit_ne: self.exit_ne,
+                no_cmov: false,
+                x87_stack: self.x87_stack,
+                priced_constants: false,
+            }) as _
         })
     }
 

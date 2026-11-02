@@ -116,6 +116,7 @@ fn two_sign_tests_ored_are_one_sign_test_of_the_or() {
         &DataLayout::default(),
         function,
         &mut declared,
+        None,
     );
     declared.place(&mut module).expect("placed");
     let out = printed(&module);

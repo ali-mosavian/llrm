@@ -10,7 +10,7 @@ fn combined(module: &mut Module) -> bool {
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared)
+    combine(context, &globals, &Default::default(), &metadata, &DataLayout::default(), function, &mut declared, None)
 }
 
 fn check(
@@ -178,6 +178,7 @@ fn without_sinking_it_stays() {
         super::visit,
         false,
         &mut llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len()),
+        None,
     );
     assert!(!changed);
     assert_eq!(printed(&module), printed(&parsed(SINKABLE)));
@@ -195,7 +196,7 @@ fn a_dead_pure_call_is_deleted() {
     let callees = llrm_mir::memory::callees(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
-    combine(context, &globals, &callees, &metadata, &DataLayout::default(), function, &mut declared);
+    combine(context, &globals, &callees, &metadata, &DataLayout::default(), function, &mut declared, None);
     assert!(!printed(&module).contains("call i32 @pure"), "{}", printed(&module));
 }
 

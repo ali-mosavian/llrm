@@ -33,6 +33,14 @@
 //! DEVIATE 4: `IRBuilder` here simplifies what it makes (`create_binop`), not
 //! just constant-folds, as everywhere in `combine_build`.
 //!
+//! DEVIATE 5: in a function for size (`optsize`), the fold is not made when
+//! the target prices the constants it swaps (`Tti::constant_code_bytes`) and
+//! the folded ones take two bytes or more over the ones they replace. The pin
+//! folds (`foldOpIntoPhi` carries no cost): `fadd (phi float [0.0, %x]), 0.5`
+//! to `phi float [0.5, ..]` swaps `fldz` (2 B) for a pool load (4 B at m16)
+//! and moves the one addition. Exit 2026-11-20: the pin's
+//! `TargetTransformInfo` prices a fold through a phi.
+//!
 //! # Used by
 //! The `visit*` of the families that fold an operation into a phi
 //! (`foldBinOpIntoSelectOrPhi`, `visitICmpInst`, `visitCastInst`...).
@@ -48,8 +56,9 @@ use llrm_mir::constantfolding;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::{simplify_binop_operands, simplify_instruction_operands_at};
+use llrm_mir::tti::Ty;
 use llrm_mir::types::{FloatKind, Type, TypeId};
 use llrm_mir::valuetracking::context::is_implied_condition_cmp;
 use llrm_mir::valuetracking::guarantee::is_guaranteed_to_transfer_execution_to_successor_range;
@@ -161,6 +170,45 @@ impl Combiner<'_> {
         Some(Operand::Constant(self.context.int(ty, implied as i128)))
     }
 
+    /// DEVIATE 5: whether a function for size would hold two or more constant
+    /// bytes over its incoming ones after the fold.
+    fn fold_swaps_in_bigger_constants(
+        &self,
+        incoming: &[(Operand, BlockId)],
+        folded: &[Option<Operand>],
+    ) -> bool {
+        let Some(tti) = self.env.tti else { return false };
+        if !self.function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            )
+        }) {
+            return false;
+        }
+        let bytes = |id| {
+            let constant = self.context.get(id);
+            let bits = match constant.kind {
+                ConstantKind::Int(bits) => bits as u64,
+                ConstantKind::Float(bits) => bits,
+                ConstantKind::Zero => 0,
+                _ => return None,
+            };
+            tti.constant_code_bytes(Ty::of(&self.context.types, constant.ty)?, bits)
+        };
+        let (mut before, mut after) = (0, 0);
+        for (&(old, _), new) in incoming.iter().zip(folded) {
+            let (Operand::Constant(old), Some(Operand::Constant(new))) = (old, new) else { continue };
+            let (Some(old), Some(new)) = (bytes(old), bytes(*new)) else { return false };
+            before += old;
+            after += new;
+        }
+        // A byte is an encoding detail (`xor` against `mov`, an operand-size
+        // prefix) the merge of the join repays: sieve m16 -Os grew 2 B when
+        // a zero widened from i16 to i32 stayed behind a phi.
+        after >= before + 2
+    }
+
     /// `foldOpIntoPhi(I, PN, AllowMultipleUses)`.
     pub fn fold_op_into_phi(
         &mut self,
@@ -246,6 +294,10 @@ impl Combiner<'_> {
             if self.is_back_edge(from, phi_block) {
                 return Visit::None;
             }
+        }
+
+        if self.fold_swaps_in_bigger_constants(&incoming, &new_values) {
+            return Visit::None;
         }
 
         // The copies, one per incoming block.
