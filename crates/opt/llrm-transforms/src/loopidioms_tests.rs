@@ -1351,3 +1351,53 @@ fn the_memset_a_loop_promotes_is_priced_as_one_fill() {
     let dear = after(100);
     assert!(!dear.contains("i8 0, i16 128"), "a fill dearer than its loop stays out\n{dear}");
 }
+
+const COMPUTED_AND_ZERO: &str = "@px = global [6 x i16] zeroinitializer
+@py = global [6 x i16] zeroinitializer
+@vx = global [6 x i16] zeroinitializer
+@vy = global [6 x i16] zeroinitializer
+define void @init(i16 %s) {
+b0:
+  br label %l
+l:
+  %i = phi i16 [ 0, %b0 ], [ %n, %l ]
+  %x = mul i16 %i, %s
+  %y = add i16 %x, %i
+  %a = getelementptr [6 x i16], ptr @px, i16 0, i16 %i
+  store i16 %x, ptr %a
+  %b = getelementptr [6 x i16], ptr @py, i16 0, i16 %i
+  store i16 %y, ptr %b
+  %c = getelementptr [6 x i16], ptr @vx, i16 0, i16 %i
+  store i16 0, ptr %c
+  %d = getelementptr [6 x i16], ptr @vy, i16 0, i16 %i
+  store i16 0, ptr %d
+  %n = add nuw nsw i16 %i, 1
+  %e = icmp eq i16 %n, 6
+  br i1 %e, label %x1, label %l
+x1:
+  ret void
+}
+";
+
+/// nbody_fixed at m64 left its two zero stores in a loop that stays for two
+/// computed ones: at speed a fill had to beat the stores it removed, a rule the
+/// pin does not have (it makes both memsets and dead-store elimination drops
+/// them over `zeroinitializer` globals): 38 stores where the pin has 26. A target
+/// that prices its fills keeps the rule (m16, +24 B).
+#[test]
+fn a_target_with_no_fill_price_forms_the_memsets_beside_computed_stores() {
+    let after = |price_fills: bool| {
+        let costs = crate::profit::OperationCosts { fill: 100, fill_cell: 1, store: 1, add: 1, branch: 3, ..Default::default() };
+        let bytes = crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs, sizes: bytes, price_fills, ..Default::default() };
+        let mut module = parsed(&format!("{DOS}{COMPUTED_AND_ZERO}"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::loopidiom::pass::LoopIdiom::new());
+        manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+        printed(&module)
+    };
+    let pin = after(false);
+    assert_eq!(pin.matches("call void @llvm.memset").count(), 2, "{pin}");
+    let priced = after(true);
+    assert_eq!(priced.matches("call void @llvm.memset").count(), 0, "{priced}");
+}

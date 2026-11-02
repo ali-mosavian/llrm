@@ -290,8 +290,9 @@ impl LoopIdiomRecognize {
         }
         // DEVIATE: at speed a loop that stays for a computed store gains from a
         // fill only the trips of the stores it removes (nbody: two zero stores
-        // beside two computed ones, a 6-cell `rep stos` for 6 stores). Exit:
-        // none.
+        // beside two computed ones, a 6-cell `rep stos` for 6 stores). Owner
+        // w2. Exit 2026-11-07: only where the target prices its fills
+        // (`price_fills`); the pin forms the memset and DSE removes it.
         if kept > 0 && run.bytes.is_none() && !self.fills_a_set_object(run, &cx, &blocks) {
             let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
             if let (Some(speed), Some(be), Some(size)) = (run.speed, be, size)
@@ -307,7 +308,9 @@ impl LoopIdiomRecognize {
         }
         // DEVIATE: at -Os a loop of several stores stays one when a fill for
         // each store is more bytes than the loop (lru.c: four stores a trip
-        // over three trips, five fills 33 bytes over it). Exit: none.
+        // over three trips, five fills 33 bytes over it). Owner w2. Exit 2026-11-08: the
+        // -Os rule is neither metric grows (`w2/idiom-size-rate`); this
+        // bytes-only check goes with the encoded-bytes price.
         if let Some((costs, callees)) = run.bytes {
             // The fill of an object a memset sets already merges with it
             // (`vel_x[i] = 0` after `let vel_x = [0, ...]`): the loop's zero
@@ -765,7 +768,8 @@ impl LoopIdiomRecognize {
         // generating the base address and checking everything.
         // DEVIATE: at -Os a copy whose length is known only at run time stays
         // a loop when the `rep movs` that replaces it is more bytes (no libc
-        // `memcpy` to call). Exit: none.
+        // `memcpy` to call). Owner w2. Exit 2026-11-08: priced from the
+        // sheet's `rep movs` row with the fill rule, then this comment goes.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
         {
