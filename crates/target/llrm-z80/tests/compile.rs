@@ -360,3 +360,15 @@ fn a_call_through_a_pointer_puts_the_address_in_iy() {
     let out = text(ir, "indirect", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("pop iy") && out.contains("call __call_iy"), "{out}");
 }
+
+/// A word compared with zero for equality took a `sub a, #0` ladder: 6
+/// instructions and two branches for `dec hl; jr nz`. The two bytes or-ed set Z
+/// when both are zero: `ld a, h; or a, l`.
+#[test]
+fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              @r = external global i8\n\
+              define void @count16(i16 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i16 [ %n, %entry ], [ %i1, %loop ]\n  store volatile i8 1, ptr @r\n  %i1 = add i16 %i, -1\n  %c = icmp eq i16 %i1, 0\n  br i1 %c, label %done, label %loop\ndone:\n  ret void\n}\n";
+    let out = text(ir, "count16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("or a, ") && !out.contains("sub a, #0"), "{out}");
+}

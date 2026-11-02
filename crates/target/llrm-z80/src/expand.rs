@@ -769,6 +769,11 @@ impl Printer<'_> {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("sbc a, {bh}"));
             }
+            // a word against zero: its two bytes or-ed, which is zero only when both are
+            Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") if bl == "#0" && bh == "#0" => {
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("or a, {}", name(al)));
+            }
             Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") => {
                 let skip = format!("{}$", self.out.len());
                 self.push(format!("ld a, {}", name(al)));
