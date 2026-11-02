@@ -239,6 +239,15 @@ impl Emitter<'_> {
                         continue;
                     }
                     operands.extend(uses);
+                    // `Select_FREEZE`: a `FREEZE` of a value that is not undef
+                    // is selected as a generic `COPY`, which the wasm passes
+                    // know by its class.
+                    let code = match (code, operands.first()) {
+                        (llrm_dagisel::generated::ids::target_opcode::COPY, Some(&Operand::Def(def))) => {
+                            copy(self.f.vreg_type(def))
+                        }
+                        (code, _) => code,
+                    };
                     let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];

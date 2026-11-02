@@ -320,3 +320,12 @@ fn undef_values() {
 fn main_and_mismatched_calls_get_wrappers() {
     check("main_wrapper");
 }
+
+/// `select i1 %c, i1 %d, i1 false` combines to an `and` of a `FREEZE`, which
+/// the matcher selects as the generic `COPY`: it reached the printer as
+/// "opcode 20 has no assembly string", and `sieve`, `queens` and every
+/// program with an `a && b` that SimplifyCFG made a select failed at -O2.
+#[test]
+fn an_i1_select_is_an_and() {
+    check("i1_select");
+}
