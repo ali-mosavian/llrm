@@ -26,11 +26,15 @@
 //! sdag-b. Review 2026-11-13.
 //!
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
-//! non-extending load only before operations are legal (the pin also folds
-//! after, where the extending load is legal), with the table given by
-//! `with_tli` (no table: only a simple load nothing else reads); every
-//! integer truncate is taken as free (`isTruncateFree`). Exit: the target's
-//! truncate query. Owner sdag-b. Review 2026-11-27.
+//! non-extending load only before the DAG is legalized, with the table given by
+//! `with_tli` (no table: only a simple load nothing else reads), and take every
+//! integer truncate as free (`isTruncateFree`). The pin's
+//! [`tryToFoldExtOfLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15712)
+//! also folds after legalization and a load that is not simple, wherever the
+//! extending load is legal
+//! ([L15746](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15746));
+//! the second is translated, the first not. Exit: the target's truncate query
+//! and the fold at every level. Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::Run`
