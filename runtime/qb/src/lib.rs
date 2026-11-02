@@ -2035,12 +2035,26 @@ mod tests {
         }
     }
 
+    /// The evidence names a C source of the llrm runtime (`posix/mathops.c`),
+    /// not a word that merely starts with `.c`.
+    fn cites_c_source(evidence: &str) -> bool {
+        evidence.match_indices(".c").any(|(at, _)| !evidence[at + 2..].starts_with(|next: char| next.is_alphanumeric()))
+    }
+
+    #[test]
+    fn a_c_source_is_a_citation_and_a_word_that_starts_with_dot_c_is_not() {
+        assert!(cites_c_source("runtime/qb/posix/mathops.c, written for the llrm runtime"));
+        assert!(cites_c_source("see mathops.c."));
+        assert!(!cites_c_source("a .cfg and a .cs file"));
+    }
+
     #[test]
     fn test_every_claim_below_the_worst_case_cites_something() {
         for name in names().into_iter().filter(|name| CONTRACTS[name] != worst(name)) {
             let evidence = &CONTRACTS[&name].evidence;
             assert!(
-                [".asm", ".inc", ".py", "AGENTS.md"].iter().any(|cited| evidence.contains(cited)),
+                [".asm", ".inc", ".py", "AGENTS.md"].iter().any(|cited| evidence.contains(cited))
+                    || cites_c_source(evidence),
                 "{name}: {evidence:?}"
             );
         }
