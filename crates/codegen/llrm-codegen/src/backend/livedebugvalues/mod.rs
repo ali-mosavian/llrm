@@ -19,7 +19,8 @@
 //! slices.
 //! O(1) per event plus the open ranges of the variable or register it touches.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 
@@ -217,10 +218,142 @@ impl Tracker {
         }
     }
 
+    /// A tracker for a block at `start` that begins with `ins` open
+    /// (`InLocs`): their ranges start at the block's first position.
+    pub fn entering(
+        start: i64,
+        ins: &BTreeMap<Var, Where>,
+    ) -> Tracker {
+        let mut tracker = Tracker::default();
+        for (&var, &place) in ins {
+            tracker.debug_value(start, var, Some(place));
+        }
+        tracker
+    }
+
+    /// What is open now: the block's `OutLocs` once its last instruction ran.
+    pub fn open_locs(&self) -> BTreeMap<Var, Where> {
+        self.open.iter().map(|(var, (place, ..))| (*var, *place)).collect()
+    }
+
     /// The ranges closed so far, in the order they closed.
     pub fn finish(self) -> Vec<Located> {
         self.closed
     }
+}
+
+/// What happens at a position of a block.
+#[derive(Clone)]
+pub enum Event {
+    /// A note: the variable is `place`, or nowhere.
+    Note(Var, Option<Where>),
+    /// An instruction writes `written` and a call's mask clobbers what it
+    /// names.
+    Def {
+        written: Vec<RegId>,
+        mask: Option<Rc<dyn Fn(RegId) -> bool>>,
+    },
+    Copy {
+        dest: RegId,
+        src: RegId,
+        src_dies: bool,
+        dest_callee_saved: bool,
+    },
+    Spill {
+        from: RegId,
+        slot: i64,
+    },
+    Reload {
+        slot: i64,
+        into: RegId,
+    },
+}
+
+/// A block: where it starts and ends, its predecessors (indexes into the
+/// list, which is in reverse post-order) and what happens in it.
+pub struct FlowBlock {
+    pub start: i64,
+    pub end: i64,
+    pub preds: Vec<usize>,
+    pub events: Vec<(i64, Event)>,
+}
+
+fn run(
+    block: &FlowBlock,
+    ins: &BTreeMap<Var, Where>,
+    stack_pointer: RegId,
+) -> Tracker {
+    let mut tracker = Tracker::entering(block.start, ins);
+    for (at, event) in &block.events {
+        match event {
+            Event::Note(var, place) => tracker.debug_value(*at, *var, *place),
+            Event::Def { written, mask } => {
+                let mask = mask.as_ref().map(|mask| move |register: RegId| mask(register));
+                let clobber = Clobber { written, mask: mask.as_ref().map(|mask| mask as &dyn Fn(RegId) -> bool) };
+                tracker.register_def(*at, &clobber, stack_pointer);
+            }
+            Event::Copy { dest, src, src_dies, dest_callee_saved } => {
+                tracker.register_copy(*at, *dest, *src, *src_dies, *dest_callee_saved);
+            }
+            Event::Spill { from, slot } => tracker.spill(*at, *from, *slot),
+            Event::Reload { slot, into } => tracker.reload(*at, *slot, *into),
+        }
+    }
+    tracker
+}
+
+/// The ranges of every variable over a function (`ExtendRanges`): what the
+/// predecessors agree is open at a block's start is open there, found by
+/// visiting the blocks in reverse post-order until no block's start changes.
+/// A predecessor not visited yet is ignored (`join`).
+///
+/// DEVIATE: the pin drops the locations whose variable's lexical scope does
+/// not dominate the block; there are no scopes here. The worklist is one
+/// ordered set, not the pin's worklist and pending pair; both reach the
+/// fixpoint.
+pub fn extend(
+    blocks: &[FlowBlock],
+    stack_pointer: RegId,
+) -> Vec<Located> {
+    let mut succs: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
+    for (index, block) in blocks.iter().enumerate() {
+        for &pred in &block.preds {
+            succs[pred].push(index);
+        }
+    }
+    let mut ins: Vec<BTreeMap<Var, Where>> = vec![BTreeMap::new(); blocks.len()];
+    let mut outs: Vec<Option<BTreeMap<Var, Where>>> = vec![None; blocks.len()];
+    let mut worklist: BTreeSet<usize> = (0..blocks.len()).collect();
+    while let Some(index) = worklist.pop_first() {
+        let mut joined: Option<BTreeMap<Var, Where>> = None;
+        for out in blocks[index].preds.iter().filter_map(|&pred| outs[pred].as_ref()) {
+            joined = Some(match joined {
+                None => out.clone(),
+                Some(mut so_far) => {
+                    so_far.retain(|var, place| out.get(var) == Some(place));
+                    so_far
+                }
+            });
+        }
+        let joined = joined.unwrap_or_default();
+        let visited = outs[index].is_some();
+        if visited && joined == ins[index] {
+            continue;
+        }
+        ins[index] = joined;
+        let out = run(&blocks[index], &ins[index], stack_pointer).open_locs();
+        if outs[index].as_ref() != Some(&out) || !visited {
+            outs[index] = Some(out);
+            worklist.extend(succs[index].iter().copied());
+        }
+    }
+    let mut found = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let mut tracker = run(block, &ins[index], stack_pointer);
+        tracker.terminator(block.end);
+        found.extend(tracker.finish());
+    }
+    found
 }
 
 #[cfg(test)]
@@ -349,5 +482,57 @@ mod tests {
             ranges(&tracker.finish()),
             [(1, 10, 20, at(1)), (1, 20, 30, cell(-8)), (1, 30, 35, at(2)), (1, 35, 38, cell(-8))]
         );
+    }
+    fn block(
+        start: i64,
+        end: i64,
+        preds: &[usize],
+        events: Vec<(i64, Event)>,
+    ) -> FlowBlock {
+        FlowBlock { start, end, preds: preds.to_vec(), events }
+    }
+
+    /// A diamond: a variable noted in the entry and untouched on both arms is
+    /// open in the join; one a single arm overwrites is not.
+    #[test]
+    fn what_both_arms_agree_on_is_open_in_the_join() {
+        let kill = |register| Event::Def { written: vec![register], mask: None };
+        let blocks = [
+            block(0, 10, &[], vec![(0, Event::Note(var(1), Some(at(1)))), (0, Event::Note(var(2), Some(at(2))))]),
+            block(10, 20, &[0], vec![]),
+            block(20, 30, &[0], vec![(22, kill(reg(2)))]),
+            block(30, 40, &[1, 2], vec![]),
+        ];
+        let mut found = ranges(&extend(&blocks, reg(9)));
+        found.sort_by_key(|one| (one.0, one.1, one.2));
+        assert_eq!(
+            found,
+            [
+                (1, 0, 10, at(1)),
+                (1, 10, 20, at(1)),
+                (1, 20, 30, at(1)),
+                (1, 30, 40, at(1)),
+                (2, 0, 10, at(2)),
+                (2, 10, 20, at(2)),
+                (2, 20, 22, at(2)),
+            ]
+        );
+    }
+
+    /// A loop: a back edge from a block not visited yet is ignored the first
+    /// time, and the fixpoint takes back a location the body kills.
+    #[test]
+    fn a_location_the_loop_body_kills_is_not_open_at_the_header() {
+        let kill = Event::Def { written: vec![reg(1)], mask: None };
+        let blocks = [
+            block(0, 10, &[], vec![(0, Event::Note(var(1), Some(at(1))))]),
+            block(10, 20, &[0, 2], vec![]),
+            block(20, 30, &[1], vec![(25, kill)]),
+        ];
+        let mut found = ranges(&extend(&blocks, reg(9)));
+        found.sort_by_key(|one| (one.0, one.1, one.2));
+        // The first visit takes the header's start from block 0 alone; the
+        // body's kill comes back over the edge and takes it away again.
+        assert_eq!(found, [(1, 0, 10, at(1))]);
     }
 }
