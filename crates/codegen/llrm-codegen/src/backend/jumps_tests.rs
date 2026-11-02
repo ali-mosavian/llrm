@@ -2299,6 +2299,59 @@ fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
     assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
 }
 
+/// One way puts an unrelated move ahead of the zeroing `xor` both ways need
+/// (`for (...) sum += ...; return sum` at -Os: `mov esi, 1` before `xor ecx, ecx`
+/// in the loop's entry, the bare `xor` on the skip edge): the leading-run hoist
+/// saw different first instructions and left two xors, 4 B over main/gcc (idiv_loop_os,
+/// recgcd 114 B against 110 B).
+#[test]
+fn test_a_zeroing_xor_behind_an_unrelated_move_is_hoisted_above_the_compare() {
+    let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![bx()], vec![imm(1)], None)), zero(5), _move(6, bx()), _return(7)], vec![]).into(),
+        block(9, vec![zero(9), _move(10, bx()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The move the `xor` would pass is what the `xor` reads: it stays behind it.
+#[test]
+fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![cx()], vec![imm(1)], None)), _inserted(_insn(5, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(7)], vec![]).into(),
+        block(9, vec![_inserted(_insn(9, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "add bx, cx").count(), 2, "{lines:?}");
+}
+
+/// A call ahead of the `xor` on one way: lifting it would hold the constant
+/// across the call, so both xors stay.
+#[test]
+fn test_a_def_behind_a_call_is_not_lifted_above_the_compare() {
+    let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
+    let call = _inserted(_insn(4, Operation::Call, "call", vec![], vec![], None));
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+            block(4, vec![call, zero(5), _move(6, bx()), _return(7)], vec![]).into(),
+            block(9, vec![zero(9), _move(10, bx()), _return(11)], vec![]).into(),
+        ],
+    );
+    let xors = threaded(&source)
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|insn| insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("xor")))
+        .count();
+    assert_eq!(xors, 2);
+}
+
 fn lined(
     one: Arc<Insn>,
     line: u32,

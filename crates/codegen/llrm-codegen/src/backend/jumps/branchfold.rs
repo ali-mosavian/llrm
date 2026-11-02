@@ -200,6 +200,79 @@ fn flags_dead_after(
 
 /// An instruction `isSafeToMove` allows above a branch: a move or arithmetic
 /// on registers and constants, with nothing else it does.
+/// The two ways of a branch with the instructions both can run first moved to
+/// the front, so `hoist_common` sees them as a leading run.
+///
+/// DEVIATE HC1 (exit: none; bar = the best compiler, gcc's code hoisting
+/// `do_hoist_insertion`, tree-ssa-pre.cc): `HoistCommonCodeInSuccs` (L2043)
+/// takes only the instructions both ways begin with, in step. An instruction
+/// of the kind it hoists that is the same on both ways, but sits behind an
+/// instruction of its own way that has nothing to do with it (`mov esi, 1`
+/// before `xor ecx, ecx`), is moved up first: it reads and writes nothing
+/// that any instruction ahead of it reads or writes, flags included. One scan
+/// of each way; matching compares the liftable ones only.
+fn lifted_pair(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    first: Block,
+    second: Block,
+) -> (Block, Block) {
+    let (ours, theirs) = (liftable(regs, bits, &first), liftable(regs, bits, &second));
+    let mut taken = vec![false; theirs.len()];
+    let mut matched: Vec<(usize, usize)> = Vec::new();
+    for &at in &ours {
+        let hit = (0..theirs.len()).find(|&slot| !taken[slot] && first.insns[at].what == second.insns[theirs[slot]].what);
+        if let Some(slot) = hit {
+            taken[slot] = true;
+            matched.push((at, theirs[slot]));
+        }
+    }
+    if matched.is_empty() {
+        return (first, second);
+    }
+    let front = |block: Block, picks: Vec<usize>| -> Block {
+        let head = block.insns.iter().position(|insn| !insn.is_meta()).unwrap_or(0);
+        let mut insns: Vec<Arc<Insn>> = block.insns[..head].to_vec();
+        insns.extend(picks.iter().map(|&at| Arc::clone(&block.insns[at])));
+        insns.extend(
+            block.insns.iter().enumerate().skip(head).filter(|(at, _)| !picks.contains(at)).map(|(_, insn)| Arc::clone(insn)),
+        );
+        block.with_insns(insns)
+    };
+    (front(first, matched.iter().map(|m| m.0).collect()), front(second, matched.iter().map(|m| m.1).collect()))
+}
+
+/// The positions of the instructions of `block` that `hoist_common` would hoist
+/// (`pure`, put there by allocation) and that depend on nothing ahead of them.
+fn liftable(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    block: &LirBlock,
+) -> Vec<usize> {
+    let (mut read, mut written) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
+    let mut found = Vec::new();
+    for (at, insn) in block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()) {
+        // Nothing is lifted over a call: its constant would live across it.
+        if insn.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
+            break;
+        }
+        let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
+            break;
+        };
+        if insn.inserted()
+            && pure(insn)
+            && reads.is_disjoint(&written)
+            && writes.is_disjoint(&read)
+            && writes.is_disjoint(&written)
+        {
+            found.push(at);
+        }
+        read = read.or(&reads);
+        written = written.or(&writes);
+    }
+    found
+}
+
 fn pure(insn: &Insn) -> bool {
     insn.what.as_ref().is_some_and(|what| {
         matches!(
@@ -554,6 +627,7 @@ impl<'a> Folder<'a> {
         if !first.phis.is_empty() || !second.phis.is_empty() {
             return false;
         }
+        let (first, second) = lifted_pair(regs, bits, first, second);
         let real = |block: &LirBlock| -> Vec<usize> {
             block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()).map(|(at, _)| at).collect()
         };
@@ -626,6 +700,9 @@ impl<'a> Folder<'a> {
                 }
             }
         }
+        // The blocks as `lifted_pair` left them: the indices of `run` are theirs.
+        self.set(one, first.clone().into_inner());
+        self.set(two, second.clone().into_inner());
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
         for (place, (at, by)) in run.iter().enumerate() {
             // One instruction for both ways: the line they share (L2251).
