@@ -126,11 +126,13 @@ pub fn flags_read_after(
 ) -> Option<u32> {
     let mut needed = 0;
     for after in &insts[at + 1..] {
-        if after.sets_flags || after.call {
-            break;
-        }
+        // an instruction that reads the codes and sets them (`subx`) is a
+        // reader first
         if after.reads_flags {
             needed |= read_by(after)?;
+        }
+        if after.sets_flags || after.call {
+            break;
         }
     }
     Some(needed)

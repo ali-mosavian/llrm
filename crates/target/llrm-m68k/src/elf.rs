@@ -158,6 +158,11 @@ fn place(
                 labels.push((label, code.len()));
             }
             Item::Bytes(bytes) => code.extend_from_slice(bytes),
+            Item::Table(labels) => {
+                let encoded = crate::encode::table(labels);
+                pending.push((code.len(), index, encoded.fixups));
+                code.extend_from_slice(&encoded.bytes);
+            }
             Item::Inst(one) => {
                 let encoded = encode(one)?;
                 pending.push((code.len(), index, encoded.fixups.clone()));

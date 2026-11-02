@@ -83,13 +83,14 @@ impl M68kCalling {
         &self,
         vt: EVT,
         pointer: bool,
+        nth: usize,
     ) -> llrm_lir::registers::RegId {
         let names = if pointer {
             self.convention.results.get("address")
         } else {
             self.convention.results.get(&(vt.size_in_bits() / 8).max(1).to_string())
         };
-        abi::register(&names.expect("RetCC_M68k_C names a register")[0])
+        abi::register(&names.expect("RetCC_M68k_C names a register")[nth])
     }
 
     /// `LowerCall`: the arguments stored in the outgoing stack area, the `CALL`
@@ -143,8 +144,13 @@ impl M68kCalling {
         let mut glue = SDValue { node: end.node, res: 1 };
         // `LowerCallResult`
         let mut values = Vec::new();
+        let mut taken: Vec<(usize, bool)> = Vec::new();
         for result in ins {
-            let register = self.result_register(result.vt, result.pointer);
+            // `CCAssignToReg<[D0, D1]>`: the second `i32` result is in `d1`
+            let class = (result.vt.size_in_bits() as usize, result.pointer);
+            let nth = taken.iter().filter(|&&taken| taken == class).count();
+            taken.push(class);
+            let register = self.result_register(result.vt, result.pointer, nth);
             let copy = dag.get_copy_from_phys_reg(chain, register, result.vt, glue);
             chain = SDValue { node: copy.node, res: 1 };
             glue = SDValue { node: copy.node, res: 2 };
@@ -211,6 +217,7 @@ impl M68kCalling {
         let pop = dag.get_constant_with(0, EVT::I32, true, false);
         let mut operands = vec![chain, pop];
         let mut glue = None;
+        let mut taken: Vec<(usize, bool)> = Vec::new();
         for out in outs {
             // `CCIfType<[i1], CCPromoteToType<i8>>`
             let mut value = out.value;
@@ -218,7 +225,10 @@ impl M68kCalling {
                 value = dag.get_node(out.ext.node(), EVT::I8, &[value]);
             }
             let vt = dag.value_type(value);
-            let register = self.result_register(vt, out.pointer);
+            let class = (vt.size_in_bits() as usize, out.pointer);
+            let nth = taken.iter().filter(|&&taken| taken == class).count();
+            taken.push(class);
+            let register = self.result_register(vt, out.pointer, nth);
             let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
@@ -262,6 +272,17 @@ impl TargetCalling for M68kCalling {
     ) -> SDValue {
         M68kCalling::lower_return(self, dag, chain, outs)
     }
+}
+
+/// `LowerJumpTable`: `WrapperPC (TargetJumpTable)` (the small code model
+/// without PIC, as [`lower_global_address`]).
+pub fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let NodeData::JumpTable(index) = dag.node(node).data else { unreachable!("JumpTable has a table payload") };
+    let table = dag.get_target_jump_table(EVT::I32, index);
+    dag.get_node(m68kisd::WRAPPER_PC, EVT::I32, &[table])
 }
 
 /// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, the offset folded

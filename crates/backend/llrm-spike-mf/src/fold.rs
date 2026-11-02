@@ -47,15 +47,28 @@ pub(crate) struct Branches {
     pub(crate) cond: Option<Inst>,
 }
 
+/// The one block a branch names; `None` for a jump table dispatch, which names
+/// every case and which `analyzeBranch` leaves unanalyzed.
 fn target(inst: &Inst) -> Option<u32> {
-    inst.operands
+    let mut blocks = inst
+        .operands
         .iter()
-        .find_map(
+        .filter_map(
             |operand| match operand {
                 Operand::Block(id) => Some(*id),
                 _ => None,
             },
-        )
+        );
+    let first = blocks.next()?;
+    blocks.next().is_none().then_some(first)
+}
+
+/// Whether a terminator names block `id`, a table jump's every case included.
+fn names(
+    inst: &Inst,
+    id: u32,
+) -> bool {
+    inst.operands.iter().any(|operand| matches!(operand, Operand::Block(block) if *block == id))
 }
 
 fn is_jump(inst: &Inst) -> bool {
@@ -168,7 +181,7 @@ fn predecessors<C>(
     let at = position(function, id);
     (0..function.blocks.len())
         .filter(|&other| {
-            function.blocks[other].insts.iter().any(|inst| inst.terminator && target(inst) == Some(id))
+            function.blocks[other].insts.iter().any(|inst| inst.terminator && names(inst, id))
                 || (other + 1 == at && can_fall_through(function, other))
         })
         .collect()
@@ -180,7 +193,7 @@ fn is_successor<C>(
     from: usize,
     id: u32,
 ) -> bool {
-    function.blocks[from].insts.iter().any(|inst| inst.terminator && target(inst) == Some(id))
+    function.blocks[from].insts.iter().any(|inst| inst.terminator && names(inst, id))
         || (can_fall_through(function, from) && function.blocks[from + 1].id == id)
 }
 

@@ -12,7 +12,7 @@ use crate::expand::{Line, finish};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
-use crate::mfunc::{emit, expand_cmov};
+use crate::mfunc::{Kind, MFunction, Operand, emit, expand_cmov};
 use crate::regalloc::{
     branch_fold, commute_tied, eliminate_phis_with, fold_reserved_copies, machine_sink, remove_identity_copies,
     remove_redundant_copies, two_address,
@@ -25,6 +25,8 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// A jump table: the absolute address of each label, as 32-bit words.
+    Table(Vec<String>),
 }
 
 /// What the compiler may do beyond the pin's output.
@@ -130,7 +132,43 @@ pub fn items_with(
             Line::Inst(inst) => Item::Inst(inst),
         });
     }
+    out.extend(jump_tables(&function, number));
     Ok(out)
+}
+
+/// Each jump table the function dispatches through: its label, then the
+/// address of each block it goes to (`EK_BlockAddress`).
+fn jump_tables(
+    function: &MFunction,
+    number: usize,
+) -> Vec<Item> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        if inst.kind != Kind::Op("JMP32j") {
+            continue;
+        }
+        let Some(Operand::Symbol(table, _)) =
+            inst.operands.iter().find(|operand| matches!(operand, Operand::Symbol(..)))
+        else {
+            continue;
+        };
+        if !seen.insert(table.clone()) {
+            continue;
+        }
+        let labels = inst
+            .operands
+            .iter()
+            .filter_map(|operand| match operand {
+                Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+                _ => None,
+            })
+            .map(|at| format!(".LBB{number}_{at}"))
+            .collect();
+        out.push(Item::Label(table.clone()));
+        out.push(Item::Table(labels));
+    }
+    out
 }
 
 /// The IR's branch probabilities by `(from, to)` block number
@@ -188,6 +226,7 @@ pub fn text_with(
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Table(labels) => labels.iter().for_each(|label| out.push_str(&format!("\t.long\t{label}\n"))),
         }
     }
     Ok(out)

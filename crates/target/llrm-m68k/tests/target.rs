@@ -4,15 +4,15 @@ use llrm_m68k::reg;
 use llrm_m68k::target::M68k;
 use llrm_target::Target;
 
-/// Results leave in `d0` by width, the frame register is `a6` and the stack
-/// pointer `sp` (`M68kRegisterInfo`), and `d2` is kept for the caller
-/// (`CSR_STD`).
+/// Results leave in `d0` by width, the second part of an 8-byte one in `d1`,
+/// the frame register is `a6` and the stack pointer `sp` (`M68kRegisterInfo`),
+/// and `d2` is kept for the caller (`CSR_STD`).
 #[test]
 fn the_target_states_the_pins_register_roles() {
     let target = M68k;
-    assert_eq!(target.results(4), [reg::D0]);
-    assert_eq!(target.results(2), [reg::WD0]);
-    assert_eq!(target.results(1), [reg::BD0]);
+    assert_eq!(target.results(4), [reg::D0, reg::D1]);
+    assert_eq!(target.results(2), [reg::WD0, reg::WD1]);
+    assert_eq!(target.results(1), [reg::BD0, reg::BD1]);
     assert_eq!(target.frame_register(), reg::A6);
     assert_eq!(target.stack_pointer(), reg::SP);
     assert!(target.callee_saved().iter().any(|&(full, _)| full == reg::D2));

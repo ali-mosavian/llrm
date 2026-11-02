@@ -96,7 +96,7 @@ pub fn assembly(
     level: Level,
 ) -> Result<String, String> {
     let mut program = program(text)?;
-    let options = MidEnd { library: Vec::new(), ..level.mid_end() };
+    let options = MidEnd { library: Vec::new(), lower_switches: false, ..level.mid_end() };
     llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = &program.modules[0];
@@ -107,7 +107,15 @@ pub fn assembly(
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
+        match llrm_mir::image::Export::of(global.linkage) {
+            llrm_mir::image::Export::Public => out.push_str(&format!("\t.globl\t{name}\n")),
+            llrm_mir::image::Export::Weak => out.push_str(&format!("\t.weak\t{name}\n")),
+            llrm_mir::image::Export::Local => {}
+        }
         out.push_str(&text_with(module, &name, cpu, backend).map_err(|why| format!("@{name}: {why}"))?);
     }
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    out.push_str(&crate::data::assembly(module, &layout)?);
     Ok(out)
 }

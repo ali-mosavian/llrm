@@ -172,6 +172,8 @@ struct Emitter<'a> {
     save: std::collections::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
+    /// The blocks each jump table goes to.
+    tables: &'a [Vec<u32>],
 }
 
 impl Emitter<'_> {
@@ -256,6 +258,9 @@ impl Emitter<'_> {
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
                 Operand::Symbol(name.clone(), 0)
+            }
+            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => {
+                Operand::Symbol(table_symbol(&self.function.name, index), 0)
             }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
             _ => match self.values.get(&(value.node, value.res)) {
@@ -412,6 +417,21 @@ impl Emitter<'_> {
                 };
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::IMPLICIT_DEF` (10), which has no name in the pin's
+            // instruction table: the register of an undefined value. It is
+            // defined as zero here (an undefined value is any value) until the
+            // MIR has an undef.
+            ISD::Machine(10) => {
+                let (class, name) = match Class::of_type(n.values[0]) {
+                    Class::Dr8 => (Class::Dr8, "MOV8di"),
+                    _ => (Class::Dr32, "MOVI32ri"),
+                };
+                let desc =
+                    local::code_of(name).and_then(local::desc).ok_or_else(|| format!("{name}: no description"))?;
+                let dst = self.new_reg(class);
+                self.values.insert((node, 0), dst);
+                into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| {
                     let ops: Vec<String> = n
@@ -465,6 +485,15 @@ impl Emitter<'_> {
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
+                // The jump through a table goes to each of its blocks: they
+                // are operands, so the passes see the successors.
+                if name == "JMP32j"
+                    && let Some(table) = n.ops.iter().find_map(|&op| table_of(self.dag, op, 6))
+                {
+                    let blocks = self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
+                    operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
+                    operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                }
                 into.push(op_inst(name, desc, operands));
                 if self.save.contains(&node) {
                     let kept = self.new_reg(Class::Dr16);
@@ -486,6 +515,31 @@ impl Emitter<'_> {
     }
 }
 
+/// The data symbol of jump table `index` of function `function`.
+pub fn table_symbol(
+    function: &str,
+    index: u32,
+) -> String {
+    format!(".LJTI_{function}_{index}")
+}
+
+/// The jump table `value` is computed from, if any: the table the address of
+/// an indirect jump is loaded from.
+fn table_of(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: usize,
+) -> Option<u32> {
+    let node = dag.node(value);
+    if let NodeData::JumpTable(index) = node.data {
+        return Some(index);
+    }
+    if depth == 0 {
+        return None;
+    }
+    node.ops.iter().find_map(|&op| table_of(dag, op, depth - 1))
+}
+
 /// `InstrEmitter` for one function's blocks.
 pub fn emit(
     name: &str,
@@ -500,6 +554,7 @@ pub fn emit(
         flags_from: None,
         save: Default::default(),
         saved: HashMap::new(),
+        tables: &first.tables,
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     for one in blocks {
@@ -520,6 +575,7 @@ pub fn emit(
     }
     // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
     // the block the phi is in.
+    let leaves = llrm_spike_mf::regalloc::successors(&emitter.function);
     for (pred, one) in blocks.iter().enumerate() {
         for update in &one.phis {
             let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
@@ -540,10 +596,17 @@ pub fn emit(
             };
             let result = register(&mut emitter, update.result);
             let incoming = register(&mut emitter, update.incoming);
+            // `FinishBasicBlock`: a block the lowering of this one made, that
+            // leaves for the phi's block, takes the same input.
+            let edges = std::iter::once(pred).chain((0..blocks.len()).filter(|&other| {
+                other != pred && blocks[other].parent == Some(one.block) && leaves[other].contains(&at)
+            }));
             let phis = &mut emitter.function.blocks[at].phis;
-            match phis.iter_mut().find(|phi| phi.result == result) {
-                Some(phi) => phi.incoming.push((pred, incoming)),
-                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            for edge in edges {
+                match phis.iter_mut().find(|phi| phi.result == result) {
+                    Some(phi) => phi.incoming.push((edge, incoming)),
+                    None => phis.push(Phi { result, incoming: vec![(edge, incoming)] }),
+                }
             }
         }
     }

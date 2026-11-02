@@ -38,7 +38,8 @@ pub fn builder_target() -> BuilderTarget {
             ..BuilderTarget::m32().dag
         },
         shift_amount: EVT::I32,
-        jump_tables: false,
+        soft_float: true,
+        jump_tables: true,
         string_instructions: false,
         // past the inline limit a copy or a fill is a call (the
         // pin: `memcpy`, `memmove`, `memset`)
@@ -72,12 +73,18 @@ pub struct PhiUpdate {
 /// One block, selected and scheduled.
 pub struct Selected {
     pub block: BlockId,
+    /// The block whose lowering made this one (a `switch`'s or a split
+    /// condition's), which exports the phi inputs its successors read.
+    pub parent: Option<BlockId>,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     pub phis: Vec<PhiUpdate>,
     /// On the entry block: the function's static allocas, `(frame index, size,
     /// alignment)`.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The ids of the blocks each of the function's jump tables goes to, by
+    /// table number (the same on every block).
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -126,12 +133,28 @@ pub fn select_function_with(
         let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
             .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        selected.push(Selected {
+            block,
+            parent: None,
+            dag: built.dag,
+            units,
+            phis: Vec::new(),
+            locals: Vec::new(),
+            tables: Vec::new(),
+        });
         for (id, mut extra) in extras {
             let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
-            selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
+            selected.push(Selected {
+                block: id,
+                parent: Some(block),
+                dag: extra.dag,
+                units,
+                phis: Vec::new(),
+                locals: Vec::new(),
+                tables: Vec::new(),
+            });
         }
     }
     // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
@@ -165,13 +188,20 @@ pub fn select_function_with(
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;
     }
+    for one in &mut selected {
+        one.tables.clone_from(&info.jump_tables);
+    }
     for (one, pending) in selected.iter_mut().zip(updates) {
-        for (phi, incoming) in pending {
+        for (at, &(phi, incoming)) in pending.iter().enumerate() {
             let ValueDef::Instruction(def) = function.value(phi).def else {
                 return Err("a phi that is not an instruction".to_owned());
             };
             let phi_block = function.parent(def).ok_or("a phi outside a block")?;
-            let result = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            let first = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            // A value of two registers has an entry for each part, in order:
+            // the k-th is the phi's k-th register.
+            let part = pending[..at].iter().filter(|(one, _)| *one == phi).count();
+            let result = if part == 0 { first } else { info.part_regs(first, part + 1)[part] };
             let bits = module.context.types.int_bits(function.value(phi).ty).unwrap_or(32);
             one.phis.push(PhiUpdate { phi_block, result, incoming, bits });
         }
