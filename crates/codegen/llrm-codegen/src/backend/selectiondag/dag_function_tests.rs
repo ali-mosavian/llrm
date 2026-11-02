@@ -1481,3 +1481,25 @@ done:
         .expect("selects");
     assert_eq!(done.body.homes.len(), 1, "{:?}", done.body.homes);
 }
+
+/// The DAG selector dropped `!llrm.spares`: only the old selector turned the
+/// optimizer's (load, write) pairs into `LirBody::spares`, so at `-m32` (DAG)
+/// the pair a fold would need was never there and `nbody` -Os kept 224 of them
+/// unread.
+#[test]
+fn test_a_spares_pair_reaches_the_body_of_the_dag_selector() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@g = global double 0.0
+define void @f(ptr %p) {
+entry:
+  %v = load double, ptr @g, !llrm.spares !0
+  store double %v, ptr %p
+  ret void
+}
+!0 = !{i32 1}
+";
+    let module = crate::testing::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert_eq!(done.body.spares.len(), 1, "{:?}", done.body.spares);
+}

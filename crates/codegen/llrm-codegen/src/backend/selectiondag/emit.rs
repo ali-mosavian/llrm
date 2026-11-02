@@ -274,6 +274,9 @@ struct Emitter<'a, 'd> {
     /// status word: the `fcom` is pushed there, next to the flag reader.
     pending_fcom: HashMap<u32, (Held, Held)>,
     first_at: HashMap<u32, i64>,
+    /// The addresses of the instructions emitted for each `IROrder` that name
+    /// memory or call.
+    mem_ats: HashMap<u32, Vec<i64>>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
     /// The `fld1`/`fldz` already loaded for a constant, valid until the next
@@ -385,6 +388,10 @@ pub struct Emitted {
     pub values: HashMap<SDValue, u32>,
     /// The address of the first instruction emitted for each `IROrder`.
     pub first_at: HashMap<u32, i64>,
+    /// The addresses of the instructions that name memory or call, for each
+    /// `IROrder`: what a pair the optimizer proved apart (`!llrm.spares`) is
+    /// carried to.
+    pub mem_ats: HashMap<u32, Vec<i64>>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -440,6 +447,7 @@ pub fn emit_in(
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         first_at: HashMap::default(),
+        mem_ats: HashMap::default(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::default();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -463,6 +471,23 @@ pub fn emit_in(
                     })
             {
                 emitter.first_at.insert(order, first);
+            }
+            let named_memory: Vec<i64> = emitter
+                .blocks
+                .iter()
+                .skip(first_block)
+                .enumerate()
+                .flat_map(|(index, block)| block.insns.iter().skip(if index == 0 { before } else { 0 }))
+                .filter(|one| {
+                    one.call.is_some()
+                        || one.what.as_ref().is_some_and(|what| {
+                            what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(_)))
+                        })
+                })
+                .map(|one| one.at)
+                .collect();
+            if !named_memory.is_empty() {
+                emitter.mem_ats.entry(order).or_default().extend(named_memory);
             }
             // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
             // instruction's line.
@@ -532,6 +557,7 @@ pub fn emit_in(
         inline_places: emitter.inline_places,
         values: emitter.values,
         first_at: emitter.first_at,
+        mem_ats: emitter.mem_ats,
     })
 }
 
