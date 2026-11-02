@@ -133,6 +133,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FAdd => pin::FADD,
         FSub => pin::FSUB,
         FMul => pin::FMUL,
+        FMA => pin::FMA,
         FDiv => pin::FDIV,
         FRem => pin::FREM,
         FNeg => pin::FNEG,
