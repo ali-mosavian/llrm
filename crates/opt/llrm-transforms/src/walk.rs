@@ -236,6 +236,7 @@ impl ProgramPass for Walk {
                     clocks: costs.call + costs.return_,
                     per_argument: costs.argument,
                     milliclocks_per_byte: tti.speed_milliclocks_per_byte(),
+                    bytes_per_unit: program.target.size_costs().add,
                 });
             }
         }

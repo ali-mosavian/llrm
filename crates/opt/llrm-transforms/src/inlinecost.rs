@@ -207,6 +207,9 @@ pub struct PricedCall {
     /// Each argument word pushed and read back.
     pub per_argument: i64,
     pub milliclocks_per_byte: i64,
+    /// Bytes of code one `CodeSize` unit of the callee comes to: the target's
+    /// ALU instruction (`size_costs().add`).
+    pub bytes_per_unit: i64,
 }
 
 /// The cost model of the target (D2): the generic one is what `opt` has
@@ -2028,7 +2031,7 @@ impl<'a> Analyzer<'a> {
         };
         let arguments = self.site.caller.instruction(self.site.call).operands.len().saturating_sub(1) as i64;
         let clocks = (price.clocks + arguments * price.per_argument) as f64 * self.site.relative_frequency.unwrap_or(1.0);
-        let growth = (self.size_units - self.call_size()) as f64;
+        let growth = ((self.size_units - self.call_size()) * price.bytes_per_unit) as f64;
         price.milliclocks_per_byte > 0 && growth * price.milliclocks_per_byte as f64 <= clocks * 1000.0
     }
 

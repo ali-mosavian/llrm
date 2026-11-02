@@ -382,8 +382,8 @@ b0:
         cost < threshold
     };
     let (dear, cheap) = (
-        PricedCall { clocks: 1000, per_argument: 6, milliclocks_per_byte: 500 },
-        PricedCall { clocks: 1, per_argument: 0, milliclocks_per_byte: 500 },
+        PricedCall { clocks: 1000, per_argument: 6, milliclocks_per_byte: 500, bytes_per_unit: 4 },
+        PricedCall { clocks: 1, per_argument: 0, milliclocks_per_byte: 500, bytes_per_unit: 4 },
     );
     assert!(!at(cheap), "a call worth one clock does not pay for the bytes");
     assert!(at(dear), "a call worth a thousand clocks pays for them");
