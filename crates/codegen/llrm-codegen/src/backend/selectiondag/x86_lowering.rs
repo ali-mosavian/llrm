@@ -148,6 +148,9 @@ pub struct X86Lowering<'a> {
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
+    /// At `optsize` (-Os, not `minsize`): the target whose encodings decide
+    /// between an `imul` and the pin's chain by bytes (DEVIATE SD447).
+    pub size_bytes: Option<&'a dyn llrm_target::Target>,
 }
 
 /// The sheet, the target and the block a constant multiply is priced against.
@@ -257,7 +260,9 @@ impl CombineHooks for X86Lowering<'_> {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
+            ISD::Mul => {
+                combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile, self.size_bytes)
+            }
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1925,6 +1930,7 @@ fn combine_mul(
     min_size: bool,
     i16_chains: bool,
     profile: Option<MulPricing<'_>>,
+    size_bytes: Option<&dyn llrm_target::Target>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 && vt != EVT::I64 && !(vt == EVT::I16 && i16_chains) {
@@ -2002,12 +2008,68 @@ fn combine_mul(
             new_mul = Some(dag.get_node(ISD::Sub, vt, &[shifted, twice]));
         }
     }
+    // DEVIATE SD447: at `optsize` the chain stays only if it is fewer bytes
+    // than the `imul` (ties go to the fewer instructions, which is the `imul`
+    // for a chain of two or more).
+    if let (Some(arch), Some(chain)) = (size_bytes, new_mul) {
+        let width_bytes = (width / 8) as i64;
+        // A last shift by 1 to 3 whose only reader is an add is a scale of
+        // that add's `lea` or address (the pin keeps the multiply by 3, 5 or 9
+        // last for it): it costs no instruction.
+        let scale_folds = dag.users(node).count() == 1
+            && dag.users(node).next().map(|user| dag.opcode(SDValue { node: user, res: 0 })) == Some(ISD::Add);
+        let (bytes, steps) = chain_encoding(dag, chain, x, arch, width_bytes, scale_folds);
+        let imul = arch.multiply_immediate_bytes(signed as i64, width_bytes);
+        if imul < bytes || (imul == bytes && steps > 1) {
+            return None;
+        }
+    }
     // DEVIATE SD446: where the pin keeps `imul`, the sheet's cheaper chain.
     if new_mul.is_none() {
         new_mul =
             profile.filter(|_| vt != EVT::I64).and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
     }
     new_mul
+}
+
+/// The bytes and the instruction count of the chain `combineMul` built from
+/// `x` up to `root`, by the target's encodings (`arithmetic::chain_bytes`
+/// counts the same steps). The copy that seeds it is not counted.
+///
+/// DEVIATE SD447: the pin's `combineMul` builds the chain at `optsize` too (it
+/// declines at `minsize` only), where gcc -Os keeps the `imul` for a constant
+/// like 10 or 11. Exit: none; the target's table decides, at -Os and -Oz on
+/// every x86 target. Owner greedy-anyisa.
+fn chain_encoding(
+    dag: &SelectionDAG,
+    root: SDValue,
+    x: SDValue,
+    arch: &dyn llrm_target::Target,
+    width: i64,
+    scale_folds: bool,
+) -> (i64, usize) {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    let (mut bytes, mut steps) = (0, 0);
+    while let Some(node) = stack.pop() {
+        if node.node == x.node || dag.constant(node).is_some() || !seen.insert(node.node) {
+            continue;
+        }
+        let operands = dag.node(node).ops.clone();
+        let scale = operands.get(1).and_then(|n| dag.constant(*n));
+        if scale_folds && node.node == root.node && dag.opcode(node) == ISD::Shl && matches!(scale, Some(1..=3)) {
+            stack.push(operands[0]);
+            continue;
+        }
+        bytes += match dag.opcode(node) {
+            ISD::Shl => arch.shift_op_bytes(operands.get(1).and_then(|n| dag.constant(*n)).unwrap_or(1) as i64, width),
+            x86isd::MUL_IMM => 3 + i64::from(width != arch.operand_bytes()),
+            _ => arch.register_op_bytes(width),
+        };
+        steps += 1;
+        stack.extend(operands);
+    }
+    (bytes, steps)
 }
 
 /// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it

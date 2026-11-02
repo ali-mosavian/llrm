@@ -14,7 +14,14 @@ fn converted(
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            profile: None,
+            size_bytes: None,
+        },
     )
     .run()
     .unwrap();
@@ -64,9 +71,16 @@ fn an_unsigned_i64_conversion_subtracts_two_to_the_63_and_flips_the_sign() {
     let mut dag = dag();
     let x = dag.get_register(EVT::Simple(MVT::F64), 5);
     let converted = dag.get_node(ISD::FpToUInt, EVT::I64, &[x]);
-    let root = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None }
-        .lower_operation(&mut dag, converted)
-        .expect("lowered");
+    let root = X86Lowering {
+        cmov: false,
+        sse2: false,
+        min_size: false,
+        i16_mul_chains: false,
+        profile: None,
+        size_bytes: None,
+    }
+    .lower_operation(&mut dag, converted)
+    .expect("lowered");
     assert_eq!(dag.opcode(root), ISD::Xor);
     let (load, adjust) = (dag.operand(root, 0), dag.operand(root, 1));
     assert_eq!(dag.opcode(load), ISD::Load);
@@ -89,7 +103,14 @@ fn an_i64_result_is_lowered_by_the_target_then_split() {
     let converted = dag.get_node(ISD::FpToSInt, EVT::I64, &[x]);
     let low = dag.get_node(ISD::Truncate, EVT::I32, &[converted]);
     dag.set_root(low);
-    let mut hooks = X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
+    let mut hooks = X86Lowering {
+        cmov: false,
+        sse2: false,
+        min_size: false,
+        i16_mul_chains: false,
+        profile: None,
+        size_bytes: None,
+    };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);
     legalizer.run().unwrap();
     assert!(legalizer.all_legal());

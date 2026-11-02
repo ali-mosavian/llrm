@@ -59,18 +59,19 @@ fn a_factor_of_a_lea_and_an_address_scale_is_one_lea_at_every_level() {
     }
 }
 
-/// A multiply by 7 is no `lea` factor times a scale: the pin's `llc` on the
-/// same IR makes it `lea r, [i*8]` and `sub r, i` at both levels (no `imul`,
-/// which the selector once kept for `-Os` size), and so do we.
+/// A multiply by 7 is no `lea` factor times a scale. At -O2 it is the pin's
+/// `lea r, [i*8]` and `sub r, i`; at -Os (strict bytes, gcc -Os does the same)
+/// it is one `imul r, i, 7`, 3 bytes against the chain's 5 (DEVIATE SD447; the
+/// pin builds the chain at -Os too, since it declines at `minsize` only).
 ///
 /// llrm-cc: the register that holds the index is `eax`, as in the pin's
 /// listing (pin-shape).
 #[test]
-fn a_factor_that_is_no_lea_times_a_scale_is_the_pins_lea_and_sub() {
+fn a_factor_that_is_no_lea_times_a_scale_is_an_imul_at_os_and_the_pins_lea_and_sub_at_o2() {
     let source = "int a7(char *a, int i) { return a[7 * i]; }\n";
-    for level in ["-Os", "-O2"] {
-        let text = listing(source, level);
-        assert!(!text.contains("imul"), "{level}: {text}");
-        assert!(text.contains("*8]") && text.lines().any(|line| line.trim().starts_with("sub ")), "{level}: {text}");
-    }
+    let os = listing(source, "-Os");
+    assert!(os.contains("imul") && !os.contains("shl "), "-Os: {os}");
+    let o2 = listing(source, "-O2");
+    assert!(!o2.contains("imul"), "-O2: {o2}");
+    assert!(o2.contains("*8]") && o2.lines().any(|line| line.trim().starts_with("sub ")), "-O2: {o2}");
 }

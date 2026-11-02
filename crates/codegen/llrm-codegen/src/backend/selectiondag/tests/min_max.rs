@@ -23,7 +23,14 @@ fn lowered(
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            profile: None,
+            size_bytes: None,
+        },
     )
     .run()
     .unwrap();

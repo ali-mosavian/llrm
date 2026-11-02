@@ -16,7 +16,14 @@ fn selected(
     legalized(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            profile: None,
+            size_bytes: None,
+        },
         &llrm_x86_m32::M32,
     )
     .unwrap();

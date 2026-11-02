@@ -50,7 +50,14 @@ fn selects(body: &str) -> Result<(), String> {
         legalized(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+            &mut X86Lowering {
+                cmov: false,
+                sse2: false,
+                min_size: false,
+                i16_mul_chains: false,
+                profile: None,
+                size_bytes: None,
+            },
             &machine,
         )
         .map_err(|r| format!("{r:?}"))?;

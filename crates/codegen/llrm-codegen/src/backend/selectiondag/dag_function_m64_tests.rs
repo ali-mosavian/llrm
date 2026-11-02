@@ -1281,20 +1281,24 @@ entry:
     assert_eq!(names.iter().filter(|n| *n == "lea").count(), 1, "{names:?}");
 }
 
-/// The pin's `combineMul` returns first at `minsize` (-Oz), and not at -Os
-/// (`optsize` only): `x * 10` stays one `imul` at -Oz and is a lea chain at
-/// -Os.
+/// The pin's `combineMul` returns first at `minsize` (-Oz) and not at -Os
+/// (`optsize` only), so `x * 10` was a lea chain at -Os where gcc -Os keeps
+/// `imul rax, rdi, 10` (4 bytes against 7). DEVIATE SD447 keeps the `imul`
+/// at -Os and -Oz where it is the shorter encoding; a single `lea` (`x * 3`)
+/// ties on bytes and stays a `lea`; at speed (-O2) the chain stands.
 #[test]
-fn an_m64_multiply_by_a_constant_stays_an_imul_at_minsize_only() {
-    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-define i64 @f(i64 %x) {
+fn an_m64_multiply_by_a_constant_is_an_imul_at_optsize_where_it_is_shorter() {
+    let names = |factor: u32, size: bool, min_size: bool| {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x) {{
 entry:
-  %a = mul i64 %x, 10
+  %a = mul i64 %x, {factor}
   ret i64 %a
-}
-";
-    let module = llrm_mir::parse::module(text).expect("parses");
-    let names = |size: bool, min_size: bool| {
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
         let mut cpu =
             crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu").clone();
         cpu.size = size || min_size;
@@ -1302,8 +1306,12 @@ entry:
         let done = selected(&module, "f", &llrm_x86_m64::M64, &cpu, &[]).expect("selected");
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
     };
-    assert!(names(true, false).iter().all(|n| n != "imul"), "-Os: a chain: {:?}", names(true, false));
-    assert!(names(true, true).iter().any(|n| n == "imul"), "-Oz: one imul: {:?}", names(true, true));
+    let imuls = |names: &[String]| names.iter().filter(|n| *n == "imul").count();
+    assert_eq!(imuls(&names(10, true, false)), 1, "-Os x*10: {:?}", names(10, true, false));
+    assert_eq!(imuls(&names(11, true, false)), 1, "-Os x*11: {:?}", names(11, true, false));
+    assert_eq!(imuls(&names(10, true, true)), 1, "-Oz x*10: {:?}", names(10, true, true));
+    assert_eq!(imuls(&names(3, true, false)), 0, "-Os x*3 stays a lea: {:?}", names(3, true, false));
+    assert_eq!(imuls(&names(10, false, false)), 0, "-O2 x*10 is the chain: {:?}", names(10, false, false));
 }
 
 /// `x % 5` at `minsize` (-Oz) on m64 was refused with

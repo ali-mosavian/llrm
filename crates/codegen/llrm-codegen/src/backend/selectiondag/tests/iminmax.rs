@@ -32,7 +32,14 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     let root = build(&mut dag, x);
     dag.set_root(root);
     let before: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();
-    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, profile: None };
+    let mut hooks = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        i16_mul_chains: false,
+        profile: None,
+        size_bytes: None,
+    };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     let root = dag.get_root();
     let after: Vec<u32> = SAMPLES.iter().map(|&p| eval(&dag, root, p)).collect();

@@ -74,7 +74,14 @@ fn a_float_read_as_an_i32_goes_through_a_stack_slot() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            profile: None,
+            size_bytes: None,
+        },
     )
     .run()
     .unwrap();
