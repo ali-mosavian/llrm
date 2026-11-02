@@ -153,6 +153,17 @@ pub fn compile_function(
         remove_unreachable_blocks(&mut f);
     }
     if options.level != crate::driver::Level::O0 {
+        let for_size = matches!(
+            options.level,
+            crate::driver::Level::Os | crate::driver::Level::Oz
+        );
+        if crate::tail_duplicate::tail_duplicate(&mut f, for_size) {
+            remove_unreachable_blocks(&mut f);
+            // The pin runs `FixIrreducibleControlFlow` after it.
+            fix_irreducible_control_flow(&mut f);
+        }
+    }
+    if options.level != crate::driver::Level::O0 {
         crate::optimize_live_intervals::optimize_live_intervals(&mut f);
         crate::mem_intrinsic_results::mem_intrinsic_results(&mut f);
     }

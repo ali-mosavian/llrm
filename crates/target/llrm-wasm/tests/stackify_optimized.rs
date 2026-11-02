@@ -270,3 +270,29 @@ fn a_constant_added_to_a_global_and_an_index_joins_the_global() {
     assert!(f.contains("px+202"), "{text}");
     assert_eq!(f.matches("i32.add").count(), 1, "{text}");
 }
+
+const COMMON_RETURN: &str = "define i32 @f(i32 %n) {
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %out, label %rec
+rec:
+  %m = add i32 %n, -1
+  %r = call i32 @f(i32 %m)
+  %s = shl i32 %r, 1
+  %t = or i32 %s, 1
+  br label %out
+out:
+  %v = phi i32 [ 0, %0 ], [ %t, %rec ]
+  ret i32 %v
+}
+";
+
+/// The join of two returns kept its phi in a local: `i32.const 0; local.set;
+/// br` into a block that read it back (hanoi, 268 instructions against the
+/// pin's 198). The pin copies the return into both predecessors.
+#[test]
+fn a_join_of_returns_returns_in_each_predecessor() {
+    let text = asm(COMMON_RETURN, Level::O2);
+    let f = body(&text, "f");
+    assert!(!f.contains("local.set"), "{text}");
+    assert!(f.contains("return"), "{text}");
+}
