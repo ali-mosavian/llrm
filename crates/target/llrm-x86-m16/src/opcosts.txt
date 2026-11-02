@@ -92,6 +92,9 @@ push_r = 1
 pop_seg = 1
 mov_ri = 6
 rep_stos_cell = 0
+# `mov r16, imm16` as encoded: `mov_ri` above is the doubled estimate for a constant that needs more than the load; a fill's
+# two loads are only the loads.
+mov_ri_exact = 3
 rep_movs = 2
 rep_movs_cell = 0
 
@@ -101,4 +104,5 @@ rep_movs_cell = 0
 [size]
 prefix = 1
 argument = 2
+fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri_exact
 float_release = x87_release

@@ -579,6 +579,16 @@ mod encoding_tests {
         assert_eq!(clocks.argument, clocks.load + clocks.store);
     }
 
+    /// A fill's bytes are the instructions it becomes as encoded: `rep stos`
+    /// 2, `push es` and `pop es` 1 each, two 3-byte loads of a word. The
+    /// doubled `mov_ri` estimate made it 18, which the loop-idiom pass then
+    /// cut by a fitted three quarters.
+    #[test]
+    fn a_fill_is_priced_at_its_encoded_bytes() {
+        use llrm_mir::target::Machine;
+        assert_eq!(super::Dos::default().size_costs().fill, 2 + 2 + 2 + 3 + 3);
+    }
+
     /// The shared call price is read off the 486 table and the byte table:
     /// the call, the return and two argument words, in clocks and in bytes.
     #[test]

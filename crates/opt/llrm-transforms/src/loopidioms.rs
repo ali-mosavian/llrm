@@ -832,9 +832,7 @@ pub(crate) fn fills_pay(
     if kept > 0 {
         return false;
     }
-    // The table doubles an operation that becomes more than one instruction;
-    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
-    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
     // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
     // known, the bytes are in the price: a fill larger than the loop still pays
@@ -848,7 +846,7 @@ pub(crate) fn fills_pay(
             let (Some(trips), Some(cells)) = (trips, width) else { return true };
             let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
             let fill = fills * clocks.fill + cells * clocks.fill_cell;
-            let saved = loop_bytes - 3 * fills * costs.fill / 4;
+            let saved = loop_bytes - fills * costs.fill;
             clocks_pay(saved, rate, fill, trips * each)
         })
 }
@@ -864,14 +862,13 @@ fn clocks_pay(
     saved * rate >= (fill - looped) * 1000
 }
 
-/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
-/// the table, three quarters of which is their real size.
+/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes.
 fn fills_cheaper(
     loop_bytes: i64,
     fills: i64,
     fill: i64,
 ) -> bool {
-    4 * loop_bytes > 3 * fills * fill
+    loop_bytes > fills * fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to

@@ -1067,13 +1067,14 @@ fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_
 }
 
 /// QCport m16 -Os, loop and fill bytes as the model sums them: mod_tex's two
-/// fills (loop 28) beat its loop, which grew the module 8 bytes at the
-/// table's 18 a fill; snd_mix's (24) and lru's four (42) lose to theirs.
+/// fills (loop 28) beat its loop; snd_mix's (24) and lru's four (42) lose to
+/// theirs. A fill is priced at its encoded 12 bytes, not a fitted fraction of
+/// the doubled table (3 * 18 / 4 = 13.5 priced a 24-byte loop above two fills).
 #[test]
-fn a_fill_is_priced_at_three_quarters_of_the_table() {
-    assert!(super::fills_cheaper(28, 2, 18));
-    assert!(!super::fills_cheaper(24, 2, 18));
-    assert!(!super::fills_cheaper(42, 4, 18));
+fn a_fill_is_priced_at_its_encoded_size() {
+    assert!(super::fills_cheaper(28, 2, 12));
+    assert!(!super::fills_cheaper(24, 2, 12));
+    assert!(!super::fills_cheaper(42, 4, 12));
 }
 
 /// lru's init at m16 -Os: the loop of two word stores is 5 bytes over the
