@@ -156,5 +156,8 @@ pub fn assembly_with(
         let name = global.name.owned().ok_or("an unnamed function")?;
         out.push_str(&text_with(module, &name, cpu, backend).map_err(|why| format!("@{name}: {why}"))?);
     }
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    out.push_str(&crate::data::assembly(module, &layout)?);
     Ok(out)
 }
