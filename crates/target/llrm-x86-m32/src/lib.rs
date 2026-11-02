@@ -79,7 +79,7 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
 /// derived, never set. Owner llrm-target-x86-m32.
 fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning {
-    let per_byte = if costs.cache_line > 0 { costs.line_fill_clocks * 1000 / costs.cache_line } else { 0 };
+    let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
         x87_stack_slots: Some(8),

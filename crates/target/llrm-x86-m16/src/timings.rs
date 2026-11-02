@@ -45,6 +45,16 @@ pub static CLEAR_RATIO: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| tab
 pub static SET_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.set_ratio_size));
 pub static CLEAR_RATIO_SIZE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.clear_ratio_size));
 pub static JUMP_TABLE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.jump_table));
+/// The policy rate of the default CPU's column: one byte of code in thousandths
+/// of a clock at speed.
+pub fn speed_milliclocks_per_byte() -> i64 {
+    let default = TABLE.default_cpu().expect("timings.times names a default CPU");
+    TABLE
+        .cpu(default)
+        .and_then(|table| table.speed_milliclocks_per_byte)
+        .expect("timings.times states speed_milliclocks_per_byte")
+}
+
 pub static CACHE_LINE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.cache_line));
 pub static LINE_FILL_CLOCKS: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.line_fill_clocks));
 
