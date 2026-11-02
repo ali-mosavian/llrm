@@ -1849,6 +1849,9 @@ pub struct View<'a> {
     room: Room,
     across: &'a dyn Fn(InstId) -> i64,
     pressure: std::borrow::Cow<'a, Pressure>,
+    /// Registers an instruction needs besides its operands and result: the
+    /// temporaries of the sequence the target expands it to.
+    scratch: Option<(InstId, i64)>,
 }
 
 impl<'a> View<'a> {
@@ -1861,7 +1864,19 @@ impl<'a> View<'a> {
         room: Room,
         across: &'a dyn Fn(InstId) -> i64,
     ) -> Self {
-        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Borrowed(pressure) }
+        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Borrowed(pressure), scratch: None }
+    }
+
+    /// This view, `inst` needing `registers` more besides its operands and
+    /// result: what a chain of shifts and adds takes where an `imul` is in
+    /// place.
+    pub fn with_scratch(
+        mut self,
+        inst: InstId,
+        registers: i64,
+    ) -> Self {
+        self.scratch = Some((inst, registers));
+        self
     }
 
     /// Over a function made to be asked about once, a candidate's.
@@ -1879,6 +1894,7 @@ impl<'a> View<'a> {
             room,
             across,
             pressure: std::borrow::Cow::Owned(Pressure::of(context, function, room.index_scales)),
+            scratch: None,
         }
     }
 
@@ -2038,7 +2054,9 @@ impl<'a> View<'a> {
             }
             for step in &steps {
                 let inst = step.inst;
-                let wanted = room.registers - transient_by(context, layout, function, inst, room, &live, &mut folded);
+                let scratch = self.scratch.filter(|(at, _)| *at == inst).map_or(0, |(_, registers)| registers);
+                let wanted =
+                    room.registers - scratch - transient_by(context, layout, function, inst, room, &live, &mut folded);
                 // Live across the instruction: what it reads and nothing else
                 // holds is not.
                 for value in &step.read {

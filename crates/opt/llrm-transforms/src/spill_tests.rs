@@ -1196,3 +1196,41 @@ b0:
     crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&same)));
     assert!(same.get(), "the updated counted set differs from a fresh pass");
 }
+
+/// A multiply the target expands to a chain needs a register an `imul` does
+/// not: at a point where the registers are full that is a spill the model
+/// must count. Three registers hold `%a`, `%b` and the product's operand
+/// with nothing to spare, so one scratch register spills one of them and none
+/// spills nothing; without `with_scratch` the model priced the chain as free
+/// and recgcd's i32 accumulator was spilled in every iteration.
+#[test]
+fn test_a_scratch_register_at_a_full_point_is_a_spill() {
+    let module = module(
+        "define i16 @f(i16 %a, i16 %b, i16 %x) {
+entry:
+  %p = mul i16 %x, 7
+  %s = add i16 %a, %p
+  %t = add i16 %s, %b
+  ret i16 %t
+}
+",
+    );
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let room = Room { registers: 3, across_call: 3, ..Room::default() };
+    let frequency = looped(function);
+    let inst = function
+        .layout()
+        .iter()
+        .flat_map(|&block| function.iter_block(block).collect::<Vec<_>>())
+        .find(|&inst| function.instruction(inst).result.is_some_and(|value| value == named(function, "p")))
+        .unwrap();
+    let cost = |scratch: i64| {
+        View::of(&module.context, &layout, function, room, &|_| 3)
+            .with_scratch(inst, scratch)
+            .forecast(&costs(), &frequency)
+            .cost
+    };
+    assert_eq!(cost(0), 0, "an in-place imul fits");
+    assert!(cost(1) > 0, "a chain's temporary spills at a full point");
+}
