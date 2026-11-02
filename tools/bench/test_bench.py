@@ -1101,3 +1101,17 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
     fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
     if "files" in fed:  # else the corpus is not cached here
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
+
+
+def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_padding_at_a_size_level():
+    """Counting code without alignment padding must not hide records it could not read, nor padding where none is expected (-Os)."""
+    got = {
+        ("a", "c", "O2"): {"code_bytes": 5, "align_bytes": 9},
+        ("a", "c", "Os"): {"code_bytes": 50, "align_bytes": 3, "align_unread": 4},
+        ("b", "c", "Os"): {"code_bytes": 7, "align_bytes": 0, "align_unread": 7},
+    }
+    assert bench.align_lines(got) == [
+        "ALIGN-UNREAD 2 cells count 11 bytes whole (data inside code: not decoded for padding)",
+        "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
+        "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
+    ]
