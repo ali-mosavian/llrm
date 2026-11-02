@@ -159,6 +159,8 @@ pub struct Tuned {
     pub two_address: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `Tti::x87_stack_slots` is 8.
+    pub x87_stack: bool,
 }
 
 use llrm_mir::tti;
@@ -168,6 +170,7 @@ use llrm_mir::tti;
 pub struct Flagged {
     pub exit_ne: bool,
     pub no_cmov: bool,
+    pub x87_stack: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -177,6 +180,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn has_cmov(&self) -> bool {
         !self.no_cmov
+    }
+
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.x87_stack.then_some(8)
     }
 
     fn cmp_sel_cost(
@@ -274,7 +281,8 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 
 impl llrm_mir::target::Machine for Tuned {
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        self.exit_ne.then(|| std::rc::Rc::new(Flagged { exit_ne: true, no_cmov: false }) as _)
+        (self.exit_ne || self.x87_stack)
+            .then(|| std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, x87_stack: self.x87_stack }) as _)
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

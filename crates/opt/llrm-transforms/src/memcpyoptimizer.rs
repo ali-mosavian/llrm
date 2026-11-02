@@ -124,6 +124,11 @@ struct Range {
     stores: Vec<(InstId, bool)>,
 }
 
+/// Whether the target's floats live on the x87 stack (`Tti::x87_stack_slots`).
+fn keeps_doubles_on_x87_stack(outer: &Outer) -> bool {
+    outer.target().tti().is_some_and(|tti| tti.x87_stack_slots().is_some())
+}
+
 /// `MemsetRange::isProfitableToUseMemset`; `widest` is the largest legal
 /// integer's bytes.
 fn profitable(
@@ -193,6 +198,7 @@ fn add_range(
 fn bytewise(
     unit: &Unit,
     value: Operand,
+    x87_stack: bool,
 ) -> Option<Byte> {
     let repeated = |bits: u128, width: u32| {
         let byte = bits & 0xFF;
@@ -209,6 +215,13 @@ fn bytewise(
     let ty = unit.operand_type(value)?;
     let width = match unit.context.types.get(ty) {
         Type::Float(FloatKind::Float) => 32,
+        // DEVIATE (gcc's `*movdf_internal`): where doubles live on the x87
+        // stack a double zero is `fldz` and an `fst` per cell, not two dword
+        // zeros. One `fldz` serves the whole run: for k cells k + 1
+        // instructions and k memory operands against 2k, and 3 bytes a cell
+        // against 14. Exit: none while the pin writes dwords; a hot site can
+        // be priced by its block frequency.
+        Type::Float(FloatKind::Double) if x87_stack => return None,
         Type::Float(FloatKind::Double) => 64,
         _ => return None,
     };
@@ -353,6 +366,7 @@ fn try_merging_into_memset(
     byte: Byte,
 ) -> Option<InstId> {
     let callees = outer.callees();
+    let x87_stack = keeps_doubles_on_x87_stack(outer);
     let plan = {
         let unit = Unit::within(context, layout, function, outer);
         let widest = i64::from(layout.largest_legal_integer() / 8);
@@ -375,7 +389,7 @@ fn try_merging_into_memset(
             }
             let found = if let Some((value, pointer)) = simple_store(function, at) {
                 // A store of the same byte at a constant offset from the start.
-                (bytewise(&unit, value) == Some(byte)).then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
+                (bytewise(&unit, value, x87_stack) == Some(byte)).then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
             } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
                 let same = match byte {
                     Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),
@@ -434,6 +448,7 @@ fn iterate_on_function(
     declared: &mut Declared,
 ) -> bool {
     let callees = outer.callees();
+    let x87_stack = keeps_doubles_on_x87_stack(outer);
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut next = function.block(block).first();
@@ -442,7 +457,7 @@ fn iterate_on_function(
             let candidate = {
                 let unit = Unit::within(context, layout, function, outer);
                 if let Some((value, pointer)) = simple_store(function, inst) {
-                    bytewise(&unit, value).map(|byte| (pointer, byte))
+                    bytewise(&unit, value, x87_stack).map(|byte| (pointer, byte))
                 } else {
                     // `processMemSet`.
                     constant_memset(&unit, callees, function, inst).and_then(|(dest, byte, _)| {

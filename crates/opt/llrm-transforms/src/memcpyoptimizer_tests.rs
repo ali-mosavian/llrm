@@ -156,3 +156,20 @@ fn two_double_zeros_are_one_memset_and_negative_zero_is_not() {
     let after = merged(&doubles("-0.0"), &[&[7]]);
     assert!(!after.contains("llvm.memset"), "{after}");
 }
+
+/// On the x87 stack a double zero is `fldz` and an `fst` a cell: the DAG
+/// selector's four dword zeros for `x[2] = x[3] = 0.0` were 14 bytes a cell
+/// against 3, and nbody's zeroed bodies grew 32 to 96 bytes over the old
+/// selector's.
+#[test]
+fn double_zeros_stay_stores_where_doubles_live_on_the_x87_stack() {
+    let text = "@a = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x) {\nb0:\n  store double 0.0, ptr @a\n  %p = getelementptr i8, ptr @a, i16 8\n  store double 0.0, ptr %p\n  %r = load i16, ptr @a\n  ret i16 %r\n}\n";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let after = crate::testing::managed_on(
+        &mut module,
+        MemCpyOptimizer,
+        crate::testing::Tuned { x87_stack: true, ..Default::default() },
+    );
+    assert!(!after.contains("llvm.memset"), "{after}");
+    assert!(after.contains("store double 0.000000e+00, ptr %p"), "{after}");
+}
