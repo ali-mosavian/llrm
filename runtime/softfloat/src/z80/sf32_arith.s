@@ -720,34 +720,25 @@ __floatunsisf:
 flent:	ld	iy,#-24
 	add	iy,sp
 	ld	sp,iy
-	ld	21(iy),a
-	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
 	ld	10(iy),#0
 	or	a,a
 	jr	z,1$
-	bit	7,3(iy)		; signed and negative: keep the sign, work on the magnitude
+	bit	7,d		; signed and negative: keep the sign, work on the magnitude
 	jr	z,1$
 	ld	10(iy),#0x80
 	xor	a,a
-	sub	a,0(iy)
-	ld	0(iy),a
+	sub	a,l
+	ld	l,a
 	ld	a,#0
-	sbc	a,1(iy)
-	ld	1(iy),a
+	sbc	a,h
+	ld	h,a
 	ld	a,#0
-	sbc	a,2(iy)
-	ld	2(iy),a
+	sbc	a,e
+	ld	e,a
 	ld	a,#0
-	sbc	a,3(iy)
-	ld	3(iy),a
-1$:	ld	l,0(iy)		; the magnitude in de:hl
-	ld	h,1(iy)
-	ld	e,2(iy)
-	ld	d,3(iy)
-	ld	a,d
+	sbc	a,d
+	ld	d,a
+1$:	ld	a,d
 	or	a,e
 	or	a,h
 	or	a,l
