@@ -739,14 +739,14 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
 
 def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
     """What fails the gate for one measurement: a count above its baseline (worse) unless a waiver (tools/bench/waivers) names its row,
-    counter and this count. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
+    counter and this count. Clocks (the 486 kernel clocks) are judged like the counts. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
     (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged."""
     if want is None:
         return []
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
     problems = []
-    for counter in (*COUNTERS, *SIZES):
+    for counter in (*COUNTERS, "clocks", *SIZES):
         if counter not in got:
             continue
         if counter not in want:
@@ -756,27 +756,6 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -
         if got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
     return problems
-
-
-def clock_limits() -> dict[str, int]:
-    """The -Os m16 rows whose 486 clocks are above main's and may not grow (clock_limits.toml, one debt class each in docs/working/ci.md):
-    row label -> clocks it may reach. A row with none is not judged."""
-    return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
-
-
-def main_clocks() -> dict[str, int]:
-    """Main's -Os m16 clocks per row (main_clocks.toml): what a row may reach without an entry in clock_limits.toml."""
-    return tomllib.loads((Path(__file__).parent / "main_clocks.toml").read_text()).get("clocks", {})
-
-
-def clock_problems(label: str, got: dict, limits: dict[str, int], main: dict[str, int] | None = None) -> list[str]:
-    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's. A row above main's with
-    no entry fails too: without it the first run of a regressed row would be red only by luck of the list."""
-    if label in limits and got.get("clocks", 0) > limits[label]:
-        return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
-    if label not in limits and main and got.get("clocks", 0) > main.get(label, float("inf")):
-        return [f"{label}: clocks {got['clocks']} > main's {main[label]} and no entry in tools/bench/clock_limits.toml"]
-    return []
 
 
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
@@ -825,8 +804,6 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
-    limits = clock_limits()
-    main = main_clocks()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -850,7 +827,6 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want, waived)
-                    problems += clock_problems(label, got, limits, main)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
