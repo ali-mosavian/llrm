@@ -2,7 +2,7 @@
 //! `GlobalAddress` node carries: the linker's name, whether the address comes
 //! from the GOT, and the alignment a pointer to it has.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::rc::Rc;
 
 use llrm_mir::context::GlobalId;
@@ -31,7 +31,7 @@ impl Globals {
         layout: &DataLayout,
         platform: Platform,
     ) -> Globals {
-        let mut by_id = HashMap::new();
+        let mut by_id = HashMap::default();
         for (at, global) in module.globals.iter().enumerate() {
             let id = GlobalId(at as u32);
             let Some(name) = global.name.owned() else { continue };

@@ -6,7 +6,7 @@
 //! shared with a path that never made the frame (`tryToSplitRestore`), at the
 //! end of each block that reaches it through the frame.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_analysis::saverestore::{self, Frame, Frequencies};
 use llrm_mir::blocklist::BlockList;

@@ -47,7 +47,7 @@ fn machine_function_with(
 /// virtual registers alone, touches no memory and has no other effect goes.
 fn eliminate_dead(function: &mut MFunction) {
     loop {
-        let mut read = std::collections::HashSet::new();
+        let mut read = llrm_support::hash::HashSet::default();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
             for operand in &inst.operands {
                 if let Operand::Use(Reg::Virt(v)) = operand {
@@ -98,7 +98,7 @@ pub fn allocated(
     allocated_with(ir, name, request, true).map(|(function, assignment, slots, _)| (function, assignment, slots))
 }
 
-type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, std::collections::HashMap<u32, usize>);
+type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, llrm_support::hash::HashMap<u32, usize>);
 
 fn allocated_with(
     ir: &str,
@@ -277,7 +277,7 @@ pub fn slots_are_a_stack(
 fn hoist_constants(function: &mut MFunction) -> bool {
     let mut moved = false;
     let cfg = Cfg::new(function);
-    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    let mut defs = llrm_support::hash::HashMap::<u32, usize>::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Def(Reg::Virt(v)) = operand {
@@ -554,8 +554,8 @@ fn sunk_operand(
     value: Reg,
 ) -> Option<Vec<usize>> {
     let insts = &function.blocks[block].insts[..p];
-    let mut uses: std::collections::HashMap<Reg, usize> = std::collections::HashMap::new();
-    let mut defs: std::collections::HashMap<Reg, usize> = std::collections::HashMap::new();
+    let mut uses: llrm_support::hash::HashMap<Reg, usize> = llrm_support::hash::HashMap::default();
+    let mut defs: llrm_support::hash::HashMap<Reg, usize> = llrm_support::hash::HashMap::default();
     for one in &function.blocks {
         for inst in &one.insts {
             for operand in &inst.operands {
@@ -733,8 +733,8 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         let taken = tail.iter().take_while(|inst| same(inst)).count();
         let cmovs: Vec<Inst> = tail.drain(..taken).collect();
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
-        let mut head_value = std::collections::HashMap::new();
-        let mut other_value = std::collections::HashMap::new();
+        let mut head_value = llrm_support::hash::HashMap::default();
+        let mut other_value = llrm_support::hash::HashMap::default();
         let mut phis = Vec::new();
         for cmov in &cmovs {
             let (result, on_false, on_true, cond) = cmov_parts(cmov)?;

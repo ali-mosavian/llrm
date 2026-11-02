@@ -250,10 +250,10 @@ pub struct Function {
     pub personality: bool,
     /// The callees that never throw (`Function::doesNotThrow`, and the
     /// libcalls `mayThrow` lists).
-    pub nothrow: std::collections::HashSet<String>,
+    pub nothrow: llrm_support::hash::HashSet<String>,
     /// What each callee does to memory, as `(reads, writes)`: `memory(...)`,
     /// `readnone` and `readonly` of the module's functions.
-    pub callee_memory: std::collections::HashMap<String, (bool, bool)>,
+    pub callee_memory: llrm_support::hash::HashMap<String, (bool, bool)>,
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,

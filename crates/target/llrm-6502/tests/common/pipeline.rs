@@ -1,7 +1,7 @@
 //! The pieces of the C -> ours pipeline the benchmarks and the differential
 //! tests share.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::path::Path;
 use std::process::Command;
 

@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "The WebAssembly target: its descriptions and DAG selector tables, generated from LLVM's WebAssembly .td"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-target = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-codegen = { workspace = true }

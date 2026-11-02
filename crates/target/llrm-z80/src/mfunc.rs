@@ -22,7 +22,7 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -138,7 +138,7 @@ struct Emitter<'a> {
     /// For the block being emitted: the nodes that read each value.
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
-    in_acc: std::collections::HashSet<(u32, u8)>,
+    in_acc: llrm_support::hash::HashSet<(u32, u8)>,
 }
 
 impl Emitter<'_> {
@@ -608,14 +608,14 @@ pub fn emit(
     let mut emitter = Emitter {
         dag: &first.dag,
         function: MFunction::new(name),
-        values: HashMap::new(),
-        builder: HashMap::new(),
-        arrives_in: HashMap::new(),
-        made: HashSet::new(),
-        widened: HashMap::new(),
-        flag_groups: HashMap::new(),
+        values: HashMap::default(),
+        builder: HashMap::default(),
+        arrives_in: HashMap::default(),
+        made: HashSet::default(),
+        widened: HashMap::default(),
+        flag_groups: HashMap::default(),
         flags_now: None,
-        users: HashMap::new(),
+        users: HashMap::default(),
         in_acc: Default::default(),
     };
     // the frame objects the selector made; the allocas came first, at their

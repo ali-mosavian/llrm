@@ -40,7 +40,7 @@
 //! `ConvertTruncs`; here only an integer constant is folded, anything else
 //! gets the instruction. Exit: none.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
@@ -110,7 +110,7 @@ struct Ordered<T: Copy + Eq + std::hash::Hash> {
 
 impl<T: Copy + Eq + std::hash::Hash> Ordered<T> {
     fn new() -> Self {
-        Self { items: Vec::new(), seen: HashSet::new() }
+        Self { items: Vec::new(), seen: HashSet::default() }
     }
 
     fn insert(
@@ -198,7 +198,7 @@ impl<'a> Promotion<'a> {
             in_loop,
             type_size: 0,
             register_bits: tti.scalar_register_bits(),
-            all_visited: HashSet::new(),
+            all_visited: HashSet::default(),
             safe_to_promote: IdSet::new(),
             safe_wrap: IdSet::new(),
             insts_to_remove: Ordered::new(),
@@ -621,8 +621,8 @@ impl<'a> Promotion<'a> {
         sinks: &Ordered<InstId>,
     ) {
         let ext_ty = self.context.types.int(width);
-        let mut new_insts: HashSet<Node> = HashSet::new();
-        let mut promoted: HashSet<Node> = HashSet::new();
+        let mut new_insts: HashSet<Node> = HashSet::default();
+        let mut promoted: HashSet<Node> = HashSet::default();
         let mut trunc_tys: IdMap<InstId, Vec<Option<TypeId>>> = IdMap::new();
         let mut removed: Vec<InstId> = Vec::new();
 

@@ -3,7 +3,7 @@
 //! between the two, so the view keeps the original [`MFunc`] and writes the
 //! allocator's registers into it.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llrm_lir::registers::{RegId, Regs};
@@ -233,14 +233,14 @@ pub fn rebuild(
     assignment: &Assignment,
     spill_slots: &[(i32, Class)],
 ) {
-    let mut originals: HashMap<i64, Op> = HashMap::new();
+    let mut originals: HashMap<i64, Op> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
     }
     // The place of each operation, by the number `view` gave it.
     let places: Vec<_> =
         function.blocks.iter().flat_map(|block| (0..block.ops.len()).map(|at| block.ops.loc(at))).collect();
-    let mut slots: HashMap<i32, u32> = HashMap::new();
+    let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
         slots.insert(*slot, function.slot(size, align));

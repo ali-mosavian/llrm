@@ -13,7 +13,7 @@
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -149,7 +149,7 @@ fn price(
     };
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();

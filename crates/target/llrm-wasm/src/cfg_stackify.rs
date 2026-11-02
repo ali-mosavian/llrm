@@ -24,7 +24,7 @@
 //! L446, `rewriteDepthImmediates` L2595, `fixEndsAtEndOfFunction` L2381), pin
 //! d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
@@ -861,12 +861,12 @@ pub fn cfg_stackify(f: &mut Function) -> Result<bool, String> {
         loops,
         exceptions,
         pads,
-        try_to_pad: HashMap::new(),
-        pad_to_try: HashMap::new(),
+        try_to_pad: HashMap::default(),
+        pad_to_try: HashMap::default(),
         scope_tops: vec![None; n + 1],
-        begin_to_end: HashMap::new(),
-        end_to_begin: HashMap::new(),
-        block_of: HashMap::new(),
+        begin_to_end: HashMap::default(),
+        end_to_begin: HashMap::default(),
+        block_of: HashMap::default(),
         next_tag: 0,
         appendix: None,
     };

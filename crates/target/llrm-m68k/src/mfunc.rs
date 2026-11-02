@@ -20,7 +20,7 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -169,7 +169,7 @@ struct Emitter<'a> {
     /// again, and cannot be run again (they have a result besides the
     /// codes, or touch memory): the codes are copied to a register right
     /// after them (`InsertCopiesAndMoveSuccs`).
-    save: std::collections::HashSet<u32>,
+    save: llrm_support::hash::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
 }
@@ -315,9 +315,9 @@ impl Emitter<'_> {
     fn nodes_to_save(
         &self,
         block: &Selected,
-    ) -> std::collections::HashSet<u32> {
+    ) -> llrm_support::hash::HashSet<u32> {
         let mut flags_from: Option<u32> = None;
-        let mut save = std::collections::HashSet::new();
+        let mut save = llrm_support::hash::HashSet::default();
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
                 let value = SDValue { node, res: 0 };
@@ -495,11 +495,11 @@ pub fn emit(
     let mut emitter = Emitter {
         dag: &first.dag,
         function: MFunction::new(name),
-        values: HashMap::new(),
-        builder: HashMap::new(),
+        values: HashMap::default(),
+        builder: HashMap::default(),
         flags_from: None,
         save: Default::default(),
-        saved: HashMap::new(),
+        saved: HashMap::default(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     for one in blocks {
@@ -711,8 +711,8 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
             restore.sets_flags = true;
             tail.insert(second, restore);
         }
-        let mut head_value: HashMap<Reg, Reg> = HashMap::new();
-        let mut other_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut head_value: HashMap<Reg, Reg> = HashMap::default();
+        let mut other_value: HashMap<Reg, Reg> = HashMap::default();
         let mut phis = Vec::new();
         for cmov in &cmovs {
             let (result, on_false, on_true, cond) = cmov_parts(cmov)?;

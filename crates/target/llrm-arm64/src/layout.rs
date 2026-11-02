@@ -5,7 +5,7 @@
 //! simplified: no frequencies, so a chain follows the first successor that is
 //! not placed).
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::frame::Lowered;
 use crate::jumptable::Table;
@@ -50,7 +50,7 @@ fn forwards(blocks: &[Lowered]) -> HashMap<String, String> {
             _ => None,
         })
         .collect();
-    let mut out = HashMap::new();
+    let mut out = HashMap::default();
     for (&from, &to) in &direct {
         // A chain, with a bound against a loop of empty blocks.
         let mut end = to;
@@ -145,7 +145,7 @@ pub fn fold(
         out
     };
     let mut placed: Vec<usize> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen: HashSet<usize> = HashSet::default();
     let mut pending: Vec<usize> = vec![0];
     while let Some(start) = pending.pop() {
         let mut current = start;

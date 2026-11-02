@@ -20,7 +20,7 @@
 //! # See also
 //! `M68kInstrInfo::copyPhysReg`, which is what the copies become.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
@@ -234,7 +234,7 @@ fn rewrite_one(
     // whose other uses are all addresses too
     match function.classes[y as usize] {
         Class::Ar32 => {}
-        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::new()) => {}
+        Class::Xr32 if reaches_addresses_only(function, uses, y, Some(x), &mut HashSet::default()) => {}
         _ => return None,
     }
     // the add's codes are read by nobody
@@ -246,7 +246,7 @@ fn rewrite_one(
             return None;
         }
     }
-    if !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::new()) {
+    if !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::default()) {
         return None;
     }
     let one = cheapest(sign * value, cpu, size)?;

@@ -18,7 +18,7 @@
 //! `MachineLICMImpl::{HoistOutOfLoop, Hoist, IsProfitableToHoist,
 //! HasLoopPHIUse, EliminateCSE, getOrCreatePreheader}`, pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_mir::module::BlockId;
 
@@ -86,7 +86,7 @@ pub fn machine_licm(f: &mut Function) -> bool {
             children[up.0 as usize].push(b);
         }
     }
-    let mut replaced: HashMap<VReg, VReg> = HashMap::new();
+    let mut replaced: HashMap<VReg, VReg> = HashMap::default();
     for l in loops.get_loops_in_preorder() {
         let header = l.get_header().0 as usize;
         let Some(preheader) = l.get_loop_preheader(&cfg).map(|b| b.0 as usize) else { continue };
@@ -110,7 +110,7 @@ pub fn machine_licm(f: &mut Function) -> bool {
         let exits: Vec<usize> =
             scopes.iter().flat_map(|&b| f.succs[b].iter().copied()).filter(|&s| !in_loop(s)).collect();
         // Where each register is read, for `HasLoopPHIUse`.
-        let mut users: HashMap<VReg, Vec<(usize, usize)>> = HashMap::new();
+        let mut users: HashMap<VReg, Vec<(usize, usize)>> = HashMap::default();
         for (b, insts) in f.blocks.iter().enumerate() {
             for (i, inst) in insts.iter().enumerate() {
                 for o in &inst.operands {

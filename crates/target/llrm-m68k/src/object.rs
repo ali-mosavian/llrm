@@ -10,7 +10,7 @@
 //! the object refactor (`ObjectTarget`, `FixupKind`, `AsmBackend`) is not on
 //! this branch; the fixup kinds above map onto it. Exit: the refactor landing.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::compile::Item;
 use crate::dagisel::enc::encoding;
@@ -161,7 +161,7 @@ fn place(
     base: u32,
 ) -> Result<(Assembled, Vec<usize>), String> {
     let mut code = Vec::new();
-    let mut symbols: HashMap<&str, u32> = HashMap::new();
+    let mut symbols: HashMap<&str, u32> = HashMap::default();
     let mut order: Vec<&str> = Vec::new();
     let mut pending: Vec<(usize, usize, Encoded)> = Vec::new();
     for (index, item) in items.iter().enumerate() {

@@ -11,7 +11,7 @@
 //! `X86InstrInfo::optimizeCompareInstr`, which asks the same of
 //! `isDefConvertible` and the flags each user reads.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::sync::LazyLock;
 
 use crate::target::DIALECT;

@@ -19,7 +19,7 @@
 //! instruction yet`), which `--isel=shadow` falls back on. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -1773,10 +1773,10 @@ pub fn emit(
         tables: &first.tables,
         edges_made: 0,
         mf: MFunc::new(name),
-        values: HashMap::new(),
-        vregs: HashMap::new(),
-        fvregs: HashMap::new(),
-        fvalues: HashMap::new(),
+        values: HashMap::default(),
+        vregs: HashMap::default(),
+        fvregs: HashMap::default(),
+        fvalues: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
     };

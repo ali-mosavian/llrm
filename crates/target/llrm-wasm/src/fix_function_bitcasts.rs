@@ -15,7 +15,7 @@
 //! parameter attributes beyond its own parameters are dropped. Exit: none,
 //! only the order of the wrappers in the module differs.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, Linkage, Module, Operand};
@@ -50,7 +50,7 @@ enum Plan {
 
 pub fn fix(module: &mut Module) -> Result<(), String> {
     let Some(layout) = module.datalayout.as_deref().map(DataLayout::parse).transpose()? else { return Ok(()) };
-    let mut calls: HashMap<GlobalId, Vec<(GlobalId, InstId, TypeId)>> = HashMap::new();
+    let mut calls: HashMap<GlobalId, Vec<(GlobalId, InstId, TypeId)>> = HashMap::default();
     for (caller, _, function) in module.functions() {
         for &block in function.layout() {
             for inst in function.iter_block(block) {
@@ -90,7 +90,7 @@ pub fn fix(module: &mut Module) -> Result<(), String> {
             }
         }
     }
-    let mut wrappers: HashMap<(GlobalId, TypeId), Option<GlobalId>> = HashMap::new();
+    let mut wrappers: HashMap<(GlobalId, TypeId), Option<GlobalId>> = HashMap::default();
     let mut main_call = false;
     for (site, callee, ty) in uses {
         let wrapper = match wrappers.get(&(callee, ty)) {

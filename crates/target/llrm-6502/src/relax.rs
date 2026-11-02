@@ -22,7 +22,7 @@
 //!                 l:
 //! ```
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::asm::{Asm, Inst, Line, Op, Operand};
 

@@ -18,7 +18,7 @@
 //! # See also
 //! `X86DAGToDAGISel::PostprocessISelDAG`.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 use std::sync::LazyLock;
 
 use llrm_codegen::backend::selectiondag::dagisel_adapter::DagisAdapter;
@@ -278,7 +278,7 @@ pub fn short_encoding(name: &str) -> Option<(u16, &'static [Piece])> {
 /// from 1 to 8 to its short instruction, in place.
 pub fn narrow(dag: &mut SelectionDAG) {
     let mut adapter = DagisAdapter::new(dag);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut work = vec![adapter.dag.get_root().node];
     while let Some(node) = work.pop() {
         if seen.insert(node) {

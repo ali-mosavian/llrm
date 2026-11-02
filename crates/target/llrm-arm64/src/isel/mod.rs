@@ -30,7 +30,7 @@ mod shifted;
 mod val;
 mod widemul;
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -177,10 +177,10 @@ impl<'a> Selector<'a> {
             volatile_access: false,
             lines: false,
             place: None,
-            global_uses: HashMap::new(),
-            global_regs: HashMap::new(),
-            global_pages: HashMap::new(),
-            global_needs_address: HashSet::new(),
+            global_uses: HashMap::default(),
+            global_regs: HashMap::default(),
+            global_pages: HashMap::default(),
+            global_needs_address: HashSet::default(),
             va: None,
         }
     }
@@ -202,8 +202,8 @@ impl<'a> Selector<'a> {
     /// Counts the accesses that name each global: a gep's result counts once
     /// for each of its readers.
     fn count_global_uses(&mut self) {
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        let mut needs_address = HashSet::new();
+        let mut counts: HashMap<String, usize> = HashMap::default();
+        let mut needs_address = HashSet::default();
         for (_, inst) in self.function.walk() {
             let instruction = self.function.instruction(inst);
             for (at, operand) in instruction.operands.iter().enumerate() {
@@ -738,7 +738,7 @@ impl<'a> Selector<'a> {
 /// The blocks reachable from the entry, in reverse post-order.
 fn reverse_post_order(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut post = Vec::new();
     // An explicit stack of (block, next successor to visit).
     let mut stack = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];

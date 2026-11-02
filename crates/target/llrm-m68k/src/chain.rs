@@ -29,7 +29,7 @@
 //! `AArch64LoadStoreOpt::findMatchingUpdateInsnForward`, which merges a
 //! separate update instead, and `auto_inc_dec` in gcc.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};

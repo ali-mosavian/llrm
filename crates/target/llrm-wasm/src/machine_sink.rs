@@ -26,7 +26,7 @@
 //! isProfitableToSinkTo, AllUsesDominatedByBlock}`,
 //! `MachineInstr::isSafeToMove`.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::loopinfo::LoopInfo;
@@ -172,7 +172,7 @@ impl Sink {
             eh_pad,
             uses: Vec::new(),
             defs: Vec::new(),
-            considered: HashSet::new(),
+            considered: HashSet::default(),
             to_split: Vec::new(),
         };
         sink.index_registers(f);

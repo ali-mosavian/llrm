@@ -21,7 +21,8 @@
 //! allocator stands in until the core machine passes run on arm64 LIR (see
 //! docs/architecture/arm64-spike.md); it is not a translation.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_codegen::model::lir::SrcLoc;
 
@@ -182,8 +183,8 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
             }
         }
     }
-    let mut ranges: HashMap<Reg, Ranges> = HashMap::new();
-    let mut weight: HashMap<Reg, f64> = HashMap::new();
+    let mut ranges: HashMap<Reg, Ranges> = HashMap::default();
+    let mut weight: HashMap<Reg, f64> = HashMap::default();
     let mut use_weight = Uses::default();
     for (at, block) in function.blocks.iter().enumerate() {
         let (first, last) = extents[at];
@@ -234,7 +235,7 @@ struct Uses {
 fn coalesce(function: &mut MFunc) {
     let (ranges, _, weight, _) = analyse(function);
     let mut ranges = ranges;
-    let mut parent: HashMap<Reg, Reg> = HashMap::new();
+    let mut parent: HashMap<Reg, Reg> = HashMap::default();
     fn find(
         parent: &mut HashMap<Reg, Reg>,
         register: Reg,
@@ -306,7 +307,7 @@ fn coalesce(function: &mut MFunc) {
 /// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
 /// never takes one.
 pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
-    let mut wide: HashSet<Reg> = HashSet::new();
+    let mut wide: HashSet<Reg> = HashSet::default();
     let mut copies: Vec<(Reg, Reg)> = Vec::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         match op {
@@ -351,7 +352,7 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     // What each physical register holds: its own live ranges (arguments,
     // results) and, once a virtual register is given it, that one's; a call
     // destroys every caller-saved register at its point.
-    let mut occupied: HashMap<Reg, Ranges> = HashMap::new();
+    let mut occupied: HashMap<Reg, Ranges> = HashMap::default();
     for (register, live) in ranges.iter().filter(|(register, _)| !register.is_virtual()) {
         occupied.entry(*register).or_default().extend(live);
     }
@@ -369,7 +370,7 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
         }
     }
     // Copy partners, for hints.
-    let mut partners: HashMap<Reg, Vec<Reg>> = HashMap::new();
+    let mut partners: HashMap<Reg, Vec<Reg>> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             if let Op::Copy { dst, src } = op {
@@ -388,9 +389,9 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     order.sort_by(|a, b| priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
     let candidates = rematerializable(function);
     let wide = wide_registers(function);
-    let mut made_again: HashMap<Reg, Vec<Op>> = HashMap::new();
-    let mut assigned: HashMap<Reg, Reg> = HashMap::new();
-    let mut spilled: HashMap<Reg, u32> = HashMap::new();
+    let mut made_again: HashMap<Reg, Vec<Op>> = HashMap::default();
+    let mut assigned: HashMap<Reg, Reg> = HashMap::default();
+    let mut spilled: HashMap<Reg, u32> = HashMap::default();
     let mut used_callee_saved: BTreeSet<Reg> = BTreeSet::new();
     for register in order {
         let live = &ranges[&register];
@@ -456,9 +457,9 @@ fn unused_constants(
     candidates: &HashMap<Reg, (Vec<Op>, u32)>,
     made_again: &HashMap<Reg, Vec<Op>>,
 ) -> HashSet<Reg> {
-    let mut unused: HashSet<Reg> = HashSet::new();
+    let mut unused: HashSet<Reg> = HashSet::default();
     loop {
-        let mut read: HashSet<Reg> = HashSet::new();
+        let mut read: HashSet<Reg> = HashSet::default();
         for op in function.blocks.iter().flat_map(|block| &block.ops) {
             let (defs, uses) = op.defs_and_uses();
             if defs.iter().any(|register| made_again.contains_key(register) || unused.contains(register)) {
@@ -544,7 +545,7 @@ fn rewrite(
             let mut again: Vec<(Reg, Reg)> = Vec::new();
             let (mut next_gpr, mut next_fpr) = (0usize, 0usize);
             // One scratch register per spilled register of this operation.
-            let mut scratch: HashMap<Reg, Reg> = HashMap::new();
+            let mut scratch: HashMap<Reg, Reg> = HashMap::default();
             op.visit(&mut |register, role| {
                 let key = register.key();
                 let replacement = if made_again.contains_key(&key) {
@@ -665,7 +666,7 @@ fn forward_spills(
         };
         (spill_slots.contains(slot)).then(|| (register, *slot, bytes, matches!(op, Op::I(Inst::Load { .. }))))
     };
-    let mut held: HashMap<Reg, (u32, u8)> = HashMap::new();
+    let mut held: HashMap<Reg, (u32, u8)> = HashMap::default();
     let mut out = Vec::with_capacity(ops.len());
     for (op, loc) in ops {
         if matches!(op, Op::Call { .. }) {
@@ -713,13 +714,13 @@ fn cheaper_again(
 /// operation that adds a symbol's page offset), and the operations that make
 /// it, in order, with their count.
 fn rematerializable(function: &MFunc) -> HashMap<Reg, (Vec<Op>, u32)> {
-    let mut defined: HashMap<Reg, usize> = HashMap::new();
+    let mut defined: HashMap<Reg, usize> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         for register in op.defs_and_uses().0 {
             *defined.entry(register).or_default() += 1;
         }
     }
-    let mut made: HashMap<Reg, (Vec<Op>, u32)> = HashMap::new();
+    let mut made: HashMap<Reg, (Vec<Op>, u32)> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         let (defs, uses) = op.defs_and_uses();
         // The instructions it takes to make the value.
@@ -897,9 +898,9 @@ mod tests {
     #[test]
     fn a_spilled_value_used_at_once_is_not_reloaded() {
         let value = Reg::Gpr(Gpr(100));
-        let spilled = HashMap::from([(value, 1)]);
+        let spilled = HashMap::from_iter([(value, 1)]);
         let mut function = function(vec![add(100, 0), add(1, 100)]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
         assert_eq!(spill_loads(&function), 0, "{:?}", function.blocks[0].ops);
     }
 
@@ -908,9 +909,9 @@ mod tests {
     #[test]
     fn a_spilled_value_is_reloaded_after_a_call() {
         let value = Reg::Gpr(Gpr(100));
-        let spilled = HashMap::from([(value, 1)]);
+        let spilled = HashMap::from_iter([(value, 1)]);
         let mut function = function(vec![add(100, 0), call(), add(1, 100)]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
         assert_eq!(spill_loads(&function), 1, "{:?}", function.blocks[0].ops);
     }
 
@@ -920,9 +921,9 @@ mod tests {
     #[test]
     fn a_spilled_register_copied_to_itself_costs_nothing() {
         let value = Reg::Fpr(Vreg(100));
-        let spilled = HashMap::from([(value, 1)]);
+        let spilled = HashMap::from_iter([(value, 1)]);
         let mut function = function(vec![Op::Copy { dst: value, src: value }]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
         assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 

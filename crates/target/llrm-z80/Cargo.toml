@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "The Z80 target: its descriptions and DAG selector tables, generated from z80.td"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-codegen = { workspace = true }
 llrm-target = { workspace = true }

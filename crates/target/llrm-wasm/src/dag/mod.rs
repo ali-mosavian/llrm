@@ -199,7 +199,7 @@ pub fn compile_function(
 /// What each function of `module` reads and writes (`doesNotAccessMemory`,
 /// `onlyReadsMemory`); a callee that is no function of it is assumed to do
 /// both.
-fn callee_memory(module: &Module) -> std::collections::HashMap<String, (bool, bool)> {
+fn callee_memory(module: &Module) -> llrm_support::hash::HashMap<String, (bool, bool)> {
     module
         .functions()
         .filter_map(|(_, global, function)| {
@@ -211,8 +211,8 @@ fn callee_memory(module: &Module) -> std::collections::HashMap<String, (bool, bo
 
 /// The callees `WebAssembly::mayThrow` takes as not throwing: functions marked
 /// `nounwind`, the three that never throw, and the libcalls it lists.
-fn non_throwing(module: &Module) -> std::collections::HashSet<String> {
-    let mut found: std::collections::HashSet<String> = module
+fn non_throwing(module: &Module) -> llrm_support::hash::HashSet<String> {
+    let mut found: llrm_support::hash::HashSet<String> = module
         .functions()
         .filter(|(_, global, function)| {
             function.attrs.iter().any(|one| {
@@ -240,8 +240,8 @@ fn non_throwing(module: &Module) -> std::collections::HashSet<String> {
 fn library_callees(
     f: &Function,
     module: &Module,
-) -> std::collections::HashMap<String, (Vec<ValType>, Vec<ValType>)> {
-    let mut found = std::collections::HashMap::new();
+) -> llrm_support::hash::HashMap<String, (Vec<ValType>, Vec<ValType>)> {
+    let mut found = llrm_support::hash::HashMap::default();
     for inst in f.blocks.iter().flatten().filter(|inst| inst.opcode == crate::dagisel::post_ids::CALL) {
         let Some(&Operand::Sym(at)) = inst.operands.iter().find(|operand| matches!(operand, Operand::Sym(_))) else {
             continue;
