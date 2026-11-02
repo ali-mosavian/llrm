@@ -89,6 +89,7 @@ fn tuning() -> llrm_mir::target::Tuning {
         // (a 3-trip search copied out), -O2 does not. Owner
         // llrm-target-x86-m32.
         unroll_override_max_level: Some(2),
+        x87_stack_slots: Some(8),
         ..llrm_mir::target::Tuning::PIN
     }
 }
@@ -609,6 +610,8 @@ mod tests {
         let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
         assert_eq!(tti.unroll_threshold_overrides(2), (Some(0), Some(100)));
         assert_eq!(tti.unroll_threshold_overrides(3), (None, None));
+        // The x87 stack the unroll counts float values against.
+        assert_eq!(tti.x87_stack_slots(), Some(8));
     }
 
     /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86

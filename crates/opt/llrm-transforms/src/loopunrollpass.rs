@@ -1411,7 +1411,7 @@ fn float_stack_overflow(
     run: &Run,
     lp: Loop,
 ) -> Option<usize> {
-    let depth = run.tti.fp_stack_depth()? as usize;
+    let depth = run.tti.x87_stack_slots()? as usize;
     let blocks = lp.get_blocks();
     let is_float = |value: llrm_mir::module::ValueId| {
         llrm_mir::tti::Ty::of(&run.context.types, run.function.value(value).ty).is_some_and(|ty| ty.is_float())

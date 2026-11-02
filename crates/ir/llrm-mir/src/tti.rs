@@ -468,9 +468,10 @@ pub trait Tti {
         (None, None)
     }
 
-    /// The depth of the stack scalar floats are computed on (x87's 8); none:
-    /// registers enough that the unroll need not mind it.
-    fn fp_stack_depth(&self) -> Option<u32> {
+    /// How many values the x87 stack holds where this subtarget keeps floats
+    /// there (no SSE2 floating point); none: floats are in registers a
+    /// pressure rule need not count.
+    fn x87_stack_slots(&self) -> Option<u32> {
         None
     }
 
