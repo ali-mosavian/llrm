@@ -1343,6 +1343,7 @@ impl<'a> TypeLegalizer<'a> {
                     self.dag.get_node(ISD::ExtractElement, half, &[part, one]),
                 )
             }
+            op @ (ISD::FpToSInt | ISD::FpToUInt) => self.expand_fp_to_int(value, op, half)?,
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);
@@ -2140,6 +2141,35 @@ impl<'a> TypeLegalizer<'a> {
         let name = self.tli.libcall_name(op, vt)?;
         let result = self.hooks.as_mut()?.make_lib_call(self.dag, name, &args, vt, signed)?;
         Some(self.split_integer(result, half))
+    }
+
+    /// `ExpandIntRes_FP_TO_XINT`: the routine that converts the float to the
+    /// wide integer, called on the operand (its softened integer when the
+    /// target has no FPU), the result split.
+    fn expand_fp_to_int(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let vt = self.dag.value_type(value);
+        let operand = self.dag.operand(value, 0);
+        let operand_vt = self.dag.value_type(operand);
+        let refused = LegalizeError::Unsupported { op, ty: vt, what: "a conversion routine the target does not name" };
+        let name = self.tli.conv_libcall_name(op, operand_vt, vt).ok_or(refused)?;
+        let argument = if self.tli.types.type_conversion(operand_vt).0 == TypeAction::SoftenFloat {
+            self.softened_float(operand)
+        } else {
+            operand
+        };
+        let signed = op == ISD::FpToSInt;
+        let refused = LegalizeError::Unsupported { op, ty: vt, what: "a target hook for the conversion call" };
+        let result = self
+            .hooks
+            .as_mut()
+            .and_then(|hooks| hooks.make_lib_call(self.dag, name, &[argument], vt, signed))
+            .ok_or(refused)?;
+        Ok(self.split_integer(result, half))
     }
 
     /// `ExpandIntRes_SDIV` and the others, as the library call the pin makes

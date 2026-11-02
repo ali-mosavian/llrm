@@ -22,6 +22,9 @@ const CASES: &[(&str, &str, &str)] = &[
     ("define double @f(i16 %a) { %r = sitofp i16 %a to double ret double %r }", "f", "__floatsidf"),
     ("define i32 @f(double %a) { %r = fptosi double %a to i32 ret i32 %r }", "f", "__fixdfsi"),
     ("define i32 @f(float %a) { %r = fptoui float %a to i32 ret i32 %r }", "f", "__fixunssfsi"),
+    ("define i64 @f(double %a) { %r = fptosi double %a to i64 ret i64 %r }", "f", "__fixdfdi"),
+    ("define i64 @f(float %a) { %r = fptoui float %a to i64 ret i64 %r }", "f", "__fixunssfdi"),
+    ("define double @f(i64 %a) { %r = sitofp i64 %a to double ret double %r }", "f", "__floatdidf"),
     (
         "define i32 @f(double %a, double %b) { %c = fcmp olt double %a, %b %r = zext i1 %c to i32 ret i32 %r }",
         "f",
