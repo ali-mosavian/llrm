@@ -336,7 +336,14 @@ pub fn dump(
         home: &|value| frame.home(value),
         callee_saved: &|register| saved.contains(&register),
     };
-    let params = std::collections::BTreeSet::new();
+    // A parameter is a variable the entry says arrived in a register
+    // (DEVIATE: the pin reads `DILocalVariable::isParameter`).
+    let params: std::collections::BTreeSet<u32> = edited
+        .notes
+        .iter()
+        .filter(|note| matches!(note.value, NoteValue::Arrived(..)))
+        .map(|note| note.variable)
+        .collect();
     let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &bare, &target);
     for one in crate::backend::livedebugvalues::extend(
         &flow,
