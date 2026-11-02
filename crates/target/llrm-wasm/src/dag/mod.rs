@@ -127,6 +127,9 @@ pub fn compile_function(
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
+    if options.level != crate::driver::Level::O0 {
+        crate::phi_elimination::split_phi_edges(&mut f);
+    }
     phi_elimination(&mut f);
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
