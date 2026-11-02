@@ -1192,10 +1192,13 @@ pub const VISIBILITY: [(Visibility, &str); 2] = [(Visibility::Hidden, "hidden"),
 /// global (LLVM's `GlobalAlias`).
 ///
 /// DEVIATE: a definition only. LLVM lets a `GlobalAlias` be a constant
-/// operand (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/IR/GlobalAlias.h);
-/// MIR keeps aliases out of the constant pool, so the parser refuses a use
-/// and the analyses that say "MIR has no `GlobalAlias`" stay true. Exit: the
-/// first program that names an alias in an expression.
+/// operand
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/IR/GlobalAlias.h);
+/// the parser reads an operand that names an alias as its aliasee, which has
+/// the same address, and refuses one that names an alias a linker may replace
+/// (`weak`). No operand names an alias, so the analyses that say "MIR has no
+/// `GlobalAlias`" stay true. Exit: the first pass that must tell a call of an
+/// alias from a call of its aliasee.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Alias {
     pub name: String,
