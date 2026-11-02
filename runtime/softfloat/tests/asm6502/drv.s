@@ -1,11 +1,15 @@
 ; ca65 driver: runs __addsf3 or __subsf3 (OP) over vec, exit code = failures (max 255); first failing record index in $c0
-.import __addsf3, __subsf3
+.import __addsf3, __subsf3, __mulsf3, __divsf3
 .export _main, vec
 .include "vec.inc"
-.ifndef SUBOP
-OP = __addsf3
-.else
+.ifdef SUBOP
 OP = __subsf3
+.elseif .defined(MULOP)
+OP = __mulsf3
+.elseif .defined(DIVOP)
+OP = __divsf3
+.else
+OP = __addsf3
 .endif
 rc2 = $82
 ptr = $a0
@@ -82,6 +86,17 @@ exact:
     cmp $e3
     beq okrec
 bad:
+.ifdef SEL
+    ldx #SEL
+    cpx #2
+    bcs @g
+    lda ptr,x
+    ldx #0
+    rts
+@g: lda $d0-2,x
+    ldx #0
+    rts
+.endif
     inc fail
     lda fail
     cmp #1

@@ -9,41 +9,9 @@
 ; a negative difference is negated afterwards instead of comparing magnitudes; normalization counts bytes first.
 
 .setcpu "6502"
-.export __addsf3, __subsf3
+.export __addsf3, __subsf3, sf_round, sf_align, sf_retinf, sf_quiet
 
-rc2 = $82
-rc3 = $83
-rc4 = $84
-rc5 = $85
-rc6 = $86
-rc7 = $87
-rc8 = $88
-rc9 = $89
-rc16 = $90
-rc17 = $91
-rc18 = $92
-rc19 = $93
-rc20 = $94
-rc21 = $95
-rc22 = $96
-rc23 = $97
-rc24 = $98
-rc25 = $99
-
-; operand blocks: guard, m0, m1, m2 (m2 bit 7 is the implicit one when normal)
-blkA = rc16
-blkB = rc20
-ea   = rc24
-eb   = rc25
-sa   = rc2              ; sign of a, $80 or 0 (valid once a is unpacked)
-sb   = rc3
-re   = rc4              ; result exponent
-rsg  = rc5              ; result sign
-tmp  = rc6
-tm2  = rc7
-fl   = rc16             ; special path only: blocks are dead there
-ca   = rc17
-fx   = rc18
+.include "sf32.inc"
 
 .segment "CODE"
 
@@ -122,13 +90,13 @@ aman:
     ldx #0
     ldy eb
     sty re
-    jsr align
+    jsr sf_align
     jmp aligned2
 shiftb:
     ldx #4
     ldy ea
     sty re
-    jsr align
+    jsr sf_align
     jmp aligned2
 aligned:
     lda ea
@@ -154,7 +122,7 @@ aligned2:
     adc blkB+3
     sta blkA+3
     bcs :+
-    jmp round
+    jmp sf_round
 :   ror blkA+3              ; carry out: shift right one, the lost bit joins the sticky bit
     ror blkA+2
     ror blkA+1
@@ -164,7 +132,7 @@ aligned2:
     ora #1
     sta blkA+0
 :   inc re
-    jmp round
+    jmp sf_round
 dosub:
     sec
     lda blkA+0
@@ -241,7 +209,7 @@ bndone:
     sta blkA+3
     stx re
 ; ---- round to nearest even on the guard byte, pack
-round:
+sf_round:
     lda blkA+0
     cmp #$80
     bcc pack
@@ -261,7 +229,7 @@ up: inc blkA+1
 pack:
     lda re
     cmp #255
-    bcs retinf
+    bcs sf_retinf
     ldy blkA+3
     bmi :+
     lda #0                  ; denormal: exponent field 0
@@ -276,7 +244,7 @@ pack:
     ldx blkA+2
     lda blkA+1
     rts
-retinf:
+sf_retinf:
     lda rsg
     ora #$7f
     sta rc3
@@ -293,7 +261,7 @@ retzero:
     rts
 
 ; ---- shift block (X = 0 for A, 4 for B) right by A bits (1..255); lost bits end up in bit 0 of the guard byte
-align:
+sf_align:
     tay
     cpy #32
     bcs alfar
@@ -368,11 +336,11 @@ special:
     cmp #2
     bne :+
     ldx #0
-    beq quiet
+    beq sf_quiet
 :   cpy #2
     bne :+
     ldx #4
-    bne quiet
+    bne sf_quiet
 :   cpy #1
     bne reta                ; b finite: a is the infinity
     lda ca
@@ -388,7 +356,7 @@ special:
     lda #0
     tax
     rts
-quiet:
+sf_quiet:
     lda rc4,x
     ora #$40
     sta rc4,x
