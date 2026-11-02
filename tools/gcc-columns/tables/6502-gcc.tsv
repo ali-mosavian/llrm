@@ -1,0 +1,245 @@
+# 6502 gcc matrix, fork spike/backends 1f3e2f803+ (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 8a9486a585a22cb94ea414739f2b779b, sim65 V2.18 - Ubuntu 2.19-2 with cl65 -t sim6502 (NMOS 6502); levels gcc -O1/-O2/-Os as run; clocks=(T101-T1)/100-9 incl. argument set-up, return and helper calls; code_bytes=CODE+RODATA+DATA of the kernel object plus the plain hand-written helpers it calls (mul/div/mem*, split in note); instrs not counted (stock sim65); ABI: args/result in zero-page rc2.. like ours, A/X/Y scratch; a cell that links cc65 library code is n/a
+target	prog	level	compiler	code_bytes	clocks	instrs	note
+6502	zero	O1	gcc	5	17		
+6502	zero	O2	gcc	5	17		
+6502	zero	Os	gcc	5	17		
+6502	add8	O1	gcc	8	33		
+6502	add8	O2	gcc	8	33		
+6502	add8	Os	gcc	8	33		
+6502	add16	O1	gcc	14	52		
+6502	add16	O2	gcc	14	52		
+6502	add16	Os	gcc	14	52		
+6502	max8	O1	gcc	17	40		
+6502	max8	O2	gcc	15	37		
+6502	max8	Os	gcc	15	37		
+6502	max16	O1	gcc	35	82		
+6502	max16	O2	gcc	27	70		
+6502	max16	Os	gcc	27	70		
+6502	sum_arr	O1	gcc	67	451		
+6502	sum_arr	O2	gcc	67	451		
+6502	sum_arr	Os	gcc	49	509		
+6502	find	O1	gcc	66	312		
+6502	find	O2	gcc	67	315		
+6502	find	Os	gcc	45	337		
+6502	fill	O1	gcc	70	354		
+6502	fill	O2	gcc	78	360		
+6502	fill	Os	gcc	77	393		
+6502	popcount	O1	gcc	36	287		
+6502	popcount	O2	gcc	36	287		
+6502	popcount	Os	gcc	36	339		
+6502	mul8	O1	gcc	23	192		body 4 B + __mulqi3 19 B
+6502	mul8	O2	gcc	23	192		body 4 B + __mulqi3 19 B
+6502	mul8	Os	gcc	23	192		body 4 B + __mulqi3 19 B
+6502	fib	O1	gcc	78	742		
+6502	fib	O2	gcc	80	742		
+6502	fib	Os	gcc	65	778		
+6502	gcd	O1	gcc	44	162		
+6502	gcd	O2	gcc	42	147		
+6502	gcd	Os	gcc	33	155		
+6502	sum4	O1	gcc	54	95		
+6502	sum4	O2	gcc	54	95		
+6502	sum4	Os	gcc	54	95		
+6502	slen	O1	gcc	59	320		
+6502	slen	O2	gcc	55	320		
+6502	slen	Os	gcc	41	358		
+6502	scmp	O1	gcc	82	120		
+6502	scmp	O2	gcc	103	108		
+6502	scmp	Os	gcc	67	108		
+6502	mcopy	O1	gcc	115	492		
+6502	mcopy	O2	gcc	100	457		
+6502	mcopy	Os	gcc	97	743		
+6502	crc16	O1	gcc	175	6744		
+6502	crc16	O2	gcc	678	1929		
+6502	crc16	Os	gcc	115	6702		
+6502	mul16	O1	gcc	47	570		body 4 B + __mulhi3 43 B
+6502	mul16	O2	gcc	47	570		body 4 B + __mulhi3 43 B
+6502	mul16	Os	gcc	47	570		body 4 B + __mulhi3 43 B
+6502	digits	O1	gcc	168	3524		body 130 B + __udivhi3 38 B
+6502	digits	O2	gcc	154	3522		body 116 B + __udivhi3 38 B
+6502	digits	Os	gcc	115	3367		body 77 B + __udivhi3 38 B
+6502	reverse	O1	gcc	106	421		
+6502	reverse	O2	gcc	106	421		
+6502	reverse	Os	gcc	92	535		
+6502	bsearch8	O1	gcc	113	397		
+6502	bsearch8	O2	gcc	116	378		
+6502	bsearch8	Os	gcc	94	405		
+6502	sum16	O1	gcc	86	918		
+6502	sum16	O2	gcc	86	918		
+6502	sum16	Os	gcc	57	1022		
+6502	schr	O1	gcc	69	221		
+6502	schr	O2	gcc	72	221		
+6502	schr	Os	gcc	50	206		
+6502	lz4	O1	gcc	489	29015		
+6502	lz4	O2	gcc	461	28192		
+6502	lz4	Os	gcc	430	57153		
+6502	lz4c	O1	gcc	593	61534		
+6502	lz4c	O2	gcc	545	59381		
+6502	lz4c	Os	gcc	487	91414		
+6502	xs8	O1	gcc	50	368		
+6502	xs8	O2	gcc	50	368		
+6502	xs8	Os	gcc	47	394		
+6502	minmax	O1	gcc	97	811		
+6502	minmax	O2	gcc	86	786		
+6502	minmax	Os	gcc	57	887		
+6502	fletcher	O1	gcc	129	1053		
+6502	fletcher	O2	gcc	139	1058		
+6502	fletcher	Os	gcc	104	1138		
+6502	hash16	O1	gcc	110	1487		
+6502	hash16	O2	gcc	104	1490		
+6502	hash16	Os	gcc	98	1587		
+6502	dotx	O1	gcc	88	597		
+6502	dotx	O2	gcc	88	597		
+6502	dotx	Os	gcc	93	870		
+6502	k_aslax3	O1	gcc	13	52		
+6502	k_aslax3	O2	gcc	13	52		
+6502	k_aslax3	Os	gcc	13	52		
+6502	k_asrax4	O1	gcc	31	73		
+6502	k_asrax4	O2	gcc	31	73		
+6502	k_asrax4	Os	gcc	31	73		
+6502	k_atoi	O1	gcc	246	807		
+6502	k_atoi	O2	gcc	267	771		
+6502	k_atoi	Os	gcc	195	773		
+6502	k_imul8x8r16	O1	gcc	69	646		body 26 B + __mulhi3 43 B
+6502	k_imul8x8r16	O2	gcc	69	646		body 26 B + __mulhi3 43 B
+6502	k_imul8x8r16	Os	gcc	69	646		body 26 B + __mulhi3 43 B
+6502	k_isalpha	O1	gcc	58	91		
+6502	k_isalpha	O2	gcc	58	91		
+6502	k_isalpha	Os	gcc	58	91		
+6502	k_isdigit	O1	gcc	46	75		
+6502	k_isdigit	O2	gcc	46	75		
+6502	k_isdigit	Os	gcc	46	75		
+6502	k_ispunct	O1	gcc	139	184		
+6502	k_ispunct	O2	gcc	136	183		
+6502	k_ispunct	Os	gcc	138	184		
+6502	k_isspace	O1	gcc	67	47		
+6502	k_isspace	O2	gcc	68	47		
+6502	k_isspace	Os	gcc	67	47		
+6502	k_isxdigit	O1	gcc	98	133		
+6502	k_isxdigit	O2	gcc	99	132		
+6502	k_isxdigit	Os	gcc	98	133		
+6502	k_itoa	O1	gcc	608	7819		body 558 B + __umodhi3 12 B, __udivhi3 38 B
+6502	k_itoa	O2	gcc	613	7937		body 563 B + __udivhi3 38 B, __umodhi3 12 B
+6502	k_itoa	Os	gcc	581	8124		body 531 B + __udivhi3 38 B, __umodhi3 12 B
+6502	k_memchr	O1	gcc	54	278		
+6502	k_memchr	O2	gcc	58	286		
+6502	k_memchr	Os	gcc	51	297		
+6502	k_memcmp	O1	gcc	88	901		
+6502	k_memcmp	O2	gcc	89	921		
+6502	k_memcmp	Os	gcc	83	966		
+6502	k_memcpy	O1	gcc	60	417		
+6502	k_memcpy	O2	gcc	60	417		
+6502	k_memcpy	Os	gcc	64	698		
+6502	k_memmove	O1	gcc	142	488		
+6502	k_memmove	O2	gcc	142	488		
+6502	k_memmove	Os	gcc	142	592		
+6502	k_memset	O1	gcc	52	985		
+6502	k_memset	O2	gcc	97	1318		body 60 B + __memset 37 B
+6502	k_memset	Os	gcc	49	1082		
+6502	k_mul20	O1	gcc	42	94		
+6502	k_mul20	O2	gcc	42	94		
+6502	k_mul20	Os	gcc	42	94		
+6502	k_mul40	O1	gcc	46	104		
+6502	k_mul40	O2	gcc	46	104		
+6502	k_mul40	Os	gcc	46	104		
+6502	k_mulax10	O1	gcc	43	94		
+6502	k_mulax10	O2	gcc	43	94		
+6502	k_mulax10	Os	gcc	43	94		
+6502	k_mulax3	O1	gcc	27	62		
+6502	k_mulax3	O2	gcc	27	62		
+6502	k_mulax3	Os	gcc	27	62		
+6502	k_mulax5	O1	gcc	30	74		
+6502	k_mulax5	O2	gcc	30	74		
+6502	k_mulax5	Os	gcc	30	74		
+6502	k_mulax6	O1	gcc	40	82		
+6502	k_mulax6	O2	gcc	40	82		
+6502	k_mulax6	Os	gcc	40	82		
+6502	k_mulax7	O1	gcc	34	84		
+6502	k_mulax7	O2	gcc	34	84		
+6502	k_mulax7	Os	gcc	34	84		
+6502	k_mulax9	O1	gcc	34	84		
+6502	k_mulax9	O2	gcc	34	84		
+6502	k_mulax9	Os	gcc	34	84		
+6502	k_shrax3	O1	gcc	13	52		
+6502	k_shrax3	O2	gcc	13	52		
+6502	k_shrax3	Os	gcc	13	52		
+6502	k_shrax7	O1	gcc	29	92		
+6502	k_shrax7	O2	gcc	29	92		
+6502	k_shrax7	Os	gcc	29	92		
+6502	k_stpcpy	O1	gcc	45	499		
+6502	k_stpcpy	O2	gcc	45	499		
+6502	k_stpcpy	Os	gcc	28	492		
+6502	k_strchr	O1	gcc	40	174		
+6502	k_strchr	O2	gcc	43	177		
+6502	k_strchr	Os	gcc	30	168		
+6502	k_strcmp	O1	gcc	79	874		
+6502	k_strcmp	O2	gcc	82	874		
+6502	k_strcmp	Os	gcc	64	923		
+6502	k_strcpy	O1	gcc	51	547		
+6502	k_strcpy	O2	gcc	51	547		
+6502	k_strcpy	Os	gcc	35	527		
+6502	k_strcspn	O1	gcc	123	390		
+6502	k_strcspn	O2	gcc	166	391		
+6502	k_strcspn	Os	gcc	88	412		
+6502	k_stricmp	O1	gcc	145	1526		
+6502	k_stricmp	O2	gcc	133	1453		
+6502	k_stricmp	Os	gcc	105	1572		
+6502	k_strlen	O1	gcc	59	320		
+6502	k_strlen	O2	gcc	55	320		
+6502	k_strlen	Os	gcc	41	358		
+6502	k_strlower	O1	gcc	79	668		
+6502	k_strlower	O2	gcc	73	679		
+6502	k_strlower	Os	gcc	66	728		
+6502	k_strncmp	O1	gcc	92	989		
+6502	k_strncmp	O2	gcc	95	1060		
+6502	k_strncmp	Os	gcc	89	1121		
+6502	k_strncpy	O1	gcc	111	989		
+6502	k_strncpy	O2	gcc	140	1130		body 103 B + __memset 37 B
+6502	k_strncpy	Os	gcc	98	1025		
+6502	k_strnicmp	O1	gcc	162	1530		
+6502	k_strnicmp	O2	gcc	150	1430		
+6502	k_strnicmp	Os	gcc	136	1571		
+6502	k_strnlen	O1	gcc	79	923		
+6502	k_strnlen	O2	gcc	82	941		
+6502	k_strnlen	Os	gcc	59	975		
+6502	k_strpbrk	O1	gcc	101	342		
+6502	k_strpbrk	O2	gcc	128	340		
+6502	k_strpbrk	Os	gcc	67	332		
+6502	k_strrchr	O1	gcc	59	460		
+6502	k_strrchr	O2	gcc	56	464		
+6502	k_strrchr	Os	gcc	48	472		
+6502	k_strspn	O1	gcc	123	194		
+6502	k_strspn	O2	gcc	134	199		
+6502	k_strspn	Os	gcc	88	200		
+6502	k_strstr	O1	gcc	109	543		
+6502	k_strstr	O2	gcc	112	535		
+6502	k_strstr	Os	gcc	83	541		
+6502	k_strupper	O1	gcc	79	668		
+6502	k_strupper	O2	gcc	73	679		
+6502	k_strupper	Os	gcc	66	728		
+6502	k_tolower	O1	gcc	48	86		
+6502	k_tolower	O2	gcc	46	83		
+6502	k_tolower	Os	gcc	45	82		
+6502	k_tosdivax	O1	gcc	103	850		body 4 B + __divhi3 61 B, __udivhi3 38 B
+6502	k_tosdivax	O2	gcc	103	850		body 4 B + __divhi3 61 B, __udivhi3 38 B
+6502	k_tosdivax	Os	gcc	103	850		body 4 B + __divhi3 61 B, __udivhi3 38 B
+6502	k_tosmodax	O1	gcc	107	856		body 4 B + __modhi3 65 B, __udivhi3 38 B
+6502	k_tosmodax	O2	gcc	107	856		body 4 B + __modhi3 65 B, __udivhi3 38 B
+6502	k_tosmodax	Os	gcc	107	856		body 4 B + __modhi3 65 B, __udivhi3 38 B
+6502	k_tosmulax	O1	gcc	47	627		body 4 B + __mulhi3 43 B
+6502	k_tosmulax	O2	gcc	47	627		body 4 B + __mulhi3 43 B
+6502	k_tosmulax	Os	gcc	47	627		body 4 B + __mulhi3 43 B
+6502	k_tosudivax	O1	gcc	42	807		body 4 B + __udivhi3 38 B
+6502	k_tosudivax	O2	gcc	42	807		body 4 B + __udivhi3 38 B
+6502	k_tosudivax	Os	gcc	42	807		body 4 B + __udivhi3 38 B
+6502	k_tosumodax	O1	gcc	54	831		body 4 B + __umodhi3 12 B, __udivhi3 38 B
+6502	k_tosumodax	O2	gcc	54	831		body 4 B + __umodhi3 12 B, __udivhi3 38 B
+6502	k_tosumodax	Os	gcc	54	831		body 4 B + __umodhi3 12 B, __udivhi3 38 B
+6502	k_tosumulax	O1	gcc	47	627		body 4 B + __mulhi3 43 B
+6502	k_tosumulax	O2	gcc	47	627		body 4 B + __mulhi3 43 B
+6502	k_tosumulax	Os	gcc	47	627		body 4 B + __mulhi3 43 B
+6502	k_toupper	O1	gcc	48	86		
+6502	k_toupper	O2	gcc	46	83		
+6502	k_toupper	Os	gcc	45	82		
+6502	k_umul8x8r16	O1	gcc	57	631		body 14 B + __mulhi3 43 B
+6502	k_umul8x8r16	O2	gcc	57	631		body 14 B + __mulhi3 43 B
+6502	k_umul8x8r16	Os	gcc	57	631		body 14 B + __mulhi3 43 B
