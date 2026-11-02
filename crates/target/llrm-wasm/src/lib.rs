@@ -30,6 +30,7 @@ pub mod reg_numbering;
 pub mod reg_stackify;
 pub mod set_p2align;
 pub mod sort_region;
+pub mod spike_coalesce;
 pub mod unreachable_blocks;
 
 use llrm_lir::registers::{RegId, Row};

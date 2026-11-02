@@ -132,6 +132,12 @@ pub fn compile_function(
     remove_unreachable_blocks(&mut f);
     fix_irreducible_control_flow(&mut f);
     late_eh_prepare(&mut f);
+    if matches!(
+        options.level,
+        crate::driver::Level::O2 | crate::driver::Level::O3 | crate::driver::Level::Os | crate::driver::Level::Oz
+    ) {
+        crate::spike_coalesce::coalesce(&mut f);
+    }
     if options.stackify {
         reg_stackify(&mut f);
     }

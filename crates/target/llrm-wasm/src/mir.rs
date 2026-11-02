@@ -242,7 +242,7 @@ pub struct Function {
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,
-    vregs: Vec<ValType>,
+    pub(crate) vregs: Vec<ValType>,
     stackified: Vec<bool>,
 }
 
