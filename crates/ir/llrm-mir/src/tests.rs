@@ -1364,3 +1364,25 @@ fn a_visibility_after_the_linkage_is_read() {
     let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
     assert_eq!(module.globals.len(), 6);
 }
+
+/// `@__main_void = hidden alias i32 (), ptr @main` was refused ("expected
+/// `global` or `constant`, found `alias`"): wasm's clang writes one for
+/// `main`. A use of the alias is a use of its target; printing keeps the line.
+#[test]
+fn an_alias_names_its_target() {
+    let text = format!(
+        "{DATALAYOUT}@__main_void = hidden alias i32 (), ptr @main\n@v = global i32 1\n@w = internal alias i32, ptr @v\n\
+         define i32 @main() {{\n  ret i32 0\n}}\n\
+         define i32 @g() {{\n  %x = load i32, ptr @w\n  %y = call i32 @__main_void()\n  ret i32 %x\n}}\n"
+    );
+    let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let names: Vec<_> = module.aliases.iter().map(|one| one.name.as_str()).collect();
+    assert_eq!(names, ["__main_void", "w"]);
+    let target = |at: usize| module.globals[module.aliases[at].target.0 as usize].name.as_deref().map(str::to_owned);
+    assert_eq!((target(0).as_deref(), target(1).as_deref()), (Some("main"), Some("v")));
+    assert_eq!(module.globals.len(), 3, "an alias is not a slot of its own");
+    let again = round(&text);
+    assert!(again.contains("@__main_void = alias i32 (), ptr @main\n"), "{again}");
+    assert!(again.contains("@w = internal alias i32, ptr @v\n"), "{again}");
+    assert_eq!(parse::module(&again).unwrap().aliases.len(), 2);
+}

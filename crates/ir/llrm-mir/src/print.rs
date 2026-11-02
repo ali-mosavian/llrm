@@ -58,6 +58,28 @@ pub fn module(module: &Module) -> String {
                 },
             ),
     );
+    section(
+        &mut out,
+        module
+            .aliases
+            .iter()
+            .map(
+                |one| {
+                    let words: Vec<&str> = [Printer::linkage(one.linkage), Printer::unnamed_addr(one.unnamed_addr)]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    format!(
+                        "@{} = {}{}alias {}, ptr {}\n",
+                        quoted(&one.name),
+                        words.join(" "),
+                        if words.is_empty() { "" } else { " " },
+                        printer.ty(one.ty),
+                        printer.globals[one.target.0 as usize]
+                    )
+                },
+            ),
+    );
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
             if !out.is_empty() {

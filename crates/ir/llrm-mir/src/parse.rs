@@ -10,9 +10,9 @@ use crate::hash::{HashMap, HashSet};
 use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
-    Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction,
-    LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr, ValueData,
-    ValueDef, ValueId,
+    Alias, Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
+    Instruction, LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr,
+    ValueData, ValueDef, ValueId,
 };
 use crate::opcode::{
     AtomicInfo, AtomicKind, AtomicOrdering, Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause,
@@ -26,6 +26,7 @@ type Parsed<T> = Result<T, ParseError>;
 pub fn module(text: &str) -> Parsed<Module> {
     let mut parser = Parser::new(lex(text)?);
     parser.prescan()?;
+    parser.aliases()?;
     parser.top_level()?;
     parser.finish()
 }
@@ -45,8 +46,11 @@ struct Parser {
     groups: HashMap<u32, Vec<Attribute>>,
     metadata: HashMap<u32, MetadataId>,
     defined_metadata: HashSet<MetadataId>,
-    /// Token ranges of the attribute groups, skipped by the main pass.
+    /// Token ranges of the attribute groups and the aliases, skipped by the
+    /// main pass.
     group_spans: Vec<(usize, usize)>,
+    /// Where each `@a = ... alias` begins, read once the globals are known.
+    alias_at: Vec<usize>,
 }
 
 /// A function being read: names to arena ids, and uses still undefined.
@@ -74,6 +78,7 @@ impl Parser {
             metadata: HashMap::default(),
             defined_metadata: HashSet::default(),
             group_spans: Vec::new(),
+            alias_at: Vec::new(),
         }
     }
 
@@ -254,7 +259,10 @@ impl Parser {
                 Token::Global(name) => {
                     let defines = awaiting_function
                         || self.tokens.get(at + 1).is_some_and(|(next, _)| *next == Token::Punct('='));
-                    if defines {
+                    if !awaiting_function && defines && self.alias_follows(at + 2) {
+                        // not a slot of its own: a name for another global
+                        self.alias_at.push(at);
+                    } else if defines {
                         if self.globals.contains_key(name) {
                             let line = self.tokens[at].1;
                             return Err(ParseError { line, message: format!("@{} is defined twice", display(name)) });
@@ -289,6 +297,58 @@ impl Parser {
                 _ => {}
             }
             at += 1;
+        }
+        self.at = 0;
+        Ok(())
+    }
+
+    /// Whether the words from `at` reach `alias` before `global` or
+    /// `constant`: `@a = hidden unnamed_addr alias ...`.
+    fn alias_follows(
+        &self,
+        mut at: usize,
+    ) -> bool {
+        while let Some((Token::Word(word), _)) = self.tokens.get(at) {
+            match word.as_str() {
+                "alias" => return true,
+                "global" | "constant" => return false,
+                _ => at += 1,
+            }
+        }
+        false
+    }
+
+    /// `parseAliasOrIFunc` (LLParser.cpp#L1316): `@a = [linkage] [visibility]
+    /// [unnamed_addr] alias T, ptr @target`. The name then stands for the
+    /// target wherever the IR uses it. DEVIATE: the aliasee is a global's
+    /// name, not a constant expression (`getelementptr` or a cast of one);
+    /// exit: the first producer of one.
+    fn aliases(&mut self) -> Parsed<()> {
+        for start in std::mem::take(&mut self.alias_at) {
+            self.at = start;
+            let Token::Global(name) = self.next() else { unreachable!("prescan found a global here") };
+            let Name::Named(text) = &name else { return self.fail("an alias has a name, not a number") };
+            let text = text.clone();
+            self.next();
+            let linkage = self.linkage();
+            self.visibility();
+            let unnamed_addr = self.unnamed_addr();
+            self.expect_word("alias")?;
+            let ty = self.ty()?;
+            self.expect_punct(',')?;
+            self.expect_word("ptr")?;
+            let Token::Global(target) = self.next() else {
+                self.at -= 1;
+                return self.fail(format!("an alias names a global, found {}", self.describe()));
+            };
+            let Some(&target) = self.globals.get(&target) else {
+                return self.fail(format!("@{} is not defined", display(&target)));
+            };
+            if self.globals.insert(name.clone(), target).is_some() {
+                return self.fail(format!("@{} is defined twice", display(&name)));
+            }
+            self.group_spans.push((start, self.at));
+            self.module.aliases.push(Alias { name: text, linkage, unnamed_addr, ty, target });
         }
         self.at = 0;
         Ok(())

@@ -1195,6 +1195,19 @@ pub struct GlobalVariable {
     pub align: Option<u64>,
 }
 
+/// `@a = alias T, ptr @target` (LLParser.cpp#L1316, `parseAliasOrIFunc`):
+/// another name for a global. A use of `@a` in the IR is read as a use of
+/// the target, so nothing but an object writer sees the alias.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Alias {
+    pub name: String,
+    pub linkage: Linkage,
+    pub unnamed_addr: UnnamedAddr,
+    /// The aliasee's value type.
+    pub ty: TypeId,
+    pub target: GlobalId,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum GlobalKind {
     Variable(GlobalVariable),
@@ -1344,6 +1357,8 @@ pub struct Module {
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.
     pub globals: Vec<GlobalValue>,
+    /// The aliases, in definition order.
+    pub aliases: Vec<Alias>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
     /// The nodes of `metadata` written as specialized metadata.
