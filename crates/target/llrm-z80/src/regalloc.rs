@@ -10,6 +10,7 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::Target;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::expand::lanes;
 use crate::{REGISTER_INFO, reg};
 
 /// A virtual register's class.
@@ -97,6 +98,20 @@ impl Target for Z80Registers {
         index: usize,
     ) -> Option<Class> {
         crate::mfunc::operand_class(name, index)
+    }
+
+    fn read_part(
+        inst: &Inst,
+        operand: usize,
+        register: RegId,
+    ) -> RegId {
+        // the sign test of a pair, and the byte halves taken from one, read a single byte
+        let half = match inst.kind {
+            Kind::Op("BIT7_16" | "HI") if operand == 1 => 1,
+            Kind::Op("LO") if operand == 1 => 0,
+            _ => return register,
+        };
+        lanes(register).map_or(register, |lanes| [lanes.0, lanes.1][half])
     }
 
     // `reads_flags_set_just_before` stays false: every copy, spill and reload

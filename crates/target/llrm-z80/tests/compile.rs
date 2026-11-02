@@ -265,3 +265,13 @@ fn a_loop_over_a_string_is_the_runtimes_strlen() {
     let out = text(include_str!("kernels/ir/slen.ll"), "slen", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("jp _strlen") && !out.contains("jr"), "{out}");
 }
+
+/// A pair copy moved both halves: crc16's `bit 7, h` on a copy of `de` came
+/// with `ld l, e` for a `l` nothing reads, a byte and 4 T-states on each of 8
+/// trips. A half that is dead after the copy is not moved (`PhysLiveness`).
+#[test]
+fn a_pair_copy_moves_only_the_halves_that_are_read() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ld h, d") && !out.contains("ld l, e"), "{out}");
+}

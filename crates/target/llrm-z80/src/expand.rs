@@ -12,9 +12,11 @@
 //! them yet. Exit: the MC printer.
 
 use llrm_lir::registers::RegId;
+use llrm_spike_mf::livephys::PhysLiveness;
 use llrm_spike_mf::regalloc::Assignment;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
+use crate::regalloc::Z80Registers;
 use crate::{REGISTER_INFO, reg};
 
 /// A line of the function: a label or an instruction.
@@ -71,6 +73,11 @@ struct Printer<'a> {
     folded: Option<(RegId, String)>,
     /// Instructions after the current one that were printed with it.
     skip: usize,
+    /// The live lanes of the allocated function, and the block and
+    /// instruction being printed.
+    liveness: llrm_spike_mf::livephys::PhysLiveness,
+    function: &'a MFunction,
+    at: (usize, usize),
 }
 
 fn name(register: RegId) -> &'static str {
@@ -170,8 +177,20 @@ impl Printer<'_> {
             }
             (true, true) => {
                 let ((dl, dh), (sl, sh)) = (lanes(to)?, lanes(from)?);
-                self.byte_move(dl, sl);
-                self.byte_move(dh, sh);
+                // a half nothing reads before it is written again is not moved
+                let after = self.liveness.live_before::<Z80Registers>(
+                    self.function,
+                    self.assignment,
+                    &REGISTER_INFO,
+                    self.at.0,
+                    self.at.1 + 1,
+                );
+                if after.is_live(&REGISTER_INFO, dl) {
+                    self.byte_move(dl, sl);
+                }
+                if after.is_live(&REGISTER_INFO, dh) {
+                    self.byte_move(dh, sh);
+                }
             }
             _ => return Err(format!("a copy of {} to {}", name(from), name(to))),
         }
@@ -946,8 +965,20 @@ pub fn finish(
         .filter(|block| matches!(&block.insts[..], [one] if one.kind == Kind::Op("RET")))
         .map(|block| block.id)
         .collect();
-    let mut printer =
-        Printer { assignment, number, out: Vec::new(), frame, returns_bare, reads, folded: None, skip: 0 };
+    let liveness = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+    let mut printer = Printer {
+        assignment,
+        number,
+        out: Vec::new(),
+        frame,
+        returns_bare,
+        reads,
+        folded: None,
+        skip: 0,
+        liveness,
+        function,
+        at: (0, 0),
+    };
     if printer.frame.active {
         for line in prologue(&printer.frame) {
             printer.push(line);
@@ -961,6 +992,7 @@ pub fn finish(
                 printer.skip -= 1;
                 continue;
             }
+            printer.at = (at, index);
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
