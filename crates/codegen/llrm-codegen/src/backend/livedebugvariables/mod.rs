@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use llrm_lir::registers::RegId;
 
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::model::lir::{LirBody, NoteValue};
+use crate::model::lir::{LirBody, NoteArg, NoteValue};
 use crate::support::hash::{HashMap, IndexMap};
 
 /// Where a value is held.
@@ -43,6 +43,9 @@ pub enum Where {
     /// The value held in the place, plus a constant (`DW_OP_plus_uconst`).
     Offset(Place, i64),
     Constant(i64),
+    /// What the function was entered with in the register
+    /// (`DW_OP_entry_value`).
+    Entry(RegId),
     /// Nothing says: its value is not held here, or was deleted.
     Undef,
 }
@@ -69,8 +72,9 @@ pub struct Located {
 
 /// The ranges of every variable. `segments` gives each value's stretches
 /// (sorted, not overlapping); `end` is where the code ends. A note of a value
-/// the table does not know, or of a form this does not place yet (`Expr`,
-/// `Arrived`), is `Undef` over its range.
+/// the table does not know, or of an `Expr` that is not its one argument as it
+/// is, is `Undef` over its range. A parameter that `Arrived` is `Entry` where
+/// no place holds it.
 pub fn locate(
     notes: &[Positioned],
     segments: &BTreeMap<u32, Vec<Segment>>,
@@ -101,15 +105,27 @@ pub fn locate(
             };
             match &note.value {
                 NoteValue::Constant(value) => push(start, stop, Where::Constant(*value)),
-                NoteValue::Value(value) | NoteValue::Offset(value, _) => {
-                    let add = if let NoteValue::Offset(_, add) = note.value { Some(add) } else { None };
+                NoteValue::Value(_) | NoteValue::Offset(..) | NoteValue::Arrived(..) | NoteValue::Expr(_) => {
+                    let (value, add, gap) = match &note.value {
+                        NoteValue::Value(value) => (*value, None, Where::Undef),
+                        NoteValue::Offset(value, add) => (*value, Some(*add), Where::Undef),
+                        NoteValue::Arrived(value, register) => (*value, None, Where::Entry(*register)),
+                        NoteValue::Expr(expr) => match (expr.args.as_slice(), expr.ops.is_empty()) {
+                            ([NoteArg::Value(value)], true) => (*value, None, Where::Undef),
+                            _ => {
+                                push(start, stop, Where::Undef);
+                                continue;
+                            }
+                        },
+                        _ => unreachable!(),
+                    };
                     let mut from = start;
-                    for segment in segments.get(value).into_iter().flatten() {
+                    for segment in segments.get(&value).into_iter().flatten() {
                         let (low, high) = (segment.start.max(start), segment.end.min(stop));
                         if low >= high {
                             continue;
                         }
-                        push(from, low, Where::Undef);
+                        push(from, low, gap);
                         push(
                             low,
                             high,
@@ -117,7 +133,7 @@ pub fn locate(
                         );
                         from = high;
                     }
-                    push(from, stop, Where::Undef);
+                    push(from, stop, gap);
                 }
                 _ => push(start, stop, Where::Undef),
             }
@@ -223,6 +239,27 @@ mod tests {
 
     fn ranges(found: &[Located]) -> Vec<(i64, i64, Where)> {
         found.iter().map(|one| (one.start, one.end, one.at)).collect()
+    }
+
+    /// A parameter that arrived in a register is `Entry` where no place holds
+    /// it, and its place where one does; an `Expr` that is its one argument
+    /// is that argument. Both were `Undef` over their whole range.
+    #[test]
+    fn an_arrived_parameter_falls_back_to_its_entry_register() {
+        let entry = RegId::from_raw(7);
+        let table = BTreeMap::from([(5, vec![seg(20, 30, reg(1))])]);
+        let found = locate(&[note(10, 1, NoteValue::Arrived(5, entry))], &table, 40);
+        assert_eq!(
+            ranges(&found),
+            [(10, 20, Where::Entry(entry)), (20, 30, Where::Place(reg(1))), (30, 40, Where::Entry(entry))]
+        );
+        let same = NoteValue::Expr(std::sync::Arc::new(crate::model::lir::NoteExpr {
+            args: vec![NoteArg::Value(5)],
+            ops: vec![],
+            value: true,
+        }));
+        let found = locate(&[note(10, 1, same)], &table, 40);
+        assert_eq!(ranges(&found), [(10, 20, Where::Undef), (20, 30, Where::Place(reg(1))), (30, 40, Where::Undef)]);
     }
 
     /// A value split into a register and then a cell is two ranges, one per
