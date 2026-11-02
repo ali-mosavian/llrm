@@ -27,6 +27,25 @@ fn the_runtime_computes_what_c_computes() {
     assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
 }
 
+/// `strlen` is `cpir` over a count that starts at 0: the empty string must be
+/// 0 (the count wraps to 0xFFFF) and 299 bytes must not stop at 8 bits.
+#[test]
+fn strlen_counts_what_c_counts() {
+    let missing: Vec<_> = ["sdasz80", "sdcc", "ucsim_z80"].into_iter().filter(|tool| !have(tool)).collect();
+    if !missing.is_empty() {
+        let optional = std::env::var("Z80_ORACLE_OPTIONAL").is_ok_and(|flag| flag == "1");
+        assert!(optional, "{missing:?} not found: strlen cannot be checked (Z80_ORACLE_OPTIONAL=1 skips it)");
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/runtime/strlen.py"), &format!("{dir}/runtime/z80_rt.s")])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
+}
+
 /// `__udivhi3` called `__umodhi3` and swapped the pair back: 55 B against
 /// SDCC's 55, a tie on bytes. The divide rows must stay wins on both bytes and
 /// cycles.

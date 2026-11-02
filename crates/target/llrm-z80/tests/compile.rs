@@ -255,3 +255,13 @@ fn a_select_is_a_branch_and_gcd_is_the_branch_loop() {
     let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
     assert!(instructions <= 19, "{instructions} instructions\n{out}");
 }
+
+/// `slen`'s pointer loop is `strlen` (LoopIdiomRecognize, once the compile
+/// states the routine) and the runtime's `cpir` routine, expanded at its sole
+/// call, replaces it: a counter loop was 10 B / 482 T-states, this is 12 B / 340
+/// against SDCC's 13 / 437.
+#[test]
+fn a_loop_over_a_string_is_the_runtimes_strlen() {
+    let out = text(include_str!("kernels/ir/slen.ll"), "slen", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("jp _strlen") && !out.contains("jr"), "{out}");
+}

@@ -443,3 +443,21 @@ loop:	ld	b,#32
 6$:	ld	sp,ix
 	pop	ix
 	ret
+
+; ---- libc: strlen --------------------------------------------------------------------------------
+
+; The length of the string at hl -> de. cpir scans from a count of 0 (the 65536 bytes it can take) for the zero byte;
+; the count is then minus the bytes scanned, the zero included, and the length is its complement.
+	.globl _strlen
+_strlen:
+	xor	a
+	ld	b,a
+	ld	c,a
+	cpir
+	ld	a,c
+	cpl
+	ld	e,a
+	ld	a,b
+	cpl
+	ld	d,a
+	ret
