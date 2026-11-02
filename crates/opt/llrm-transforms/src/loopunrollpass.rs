@@ -43,11 +43,11 @@
 //!   where, once copied out, the nest reads and writes more distinct float
 //!   locations in one pass of its outermost loop than the stack has slots. The
 //!   pin's `shouldFullUnroll` prices the copies' instructions and what folds
-//!   (`UnrolledCost`) and nothing of the registers the result needs; its
-//!   scalar promotion then holds each constant-address location in a register
-//!   across the outer loop, and the pin's own `llc` spills them (bq32 nbody
-//!   -O3: 17 carried doubles in 8 slots; ours 50 + 65 spills, the pin's `llc`
-//!   on the same IR 41 + 74, gcc -O3 on the C source 12 + 10). The exit is a
+//!   (`UnrolledCost`) and nothing of the registers the result needs; its scalar
+//!   promotion then holds each constant-address location in a register across
+//!   the outer loop, and the pin's own `llc` spills them (bq32 nbody -O3: 17
+//!   carried doubles in 8 slots; ours 50 + 65 spills, the pin's `llc` on the
+//!   same IR 41 + 74, gcc -O3 on the C source 12 + 10). The exit is a
 //!   register-pressure term in the pin's cost model or in promotion; none
 //!   exists in the pin. Exit 2026-11-20. Pin:
 //!   [`computeUnrollCount`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1016).
@@ -113,6 +113,10 @@ pub struct Options {
     /// `OnlyWhenForced`.
     pub only_when_forced: bool,
     pub prepare_for_lto: bool,
+    /// `LoopUnrollPass` (the slot at `PassBuilderPipelines.cpp:1476`) rather
+    /// than `LoopFullUnrollPass`: the target's partial, runtime and upper-bound
+    /// unrolling stand.
+    pub target_partial: bool,
 }
 
 /// What the pass reads and changes.
@@ -378,10 +382,13 @@ pub(crate) fn gather_unrolling_preferences(
     has_calls: bool,
 ) -> UnrollingPreferences {
     let mut up = gather_unrolling_preferences_of_target(run, has_calls);
-    // Apply the values provided by the full unroll pass.
-    up.partial = false;
-    up.runtime = false;
-    up.upper_bound = false;
+    // Apply the values provided by the full unroll pass: `LoopUnrollPass`
+    // leaves the target's.
+    if !run.options.target_partial {
+        up.partial = false;
+        up.runtime = false;
+        up.upper_bound = false;
+    }
     if UNROLL_MAX_UPPER_BOUND == 0 {
         up.upper_bound = false;
     }
@@ -939,7 +946,8 @@ fn float_locations_unrolled(
                 } else if level == scope_header {
                     0
                 } else {
-                    // A loop of varying trips (a triangle) reaches at most its maximum.
+                    // A loop of varying trips (a triangle) reaches at most its
+                    // maximum.
                     match se.get_small_constant_trip_count(&cx, level) {
                         0 => se.get_small_constant_max_trip_count(&cx, level),
                         exact => exact,
@@ -956,7 +964,11 @@ fn float_locations_unrolled(
                 continue;
             }
             weight.insert(address.0, reach);
-            if is_store { written.insert(address.0) } else { read.insert(address.0) };
+            if is_store {
+                written.insert(address.0)
+            } else {
+                read.insert(address.0)
+            };
         }
     }
     read.intersection(&written).map(|address| weight[address]).sum()
@@ -986,7 +998,11 @@ fn should_full_unroll(
     if let Some(slots) = run.tti.x87_stack_slots() {
         let held = float_locations_unrolled(run, analyzed, lp, full_unroll_trip_count);
         if held > slots as usize {
-            why(run, lp, &format!("{held} float locations read and written once unrolled, past the {slots}-slot float stack"));
+            why(
+                run,
+                lp,
+                &format!("{held} float locations read and written once unrolled, past the {slots}-slot float stack"),
+            );
             return None;
         }
     }
@@ -1475,8 +1491,15 @@ fn try_to_unroll_loop(
     }
 
     // Do not attempt partial/runtime unrolling in the full unroller.
-    if (trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count {
+    let partial = (trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count;
+    if partial && !run.options.target_partial {
         why(run, lp, "partial/runtime unroll in FullLoopUnroll");
+        return Unrolled::Unmodified;
+    }
+    // A partial count with no remainder: the trip multiple divides by it. The
+    // remainder forms (`UnrollRuntimeLoopRemainder`) are not wired in here.
+    if partial && (count < 2 || trip_multiple % count != 0) {
+        why(run, lp, &format!("partial unroll by {count} needs a remainder (trip multiple {trip_multiple})"));
         return Unrolled::Unmodified;
     }
 
@@ -1492,8 +1515,9 @@ fn try_to_unroll_loop(
     let latches = lp.get_loop_latches(run.function);
     let unroll_options = UnrollOptions {
         count,
-        max_trip_count: count,
+        max_trip_count: if partial { trip_count.max(max_trip_count) } else { count },
         max_or_zero,
+        trip_multiple,
         exits: exits.into_iter().filter(|exit| exit.trip_count != 0).collect(),
     };
     match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
@@ -1865,6 +1889,9 @@ pub struct LoopFullUnroll {
     /// `OnlyWhenForced`: only a loop that asks to be unrolled is
     /// (`!PTO.LoopUnrolling`, clang's `-fno-unroll-loops`, the default at -O1).
     pub only_when_forced: bool,
+    /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: see
+    /// [`Options::target_partial`].
+    pub target_partial: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -1908,6 +1935,7 @@ impl FunctionPass for LoopFullUnroll {
                 min_size: false,
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
+                target_partial: self.target_partial,
             },
         };
         let changed = unroll_loops(&mut run);

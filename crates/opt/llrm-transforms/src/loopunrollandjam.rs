@@ -732,7 +732,7 @@ fn unroll_remainder_loop(
     let body = lp.get_blocks().to_vec();
     let latches = lp.get_loop_latches(cx.function);
     let capacity = run.function.block_capacity();
-    let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
+    let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, trip_multiple: 1, exits };
     if let Err(error) =
         crate::loopunroll::unroll_loop_blocks(run.function, epilog_header, &body, &latches, &options, &mut run.emptied)
     {
@@ -1552,6 +1552,7 @@ impl FunctionPass for LoopUnrollAndJam {
                 min_size: false,
                 only_when_forced: false,
                 prepare_for_lto: false,
+                target_partial: false,
             },
         };
         let mut changed = false;

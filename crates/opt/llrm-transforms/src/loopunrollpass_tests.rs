@@ -13,8 +13,14 @@ fn unrolled(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_partial: false,
+    };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
 
@@ -188,8 +194,14 @@ b2:
     let function = module.function_mut("f").expect("@f").1;
     assert!(crate::loopsimplify::simplified(&mut function.clone()), "the input is in simplified form already");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_partial: false,
+    };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
 }
@@ -307,6 +319,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             opt_level: 2,
             opt_size: false,
             only_when_forced: false,
+            target_partial: false,
             created: std::rc::Rc::clone(&created),
         },
     );
@@ -329,6 +342,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             opt_level: 2,
             opt_size: false,
             only_when_forced: false,
+            target_partial: false,
             created: std::rc::Rc::clone(&created),
         },
     );
@@ -461,10 +475,143 @@ exit:
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 3, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 3,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_partial: false,
+    };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
+}
+
+/// `Basic`'s prices with a loop buffer of 28 micro-ops: partial unrolling on,
+/// as `BasicTTIImplBase::getUnrollingPreferences` for a core that has one.
+struct Buffered;
+
+impl llrm_mir::tti::Tti for Buffered {
+    fn loop_micro_op_buffer_size(&self) -> u32 {
+        28
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        op: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(op, ty, kind)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        stored_constant: bool,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.memory_op_cost(op, ty, kind, stored_constant)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(imm, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        op: llrm_mir::tti::ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        gv: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(gv, offset, base, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        op: llrm_mir::tti::CastKind,
+        dst: llrm_mir::tti::Ty,
+        src: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(op, dst, src, kind)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        first: llrm_mir::tti::OperandInfo,
+        second: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, kind, first, second)
+    }
+}
+
+fn unrolled_by_buffered(
+    module: &mut Module,
+    target_partial: bool,
+) -> bool {
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_partial,
+    };
+    unroll_function(module, "f", &Buffered, options).expect("unrolls")
+}
+
+/// A 100-trip loop past the full-unroll budget stayed rolled under a target
+/// with partial unrolling (every copy count refused as "partial/runtime unroll
+/// in FullLoopUnroll"): the `LoopUnrollPass` slot now copies the body by a
+/// divisor of its trip count and keeps the loop.
+#[test]
+fn a_loop_of_many_trips_is_partially_unrolled_where_the_target_asks_for_it() {
+    let before = parsed(&counted(100));
+    let mut module = before.clone();
+    assert!(!unrolled_by_buffered(&mut parsed(&counted(100)), false), "the full-unroll slot leaves it");
+    assert!(unrolled_by_buffered(&mut module, true), "{}", printed(&module));
+    let muls = printed(&module).matches("mul i16").count();
+    assert!((2..100).contains(&muls), "{muls} copies of the body:\n{}", printed(&module));
+    assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }

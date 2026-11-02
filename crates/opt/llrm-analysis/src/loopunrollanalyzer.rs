@@ -37,7 +37,9 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Linkage, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
-use llrm_mir::simplify::{simplify_binop_operands, simplify_call_operands, simplify_cast_operand, simplify_icmp_operands};
+use llrm_mir::simplify::{
+    simplify_binop_operands, simplify_call_operands, simplify_cast_operand, simplify_icmp_operands,
+};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::AssumptionCache;
 
@@ -277,7 +279,8 @@ impl UnrolledInstAnalyzer {
     ) -> bool {
         let operation = env.function.instruction(inst);
         let operands: Vec<Operand> = operation.operands.iter().map(|&op| Self::lookup(simplified, op)).collect();
-        if let Some(value) = simplify_call_operands(env.context, env.globals, env.layout, env.function, inst, &operands) {
+        if let Some(value) = simplify_call_operands(env.context, env.globals, env.layout, env.function, inst, &operands)
+        {
             if let Some(result) = operation.result {
                 simplified.insert(result, value);
             }

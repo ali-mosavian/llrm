@@ -33,7 +33,12 @@ fn unrolled(
     let at = cfg::id(named(function, header));
     let loop_ = shape.loops.iter().find(|one| one.header == at).expect("the loop").clone();
     let exits = exits.iter().map(|&(name, trip_count)| Exit { block: named(function, name), trip_count }).collect();
-    unroll_loop(function, &loop_, &Options { count, max_trip_count: count, max_or_zero: false, exits }).unwrap()
+    unroll_loop(
+        function,
+        &loop_,
+        &Options { count, max_trip_count: count, max_or_zero: false, trip_multiple: 1, exits },
+    )
+    .unwrap()
 }
 
 fn loops_left(module: &mut Module) -> usize {
@@ -215,13 +220,16 @@ b5:
 }
 
 #[test]
-fn test_a_count_below_the_maximum_trip_count_is_refused() {
+fn test_a_count_the_trip_multiple_does_not_divide_is_refused() {
     let mut module = parsed(ROTATED);
     let function = f(&mut module);
     let shape = cfg::Shape::of(function);
     let loop_ = shape.loops[0].clone();
-    let partial = Options { count: 2, max_trip_count: 4, max_or_zero: false, exits: Vec::new() };
-    assert!(unroll_loop(function, &loop_, &partial).is_err());
+    let partial = Options { count: 2, max_trip_count: 4, max_or_zero: false, trip_multiple: 1, exits: Vec::new() };
+    assert!(
+        unroll_loop(function, &loop_, &partial).is_err(),
+        "a count the trip multiple does not divide leaves a remainder"
+    );
 }
 
 fn rotated_with(trips: u32) -> String {
@@ -256,4 +264,48 @@ fn test_the_copies_stand_after_the_latch_before_the_exit() {
     let order: Vec<String> =
         function.layout().iter().map(|&one| function.block(one).name.clone().unwrap_or("new".into())).collect();
     assert_eq!(order, ["b0", "b1", "b2", "new", "new", "b3"], "{}", printed(&module));
+}
+
+/// `@f` with the loop headed by `header` copied `count` times, going round
+/// `trips / count` times: the trip count is a multiple of `trips`.
+fn unrolled_partially(
+    module: &mut Module,
+    header: &str,
+    count: u32,
+    trips: u32,
+) -> Unrolled {
+    let function = f(module);
+    let shape = cfg::Shape::of(function);
+    let at = cfg::id(named(function, header));
+    let loop_ = shape.loops.iter().find(|one| one.header == at).expect("the loop").clone();
+    let options = Options { count, max_trip_count: trips, max_or_zero: false, trip_multiple: trips, exits: Vec::new() };
+    unroll_loop(function, &loop_, &options).unwrap()
+}
+
+/// A loop of 12 trips copied 4 times keeps its loop, runs it 3 times, and
+/// computes what it did: the header's phis read the last copy's values and
+/// the first three latch tests fall through. Before, the unroller refused
+/// anything but the maximum trip count (wasm scroll -O3 kept its 1920-trip
+/// copy loops rolled: 5.36M instructions to clang's 2.78M).
+#[test]
+fn test_a_partial_unroll_keeps_the_loop_and_computes_the_same() {
+    let mut module = parsed(&rotated_with(12));
+    let before = results(&module, INPUTS);
+    assert_eq!(unrolled_partially(&mut module, "b1", 4, 12), Unrolled::Partially);
+    let text = printed(&module);
+    assert_eq!(loops_left(&mut module), 1, "{text}");
+    assert_eq!(text.matches("mul i16").count(), 4, "{text}");
+    assert_eq!(results(&module, INPUTS), before, "{text}");
+}
+
+/// A loop whose test is in the header: every copy keeps its test, since the
+/// trip multiple says nothing about where an early exit leaves.
+#[test]
+fn test_a_partial_unroll_of_a_header_tested_loop_computes_the_same() {
+    let mut module = parsed(&HEADER_TESTED.replace("i16 %i, 3", "i16 %i, 11"));
+    let before = results(&module, INPUTS);
+    assert_eq!(unrolled_partially(&mut module, "b1", 3, 12), Unrolled::Partially);
+    let text = printed(&module);
+    assert_eq!(loops_left(&mut module), 1, "{text}");
+    assert_eq!(results(&module, INPUTS), before, "{text}");
 }

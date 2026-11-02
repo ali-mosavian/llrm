@@ -1,5 +1,6 @@
-//! Complete unrolling of a loop over any exiting block: LLVM's `UnrollLoop`
-//! (`LoopUnroll.cpp`) for the count that is the loop's maximum trip count.
+//! Complete or partial unrolling of a loop over any exiting block: LLVM's
+//! `UnrollLoop` (`LoopUnroll.cpp`) for a count that is the loop's maximum trip
+//! count, or a divisor of its trip multiple.
 //!
 //! # How it works
 //! The caller says how many times the loop's blocks run (`Options::count`,
@@ -30,9 +31,12 @@
 //! shape is a guard.
 //!
 //! # Deviations
-//! - D2 No partial, runtime or epilog unrolling: `options.count` must be the
-//!   maximum trip count (`unroll_loop` refuses otherwise). The pinned `opt`
-//!   leaves `UP.Partial` and `UP.Runtime` off at `-mcpu=i486` and `pentiumpro`
+//! - D2 Partial unrolling only where `options.trip_multiple` is a multiple of
+//!   `count` (no remainder code): the loop stays, its latch test is kept in the
+//!   last copy only. A count that does not divide it, runtime and epilog
+//!   unrolling are refused (`unroll_loop` returns an error); the remainder
+//!   forms are `loopunrollruntime`. The pinned `opt` leaves `UP.Partial` and
+//!   `UP.Runtime` off at `-mcpu=i486` and `pentiumpro`
 //!   ([the
 //!   plan](https://github.com/ali-mosavian/llrm/blob/main/docs/architecture/loop-passes-port.md)).
 //! - D8 No `LoopInfo`, `DominatorTree`, `ScalarEvolution` or `AssumptionCache`
@@ -95,15 +99,20 @@ pub struct Exit {
     pub trip_count: u32,
 }
 
-/// `UnrollLoopOptions`, for a complete unroll.
+/// `UnrollLoopOptions`, for a complete or a remainder-free partial unroll.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Options {
-    /// Copies of the loop: its maximum trip count.
+    /// Copies of the loop: its maximum trip count, or a divisor of
+    /// `trip_multiple` for a partial unroll.
     pub count: u32,
     /// `getSmallConstantMaxTripCount(L)`; 0 where unknown.
     pub max_trip_count: u32,
     /// `isBackedgeTakenCountMaxOrZero(L)`.
     pub max_or_zero: bool,
+    /// `getSmallConstantTripMultiple`: the trip count is a multiple of this
+    /// (1 where unknown). A copy count under the maximum trip count must divide
+    /// it: there is no remainder.
+    pub trip_multiple: u32,
     pub exits: Vec<Exit>,
 }
 
@@ -115,6 +124,9 @@ pub enum Unrolled {
     Fully,
     /// `LoopUnrollResult::PartiallyUnrolled`: the loop was peeled.
     Peeled,
+    /// `LoopUnrollResult::PartiallyUnrolled`: the body is copied `count`
+    /// times and the loop goes round `trip count / count` times.
+    Partially,
 }
 
 struct ExitInfo {
@@ -155,8 +167,14 @@ pub fn unroll_loop_blocks(
     options: &Options,
     emptied_blocks: &mut Vec<BlockId>,
 ) -> Result<Unrolled, String> {
-    if options.count == 0 || options.max_trip_count == 0 || options.count != options.max_trip_count {
-        return Err("a complete unroll's count is the maximum trip count (D2)".to_owned());
+    // A complete unroll copies the loop its maximum trip count times; a
+    // partial one a count that divides the trip multiple (no remainder: D2).
+    let complete = options.count != 0 && options.count == options.max_trip_count;
+    if options.count == 0 {
+        return Err("an unroll's count is not 0".to_owned());
+    }
+    if !complete && (options.count < 2 || options.trip_multiple % options.count != 0) {
+        return Err("a partial unroll's count divides the trip multiple (D2)".to_owned());
     }
     let inside = |at: BlockId| body.contains(&at);
     let outside_predecessors = function.predecessors(header).into_iter().filter(|&at| !inside(at)).collect::<Vec<_>>();
@@ -298,8 +316,24 @@ pub fn unroll_loop_blocks(
         function.set_operands(phi, from_arms(&incoming));
     }
 
+    // A partial unroll keeps the header's phis: the back edge now comes from
+    // the last copy of the latch, with what that copy computed.
+    if !complete {
+        let last_latch = *latches.last().expect("a latch per iteration");
+        for &phi in &header_phis {
+            let mut incoming = arms(function, phi);
+            for arm in incoming.iter_mut().filter(|(_, source)| *source == latch) {
+                if let Operand::Value(one) = arm.0 {
+                    arm.0 = last_value.get(&one).copied().unwrap_or(arm.0);
+                }
+                arm.1 = last_latch;
+            }
+            function.set_operands(phi, from_arms(&incoming));
+        }
+    }
+
     // The original header's phis are the preheader's values.
-    for &phi in &header_phis {
+    for &phi in header_phis.iter().filter(|_| complete) {
         let value = function.instruction(phi).result.expect("a phi's value");
         let entry = arms(function, phi)
             .into_iter()
@@ -328,7 +362,11 @@ pub fn unroll_loop_blocks(
         let size = info.copies.len();
         for (index, &source) in info.copies.iter().enumerate() {
             let next = (index + 1) % size;
-            let known = if preserve_only_first {
+            let known = if !complete {
+                // Only the latch test of the last copy can end the loop where
+                // the trip multiple is a multiple of the count.
+                (is_latch && next != 0 && options.trip_multiple % options.count == 0).then_some(false)
+            } else if preserve_only_first {
                 (index != 0).then_some(next == 0)
             } else if next == 0 {
                 Some(true)
@@ -351,7 +389,7 @@ pub fn unroll_loop_blocks(
     }
 
     // The last copy's jump back to the header can no longer be taken.
-    if !latch_is_exiting {
+    if complete && !latch_is_exiting {
         let last = *latches.last().expect("a latch per iteration");
         _unreachable(function, last)?;
     }
@@ -372,7 +410,7 @@ pub fn unroll_loop_blocks(
         }
     }
     emptied_blocks.extend(emptied);
-    Ok(Unrolled::Fully)
+    Ok(if complete { Unrolled::Fully } else { Unrolled::Partially })
 }
 
 /// The blocks outside `blocks` that `blocks` jump to.
