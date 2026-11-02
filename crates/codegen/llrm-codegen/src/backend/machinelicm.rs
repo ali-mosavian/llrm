@@ -387,11 +387,14 @@ pub fn hoisted(
                             && one.requires.is_empty()
                             && one.delivers.is_empty()
                             && crate::greedy::remat::is_trivially_re_materializable(one, false)
-                            // DEVIATE LICM1: at -Os the constant is one
+                            // DEVIATE LICM1 (pin: MachineLICM.cpp L1304,
+                            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1304,
+                            // always hoists): at -Os the constant is one
                             // instruction in the loop or one before it, so
                             // hoisting saves no bytes and its register can
-                            // cost a push or a spill. Exit: none while the
-                            // bar is bytes.
+                            // cost a push or a spill. Exit 2026-11-20: when
+                            // the greedy allocator makes a hoisted constant
+                            // again at its uses, re-measure -Os and drop.
                             && !size
                     });
                     if constant && !movable {
