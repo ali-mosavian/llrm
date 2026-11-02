@@ -403,7 +403,24 @@ md:	ld	21(iy),a
 	xor	a,7(iy)
 	and	a,#0x80
 	ld	10(iy),a
-	ld	a,8(iy)		; a NaN operand
+	ld	a,8(iy)		; both normal: no special case, nothing to normalize
+	inc	a
+	cp	a,#2
+	jr	c,mdsp
+	ld	a,9(iy)
+	inc	a
+	cp	a,#2
+	jr	c,mdsp
+	set	7,2(iy)
+	set	7,6(iy)
+	xor	a,a
+	ld	12(iy),a
+	ld	20(iy),a
+	ld	a,21(iy)
+	dec	a
+	jp	z,mulnrm
+	jp	divnrm
+mdsp:	ld	a,8(iy)		; a NaN operand
 	inc	a
 	jr	nz,1$
 	ld	a,2(iy)
@@ -532,6 +549,7 @@ unp:	ld	a,2(iy)
 	jr	5$
 
 mulgo:	call	unp
+mulnrm:
 	ld	a,8(iy)		; e = ea + eb - 127 - na - nb
 	add	a,9(iy)
 	ld	c,a
@@ -596,6 +614,7 @@ m8:	.rept	8		; eight multiplier bits from d; the add carry enters the next rr ch
 	ret
 
 divgo:	call	unp
+divnrm:
 	ld	a,8(iy)		; e = ea - eb + 126 + nb - na
 	sub	a,9(iy)
 	ld	c,a
@@ -755,129 +774,95 @@ flent:	ld	iy,#-24
 
 	.globl __fixsfsi
 __fixsfsi:
-	ld	a,#1
+	ld	c,#1
 	jr	fixent
 	.globl __fixunssfsi
 __fixunssfsi:
-	xor	a,a
-fixent:	ld	iy,#-24
-	add	iy,sp
-	ld	sp,iy
-	ld	21(iy),a
-	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
-	ld	a,3(iy)
+	ld	c,#0
+fixent:	ld	a,d		; c: bit 7 the sign, bit 0 signed; no frame
 	and	a,#0x80
-	ld	10(iy),a
-	ld	a,2(iy)
+	or	a,c
+	ld	c,a
+	ld	a,e
 	add	a,a
-	ld	a,3(iy)
+	ld	a,d
 	adc	a,a
-	ld	8(iy),a
-	inc	a
-	jr	nz,1$
-	ld	a,2(iy)		; NaN gives 0
-	and	a,#0x7f
-	or	a,1(iy)
-	or	a,0(iy)
-	jp	nz,retzero32
-1$:	ld	a,8(iy)
 	cp	a,#127		; |x| < 1
-	jp	c,retzero32
-	cp	a,#159		; |x| >= 2^32
-	jp	nc,big
-	ld	a,2(iy)
-	and	a,#0x7f
-	or	a,#0x80
-	ld	2(iy),a
-	ld	3(iy),#0
-	ld	l,0(iy)		; shift in registers
-	ld	h,1(iy)
-	ld	e,2(iy)
+	jr	c,fzero
+	cp	a,#159		; |x| >= 2^32, inf, NaN
+	jr	nc,fbig
+	set	7,e
 	ld	d,#0
-	ld	a,8(iy)
-	sub	a,#150		; by e - 23
-	jr	z,22$
-	jr	c,55$
+	sub	a,#150		; shift by e - 23
+	jr	z,fsign
+	jr	c,frt
 	ld	b,a
-11$:	add	hl,hl
+1$:	add	hl,hl
 	rl	e
 	rl	d
-	djnz	11$
-	jr	22$
-55$:	neg
-	ld	b,a
-	cp	a,#8
-	jr	c,33$
-44$:	ld	l,h		; whole bytes first
+	djnz	1$
+	jr	fsign
+frt:	neg
+2$:	cp	a,#8		; whole bytes first
+	jr	c,3$
+	ld	l,h
 	ld	h,e
 	ld	e,d
-	ld	d,#0
-	ld	a,b
 	sub	a,#8
+	jr	2$
+3$:	or	a,a
+	jr	z,fsign
 	ld	b,a
-	cp	a,#8
-	jr	nc,44$
-	or	a,a
-	jr	z,22$
-33$:	srl	d
-	rr	e
+4$:	srl	e
 	rr	h
 	rr	l
-	djnz	33$
-22$:	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
-mdone:	ld	a,21(iy)
-	or	a,a
-	jr	z,uns
-	bit	7,10(iy)
-	jr	nz,sneg
-	bit	7,3(iy)
-	jr	nz,imax
-	jr	retm
-sneg:	bit	7,3(iy)
-	jr	nz,imin
+	djnz	4$
+fsign:	bit	0,c
+	jr	z,funs
+	bit	7,d		; 2^31 or more
+	jr	nz,fsat
+	bit	7,c
+	jr	z,fret
 	xor	a,a
-	sub	a,0(iy)
-	ld	0(iy),a
+	sub	a,l
+	ld	l,a
 	ld	a,#0
-	sbc	a,1(iy)
-	ld	1(iy),a
+	sbc	a,h
+	ld	h,a
 	ld	a,#0
-	sbc	a,2(iy)
-	ld	2(iy),a
+	sbc	a,e
+	ld	e,a
 	ld	a,#0
-	sbc	a,3(iy)
-	ld	3(iy),a
-	jr	retm
-uns:	bit	7,10(iy)
-	jr	nz,retzero32
-	jr	retm
-big:	ld	a,21(iy)
-	or	a,a
-	jr	z,ubig
-	bit	7,10(iy)
-	jr	nz,imin
-imax:	ld	hl,#0xffff
-	ld	de,#0x7fff
-	jp	done
-imin:	ld	hl,#0
-	ld	de,#0x8000
-	jp	done
-ubig:	bit	7,10(iy)
-	jr	nz,retzero32
-	ld	hl,#0xffff
-	ld	de,#0xffff
-	jp	done
-retm:	ld	l,0(iy)
-	ld	h,1(iy)
-	ld	e,2(iy)
-	ld	d,3(iy)
-	jp	done
+	sbc	a,d
+	ld	d,a
+fret:	ex	de,hl
+	ret
+funs:	bit	7,c
+	jr	z,fret
+fzero:	ld	hl,#0
+	ld	d,h
+	ld	e,l
+	ret
+fbig:	inc	a		; NaN gives 0
+	jr	nz,fsat
+	ld	a,e
+	and	a,#0x7f
+	or	a,h
+	or	a,l
+	jr	nz,fzero
+fsat:	bit	7,c
+	jr	nz,5$
+	ld	hl,#0x7fff		; the largest: 0x7fffffff, or 0xffffffff unsigned
+	bit	0,c
+	jr	nz,6$
+	ld	h,l
+6$:	ld	de,#0xffff
+	ret
+5$:	bit	0,c		; negative: 0x80000000, or 0 unsigned
+	jr	z,fzero
+	ld	hl,#0x8000
+	ld	de,#0
+	ret
 retzero32:
 	ld	hl,#0
 	ld	d,h
