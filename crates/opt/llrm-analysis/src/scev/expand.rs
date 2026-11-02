@@ -719,6 +719,16 @@ impl Run<'_> {
         s: Scev,
         ops: &[Use],
     ) -> Operand {
+        // Recognize the canonical representation of an unsimplified urem.
+        let urem = {
+            let cx = cx!(self);
+            self.se.match_urem(&cx, s)
+        };
+        if let Some((lhs, rhs)) = urem {
+            let lhs = self.expand(lhs);
+            let rhs = self.expand(rhs);
+            return self.insert_binop(BinaryOp::URem, lhs, rhs, flags::NONE, false);
+        }
         let wrap = self.se.get_no_wrap_flags(s, flags::NUW | flags::NSW);
         let all = self.ops_and_loops(ops);
         let mut sum: Option<Operand> = None;
