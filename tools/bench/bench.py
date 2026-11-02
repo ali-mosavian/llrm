@@ -486,17 +486,18 @@ def net_times(measured: dict) -> dict:
 def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Path) -> dict:
     """The kernel's 486 clocks, from the emulator that prices the flat image (tools/bench/flatcount.py). The emulator counts every
     instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE, DOSBox's repeated string instructions counted as it does: flatcount.DOSBOX_REP_SLICE), and a price of another run is no price. Reported, not gated."""
-    if instructions > flatcount.LIMIT // 2:
+    limit = int(os.environ.get("LLRM_FLAT_LIMIT") or flatcount.LIMIT)  # raised for the cells the default cap cannot reach (grep: 642M instructions), the same for main and tip
+    if instructions > limit // 2:
         print(f"WARNING {key}: no clocks: {instructions} instructions are too many to emulate", file=sys.stderr)
         return {}
-    ran = flatcount.run(image, region.upper(), cwd)
+    ran = flatcount.run(image, region.upper(), cwd, limit)
     if ran.error or ran.region is None:
         print(f"WARNING {key}: no clocks: {ran.error}", file=sys.stderr)
         return {}
     if not flatcount.agrees(ran.region.instructions, instructions, ran.rep_iterations):
         print(f"WARNING {key}: no clocks: the emulator counted {ran.region.instructions} instructions, DOSBox {instructions}", file=sys.stderr)
         return {}
-    return {"clocks": ran.region.clocks}
+    return {"clocks": ran.region.clocks, **({"emu_limit": limit} if limit != flatcount.LIMIT else {})}
 
 
 def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
@@ -778,6 +779,8 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
     only when bytes and clocks both equal the base's. A cell without clocks on either side is strict on every metric."""
     if want is None:
         return []
+    if want.get("instructions") == 0 and "error" not in got:  # a base that executed nothing is no base: parity/control Os read 0 on main and 158 B was compared
+        return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
     problems = []
@@ -792,6 +795,8 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         if counter not in got:
             continue
         if counter not in want:
+            if counter in COUNTERS:  # a base without it ran no strict check on it: the gate would pass on a number never compared
+                problems.append(f"{label}: base has no {counter} (not judged; regenerate the base)")
             continue
         if priced and counter in ("instructions", "memory_operands", "clocks", "code_bytes"):
             continue
@@ -1126,6 +1131,12 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+        args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
+    print("HARNESS", basecounts.harness_digest())
+    unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
+    if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
+        print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")
+        return 1
     if args.record:
         import measure
 
@@ -1158,6 +1169,7 @@ def main() -> int:
         judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
         problems += uncovered
         print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
+        print(*basecounts.coverage_detail(measured, base, same), sep="\n")
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")

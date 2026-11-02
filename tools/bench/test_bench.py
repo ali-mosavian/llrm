@@ -1020,12 +1020,12 @@ def test_compare_baselines_refuses_two_runs_that_differ_and_names_the_cells(tmp_
 
 def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_it():
     """With a size-guard candidate parity/control bas and bq16 read 0 instructions (the kernel inlined into the harness) and passed the gate as
-    -100%. A kernel that executes nothing measures nothing; a base that also folded it is not accused."""
+    -100%. A kernel that executes nothing measures nothing; a base that also folded it is no base: the cell is flagged, not compared (oversight, 11-02)."""
     import bench
 
     out = bench.against("control bas -Os", {"instructions": 0, "code_bytes": 100}, {"instructions": 156, "code_bytes": 246})
     assert len(out) == 1 and "INVALID" in out[0], out
-    assert bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0}) == []
+    assert any("INVALID BASE" in one for one in bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0})), "a base that ran nothing is no base, even when the head ran nothing too"
     assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
 
 
@@ -1108,6 +1108,44 @@ def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_and_o3(tmp_path, m
     assert bench.rate_for("c", "O2") == 0
     sheet.write_text("cache_line - =\n")
     assert bench.rate_for("c", "O2") == 0
+
+
+def test_a_base_without_memory_operands_is_flagged_not_passed():
+    """The base file lacked memory_operands, so the -Os strict memory check never ran and every row passed it: the gate compared one metric of two."""
+    problems = bench.against("queens c -Os", {"instructions": 100, "memory_operands": 90}, {"instructions": 100})
+    assert any("base has no memory_operands" in one for one in problems)
+
+
+def test_the_emulation_cap_can_be_raised_for_cells_the_default_cannot_reach(monkeypatch, tmp_path):
+    """grep bq32 runs 642M instructions: above the cap's half, so its clocks were missing on both sides and the cell was judged on the rest. LLRM_FLAT_LIMIT raises the cap for one run and the row says which."""
+    from types import SimpleNamespace
+
+    ran = SimpleNamespace(error=None, region=SimpleNamespace(instructions=642_000_000, clocks=1234), rep_iterations=0)
+    monkeypatch.setattr(bench.flatcount, "run", lambda image, region, cwd, limit=bench.flatcount.LIMIT: ran)
+    monkeypatch.setattr(bench.flatcount, "agrees", lambda *a: True)
+    monkeypatch.delenv("LLRM_FLAT_LIMIT", raising=False)
+    assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {}
+    monkeypatch.setenv("LLRM_FLAT_LIMIT", "2000000000")
+    assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {"clocks": 1234, "emu_limit": 2000000000}
+
+
+def test_a_base_that_executed_zero_instructions_is_no_base():
+    """parity/control Os read 0 instructions on main (the kernel folded away) and its 158 B was handed to the compare as the base: the head's +108 B looked like a regression of a program that never ran."""
+    problems = bench.against("parity/control bq16 -Os", {"instructions": 147, "code_bytes": 285}, {"instructions": 0, "code_bytes": 157})
+    assert any("INVALID BASE" in one for one in problems)
+
+
+def test_a_leg_with_cells_that_did_not_build_exits_nonzero_and_names_them(tmp_path, capsys):
+    """w9's dist had no jwasm: all 4 cells were 'build: jwasm: not found', the leg wrote a JSON of errors and exited 0, and the corpus driver logged rc=0."""
+    from unittest import mock
+
+    measured = {("p", "c", "O2"): {"error": "build: jwasm: sh: 1: exec: /d/jwasm: not found"}, ("p", "c", "Os"): {"code_bytes": 9, "data_bytes": 0, "bss_bytes": 0}}
+    with mock.patch.object(bench, "measure_all", return_value=measured), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "O2", "Os", "--json", str(tmp_path / "leg.json"), "p"]):
+        assert bench.main() == 1
+    out = capsys.readouterr().out
+    assert "NOHEAD 1 cells did not build:" in out and "p/c/O2: build: jwasm" in out
+    with mock.patch.object(bench, "measure_all", return_value={("p", "c", "Os"): measured[("p", "c", "Os")]}), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "Os", "--json", str(tmp_path / "ok.json"), "p"]):
+        assert bench.main() == 0
 
 
 def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
