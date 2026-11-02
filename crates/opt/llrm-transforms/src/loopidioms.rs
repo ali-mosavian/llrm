@@ -836,10 +836,11 @@ pub(crate) fn fills_pay(
     // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
     // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
-    // At speed under a clock price (m16 -O2: 1 clock = 2 B) the bytes are in
-    // the price: a fill larger than the loop still pays for the clocks it
-    // saves. At -Os the bytes decide first.
-    (stores < 2 || (at_speed && clocks.is_some()) || fills_cheaper(loop_bytes, fills, costs.fill))
+    // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
+    // known, the bytes are in the price: a fill larger than the loop still pays
+    // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
+    let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
             // backend prices a memset's fill against its stores. The loop
