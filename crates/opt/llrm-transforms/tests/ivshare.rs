@@ -141,3 +141,30 @@ fn the_end_form_predicate_reads_a_hand_written_end_form() {
     let limit = end.replace("%lsr.iv.next, 0", "%lsr.iv.next, %n");
     assert!(!has_end_form(&loop_block(&limit)));
 }
+
+/// The instrument under each configuration: a loop already in the end form
+/// stays one through `reduced`, and the constant-trip shape (B09) is rewritten
+/// into it at 16 and 32 bits. At 64 bits LSR turns a given end form back into
+/// the zero-based index and a compare against the constant (the pin's choice:
+/// the compare macro-fuses, so the zero test saves nothing), so no shape
+/// reaches the end form there until the zero test is priced (S3, H10).
+#[test]
+fn each_configuration_reads_the_end_form_it_makes_or_is_given() {
+    for (width, ty) in [("p16", "i16"), ("p32", "i32"), ("p64", "i64")] {
+        let layout = fs::read_to_string(root().join("shapes").join(format!("B09.{width}.ll")))
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_owned();
+        let end = format!(
+            "{layout}\ndefine void @f(ptr %p) {{\nentry:\n  br label %loop\nloop:\n  %i = phi {ty} [ -400, %entry ], [ %next, %loop ]\n  %a = getelementptr i8, ptr %p, {ty} %i\n  %b = getelementptr i8, ptr %a, {ty} 400\n  store i32 0, ptr %b\n  %next = add nsw {ty} %i, 4\n  %c = icmp eq {ty} %next, 0\n  br i1 %c, label %exit, label %loop\nexit:\n  ret void\n}}\n"
+        );
+        let kept = has_end_form(&loop_block(&reduced(width, &end)));
+        assert_eq!(kept, width != "p64", "{width}: the given end form is kept: {kept}");
+    }
+    for width in ["p16", "p32"] {
+        let text = fs::read_to_string(root().join("shapes").join(format!("B09.{width}.ll"))).unwrap();
+        assert!(has_end_form(&loop_block(&reduced(width, &text))), "{width}: B09 does not reach the end form");
+    }
+}
