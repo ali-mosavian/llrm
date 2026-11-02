@@ -774,13 +774,6 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE LS1: whether the solver tries every formula of the first use
-    /// instead of dropping those that name a register an earlier first-use
-    /// formula held (`VisitedRegs`).
-    fn lsr_searches_exhaustively(&self) -> bool {
-        false
-    }
-
     /// DEVIATE LU5: whether a formula whose base register is a non-affine
     /// addrec of an enclosing loop is charged the induction variables its
     /// expansion keeps live across that loop (one for each order past the

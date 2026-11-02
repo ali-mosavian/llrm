@@ -1131,7 +1131,7 @@ fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
 /// +256 instructions at m16): the first use's formulae hid the counter from
 /// the rest. The byte index ending at zero is one fewer instruction.
 #[test]
-fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero_in_real_mode() {
+fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero() {
     let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
