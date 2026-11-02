@@ -500,12 +500,13 @@ entry:
     }
 }
 
-/// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
-/// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
-/// switches): the target prices no jump table, so the DAG makes compares as the
-/// MIR pass does.
+/// A dense switch at m64 is a jump table of offsets, read through a register
+/// as the pin's PIC code does (`movslq (table,idx,4)`, `add table`, `jmp *`).
+/// It was compares (the target priced no table: `WrapperRIP` of a table
+/// address was `CannotSelect Target(954)`), and a 256-case state machine cost
+/// the allocator 400 M instructions against the pin's 12 M.
 #[test]
-fn a_dense_switch_at_m64_is_compares_not_a_jump_table() {
+fn a_dense_switch_at_m64_is_a_register_jump_through_a_table() {
     let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
 define i32 @f(i32 %x) {
 entry:
@@ -522,7 +523,10 @@ d: ret i32 0
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
+    let insns = done.body.insns();
+    let jumps: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.indirect).collect();
+    assert_eq!(jumps.len(), 1);
+    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some(), "{:?}", jumps[0]);
 }
 
 /// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the

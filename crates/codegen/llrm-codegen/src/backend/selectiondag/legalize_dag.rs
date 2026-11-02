@@ -418,7 +418,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> SDValue {
         let (chain, table, index) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let pointer = self.dag.config().pointer;
-        let entry = pointer.size_in_bits() / 8;
+        // A 64-bit table is position independent: 32-bit offsets from the
+        // table (`EK_LabelDifference32`), a pointer's worth of entry otherwise.
+        let relative = pointer == EVT::I64;
+        let entry = if relative { 4 } else { pointer.size_in_bits() / 8 };
         let index_vt = self.dag.value_type(index);
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
@@ -432,6 +435,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             space: 0,
             ordering: None,
         };
+        if relative {
+            let info = MemInfo { mem_vt: EVT::I32, ..info };
+            let offset = self.dag.get_ext_load(super::actions::LoadExt::SExtLoad, pointer, chain, address, info);
+            // `getPICJumpTableRelocBase`: the table itself at 64 bits.
+            let target = self.dag.get_node(ISD::Add, pointer, &[offset, table]);
+            return self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: offset.node, res: 1 }, target]);
+        }
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }

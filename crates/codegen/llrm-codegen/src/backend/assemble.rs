@@ -454,7 +454,11 @@ pub fn assembled_by(
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    data.extend(masm::jump_tables(&procedures, &mut names, module));
+    let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
+    data.extend(tables);
+    if !read_only.is_empty() {
+        sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
+    }
     timed("stack checks", || {
         crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch)
     });
