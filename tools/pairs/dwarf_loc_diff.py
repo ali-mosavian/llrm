@@ -8,14 +8,23 @@ refused, never counted as equal: different code has different places.
 import argparse
 import os
 import re
+import resource
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 
+MEMORY_LIMIT = 16 << 30
+
+
+def limit_memory() -> None:
+    """Each run is bounded: one unbounded llc grew to 217 GB and took the box."""
+    resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
+
+
 def run(command: list[str]) -> str:
-    done = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    done = subprocess.run(command, capture_output=True, text=True, timeout=600, preexec_fn=limit_memory)
     if done.returncode != 0:
         raise RuntimeError((done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1][:200])
     return done.stdout
