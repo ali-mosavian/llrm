@@ -66,6 +66,7 @@ pub fn keep_imul(
             }
         }
     }
+    llrm_support::debug!("mulscratch", "{} candidate(s)", candidates.len());
     if candidates.is_empty() {
         return found;
     }
@@ -85,7 +86,9 @@ pub fn keep_imul(
     let view = || spill::View::over(&pressure, context, layout, function, room, &across);
     let base = view().forecast(&costs, &frequency).cost;
     for (inst, result, registers) in candidates {
-        if view().with_scratch(inst, registers).forecast(&costs, &frequency).cost > base {
+        let with = view().with_scratch(inst, registers).forecast(&costs, &frequency).cost;
+        llrm_support::debug!("mulscratch", "{result:?}: {registers} more register(s), price {base} -> {with}");
+        if with > base {
             found.insert(result);
         }
     }
