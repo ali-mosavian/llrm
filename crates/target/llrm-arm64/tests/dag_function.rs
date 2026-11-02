@@ -496,7 +496,7 @@ mod emitted {
     fn machine(body: &str) -> llrm_arm64::mfunc::MFunc {
         let text = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
         let module = llrm_mir::parse::module(&text).expect("parses");
-        emit("f", &select_function(&module, "f").expect("selects")).expect("emits")
+        emit("f", &select_function(&module, "f").expect("selects"), false).expect("emits")
     }
 
     /// Both members of an aggregate phi were copied into one register, so the

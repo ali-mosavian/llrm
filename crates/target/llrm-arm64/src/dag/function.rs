@@ -121,6 +121,9 @@ pub struct Selected {
     pub phis: Vec<PhiCopy>,
     /// The ids of the blocks each of the function's jump tables goes to.
     pub tables: Vec<Vec<u32>>,
+    /// The frame object each source variable lives in (`llvm.dbg.declare` of a
+    /// static `alloca`), by the variable's metadata node.
+    pub declared: Vec<(llrm_mir::MetadataId, u32)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -177,6 +180,14 @@ pub fn select_function_in(
     let mut info = FunctionLoweringInfo::new(function);
     let mut frame = static_frame(module, function, layout, &info)?;
     let mut selected = Vec::new();
+    let declared: Vec<(llrm_mir::MetadataId, u32)> = function
+        .debug_records()
+        .iter()
+        .filter_map(|record| {
+            let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+            Some((record.variable, u32::try_from(*info.static_allocas.get(&address)?).ok()?))
+        })
+        .collect();
     // Each block is built and selected in turn, as the pin does, so a block
     // reads what the blocks before it knew of a register. The blocks a
     // lowering makes (the case blocks of a split `br (or a, b)`) follow the
@@ -245,6 +256,7 @@ pub fn select_function_in(
             successors,
             phis,
             tables: info.jump_tables.clone(),
+            declared: declared.clone(),
         });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
