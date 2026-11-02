@@ -284,52 +284,50 @@ low:	ld	hl,#1		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
 	jr	z,20$
 	set	0,0(iy)
 20$:	ld	bc,#1
-roundp:	ld	a,0(iy)
+roundp:	ld	l,0(iy)		; the mantissa in de:hl
+	ld	h,1(iy)
+	ld	e,2(iy)
+	ld	d,3(iy)
+	ld	a,l
 	and	a,#7
-	ld	d,a
-	ld	e,#3
-21$:	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	dec	e
-	jr	nz,21$
-	ld	a,d
+	ld	13(iy),a	; the three guard bits
+	srl	d
+	rr	e
+	rr	h
+	rr	l
+	srl	d
+	rr	e
+	rr	h
+	rr	l
+	srl	d
+	rr	e
+	rr	h
+	rr	l
+	ld	a,13(iy)
 	cp	a,#5
 	jr	nc,up
 	cp	a,#4
 	jr	nz,noup
-	bit	0,0(iy)
+	bit	0,l
 	jr	z,noup
-up:	ld	a,0(iy)
-	add	a,#1
-	ld	0(iy),a
-	ld	a,1(iy)
-	adc	a,#0
-	ld	1(iy),a
-	ld	a,2(iy)
-	adc	a,#0
-	ld	2(iy),a
-	ld	a,3(iy)
-	adc	a,#0
-	ld	3(iy),a
+up:	inc	hl
+	ld	a,h
+	or	a,l
+	jr	nz,noup
+	inc	de
 noup:	ld	a,c		; add (e - 1) << 23 and the sign
 	dec	a
-	ld	c,a
+	ld	b,a
+	srl	b
 	and	a,#1
 	rrca
-	ld	d,a
-	ld	a,c
-	srl	a
+	add	a,e
 	ld	e,a
-	ld	a,2(iy)
-	add	a,d
-	ld	2(iy),a
-	ld	a,3(iy)
-	adc	a,e
+	ld	a,b
+	adc	a,d
 	or	a,10(iy)
-	ld	3(iy),a
-	jr	reta
+	ld	d,a
+	jp	done
 inf:	ld	a,10(iy)
 	or	a,#0x7f
 	ld	d,a
@@ -755,33 +753,56 @@ flent:	push	hl
 	ld	a,#0
 	sbc	a,3(iy)
 	ld	3(iy),a
-1$:	ld	a,0(iy)
-	or	a,1(iy)
-	or	a,2(iy)
-	or	a,3(iy)
+1$:	ld	l,0(iy)		; the magnitude in de:hl
+	ld	h,1(iy)
+	ld	e,2(iy)
+	ld	d,3(iy)
+	ld	a,d
+	or	a,e
+	or	a,h
+	or	a,l
 	jp	z,retzero32
 	ld	bc,#153		; 127 + 26: the exponent when the leading one is at bit 26
 	ld	13(iy),#0
-2$:	ld	a,3(iy)		; above bit 26: shift right, the lost bits folded into bit 0 at the end
-	and	a,#0xf8
-	jr	z,4$
-	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,3$
-	set	0,13(iy)
-3$:	inc	bc
+2$:	ld	a,d		; a zero top byte moves up whole
+	or	a,a
+	jr	nz,3$
+	ld	d,e
+	ld	e,h
+	ld	h,l
+	ld	l,a
+	ld	a,c
+	sub	a,#8
+	ld	c,a
+	jr	nc,2$
+	dec	b
 	jr	2$
-4$:	bit	2,3(iy)		; below: shift left
-	jr	nz,5$
-	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
+3$:	ld	a,d		; above bit 26: shift right, the lost bits folded into bit 0 at the end
+	and	a,#0xf8
+	jr	z,5$
+4$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,6$
+	set	0,13(iy)
+6$:	inc	bc
+	ld	a,d
+	and	a,#0xf8
+	jr	nz,4$
+	jr	7$
+5$:	bit	2,d		; below: shift left
+	jr	nz,7$
+	add	hl,hl
+	rl	e
+	rl	d
 	dec	bc
-	jr	4$
-5$:	bit	0,13(iy)
+	jr	5$
+7$:	ld	0(iy),l
+	ld	1(iy),h
+	ld	2(iy),e
+	ld	3(iy),d
+	bit	0,13(iy)
 	jp	z,packbc
 	set	0,0(iy)
 	jp	packbc
@@ -837,24 +858,44 @@ fixent:	push	hl
 	or	a,#0x80
 	ld	2(iy),a
 	ld	3(iy),#0
+	ld	l,0(iy)		; shift in registers
+	ld	h,1(iy)
+	ld	e,2(iy)
+	ld	d,#0
 	ld	a,8(iy)
-	sub	a,#150		; shift by e - 23
-	jr	z,mdone
-	jr	c,shr
+	sub	a,#150		; by e - 23
+	jr	z,22$
+	jr	c,55$
 	ld	b,a
-2$:	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
-	djnz	2$
-	jr	mdone
-shr:	neg
+11$:	add	hl,hl
+	rl	e
+	rl	d
+	djnz	11$
+	jr	22$
+55$:	neg
 	ld	b,a
-3$:	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	djnz	3$
+	cp	a,#8
+	jr	c,33$
+44$:	ld	l,h		; whole bytes first
+	ld	h,e
+	ld	e,d
+	ld	d,#0
+	ld	a,b
+	sub	a,#8
+	ld	b,a
+	cp	a,#8
+	jr	nc,44$
+	or	a,a
+	jr	z,22$
+33$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	djnz	33$
+22$:	ld	0(iy),l
+	ld	1(iy),h
+	ld	2(iy),e
+	ld	3(iy),d
 mdone:	ld	a,21(iy)
 	or	a,a
 	jr	z,uns
