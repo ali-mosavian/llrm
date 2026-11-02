@@ -40,7 +40,7 @@
 //! # Runs
 //! At the end of `alloc::emit_with`, before branch relaxation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::asm::{Asm, Flags, Index, Inst, Line, Op, Operand, Registers};
 
@@ -143,18 +143,81 @@ fn retain(
     asm.lines.retain(|_| *keep.next().unwrap());
 }
 
-/// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
-/// goes, unless a branch reads the flags it sets. The values known are the
-/// immediates loaded and the transfers between registers, forgotten at a
-/// label, a call or an instruction not listed.
-pub fn drop_known_loads(asm: &mut Asm) {
-    let mut known: [Option<&str>; 3] = [None; 3];
-    let mut keep = vec![true; asm.lines.len()];
-    for (at, line) in asm.lines.iter().enumerate() {
+/// What `a`, `x` and `y` hold: the immediate they were last loaded with.
+type Known<'a> = [Option<&'a str>; 3];
+
+/// The registers' values at a label, from every branch to it: a value both
+/// edges agree on.
+fn meet<'a>(
+    into: &mut Known<'a>,
+    other: &Known<'a>,
+) {
+    for (one, two) in into.iter_mut().zip(other) {
+        if one != two {
+            *one = None;
+        }
+    }
+}
+
+/// Whether the opcode jumps to the label it names, without a return.
+fn jumps(op: Op) -> bool {
+    op.is_branch() || op == Op::Jmp
+}
+
+/// The labels only branches in this text reach (a function's entry, anything
+/// called, exported or named by a directive is not): a branch's target.
+fn branch_targets(lines: &[Line]) -> Vec<&str> {
+    let mut branched: Vec<&str> = Vec::new();
+    let mut other: Vec<&str> = Vec::new();
+    for line in lines {
+        match line {
+            Line::Inst(Inst { op, operand: Operand::Direct(name) }) if jumps(*op) => branched.push(name),
+            Line::Inst(Inst { operand: Operand::Direct(name), .. }) => other.push(name),
+            _ => {}
+        }
+    }
+    let mut seen_label = false;
+    let mut targets = Vec::new();
+    for line in lines {
+        if let Line::Label(name) = line {
+            let entry = !std::mem::replace(&mut seen_label, true);
+            let named = lines.iter().any(|l| matches!(l, Line::Raw(text) if text.contains(name.as_str())));
+            if !entry && !named && branched.contains(&name.as_str()) && !other.contains(&name.as_str()) {
+                targets.push(name.as_str());
+            }
+        }
+    }
+    targets
+}
+
+/// One walk over `lines` with the values known at each label in `at_label`
+/// (a label no branch reached yet is not there): the loads to drop and to turn
+/// into transfers, and the values each branch carries to its label.
+fn walk<'a>(
+    lines: &'a [Line],
+    targets: &[&str],
+    at_label: &HashMap<&'a str, Known<'a>>,
+) -> (Vec<bool>, Vec<(usize, Op)>, HashMap<&'a str, Known<'a>>) {
+    let mut known: Option<Known<'a>> = Some([None; 3]);
+    let mut keep = vec![true; lines.len()];
+    let mut transfers: Vec<(usize, Op)> = Vec::new();
+    let mut carried: HashMap<&str, Known> = HashMap::new();
+    for (at, line) in lines.iter().enumerate() {
         let Line::Inst(Inst { op, operand }) = line else {
-            known = [None; 3];
+            known = Some(match line {
+                Line::Label(name) if targets.contains(&name.as_str()) => {
+                    // fallen into, and branched to
+                    let mut here = at_label.get(name.as_str()).copied();
+                    if let (Some(fall), Some(here)) = (known.as_ref(), here.as_mut()) {
+                        meet(here, fall);
+                    }
+                    here.or(known).unwrap_or([None; 3])
+                }
+                _ => [None; 3],
+            });
             continue;
         };
+        let mut state = known.unwrap_or([None; 3]);
         let register = match op {
             Op::Lda => Some(0),
             Op::Ldx => Some(1),
@@ -162,33 +225,90 @@ pub fn drop_known_loads(asm: &mut Asm) {
             _ => None,
         };
         let on_a = matches!(operand, Operand::None | Operand::Acc);
+        if jumps(*op)
+            && let Operand::Direct(name) = operand
+            && targets.contains(&name.as_str())
+        {
+            carried.entry(name.as_str()).and_modify(|have| meet(have, &state)).or_insert(state);
+        }
+        // control does not run on past a jump or a return
+        let ends = matches!(op, Op::Bra | Op::Jmp | Op::Rts);
         match (op, register, operand) {
             (_, Some(register), Operand::Imm(value)) => {
-                if known[register] == Some(value) && flags_unread_after(&asm.lines, at + 1) {
+                if state[register] == Some(value.as_str()) && flags_unread_after(lines, at + 1) {
                     keep[at] = false;
+                    known = Some(state);
                     continue;
                 }
-                known[register] = Some(value);
+                // `x` and `y` have no transfer between them
+                let from = match register {
+                    0 => [1, 2].into_iter().find(|&from| state[from] == Some(value.as_str())),
+                    _ => (state[0] == Some(value.as_str())).then_some(0),
+                };
+                if let Some(from) = from {
+                    let op = match (from, register) {
+                        (1, 0) => Op::Txa,
+                        (2, 0) => Op::Tya,
+                        (0, 1) => Op::Tax,
+                        _ => Op::Tay,
+                    };
+                    transfers.push((at, op));
+                }
+                state[register] = Some(value);
             }
-            (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => known[0] = None,
-            (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => known[0] = None,
-            (Op::Ldx | Op::Inx | Op::Dex, ..) => known[1] = None,
-            (Op::Ldy | Op::Iny | Op::Dey, ..) => known[2] = None,
-            (Op::Txa, ..) => known[0] = known[1],
-            (Op::Tya, ..) => known[0] = known[2],
-            (Op::Tax, ..) => known[1] = known[0],
-            (Op::Tay, ..) => known[2] = known[0],
+            (Op::Lda | Op::Pla | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor, ..) => state[0] = None,
+            (Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec, _, _) if on_a => state[0] = None,
+            (Op::Ldx | Op::Inx | Op::Dex, ..) => state[1] = None,
+            (Op::Ldy | Op::Iny | Op::Dey, ..) => state[2] = None,
+            (Op::Txa, ..) => state[0] = state[1],
+            (Op::Tya, ..) => state[0] = state[2],
+            (Op::Tax, ..) => state[1] = state[0],
+            (Op::Tay, ..) => state[2] = state[0],
             // a register's value survives what neither writes it nor leaves
             // the function: stores, compares, branches, memory
             // read-modify-write
             (Op::Cmp | Op::Cpx | Op::Cpy | Op::Bit | Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror, ..) => {
             }
             _ if line.inst().is_some_and(|i| i.flags() == Flags::Keeps) => {}
-            _ if op.opposite().is_some() => {}
-            _ => known = [None; 3],
+            _ if op.is_branch() => {}
+            _ => state = [None; 3],
         }
+        known = (!ends).then_some(state);
+    }
+    (keep, transfers, carried)
+}
+
+/// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
+/// goes, unless a branch reads the flags it sets. One that another register
+/// holds is the 1-byte transfer (`txa` for `lda #0` when `x` is 0: the same
+/// clocks, and the same `N` and `Z`; llvm-mos's
+/// `MOSLateOptimization::combineLdImm` does the same, bar the 65816-only
+/// `x`/`y` transfers). The values known are the immediates loaded and the
+/// transfers between registers, forgotten at a call or an instruction not
+/// listed. At a label only branches in this text reach, they are the values
+/// every incoming edge agrees on (a loop's back edge is found by walking again
+/// until they hold); at any other label they are forgotten.
+pub fn drop_known_loads(asm: &mut Asm) {
+    let Some((keep, transfers)) = decide_known_loads(&asm.lines) else { return };
+    for (at, op) in transfers {
+        asm.lines[at] = Line::Inst(Inst::new(op, Operand::None));
     }
     retain(asm, &keep);
+}
+
+/// The loads to keep and to turn into transfers, once the values at the labels
+/// hold; none if eight walks do not settle them.
+fn decide_known_loads(lines: &[Line]) -> Option<(Vec<bool>, Vec<(usize, Op)>)> {
+    let targets = branch_targets(lines);
+    let mut at_label: HashMap<&str, Known> = HashMap::new();
+    for _ in 0..8 {
+        let (keep, transfers, carried) = walk(lines, &targets, &at_label);
+        if carried == at_label {
+            return Some((keep, transfers));
+        }
+        at_label = carried;
+    }
+    None
 }
 
 /// Whether `line` changes neither a register nor the cell `load` reads: a

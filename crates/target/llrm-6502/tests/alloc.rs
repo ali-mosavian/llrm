@@ -2295,6 +2295,43 @@ fn a_load_of_the_immediate_a_register_holds_goes() {
     assert_eq!(pass(drop_known_loads, branch), branch, "beq reads the flags the load set");
 }
 
+/// `lda #0` while `x` held 0 cost a byte more than `txa` (lz4, +1 B once the
+/// coalescer remade a constant for a copy). The load is the transfer from the
+/// register that holds the constant (llvm-mos `MOSLateOptimization::
+/// combineLdImm`); `x` and `y` have none between them, and
+/// a register that does not hold it is loaded.
+#[test]
+fn a_load_of_what_another_register_holds_is_a_transfer() {
+    use llrm_6502::peephole::drop_known_loads;
+    let transfer = |from: &str, to: &str| pass(drop_known_loads, from) == to;
+    assert!(transfer("  ldx #0\n  sta rc2\n  lda #0\n  sta rc3\n", "  ldx #0\n  sta rc2\n  txa\n  sta rc3\n"));
+    assert!(transfer("  ldy #5\n  lda #5\n", "  ldy #5\n  tya\n"));
+    assert!(transfer("  lda #7\n  ldx #7\n  ldy #7\n", "  lda #7\n  tax\n  tay\n"));
+    let none = "  ldx #0\n  ldy #0\n";
+    assert_eq!(pass(drop_known_loads, none), none, "no transfer between x and y");
+    let other = "  ldx #1\n  lda #0\n";
+    assert_eq!(pass(drop_known_loads, other), other, "x holds another value");
+    assert!(transfer("  ldx #0\n  lda #0\n  beq l\n", "  ldx #0\n  txa\n  beq l\n"), "N and Z are the load's");
+}
+
+/// The `ldx #0` of lz4 reached its `lda #0` over a label that only a branch
+/// of the function jumps to (`bcc pa; inc rc3; pa:`), and the label made the
+/// register unknown: the `lda #0` stayed (+1 B on 3 cells). Both edges say
+/// `x` is 0. A loop's back edge counts (`x` is 0 at the top only if the body
+/// leaves it 0), and a label nothing branches to is still unknown.
+#[test]
+fn a_register_known_on_every_edge_into_a_label_is_known_there() {
+    use llrm_6502::peephole::drop_known_loads;
+    let diamond = "f:\n  ldx #0\n  bcc l\n  inc rc3\nl:\n  lda #0\n";
+    assert_eq!(pass(drop_known_loads, diamond), diamond.replace("lda #0", "txa"));
+    let differ = "f:\n  ldx #0\n  bcc l\n  ldx #1\nl:\n  lda #0\n";
+    assert_eq!(pass(drop_known_loads, differ), differ, "the edges disagree");
+    let keeps = "f:\n  ldx #0\nl:\n  inc rc2\n  bne l\n  lda #0\n";
+    assert_eq!(pass(drop_known_loads, keeps), keeps.replace("lda #0", "txa"), "the body leaves x alone");
+    let counts = "f:\n  ldx #0\nl:\n  inx\n  bne l\n  lda #0\n";
+    assert_eq!(pass(drop_known_loads, counts), counts, "the back edge carries another x");
+}
+
 /// `cmp #0` after a load, an ALU op or a transfer into `a` tested what the
 /// flags already said (`strcpy`, 2 bytes and 2 clocks a trip); a store between
 /// leaves the flags as they were, any other op does not.
