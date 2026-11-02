@@ -325,6 +325,16 @@ pub enum Datum {
     /// A frontend's own item, which Python's untyped `Module.data` carries
     /// through: QB's `_SegmentWord`, a `dw seg name` only its writer encodes.
     SegmentWord(String),
+    /// A four-byte `name - base`, a position-independent jump table's entry
+    /// (`.long .LBB0_6-.LJTI0_0`).
+    Difference(Difference),
+}
+
+/// `name - base` in four bytes: both labels of one module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Difference {
+    pub name: String,
+    pub base: String,
 }
 
 /// The bytes `items` occupy from segment offset `from` (an `Align` pads to a
@@ -341,6 +351,7 @@ pub fn data_size(
         Datum::Align(_) => at,
         Datum::Bytes(bytes) => at + bytes.len() as i64,
         Datum::SegmentWord(_) => at + 2,
+        Datum::Difference(_) => at + 4,
     }) - from
 }
 
@@ -536,20 +547,51 @@ pub fn jump_tables(
         let jumps =
             procedure.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.as_ref());
         for what in jumps.filter(|what| what.op == Operation::Jump && what.indirect && !what.table.is_empty()) {
-            let Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })) = what.sources.first() else { continue };
-            let name = format!("$J{}", addr.index);
-            names.insert((Space::Segment, addr.index), name.clone());
+            let index = match (what.sources.first(), what.table_id) {
+                (Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })), _) => addr.index,
+                (_, Some(id)) => id,
+                _ => continue,
+            };
+            let name = format!("$J{index}");
+            names.insert((Space::Segment, index), name.clone());
             out.push(Datum::Object(Label { name }));
-            out.extend(
-                what.table
-                    .iter()
-                    .map(
-                        |&target| Datum::Pointer(Pointer { name: label(number, target), offset: 0, far: false, bytes }),
-                    ),
-            );
+            // A table read through a register is position independent: its
+            // entries are offsets from the table.
+            let relative = what.table_id.is_some() && !matches!(what.sources.first(), Some(Loc::Mem(_)));
+            out.extend(what.table.iter().map(|&target| {
+                if relative {
+                    Datum::Difference(Difference { name: label(number, target), base: format!("$J{index}") })
+                } else {
+                    Datum::Pointer(Pointer { name: label(number, target), offset: 0, far: false, bytes })
+                }
+            }));
         }
     }
     out
+}
+
+/// The tables of `tables` (from [`jump_tables`]) that are position independent,
+/// each 4-aligned, and the others: a table of differences is never written, so
+/// it goes in the read-only data (`.rodata`) as the pin's.
+pub fn split_read_only(tables: Vec<Datum>) -> (Vec<Datum>, Vec<Datum>) {
+    let (mut read_only, mut writable) = (Vec::new(), Vec::new());
+    let mut group: Vec<Datum> = Vec::new();
+    let mut flush = |group: &mut Vec<Datum>| {
+        if matches!(group.get(1), Some(Datum::Difference(_))) {
+            read_only.push(Datum::Align(Align { to: 4 }));
+            read_only.append(group);
+        } else {
+            writable.append(group);
+        }
+    };
+    for datum in tables {
+        if matches!(datum, Datum::Object(_)) {
+            flush(&mut group);
+        }
+        group.push(datum);
+    }
+    flush(&mut group);
+    (read_only, writable)
 }
 
 pub fn datum(item: &Datum) -> Vec<String> {
@@ -574,6 +616,7 @@ pub fn datum(item: &Datum) -> Vec<String> {
         Datum::Bytes(item) => _code(&[InlinePart::Bytes(item.clone())]),
         // `_code((item,))` yields nothing for an item it cannot match.
         Datum::SegmentWord(_) => Vec::new(),
+        Datum::Difference(Difference { name, base }) => vec![format!("    dd {name} - {base}")],
     }
 }
 
