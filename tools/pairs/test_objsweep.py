@@ -132,3 +132,31 @@ def test_a_sweep_where_no_cell_compiles_is_no_evidence_not_a_pass(tmp_path, caps
     args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
     assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 2
     assert "NO EVIDENCE" in capsys.readouterr().out
+
+
+def test_the_arm64_debug_leg_passes_g_so_a_changed_debug_byte_is_a_changed_object(tmp_path):
+    """`--arm64 --debug` never passed -g: the .debug_* sections were not compared and a changed DW_FORM byte read 0 changed."""
+    (tmp_path / "x.ll").write_text("; DICompileUnit\n")
+
+    def llc(directory, byte):
+        (tmp_path / directory).mkdir()
+        stub = tmp_path / directory / "llrm-arm64-llc"
+        stub.write_text(f'#!/bin/sh\ng=0\nfor a in "$@"; do [ "$a" = -g ] && g=1; done\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ [ $g = 1 ] && printf {byte} > "$a" || printf obj > "$a"; next=; }};; esac; done\nexit 0\n')
+        stub.chmod(0o755)
+        return str(tmp_path / directory / "llrm-cc")
+
+    args = type("A", (), {"old": llc("o", "A"), "new": llc("n", "B"), "jobs": 1, "debug": True})()
+    assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 1
+
+
+def test_an_arm64_debug_leg_over_sources_without_debug_info_is_no_evidence(tmp_path, capsys):
+    """A -g leg over .ll files with no !DI nodes compares objects with no debug sections: identical, and proves nothing."""
+    (tmp_path / "x.ll").write_text("define void @f() { ret void }\n")
+    for directory in ("o", "n"):
+        (tmp_path / directory).mkdir()
+        stub = tmp_path / directory / "llrm-arm64-llc"
+        stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf obj > "$a"; next=; };; esac; done\nexit 0\n')
+        stub.chmod(0o755)
+    args = type("A", (), {"old": str(tmp_path / "o" / "llrm-cc"), "new": str(tmp_path / "n" / "llrm-cc"), "jobs": 1, "debug": True})()
+    assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 2
+    assert "NO EVIDENCE" in capsys.readouterr().out

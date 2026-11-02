@@ -90,9 +90,9 @@ def compile_one(binary: str, source: Path, target: str, level: str, out: Path, i
     return run_compiler(command, out, writers, environment)
 
 
-def compile_arm64(binary: str, source: Path, out: Path, writers: dict[str, str] | None = None) -> tuple[bytes | None, str]:
-    """`llrm-arm64-llc` on a `.ll` file: the object of its triple's platform (Mach-O or ELF), and with `writers` the other format's too."""
-    return run_compiler([binary, "-o", str(out), str(source)], out, writers)
+def compile_arm64(binary: str, source: Path, out: Path, writers: dict[str, str] | None = None, debug: bool = False) -> tuple[bytes | None, str]:
+    """`llrm-arm64-llc` on a `.ll` file: the object of its triple's platform (Mach-O or ELF), and with `writers` the other format's too; `debug` asks for `-g`."""
+    return run_compiler([binary, *(["-g"] if debug else []), "-o", str(out), str(source)], out, writers)
 
 
 def summary(changed: list[tuple[str, int, int]], top: int = 5) -> list[str]:
@@ -166,12 +166,16 @@ def sweep_arm64(args, sources: list[Path]) -> int:
     if missing:
         print(f"objsweep --arm64: no llrm-arm64-llc at {', '.join(missing)}: the arm64 objects were NOT compared")
         return 1
+    debug = getattr(args, "debug", False)
+    if debug and not any("DICompileUnit" in source.read_text(errors="replace") for source in sources):
+        print("objsweep --arm64 --debug: NO EVIDENCE: no source carries debug info (!DICompileUnit), so no object has a .debug_* section to compare")
+        return 2
     scratch = Path(tempfile.mkdtemp(prefix="objsweep-arm64-"))
 
     def run(source):
         old_writers, new_writers = {}, {}
-        old = compile_arm64(old_bin, source, scratch / f"{source.stem}.old.o", old_writers)
-        new = compile_arm64(new_bin, source, scratch / f"{source.stem}.new.o", new_writers)
+        old = compile_arm64(old_bin, source, scratch / f"{source.stem}.old.o", old_writers, debug)
+        new = compile_arm64(new_bin, source, scratch / f"{source.stem}.new.o", new_writers, debug)
         return source, old, new, old_writers, new_writers
 
     changed, failed, same = [], [], 0
