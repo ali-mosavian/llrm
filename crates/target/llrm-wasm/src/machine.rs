@@ -19,7 +19,36 @@ use std::rc::Rc;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts, Tuning};
-use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
+use llrm_mir::tti::{
+    ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty, base_intrinsic_cost,
+    is_free_intrinsic,
+};
+
+/// The pin's price of each scalar intrinsic by cost kind, `python3
+/// tti_intrinsics_oracle.py`: lines `kind name cost`, sorted by byte.
+const INTRINSIC_PRICES: &str = include_str!("tti_intrinsics.txt");
+
+/// The price of `name` under `kind`; none when the table has no row.
+fn intrinsic_price(
+    kind: &str,
+    name: &str,
+) -> Option<i64> {
+    let key = || kind.bytes().chain([b' ']).chain(name.bytes()).chain([b' ']);
+    let key_len = kind.len() + name.len() + 2;
+    let (mut low, mut high) = (0, INTRINSIC_PRICES.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = INTRINSIC_PRICES[low..middle].rfind('\n').map_or(low, |at| low + at + 1);
+        let end = INTRINSIC_PRICES[start..].find('\n').map_or(INTRINSIC_PRICES.len(), |at| start + at);
+        let line = &INTRINSIC_PRICES[start..end];
+        match line.bytes().take(key_len).cmp(key()) {
+            std::cmp::Ordering::Less => low = end + 1,
+            std::cmp::Ordering::Greater => high = start,
+            std::cmp::Ordering::Equal => return line[key_len..].trim_end().parse().ok(),
+        }
+    }
+    None
+}
 
 /// The wasm cost model the passes of the mid-end read.
 #[derive(Clone, Debug, Default)]
@@ -211,6 +240,29 @@ impl Tti for Wasm {
     ) -> Cost {
         Basic.arithmetic_cost(op, ty, kind, left, right)
     }
+
+    /// `BasicTTIImplBase::getIntrinsicInstrCost`: the pin's `opt` priced each
+    /// scalar intrinsic (`fmuladd` is an `fmul` and an `fadd`). One it has no
+    /// row for keeps the base answer.
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        _ret: Option<Ty>,
+        _args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        let kind = match kind {
+            CostKind::RecipThroughput => "throughput",
+            CostKind::Latency => "latency",
+            CostKind::CodeSize => "code-size",
+            CostKind::SizeAndLatency => "size-latency",
+        };
+        match intrinsic_price(kind, name) {
+            Some(cost) => Cost::of(cost),
+            None if is_free_intrinsic(name) => Cost::FREE,
+            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -227,5 +279,16 @@ mod tests {
         assert_eq!(cost(CastKind::SExt, Ty::Int(64), Ty::Int(32)), Some(Cost::FREE));
         assert_eq!(cost(CastKind::ZExt, Ty::Int(32), Ty::Int(1)), None);
         assert_eq!(cost(CastKind::Trunc, Ty::Int(8), Ty::Int(32)), None);
+    }
+
+    /// `llvm.fmuladd` had no price, so a loop that held one could not be
+    /// unrolled (floats -O2: 23,042 instructions against the pin's 16,542).
+    /// The pin prices it as an `fmul` and an `fadd`.
+    #[test]
+    fn an_fmuladd_is_priced_as_a_multiply_and_an_add() {
+        let cost = |name, kind| Wasm.intrinsic_cost(name, None, &[], kind);
+        assert_eq!(cost("llvm.fmuladd.f64", CostKind::CodeSize), Cost::of(2));
+        assert_eq!(cost("llvm.fmuladd.f32", CostKind::RecipThroughput), Cost::of(4));
+        assert_eq!(cost("llvm.lifetime.start.p0", CostKind::CodeSize), Cost::FREE);
     }
 }
