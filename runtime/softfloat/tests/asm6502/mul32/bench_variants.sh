@@ -57,4 +57,8 @@ for v in "" _v2 _v2y _v2b _v3; do
   run "$n" llvmmos_mulsi3$v.s
   $B/clang --target=mos -I$INC -c llvmmos_mulsi3$v.s -o $T/o.o && echo "  routine bytes: $($B/llvm-size $T/o.o | awk 'NR==2{print $1}')"
 done
+# the shipped file src/6502/mulsi3.S, three flag sets
+for f in "" -DSF_MUL_SMALL -DSF_MUL_FAST; do
+  run "mulsi3.S${f:+_}${f#-D}" "$f ../../../src/6502/mulsi3.S"
+done
 rm -r $T
