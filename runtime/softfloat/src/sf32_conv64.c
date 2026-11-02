@@ -70,9 +70,9 @@ static sf32 trunc_bits(sf64 a)
     return sf32_pack(sign, e - 896, (uint32_t)sf_shr_sticky64(m, 26));
 }
 
-float SF_NAME(floatdisf)(int64_t x) { return b2f(from_i64_bits(x)); }
-float SF_NAME(floatundisf)(uint64_t x) { return b2f(from_u64_bits(x)); }
-int64_t SF_NAME(fixsfdi)(float a) { return to_i64_bits(f2b(a)); }
-uint64_t SF_NAME(fixunssfdi)(float a) { return to_u64_bits(f2b(a)); }
-double SF_NAME(extendsfdf2)(float a) { return b2d(ext_bits(f2b(a))); }
-float SF_NAME(truncdfsf2)(double a) { return b2f(trunc_bits(d2b(a))); }
+sf_float SF_NAME(floatdisf)(int64_t x) { return b2f(from_i64_bits(x)); }
+sf_float SF_NAME(floatundisf)(uint64_t x) { return b2f(from_u64_bits(x)); }
+int64_t SF_NAME(fixsfdi)(sf_float a) { return to_i64_bits(f2b(a)); }
+uint64_t SF_NAME(fixunssfdi)(sf_float a) { return to_u64_bits(f2b(a)); }
+sf_double SF_NAME(extendsfdf2)(sf_float a) { return b2d(ext_bits(f2b(a))); }
+sf_float SF_NAME(truncdfsf2)(sf_double a) { return b2f(trunc_bits(d2b(a))); }

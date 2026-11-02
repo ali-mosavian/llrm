@@ -111,18 +111,18 @@ static int cmp_bits(sf32 a, sf32 b)
     return x < y ? -1 : x > y;
 }
 
-float SF_NAME(addsf3)(float a, float b) { return b2f(add_bits(f2b(a), f2b(b))); }
-float SF_NAME(subsf3)(float a, float b) { return b2f(sub_bits(f2b(a), f2b(b))); }
-float SF_NAME(mulsf3)(float a, float b) { return b2f(mul_bits(f2b(a), f2b(b))); }
-float SF_NAME(divsf3)(float a, float b) { return b2f(div_bits(f2b(a), f2b(b))); }
-float SF_NAME(negsf2)(float a) { return b2f(f2b(a) ^ SIGN); }
+sf_float SF_NAME(addsf3)(sf_float a, sf_float b) { return b2f(add_bits(f2b(a), f2b(b))); }
+sf_float SF_NAME(subsf3)(sf_float a, sf_float b) { return b2f(sub_bits(f2b(a), f2b(b))); }
+sf_float SF_NAME(mulsf3)(sf_float a, sf_float b) { return b2f(mul_bits(f2b(a), f2b(b))); }
+sf_float SF_NAME(divsf3)(sf_float a, sf_float b) { return b2f(div_bits(f2b(a), f2b(b))); }
+sf_float SF_NAME(negsf2)(sf_float a) { return b2f(f2b(a) ^ SIGN); }
 
 /* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. */
-int SF_NAME(cmpsf2)(float a, float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? 1 : c; }
-int SF_NAME(eqsf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
-int SF_NAME(nesf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
-int SF_NAME(ltsf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
-int SF_NAME(lesf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
-int SF_NAME(gesf2)(float a, float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? -1 : c; }
-int SF_NAME(gtsf2)(float a, float b) { return SF_NAME(gesf2)(a, b); }
-int SF_NAME(unordsf2)(float a, float b) { return cmp_bits(f2b(a), f2b(b)) == 2; }
+int SF_NAME(cmpsf2)(sf_float a, sf_float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? 1 : c; }
+int SF_NAME(eqsf2)(sf_float a, sf_float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(nesf2)(sf_float a, sf_float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(ltsf2)(sf_float a, sf_float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(gesf2)(sf_float a, sf_float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? -1 : c; }
+int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_NAME(gesf2)(a, b); }
+int SF_NAME(unordsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b)) == 2; }

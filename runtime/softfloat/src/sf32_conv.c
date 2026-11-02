@@ -54,7 +54,7 @@ static uint32_t to_u32_bits(sf32 a)
     return big ? UINT32_MAX : m;
 }
 
-float SF_NAME(floatsisf)(int32_t x) { return b2f(from_i32_bits(x)); }
-float SF_NAME(floatunsisf)(uint32_t x) { return b2f(from_u32_bits(x)); }
-int32_t SF_NAME(fixsfsi)(float a) { return to_i32_bits(f2b(a)); }
-uint32_t SF_NAME(fixunssfsi)(float a) { return to_u32_bits(f2b(a)); }
+sf_float SF_NAME(floatsisf)(int32_t x) { return b2f(from_i32_bits(x)); }
+sf_float SF_NAME(floatunsisf)(uint32_t x) { return b2f(from_u32_bits(x)); }
+int32_t SF_NAME(fixsfsi)(sf_float a) { return to_i32_bits(f2b(a)); }
+uint32_t SF_NAME(fixunssfsi)(sf_float a) { return to_u32_bits(f2b(a)); }
