@@ -1,5 +1,5 @@
 //! An IR alias is a symbol of the object: `@other = alias ..., ptr @impl` puts
-//! `other` at `impl`'s address (~/scratch/handoff/globalalias-plan.md).
+//! `other` at `impl`'s address (the GlobalAlias plan, step 3).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
