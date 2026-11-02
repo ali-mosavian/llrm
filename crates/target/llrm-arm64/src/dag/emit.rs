@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_codegen::model::lir::SrcLoc;
 use llrm_dagisel::generated::aarch64::aarch64_apple_m1::MACHINE_OPCODES;
 use llrm_lir::registers::RegId;
 
@@ -35,7 +36,7 @@ use crate::mc::inst::{
     Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::visit::Reg;
-use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, block_label};
+use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, block_label};
 
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
@@ -1403,9 +1404,13 @@ impl Emitter<'_> {
 }
 
 /// `blocks` of function `name` as a machine function, one block of ops each.
+/// `blocks` of function `name` as a machine function, one block of ops each;
+/// with `lines`, each op carries the source place of the IR instruction its
+/// node was made for (`SDLoc` to `DebugLoc`).
 pub fn emit(
     name: &str,
     blocks: &[Selected],
+    lines: bool,
 ) -> Result<MFunc, String> {
     let first = blocks.first().ok_or("a function with no block")?;
     let mut emitter = Emitter {
@@ -1425,6 +1430,7 @@ pub fn emit(
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
     }
+    emitter.mf.declared.clone_from(&first.declared);
     let mut edges: Vec<MBlock> = Vec::new();
     for (at, block) in blocks.iter().enumerate() {
         emitter.dag = &block.dag;
@@ -1434,14 +1440,23 @@ pub fn emit(
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
         }
+        let mut places: Vec<Option<SrcLoc>> = Vec::new();
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
+                places.resize(emitter.ops.len(), None);
                 emitter.node(node)?;
+                if lines {
+                    let order = block.dag.node(SDValue { node, res: 0 }).order as usize;
+                    let place = block.dag.lines.get(order).copied().flatten();
+                    places.resize(emitter.ops.len(), place);
+                }
             }
         }
         let mut ops = std::mem::take(&mut emitter.ops);
         edges.extend(emitter.phi_edges(block, &mut ops)?);
-        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops: ops.into() });
+        places.resize(ops.len(), None);
+        let ops: OpList = ops.into_iter().zip(places).collect();
+        emitter.mf.blocks.push(MBlock { label: block_label(name, at), ops });
     }
     // The blocks made for critical edges lie after the function's own.
     emitter.mf.blocks.extend(edges);
