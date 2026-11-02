@@ -162,6 +162,41 @@ fn an_unordered_float_code_the_target_expands_is_inverted_swapped_or_split() {
     assert_eq!(compare(CondCode::SetUEq), (ISD::Or, vec![CondCode::SetEq, CondCode::SetUo]));
 }
 
+/// A `UAddO` or `USubO` the target expands was refused ("convert node to
+/// libcall", Z80 `overflow_builtins`). `expandUADDSUBO`: the wrapped
+/// operation and an unsigned compare of its result with an operand, and for
+/// `+ 1` and `+ -1` the compares against 0.
+#[test]
+fn an_unsigned_overflow_op_the_target_expands_is_the_wrapped_op_and_a_compare() {
+    let i16 = EVT::Simple(MVT::I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
+        tli.set_operation_action(op, MVT::I16, Action::Expand);
+    }
+    // the overflow bit of `op a, b` as (compare code, its left operand's
+    // opcode, its right operand is `a`)
+    let overflow = |op: ISD, b: Option<u128>| {
+        let mut dag = dag();
+        let a = dag.get_register(i16, 1);
+        let b = match b {
+            Some(value) => dag.get_constant(value, i16),
+            None => dag.get_register(i16, 2),
+        };
+        let both = dag.get_node_multi(op, &[i16, EVT::I8], &[a, b]);
+        dag.set_root(SDValue { node: both.node, res: 1 });
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::SetCC);
+        let NodeData::CondCode(cc) = dag.node(dag.operand(root, 2)).data else { panic!("no code") };
+        let (left, right) = (dag.operand(root, 0), dag.operand(root, 1));
+        (cc, dag.opcode(left), dag.opcode(right) == ISD::Constant, right == a)
+    };
+    assert_eq!(overflow(ISD::UAddO, None), (CondCode::SetULt, ISD::Add, false, true));
+    assert_eq!(overflow(ISD::USubO, None), (CondCode::SetUGt, ISD::Sub, false, true));
+    assert_eq!(overflow(ISD::UAddO, Some(1)), (CondCode::SetEq, ISD::Add, true, false));
+    assert_eq!(overflow(ISD::UAddO, Some(0xFFFF)), (CondCode::SetNe, ISD::Register, true, false));
+}
+
 /// `frem`, `fsin` and `lrint` marked `LibCall` were refused ("convert node to
 /// libcall"): only the two-operand integer routines were translated. The call
 /// takes every operand of the node, and `lrint` of a double returns an integer.
