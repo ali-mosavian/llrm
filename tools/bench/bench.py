@@ -744,46 +744,64 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     return True
 
 
-def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
+TUNE_486 = ROOT / "machine" / "tune" / "x86" / "i486.toml"  # the CPU the flat clocks are priced for (flatcount.py)
+M16_TIMINGS = ROOT / "crates" / "target" / "llrm-x86-m16" / "src" / "timings.times"
+
+
+def m16_rate() -> int:
+    """The `speed_milliclocks_per_byte` row of the m16 sheet: one price for every CPU column (policy); 0 where the row is absent or the columns disagree."""
+    for line in M16_TIMINGS.read_text().splitlines():
+        cells = line.split()
+        if cells[:1] == ["speed_milliclocks_per_byte"]:
+            values = set(cells[1:])
+            return int(values.pop()) if len(values) == 1 and next(iter(values), "").isdigit() else 0
+    return 0
+
+
+def rate_for(language: str, opt: str) -> int:
+    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`, from the target's own rows: m16 at -O2/-O3 its
+    `speed_milliclocks_per_byte`; the flat x86-32 target at -O2/-O3 the 486's line fill (clocks to fill a line, per byte of line). 0 where the target has
+    none and at -Os."""
+    if language == FLAT and opt in ("O2", "O3"):
+        tune = tomllib.loads(TUNE_486.read_text())
+        return 1000 * tune["line_fill_clocks"] // tune["cache_line"] if "line_fill_clocks" in tune else 0
+    return m16_rate() if language in ("bas", "bq16", "c", "nib") and opt in ("O2", "O3") else 0
+
+
+def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), rate: int = 0) -> list[str]:
     """What fails the gate for one measurement: a count above its baseline (worse) unless a waiver (tools/bench/waivers) names its row,
     counter and this count. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
-    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged."""
+    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged. Clocks (the 486 kernel clocks) are judged like the counts.
+    Where the target prices a byte (`rate`, milliclocks per byte; -O2/-O3), the cell passes when 1000 * delta clocks + rate * delta code bytes <= 0 and
+    clocks, code bytes, instructions and memory operands are not gated alone: they are in the row.
+    Elsewhere (-Os, -O1 aside, and targets without a rate) code bytes and clocks are strict; instructions and memory operands are reported and gate
+    only when bytes and clocks both equal the base's. A cell without clocks on either side is strict on every metric."""
     if want is None:
         return []
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
     problems = []
-    for counter in (*COUNTERS, *SIZES):
+    priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
+    if priced:
+        clocks, size = got["clocks"] - want["clocks"], got["code_bytes"] - want["code_bytes"]
+        if 1000 * clocks + rate * size > 0:
+            problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
+    timed = not priced and all(one in side for one in ("clocks", "code_bytes") for side in (got, want))
+    tied = timed and got["clocks"] == want["clocks"] and got["code_bytes"] == want["code_bytes"]
+    for counter in (*COUNTERS, "clocks", *SIZES):
         if counter not in got:
             continue
         if counter not in want:
+            continue
+        if priced and counter in ("instructions", "memory_operands", "clocks", "code_bytes"):
+            continue
+        if timed and not tied and counter in COUNTERS:
             continue
         if got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
             continue
         if got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
     return problems
-
-
-def clock_limits() -> dict[str, int]:
-    """The -Os m16 rows whose 486 clocks are above main's and may not grow (clock_limits.toml, one debt class each in docs/working/ci.md):
-    row label -> clocks it may reach. A row with none is not judged."""
-    return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
-
-
-def main_clocks() -> dict[str, int]:
-    """Main's -Os m16 clocks per row (main_clocks.toml): what a row may reach without an entry in clock_limits.toml."""
-    return tomllib.loads((Path(__file__).parent / "main_clocks.toml").read_text()).get("clocks", {})
-
-
-def clock_problems(label: str, got: dict, limits: dict[str, int], main: dict[str, int] | None = None) -> list[str]:
-    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's. A row above main's with
-    no entry fails too: without it the first run of a regressed row would be red only by luck of the list."""
-    if label in limits and got.get("clocks", 0) > limits[label]:
-        return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
-    if label not in limits and main and got.get("clocks", 0) > main.get(label, float("inf")):
-        return [f"{label}: clocks {got['clocks']} > main's {main[label]} and no entry in tools/bench/clock_limits.toml"]
-    return []
 
 
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
@@ -832,8 +850,6 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
     each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
-    limits = clock_limits()
-    main = main_clocks()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -856,8 +872,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
-                    problems += against(label, got, want, waived)
-                    problems += clock_problems(label, got, limits, main)
+                    problems += against(label, got, want, waived, rate_for(variant.language, opt))
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
