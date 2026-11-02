@@ -235,7 +235,7 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         value: u32,
         phys: RegId,
     ) -> i64 {
-        x86_encoding_bytes(one, value, phys)
+        one.what.as_ref().map_or(0, |what| llrm_x86::register_cost::register_extra_bytes(what, value, phys))
     }
 
     fn is_trivially_re_materializable(
@@ -580,10 +580,11 @@ pub(crate) fn is_encodable(
         Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
 
-    // A spill cell is made through the 16-bit frame register; long mode and
-    // flat mode address it through the target's own.
+    // A spill cell is made through the 16-bit frame register; a target whose
+    // frame register is wider addresses it through its own.
+    let wide_frame = regs.width_of(classes.frame).is_some_and(|width| width > 2);
     let framed = |operand: Loc| match operand {
-        Loc::Mem(cell) if bits >= 32 && cell.through == crate::model::ir::FRAME => {
+        Loc::Mem(cell) if wide_frame && cell.through == crate::model::ir::FRAME => {
             Loc::Mem(Mem { through: classes.frame, ..cell })
         }
         other => other,
@@ -734,74 +735,4 @@ mod tests {
         assert_eq!(plain.argument_loads(&body), BTreeSet::from([1]));
         assert!(basic.argument_loads(&body).is_empty());
     }
-}
-
-/// What register `phys` adds to `one` for `value`, from x86's encoding rules:
-/// `r8`..`r15` and, at byte width, `sil`/`dil`/`spl`/`bpl` need a REX prefix
-/// (one byte) unless the instruction has one anyway (a 64-bit operand); the
-/// accumulator has the shorter form of an ALU operation with an immediate
-/// that does not fit a byte (`cmp eax, imm32`, one byte less), and of every
-/// byte one.
-fn x86_encoding_bytes(
-    one: &Insn,
-    value: u32,
-    phys: RegId,
-) -> i64 {
-    let Some(what) = one.what.as_ref() else { return 0 };
-    let name = format!("{phys:?}").to_lowercase();
-    let extended = name
-        .strip_prefix('r')
-        .and_then(|n| n.trim_end_matches(char::is_alphabetic).parse::<u32>().ok())
-        .is_some_and(|n| n >= 8);
-    let byte_rex = matches!(name.as_str(), "sil" | "dil" | "spl" | "bpl");
-    let accumulator = matches!(name.as_str(), "al" | "ax" | "eax" | "rax");
-    let operands = what.dests.iter().chain(&what.sources);
-    // A 64-bit data operand puts REX.W on the instruction: a prefix is there.
-    let wide = operands
-        .clone()
-        .any(
-            |loc| match loc {
-                Loc::Held(held) => held.width == 8 && held.value != value,
-                Loc::Mem(cell) => cell.width == 8,
-                _ => false,
-            },
-        );
-    let (mut register_width, mut as_register, mut as_address) = (0, false, false);
-    for loc in operands.clone() {
-        match loc {
-            Loc::Held(held) if held.value == value => {
-                register_width = register_width.max(held.width);
-                as_register = true;
-            }
-            Loc::Mem(cell) => {
-                as_address |= [cell.base, cell.index].into_iter().flatten().any(|held| held.value == value);
-            }
-            _ => {}
-        }
-    }
-    let mut bytes = 0;
-    let needs_rex = if as_register { extended && register_width < 8 || byte_rex && register_width == 1 } else { false };
-    if (needs_rex || (as_address && extended)) && !wide && register_width < 8 {
-        bytes += 1;
-    }
-    if as_register && accumulator {
-        let alu =
-            matches!(
-                what.name.as_deref(),
-                Some("add" | "adc" | "sub" | "sbb" | "and" | "or" | "xor" | "cmp" | "test")
-            );
-        let immediate = what
-            .sources
-            .iter()
-            .find_map(
-                |loc| match loc {
-                    Loc::Imm(imm) if imm.address.is_none() => Some(imm.value),
-                    _ => None,
-                },
-            );
-        if alu && immediate.is_some_and(|v| register_width == 1 || !(-128..=127).contains(&v)) {
-            bytes -= 1;
-        }
-    }
-    bytes
 }
