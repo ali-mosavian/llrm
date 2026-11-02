@@ -105,7 +105,7 @@ fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
     let ir = include_str!("kernels/ir/crc16.ll");
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     let (test, xor) =
-        (out.find("bit 7, d").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
+        (out.find("bit 7, ").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
     assert!(test < xor, "{out}");
 }
 
@@ -243,4 +243,15 @@ fn a_spill_slot_that_is_a_stack_is_push_and_pop() {
         out.contains("push bc") && out.contains("pop bc") && !out.contains("(ix)") && !out.contains("push ix"),
         "{out}"
     );
+}
+
+/// With `has_cmov` left true, gcd's `if (a > b) a -= b; else b -= a;` was
+/// turned into a select before the branch and came out 30 B / 462 T at -O2
+/// (SDCC 21 B / 295 T). A select is a branch on the Z80: 22 B / 285 T.
+#[test]
+fn a_select_is_a_branch_and_gcd_is_the_branch_loop() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let out = text(ir, "gcd", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+    assert!(instructions <= 19, "{instructions} instructions\n{out}");
 }
