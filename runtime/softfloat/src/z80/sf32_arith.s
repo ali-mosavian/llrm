@@ -567,6 +567,126 @@ mulnrm:
 	sbc	hl,de
 	ld	22(iy),l
 	ld	23(iy),h
+.ifdef SF_MUL_LUT
+	xor	a,a		; quarter squares (measured slower than m8): x*y = q1[x+y] - q2[255-x+y], nine products into 14..19(iy)
+	ld	14(iy),a
+	ld	15(iy),a
+	ld	16(iy),a
+	ld	17(iy),a
+	ld	18(iy),a
+	ld	19(iy),a
+	ld	b,0(iy)
+	ld	a,b
+	cpl
+	ld	c,a
+	ld	a,4(iy)
+	call	qm
+	ld	l,#14
+	call	qadd
+	ld	a,5(iy)
+	call	qm
+	ld	l,#15
+	call	qadd
+	ld	a,6(iy)
+	call	qm
+	ld	l,#16
+	call	qadd
+	ld	b,1(iy)
+	ld	a,b
+	cpl
+	ld	c,a
+	ld	a,4(iy)
+	call	qm
+	ld	l,#15
+	call	qadd
+	ld	a,5(iy)
+	call	qm
+	ld	l,#16
+	call	qadd
+	ld	a,6(iy)
+	call	qm
+	ld	l,#17
+	call	qadd
+	ld	b,2(iy)
+	ld	a,b
+	cpl
+	ld	c,a
+	ld	a,4(iy)
+	call	qm
+	ld	l,#16
+	call	qadd
+	ld	a,5(iy)
+	call	qm
+	ld	l,#17
+	call	qadd
+	ld	a,6(iy)
+	call	qm
+	ld	l,#18
+	call	qadd
+	ld	c,22(iy)
+	ld	b,23(iy)
+	ld	d,19(iy)
+	ld	e,18(iy)
+	ld	h,17(iy)
+	ld	l,16(iy)
+	bit	7,d
+	jr	z,1$
+	inc	bc		; product >= 2: exponent up
+	ld	a,15(iy)
+	jr	2$
+1$:	ld	a,15(iy)		; else one place left
+	add	a,a
+	adc	hl,hl
+	rl	e
+	rl	d
+2$:	or	a,14(iy)
+	jp	z,pack32
+	set	0,l
+	jp	pack32
+; de = b * a, c = ~b (tables page aligned)
+qm:	ld	e,a
+	add	a,b
+	ld	l,a
+	ld	a,#>q1lo
+	adc	a,#0
+	ld	h,a
+	ld	a,e
+	add	a,c
+	ld	e,(hl)
+	inc	h
+	inc	h
+	ld	d,(hl)
+	ld	l,a
+	ld	a,#>q2lo
+	adc	a,#0
+	ld	h,a
+	ld	a,e
+	sub	a,(hl)
+	ld	e,a
+	inc	h
+	inc	h
+	ld	a,d
+	sbc	a,(hl)
+	ld	d,a
+	ret
+; adds de into the sum at offset l in the caller's frame (sp + 2 here), the carry rippling up
+qadd:	ld	h,#0
+	add	hl,sp
+	inc	hl
+	inc	hl
+	ld	a,(hl)
+	add	a,e
+	ld	(hl),a
+	inc	hl
+	ld	a,(hl)
+	adc	a,d
+	ld	(hl),a
+	ret	nc
+3$:	inc	hl
+	inc	(hl)
+	jr	z,3$
+	ret
+.else
 	ld	c,0(iy)		; multiplicand a in e:bc, sum in a:hl, multiplier byte in d: one rr chain per bit
 	ld	b,1(iy)
 	ld	e,2(iy)
@@ -612,6 +732,7 @@ m8:	.rept	8		; eight multiplier bits from d; the add carry enters the next rr ch
 	adc	a,e
 	.endm
 	ret
+.endif
 
 divgo:	call	unp
 divnrm:
@@ -859,3 +980,29 @@ retzero32:
 	ld	d,h
 	ld	e,l
 	jp	done
+
+.ifdef SF_MUL_LUT
+	.area	_SFLUT		; 256-byte aligned (linker -b); q1 lo, q1 hi, q2 lo, q2 hi, 512 entries each
+q1lo:
+n = 0
+	.rept	512
+	.db	(n*n/4)&0xff
+n = n + 1
+	.endm
+n = 0
+	.rept	512
+	.db	(n*n/4)>>8
+n = n + 1
+	.endm
+q2lo:
+n = 0
+	.rept	512
+	.db	((n-255)*(n-255)/4)&0xff
+n = n + 1
+	.endm
+n = 0
+	.rept	512
+	.db	((n-255)*(n-255)/4)>>8
+n = n + 1
+	.endm
+.endif
