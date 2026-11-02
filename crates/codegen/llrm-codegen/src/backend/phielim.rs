@@ -828,15 +828,23 @@ pub fn _split_edges(
                 .filter(|one| !one.defines.iter().any(|value| moved.contains(&(block.at, *value))))
                 .map(|one| _retargeted(one, &landing, block.at))
                 .collect();
+        // The split blocks go between this one and its layout successor, so
+        // a fall-through is a jump until `without_jumps_to_next` has the
+        // order.
         let last = block.insns.last();
-        if let Some(last) = last {
+        if let Some(last) = last.filter(|_| left.contains(&block.at)) {
             if let Some(what) = last.what.as_ref().filter(|what| what.op == Operation::Branch) {
                 let fallthrough = block.succ.iter().copied().find(|&into| Some(into) != what.target);
-                if let Some(&edge) = fallthrough.and_then(|fallthrough| landing.get(&(block.at, fallthrough))) {
+                if let Some(fallthrough) = fallthrough {
+                    let edge = landing.get(&(block.at, fallthrough)).copied().unwrap_or(fallthrough);
                     insns.push(_made(last, last.at, jump_to(edge), vec![], vec![]));
                 }
             }
         }
+        let here = block.at;
+        let fall = insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| {
+            one.what.as_ref().filter(|what| what.op == Operation::Jump && !what.indirect).and_then(|what| what.target)
+        });
         blocks.push(
             LirBlock {
                 at: block.at,
@@ -866,13 +874,19 @@ pub fn _split_edges(
             }
             .into(),
         );
+        // The edge the block falls through to comes first: it is next.
+        let mut beside: Vec<(&(i64, i64), i64)> =
+            landing.iter().filter(|((where_, _), _)| *where_ == here).map(|(key, &at)| (key, at)).collect();
+        beside.sort_by_key(|&(_, at)| Some(at) != fall);
+        blocks.extend(beside.into_iter().filter_map(|(key, _)| made.swap_remove(key)).map(Block::from));
     }
     let mut out = body.clone();
+    let touched: BTreeSet<i64> = left.iter().copied().chain(landing.values().copied()).collect();
+    crate::backend::edges::without_jumps_to_next(&mut blocks, &|at| touched.contains(&at));
     for (&(where_, into), &at) in &landing {
         let succ = &body.blocks.iter().find(|one| one.at == where_).expect("a split edge's block").succ;
         out.odds.rerouted(where_, succ, into, &[(at, 1.0)]);
     }
-    blocks.extend(made.into_values().map(Block::from));
     out.blocks = blocks;
     Ok(out)
 }
@@ -929,11 +943,14 @@ pub fn unsplit(body: &LirBody) -> LirBody {
                     && one.uses.is_empty())
             })
             .collect();
-        if live.len() == 1
-            && live[0]
-                .what
-                .as_ref()
-                .is_some_and(|what| what.op == Operation::Jump && what.target == Some(block.succ[0]))
+        // The block `_split_edges` left laid next to its source holds no jump
+        // at all: control runs through it.
+        if live.is_empty()
+            || (live.len() == 1
+                && live[0]
+                    .what
+                    .as_ref()
+                    .is_some_and(|what| what.op == Operation::Jump && what.target == Some(block.succ[0])))
         {
             bypass.insert(block.at, block.succ[0]);
         }
@@ -954,12 +971,10 @@ pub fn unsplit(body: &LirBody) -> LirBody {
         at
     };
 
+    let kept: Vec<&Block> = body.blocks.iter().filter(|block| !bypass.contains_key(&block.at)).collect();
     let mut blocks: Vec<Block> = Vec::new();
-    for block in &body.blocks {
-        if bypass.contains_key(&block.at) {
-            continue;
-        }
-        let insns = block
+    for (index, block) in kept.iter().enumerate() {
+        let mut insns: Vec<Arc<Insn>> = block
             .insns
             .iter()
             .map(|one| match one.what.as_ref().and_then(|what| what.remapped(where_)) {
@@ -971,6 +986,15 @@ pub fn unsplit(body: &LirBody) -> LirBody {
                 None => Arc::clone(one),
             })
             .collect();
+        // What ran through a bypassed block into the next one now needs the
+        // jump to where that block went, unless that block is next.
+        if let Ok(Some(fall)) = crate::backend::masm::_falls_to(block, &body.name)
+            && bypass.contains_key(&fall)
+            && kept.get(index + 1).map(|next| next.at) != Some(where_(fall))
+            && let Some(last) = block.insns.last()
+        {
+            insns.push(_made(last, last.at, jump_to(where_(fall)), vec![], vec![]));
+        }
         let phis = block
             .phis
             .iter()
@@ -982,7 +1006,7 @@ pub fn unsplit(body: &LirBody) -> LirBody {
         blocks.push(
             LirBlock {
                 at: block.at,
-                insns,
+                insns: insns.into(),
                 succ: block.succ.iter().map(|&at| where_(at)).collect(),
                 phis,
                 cold: block.cold,
@@ -1089,28 +1113,86 @@ mod tests {
         assert_eq!(verify::verify(&done, false), Vec::<String>::new());
     }
 
-    #[test]
-    fn test_split_fallthrough_gets_an_explicit_jump() {
-        // EVTRAP's split exit edge was emitted unreachable after the handler.
-        let jz = branch(0, Some((0, 2)), "jz", 20);
-        let edge_body = body("edge", vec![block(0, vec![Arc::clone(&jz)], vec![10, 20], vec![]).into()]);
-        let done = _split_edges(
+    fn split_edge_of(
+        jz: &Arc<Insn>,
+        edge: (i64, i64),
+        pairs: Vec<(u32, u32)>,
+        after: Vec<Arc<Insn>>,
+    ) -> LirBody {
+        let mut pred = vec![Arc::clone(jz)];
+        pred.extend(after);
+        let edge_body = body(
+            "edge",
+            vec![
+                block(0, pred, vec![10, 20], vec![]).into(),
+                block(10, vec![], vec![], vec![]).into(),
+                block(20, vec![], vec![], vec![]).into(),
+            ],
+        );
+        _split_edges(
             &edge_body,
-            &IndexMap::from_iter([((0, 10), Split::Pairs(vec![(2, 1)]))]),
+            &IndexMap::from_iter([(edge, Split::Pairs(pairs))]),
             &IndexMap::default(),
             &IndexMap::default(),
-            &IndexMap::from_iter([(0, vec![])]),
+            &IndexMap::from_iter([(0, vec![]), (10, vec![]), (20, vec![])]),
             &IndexMap::from_iter([(2, 2)]),
             false,
             &|_, _| false,
         )
-        .unwrap();
-        let edge = &done.blocks[done.blocks.len() - 1];
-        let last = &done.blocks[0].insns[done.blocks[0].insns.len() - 1];
-        let last_what = last.what.as_ref().unwrap();
-        assert_eq!(last_what.op, Operation::Jump);
-        assert_eq!(last_what.target, Some(edge.at));
-        assert_eq!(last.at, jz.at);
+        .unwrap()
+    }
+
+    fn last_jump(block: &LirBlock) -> Option<i64> {
+        let what = block.insns.last()?.what.as_ref()?;
+        (what.op == Operation::Jump).then_some(what.target?)
+    }
+
+    #[test]
+    fn test_split_fallthrough_edge_sits_next_to_its_source_without_a_jump() {
+        // The pin lays a split block right after its predecessor and drops the
+        // jump to it (`updateTerminator`). The block went last and the source
+        // kept `jcc; jmp`: the loop paid an instruction slot and, once
+        // allocated, a taken jump per trip.
+        let jz = branch(0, Some((0, 2)), "jz", 20);
+        let done = split_edge_of(&jz, (0, 10), vec![(2, 1)], vec![]);
+        let order: Vec<i64> = done.blocks.iter().map(|one| one.at).collect();
+        let edge = order[1];
+        assert!(edge >= 1 << 32, "the edge block follows its source: {order:?}");
+        assert_eq!(&order[2..], [10, 20]);
+        assert_eq!(last_jump(&done.blocks[0]), None, "the source falls into the edge block");
+        assert_eq!(done.blocks[0].succ.to_vec(), vec![edge, 20]);
+        assert_eq!(last_jump(&done.blocks[1]), None, "and falls on into 10");
+        assert_eq!(done.blocks[1].succ.to_vec(), vec![10]);
+    }
+
+    #[test]
+    fn test_split_taken_edge_flips_the_branch_to_fall_into_the_edge_block() {
+        // The pin's `updateTerminator` turns `jz edge; jmp 10` with the edge
+        // block next into `jnz 10`. Ours kept both: three of the reduced safe
+        // loop's four extra instruction slots, which made every live range
+        // longer and its spill weight lower.
+        let jz = branch(0, Some((0, 2)), "jz", 20);
+        let jump = Arc::new(Insn::new(0, None, what(Operation::Jump, "jmp", vec![], vec![], Some(10)), vec![], vec![]));
+        let done = split_edge_of(&jz, (0, 20), vec![(2, 1)], vec![jump]);
+        let edge = done.blocks[1].at;
+        assert!(edge >= 1 << 32);
+        assert_eq!(done.blocks[0].insns.len(), 1, "no jump left");
+        let flipped = done.blocks[0].insns[0].what.as_ref().unwrap();
+        assert_eq!((flipped.name.as_deref(), flipped.target), (Some("jnz"), Some(10)));
+        assert_eq!(done.blocks[2].at, 10);
+        assert_eq!(done.blocks[0].succ.to_vec(), vec![10, edge], "the first successor is the branch's target");
+    }
+
+    #[test]
+    fn test_unsplit_of_a_block_the_source_falls_into_keeps_the_way_on() {
+        // Removing the empty edge block must leave the source jumping to where
+        // the edge block went when that is not the block next.
+        let jz = branch(0, Some((0, 2)), "jz", 20);
+        let done = unsplit(&split_edge_of(&jz, (0, 10), vec![], vec![]));
+        let order: Vec<i64> = done.blocks.iter().map(|one| one.at).collect();
+        assert_eq!(order, [0, 10, 20]);
+        assert_eq!(verify::verify(&done, false), Vec::<String>::new());
+        assert_eq!(done.blocks[0].succ.to_vec(), vec![10, 20]);
     }
 
     #[test]
@@ -1138,7 +1220,11 @@ mod tests {
             &|_, _| false,
         )
         .unwrap();
-        assert!(done.blocks[2].same_as(&far.blocks[2]));
-        assert!(done.blocks[3].same_as(&far.blocks[3]));
+        let same = |at: i64| {
+            let find = |of: &LirBody| of.blocks.iter().find(|one| one.at == at).unwrap().clone();
+            find(&done).same_as(&find(&far))
+        };
+        assert!(same(20));
+        assert!(same(40));
     }
 }
