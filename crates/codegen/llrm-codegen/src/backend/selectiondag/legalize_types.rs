@@ -1962,8 +1962,9 @@ impl<'a> TypeLegalizer<'a> {
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
     /// halves, plus the two cross products in the high half. Two operands that
     /// are both zero-extended or both sign-extended (by their known bits) need
-    /// no cross products. No library call is made: the pin has none for the
-    /// types that come here, and `force_expand_multiply` is its fallback.
+    /// no cross products. With no widening multiply of the halves the pin
+    /// calls the type's library routine (`__muldi3`), when the target names one
+    /// and makes the call, and `force_expand_multiply` is its fallback.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -2004,6 +2005,11 @@ impl<'a> TypeLegalizer<'a> {
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
         } else {
+            // `RTLIB::MUL_I64` and the others, between `expandMUL` and the
+            // forced expansion
+            if let Some(halves) = self.expand_by_libcall(value, ISD::Mul, half, true, [lhs, rhs]) {
+                return Ok(halves);
+            }
             return Ok(self.force_expand_multiply(ll, rl, lh, rh));
         };
         let cross_right = self.dag.get_node(ISD::Mul, half, &[ll, rh]);

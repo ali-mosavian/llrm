@@ -268,3 +268,62 @@ fn an_i32_funnel_shift_expands_to_two_half_width_funnel_shifts() {
         }
     }
 }
+
+/// An `i64` product on a target with no widening multiply of its halves took
+/// `force_expand_multiply` and never the pin's `MUL_I64` (`__muldi3`): 445
+/// lines of assembly and four `__mulsi3` calls for one `u64 * u64` on the 6502.
+/// `ExpandIntRes_MUL` tries `expandMUL`, then the library call, then the
+/// forced expansion; it is now one call of two operands.
+#[test]
+fn a_64_bit_product_without_a_widening_multiply_is_the_pins_default_libcall() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len()));
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let load = |dag: &mut SelectionDAG, slot| {
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I64, chain, ptr, info)
+    };
+    let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));
+    let product = dag.get_node(ISD::Mul, EVT::I64, &[a, b]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+    dag.set_root(low);
+    let mut calls = Calls::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("__muldi3", 2)]);
+}
