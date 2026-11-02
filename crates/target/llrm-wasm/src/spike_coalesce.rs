@@ -82,15 +82,8 @@ fn class(ty: ValType) -> Class {
 }
 
 fn name_of(opcode: u16) -> &'static str {
-    use std::sync::Mutex;
-    static NAMES: Mutex<Vec<(u16, &'static str)>> = Mutex::new(Vec::new());
-    let mut names = NAMES.lock().unwrap();
-    if let Some((_, name)) = names.iter().find(|(one, _)| *one == opcode) {
-        return name;
-    }
-    let name: &'static str = Box::leak(format!("W{opcode}").into_boxed_str());
-    names.push((opcode, name));
-    name
+    use crate::dagisel::opcode_names::OPCODE_NAMES;
+    OPCODE_NAMES.binary_search_by_key(&opcode, |&(id, _)| id).map_or("UNNAMED", |at| OPCODE_NAMES[at].1)
 }
 
 /// The function as the spike machine function: no phis (wasm's are gone by

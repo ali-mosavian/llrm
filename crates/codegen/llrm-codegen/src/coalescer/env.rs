@@ -215,7 +215,16 @@ pub fn coalesce(
         .collect();
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, carried_first: true, aliases, should_join, freq };
+    let env = TargetEnv {
+        palettes: palettes.into(),
+        pins,
+        size,
+        keep_pinned: true,
+        carried_first: true,
+        aliases,
+        should_join,
+        freq,
+    };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);

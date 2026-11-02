@@ -273,8 +273,9 @@ impl Coalescer<'_> {
                 .collect();
             for copy in copies {
                 let Some((dst, src)) = full_copy(self.lis.instr(copy)) else { continue };
-                // Live across the back edge and written inside the loop: a value
-                // the loop only reads (an argument) is no chain.
+                // Live across the back edge and written inside the loop: a
+                // value the loop only reads (an argument) is no
+                // chain.
                 let carried = |lis: &mut LiveIntervals, reg: u32| {
                     starts.iter().any(|at| lis.interval(reg).live_at(at)) && {
                         let defs: Vec<InstrKey> =
