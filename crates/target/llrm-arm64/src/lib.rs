@@ -2,6 +2,7 @@
 
 pub mod cc;
 pub mod cfi;
+pub mod combine;
 pub mod dag;
 pub mod data;
 pub mod debug;

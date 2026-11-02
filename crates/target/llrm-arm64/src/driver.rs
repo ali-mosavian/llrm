@@ -291,6 +291,19 @@ pub fn functions_with(
         }
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
+        if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
+            let size = function
+                .attrs
+                .iter()
+                .any(
+                    |attr| matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                    ),
+                );
+            crate::combine::run(&mut machine, size);
+            dump("Combine", &machine);
+        }
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
         crate::storecluster::run(&mut machine);
