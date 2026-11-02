@@ -563,9 +563,10 @@ pub struct Options {
     /// one as wide as the near one is the same space: a flat target.
     pub near_bytes: usize,
     pub far_bytes: usize,
-    /// `x ^ y` that squaring does not reach is a call to the runtime's `pow`
-    /// (`B$LPOW`): the target has no extended float to run the x87 sequence on.
-    pub pow_libcall: bool,
+    /// The target has no extended float to run the x87 sequence on: `x ^ y`
+    /// that squaring does not reach is a call to the runtime's `pow`
+    /// (`B$LPOW`), and a float scaled to CURRENCY a call to `B$LFPC`.
+    pub without_extended_float: bool,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
@@ -8873,10 +8874,14 @@ impl Compiler {
         // the runtime reports it as error 11, an INTEGER divide is the 16-bit
         // `idiv` BC emits and `-32768 \ -1` needs no check of ours. Not where
         // an ON ERROR handler is active (the trap names no statement to
-        // RESUME), nor by the constant -1, which the optimizer turns into a
+        // RESUME: the runtime takes the first statement row after the fault's
+        // address, and our block layout does not keep the rows in address
+        // order; differential overflow-ops ran the divide again to the 120 s
+        // limit), nor by the constant -1, which the optimizer turns into a
         // negation.
         let hardware_idiv = narrow_divmod
             && self.options.idiv_overflow_traps
+            && !(self.handles_errors || self.module_handled)
             && !matches!(&right_operand, Operand::Constant(_, Number::Integer(-1)));
         let narrow_divmod = narrow_divmod && !hardware_idiv;
         let integral = matches!(
@@ -9439,7 +9444,7 @@ impl Compiler {
             }
         }
 
-        if self.options.pow_libcall {
+        if self.options.without_extended_float {
             return self.library_power(left, right);
         }
 
@@ -9508,6 +9513,55 @@ impl Compiler {
             vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
         );
         Ok((self.convert(Operand::Value(power), DOUBLE, common)?, common))
+    }
+
+    /// A DOUBLE rounded to the integer type `to` as the x87's `fist` does: to
+    /// nearest, ties to even, and a value past the type the integer
+    /// indefinite (its lowest value), with no error. A target without the x87
+    /// leaves that conversion's overflow to its own `lrint`. The test is on the
+    /// double, before the rounding: the highest value of the type is odd, so
+    /// half past it rounds up and out, and the lowest is even, so half below it
+    /// rounds in.
+    fn indefinite_integer(
+        &mut self,
+        operand: Operand,
+        to: u32,
+    ) -> Result<Operand, SemanticError> {
+        let Some(range) = integer_range(to).filter(|range| *range.start() < 0) else {
+            return self.convert(operand, DOUBLE, to);
+        };
+        let top = self.floating_literal(&format!("{}.5", range.end()), DOUBLE)?;
+        let bottom = self.floating_literal(&format!("{}.5", range.start()), DOUBLE)?;
+        let above = self.computed("ge", BOOLEAN, vec![operand.clone(), top]);
+        let below = self.computed("lt", BOOLEAN, vec![operand.clone(), bottom]);
+        let past = self.computed("or", BOOLEAN, vec![above, below]);
+        let rounded = self.convert(operand, DOUBLE, to)?;
+        let wide = self.computed("convert", CURRENCY, vec![rounded]);
+        let chosen = self.conditional_value(past, Operand::Constant(CURRENCY, Number::Integer(*range.start())), wide);
+        let narrow = self.value(to);
+        self.emit("convert", vec![narrow], vec![chosen]);
+        Ok(Operand::Value(narrow))
+    }
+
+    /// A DOUBLE scaled to CURRENCY by the runtime (`B$LFPC`), which does what
+    /// the x87 does for B$FPCY with integers: the product rounded to 64 bits,
+    /// then to the nearest integer, ties to even.
+    fn library_scaled_float(
+        &mut self,
+        operand: Operand,
+    ) -> Result<Operand, SemanticError> {
+        let x = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(x), operand]);
+        let pointer_type = self.pointer_type(CURRENCY);
+        let pointer = self.value(pointer_type);
+        self.emit_runtime_call("B$LFPC", vec![pointer], vec![Operand::Place(x)]);
+        let scaled = self.value(CURRENCY);
+        self.emit(
+            "load",
+            vec![scaled],
+            vec![Operand::Indirect { base: pointer, offset: 0, type_id: CURRENCY, volatile: false, inbounds: false }],
+        );
+        Ok(Operand::Value(scaled))
     }
 
     /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is
@@ -9683,6 +9737,9 @@ impl Compiler {
             }
             if matches!(from, SINGLE | DOUBLE) {
                 let operand = self.convert(operand, from, DOUBLE)?;
+                if self.options.without_extended_float {
+                    return self.library_scaled_float(operand);
+                }
                 let wide = self.computed("convert", EXTENDED, vec![operand]);
                 // A SINGLE holds 10000 exactly, and a 4-byte constant is the
                 // pin's pool entry for it where a 10-byte one
@@ -9696,6 +9753,9 @@ impl Compiler {
             let wide = self.computed("convert", DOUBLE, vec![operand]);
             let factor = scale(self)?;
             let quotient = self.computed("fdiv", DOUBLE, vec![wide, factor]);
+            if integral(to) && self.options.without_extended_float {
+                return self.indefinite_integer(quotient, to);
+            }
             return if to == DOUBLE { Ok(quotient) } else { self.convert(quotient, DOUBLE, to) };
         }
         self.fail(format!("cannot convert {} to {} here", self.name(from), self.name(to)))
