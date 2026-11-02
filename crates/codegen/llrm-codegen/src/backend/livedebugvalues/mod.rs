@@ -19,6 +19,8 @@
 //! slices.
 //! O(1) per event plus the open ranges of the variable or register it touches.
 
+pub mod history;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
