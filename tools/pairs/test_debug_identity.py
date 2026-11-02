@@ -39,3 +39,8 @@ def test_a_compile_that_hands_back_bytes_is_compared_from_those_bytes(tmp_path, 
     stub.chmod(0o755)
     monkeypatch.setattr("sys.argv", ["debug_identity", str(stub), "--src", str(tmp_path), "--targets", "m64", "--levels", "O2"])
     assert d.main() == 0
+
+
+def test_the_section_name_table_is_not_a_difference_it_names_the_debug_sections():
+    """`.shstrtab` holds the names of the sections, so adding `.debug_info` changes it by itself."""
+    assert d.differences({".text": b"a", ".shstrtab": b"\0.text\0"}, {".text": b"a", ".shstrtab": b"\0.text\0.debug_info\0"}) == []

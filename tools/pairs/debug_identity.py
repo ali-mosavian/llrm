@@ -14,7 +14,8 @@ import objsweep
 
 def differences(off: dict[str, bytes], on: dict[str, bytes]) -> list[str]:
     """The non-debug sections that differ or that only one side has."""
-    keep = lambda sections: {name: data for name, data in sections.items() if ".debug" not in name}  # noqa: E731
+    # `.shstrtab` only spells the sections' names, and `-g` adds the debug ones.
+    keep = lambda sections: {name: data for name, data in sections.items() if ".debug" not in name and name != ".shstrtab"}  # noqa: E731
     a, b = keep(off), keep(on)
     return sorted(name for name in a.keys() | b.keys() if a.get(name) != b.get(name))
 
