@@ -85,26 +85,27 @@ for op, i in zip(OPS, range(6)):
         worst = max(worst, abs(got - w) / max(abs(w), 1e-30) if op != 'f2i' else abs(got - w))
     res[op] = {'woz_cyc': (out['call'][0] - out['nocall'][0]) / N, 'woz_err': worst, 'woz_len': len(raw)}
 
-# ---- ours
+# ---- IEEE variants: the generic C and the 6502-shaped one
+IEEE = {'ours': ['sf32.c', 'sf32_conv.c'], 'tight': ['sf32_6502.c']}
 rtlines = open(MOS_RT).read()
-for op in OPS:
-    h = open(f'{T}/ours_{op}.h').read(); open(f'{T}/tables.h', 'w').write(h)
-    asm = {}
-    for f in ('sf32', 'sf32_conv'):
-        sh(CC, '--target=6502-sim65', '-Os', '-S', '-DSF_INTABI', f'-I{SF}/include', f'{SF}/src/{f}.c', '-o', f'{T}/{f}.s')
-    cyc = {}
-    for mode, d in (('call', [f'-DOP={OPS.index(op)}']), ('nocall', ['-DNOCALL'])):
-        sh(CC, '--target=6502-sim65', '-Os', '-S', *d, f'-I{T}', f'{HERE}/ours_main.c', '-o', f'{T}/m.s')
-        with open(f'{T}/p.s', 'w') as f:
-            f.write(''.join(l for l in open(f'{T}/m.s') if re.match(r'^rc\d+ = ', l)))
-            f.write('.export _main\n_main:\n  jsr main\n  rts\n')
-            for n in ('m', 'sf32', 'sf32_conv'):
-                f.write(''.join(l for l in open(f'{T}/{n}.s') if not re.match(r'^rc\d+ = ', l)))
-            f.write(rtlines)
-        sh('cl65', '-t', 'sim6502', '-o', f'{T}/o.bin', f'{T}/p.s')
-        c, rc, _ = cycles(f'{T}/o.bin'); cyc[mode] = c
-        if mode == 'call' and rc: res[op]['ours_wrong'] = rc
-    res[op]['ours_cyc'] = (cyc['call'] - cyc['nocall']) / N
+for var, srcs in IEEE.items():
+    for f in srcs:
+        sh(CC, '--target=6502-sim65', '-Os', '-S', '-DSF_INTABI', f'-I{SF}/include', f'{SF}/src/{f}', '-o', f'{T}/{var}_{f[:-2]}.s')
+    for op in OPS:
+        open(f'{T}/tables.h', 'w').write(open(f'{T}/ours_{op}.h').read())
+        cyc = {}
+        for mode, d in (('call', [f'-DOP={OPS.index(op)}']), ('nocall', ['-DNOCALL'])):
+            sh(CC, '--target=6502-sim65', '-Os', '-S', *d, f'-I{T}', f'{HERE}/ours_main.c', '-o', f'{T}/m.s')
+            with open(f'{T}/p.s', 'w') as f:
+                f.write(''.join(l for l in open(f'{T}/m.s') if re.match(r'^rc\d+ = ', l)))
+                f.write('.export _main\n_main:\n  jsr main\n  rts\n')
+                for n in ['m'] + [f'{var}_{x[:-2]}' for x in srcs]:
+                    f.write(''.join(l for l in open(f'{T}/{n}.s') if not re.match(r'^rc\d+ = ', l)))
+                f.write(rtlines)
+            sh('cl65', '-t', 'sim6502', '-o', f'{T}/o.bin', f'{T}/p.s')
+            c, rc, _ = cycles(f'{T}/o.bin'); cyc[mode] = c
+            if mode == 'call' and rc: res[op][var + '_wrong'] = rc
+        res[op][var + '_cyc'] = (cyc['call'] - cyc['nocall']) / N
 
 # ---- fast variants, compiled by llrm-cc: the spike (own algorithm) and the translation of the original
 VARIANTS = {'spike': ('fast32.c', []), 'wozC': ('fast32_woz.c', ['-DFZW_NAME(n)=fz_##n'])}
@@ -162,17 +163,17 @@ def closure(fn, sc):
         seen.add(f); work += list(calls[f])
     return sum(sizes[f] for f in seen)
 with open(f'{T}/rtfull.s', 'w') as f:
-    f.write(''.join(l for l in open(f'{T}/sf32.s') if re.match(r'^rc\d+ = ', l))); f.write(rtlines)
-sc_ieee = measure([f'{T}/sf32.s', f'{T}/sf32_conv.s', f'{T}/rtfull.s'])
+    f.write(''.join(l for l in open(f'{T}/ours_sf32.s') if re.match(r'^rc\d+ = ', l))); f.write(rtlines)
+sc_ieee = {v: measure([f'{T}/{v}_{x[:-2]}.s' for x in srcs] + [f'{T}/rtfull.s']) for v, srcs in IEEE.items()}
 sc_var = {v: measure([f'{T}/{v}.s', f'{T}/rtfull.s']) for v in VARIANTS}
 for op in OPS:
-    res[op]['ours_bytes'] = closure(OURS_FN[op], sc_ieee)
+    for v in IEEE: res[op][v + '_bytes'] = closure(OURS_FN[op], sc_ieee[v])
     for v in VARIANTS: res[op][v + '_bytes'] = closure(FAST_FN[op], sc_var[v])
     res[op]['woz_bytes'] = woz_bytes[op]
 
-print('%-4s %6s %6s %6s %6s | %7s %7s %7s %7s  %s' % ('op', 'WozB', 'wozC B', 'spikeB', 'ieee B', 'Woz cyc', 'wozC', 'spike', 'ieee', 'Woz err (rel; abs f2i)'))
+print('%-4s %6s %6s %6s %6s %6s | %7s %7s %7s %7s %7s' % ('op', 'WozB', 'wozC B', 'spikeB', 'ieee B', 'tight B', 'Woz cyc', 'wozC', 'spike', 'ieee', 'tight'))
 for op in OPS:
     r = res[op]
-    bad = ''.join(' %s WRONG' % k for k in ('ours_wrong', 'spike_wrong', 'wozC_wrong') if k in r)
-    print('%-4s %6d %6d %6d %6d | %7.0f %7.0f %7.0f %7.0f  %.1e%s' % (op, r['woz_bytes'], r['wozC_bytes'], r['spike_bytes'], r['ours_bytes'], r['woz_cyc'], r['wozC_cyc'], r['spike_cyc'], r['ours_cyc'], r['woz_err'], bad))
+    bad = ''.join(' %s WRONG' % k for k in ('ours_wrong', 'tight_wrong', 'spike_wrong', 'wozC_wrong') if k in r)
+    print('%-4s %6d %6d %6d %6d %6d | %7.0f %7.0f %7.0f %7.0f %7.0f%s' % (op, r['woz_bytes'], r['wozC_bytes'], r['spike_bytes'], r['ours_bytes'], r['tight_bytes'], r['woz_cyc'], r['wozC_cyc'], r['spike_cyc'], r['ours_cyc'], r['tight_cyc'], bad))
 print('N=%d  workdir %s' % (N, T))
