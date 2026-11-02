@@ -210,10 +210,10 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
 /// Which instruction selector makes the machine function (`--isel=`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum IselMode {
-    #[default]
     Hand,
     Dag,
     /// The DAG path, the hand selector where it refuses (counted on stderr).
+    #[default]
     Shadow,
 }
 
@@ -229,7 +229,7 @@ impl IselMode {
     }
 }
 
-static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Hand);
+static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Shadow);
 
 /// Chooses the selector for the compiles that follow (the process's, as the
 /// pass flags are).
@@ -313,8 +313,9 @@ pub fn functions_with(
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
-        // A function greedy refuses goes to the linear scan, reported.
-        let greedy = llrm_support::env_flag!("LLRM_ARM64_GREEDY").then(|| crate::lir_view::allocate(&mut machine));
+        // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
+        // linear scan; a function greedy refuses goes to the scan, reported.
+        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
