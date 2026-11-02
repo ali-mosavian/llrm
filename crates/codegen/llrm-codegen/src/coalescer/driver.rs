@@ -242,6 +242,65 @@ impl Coalescer<'_> {
         }
     }
 
+    /// DEVIATE CO1 (`CoalescerEnv::joins_carried_first`): the copies of a value
+    /// that is live across a loop's back edge, before the others. The pin
+    /// takes the split edge first, the block of a phi copy from a rare path:
+    /// the incoming value joins the phi result before the carried chain does,
+    /// and the chain keeps a copy per trip (m68k arrmax, 6502 bsearch8, z80
+    /// scmp). A value that dies inside the trip (a select's result) keeps the
+    /// pin's order. Exit: the pin's order, or an LLVM change that weighs the
+    /// copies.
+    fn coalesce_carried(
+        &mut self,
+        order: &[MbbPriority],
+        depth: &[u32],
+    ) {
+        let headers: Vec<usize> = (0..self.lis.cfg.len())
+            .filter(|&block| depth[block] > 0 && self.lis.cfg.preds[block].iter().any(|&pred| pred >= block))
+            .collect();
+        if headers.is_empty() {
+            return;
+        }
+        let starts: Vec<_> = headers.iter().map(|&block| self.lis.indexes.get_mbb_start_idx(block)).collect();
+        let prev_size = self.work.len();
+        for info in order.iter().filter(|info| info.depth > 0) {
+            let copies: Vec<InstrKey> = self
+                .lis
+                .block_insns(info.block)
+                .iter()
+                .filter(|one| full_copy(one).is_some())
+                .map(|one| one.id())
+                .collect();
+            for copy in copies {
+                let Some((dst, src)) = full_copy(self.lis.instr(copy)) else { continue };
+                // Live across the back edge and written inside the loop: a value
+                // the loop only reads (an argument) is no chain.
+                let carried = |lis: &mut LiveIntervals, reg: u32| {
+                    starts.iter().any(|at| lis.interval(reg).live_at(at)) && {
+                        let defs: Vec<InstrKey> =
+                            lis.operands(reg).iter().filter(|one| one.is_def).map(|one| one.instr).collect();
+                        defs.into_iter().any(|def| {
+                            let at = lis.indexes.get_instruction_index(def);
+                            depth[lis.indexes.get_mbb_from_index(&at)] > 0
+                        })
+                    }
+                };
+                if carried(self.lis, dst.value) || carried(self.lis, src.value) {
+                    self.work.push(Some(copy));
+                }
+            }
+        }
+        self.copy_coalesce_work_list(List::Work, prev_size);
+        let mut at = prev_size;
+        while at < self.work.len() {
+            if self.work[at].is_none() {
+                self.work.remove(at);
+            } else {
+                at += 1;
+            }
+        }
+    }
+
     /// `coalesceLocals`.
     fn coalesce_locals(&mut self) {
         self.copy_coalesce_work_list(List::Local, 0);
@@ -267,6 +326,9 @@ pub fn run(
         .collect();
     order.sort_by(compare_mbb_priority);
     let mut coalescer = Coalescer { lis, env, state: State::new(), work: Vec::new(), local: Vec::new(), joined: 0 };
+    if env.joins_carried_first() {
+        coalescer.coalesce_carried(&order, depth);
+    }
     // Coalesce intervals in MBB priority order.
     let mut curr_depth = u32::MAX;
     for info in &order {

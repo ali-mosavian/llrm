@@ -583,6 +583,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
+        carried_first: false,
         aliases: Default::default(),
         should_join: Box::new(|_| true),
         freq: Vec::new(),

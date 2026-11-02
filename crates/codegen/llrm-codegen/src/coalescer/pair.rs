@@ -24,6 +24,12 @@ use crate::model::lir::Insn;
 /// What the target says of two values: `getCommonSubClass(DstRC, SrcRC)` is
 /// not null.
 pub trait CoalescerEnv {
+    /// DEVIATE CO1 (see `Coalescer::coalesce_carried`): whether the copies of a
+    /// value live across a loop's back edge are joined first.
+    fn joins_carried_first(&self) -> bool {
+        false
+    }
+
     fn can_share(
         &self,
         a: u32,
