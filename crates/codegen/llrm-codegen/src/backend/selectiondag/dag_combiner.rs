@@ -598,9 +598,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
-            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
-                self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
-            }
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
+                .fold_extend_of_cast(node)
+                .or_else(|| self.visit_extend(node))
+                .or_else(|| self.sext_of_non_negative(node)),
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
@@ -1374,6 +1375,30 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `visitSIGN_EXTEND` ([L16279][pin]): `(sext x)` is `(zext nneg x)` if the
+    /// sign bit is known zero and the target does not extend signed more
+    /// cheaply. At m64 that is `mov r32, r32`, not `movslq`.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16279
+    fn sext_of_non_negative(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::SignExtend {
+            return None;
+        }
+        let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        let from = self.dag.value_type(n0);
+        if self.tli?.is_sext_cheaper_than_zext(from, vt)
+            || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+        {
+            return None;
+        }
+        Some(self.dag.get_node_flags(ISD::ZeroExtend, vt, &[n0], super::dag::SDNodeFlags::NON_NEG))
     }
 
     /// `visitSIGN_EXTEND`, `visitZERO_EXTEND` and `visitANY_EXTEND` for a
