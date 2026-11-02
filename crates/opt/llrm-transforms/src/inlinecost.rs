@@ -211,8 +211,6 @@ pub struct InlineParams<'a> {
 pub struct PricedCall {
     /// The call and the return.
     pub clocks: i64,
-    /// Each argument word pushed and read back.
-    pub per_argument: i64,
     pub milliclocks_per_byte: i64,
 }
 
@@ -2053,8 +2051,9 @@ impl<'a> Analyzer<'a> {
             self.params.stack_words.and_then(|words| words.get(&self.site.callee_id).copied()).unwrap_or_else(|| {
                 self.site.caller.instruction(self.site.call).operands.len().saturating_sub(1) as i64
             });
-        let clocks =
-            (price.clocks + arguments * price.per_argument) as f64 * self.site.relative_frequency.unwrap_or(1.0);
+        // The call and the return only: the argument moves a copy keeps are no
+        // saving.
+        let clocks = price.clocks as f64 * self.site.relative_frequency.unwrap_or(1.0);
         let Some(bytes) = self.params.byte_costs else { return false };
         let growth = (crate::walk::function_bytes(self.site.module, self.site.layout, bytes, self.callee)
             - bytes.call_overhead(arguments as usize))

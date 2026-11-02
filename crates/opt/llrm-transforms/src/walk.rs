@@ -235,7 +235,6 @@ impl ProgramPass for Walk {
             if tti.speed_inline_by_code_size() {
                 params.priced_call = Some(crate::inlinecost::PricedCall {
                     clocks: costs.call + costs.return_,
-                    per_argument: costs.argument,
                     milliclocks_per_byte: tti.speed_milliclocks_per_byte(),
                 });
                 params.byte_costs = Some(&byte_costs);

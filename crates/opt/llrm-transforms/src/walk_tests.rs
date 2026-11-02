@@ -1540,10 +1540,13 @@ b0:
 }
 
 /// qlight c at m16 -O2: `ls_scale_byte` (a clamped multiply and a divide by
-/// 255) four times. Kept as calls it ran 472 clocks, above main's 463 (main
-/// inlines it); D13 inlines it where the sheet's call clocks pay (388 clocks).
+/// 255) four times. D13 credits a call with the call and the return only (the
+/// argument moves a copy keeps are no saving, oversight 2026-11-02), 31 clocks
+/// at 486: that does not pay for the copy's bytes, so the calls stay. Kept as
+/// calls it ran 472 clocks / 200 B against main's 463 / 376 (main inlines it):
+/// +9 clk - 0.5 * 176 B < 0 at m16's rate, inside the gate's priced total.
 #[test]
-fn test_an_o2_call_of_a_clamped_divide_by_a_constant_is_inlined_at_m16_where_main_inlines_it() {
+fn test_an_o2_call_of_a_clamped_divide_by_a_constant_stays_a_call_at_m16_when_the_copy_costs_more_than_the_call() {
     let text = "@raw = global i16 200
 @low = global i16 -20
 @s1 = global i16 120
@@ -1591,7 +1594,7 @@ b0:
 }
 ";
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
-    assert_eq!(m16.matches("call i16 @scale").count(), 0, "the calls stayed:\n{m16}");
+    assert_eq!(m16.matches("call i16 @scale").count(), 4, "the calls went:\n{m16}");
 }
 
 /// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
