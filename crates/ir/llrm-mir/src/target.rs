@@ -332,6 +332,12 @@ pub struct OperationCosts {
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
     pub divide_margin: i64,
+    /// The multiply-high of a constant divide's sequence: the product's upper
+    /// half, where the CPU's multiply ends early on a short multiplier (the
+    /// 486's 13..42) and the multiplier is the dividend, whose value the
+    /// selector does not know: priced at the minimum, as gcc's
+    /// `mul_highpart_cost` prices a non-constant multiplier (`mult_init`).
+    pub multiply_high: i64,
     pub shift: i64,
     pub address: i64,
     /// An address advanced in a space whose displacement carries into its
@@ -485,6 +491,7 @@ impl Default for OperationCosts {
             multiply_long: 1,
             divide_long: 1,
             divide_margin: 0,
+            multiply_high: 1,
             shift: 1,
             address: 1,
             carry: 1,

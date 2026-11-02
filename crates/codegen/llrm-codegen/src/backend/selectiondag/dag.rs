@@ -175,6 +175,9 @@ pub struct DivPrices {
     pub extend: i64,
     pub multiply: i64,
     pub multiply_long: i64,
+    /// The multiply-high of the magic sequence
+    /// ([`OperationCosts::multiply_high`]).
+    pub multiply_high: i64,
     pub divide: i64,
     pub divide_long: i64,
     /// Percent of the divide's price the multiply-high sequence must exceed it
