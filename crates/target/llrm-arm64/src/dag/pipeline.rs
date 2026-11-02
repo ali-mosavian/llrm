@@ -421,8 +421,10 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     globals: &Globals,
     info: &mut llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo,
+    opt_for_size: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = TargetLowering::aarch64(APPLE_M1);
+    tli.set_opt_for_size(opt_for_size);
     tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };

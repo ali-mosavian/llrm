@@ -877,10 +877,14 @@ pub fn lower_fp_round(
 }
 
 /// `isFPImmLegal`: a constant an `fmov` immediate holds, positive zero, or one
-/// that at most two `mov`s make (the pin's limit when not optimizing for size).
+/// that at most two `mov`s make, one when optimizing for size ([pin][pin]).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L14019-L14058
 pub fn fp_imm_legal(
     vt: llrm_codegen::backend::selectiondag::mvt::MVT,
     bits: u128,
+    opt_for_size: bool,
 ) -> bool {
     use llrm_codegen::backend::selectiondag::mvt::MVT;
     let (value, width) = match vt {
@@ -888,7 +892,9 @@ pub fn fp_imm_legal(
         MVT::F32 => (f64::from(f32::from_bits(bits as u32)), 32),
         _ => return false,
     };
-    bits == 0 || crate::mc::immediate::fp_immediate(value).is_some() || mov_imm(bits as u64, width, Gpr(0)).len() <= 2
+    bits == 0
+        || crate::mc::immediate::fp_immediate(value).is_some()
+        || mov_imm(bits as u64, width, Gpr(0)).len() <= if opt_for_size { 1 } else { 2 }
 }
 
 /// `LowerATOMIC_LOAD_AND`: LSE has an atomic load-clear but no load-and, so the

@@ -192,6 +192,15 @@ pub fn select_function_in(
     // reads what the blocks before it knew of a register. The blocks a
     // lowering makes (the case blocks of a split `br (or a, b)`) follow the
     // block that made them in the layout.
+    let opt_for_size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
     let mut work = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(module, function, layout, &target, &Aarch64Arch, &convention, &mut info, block)
@@ -201,7 +210,8 @@ pub fn select_function_in(
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
         let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
-        let units = select_block(&mut built.dag, &globals, &mut info).map_err(|why| format!("{why:?}"))?;
+        let units =
+            select_block(&mut built.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
         for (id, mut extra) in extras {
             // `FinishBasicBlock`: a block the lowering made is a predecessor
@@ -209,7 +219,8 @@ pub fn select_function_in(
             // that made it does.
             extra.phi_updates = parent_updates.clone();
             let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
-            let units = select_block(&mut extra.dag, &globals, &mut info).map_err(|why| format!("{why:?}"))?;
+            let units =
+                select_block(&mut extra.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
         }
     }
