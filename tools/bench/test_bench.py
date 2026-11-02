@@ -364,7 +364,7 @@ class TimedOnlyTests(unittest.TestCase):
             obj.write_bytes(test_sizes.object_with(12))
             with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
-        self.assertEqual(got, {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40})
+        self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
 
     def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
         """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
@@ -1089,7 +1089,7 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     monkeypatch.setattr(bench.icount, "run", fake_run)
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
     monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
-    monkeypatch.setattr(bench.sizes, "code_bytes", lambda obj: 0)
+    monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
     bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
     assert seen["files"] == ["PHOTO.JPG"], seen
 
