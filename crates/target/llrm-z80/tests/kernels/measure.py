@@ -32,6 +32,8 @@ EXTRA = [
     # the carry out of a 32-bit add is a compare used as a value (SETCC8)
     # the caller stores the 8th and 9th byte argument on the stack
     ("stackargs", "i8", [("i8", "5")], 30),
+    # a 300-byte local: the frame objects below it are out of IX's byte displacement
+    ("bigframe", "i8", [("i8", "5")], 5),
     ("carry32", "i16", [("i32", "65535"), ("i8", "1")], 1),
 ]
 HEADER = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"\n'

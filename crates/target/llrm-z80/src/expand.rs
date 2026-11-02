@@ -586,16 +586,16 @@ impl Printer<'_> {
                 };
                 if op == "LD8fi" {
                     let value = self.immediate(inst, 0, 0xFF)?;
-                    let slot = self.slot(index, extra)?;
+                    let slot = self.frame_slots(index, extra, 1)?.remove(0);
                     self.push(format!("ld {slot}, {value}"));
                 } else if op.starts_with("LD8") {
                     let register = name_of(self, 0)?;
-                    let slot = self.slot(index, extra)?;
+                    let slot = self.frame_slots(index, extra, 1)?.remove(0);
                     self.push(if load { format!("ld {register}, {slot}") } else { format!("ld {slot}, {register}") });
                 } else {
                     let (lo, hi) = lanes(self.register(inst, 0)?)?;
-                    for (byte, plus) in [(lo, 0), (hi, 1)] {
-                        let slot = self.slot(index, extra + plus)?;
+                    let slots = self.frame_slots(index, extra, 2)?;
+                    for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                         self.push(if load {
                             format!("ld {}, {slot}", name(byte))
                         } else {
@@ -618,10 +618,11 @@ impl Printer<'_> {
             "SPILL8" | "RELOAD8" => {
                 let (index, register) =
                     if op == "SPILL8" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
-                let (register, slot) = (name_of(self, register)?, self.slot(index, 0)?);
+                let register = name_of(self, register)?;
                 if op == "RELOAD8" && self.updated_in_place(inst, rest)? {
                     return Ok(());
                 }
+                let slot = self.frame_slots(index, 0, 1)?.remove(0);
                 if op == "RELOAD8" && self.reload_is_operand(inst, rest) {
                     self.folded = Some((self.register(inst, 0)?, slot));
                     return Ok(());
@@ -636,8 +637,8 @@ impl Printer<'_> {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
-                for (byte, extra) in [(lo, 0), (hi, 1)] {
-                    let slot = self.slot(index, extra)?;
+                let slots = self.frame_slots(index, 0, 2)?;
+                for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
                         format!("ld {slot}, {}", name(byte))
                     } else {
@@ -895,6 +896,35 @@ impl Printer<'_> {
             return Err(format!("frame object {index} is {at} from ix, out of the byte displacement"));
         }
         Ok(format!("{at}(ix)"))
+    }
+
+    /// The operands of `count` bytes of frame object `index` from `extra`. Within the byte
+    /// displacement of IX they are `d(ix)`; beyond it they are `d(iy)` with IY set to the
+    /// first byte (`ld iy, #n; add iy, sp`), when nothing holds IY at this instruction.
+    fn frame_slots(
+        &mut self,
+        index: i32,
+        extra: i64,
+        count: i64,
+    ) -> Result<Vec<String>, String> {
+        let offset = *self.frame.offsets.get(&index).ok_or_else(|| format!("frame object {index} has no place"))?;
+        let at = offset + extra;
+        if (-128..=127).contains(&at) && (-128..=127).contains(&(at + count - 1)) {
+            return Ok((0..count).map(|byte| format!("{}(ix)", at + byte)).collect());
+        }
+        let live = self.liveness.live_before::<Z80Registers>(
+            self.function,
+            self.assignment,
+            &REGISTER_INFO,
+            self.at.0,
+            self.at.1,
+        );
+        if live.is_live(&REGISTER_INFO, reg::IY) {
+            return Err(format!("frame object {index} is {at} from ix and iy is live"));
+        }
+        self.push(format!("ld iy, #{}", at + self.frame.below_ix() + self.call_bytes));
+        self.push("add iy, sp");
+        Ok((0..count).map(|byte| format!("{byte}(iy)")).collect())
     }
 
     fn frame_index(

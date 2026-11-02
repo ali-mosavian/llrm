@@ -339,3 +339,13 @@ fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("push bc") && out.contains("pop bc") && out.contains("(ix), "), "{out}");
 }
+
+/// A frame object out of the byte displacement of IX was refused: "frame object
+/// N is -306 from ix, out of the byte displacement". 7 functions of the C corpus
+/// beyond the 23 rows hit it. IY, when nothing holds it, is the base.
+#[test]
+fn a_frame_object_out_of_ixs_reach_is_addressed_through_iy() {
+    let ir = include_str!("kernels/ir/bigframe.ll");
+    let out = text(ir, "bigframe", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("(iy)") && out.contains("add iy, sp"), "{out}");
+}
