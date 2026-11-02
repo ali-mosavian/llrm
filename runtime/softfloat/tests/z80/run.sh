@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: tests/z80/run.sh [ops]   (mul udiv umod div mod fadd fsub fmul fdiv)
+# usage: tests/z80/run.sh [ops]   (mul udiv umod div mod fadd fsub fmul fdiv citof cutof cftoi cftou)
 # Runs src/z80/int32.s on ucsim_z80 against the host: mismatches and mean cycles per call (call minus a bare ret).
 set -e
 cd "$(dirname "$0")"; OPS=${*:-mul udiv umod div mod}; T=$(mktemp -d); S=../../src/z80
@@ -7,9 +7,9 @@ printf '\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp
 sdasz80 -o $T/crt0.rel $T/crt0.s
 for f in $S/*.s; do b=$(basename $f .s); cp $f $T/$b.s; sdasz80 -g -o $T/$b.rel $T/$b.s; done
 for op in $OPS; do
-  case $op in mul) f=__mulsi3;; udiv) f=__udivsi3;; umod) f=__umodsi3;; div) f=__divsi3;; mod) f=__modsi3;; fadd) f=__addsf3;; fsub) f=__subsf3;; fmul) f=__mulsf3;; fdiv) f=__divsf3;; esac
-  case $op in f*) G=gen_f32.py;; *) G=gen.py;; esac
-  python3 $G ${op#f} > $T/vec.inc
+  case $op in mul) f=__mulsi3;; udiv) f=__udivsi3;; umod) f=__umodsi3;; div) f=__divsi3;; mod) f=__modsi3;; fadd) f=__addsf3;; fsub) f=__subsf3;; fmul) f=__mulsf3;; fdiv) f=__divsf3;; citof) f=__floatsisf;; cutof) f=__floatunsisf;; cftoi) f=__fixsfsi;; cftou) f=__fixunssfsi;; esac
+  case $op in f*|c*) G=gen_f32.py;; *) G=gen.py;; esac
+  python3 $G ${op#?} > $T/vec.inc
   sed "s/OP/$f/g" drv.s > $T/drv.s
   printf '\t.module stub\n\t.area _CODE\n\t.globl %s\n%s:\n\tret\n' $f $f > $T/stub.s
   (cd $T; sdasz80 -o drv.rel drv.s; sdasz80 -o stub.rel stub.s

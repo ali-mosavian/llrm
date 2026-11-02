@@ -9,6 +9,13 @@ def bits(x):
     except OverflowError: return 0x7f800000 if x > 0 else 0xff800000
 def ref(a, b):
     x, y = f(a), f(b)
+    if op == 'itof': return bits(float(a - (1 << 32) if a >> 31 else a))
+    if op == 'utof': return bits(float(a))
+    if op in ('ftoi', 'ftou'):
+        if x != x: return 0
+        lo, hi = (-(1 << 31), (1 << 31) - 1) if op == 'ftoi' else (0, (1 << 32) - 1)
+        t = max(lo, min(hi, int(x))) if abs(x) != float('inf') else (hi if x > 0 else lo)
+        return t & 0xffffffff
     if op == 'add': r = x + y
     elif op == 'sub': r = x - y
     elif op == 'mul': r = x * y
@@ -18,8 +25,17 @@ def ref(a, b):
     return 0x7fc00000 if r != r else bits(r)
 sp = [0, 0x80000000, 1, 0x80000001, 0x007fffff, 0x00800000, 0x3f800000, 0xbf800000, 0x7f7fffff, 0xff7fffff,
       0x7f800000, 0xff800000, 0x7fc00000, 0x40000000, 0x3f800001, 0x4b000000, 0x4b800000, 0x33800000, 0x34000000, 0x00800001, 0x3f7fffff]
-recs = [(a, b) for a in sp for b in sp]
-while len(recs) < 700:
+conv = op in ('itof', 'utof', 'ftoi', 'ftou')
+recs = [(a, 0) for a in sp + [0x4f000000, 0xcf000000, 0x4effffff, 0xcf000001, 0x4f800000, 0x4f7fffff, 0x3f7fffff, 0xbf7fffff, 0x3fc00000, 0xbfc00000, 0x4b7fffff, 0x7fffffff, 0xffffffff, 0x7fa00000, 0x01000001, 0x7fffff80, 0x80000000]] if conv else [(a, b) for a in sp for b in sp]
+while conv and len(recs) < 700:
+    if op in ('itof', 'utof'):
+        a = random.getrandbits(random.choice([3, 8, 16, 24, 25, 26, 31, 32])) if random.random() < .8 else random.choice([0x80000000, 0x7fffffff, 0xffffffff, 0x01000001, 0x01000003, 0x7fffff80, 0x7fffffc0])
+        if random.random() < .3: a = (-a) & 0xffffffff
+    else:
+        a = (random.getrandbits(32) & 0x807fffff) | random.randint(110, 165) << 23
+        if random.random() < .1: a = random.getrandbits(32)
+    recs.append((a, 0))
+while not conv and len(recs) < 700:
     a = random.getrandbits(32)
     if random.random() < .12: a &= 0x807fffff
     ea = (a >> 23) & 255

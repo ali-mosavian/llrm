@@ -708,3 +708,202 @@ divgo:	call	unp
 	set	0,0(iy)
 4$:	inc	bc
 	jp	packbc
+
+; ---- conversions with 32-bit integers: the integer is in HL (low) and DE (high), the float likewise -------------------
+
+	.globl __floatsisf
+__floatsisf:
+	ld	a,#1
+	jr	flent
+	.globl __floatunsisf
+__floatunsisf:
+	xor	a,a
+flent:	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	ld	iy,#0
+	add	iy,sp
+	ld	21(iy),a
+	ld	0(iy),l
+	ld	1(iy),h
+	ld	2(iy),e
+	ld	3(iy),d
+	ld	10(iy),#0
+	or	a,a
+	jr	z,1$
+	bit	7,3(iy)		; signed and negative: keep the sign, work on the magnitude
+	jr	z,1$
+	ld	10(iy),#0x80
+	xor	a,a
+	sub	a,0(iy)
+	ld	0(iy),a
+	ld	a,#0
+	sbc	a,1(iy)
+	ld	1(iy),a
+	ld	a,#0
+	sbc	a,2(iy)
+	ld	2(iy),a
+	ld	a,#0
+	sbc	a,3(iy)
+	ld	3(iy),a
+1$:	ld	a,0(iy)
+	or	a,1(iy)
+	or	a,2(iy)
+	or	a,3(iy)
+	jp	z,retzero32
+	ld	bc,#153		; 127 + 26: the exponent when the leading one is at bit 26
+	ld	13(iy),#0
+2$:	ld	a,3(iy)		; above bit 26: shift right, the lost bits folded into bit 0 at the end
+	and	a,#0xf8
+	jr	z,4$
+	srl	3(iy)
+	rr	2(iy)
+	rr	1(iy)
+	rr	0(iy)
+	jr	nc,3$
+	set	0,13(iy)
+3$:	inc	bc
+	jr	2$
+4$:	bit	2,3(iy)		; below: shift left
+	jr	nz,5$
+	sla	0(iy)
+	rl	1(iy)
+	rl	2(iy)
+	rl	3(iy)
+	dec	bc
+	jr	4$
+5$:	bit	0,13(iy)
+	jp	z,packbc
+	set	0,0(iy)
+	jp	packbc
+
+	.globl __fixsfsi
+__fixsfsi:
+	ld	a,#1
+	jr	fixent
+	.globl __fixunssfsi
+__fixunssfsi:
+	xor	a,a
+fixent:	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	push	hl
+	ld	iy,#0
+	add	iy,sp
+	ld	21(iy),a
+	ld	0(iy),l
+	ld	1(iy),h
+	ld	2(iy),e
+	ld	3(iy),d
+	ld	a,3(iy)
+	and	a,#0x80
+	ld	10(iy),a
+	ld	a,2(iy)
+	add	a,a
+	ld	a,3(iy)
+	adc	a,a
+	ld	8(iy),a
+	inc	a
+	jr	nz,1$
+	ld	a,2(iy)		; NaN gives 0
+	and	a,#0x7f
+	or	a,1(iy)
+	or	a,0(iy)
+	jp	nz,retzero32
+1$:	ld	a,8(iy)
+	cp	a,#127		; |x| < 1
+	jp	c,retzero32
+	cp	a,#159		; |x| >= 2^32
+	jp	nc,big
+	ld	a,2(iy)
+	and	a,#0x7f
+	or	a,#0x80
+	ld	2(iy),a
+	ld	3(iy),#0
+	ld	a,8(iy)
+	sub	a,#150		; shift by e - 23
+	jr	z,mdone
+	jr	c,shr
+	ld	b,a
+2$:	sla	0(iy)
+	rl	1(iy)
+	rl	2(iy)
+	rl	3(iy)
+	djnz	2$
+	jr	mdone
+shr:	neg
+	ld	b,a
+3$:	srl	3(iy)
+	rr	2(iy)
+	rr	1(iy)
+	rr	0(iy)
+	djnz	3$
+mdone:	ld	a,21(iy)
+	or	a,a
+	jr	z,uns
+	bit	7,10(iy)
+	jr	nz,sneg
+	bit	7,3(iy)
+	jr	nz,imax
+	jr	retm
+sneg:	bit	7,3(iy)
+	jr	nz,imin
+	xor	a,a
+	sub	a,0(iy)
+	ld	0(iy),a
+	ld	a,#0
+	sbc	a,1(iy)
+	ld	1(iy),a
+	ld	a,#0
+	sbc	a,2(iy)
+	ld	2(iy),a
+	ld	a,#0
+	sbc	a,3(iy)
+	ld	3(iy),a
+	jr	retm
+uns:	bit	7,10(iy)
+	jr	nz,retzero32
+	jr	retm
+big:	ld	a,21(iy)
+	or	a,a
+	jr	z,ubig
+	bit	7,10(iy)
+	jr	nz,imin
+imax:	ld	hl,#0xffff
+	ld	de,#0x7fff
+	jp	done
+imin:	ld	hl,#0
+	ld	de,#0x8000
+	jp	done
+ubig:	bit	7,10(iy)
+	jr	nz,retzero32
+	ld	hl,#0xffff
+	ld	de,#0xffff
+	jp	done
+retm:	ld	l,0(iy)
+	ld	h,1(iy)
+	ld	e,2(iy)
+	ld	d,3(iy)
+	jp	done
+retzero32:
+	ld	hl,#0
+	ld	d,h
+	ld	e,l
+	jp	done
