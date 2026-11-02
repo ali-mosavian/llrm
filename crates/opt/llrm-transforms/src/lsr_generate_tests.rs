@@ -315,3 +315,25 @@ fn the_whole_search_is_linear_in_the_uses() {
         assert!(pair[1].0 <= 2 * pair[0].0 + 8 && pair[1].1 <= 2 * pair[0].1 + 8, "{work:?}");
     }
 }
+
+/// LSR's register budget counted the registers of the target as free for its
+/// own values although an accumulator held across the loop takes some: an
+/// `i32` sum is two words on a 16-bit target and the budget was five of six
+/// (bench/shellsort at -Os spilled the sum when LSR dropped a compare). The
+/// loop-carried phis that are not recurrences of the loop are the pressure.
+#[test]
+fn loop_carried_values_that_are_not_recurrences_take_registers() {
+    let looped = |acc: &str| {
+        format!(
+            "define {acc} @f(ptr %p, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %s = phi {acc} [ 0, %entry ], [ %s2, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %w = zext i32 %v to {acc}\n  %s2 = add {acc} %s, %w\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret {acc} %s2\n}}\n"
+        )
+    };
+    let mut units = Vec::new();
+    for acc in ["i32", "i64"] {
+        generated(&looped(acc), |cx, se, _, header| {
+            units.push(crate::lsr_collect::loop_carried_register_units(se, cx, header));
+        });
+    }
+    // The index is a recurrence LSR rewrites; the sum is not.
+    assert_eq!(units, [1, 2]);
+}

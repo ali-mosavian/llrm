@@ -479,6 +479,11 @@ pub struct Collection<'a, 'b> {
     /// How many formulae were offered to `insert_formula`: the work generation
     /// did.
     pub insert_attempts: usize,
+    /// Registers (in the target's word) held across the whole loop by values
+    /// LSR does not manage: the accumulators and other loop-carried phis that
+    /// are not induction variables. The registers LSR may use are those the
+    /// target has less these.
+    pub other_register_units: u32,
     /// How many formulae were rated: the work the filter, narrowing and solver
     /// did.
     pub rated: std::cell::Cell<usize>,
@@ -514,6 +519,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
+            other_register_units: 0,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
         }
@@ -890,6 +896,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
                     as_written: true,
+                    other_register_units: self.other_register_units,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1011,4 +1018,32 @@ impl<'a, 'b> Collection<'a, 'b> {
             }
         }
     }
+}
+
+/// The registers, in the target's word, of the loop-carried phis of header
+/// `l` that are not recurrences LSR rewrites: the accumulators that stay in
+/// registers for the whole loop (an `i32` is two words on a 16-bit target).
+pub fn loop_carried_register_units(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    l: BlockId,
+) -> u32 {
+    let word = cx.layout.pointer(0).bits.max(8) as u32;
+    let phis: Vec<InstId> =
+        cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
+    let mut units = 0;
+    for phi in phis {
+        let Some(result) = cx.function.instruction(phi).result else { continue };
+        let value = Operand::Value(result);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let s = se.get_scev(cx, value);
+        if se.addrec_header(s) == Some(l) {
+            continue;
+        }
+        let bits = se.get_type_size_in_bits(cx, se.type_of(s)) as u32;
+        units += bits.div_ceil(word);
+    }
+    units
 }

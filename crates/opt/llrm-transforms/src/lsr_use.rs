@@ -489,6 +489,8 @@ pub struct Rating<'a, 'b> {
     /// The formulae rated are the loop as it stands: its values exist, and
     /// nothing is expanded (DEVIATE LU5 charges only an expansion).
     pub as_written: bool,
+    /// Registers held across the loop by values LSR does not manage.
+    pub other_register_units: u32,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -626,7 +628,7 @@ impl Cost {
 
         // Every register past the target's, less one, is another instruction
         // (a fill).
-        let target_regs = r.tti.number_of_gpr_registers() - 1;
+        let target_regs = (r.tti.number_of_gpr_registers() - 1).saturating_sub(r.other_register_units);
         if self.c.num_regs > target_regs {
             // Already past: only the newly added registers add instructions.
             if prev_regs > target_regs {

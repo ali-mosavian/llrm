@@ -66,7 +66,15 @@ fn rated(
     visited: &HashSet<Scev>,
 ) -> Cost {
     let tti = X86::of_cpu("core2").unwrap();
-    let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, as_written: false };
+    let mut rating = Rating {
+        se,
+        cx,
+        tti: &tti,
+        l: header,
+        hardware_loop_profitable: false,
+        as_written: false,
+        other_register_units: 0,
+    };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
     cost
@@ -153,7 +161,15 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
         assert!(rated(cx, se, header, &lu, &f, &visited).is_loser());
 
         let tti = X86::of_cpu("core2").unwrap();
-        let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, as_written: false };
+        let mut rating = Rating {
+            se,
+            cx,
+            tti: &tti,
+            l: header,
+            hardware_loop_profitable: false,
+            as_written: false,
+            other_register_units: 0,
+        };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
         assert_eq!(cost.c, LsrCost::default(), "a chosen register costs nothing more");
@@ -364,7 +380,15 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
         };
         let (fa, fb) = (scaled(a), scaled(b));
         for (tti, first, both) in [(&real as &dyn llrm_mir::tti::Tti, 3, 3), (&flat, 1, 1)] {
-            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, as_written: false };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+            };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
             assert_eq!(cost.c.insns, first, "the recurrence and the prefixed index");
@@ -496,7 +520,15 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
         let f = Formula { base_regs: vec![walk], has_base_reg: true, ..Formula::default() };
         let lu = use_of(Kind::Address, &[0]);
         let rate = |tti: &dyn Tti, se: &mut ScalarEvolution| {
-            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, as_written: false };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+            };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
             cost.c.add_rec_cost
