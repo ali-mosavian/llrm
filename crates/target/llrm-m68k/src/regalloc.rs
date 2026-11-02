@@ -83,6 +83,15 @@ impl Target for M68kRegisters {
         CALLER_SAVED.to_vec()
     }
 
+    /// `copyPhysReg`: a copy into a data register is a `move`, which sets the
+    /// codes.
+    fn copy_sets_flags(
+        to: RegId,
+        from: RegId,
+    ) -> bool {
+        to != from && crate::flags::is_data(to)
+    }
+
     /// `getStoreRegOpcode`: a `MOVEM` pseudo, since a `move` would overwrite
     /// the condition codes a branch may still read.
     fn spill_store(
@@ -141,6 +150,14 @@ pub fn allocate_spilling_by_frequency(
     first_slot: i32,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
     llrm_spike_mf::spill::allocate_spilling_ordered::<M68kRegisters>(function, first_slot, true)
+}
+
+/// [`allocate_spilling_by_frequency`] by the translated greedy allocator.
+pub fn allocate_greedy(
+    function: &mut MFunction,
+    size: bool,
+) -> Result<(Assignment, Vec<(i32, Class)>), String> {
+    llrm_spike_mf::tolir::allocate_greedy::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), size)
 }
 
 /// `MachineSinking` over the m68k function.
