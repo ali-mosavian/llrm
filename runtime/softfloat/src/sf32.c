@@ -33,6 +33,7 @@ static sf32 add_bits(sf32 a, sf32 b)
     if ((a & ~SIGN) < (b & ~SIGN)) { sf32 t = a; a = b; b = t; }
     int ea, eb;
     uint32_t ma = unpack(a, &ea) << 3, mb = unpack(b, &eb) << 3;
+    if (ea - eb > 25) return a; /* ed > 25: b is under a quarter of a's last place; 25 is not enough (2^k - 1.5 * 2^(k-25) rounds down) */
     mb = sf_shr_sticky32(mb, ea - eb);
     uint32_t sign = a & SIGN, m;
     if ((a ^ b) & SIGN) {
