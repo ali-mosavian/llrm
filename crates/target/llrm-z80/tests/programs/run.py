@@ -99,7 +99,9 @@ def one(job):
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
     ll.write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
     try:
-        p = sh([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w, timeout=args.compile_timeout)
+        # a compile that runs away is stopped at 16 GB of address space, not the machine's memory
+        p = sh(["bash", "-c", 'ulimit -v 16777216; exec "$@"', "llc", args.llc, "-S", f"-O{args.llc_level or args.level}",
+                "-o", str(w / "p.s"), str(ll)], w, timeout=args.compile_timeout)
     except subprocess.TimeoutExpired:
         return name, "SLOW", f"llc over {args.compile_timeout} s"
     if p.returncode:
