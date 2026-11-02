@@ -23,20 +23,9 @@ __divsf3:
 	.globl __addsf3
 __addsf3:
 	xor	a,a
-fas:	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	ld	iy,#0
+fas:	ld	iy,#-24
 	add	iy,sp
+	ld	sp,iy
 	ld	12(iy),a
 	ld	0(iy),l
 	ld	1(iy),h
@@ -401,18 +390,9 @@ retb:	ld	l,4(iy)
 retnan:	ld	hl,#0
 	ld	de,#0x7fc0
 done:	ex	de,hl		; the long result: low word in de, high word in hl
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
+	ld	iy,#24
+	add	iy,sp
+	ld	sp,iy
 	ret
 
 ; ---- multiply and divide: the operation (1 or 2) is in A, the frame holds a and b as for add
@@ -720,20 +700,9 @@ __floatsisf:
 	.globl __floatunsisf
 __floatunsisf:
 	xor	a,a
-flent:	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	ld	iy,#0
+flent:	ld	iy,#-24
 	add	iy,sp
+	ld	sp,iy
 	ld	21(iy),a
 	ld	0(iy),l
 	ld	1(iy),h
@@ -818,20 +787,9 @@ __fixsfsi:
 	.globl __fixunssfsi
 __fixunssfsi:
 	xor	a,a
-fixent:	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	ld	iy,#0
+fixent:	ld	iy,#-24
 	add	iy,sp
+	ld	sp,iy
 	ld	21(iy),a
 	ld	0(iy),l
 	ld	1(iy),h
