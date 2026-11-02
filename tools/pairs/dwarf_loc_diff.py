@@ -109,9 +109,11 @@ def compare(pin: dict, ours: dict) -> dict[str, list]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sources", nargs="+")
-    parser.add_argument("--pin", default=os.path.expanduser("~/scratch/llrm-pin-stage/bin"))
+    parser.add_argument("--pin", default=os.environ.get("LLRM_PIN_BIN"), help="the pin LLVM bin directory (default: $LLRM_PIN_BIN)")
     parser.add_argument("--llc", required=True, help="llrm-llc")
     args = parser.parse_args()
+    if not args.pin:
+        parser.error("--pin or LLRM_PIN_BIN names the pin LLVM bin directory")
     work = Path(tempfile.mkdtemp(prefix="dwarfloc-"))
     total = {"same": 0, "form": 0, "different": 0, "missing": 0, "refused": 0, "files refused": 0}
     for source in map(Path, args.sources):

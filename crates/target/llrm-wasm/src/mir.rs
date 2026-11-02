@@ -3,7 +3,8 @@
 //! DEVIATE W15: a spike-local model inside llrm-wasm, keyed to the generated
 //! opcode ids and the pin's operand order (defs first). Reason: the repo has no
 //! target-neutral machine function (`llrm-lir` is x86-register-shaped).
-//! Exit: the neutral machine function, one post-main task for every target.
+//! Exit: the neutral machine function, one post-main task for every target, no
+//! later than 2026-11-20.
 //!
 //! # See also
 //! `MachineRegisterInfo`, `WebAssemblyFunctionInfo`
@@ -53,6 +54,11 @@ impl ValType {
         self.pick([post::LOCAL_TEE_I32, post::LOCAL_TEE_I64, post::LOCAL_TEE_F32, post::LOCAL_TEE_F64])
     }
 
+    /// `getTeeOpcode`.
+    pub fn tee(self) -> u16 {
+        self.pick([post::TEE_I32, post::TEE_I64, post::TEE_F32, post::TEE_F64])
+    }
+
     /// `COPY`.
     pub fn copy(self) -> u16 {
         self.pick([post::COPY_I32, post::COPY_I64, post::COPY_F32, post::COPY_F64])
@@ -86,7 +92,7 @@ pub fn is_copy(opcode: u16) -> bool {
     [post::COPY_I32, post::COPY_I64, post::COPY_F32, post::COPY_F64].contains(&opcode)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Operand {
     Def(VReg),
     Use(VReg),
@@ -117,6 +123,9 @@ impl Operand {
 pub struct Mem {
     pub size: u64,
     pub align: u64,
+    /// `!MachineMemOperand::isUnordered()`: volatile, or atomic above
+    /// monotonic.
+    pub ordered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -216,12 +225,17 @@ pub struct Function {
     pub blocks: Vec<Vec<Inst>>,
     /// The successors of each block, by position, in the terminator's order.
     pub succs: Vec<Vec<usize>>,
+    /// The probability of each edge of `succs` as a numerator over 2^31,
+    /// zero when unknown; only until `machine_sink` has read it.
+    pub edge_probs: Vec<Vec<u32>>,
     /// The symbol and addend of each [`Operand::Sym`].
     pub symbols: Vec<(String, i64)>,
     /// The (name, parameters, results) of each function the code names: the
     /// signature the object file gives an undefined function.
     /// `.globl`, `.weak` or neither, and the binding in the object.
     pub binding: Binding,
+    /// `.hidden`: `WASM_SYMBOL_VISIBILITY_HIDDEN` in the object.
+    pub hidden: bool,
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
     /// The (name, type) of each wasm global the code names: an import of the
     /// object file.
@@ -237,10 +251,13 @@ pub struct Function {
     /// The callees that never throw (`Function::doesNotThrow`, and the
     /// libcalls `mayThrow` lists).
     pub nothrow: std::collections::HashSet<String>,
+    /// What each callee does to memory, as `(reads, writes)`: `memory(...)`,
+    /// `readnone` and `readonly` of the module's functions.
+    pub callee_memory: std::collections::HashMap<String, (bool, bool)>,
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,
-    vregs: Vec<ValType>,
+    pub(crate) vregs: Vec<ValType>,
     stackified: Vec<bool>,
 }
 

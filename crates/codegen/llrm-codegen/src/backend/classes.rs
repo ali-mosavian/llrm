@@ -319,4 +319,15 @@ mod tests {
         assert_eq!(classes.encodable_bases, llrm_x86::addressing16::BASES.into_iter().collect());
         assert_eq!(classes.addressing, [RegId::BX, RegId::BP, RegId::SI, RegId::DI].into_iter().collect());
     }
+
+    /// `is_encodable` puts a spill cell through the target's own frame register
+    /// when that register is wider than 16 bits: m16 must keep the abstract
+    /// one.
+    #[test]
+    fn only_m16_has_a_sixteen_bit_frame_register() {
+        let wide = |classes: &RegisterClasses| classes.registers.width_of(classes.frame).is_some_and(|width| width > 2);
+        assert!(!wide(&RegisterClasses::of(&llrm_x86_m16::M16)));
+        assert!(wide(&RegisterClasses::of(&llrm_x86_m32::M32)));
+        assert!(wide(&RegisterClasses::of(&llrm_x86_m64::M64)));
+    }
 }

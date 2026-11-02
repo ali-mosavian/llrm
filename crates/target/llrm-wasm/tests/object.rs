@@ -4,7 +4,7 @@
 
 use llrm_wasm::Width;
 use llrm_wasm::dag::Options;
-use llrm_wasm::driver::object;
+use llrm_wasm::driver::{Level, object};
 
 fn four(options: Options) -> Vec<u8> {
     let source =
@@ -148,4 +148,39 @@ fn a_constructor_entry_without_a_function_is_dropped() {
     let bytes = llrm_wasm::driver::object(text, llrm_wasm::Width::W32, llrm_wasm::dag::Options::default());
     let bytes = bytes.unwrap_or_else(|why| panic!("{why}"));
     assert!(bytes.windows(4).any(|w| w == b"init"), "the init function is in the object");
+}
+
+/// `tests/obj/main_alias.wasm` is the pin's object less its `producers`
+/// section (the pin's version string). A C `main(void)` is `__original_main`
+/// behind a `main(i32, i32)` wrapper, with a hidden `__main_void` alias of the
+/// body: the parser stopped at "expected a type, found `hidden`", so no C
+/// program reached the wasm backend.
+#[test]
+fn a_hidden_main_and_its_alias_are_the_pins_object() {
+    check("main_alias");
+}
+
+const ALIAS_CALL: &str = "@other = alias i32 (i32), ptr @impl
+define i32 @impl(i32 %x) {
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+define i32 @user(i32 %x) {
+  %r = call i32 @other(i32 %x)
+  ret i32 %r
+}
+";
+
+/// DEVIATE W23: the call names the alias, and ours relocates against `impl`'s
+/// symbol (0), the pin against `other`'s (2). At -O0 the callee is not inlined.
+#[test]
+fn a_call_naming_an_alias_relocates_against_its_aliasee() {
+    let options = Options { level: Level::O0, ..Options::default() };
+    let bytes = object(ALIAS_CALL, Width::W32, options).unwrap();
+    let at = bytes.windows(10).position(|w| w == b"reloc.CODE").expect("a code relocation section") + 10;
+    // section index, one relocation: type FUNCTION_INDEX_LEB (0), offset,
+    // symbol
+    assert_eq!(bytes[at + 1], 1, "one relocation");
+    assert_eq!((bytes[at + 2], bytes[at + 4]), (0, 0), "a function-index relocation against symbol 0, `impl`");
+    assert!(bytes.windows(5).any(|w| w == b"other"), "the alias is a symbol");
 }

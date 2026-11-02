@@ -31,3 +31,14 @@ def test_a_global_is_the_same_place_whether_its_address_is_addr_or_addrx():
     pin = {("", "g"): ("expr", (161, 2))}
     ours = {("", "g"): ("expr", (3, 0, 0, 0, 0, 0, 0, 0, 0))}
     assert d.compare(pin, ours)["form"] == [("", "g")]
+
+
+def test_the_pin_directory_is_named_by_the_caller_not_a_path_of_one_machine(tmp_path):
+    """A default of `~/scratch/...` in the script put one machine's directory in the tree."""
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "LLRM_PIN_BIN"}
+    done = subprocess.run([sys.executable, d.__file__, "--llc", "x", "y.c"], capture_output=True, text=True, env=env)
+    assert done.returncode == 2 and "LLRM_PIN_BIN" in done.stderr, (done.returncode, done.stderr)

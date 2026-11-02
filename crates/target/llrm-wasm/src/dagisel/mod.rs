@@ -7,5 +7,6 @@ pub mod addr;
 pub mod generated;
 pub mod hooks;
 pub mod lowering;
+pub mod opcode_names;
 pub mod post_ids;
 pub mod predicates;

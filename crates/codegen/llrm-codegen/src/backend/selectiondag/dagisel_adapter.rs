@@ -133,6 +133,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FAdd => pin::FADD,
         FSub => pin::FSUB,
         FMul => pin::FMUL,
+        FMA => pin::FMA,
         FDiv => pin::FDIV,
         FRem => pin::FREM,
         FNeg => pin::FNEG,
@@ -1211,7 +1212,9 @@ impl AddrDag for DagisAdapter<'_> {
                     flags: 0,
                 })
             }
-            NodeData::JumpTable(index) => {
+            // Only the position-independent table is a symbol operand
+            // (`relative_jump_tables`); the others keep it in a register.
+            NodeData::JumpTable(index) if self.dag.relative_jump_tables() => {
                 Some(Wrapped { symbol: Symbol { kind: SymbolKind::JumpTable, id: index }, offset: 0, flags: 0 })
             }
             _ => None,

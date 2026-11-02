@@ -1569,11 +1569,31 @@ impl Module {
             }));
         }
         self.context.renumber_globals(&|global| renumbered[global.0 as usize]);
+        // An alias follows its aliasee, and goes with it.
+        self.aliases.retain_mut(|alias| match renumbered[alias.aliasee.0 as usize] {
+            Some(now) => {
+                alias.aliasee = now;
+                true
+            }
+            None => false,
+        });
         let mut at = 0;
         self.globals.retain(|_| {
             at += 1;
             renumbered[at - 1].is_some()
         });
+    }
+
+    /// An error where the module defines an alias and `target`'s writer emits
+    /// none: dropping the symbol would link as an undefined reference later.
+    pub fn refuse_aliases(
+        &self,
+        target: &str,
+    ) -> Result<(), String> {
+        match self.aliases.first() {
+            Some(alias) => Err(format!("{target} cannot emit the alias @{}", alias.name)),
+            None => Ok(()),
+        }
     }
 
     /// Whether the code is position independent: clang's "PIC Level" module

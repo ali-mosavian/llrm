@@ -217,6 +217,7 @@ pub mod legalize;
 pub mod libmcalls;
 #[cfg(test)]
 mod libmcalls_tests;
+pub mod licm_core;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
