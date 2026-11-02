@@ -217,6 +217,35 @@ pub fn positioned(
     out
 }
 
+/// Prints, for `LLRM_LDV_DUMP`, the notes' slot positions (`LDVNOTE`) and the
+/// ranges of every variable (`LDV`) over the body the allocator wrote, to be
+/// joined by note index with the same function's `valuetrack` rows. Reads
+/// only; the code is unchanged.
+pub fn dump(
+    edited: &LirBody,
+    placed: &[(u32, RegId)],
+    spilled: &[u32],
+    parents: &HashMap<u32, u32>,
+    frame: &crate::backend::frame::Frame,
+) {
+    use crate::backend::frame::FrameInfo;
+    let mut lis = LiveIntervals::new(edited);
+    let placed: IndexMap<u32, RegId> = placed.iter().copied().collect();
+    let mut table = segments_of(&mut lis, &placed, parents);
+    let root = |value: u32| parents.get(&value).copied().unwrap_or(value);
+    add_cells(&mut table, spilled.iter().map(|&value| root(value)), |value| frame.home(value), &frame.stacks);
+    let at = |id| i64::from(lis.indexes.get_instruction_index(id).get_index());
+    for one in edited.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for &note in &one.debug.before {
+            eprintln!("LDVNOTE\t{}\t{note}\t{}", edited.name, at(one.id()));
+        }
+    }
+    let end = lis.indexes.get_last_index().get_index();
+    for one in locate(&positioned(edited, &lis), &table, i64::from(end), true) {
+        eprintln!("LDV\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

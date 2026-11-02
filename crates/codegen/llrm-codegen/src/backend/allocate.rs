@@ -360,6 +360,9 @@ pub fn greedy_rewritten(
         );
     }
     GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+    if llrm_support::env_flag!("LLRM_LDV_DUMP") {
+        crate::backend::livedebugvariables::dump(&edited, &decided.placed, &decided.spilled, &decided.parents, frame);
+    }
     let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
     Ok((
         Assignment { r#where, spilled: BTreeSet::new(), cost: 0.0, optimal: false, why: "llvm greedy".to_owned() },

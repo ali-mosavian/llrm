@@ -995,6 +995,21 @@ pub fn laid_out(
                             debug.target.entry_values,
                         )
                     };
+                    if llrm_support::env_flag!("LLRM_LDV_DUMP") {
+                        for (at, mark) in &marks {
+                            if let masm::Mark::Note(note) = mark {
+                                eprintln!("VTNOTE\t{}\t{note}\t{at}", procedure.body.name);
+                            }
+                        }
+                        for ((variable, piece), ranges) in &found {
+                            for (from, to, places) in ranges {
+                                eprintln!(
+                                    "VT\t{}\t{variable}\t{piece:?}\t{from}\t{to}\t{places:?}",
+                                    procedure.body.name
+                                );
+                            }
+                        }
+                    }
                     let parts: Vec<_> = found
                         .into_iter()
                         .filter(|((variable, _), _)| *variable == node)
