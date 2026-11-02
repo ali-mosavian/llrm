@@ -964,6 +964,7 @@ fn selected_in(
             .ok()
             .flatten()
             .is_some_and(|clocks| clocks.minimum < clocks.maximum),
+        mask_by_extension: cpu.masks_by_extension().unwrap_or(true),
         address_mode,
     });
     let selector = Selector::new(if m16 {

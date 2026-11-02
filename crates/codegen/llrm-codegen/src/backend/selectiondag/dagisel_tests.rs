@@ -19,6 +19,7 @@ fn hooks() -> X86Hooks {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
+        mask_by_extension: true,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
     })
 }

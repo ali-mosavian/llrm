@@ -123,6 +123,7 @@ mod x86_addr {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         })
     }
@@ -269,6 +270,7 @@ mod rmw {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         })
     }
@@ -375,6 +377,7 @@ mod fold_load {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         })
     }
@@ -541,6 +544,7 @@ mod select_without_cmov {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, cmov), Outcome::Selected);
@@ -730,6 +734,7 @@ mod far_pointer_loads {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: mode,
         })
     }
@@ -899,6 +904,7 @@ mod string_instructions {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode,
         })
     }
@@ -988,6 +994,7 @@ mod segment_overrides {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: AddrMode::Real16,
         });
         assert_eq!(Selector::new(crate::generated::x86_m16::TABLE).select(dag, &mut hooks, load), Outcome::Selected);
@@ -1109,6 +1116,7 @@ mod x87_pseudos {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: AddrMode::Flat32,
         })
     }
@@ -1175,6 +1183,7 @@ mod select_loop {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: AddrMode::Flat32,
         })
     }
@@ -1301,6 +1310,7 @@ fn a_return_glue_node_is_selected_to_ret() {
         min_size: false,
         has_frame_pointer: true,
         multiply_early_out: false,
+        mask_by_extension: true,
         address_mode: crate::x86_addr::AddrMode::Flat32,
     });
 
@@ -1390,6 +1400,7 @@ mod divrem {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         select_node(&Selector::new(table::TABLE), dag, &mut hooks, node)
@@ -1483,6 +1494,7 @@ mod mul_lohi {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1525,6 +1537,7 @@ mod llrm_intrinsics {
                 min_size: false,
                 has_frame_pointer: true,
                 multiply_early_out: false,
+                mask_by_extension: true,
                 address_mode: crate::x86_addr::AddrMode::Real16,
             });
 
@@ -1554,6 +1567,7 @@ mod llrm_intrinsics {
                 min_size: false,
                 has_frame_pointer: true,
                 multiply_early_out: false,
+                mask_by_extension: true,
                 address_mode: crate::x86_addr::AddrMode::Real16,
             });
 
@@ -1581,6 +1595,7 @@ mod llrm_intrinsics {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Real16,
         });
 
@@ -1608,6 +1623,7 @@ mod llrm_intrinsics {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Real16,
         });
 
@@ -1656,6 +1672,7 @@ mod fcmp_without_fcomi {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
 
@@ -1693,6 +1710,7 @@ mod pop_from_x87 {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
 
@@ -1746,6 +1764,7 @@ mod decrement_for_flags {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
@@ -1785,6 +1804,7 @@ mod and_with_a_low_mask {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, and), Outcome::Selected);
@@ -1829,6 +1849,7 @@ mod setcc_carry {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
@@ -1875,6 +1896,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
@@ -1907,6 +1929,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
@@ -2006,6 +2029,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
@@ -2031,6 +2055,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat64,
         });
         assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
@@ -2052,6 +2077,7 @@ mod x64_table {
             min_size: false,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         };
         assert_eq!(options.pointer_type(), mvt::i64);
@@ -2085,6 +2111,7 @@ mod minsize_store_immediate {
             min_size,
             has_frame_pointer: true,
             multiply_early_out: false,
+            mask_by_extension: true,
             address_mode: crate::x86_addr::AddrMode::Flat32,
         });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, store), Outcome::Selected);

@@ -57,6 +57,7 @@ features = ["X87", "CX8", "CMOV", "SSE1", "SSE2"]
 [dynamic]
 "shouldOptForSize(MF)" = "should_opt_for_size"
 "MF->getFunction().hasMinSize()" = "has_min_size"
+"shouldMaskByExtension(MF)" = "masks_by_extension"
 "Subtarget->getFrameLowering()->hasFP(*MF)" = "has_frame_pointer"
 "Subtarget->isLegalToCallImmediateAddr()" = "is_legal_to_call_immediate_addr"
 

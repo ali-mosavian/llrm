@@ -8,7 +8,7 @@ use crate::dag::{Dag, Hooks, PatternContext, SDValue, X86Predicates};
 use crate::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::predicates;
 
-pub static ITEMS: [crate::matcher::Matcher; 15252] = [
+pub static ITEMS: [crate::matcher::Matcher; 15260] = [
     SwitchOpcode,
     OpcodeCase { size: 3589, opcode: 317 },
     RecordMemRef,
@@ -7808,7 +7808,7 @@ pub static ITEMS: [crate::matcher::Matcher; 15252] = [
     Alt(0),
     Alt(0),
     Alt(0),
-    OpcodeCase { size: 367, opcode: 193 },
+    OpcodeCase { size: 375, opcode: 193 },
     Scope,
     Alt(38),
     RecordChild(0),
@@ -7893,13 +7893,21 @@ pub static ITEMS: [crate::matcher::Matcher; 15252] = [
     MorphNodeTo(Emit { opcode: 911, flags: 9, vts: [Vt(8), Vt(7)], num_vts: 2, operands: Slice { start: 97, len: 6 } }),
     Alt(0),
     OpcodeCase { size: 0, opcode: 0 },
-    Alt(6),
+    Alt(14),
     CheckAndImm(255),
     RecordChild(0),
     CheckType(Vt(6)),
+    Scope,
+    Alt(3),
+    CheckPatternPredicate(267),
+    EmitInteger { vt: Vt(6), value: 255 },
+    MorphNodeTo(Emit { opcode: 819, flags: 0, vts: [Vt(6), Vt(7)], num_vts: 2, operands: Slice { start: 0, len: 2 } }),
+    Alt(4),
+    CheckPatternPredicate(268),
     EmitInteger { vt: Vt(7), value: 1 },
     EmitNode(Emit { opcode: 8, flags: 0, vts: [Vt(5), Vt(0)], num_vts: 1, operands: Slice { start: 0, len: 2 } }),
     MorphNodeTo(Emit { opcode: 2765, flags: 0, vts: [Vt(6), Vt(0)], num_vts: 1, operands: Slice { start: 123, len: 1 } }),
+    Alt(0),
     Alt(40),
     RecordChild(0),
     MoveChild(1),
@@ -11030,7 +11038,7 @@ pub static ITEMS: [crate::matcher::Matcher; 15252] = [
     OpcodeCase { size: 6, opcode: 12 },
     CheckType(Vt(7)),
     MoveParent,
-    CheckPatternPredicate(279),
+    CheckPatternPredicate(281),
     EmitMergeInputChains(Slice { start: 82, len: 1 }),
     EmitConvertToTarget(1),
     MorphNodeTo(Emit { opcode: 1169, flags: 39, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 123, len: 1 } }),
@@ -15274,7 +15282,9 @@ pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {
         173 => ctx.should_opt_for_size(),
         177 => ctx.should_opt_for_size(),
         227 => ctx.has_min_size(),
-        279 => ctx.is_legal_to_call_immediate_addr(),
+        267 => !ctx.masks_by_extension(),
+        268 => ctx.masks_by_extension(),
+        281 => ctx.is_legal_to_call_immediate_addr(),
         _ => unreachable!("pattern predicate {id} is not in this table"),
     }
 }

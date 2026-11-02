@@ -86,6 +86,21 @@ def : Pat<(extloadi16i1 addr:$src), (MOVZX16rm8 addr:$src)>;
 def : Pat<(i16 (zextloadi8 addr:$src)), (MOVZX16rm8 addr:$src)>;
 def : Pat<(i16 (zext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
 def : Pat<(i16 (anyext GR8:$src)), (MOVZX16rr8 GR8:$src)>;
-def : Pat<(and GR16:$src1, 0xff), (MOVZX16rr8 (EXTRACT_SUBREG GR16:$src1, sub_8bit))>;
 def : Pat<(sext_inreg GR16:$src, i8), (MOVSX16rr8 (EXTRACT_SUBREG GR16:$src, sub_8bit))>;
 }
+
+// `and r16, 255` is the byte `movzx` where the target prices the extension no higher than the `and`
+// (`Profile::masks_by_extension`: for size, or a CPU whose `movzx` is as fast). On the 486 and the
+// Pentium `movzx r16, r8` is three clocks and the `and` one, in as many bytes through AX and one
+// more otherwise, so the `and` stays.
+// DEVIATE MB1 (owner w2, 2026-11-02; exit: none, the pin prices no CPU timing): the pin's (and GR16, 0xff)
+// is the extension unconditionally (X86InstrCompiler.td L1778 at d1106deb71cc); histo c/nib -O2
+// was +8192 clocks over main with it.
+def MaskByExtension : Predicate<"shouldMaskByExtension(MF)">;
+def NoMaskByExtension : Predicate<"!shouldMaskByExtension(MF)">;
+let AddedComplexity = 10, Predicates = [In16BitMode, MaskByExtension] in
+def : Pat<(and GR16:$src1, 0xff), (MOVZX16rr8 (EXTRACT_SUBREG GR16:$src1, sub_8bit))>;
+// Where it is not, the `and` itself: the pin's own mask pattern (X86InstrCompiler.td L1778, the
+// 32-bit extension of the low byte) would otherwise be the next to match.
+let AddedComplexity = 10, Predicates = [In16BitMode, NoMaskByExtension] in
+def : Pat<(and GR16:$src1, 0xff), (AND16ri GR16:$src1, 0xff)>;

@@ -552,6 +552,11 @@ pub trait PatternContext {
     fn should_opt_for_size(&self) -> bool;
     /// `MF->getFunction().hasMinSize()`.
     fn has_min_size(&self) -> bool;
+    /// The target prices the extension of a masked low byte no higher than the
+    /// `and` (`m16.td`'s `MaskByExtension`); the pin's own patterns do not ask.
+    fn masks_by_extension(&self) -> bool {
+        true
+    }
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     fn has_frame_pointer(&self) -> bool;
     /// `Subtarget->isLegalToCallImmediateAddr()`.

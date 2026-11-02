@@ -57,6 +57,10 @@ pub struct Options {
     /// The CPU's multiply ends early on the r/m operand's length (the 486: `10
     /// + max(bits, 3)`), from its tune description.
     pub multiply_early_out: bool,
+    /// `and r, 255` is the byte `movzx`: the CPU takes no more for the
+    /// extension than for the `and`, or the code is for size
+    /// (`Profile::masks_by_extension`).
+    pub mask_by_extension: bool,
     /// The address forms the target has (SD3).
     pub address_mode: AddrMode,
 }
@@ -95,6 +99,9 @@ impl PatternContext for X86Hooks {
     }
     fn has_min_size(&self) -> bool {
         self.options.min_size
+    }
+    fn masks_by_extension(&self) -> bool {
+        self.options.mask_by_extension
     }
     fn has_frame_pointer(&self) -> bool {
         self.options.has_frame_pointer

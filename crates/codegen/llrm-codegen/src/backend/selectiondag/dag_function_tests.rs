@@ -1450,3 +1450,32 @@ fn on_a_486_the_magic_is_the_accumulator_and_the_dividend_the_multiplier() {
     assert_eq!(urem_mul_operands("486"), (true, false));
     assert_eq!(urem_mul_operands("P5"), (false, true));
 }
+
+const WORD_MASKED_BY_255: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %a, i16 %b) {
+  %s = add i16 %a, %b
+  %r = and i16 %s, 255
+  ret i16 %r
+}
+";
+
+/// `(a + b) & 255` at m16 on the 486 was `movzx ax, cl`: three clocks where
+/// `and ax, 255` takes one, and the same three bytes (histo c/nib -O2, +8192
+/// clocks over main). `m16.td`'s mask pattern is priced by
+/// `Profile::masks_by_extension`: the extension for size, the `and` otherwise.
+#[test]
+fn at_m16_a_byte_mask_of_a_word_is_the_cheaper_of_and_and_movzx() {
+    let module = crate::testing::module(WORD_MASKED_BY_255).expect("parses");
+    for (cpu, size, want) in [("486", false, "and"), ("486", true, "movzx")] {
+        let mut profile = crate::backend::cpu::profile(cpu).expect("a cpu").clone();
+        profile.size = size;
+        let done = selected(&module, "f", &llrm_x86_m16::M16, &profile, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        assert!(
+            seen.iter().any(|n| n.starts_with(want))
+                && !seen.iter().any(|n| n.starts_with(if want == "and" { "movzx" } else { "and" })),
+            "{cpu} size={size}: {seen:?}"
+        );
+    }
+}
