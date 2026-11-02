@@ -16,6 +16,19 @@ int __main_void(void) __attribute__((weak));
 int __main_argc_argv(int, char **) __attribute__((weak));
 static unsigned long state;
 void report(long value) { state = state * 31u + (unsigned long)value; }
+/* The input of the benches that read one (grep): 64 KB of words, the same bytes on both sides. */
+int input_read(char *buffer, int count)
+{
+    static const char *const words[] = {"Oliver ", "Scrooge ", "ghost ", "Marley ", "and ", "the ", "of ", "Tiny Tim\n", "a "};
+    static unsigned long seed = 1, sent;
+    int n = 0;
+    while (n < count && sent < 65536) {
+        const char *w;
+        seed = seed * 1103515245u + 12345u;
+        for (w = words[(seed >> 16) % 9]; *w && n < count; ++w, ++sent) buffer[n++] = *w;
+    }
+    return n;
+}
 int run(void)
 {
     if (__main_void) __main_void();
@@ -29,9 +42,9 @@ code() { wasm-objdump -h "$1" | sed -n 's/^ *Code start=.*(size=0x\([0-9a-f]*\))
 
 # "result instructions" of one object linked with the stub.
 count() {
-  wasm-ld --no-entry --export=run --allow-undefined "$1" "$out/stub.o" -o "$1.wasm" 2>/dev/null || { echo "linkfail 0"; return; }
+  wasm-ld --no-entry --export=run --allow-undefined "$1" "$out/stub.o" -o "$1.wasm" 2>/dev/null || { echo "none 0"; return; }
   timeout 120 wasm-interp "$1.wasm" -r run --trace > "$1.trace" 2>&1
-  echo "$(sed -n 's/^run() => i32:\(-*[0-9]*\)$/\1/p' "$1.trace") $(grep -c '^#' "$1.trace")"
+  echo "$(sed -n 's/^run() => i32:\(-*[0-9]*\)$/\1/p' "$1.trace" | head -1 | grep . || echo none) $(grep -c '^#' "$1.trace")"
 }
 
 printf '%-22s %9s %9s %12s %12s  %s\n' program llrm_B clang_B llrm_instr clang_instr result
@@ -43,7 +56,9 @@ for f in "$@"; do
     { printf '%-22s clang FAIL\n' "$n"; continue; }
   read -r lv li <<< "$(count "$out/$n.l.o")"
   read -r cv ci <<< "$(count "$out/$n.c.o")"
-  ok=same
-  [ "${lv:-x}" = "${cv:-y}" ] || ok="DIFFERENT(${lv:-none}/${cv:-none})"
+  # A side that did not run (unresolved import, trap) has no result: the row is unjudged, never "same".
+  if [ "${lv:-none}" = none ] || [ "${cv:-none}" = none ]; then ok="n/a(no result: llrm ${lv:-none}, clang ${cv:-none})"
+  elif [ "$lv" = "$cv" ]; then ok=same
+  else ok="DIFFERENT($lv/$cv)"; fi
   printf '%-22s %9s %9s %12s %12s  %s\n' "$n" "$(code "$out/$n.l.o")" "$(code "$out/$n.c.o")" "${li:-0}" "${ci:-0}" "$ok"
 done
