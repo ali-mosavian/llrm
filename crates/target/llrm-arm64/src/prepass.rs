@@ -258,6 +258,7 @@ fn dead_code(function: &mut MFunc) {
 
 pub fn run(function: &mut MFunc) {
     dead_code(function);
+    unsplit_edges(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
@@ -927,5 +928,103 @@ pub fn order_copies(function: &mut MFunc) {
                 );
             at = end.max(at + 1);
         }
+    }
+}
+
+/// A back edge's phi copies go to the end of the latch, not into a block of
+/// their own: `PHIElimination::SplitPHIEdges` never splits one
+/// ([PHIElimination.cpp#L827-L832](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L827-L832)).
+/// `recfloat`'s loop ran `fmov; b` in an edge block each trip, the pin one
+/// `fmov` before the branch.
+///
+/// DEVIATE PE1: the DAG path splits every critical edge as it emits, before
+/// any liveness exists, and the pin decides after it. This pass is that
+/// decision for back edges, with the check the pin's per-phi temporary gives
+/// it (the copy's destinations are dead on the other successor). Exit: phi
+/// elimination onto the shared machine function with liveness (dated 11-20),
+/// then this pass goes.
+fn unsplit_edges(function: &mut MFunc) {
+    let is_edge = |label: &str| {
+        label.rsplit_once(".e").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let is_branch = |op: &Op| {
+        matches!(
+            op,
+            Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
+        )
+    };
+    loop {
+        let graph = cfg(function);
+        let live = live_in(function, &graph);
+        let found = (0..function.blocks.len()).find_map(|edge| {
+            let block = &function.blocks[edge];
+            if !is_edge(&block.label) || graph.predecessors[edge].len() != 1 {
+                return None;
+            }
+            let from = graph.predecessors[edge][0];
+            let [Op::I(Inst::Branch { link: false, target: Target::Label(head) }), ..] =
+                &block.ops.iter().rev().take(1).cloned().collect::<Vec<_>>()[..]
+            else {
+                return None;
+            };
+            let copies = &block.ops[..block.ops.len() - 1];
+            if copies.is_empty() || !copies.iter().all(|op| matches!(op, Op::Copy { .. })) {
+                return None;
+            }
+            // The other successors must not need what the copies read or write,
+            // and the branches must not read what they write.
+            let others: Vec<usize> = graph.successors[from].iter().copied().filter(|&one| one != edge).collect();
+            if others.len() + 1 != graph.successors[from].len() || from == edge {
+                return None;
+            }
+            let defined: Vec<Reg> = copies.iter().flat_map(|op| op.defs_and_uses().0).collect();
+            // Only a back edge: `SplitPHIEdges` never splits one, and
+            // `MachineSink` never breaks it for a sink. Any other edge may
+            // still be one the sink lands a value on.
+            let back = function
+                .blocks
+                .iter()
+                .position(|one| one.label == *head)
+                .is_some_and(|header| dominates(&graph, header, from));
+            if !back {
+                return None;
+            }
+            let touched = defined.clone();
+            if others.iter().any(|&one| touched.iter().any(|reg| live[one].contains(reg))) {
+                return None;
+            }
+            let reads_defined = function.blocks[from]
+                .ops
+                .iter()
+                .filter(|op| is_branch(op))
+                .any(|op| op.defs_and_uses().1.iter().any(|reg| defined.contains(reg)));
+            if reads_defined {
+                return None;
+            }
+            Some((edge, from, head.clone()))
+        });
+        let Some((edge, from, head)) = found else { return };
+        let label = function.blocks[edge].label.clone();
+        let mut copies = std::mem::take(&mut function.blocks[edge].ops).into_iter().collect::<Vec<_>>();
+        copies.pop();
+        let ops = &mut function.blocks[from].ops;
+        for index in 0..ops.len() {
+            if let Op::I(
+                Inst::Branch { target, .. }
+                | Inst::BranchCond { target, .. }
+                | Inst::CompareBranch { target, .. }
+                | Inst::TestBranch { target, .. },
+            ) = ops.op_mut(index)
+            {
+                if *target == Target::Label(label.clone()) {
+                    *target = Target::Label(head.clone());
+                }
+            }
+        }
+        let at = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
+        for (offset, copy) in copies.into_iter().enumerate() {
+            ops.insert(at + offset, copy.0);
+        }
+        function.blocks.remove(edge);
     }
 }

@@ -757,7 +757,7 @@ fn div_prices(
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
 fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
-    let rate = cpu.size_milliclocks_per_byte();
+    let rate = cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
     if rate == 0 {
         return None;
     }

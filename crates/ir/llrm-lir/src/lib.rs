@@ -503,7 +503,7 @@ impl fmt::Display for Operation {
 }
 
 /// Typed selected semantics for one instruction.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
     pub name: Option<std::sync::Arc<str>>,
@@ -514,6 +514,10 @@ pub struct Semantics {
     /// A table jump (`indirect`, its one source the table's cell): the block
     /// each index of the table goes to. Empty for any other instruction.
     pub table: Vec<i64>,
+    /// A table jump through a register (`table` set, its one source the
+    /// register): the id of the data object that holds the table, which the
+    /// jump's cell names when the table is read from memory.
+    pub table_id: Option<i64>,
     /// A `rep` prefix on an instruction that is not a string operation
     /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
     pub repeat: bool,
@@ -522,6 +526,26 @@ pub struct Semantics {
     /// `None` where unknown, which an indirect call keeps the frame register
     /// for.
     pub pops: Option<i64>,
+}
+
+impl std::hash::Hash for Semantics {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        // `table_id` is left out: a field added to the derived hash reordered
+        // a hash-keyed container (two edge landings swapped their labels in
+        // `level.nib` at m16). Equal values still hash alike.
+        self.op.hash(state);
+        self.name.hash(state);
+        self.dests.hash(state);
+        self.sources.hash(state);
+        self.target.hash(state);
+        self.indirect.hash(state);
+        self.table.hash(state);
+        self.repeat.hash(state);
+        self.pops.hash(state);
+    }
 }
 
 impl Semantics {
@@ -544,6 +568,7 @@ impl Semantics {
             && self.target == other.target
             && self.indirect == other.indirect
             && self.table == other.table
+            && self.table_id == other.table_id
             && self.repeat == other.repeat
             && self.pops == other.pops
             && same(&self.dests, &other.dests)
@@ -581,6 +606,7 @@ impl Semantics {
             target: None,
             indirect: false,
             table: Vec::new(),
+            table_id: None,
             repeat: false,
             pops: None,
         }
@@ -599,6 +625,7 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     target: None,
     indirect: false,
     table: Vec::new(),
+    table_id: None,
     repeat: false,
     pops: None,
 });
@@ -696,6 +723,7 @@ pub fn restoring(
         target: None,
         indirect: false,
         table: Vec::new(),
+        table_id: None,
         repeat: false,
         pops: None,
     }

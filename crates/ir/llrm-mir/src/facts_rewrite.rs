@@ -577,6 +577,11 @@ mod tests {
             // copy's own pointers; it reads no flag off an existing
             // instruction.
             "memloops.rs",
+            // TypePromotion.cpp's `isPromotedResultSafe` takes `nuw` of an
+            // add, sub, mul or shl as proof it cannot wrap, and `PromoteTree`
+            // drops `nsw` off a trunc to i1 that is not also `nuw`. It sets no
+            // flag.
+            "typepromotion_pass.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

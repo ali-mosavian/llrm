@@ -24,9 +24,10 @@ use super::pipeline::select_block;
 use crate::REGISTER_INFO;
 use crate::machine::Platform;
 
-static CALLING: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
+static DARWIN: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
+static LINUX: LazyLock<Aarch64Calling> = LazyLock::new(|| Aarch64Calling { linux: true });
 
-pub fn builder_target() -> BuilderTarget {
+pub fn builder_target(platform: Platform) -> BuilderTarget {
     BuilderTarget {
         dag: DagConfig {
             pointer: EVT::I64,
@@ -35,11 +36,23 @@ pub fn builder_target() -> BuilderTarget {
             dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             known_bits_for_target_node: Some(known_bits_for_target_node),
+            fma_faster: true,
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         stack_align: Some(16),
+        // The inline expansion has no `q` type (SD13): the calling hook makes
+        // every constant copy and fill within the pin's limits.
+        tuning: llrm_mir::target::Tuning {
+            max_stores_per_memset: 0,
+            max_stores_per_memset_opt_size: 0,
+            max_stores_per_memcpy: 0,
+            max_stores_per_memcpy_opt_size: 0,
+            max_stores_per_memmove: 0,
+            max_stores_per_memmove_opt_size: 0,
+            ..llrm_mir::target::Tuning::PIN
+        },
         native_atomics: true,
         jump_tables: true,
         // AArch64Subtarget.cpp#L345: 10 (4 at minsize, not modelled).
@@ -49,7 +62,7 @@ pub fn builder_target() -> BuilderTarget {
             ret: ISD::Target(RET_GLUE),
             stack_pointer: "sp",
             big_endian: false,
-            calling: Some(&*CALLING),
+            calling: Some(if platform == Platform::Linux { &*LINUX } else { &*DARWIN }),
         }),
         ..BuilderTarget::m64()
     }
@@ -106,6 +119,11 @@ pub struct Selected {
     pub successors: Vec<u32>,
     /// What the phis of the function take from this block's edges.
     pub phis: Vec<PhiCopy>,
+    /// The ids of the blocks each of the function's jump tables goes to.
+    pub tables: Vec<Vec<u32>>,
+    /// The frame object each source variable lives in (`llvm.dbg.declare` of a
+    /// static `alloca`), by the variable's metadata node.
+    pub declared: Vec<(llrm_mir::MetadataId, u32)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -155,17 +173,34 @@ pub fn select_function_in(
     };
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
-    let target = builder_target()
+    let target = builder_target(platform)
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
     let mut info = FunctionLoweringInfo::new(function);
     let mut frame = static_frame(module, function, layout, &info)?;
     let mut selected = Vec::new();
+    let declared: Vec<(llrm_mir::MetadataId, u32)> = function
+        .debug_records()
+        .iter()
+        .filter_map(|record| {
+            let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+            Some((record.variable, u32::try_from(*info.static_allocas.get(&address)?).ok()?))
+        })
+        .collect();
     // Each block is built and selected in turn, as the pin does, so a block
     // reads what the blocks before it knew of a register. The blocks a
     // lowering makes (the case blocks of a split `br (or a, b)`) follow the
     // block that made them in the layout.
+    let opt_for_size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
     let mut work = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(module, function, layout, &target, &Aarch64Arch, &convention, &mut info, block)
@@ -175,7 +210,8 @@ pub fn select_function_in(
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
         let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
-        let units = select_block(&mut built.dag, &globals, &mut info).map_err(|why| format!("{why:?}"))?;
+        let units =
+            select_block(&mut built.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
         for (id, mut extra) in extras {
             // `FinishBasicBlock`: a block the lowering made is a predecessor
@@ -183,7 +219,8 @@ pub fn select_function_in(
             // that made it does.
             extra.phi_updates = parent_updates.clone();
             let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
-            let units = select_block(&mut extra.dag, &globals, &mut info).map_err(|why| format!("{why:?}"))?;
+            let units =
+                select_block(&mut extra.dag, &globals, &mut info, opt_for_size).map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
         }
     }
@@ -198,15 +235,21 @@ pub fn select_function_in(
         } else {
             function.successors(llrm_mir::module::BlockId(id)).into_iter().map(|b| b.0).collect()
         };
-        let phis = built
-            .phi_updates
+        let updates = &built.phi_updates;
+        let phis = updates
             .iter()
-            .map(|&(phi, src)| {
+            .enumerate()
+            .map(|(at, &(phi, src))| {
                 let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
                     return Err("a phi that is no instruction".to_owned());
                 };
                 let to = function.parent(def).ok_or("a phi outside a block")?.0;
-                let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+                let reg = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+                // A value of several registers (an aggregate, an `i128`) has
+                // one update for each part, in order: the k-th is the phi's
+                // k-th register.
+                let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
+                let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
                 let float = matches!(
                     module.context.types.get(function.value(phi).ty),
                     llrm_mir::types::Type::Float(_)
@@ -223,6 +266,8 @@ pub fn select_function_in(
             layout: order.clone(),
             successors,
             phis,
+            tables: info.jump_tables.clone(),
+            declared: declared.clone(),
         });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
