@@ -164,6 +164,15 @@ def absaddr : Operand<i16> { let MIOperandInfo = (ops i16imm, i16imm); }
 def MOSAbs : ComplexPattern<i16, 2, "SelectAbs", [], []>;
 let mayLoad = 1, AddedComplexity = 20 in
   def LDABS : MOSInst<(outs Imag8:$d), (ins absaddr:$a), "ldabs $d, $a", [(set i8:$d, (load MOSAbs:$a))]>;
+// A byte op whose second operand is a global in memory: LDA a; ADC g. The load folds only when this is its one
+// use and no store lies between (the matcher's legality check); a commutative op takes the load on either side.
+let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
+  def ADD8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "add8m $d, $a, $m", [(set i8:$d, (add i8:$a, (load MOSAbs:$m)))]>;
+  def SUB8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "sub8m $d, $a, $m", [(set i8:$d, (sub i8:$a, (load MOSAbs:$m)))]>;
+  def AND8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "and8m $d, $a, $m", [(set i8:$d, (and i8:$a, (load MOSAbs:$m)))]>;
+  def OR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "or8m $d, $a, $m", [(set i8:$d, (or i8:$a, (load MOSAbs:$m)))]>;
+  def XOR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "xor8m $d, $a, $m", [(set i8:$d, (xor i8:$a, (load MOSAbs:$m)))]>;
+}
 let mayStore = 1, AddedComplexity = 20 in
   def STABS : MOSInst<(outs), (ins Imag8:$s, absaddr:$a), "stabs $s, $a", [(store i8:$s, MOSAbs:$a)]>;
 let mayStore = 1 in {
@@ -257,6 +266,10 @@ def : Pat<(i8 (trunc Imag16:$a)), (EXTRACT_SUBREG Imag16:$a, sub_lo)>;
 def : Pat<(i8 (trunc (srl Imag16:$a, (i8 8)))), (EXTRACT_SUBREG Imag16:$a, sub_hi)>;
 // Only the low byte of a left shift is wanted: shift the low byte (`(x << 11) >> 8` is a byte shifted by 3).
 def : Pat<(i8 (trunc (shl Imag16:$a, (i8 imm:$k)))), (SHL8 (EXTRACT_SUBREG Imag16:$a, sub_lo), imm:$k)>;
+// The low byte of a word shifted right by 5 to 7 is the high byte of the word shifted left by 3 to 1: three
+// steps of `asl; rol` where seven of `lsr; ror` were.
+foreach k = 5-7 in
+  def : Pat<(i8 (trunc (srl Imag16:$a, (i8 k)))), (EXTRACT_SUBREG (SHL16 Imag16:$a, !sub(8, k)), sub_hi)>;
 def : Pat<(i16 (zext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
 def : Pat<(i16 (anyext Imag8:$a)), (REG_SEQUENCE Imag16, Imag8:$a, sub_lo, (LDI8 0), sub_hi)>;
 // A byte loaded and widened: the load, and a zero high byte.

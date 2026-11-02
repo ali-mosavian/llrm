@@ -173,8 +173,9 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the stand-in for
-        // the target's override-table entry).
+        // DEVIATE (6502-5): no unrolling, where the pin's unroller reads the
+        // target's `getUnrollingPreferences`. Exit: the 6502's thresholds as a
+        // per-target override-table entry, once the unroller takes them.
         options.unroll = false;
         options.loop_unrolling = false;
         for flag in &request.passes {
@@ -193,6 +194,35 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     let mut program = program(text, request)?;
+    // The copies as loops, for the functions that call `memcpy`: priced
+    // against the calls below.
+    let copies = if request.level == Level::O0 {
+        Vec::new()
+    } else {
+        llrm_transforms::memloops::candidates(&program.modules[0])
+    };
+    let looped = (!copies.is_empty()).then(|| {
+        let mut looped = program.modules[0].clone();
+        llrm_transforms::memloops::expanded(&mut looped, &|name| copies.iter().any(|one| one == name)).map(|()| {
+            crate::prepare::split_phi_edges(&mut looped);
+            looped
+        })
+    });
+    let looped = looped.transpose()?;
+    // The loops that walk a pointer by page, for the functions that have one:
+    // priced against the loops as they are, below.
+    let index_bits = llrm_mir::target::Machine::index_register_bits(&Mos6502Machine);
+    let paged = index_bits
+        .filter(|_| request.level != Level::O0)
+        .map(|bits| {
+            let mut paged = program.modules[0].clone();
+            llrm_transforms::pageindex::indexed(&mut paged, bits).map(|names| {
+                crate::prepare::split_phi_edges(&mut paged);
+                (names, paged)
+            })
+        })
+        .transpose()?
+        .filter(|(names, _)| !names.is_empty());
     llrm_6502_prepare(&mut program);
     let module = &program.modules[0];
     let names: Vec<String> = module
@@ -205,8 +235,26 @@ pub fn assembly(
     let mut selections = Vec::new();
     for name in &names {
         let mut selection = select_function(module, name, request.cpu)?;
+        let mut as_called = true;
         selection.zero_page = request.platform.zero_page;
         selection.tuning = request.level.tuning();
+        if let Some(looped) = looped.as_ref().filter(|_| copies.contains(name)) {
+            let mut other = select_function(looped, name, request.cpu)?;
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+            if cheaper(module, name, &other, looped, &selection, request)? {
+                selection = other;
+                as_called = false;
+            }
+        }
+        if let Some((_, paged)) = paged.as_ref().filter(|(names, _)| as_called && names.contains(name)) {
+            let mut other = select_function(paged, name, request.cpu)?;
+            other.zero_page = request.platform.zero_page;
+            other.tuning = request.level.tuning();
+            if cheaper(module, name, &other, paged, &selection, request)? {
+                selection = other;
+            }
+        }
         selections.push(selection);
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
@@ -215,6 +263,34 @@ pub fn assembly(
         text = text.replace(name.as_str(), label);
     }
     Ok(equates(&request.platform) + &text + &data.0)
+}
+
+/// Whether `name` as the loops in `alt` costs less than the calls in
+/// `selected`: the clocks (a trip through a loop weighs ten) and the bytes at
+/// `routines.toml`'s price. A function either
+/// can't be priced for keeps its calls.
+fn cheaper(
+    module: &llrm_mir::module::Module,
+    name: &str,
+    alt: &crate::dagisel::function::Selection,
+    alt_module: &llrm_mir::module::Module,
+    selected: &crate::dagisel::function::Selection,
+    request: &Request,
+) -> Result<bool, String> {
+    let prices = crate::routines::copy_prices();
+    let routines = [("memcpy", prices.call_clocks)];
+    let byte = if matches!(request.level, Level::Os | Level::Oz) { prices.byte_clocks.1 } else { prices.byte_clocks.0 };
+    let cost = |module: &llrm_mir::module::Module, selection| -> Option<u64> {
+        let text = crate::select::function_text(module, name, selection).ok()?;
+        let depths = llrm_transforms::memloops::loop_depths(module.global(module.named(name)?).function()?);
+        let depth_of = |block: u32| depths.get(block as usize).copied().unwrap_or(0);
+        let priced = crate::timing::estimate_calling(request.cpu, &text, &routines, Some(&depth_of)).ok()?;
+        Some(priced.cycles + byte * u64::from(priced.bytes))
+    };
+    Ok(matches!(
+        (cost(alt_module, alt), cost(module, selected)),
+        (Some(looped), Some(called)) if looped < called
+    ))
 }
 
 fn llrm_6502_prepare(program: &mut Program) {
@@ -233,6 +309,11 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
+    /// `lda (zp),y`: the index is `y`.
+    fn index_register_bits(&self) -> Option<u32> {
+        Some(8)
+    }
+
     fn foreign_span(
         &self,
         selectors: (i64, i64),

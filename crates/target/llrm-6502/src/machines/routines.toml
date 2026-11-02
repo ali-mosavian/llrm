@@ -1,0 +1,15 @@
+# What the runtime's memcpy costs a call, in clocks, and what a byte of code is worth when a function with
+# the copy as a call is priced against the same function with it as a loop. Memcpy's own figures are
+# measured from mos_rt.s.
+[copy]
+# Entry and exit: the page count, the return value, the saved byte.
+entry_clocks = 60
+# The page loop: lda (zp),y; sta (zp),y; iny; bne.
+clocks_per_byte = 16
+# The length a copy of unknown length is priced at (`profit::UNKNOWN_TRIPS`).
+typical_bytes = 10
+# Policy: the exchange rate of a byte of code against the estimate's loop-weighted clocks, at speed and at
+# size (like the -O2/-Os split). Any value from 100 to 2000 gives the same choices on lz4 and 8 hot loops of
+# 0 to 6 live words (sim65 cycles checked); 0 always keeps the call.
+byte_clocks_speed = 500
+byte_clocks_size = 5000
