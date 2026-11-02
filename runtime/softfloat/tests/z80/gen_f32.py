@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""gen_f32.py OP -> table of a, b, expected binary32 (add sub mul div) from the host; any NaN result is 0x7fc00000."""
+"""gen_f32.py OP [edge] -> table of a, b, expected binary32 (add sub mul div) from the host; any NaN result is 0x7fc00000.
+edge: 1800 records near the edges instead: add/sub exponent gaps 20..34, mul/div results near the denormal range, ftoi/ftou exponents 126..160."""
 import math, random, struct, sys
 op = sys.argv[1]
 random.seed(3)
@@ -50,6 +51,25 @@ while not conv and len(recs) < 700:
         d = random.choice([40, 30, 3, 2, 1])
         b = random.getrandbits(32) if random.random() < .3 else (random.getrandbits(32) & 0x807fffff) | ((((a >> 23) & 255) + random.randint(-d, d)) & 255) << 23
     recs.append((a, b))
+if sys.argv[2:] == ['edge']:
+    m = lambda: random.choice([0, 1, 0x7fffff, 0x400000, 0x7ffffe, random.getrandbits(23)])
+    sg = lambda: random.choice([0, 1 << 31])
+    recs = []
+    while len(recs) < 1800:
+        if op in ('add', 'sub'):
+            ea = random.randint(36, 254); d = random.randint(20, 34)
+            a, b = sg() | ea << 23 | m(), sg() | (ea - d) << 23 | m()
+            if random.random() < .5: a, b = b, a
+        elif op in ('mul', 'div'):
+            ea = random.randint(0, 160); r = random.randint(-33, 3)
+            eb = r + 127 - ea if op == 'mul' else ea + 127 - r
+            if not 0 <= eb <= 254: continue
+            a, b = sg() | ea << 23 | m(), sg() | eb << 23 | m()
+        elif op in ('ftoi', 'ftou'):
+            a = sg() | random.randint(126, 160) << 23 | m(); b = 0
+        else:
+            a = random.getrandbits(random.randint(1, 32)); b = 0
+        recs.append((a, b))
 print("NV = %d\nvec:" % len(recs))
 for a, b in recs:
     w = lambda t: [t & 0xffff, t >> 16]
