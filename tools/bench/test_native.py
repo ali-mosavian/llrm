@@ -94,3 +94,12 @@ def test_the_pin_column_compiles_with_the_pinned_clang(tmp_path, monkeypatch):
     monkeypatch.setenv("LLRM_PIN_CLANG", "/pin/bin/clang")
     command, _ = native.compile_command("pin64", tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)
     assert command[0] == "/pin/bin/clang" and "-fno-pic" in command
+
+
+def test_nbody_single_prints_its_checksum_on_x86_64(tmp_path):
+    """main 65098fd950's llrm-cc -m64 printed 3731452 for bench/nbody_single (gcc and clang 86016); release/next prints 86016. A float program must not change its answer with the compiler."""
+    if not (native.BIN / "llrm-cc").is_file() or shutil.which("gcc") is None or native.perf_missing():
+        pytest.skip("needs llrm-cc, gcc and perf")
+    directory = native.ROOT / "bench" / "nbody_single"
+    row = native.measure_one(native.OURS, native.BIN, directory, directory / "nbody_single.c", "O2", tmp_path, native.ROOT / "bench")
+    assert "error" not in row, row

@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import sizes  # noqa: E402
 
+sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
+from dosbatch import BIN  # noqa: E402
+
 DRIVER = Path(__file__).with_name("native_driver.c")
 POSIX = ROOT / "runtime" / "shared" / "posix"
 OURS = "c64"
