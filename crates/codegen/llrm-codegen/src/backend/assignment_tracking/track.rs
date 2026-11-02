@@ -202,7 +202,7 @@ fn function_tracked(
         list.reverse();
         records.extend(std::mem::take(list));
     }
-    let gone: std::collections::HashSet<usize> = declares.into_iter().collect();
+    let gone: crate::support::hash::HashSet<usize> = declares.into_iter().collect();
     records.extend(
         function.debug_records().iter().enumerate().filter(|(index, _)| !gone.contains(index)).map(|(_, one)| *one),
     );

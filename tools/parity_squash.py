@@ -2519,6 +2519,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if landed_ok:
                 git("fetch", "-q", "origin", BRANCH)
                 log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
+                print(delete_merged_head(number))
 
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
@@ -2532,6 +2533,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                     for number in pending:
                         landed.append(number)
                         log_landed(tip, number, "gate-ok")
+                        print(delete_merged_head(number))
                 else:
                     print(f"one-push failed ({why}); squashing each PR instead")
                     for number in pending:
@@ -2662,6 +2664,30 @@ def head_failures(sha: str, compute=None, cache: Path = HEAD_FAILURES) -> set[st
     cache.mkdir(parents=True, exist_ok=True)
     file.write_text(json.dumps(sorted(failed)))
     return failed
+
+
+def delete_merged_head(number: str, run=None, sleep=time.sleep, tries: int = 6) -> str:
+    """Delete the remote head branch of a PR the runner landed (standing rule: a merged branch is always deleted; the runner pushes to $LAND_BRANCH itself, so
+    GitHub's delete-on-merge never fires). Only a MERGED PR's branch of this repository, never the integration branch: deleting the head of a PR GitHub has not yet
+    marked merged would close it unmerged, so the state is polled first. Returns what it did; never raises (the landing is done)."""
+    run = run or gh_run
+    for attempt in range(tries):
+        view = run(["gh", "pr", "view", number, "--json", "state,headRefName,isCrossRepository"], capture_output=True, text=True, errors="replace")
+        info = json.loads(view.stdout) if view.returncode == 0 and view.stdout.strip() else {}
+        if info.get("state") == "MERGED":
+            break
+        if attempt + 1 < tries:
+            sleep(5)
+    else:
+        return f"#{number}: head branch kept (PR not MERGED yet)"
+    name = info.get("headRefName", "")
+    if not name or info.get("isCrossRepository") or name in PROTECTED_BRANCHES:
+        return f"#{number}: head branch {name or '?'} kept (fork or protected)"
+    done = run(["gh", "api", "-X", "DELETE", f"repos/{{owner}}/{{repo}}/git/refs/heads/{name}"], capture_output=True, text=True, errors="replace")
+    return f"#{number}: head branch {name} deleted" if done.returncode == 0 else f"#{number}: head branch {name} not deleted: {' '.join((done.stderr or done.stdout).split())[-120:]}"
+
+
+PROTECTED_BRANCHES = frozenset({BRANCH, "main", "release/next"})
 
 
 def log_landed(sha: str, number: str, result: str, path: Path | None = None) -> None:
@@ -2817,6 +2843,7 @@ def _merge(number: str, known: dict[str, str] | None = None) -> int:
     squash = json.loads(gh_run(["gh", "pr", "view", number, "--json", "mergeCommit"], capture_output=True, text=True, errors="replace", check=True).stdout)["mergeCommit"]["oid"]
     git("fetch", "-q", "origin", squash)
     log_landed(squash, number, "gate-ok" + (f" (head red: {','.join(sorted(head_failed))})" if head_failed else ""))
+    print(delete_merged_head(number))
     if strays := squash_strays(squash, files):
         print(f"REVERT-DETECTED: squash {squash[:9]} of #{number} touches files the PR never listed (a stale tree reverting other work?); restore them NOW:")
         print("\n".join(f"  {path} {change}" for path, change in strays))

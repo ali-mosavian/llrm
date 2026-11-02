@@ -12,8 +12,6 @@
 //! frame cell from its `Declare` and do not read memory wedges. Exit: the
 //! selectors read wedges (`DBG_VALUE` through selection and allocation).
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::DwOp;
 use llrm_mir::{
     DebugRecord, DebugWhat, GlobalId, GlobalKind, InstId, MetadataId, MetadataNode, MetadataOperand, Module, Operand,
@@ -22,6 +20,7 @@ use llrm_mir::{
 
 use super::track::static_alloca;
 use super::{FunctionVarLocs, VarLocInfo, VariableId, expression_text, op_words};
+use crate::support::hash::{HashMap, HashSet};
 
 /// The `!DIExpression` nodes made so far, one per distinct text.
 #[derive(Default)]
@@ -89,7 +88,7 @@ pub fn rewrite(
     let first = function.walk().next().map(|(_, inst)| inst);
     let mut wanted: Vec<(InstId, bool, &VarLocInfo)> = Vec::new();
     // The variables stated in a cell, for the `Declare` each gets once.
-    let mut homed: HashSet<(VariableId, Operand)> = HashSet::new();
+    let mut homed: HashSet<(VariableId, Operand)> = HashSet::default();
     let in_cell = |one: &VarLocInfo| match (&one.expression[..], &one.values[..]) {
         ([DwOp::Deref], [address @ Operand::Value(value)]) => match function.value(*value).def {
             llrm_mir::ValueDef::Instruction(def) if static_alloca(function, def) => Some(*address),
