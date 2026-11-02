@@ -546,7 +546,7 @@ pub(crate) fn is_encodable(
 ) -> Result<bool, Error> {
     let regs = classes.registers;
     let mut taken: IndexMap<u32, RegId> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4]
+    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4, 8]
         .into_iter()
         .map(|width| {
             (
