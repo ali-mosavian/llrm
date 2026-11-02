@@ -869,3 +869,17 @@ fn a_zext_nneg_of_a_load_a_signed_compare_reads_is_the_sext() {
     assert!(names.iter().any(|n| n == "movsx"), "premise: the sext is selected, got {names:?}");
     assert!(!names.iter().any(|n| n == "movzx"), "the zext nneg is the sext: {names:?}");
 }
+
+/// The same, with the `sext` made first so the `zext nneg` is combined first:
+/// the pin's `tryToFoldExtOfLoad` (`NonNegZExt`) makes it the `sext` load.
+#[test]
+fn a_zext_nneg_combined_before_the_sext_of_its_load_is_the_sext() {
+    let flipped = ZEXT_NNEG_BESIDE_SEXT.replace(
+        "  %z = zext nneg i16 %v to i32\n  %s = sext i16 %v to i32\n",
+        "  %s = sext i16 %v to i32\n  %z = zext nneg i16 %v to i32\n",
+    );
+    assert_ne!(flipped, ZEXT_NNEG_BESIDE_SEXT, "premise: the order flips");
+    let names = names(&flipped).unwrap();
+    assert!(names.iter().any(|n| n == "movsx"), "premise: the sext is selected, got {names:?}");
+    assert!(!names.iter().any(|n| n == "movzx"), "the zext nneg is the sext: {names:?}");
+}
