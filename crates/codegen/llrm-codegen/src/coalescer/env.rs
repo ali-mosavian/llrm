@@ -156,12 +156,45 @@ impl CoalescerEnv for TargetEnv {
     }
 }
 
+/// Where each joined value went.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct JoinMap(IndexMap<u32, u32>);
+
+impl JoinMap {
+    /// The value that stands for `value` in the joined body: itself if it was
+    /// not absorbed, else the survivor of the joins it went through.
+    pub fn survivor(
+        &self,
+        value: u32,
+    ) -> u32 {
+        let mut now = value;
+        while let Some(&next) = self.0.get(&now) {
+            now = next;
+        }
+        now
+    }
+
+    /// Every absorbed value with its survivor.
+    pub fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.0.keys().map(|&value| (value, self.survivor(value)))
+    }
+}
+
 /// `body` with its copies joined by the translated coalescer.
 pub fn joined(
     body: &LirBody,
     env: &dyn CoalescerEnv,
     depth: &[u32],
 ) -> LirBody {
+    joined_with_map(body, env, depth).0
+}
+
+/// [`joined`], and where each absorbed value went.
+pub fn joined_with_map(
+    body: &LirBody,
+    env: &dyn CoalescerEnv,
+    depth: &[u32],
+) -> (LirBody, JoinMap) {
     // The intervals TwoAddress edited, where it ran just before.
     let mut lis = crate::liveness::liveintervals::take_handed_over(body).unwrap_or_else(|| LiveIntervals::new(body));
     let stats = driver::run(&mut lis, env, depth);
@@ -178,7 +211,7 @@ pub fn joined(
     }
     // The allocator starts from these (`take_handed_over_edited_to`).
     crate::liveness::liveintervals::hand_over(lis, &after);
-    after
+    (after, JoinMap(stats.renames.into_iter().collect()))
 }
 
 /// `body` with its copies joined, for a caller that states the palettes and
@@ -191,7 +224,7 @@ pub fn coalesce(
     size: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
-) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
+) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
     let aliases = pins
         .iter()
         .map(|(value, register)| {
@@ -212,8 +245,8 @@ pub fn coalesce(
     let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
-    let after = joined(body, &env, &depth);
-    (after, env.palettes.into_inner())
+    let (after, map) = joined_with_map(body, &env, &depth);
+    (after, env.palettes.into_inner(), map)
 }
 
 /// `LLRM_COALESCE_WHY=1`: the reason for each register copy the joins left. A
