@@ -342,19 +342,19 @@ fn _refolded(
             continue;
         }
         let bytes = loaded + held - folded_bytes;
-        let rate = if cpu.size || cpu.min_size {
-            cpu.size_milliclocks_per_byte()
+        // Built for size the bytes decide, on every target and with no
+        // exchange rate; clocks only break a tie. At speed a target with a
+        // rate takes clocks for bytes at it, and one without takes neither
+        // worse.
+        let pays = if cpu.size || cpu.min_size {
+            bytes > 0 || (bytes == 0 && saved > 0)
         } else {
-            cpu.target().tuning().speed_milliclocks_per_byte
-        };
-        // A target with an exchange rate takes clocks for bytes at it, and
-        // never grows code built for size; one without takes neither worse.
-        let pays = if rate == 0 {
-            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
-        } else if cpu.size || cpu.min_size {
-            bytes > 0
-        } else {
-            saved * 1000 + bytes * rate > 0
+            let rate = cpu.target().tuning().speed_milliclocks_per_byte;
+            if rate == 0 {
+                saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
+            } else {
+                saved * 1000 + bytes * rate > 0
+            }
         };
         if !pays {
             continue;
@@ -976,6 +976,60 @@ mod tests {
             fstp(3, 3, frame(-4)),
         ]);
         let got = names(&folded(&body, cpu, REGISTERS));
+        assert!(got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// A size profile of a target with no size rate (m32), the memory form of
+    /// `fadd` priced above the pair it replaces (`fld` 6 + `fadd` 6).
+    fn priced_memory_form(memory: i64) -> crate::backend::cpu::Profile {
+        let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile").clone();
+        for (key, price) in [("x87_load", 6), ("x87_add", 6), ("x87_add_m", memory)] {
+            cpu._costs.retain(|(name, _)| name != key);
+            cpu._costs.push((key.to_owned(), price));
+        }
+        cpu
+    }
+
+    /// A load read by `readers` arithmetic instructions: the several-reader
+    /// refold, the only fold that weighs clocks against bytes (a single reader
+    /// folds as the pin does, whatever the clocks).
+    fn read_by(readers: usize, cell: Mem) -> LirBody {
+        let mut insns = vec![fld(0, 1, cell), insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![])];
+        let mut left = 2;
+        for reader in 0..readers {
+            let result = 3 + reader as u32;
+            insns.push(arith(2 + reader as i64, "fadd", result, left, 1));
+            left = result;
+        }
+        insns.push(fstp(10, left, frame(-4)));
+        one_block(insns)
+    }
+
+    /// Built for size the bytes decide: two readers of a 3-byte cell save a
+    /// byte and, at `fadd m64` 20 against 12, cost 16 clocks; the fold is made
+    /// on every target. m32 -Os refused it (no size rate: neither metric may
+    /// grow) and m16 took it only through a fitted 10_000 rate.
+    #[test]
+    fn test_a_refold_that_saves_bytes_and_costs_clocks_is_made_for_size() {
+        let cpu = priced_memory_form(20);
+        let got = names(&folded(&read_by(2, frame(-8)), &cpu, REGISTERS));
+        assert!(!got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// The same refold with the memory form cheaper than the pair.
+    #[test]
+    fn test_a_refold_that_saves_bytes_and_clocks_is_made_for_size() {
+        let cpu = priced_memory_form(6);
+        let got = names(&folded(&read_by(2, frame(-8)), &cpu, REGISTERS));
+        assert!(!got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// A guard, green before and after: three readers of a 4-byte cell save
+    /// clocks and add two bytes; code built for size does not grow.
+    #[test]
+    fn test_a_refold_that_saves_clocks_and_grows_code_is_not_made_for_size() {
+        let cpu = priced_memory_form(6);
+        let got = names(&folded(&read_by(3, global(0, 0)), &cpu, REGISTERS));
         assert!(got.contains(&"fld".to_owned()), "{got:?}");
     }
 }
