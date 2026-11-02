@@ -453,3 +453,13 @@ def test_a_cell_with_no_clocks_on_either_side_is_named_not_read_as_equal():
     base = {("grep", "bq32", "Os"): counted, ("fib", "bq32", "Os"): row_with}
     lines = bc.coverage_detail(measured, base, {"grep", "fib"})
     assert "NOCLOCKS both sides: grep bq32 -Os" in lines
+
+
+def test_the_judge_reads_no_waiver_when_they_are_switched_off(tmp_path, monkeypatch):
+    """The second main merge takes no waiver: with LLRM_BENCH_WAIVERS=off a row a waiver names must be judged against the base like any other."""
+    (tmp_path / bc.WAIVERS).mkdir(parents=True)
+    (tmp_path / bc.WAIVERS / "a.toml").write_text('reason = "r"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 7\n')
+    monkeypatch.delenv("LLRM_BENCH_WAIVERS", raising=False)
+    assert len(bc.waivers(tmp_path)) == 1
+    monkeypatch.setenv("LLRM_BENCH_WAIVERS", "off")
+    assert bc.waivers(tmp_path) == []

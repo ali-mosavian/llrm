@@ -217,6 +217,8 @@ def waivers(root: Path = ROOT) -> list[dict]:
     """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
     a failure once a row is no longer worse than the base."""
     out = []
+    if os.environ.get("LLRM_BENCH_WAIVERS") == "off":  # the second main merge takes no waiver: the judge then reads none
+        return out
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
