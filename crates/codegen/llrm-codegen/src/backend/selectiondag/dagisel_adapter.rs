@@ -1138,7 +1138,7 @@ impl AddrDag for DagisAdapter<'_> {
     ) -> u64 {
         let ours = ours(value);
         let bits = self.dag.value_type(ours).size_in_bits();
-        let all = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        let all = u64::MAX.checked_shr(u64::BITS - bits.min(u64::BITS)).unwrap_or(0);
         super::known_bits::known_bits(self.dag, ours).zero as u64 & all
     }
     fn segment_override(

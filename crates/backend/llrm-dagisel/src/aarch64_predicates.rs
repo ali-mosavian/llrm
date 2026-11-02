@@ -165,13 +165,13 @@ imm_predicates! {
     imm_u64_lt_16 => |i| (i as u64) < 16;
     imm_u64_lt_32 => |i| (i as u64) < 32;
     imm_u64_lt_64 => |i| (i as u64) < 64;
-    imm_u64_lt_65536 => |i| (i as u64) < 65536;
+    imm_u64_lt_65536 => |i| (i as u64) <= u64::from(u16::MAX);
     imm_u32_lt_8 => |i| (i as u32) < 8;
     imm_u32_lt_16 => |i| (i as u32) < 16;
     imm_u32_lt_32 => |i| (i as u32) < 32;
     imm_u32_lt_128 => |i| (i as u32) < 128;
     imm_u32_lt_256 => |i| (i as u32) < 256;
-    imm_u32_lt_65536 => |i| (i as u32) < 65536;
+    imm_u32_lt_65536 => |i| (i as u32) <= u32::from(u16::MAX);
     imm_u32_le_63 => |i| (i as u32) <= 63;
     imm_u32_1_to_16 => |i| (i as u32) > 0 && (i as u32) < 17;
     imm_u32_1_to_32 => |i| (i as u32) > 0 && (i as u32) < 33;
