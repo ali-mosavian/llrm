@@ -1,0 +1,433 @@
+; IEEE-754 binary32 for the 6502, hand written. Round to nearest even, denormals, inf, NaN.
+; ABI (proposed to llrm-target-6502): a in rc2..rc5, b in rc6..rc9 (little endian, rc8/rc9 read only),
+; result in A:X:rc2:rc3 (byte 0..3). Scratch: rc2..rc7 and rc16..rc25; rc0, rc1 and rc8..rc15 are never written.
+;
+; The tricks: signs and exponents come out of two shifts (asl a / rol a leaves the exponent in A and the sign in
+; the carry); a mantissa is three bytes plus a guard byte, the guard byte holds the rounding bits and a sticky bit
+; in its bit 0; alignment moves whole bytes, then at most seven single bits, with the lost bits found by one mask
+; test instead of a sticky test per bit; operands are never swapped (the block to shift is chosen by an X offset);
+; a negative difference is negated afterwards instead of comparing magnitudes; normalization counts bytes first.
+
+.setcpu "6502"
+.export __addsf3, __subsf3
+
+rc2 = $82
+rc3 = $83
+rc4 = $84
+rc5 = $85
+rc6 = $86
+rc7 = $87
+rc8 = $88
+rc9 = $89
+rc16 = $90
+rc17 = $91
+rc18 = $92
+rc19 = $93
+rc20 = $94
+rc21 = $95
+rc22 = $96
+rc23 = $97
+rc24 = $98
+rc25 = $99
+
+; operand blocks: guard, m0, m1, m2 (m2 bit 7 is the implicit one when normal)
+blkA = rc16
+blkB = rc20
+ea   = rc24
+eb   = rc25
+sa   = rc2              ; sign of a, $80 or 0 (valid once a is unpacked)
+sb   = rc3
+re   = rc4              ; result exponent
+rsg  = rc5              ; result sign
+tmp  = rc6
+tm2  = rc7
+fl   = rc16             ; special path only: blocks are dead there
+ca   = rc17
+
+.segment "CODE"
+
+__subsf3:
+    ldx #$80
+    bne addcore
+__addsf3:
+    ldx #0
+addcore:
+    txa
+    pha                     ; subtract flag, kept on the stack until both operands are unpacked
+    lda rc8
+    asl a
+    lda rc9
+    rol a
+    beq bden
+    cmp #$ff
+    bne :+
+    jmp special
+:   sta eb
+    lda rc8
+    ora #$80
+    bne bman
+bden:
+    lda #1
+    sta eb
+    lda rc8
+    and #$7f
+bman:
+    sta blkB+3
+    lda rc7
+    sta blkB+2
+    lda rc6
+    sta blkB+1
+    lda #0
+    sta blkB+0
+    sta blkA+0
+    lda rc4
+    asl a
+    lda rc5
+    rol a
+    beq aden
+    cmp #$ff
+    bne :+
+    jmp special
+:   sta ea
+    lda rc4
+    ora #$80
+    bne aman
+aden:
+    lda #1
+    sta ea
+    lda rc4
+    and #$7f
+aman:
+    sta blkA+3
+    lda rc3
+    sta blkA+2
+    lda rc2
+    sta blkA+1
+    lda rc5                 ; signs: sa = a's, sb = b's xor the subtract flag
+    and #$80
+    sta sa
+    pla
+    eor rc9
+    and #$80
+    sta sb
+; ---- align the operand with the smaller exponent
+    sec
+    lda ea
+    sbc eb
+    beq aligned
+    bcs shiftb
+    eor #$ff
+    adc #1                  ; carry is clear here: A = eb - ea
+    ldx #0
+    ldy eb
+    sty re
+    jsr align
+    jmp aligned2
+shiftb:
+    ldx #4
+    ldy ea
+    sty re
+    jsr align
+    jmp aligned2
+aligned:
+    lda ea
+    sta re
+aligned2:
+; ---- add or subtract the aligned mantissas
+    lda sa
+    eor sb
+    bmi dosub
+    lda sa
+    sta rsg
+    clc
+    lda blkA+0
+    adc blkB+0
+    sta blkA+0
+    lda blkA+1
+    adc blkB+1
+    sta blkA+1
+    lda blkA+2
+    adc blkB+2
+    sta blkA+2
+    lda blkA+3
+    adc blkB+3
+    sta blkA+3
+    bcs :+
+    jmp round
+:   ror blkA+3              ; carry out: shift right one, the lost bit joins the sticky bit
+    ror blkA+2
+    ror blkA+1
+    ror blkA+0
+    bcc :+
+    lda blkA+0
+    ora #1
+    sta blkA+0
+:   inc re
+    jmp round
+dosub:
+    sec
+    lda blkA+0
+    sbc blkB+0
+    sta blkA+0
+    lda blkA+1
+    sbc blkB+1
+    sta blkA+1
+    lda blkA+2
+    sbc blkB+2
+    sta blkA+2
+    lda blkA+3
+    sbc blkB+3
+    sta blkA+3
+    bcs subpos
+    sec                     ; negative: negate the four bytes, the sign is b's
+    lda #0
+    sbc blkA+0
+    sta blkA+0
+    lda #0
+    sbc blkA+1
+    sta blkA+1
+    lda #0
+    sbc blkA+2
+    sta blkA+2
+    lda #0
+    sbc blkA+3
+    sta blkA+3
+    lda sb
+    sta rsg
+    jmp subnorm
+subpos:
+    lda sa
+    sta rsg
+subnorm:
+    lda blkA+3              ; zero result is +0
+    ora blkA+2
+    ora blkA+1
+    ora blkA+0
+    bne :+
+    jmp retzero
+:   lda blkA+3
+    bne bitnorm
+byteloop:                   ; top byte clear: move up a whole byte while the exponent allows
+    lda re
+    cmp #9
+    bcc bitnorm
+    sbc #8
+    sta re
+    lda blkA+2
+    sta blkA+3
+    lda blkA+1
+    sta blkA+2
+    lda blkA+0
+    sta blkA+1
+    lda #0
+    sta blkA+0
+    lda blkA+3
+    beq byteloop
+bitnorm:
+    lda blkA+3
+    bmi round
+    lda re
+    cmp #2
+    bcc round               ; exponent 1: the result is denormal
+    dec re
+    asl blkA+0
+    rol blkA+1
+    rol blkA+2
+    rol blkA+3
+    jmp bitnorm
+; ---- round to nearest even on the guard byte, pack
+round:
+    lda blkA+0
+    cmp #$80
+    bcc pack
+    bne up
+    lda blkA+1
+    and #1
+    beq pack
+up: inc blkA+1
+    bne pack
+    inc blkA+2
+    bne pack
+    inc blkA+3
+    bne pack
+    lda #$80                ; the mantissa wrapped: 1.0 at the next exponent
+    sta blkA+3
+    inc re
+pack:
+    lda re
+    cmp #255
+    bcs retinf
+    ldy blkA+3
+    bmi :+
+    lda #0                  ; denormal: exponent field 0
+:   lsr a                   ; A = exponent >> 1, carry = exponent bit 0
+    ora rsg
+    sta rc3
+    lda blkA+3
+    and #$7f
+    bcc :+
+    ora #$80
+:   sta rc2
+    ldx blkA+2
+    lda blkA+1
+    rts
+retinf:
+    lda rsg
+    ora #$7f
+    sta rc3
+    lda #$80
+    sta rc2
+    lda #0
+    tax
+    rts
+retzero:
+    lda #0
+    sta rc2
+    sta rc3
+    tax
+    rts
+
+; ---- shift block (X = 0 for A, 4 for B) right by A bits (1..255); lost bits end up in bit 0 of the guard byte
+align:
+    tay
+    cpy #32
+    bcs alfar
+al8:
+    cpy #8
+    bcc albits
+    lda blkA+0,x            ; one byte: guard = m0, sticky if the old guard was not zero
+    beq :+
+    lda blkA+1,x
+    ora #1
+    bne :++
+:   lda blkA+1,x
+:   sta blkA+0,x
+    lda blkA+2,x
+    sta blkA+1,x
+    lda blkA+3,x
+    sta blkA+2,x
+    lda #0
+    sta blkA+3,x
+    tya
+    sec
+    sbc #8
+    tay
+    jmp al8
+albits:
+    tya
+    beq aldone
+    lda masks-1,y           ; the bits about to fall out of the guard byte
+    and blkA+0,x
+    sta tmp
+:   lsr blkA+3,x
+    ror blkA+2,x
+    ror blkA+1,x
+    ror blkA+0,x
+    dey
+    bne :-
+    lda tmp
+    beq aldone
+    lda blkA+0,x
+    ora #1
+    sta blkA+0,x
+aldone:
+    rts
+alfar:                      ; 32 bits or more: everything becomes the sticky bit
+    lda blkA+1,x
+    ora blkA+2,x
+    ora blkA+3,x
+    ora blkA+0,x
+    beq :+
+    lda #1
+:   sta blkA+0,x
+    lda #0
+    sta blkA+1,x
+    sta blkA+2,x
+    sta blkA+3,x
+    rts
+
+masks:
+    .byte $01, $03, $07, $0f, $1f, $3f, $7f
+
+; ---- inf and NaN operands: a in rc2..rc5, b in rc6..rc9, the subtract flag on the stack
+special:
+    pla
+    and #$80
+    sta fl
+    ldx #0                  ; class of a: 0 finite, 1 inf, 2 nan
+    lda rc5
+    and #$7f
+    cmp #$7f
+    bne ca_done
+    lda rc4
+    bpl ca_done
+    inx
+    lda rc4
+    and #$7f
+    ora rc3
+    ora rc2
+    beq ca_done
+    inx
+ca_done:
+    stx ca
+    ldx #0
+    lda rc9
+    and #$7f
+    cmp #$7f
+    bne cb_done
+    lda rc8
+    bpl cb_done
+    inx
+    lda rc8
+    and #$7f
+    ora rc7
+    ora rc6
+    beq cb_done
+    inx
+cb_done:
+    lda ca
+    cmp #2
+    bne :+
+    lda rc4
+    ora #$40
+    sta rc4
+    jmp reta
+:   cpx #2
+    bne :+
+    lda rc8
+    ora #$40
+    sta rc8
+    jmp retb
+:   cpx #1
+    bne reta                ; b finite: a is the infinity
+    lda ca
+    beq retb                ; a finite, b infinite
+    lda rc5                 ; both infinite: opposite effective signs are invalid
+    eor rc9
+    eor fl
+    bpl reta
+    lda #$c0
+    sta rc2
+    lda #$7f
+    sta rc3
+    lda #0
+    tax
+    rts
+reta:
+    ldy rc2
+    ldx rc3
+    lda rc4
+    sta rc2
+    lda rc5
+    sta rc3
+    tya
+    rts
+retb:
+    lda rc8
+    sta rc2
+    lda rc9
+    eor fl
+    sta rc3
+    ldx rc7
+    lda rc6
+    rts

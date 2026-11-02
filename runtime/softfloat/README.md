@@ -23,3 +23,9 @@ Math (`src/mathf.c`, coefficients in `include/sf_coef.h` from `tools/gen_coef.py
 `src/fast32.c` (spike): the fast mode's candidate, a 4-byte float in the Woz layout (exponent byte, 24-bit two's complement mantissa), truncating, no denormals/inf/NaN, saturating, 32-bit operations only, written from the algorithm's description. Oracle `tests/host_fast32.c` (double arithmetic, 2^-21); `tests/woz_compare/run.py` prints its bytes and sim65 cycles next to Woz's and the IEEE ones.
 
 `src/fast32_woz.c`: the Rankin/Wozniak routines (Dr. Dobb's Journal 1976, public domain) translated routine by routine into C, flags and zero-page registers included. `tests/woz_compare/xcheck.py` runs the original machine code (built from the listing at run time) and this file on the same ~13,000 operands and requires identical bytes (overflow-vector cases skipped).
+
+## 6502 assembly spike (`src/6502/sf32.s`)
+
+Hand-written `__addsf3`/`__subsf3`: IEEE binary32, RNE, denormals, inf, NaN. Args rc2..rc5 / rc6..rc9, result A:X:rc2:rc3, scratch rc2..rc7 and rc16..rc25 only.
+`tests/asm6502/run.sh [n]` checks it bit-exact against the host FPU on sim65 (4000 vectors: 0 fails; a broken tie rule gives 60 fails).
+Measured: 679 B for add and sub together, about 400 cycles per call on mixed vectors. mul, div and the int conversions are next.
