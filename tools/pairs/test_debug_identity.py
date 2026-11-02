@@ -20,3 +20,22 @@ def test_the_positive_control_needs_debug_sections_in_the_g_object():
     """A -g object with no .debug_* section proves nothing about the code: the leg did not run -g."""
     assert d.has_debug({".text": b"a", ".debug_info": b"x"})
     assert not d.has_debug({".text": b"a"})
+
+
+def test_a_compile_that_hands_back_bytes_is_compared_from_those_bytes(tmp_path, monkeypatch):
+    """The sweep's compile removes the object it wrote: opening the path crashed with FileNotFoundError and compared nothing."""
+    import shutil
+    import subprocess
+
+    if not (shutil.which("cc") and shutil.which("objcopy")):
+        return
+    (tmp_path / "x.c").write_text("int f(int a) { return a + 1; }\n")
+    plain, debug = tmp_path / "plain.o", tmp_path / "debug.o"
+    subprocess.run(["cc", "-c", "-O1", str(tmp_path / "x.c"), "-o", str(plain)], check=True)
+    (tmp_path / "info").write_bytes(b"debug")
+    subprocess.run(["objcopy", "--add-section", f".debug_info={tmp_path / 'info'}", str(plain), str(debug)], check=True)
+    stub = tmp_path / "cc-stub"
+    stub.write_text(f'#!/bin/sh\ng=0\nfor a in "$@"; do [ "$a" = -g ] && g=1; done\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ if [ $g = 1 ]; then cp {debug} "$a"; else cp {plain} "$a"; fi; next=; }};; esac; done\nexit 0\n')
+    stub.chmod(0o755)
+    monkeypatch.setattr("sys.argv", ["debug_identity", str(stub), "--src", str(tmp_path), "--targets", "m64", "--levels", "O2"])
+    assert d.main() == 0

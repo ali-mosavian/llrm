@@ -23,11 +23,13 @@ def has_debug(sections: dict[str, bytes]) -> bool:
     return any(name.startswith(".debug") for name in sections)
 
 
-def sections_of(path: Path) -> dict[str, bytes]:
+def sections_of(data: bytes) -> dict[str, bytes]:
+    """The sections of an ELF object (the compile hands back its bytes and removes the file)."""
+    import io  # noqa: PLC0415
+
     from elftools.elf.elffile import ELFFile  # noqa: PLC0415
 
-    with open(path, "rb") as handle:
-        return {section.name: section.data() for section in ELFFile(handle).iter_sections() if section.name}
+    return {section.name: section.data() for section in ELFFile(io.BytesIO(data)).iter_sections() if section.name}
 
 
 def main() -> int:
@@ -50,7 +52,7 @@ def main() -> int:
                 if off is None or on is None:
                     refused += 1
                     continue
-                a, b = sections_of(scratch / f"{tag}.off.o"), sections_of(scratch / f"{tag}.on.o")
+                a, b = sections_of(off), sections_of(on)
                 if not has_debug(b):
                     refused += 1
                     print(f"  no .debug section with -g: {tag}")
