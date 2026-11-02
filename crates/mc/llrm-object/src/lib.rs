@@ -2,6 +2,7 @@
 //! `docs/formats/object-model.md`.
 
 pub mod assembler;
+pub mod table;
 
 /// Which debug format a [`Role::Debug`] section belongs to, so a writer needs
 /// no name to tell them apart.

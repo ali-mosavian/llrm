@@ -312,9 +312,12 @@ pub fn functions_with(
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
-        let blocks = crate::layout::fold(blocks);
-        let blocks = crate::pairs::fold(blocks);
+        let mut tables = crate::jumptable::tables_of(&machine);
+        let blocks = crate::layout::fold(blocks, &mut tables);
+        let mut blocks = crate::pairs::fold(blocks);
+        crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
         out.push(crate::emit::Function {
+            tables,
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),
             blocks,
@@ -404,6 +407,9 @@ pub fn assembly(
             for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
             }
+        }
+        for table in &function.tables {
+            out.push_str(&table.assembly(platform));
         }
     }
     Ok(out)

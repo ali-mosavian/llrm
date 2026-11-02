@@ -106,6 +106,8 @@ pub struct Selected {
     pub successors: Vec<u32>,
     /// What the phis of the function take from this block's edges.
     pub phis: Vec<PhiCopy>,
+    /// The ids of the blocks each of the function's jump tables goes to.
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -223,6 +225,7 @@ pub fn select_function_in(
             layout: order.clone(),
             successors,
             phis,
+            tables: info.jump_tables.clone(),
         });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));

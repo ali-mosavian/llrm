@@ -144,6 +144,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::Copy { .. } => (Kind::Copy, false, false, false),
                 Op::Imm { .. } => (Kind::Op("Imm"), false, false, false),
                 Op::FrameAddress { .. } => (Kind::Op("FrameAddress"), false, false, false),
+                Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
             };
@@ -175,6 +176,10 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             {
                 operands.push(Operand::Block(*target));
             }
+            if let Op::JumpTable { targets, .. } = &op {
+                operands
+                    .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
+            }
             if kind != Kind::Copy {
                 operands.push(Operand::Imm(content(&op)));
             }
@@ -197,7 +202,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 op,
                 Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
             );
-            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }));
+            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
             inst.rematerializable = matches!(
                 op,
                 Op::Imm { .. }

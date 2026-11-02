@@ -427,7 +427,7 @@ pub enum FrameMark {
 impl Inst {
     /// A pseudo-instruction: it encodes to no word.
     pub fn is_directive(&self) -> bool {
-        matches!(self, Inst::Cfi(_) | Inst::Mark(_))
+        matches!(self, Inst::Cfi(_) | Inst::Mark(_) | Inst::Label(_))
     }
 }
 
@@ -436,6 +436,8 @@ pub enum Inst {
     /// Where the prologue ends or an epilogue begins: no bytes, it tells the
     /// line table (`prologue_end`, `epilogue_begin`).
     Mark(FrameMark),
+    /// A label inside a block (the base of a jump table's offsets): no bytes.
+    Label(String),
     /// A `.cfi_*` directive (`CFI_INSTRUCTION`): no bytes, it states what the
     /// instructions before it did to the frame.
     Cfi(llrm_object::assembler::Cfi),
