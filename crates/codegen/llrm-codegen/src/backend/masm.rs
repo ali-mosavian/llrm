@@ -679,6 +679,10 @@ pub enum Mark {
     Def { tag: u32, place: Place },
     /// Note `note` of the body (`LirBody::notes`) stands here.
     Note(u32),
+    /// The LIR instruction with this identity (`Insn::id`) starts here: a
+    /// zero-size anchor the debug ranges are placed by, written for a body
+    /// that has notes.
+    Insn(u64),
     /// The call before it clobbers this register (one mark for each it
     /// clobbers).
     Clobbered(RegId),
@@ -1878,7 +1882,12 @@ fn built(
                     one.delivers.iter().zip(&one.debug.defines).filter(|(_, tag)| **tag != u32::MAX).map(
                         |((_, register), tag)| Item::Mark(Mark::Def { tag: *tag, place: Place::Register(*register) }),
                     );
-                defined.chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note)))).collect::<Vec<_>>()
+                let anchor = (!procedure.body.notes.is_empty()).then_some(Item::Mark(Mark::Insn(one.id())));
+                anchor
+                    .into_iter()
+                    .chain(defined)
+                    .chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note))))
+                    .collect::<Vec<_>>()
             })
             .collect();
     let cells = blocks_arguments(&procedure.body);
@@ -1989,6 +1998,10 @@ fn built(
             }
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
+            }
+            // The instruction's anchor, ahead of what is said before it.
+            if !procedure.body.notes.is_empty() && !one.arrival() {
+                out.push(Item::Mark(Mark::Insn(one.id())));
             }
             // What is said before an instruction stands there whether or not it
             // is emitted: a jump to the next block is not.
@@ -4622,6 +4635,64 @@ mod tests {
         let r#where =
             ir::AddressRef { through: RegId::None, index_through: RegId::EAX, ..ir::AddressRef::new(Some(address)) };
         assert_eq!(_operand(regs, &Loc::Address(r#where), &names).unwrap(), "L_b1+12[eax]");
+    }
+
+    /// A body with debug notes has an anchor at every instruction, which the
+    /// debug ranges are placed by; one without notes (no `-g`) has none, so
+    /// its output is what it was.
+    #[test]
+    fn test_a_body_with_notes_marks_every_instruction_and_one_without_marks_none() {
+        for noted in [true, false] {
+            let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
+            let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+            let ids = [r#move.id(), leave.id()];
+            let mut body = lir::LirBody::new(
+                "get",
+                1,
+                vec![lir::LirBlock::new(1, vec![r#move, leave]).into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            if noted {
+                body.notes = std::sync::Arc::new(vec![lir::DebugNote {
+                    variable: 1,
+                    piece: None,
+                    value: lir::NoteValue::Constant(0),
+                }]);
+            }
+            let registers = llrm_target::FrameRegisters {
+                pointer: RegId::EBP,
+                stack: RegId::ESP,
+                saved: Vec::new(),
+                slot: 4,
+                align: 4,
+                optional: false,
+                enter: false,
+                wrap_split_size: false,
+                slot_scratch: None,
+                free: false,
+            };
+            let procedure = Procedure {
+                name: "_get".into(),
+                public: true,
+                far: false,
+                body,
+                reserve: 4,
+                callees: IndexMap::default(),
+                interrupt: None,
+                size: false,
+                entry: 0,
+                stack_check: None,
+                probe_stack: None,
+                registers,
+            };
+            let marked: Vec<u64> = built(&procedure, 1, false)
+                .unwrap()
+                .iter()
+                .filter_map(|item| if let Item::Mark(Mark::Insn(id)) = item { Some(*id) } else { None })
+                .collect();
+            assert_eq!(marked, if noted { ids.to_vec() } else { Vec::new() }, "noted: {noted}");
+        }
     }
 }
 
