@@ -826,6 +826,7 @@ pub(crate) fn fills_pay(
     kept: i64,
     at_speed: bool,
     clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
+    inline: Option<InlineFills>,
 ) -> bool {
     // `clocks`' last entry is the cells the fill stores in all: a cell is a
     // `stos` of a dword, or the pattern's own cell.
@@ -853,10 +854,41 @@ pub(crate) fn fills_pay(
             // stays when its extra bytes buy fewer clocks than that.
             let (Some(trips), Some(cells)) = (trips, width) else { return true };
             let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
-            let fill = fills * clocks.fill + cells * clocks.fill_cell;
-            let saved = loop_bytes - fills * costs.fill;
+            // At speed the backend stores a small constant fill inline
+            // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
+            let (fill, fill_bytes) = match inline.filter(|inline| at_speed && inline.stores() <= inline.max_stores) {
+                Some(inline) => (fills * inline.price(clocks), fills * inline.price(costs)),
+                None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
+            };
+            let saved = loop_bytes - fill_bytes;
             clocks_pay(saved, rate, fill, trips * each)
         })
+}
+
+/// A fill the backend may store inline: `bytes` long, and the most stores a
+/// constant memset takes before it is a `rep stos`
+/// (`Tuning::max_stores_per_memset`).
+#[derive(Clone, Copy)]
+pub(crate) struct InlineFills {
+    pub max_stores: i64,
+    pub bytes: i64,
+}
+
+impl InlineFills {
+    /// Its stores: dwords, then a word and a byte for the tail.
+    fn stores(self) -> i64 {
+        self.bytes / 4 + i64::from(self.bytes % 4 >= 2) + self.bytes % 2
+    }
+
+    /// What those stores cost in `prices`: a dword store carries the
+    /// operand-size prefix where the target has one (`fill_is_smaller`).
+    fn price(
+        self,
+        prices: &OperationCosts,
+    ) -> i64 {
+        let dwords = self.bytes / 4;
+        dwords * (prices.store + prices.prefix) + (self.stores() - dwords) * prices.store
+    }
 }
 
 /// Whether the `saved` bytes of the fill are worth the clocks it adds over

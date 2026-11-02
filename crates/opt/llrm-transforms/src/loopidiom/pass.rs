@@ -172,6 +172,7 @@ impl FunctionPass for LoopIdiom {
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
                 speed: speed_costs.as_ref(),
+                memset_stores: outer.target().tuning().max_stores_per_memset as i64,
                 tti: tti.as_deref(),
             };
             let mut options = self.options;

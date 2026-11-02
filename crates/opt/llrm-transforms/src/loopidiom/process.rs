@@ -68,6 +68,9 @@ pub struct Run<'a> {
     pub clocks: Option<(&'a OperationCosts, i64)>,
     /// The target's clock prices, at speed; none at `-Os`.
     pub speed: Option<&'a OperationCosts>,
+    /// `Tuning::max_stores_per_memset`: the stores a constant fill may be
+    /// inline.
+    pub memset_stores: i64,
     /// `TTI`: the target's costs, where it has them.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -332,6 +335,17 @@ impl LoopIdiomRecognize {
                         );
                     (clocks, rate, trips, cells)
                 }),
+                {
+                    let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
+                    let bytes = be
+                        .filter(|be| be.active_bits() <= 32)
+                        .zip(size.filter(|size| size.active_bits() <= 32))
+                        .map(|(be, size)| (be.zext_value() as i64 + 1) * size.zext_value() as i64 * stores);
+                    bytes.map(|bytes| crate::loopidioms::InlineFills {
+                        max_stores: run.memset_stores,
+                        bytes: bytes / (groups.len() as i64).max(1),
+                    })
+                },
             ) {
                 return false;
             }

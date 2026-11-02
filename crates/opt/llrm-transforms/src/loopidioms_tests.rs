@@ -1163,3 +1163,47 @@ fn a_target_with_no_segment_setup_forms_the_memsets_the_pin_forms() {
     assert!(flat.contains("call void @llvm.memset"), "no segment setup: the pin's memsets\n{flat}");
     assert!(!setup.contains("call void @llvm.memset"), "ES around each fill: the loop is smaller\n{setup}");
 }
+
+const SMALL_INIT_LOOP: &str = "@a = global [3 x i16] zeroinitializer
+@b = global [3 x i16] zeroinitializer
+@c = global [3 x i16] zeroinitializer
+@d = global [3 x i32] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %pa = getelementptr [3 x i16], ptr @a, i16 0, i16 %i
+  store i16 0, ptr %pa
+  %pb = getelementptr [3 x i16], ptr @b, i16 0, i16 %i
+  store i16 -1, ptr %pb
+  %pc = getelementptr [3 x i16], ptr @c, i16 0, i16 %i
+  store i16 -1, ptr %pc
+  %pd = getelementptr [3 x i32], ptr @d, i16 0, i16 %i
+  store i32 0, ptr %pd
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 3
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// lru's init loops (three trips of four stores to four small objects) stayed
+/// loops at m16 -O2: the model priced each fill as `rep stos` (17 clocks and 4
+/// a dword), 128 against the loop's 54, while the backend stores a fill of up
+/// to `MaxStoresPerMemset` stores inline, as main did (+24 clocks, +19
+/// instructions, +5 memory operands over main on lru c).
+#[test]
+fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
+    let mut module = parsed(&format!("{DOS}{SMALL_INIT_LOOP}"));
+    let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::loopidiom::pass::LoopIdiom::new());
+    manager.run_module(&mut module, machine).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 4, "{after}");
+}
