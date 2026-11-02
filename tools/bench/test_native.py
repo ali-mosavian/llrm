@@ -103,3 +103,16 @@ def test_nbody_single_prints_its_checksum_on_x86_64(tmp_path):
     directory = native.ROOT / "bench" / "nbody_single"
     row = native.measure_one(native.OURS, native.BIN, directory, directory / "nbody_single.c", "O2", tmp_path, native.ROOT / "bench")
     assert "error" not in row, row
+
+
+def test_the_counted_source_runs_and_the_sized_source_is_sized(tmp_path):
+    """crc's bench_crc(0) folded into main: llrm and clang read 21 instructions where the loop runs 600+ (gcc 665). The harness gives a call-keeping counted source and a noinline sized one."""
+    if shutil.which("gcc") is None or native.perf_missing():
+        pytest.skip("needs gcc and perf")
+    directory = program(tmp_path, "g", PROGRAM)
+    (directory / "sized.c").write_text(PROGRAM + "\nlong pad_(long n) { return n * 3 + n / 7; }\n")
+    plain = native.measure_one("gcc64", tmp_path, directory, directory / "g.c", "O2", tmp_path / "w", tmp_path)
+    both = native.measure_one("gcc64", tmp_path, directory, directory / "g.c", "O2", tmp_path / "w2", tmp_path, directory / "sized.c")
+    assert "error" not in both, both
+    assert both["instructions"] == plain["instructions"]
+    assert both["code_bytes"] > plain["code_bytes"]

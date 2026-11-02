@@ -547,6 +547,14 @@ def stage(text: str) -> None:
     print(f"bench: [{time.monotonic() - START:6.0f}s] {text}", file=sys.stderr, flush=True)
 
 
+def native_sources(name: str, directory: Path, work: Path) -> tuple[Path, Path] | None:
+    """The sources the x86_64 row runs and sizes: the harness's own (kept_a_call) for the program's C variant, in a folder of its own."""
+    variant = next((one for one in variants(directory) if one.language == "c"), None)
+    folder = work / "kept"
+    folder.mkdir(parents=True, exist_ok=True)
+    return kept_a_call(variant, folder, name.replace("/", "_")) if variant else None
+
+
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}. The levels are independent (a folder each) and are
     measured at once, in a process each; a timed run keeps them one after the other."""
@@ -559,7 +567,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
     if ONLY is None or native.OURS in ONLY:
-        out |= native.measure([(directory_name(one), one) for one in benchmarks(selected)], BIN, opts, work / "native", BENCH)
+        out |= native.measure([(directory_name(one), one) for one in benchmarks(selected)], BIN, opts, work / "native", BENCH, native_sources)
     return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
 
 
