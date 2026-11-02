@@ -566,6 +566,293 @@ mulnrm:
 	sbc	hl,de
 	ld	22(iy),l
 	ld	23(iy),h
+.ifdef SF_MUL_NIB
+; nibble products: x*y = nibt[x << 4 | y]; n*c = lo + 16*hi per byte, so each term lands byte aligned in E (weight 1) or
+; O (weight 16), P = E + 16*O; E, O and the multiplier nibbles are static cells (not reentrant)
+	ld	hl,#nbE		; clear E and O
+	ld	b,#12
+	xor	a,a
+1$:	ld	(hl),a
+	inc	hl
+	djnz	1$
+	ld	a,4(iy)	; multiplier byte 0: a, a << 4, h << 4, h
+	ld	c,a
+	and	a,#0x0f
+	ld	(nbA+0),a
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	(nbAS+0),a
+	ld	a,c
+	and	a,#0xf0
+	ld	(nbHS+0),a
+	rrca
+	rrca
+	rrca
+	rrca
+	ld	(nbH+0),a
+	ld	a,5(iy)	; multiplier byte 1: a, a << 4, h << 4, h
+	ld	c,a
+	and	a,#0x0f
+	ld	(nbA+1),a
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	(nbAS+1),a
+	ld	a,c
+	and	a,#0xf0
+	ld	(nbHS+1),a
+	rrca
+	rrca
+	rrca
+	rrca
+	ld	(nbH+1),a
+	ld	a,6(iy)	; multiplier byte 2: a, a << 4, h << 4, h
+	ld	c,a
+	and	a,#0x0f
+	ld	(nbA+2),a
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	(nbAS+2),a
+	ld	a,c
+	and	a,#0xf0
+	ld	(nbHS+2),a
+	rrca
+	rrca
+	rrca
+	rrca
+	ld	(nbH+2),a
+	ld	h,#>nibt
+	ld	a,0(iy)		; multiplicand byte 0: b low nibble, c high nibble << 4
+	ld	c,a
+	and	a,#0x0f
+	ld	b,a
+	ld	a,c
+	and	a,#0xf0
+	ld	c,a
+	ld	a,(nbAS+0)
+	or	a,b
+	ld	de,#nbE+0
+	call	nadd
+	ld	a,(nbA+0)
+	or	a,c
+	ld	de,#nbO+0
+	call	nadd
+	ld	a,(nbHS+0)
+	or	a,b
+	ld	de,#nbO+0
+	call	nadd
+	ld	a,(nbH+0)
+	or	a,c
+	ld	de,#nbE+1
+	call	nadd
+	ld	a,(nbAS+1)
+	or	a,b
+	ld	de,#nbE+1
+	call	nadd
+	ld	a,(nbA+1)
+	or	a,c
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbHS+1)
+	or	a,b
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbH+1)
+	or	a,c
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbAS+2)
+	or	a,b
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbA+2)
+	or	a,c
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbHS+2)
+	or	a,b
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbH+2)
+	or	a,c
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,1(iy)		; multiplicand byte 1: b low nibble, c high nibble << 4
+	ld	c,a
+	and	a,#0x0f
+	ld	b,a
+	ld	a,c
+	and	a,#0xf0
+	ld	c,a
+	ld	a,(nbAS+0)
+	or	a,b
+	ld	de,#nbE+1
+	call	nadd
+	ld	a,(nbA+0)
+	or	a,c
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbHS+0)
+	or	a,b
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbH+0)
+	or	a,c
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbAS+1)
+	or	a,b
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbA+1)
+	or	a,c
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbHS+1)
+	or	a,b
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbH+1)
+	or	a,c
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbAS+2)
+	or	a,b
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbA+2)
+	or	a,c
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbHS+2)
+	or	a,b
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbH+2)
+	or	a,c
+	ld	de,#nbE+4
+	call	nadd
+	ld	a,2(iy)		; multiplicand byte 2: b low nibble, c high nibble << 4
+	ld	c,a
+	and	a,#0x0f
+	ld	b,a
+	ld	a,c
+	and	a,#0xf0
+	ld	c,a
+	ld	a,(nbAS+0)
+	or	a,b
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbA+0)
+	or	a,c
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbHS+0)
+	or	a,b
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbH+0)
+	or	a,c
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbAS+1)
+	or	a,b
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbA+1)
+	or	a,c
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbHS+1)
+	or	a,b
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbH+1)
+	or	a,c
+	ld	de,#nbE+4
+	call	nadd
+	ld	a,(nbAS+2)
+	or	a,b
+	ld	de,#nbE+4
+	call	nadd
+	ld	a,(nbA+2)
+	or	a,c
+	ld	de,#nbO+4
+	call	nadd
+	ld	a,(nbHS+2)
+	or	a,b
+	ld	de,#nbO+4
+	call	nadd
+	ld	a,(nbH+2)
+	or	a,c
+	ld	de,#nbE+5
+	call	nadd
+	ld	b,#4		; E += 16 * O
+2$:	ld	hl,#nbO
+	or	a,a
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	djnz	2$
+	ld	hl,#nbE
+	ld	de,#nbO
+	ld	b,#6
+	or	a,a
+3$:	ld	a,(de)
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	3$
+	ld	c,22(iy)
+	ld	b,23(iy)
+	ld	hl,(nbE+4)	; block P5..P2 in d:e:h:l, sticky P1 | P0
+	ld	d,h
+	ld	e,l
+	ld	hl,(nbE+2)
+	bit	7,d
+	jr	z,4$
+	inc	bc		; product >= 2: exponent up
+	ld	a,(nbE+1)
+	jr	5$
+4$:	ld	a,(nbE+1)	; else one place left
+	add	a,a
+	adc	hl,hl
+	rl	e
+	rl	d
+5$:	push	hl
+	ld	hl,#nbE
+	or	a,(hl)
+	pop	hl
+	jp	z,pack32
+	set	0,l
+	jp	pack32
+; adds nibt[a] into the byte at de, the carry rippling up; h = >nibt
+nadd:	ld	l,a
+	ld	a,(hl)
+	ex	de,hl
+	add	a,(hl)
+	ld	(hl),a
+	jr	nc,7$
+6$:	inc	hl
+	inc	(hl)
+	jr	z,6$
+7$:	ld	h,#>nibt
+	ret
+.else
 .ifdef SF_MUL_LUT
 	xor	a,a		; quarter squares (measured slower than m8): x*y = q1[x+y] - q2[255-x+y], nine products into 14..19(iy)
 	ld	14(iy),a
@@ -731,6 +1018,7 @@ m8:	.rept	8		; eight multiplier bits from d; the add carry enters the next rr ch
 	adc	a,e
 	.endm
 	ret
+.endif
 .endif
 
 divgo:	call	unp
@@ -1000,4 +1288,22 @@ n = 0
 	.db	((n-255)*(n-255)/4)>>8
 n = n + 1
 	.endm
+.endif
+
+.ifdef SF_MUL_NIB
+	.area	_SFLUT		; 256-byte aligned (linker -b)
+nibt:
+n = 0
+	.rept	256
+	.db	(n/16)*(n&15)
+n = n + 1
+	.endm
+	.area	_DATA
+nbE:	.ds	6
+nbO:	.ds	6
+nbA:	.ds	3
+nbAS:	.ds	3
+nbH:	.ds	3
+nbHS:	.ds	3
+	.area	_CODE
 .endif
