@@ -42,3 +42,11 @@ keeps a loop's exit counter beside the scaled one it is a multiple of
 (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
 the line.
+
+DEVIATE LG2: for an even factor `c`, `getExactSDiv` fails where the compared
+value `x` stays below 2^(bits - ctz(c)) under the loop's guards: `x * c == 0`
+iff `x` is a multiple of that, so only 0 is. Without it a byte-stepped loop
+kept a second counter beside the byte index (examples/dot m16: `dec cx`, a
+32-bit spill). Proof: `the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively`
+(i8 all factors, i16 bounded). Exit: delete the check if the pin's SCEV proves
+the same sext through `isAddRecSExtable`.
