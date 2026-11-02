@@ -657,6 +657,20 @@ ubn:
     sta rc20
     lda #1
     sta rc23
+ubw:
+    lda rc22                ; a zero top byte moves up whole
+    bne ubl
+    lda rc21
+    sta rc22
+    lda rc20
+    sta rc21
+    lda #0
+    sta rc20
+    tya
+    clc
+    adc #8
+    tay
+    bne ubw
 ubl:
     lda rc22
     bmi ubok
@@ -705,6 +719,20 @@ undn:
     sta rc16,x
     lda #1
     sta rc19,x
+unw:
+    lda rc18,x              ; a zero top byte moves up whole
+    bne unl
+    lda rc17,x
+    sta rc18,x
+    lda rc16,x
+    sta rc17,x
+    lda #0
+    sta rc16,x
+    tya
+    clc
+    adc #8
+    tay
+    bne unw
 unl:
     lda rc18,x
     bmi unok
