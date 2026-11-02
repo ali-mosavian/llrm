@@ -276,7 +276,15 @@ pub fn dump(
         }
     }
     let table = by_note_value(edited, &table, parents);
-    for one in locate(&positioned(edited, &lis), &table, i64::from(end), true) {
+    let located = locate(&positioned(edited, &lis), &table, i64::from(end), true);
+    // The pin's LiveDebugValues over those ranges: the stack pointer is not
+    // known to this report, so no register is spared a call's mask (none is
+    // given).
+    let flow = crate::backend::livedebugvalues::flow_of(edited, &lis, &placed, &located);
+    for one in crate::backend::livedebugvalues::extend(&flow, RegId::None) {
+        eprintln!("VLD\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
+    }
+    for one in located {
         eprintln!("LDV\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
 }

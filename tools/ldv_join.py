@@ -2,7 +2,7 @@
 """Join the LLRM_LDV_DUMP rows of an llrm-cc -g compile: LDV (allocator) against VT (valuetrack).
 
 Probe every variable at every note anchor (the slot of LDVNOTE n, the byte offset of VTNOTE n);
-classify agree / conflict / ldv-only / vt-only. Usage: ldv_join.py DUMP.log [...]
+classify agree / conflict / ldv-only / vt-only. Usage: ldv_join.py [LDV|VLD] DUMP.log [...]  (VLD: after the block join)
 """
 import re
 import sys
@@ -34,19 +34,20 @@ def vt_places(text):
     return {where(token) for token in tokens} or {("?", text)}
 
 
-def main(paths):
+def main(paths, kind="LDV", quiet=False):
     out = Counter()
     detail = defaultdict(list)
     for path in paths:
         ldv_note, vt_note = {}, {}
         ldv, vt = defaultdict(list), defaultdict(list)
+        # (The probes below are per file: a function name repeats across files.)
         for line in open(path, errors="replace"):
             f = line.rstrip("\n").split("\t")
             if f[0] == "LDVNOTE":
                 ldv_note.setdefault((f[1], int(f[2])), int(f[3]))
             elif f[0] == "VTNOTE":
                 vt_note.setdefault((f[1], int(f[2])), int(f[3]))
-            elif f[0] == "LDV":
+            elif f[0] == kind:
                 ldv[(f[1], f[2], f[3])].append((int(f[4]), int(f[5]), where(f[6])))
             elif f[0] == "VT":
                 vt[(f[1], f[2], f[3])].append((int(f[4]), int(f[5]), vt_places(f[6])))
@@ -68,12 +69,24 @@ def main(paths):
                 out[kind] += 1
                 if kind != "agree":
                     detail[kind].append(f"{path} {fn} var {var} note {n}: ldv={a} vt={b}")
-    print(dict(out))
-    for kind, rows in detail.items():
-        print(f"-- {kind} ({len(rows)})")
-        for row in sorted(set(rows))[:12]:
-            print("  ", row)
+    if not quiet:
+        print(dict(out))
+        for name, rows in detail.items():
+            print(f"-- {name} ({len(rows)})")
+            for row in sorted(set(rows))[:12]:
+                print("  ", row)
+    return out
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    args = sys.argv[1:]
+    kind = "LDV"
+    if args and args[0] in ("LDV", "VLD"):
+        kind, args = args[0], args[1:]
+    if len(args) > 1:
+        total = Counter()
+        for path in args:
+            total += main([path], kind, quiet=True)
+        print(dict(total))
+    else:
+        main(args, kind)

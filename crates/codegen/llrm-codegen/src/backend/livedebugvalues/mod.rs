@@ -25,6 +25,9 @@ use std::rc::Rc;
 use llrm_lir::registers::RegId;
 
 use super::livedebugvariables::{Located, Place, Where};
+use crate::liveness::liveintervals::LiveIntervals;
+use crate::model::lir::LirBody;
+use crate::support::hash::{HashMap, IndexMap};
 
 /// A variable, or a byte piece of it (`DebugVariable`).
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -354,6 +357,61 @@ pub fn extend(
         found.extend(tracker.finish());
     }
     found
+}
+
+/// The blocks of `body` as `extend` takes them, in reverse post-order, from
+/// what the allocator decided: a register an instruction defines (through
+/// `placed`), clobbers or delivers is written there, and a located range
+/// starts a note at its first position. A write at a position goes before
+/// the note that starts there: the note's register holds its value after the
+/// instruction.
+///
+/// DEVIATE: the pin reads the final instructions' operands; this reads the
+/// allocator's body and its decisions, which agree. Copies, spills and
+/// reloads are not recognised yet.
+pub fn flow_of(
+    body: &LirBody,
+    lis: &LiveIntervals,
+    placed: &IndexMap<u32, RegId>,
+    located: &[Located],
+) -> Vec<FlowBlock> {
+    let order = crate::backend::postrasink::reverse_post_order(body);
+    let index_of: HashMap<i64, usize> = order.iter().enumerate().map(|(rank, &at)| (at, rank)).collect();
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); order.len()];
+    for block in body.blocks.iter() {
+        let Some(&from) = index_of.get(&block.at) else { continue };
+        for to in block.succ.iter().filter_map(|to| index_of.get(to)) {
+            preds[*to].push(from);
+        }
+    }
+    let mut blocks: Vec<FlowBlock> = Vec::new();
+    for (rank, &at) in order.iter().enumerate() {
+        let Some(position) = body.blocks.iter().position(|block| block.at == at) else { continue };
+        let (start, end) = *lis.indexes.get_mbb_range(position);
+        let mut events: Vec<(i64, u8, Event)> = Vec::new();
+        for one in body.blocks[position].insns.iter() {
+            let here = i64::from(lis.indexes.get_instruction_index(one.id()).get_index());
+            let mut written: Vec<RegId> = one.defines.iter().filter_map(|value| placed.get(value).copied()).collect();
+            written.extend(one.clobbers.iter().copied());
+            written.extend(one.delivers.iter().map(|(_, register)| *register));
+            if !written.is_empty() {
+                events.push((here, 0, Event::Def { written, mask: None }));
+            }
+        }
+        let (low, high) = (i64::from(start.get_index()), i64::from(end.get_index()));
+        for one in located.iter().filter(|one| (low..high).contains(&one.start)) {
+            let place = (one.at != Where::Undef).then_some(one.at);
+            events.push((one.start, 1, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
+        }
+        events.sort_by_key(|(here, phase, _)| (*here, *phase));
+        blocks.push(FlowBlock {
+            start: low,
+            end: high,
+            preds: std::mem::take(&mut preds[rank]),
+            events: events.into_iter().map(|(here, _, event)| (here, event)).collect(),
+        });
+    }
+    blocks
 }
 
 #[cfg(test)]
