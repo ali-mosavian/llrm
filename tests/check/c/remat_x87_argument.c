@@ -3,8 +3,9 @@
 // `argument_loads` took only integer `mov`, so x and y were stored to fresh slots every iteration: a 30 B frame instead of 10 and 3 `fstp` in the loop.
 // CHECK-LABEL: _f@3 proc
 // CHECK: sub sp, 10
-// CHECK: fld dword ptr [bp+6]
-// CHECK: fld dword ptr [bp+10]
+// The old selector now reads the cell as the operand of the multiply and the add (`fmul`/`fadd` memory forms), still unspilled.
+// CHECK: {{f(ld|mul)}} dword ptr [bp+6]
+// CHECK: {{f(ld|add)}} dword ptr [bp+10]
 // CHECK: _f@3 endp
 void use(int);
 float f(int n, float x, float y)

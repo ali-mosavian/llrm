@@ -163,12 +163,20 @@ pub struct Tuned {
 
 use llrm_mir::tti;
 
-struct PrefersExitNe;
+/// `Basic`'s prices, with the named hooks on.
+#[derive(Default)]
+pub struct Flagged {
+    pub exit_ne: bool,
+    pub no_cmov: bool,
+}
 
-/// `Basic`'s prices, with `prefers_exit_ne` on.
-impl llrm_mir::tti::Tti for PrefersExitNe {
+impl llrm_mir::tti::Tti for Flagged {
     fn prefers_exit_ne(&self) -> bool {
-        true
+        self.exit_ne
+    }
+
+    fn has_cmov(&self) -> bool {
+        !self.no_cmov
     }
 
     fn cmp_sel_cost(
@@ -266,7 +274,7 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 
 impl llrm_mir::target::Machine for Tuned {
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        self.exit_ne.then(|| std::rc::Rc::new(PrefersExitNe) as _)
+        self.exit_ne.then(|| std::rc::Rc::new(Flagged { exit_ne: true, no_cmov: false }) as _)
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

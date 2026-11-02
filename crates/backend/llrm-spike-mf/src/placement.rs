@@ -88,6 +88,13 @@ pub trait Layout {
     fn loops(&self) -> Vec<Loop>;
     /// `shouldOptimizeForSize`.
     fn optimize_for_size(&self) -> bool;
+    /// Whether a taken jump has a price the layout should count: a rotated
+    /// loop then pays for the jump at its entry only when the loop runs
+    /// less often than that jump saves (the pin's compare is entry against
+    /// exit, which a loop with one entry and one exit always ties).
+    fn counts_jumps(&self) -> bool {
+        false
+    }
 }
 
 /// A chain of blocks laid out in a row (`BlockChain`).
@@ -708,7 +715,15 @@ impl<'a, L: Layout> Placer<'a, L> {
                     return;
                 }
             }
-            if self.top_fall_through_freq(top, loop_set) >= exit_freq {
+            // DEVIATE (6502-4): against the back edge's frequency when the
+            // layout counts jumps, where the pin's `ExitFreq` ties
+            // with the entry's for a loop with one entry and one
+            // exit. Reason: a 6502 `jmp` is 3 clocks and 3 bytes;
+            // the rotation drops one per trip and adds one per
+            // entry. Exit: none while the pin's rotation ignores the
+            // cost of the jump it removes; drop it if the pin counts that cost.
+            let saved = if self.layout.counts_jumps() { self.edge_frequency(bottom, top) } else { exit_freq };
+            if self.top_fall_through_freq(top, loop_set) >= saved {
                 return;
             }
         }
@@ -846,6 +861,7 @@ pub type Odds = HashMap<(u32, u32), (BranchProbability, usize)>;
 
 /// A function's blocks as [`Layout`] asks for them.
 pub struct Graph {
+    counts_jumps: bool,
     succs: Vec<Vec<usize>>,
     preds: Vec<Vec<usize>>,
     probs: Vec<Vec<BranchProbability>>,
@@ -968,7 +984,7 @@ impl Graph {
             })
             .collect();
         let loops = loop_forest(&cfg);
-        Graph { succs, preds, probs, freqs, pinned, loops, size }
+        Graph { counts_jumps: false, succs, preds, probs, freqs, pinned, loops, size }
     }
 }
 
@@ -1037,6 +1053,10 @@ fn loop_forest(cfg: &Cfg) -> Vec<Loop> {
 impl Layout for Graph {
     fn len(&self) -> usize {
         self.succs.len()
+    }
+
+    fn counts_jumps(&self) -> bool {
+        self.counts_jumps
     }
 
     fn successors(
@@ -1175,10 +1195,22 @@ pub fn place_blocks<C, J: Jump>(
     odds: &Odds,
     size: bool,
 ) -> bool {
+    place_blocks_counting::<C, J>(function, odds, size, false)
+}
+
+/// [`place_blocks`] where `counts_jumps` says the target prices a taken jump
+/// ([`Layout::counts_jumps`]).
+pub fn place_blocks_counting<C, J: Jump>(
+    function: &mut MFunction<C>,
+    odds: &Odds,
+    size: bool,
+    counts_jumps: bool,
+) -> bool {
     if function.blocks.len() < 2 || function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
     }
-    let graph = Graph::of::<C, J>(function, odds, size);
+    let mut graph = Graph::of::<C, J>(function, odds, size);
+    graph.counts_jumps = counts_jumps;
     let order = place(&graph);
     let identity = order.iter().enumerate().all(|(at, &block)| at == block);
     let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();

@@ -56,11 +56,19 @@ pub struct Options {
     /// Keep only the first `k` statements of `test`: the way a mismatch is cut
     /// down.
     pub limit: Option<usize>,
+    /// Loops that read a local array through a pointer stepped after each
+    /// read (`*w++`): what a backend turns into post-increment loads. Off,
+    /// the programs are the ones generated before the option existed.
+    pub walks: bool,
+    /// Copies of one array's first elements over another of the same type
+    /// (`__builtin_memcpy` of a constant size): what a backend turns into a
+    /// run of `(An)+` moves. Needs `walks`.
+    pub copies: bool,
 }
 
 impl Options {
     pub const fn new(model: DataModel) -> Options {
-        Options { model, opaque: false, signed: true, limit: None }
+        Options { model, opaque: false, signed: true, limit: None, walks: false, copies: false }
     }
 }
 
@@ -391,7 +399,13 @@ impl Gen {
     ) {
         let pad = "  ".repeat(indent);
         for _ in 0..count {
-            match self.rng.below(12) {
+            match self.rng.below(if self.options.copies {
+                15
+            } else if self.options.walks {
+                13
+            } else {
+                12
+            }) {
                 0..=4 => {
                     if let Some(v) = self.assign_target(scope) {
                         let e = self.expr(v.ty, 3, scope);
@@ -449,6 +463,75 @@ impl Gen {
                     writeln!(out, "{pad}default: ;").unwrap();
                     self.stmts(1, 0, scope, indent + 1, out);
                     writeln!(out, "{pad}}}").unwrap();
+                }
+                12 => {
+                    if let (Some(a), Some(v)) =
+                        (scope.arrays.get(self.rng.below(scope.arrays.len().max(1))), self.assign_target(scope))
+                    {
+                        let (name, ty, len) = (a.name.clone(), a.ty, a.len);
+                        let wide = v.ty.wide();
+                        let step = if self.rng.chance(50) {
+                            format!(
+                                "{0} = ({1})({0} {2} ({3})*w++);",
+                                v.name,
+                                self.c(v.ty),
+                                ["+", "-", "&", "|", "^"][self.rng.below(5)],
+                                wide
+                            )
+                        } else {
+                            format!(
+                                "if (({wide})*w++ {op} ({wide}){name}) {name} = ({ty})({name} + 1);",
+                                op = ["<", ">", "<=", ">=", "==", "!="][self.rng.below(6)],
+                                name = v.name,
+                                ty = self.c(v.ty),
+                            )
+                        };
+                        writeln!(
+                            out,
+                            "{pad}{{ const {} *w = {name}; unsigned char n = {len}; while (n--) {{ {step} }} }}",
+                            self.c(ty)
+                        )
+                        .unwrap();
+                    }
+                }
+                14 => {
+                    // the copy of a helper whose pointers arrive as arguments:
+                    // between two long arrays, or the halves of one
+                    let longs: Vec<(&str, usize)> = scope
+                        .arrays
+                        .iter()
+                        .filter(|array| array.ty == Ty::U32 && array.len >= 3)
+                        .map(|array| (array.name.as_str(), array.len))
+                        .collect();
+                    if !longs.is_empty() {
+                        let from = self.rng.below(longs.len());
+                        let to = self.rng.below(longs.len());
+                        let (src, dst) = if from == to {
+                            // the second half is a different object as far as
+                            // the copy goes
+                            (format!("{} + 3", longs[from].0), longs[to].0.to_owned())
+                        } else {
+                            (longs[from].0.to_owned(), longs[to].0.to_owned())
+                        };
+                        if let (Some(v), true) = (self.assign_target(scope), from != to || longs[from].1 >= 6) {
+                            writeln!(out, "{pad}{} = ({})cpl({dst}, {src});", v.name, self.c(v.ty)).unwrap();
+                        }
+                    }
+                }
+                13 => {
+                    let n = scope.arrays.len();
+                    let from = self.rng.below(n.max(1));
+                    let start = self.rng.below(n.max(1));
+                    // the next array of the same type, which is never the
+                    // source
+                    let to = (0..n)
+                        .map(|k| (start + k) % n)
+                        .find(|&k| k != from && scope.arrays[k].ty == scope.arrays[from].ty);
+                    if let (Some(src), Some(dst)) = (scope.arrays.get(from), to.map(|k| &scope.arrays[k])) {
+                        let count = 1 + self.rng.below(src.len.min(dst.len).min(6));
+                        writeln!(out, "{pad}__builtin_memcpy({0}, {1}, {count} * sizeof({0}[0]));", dst.name, src.name)
+                            .unwrap();
+                    }
                 }
                 9 if scope.has_struct => {
                     let e = self.expr(Ty::U8, 2, scope);
@@ -600,6 +683,13 @@ pub fn program(
          static void bump(struct S *p, unsigned char x) {{ p->a = (unsigned char)(p->a + x); p->b = ({u16})(p->b ^ ((unsigned)x << 3)); if (x & 1) p->c = (unsigned char)(p->c + p->a); }}\n\n"
     )
     .unwrap();
+    if options.copies {
+        // the pointers of the copy are arguments, and the reads after it follow
+        // them
+        g.text.push_str(
+            "static __attribute__((noinline)) unsigned long cpl(unsigned long *d, const unsigned long *s) { __builtin_memcpy(d, s, 12); return ((volatile unsigned long *)d)[2] + ((volatile unsigned long *)d)[1]; }\n\n",
+        );
+    }
     for n in 0..g.rng.below(4) {
         let ret = TYPES[g.rng.below(3)];
         let params: Vec<Ty> = (0..g.rng.below(4)).map(|_| TYPES[g.rng.below(3)]).collect();

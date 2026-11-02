@@ -211,6 +211,16 @@ pub fn expand(
             let (d, a, b) = simple(o)?;
             byte3(&mut out, "", "eor", &d, &a, &b);
         }
+        op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {
+            let (carry, mnemonic) = match inst.opcode {
+                op::ADD8M => ("clc", "adc"),
+                op::SUB8M => ("sec", "sbc"),
+                op::AND8M => ("", "and"),
+                op::OR8M => ("", "ora"),
+                _ => ("", "eor"),
+            };
+            byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &address(&o[2], &o[3])?);
+        }
         op::ADD16 => wide(&mut out, "adc", "adc", &o[0], &o[1], &o[2])?,
         op::SUB16 => wide(&mut out, "sbc", "sbc", &o[0], &o[1], &o[2])?,
         op::ADDO16 => wide(&mut out, "adc", "adc", &o[0], &o[2], &o[3])?,
@@ -560,35 +570,6 @@ pub fn function(
         }
     }
     Ok(out)
-}
-
-/// `bra` reaches 127 bytes. An instruction is at most 3 bytes, so a `bra` whose
-/// target is within 40 instruction lines stays and any other becomes `jmp`.
-///
-/// DEVIATE: line counting, not sizes. Reason: the spike has no branch
-/// relaxation. Exit: the shared one.
-pub fn relax_bra(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
-    let mut out = String::new();
-    for (at, line) in lines.iter().enumerate() {
-        let Some(target) = line.strip_prefix("  bra ") else {
-            writeln!(out, "{line}").unwrap();
-            continue;
-        };
-        let label = format!("{target}:");
-        let near = lines
-            .iter()
-            .position(|l| *l == label)
-            .is_some_and(
-                |to| {
-                    let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
-                    lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
-                },
-            );
-        writeln!(out, "  {} {target}", if near { "bra" } else { "jmp" }).unwrap();
-    }
-    out
 }
 
 /// The equates for the imaginary registers on `platform`: `rc0 = $80` and so

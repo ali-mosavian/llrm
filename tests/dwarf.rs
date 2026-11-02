@@ -151,7 +151,11 @@ fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_retu
     let made =
         Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let made = compile(&fixtures.join("gdb.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    let made = compile(
+        &fixtures.join("gdb.c"),
+        &["-m32", "-O0", "-fomit-frame-pointer", "-fobject-format=elf", "-g"],
+        &object,
+    );
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let linked =
         Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
@@ -620,7 +624,11 @@ fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_i
     let made =
         Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let made = compile(&fixtures.join("gdb.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    let made = compile(
+        &fixtures.join("gdb.c"),
+        &["-m32", "-O0", "-fomit-frame-pointer", "-fobject-format=elf", "-g"],
+        &object,
+    );
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let linked =
         Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
@@ -673,7 +681,11 @@ fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
     let scratch = tempfile::tempdir().unwrap();
     let assembly = |source: &Path, flags: &[&str]| {
         let out = scratch.path().join("x.s");
-        let made = compile(source, &[&["-m32", "-O0", "-fobject-format=elf", "-S"], flags].concat(), &out);
+        let made = compile(
+            source,
+            &[&["-m32", "-O0", "-fomit-frame-pointer", "-fobject-format=elf", "-S"], flags].concat(),
+            &out,
+        );
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
         std::fs::read_to_string(&out).unwrap()
     };
@@ -880,7 +892,7 @@ fn cv4_names_a_local_of_a_function_without_a_frame_register_off_the_stack_pointe
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("known.obj");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/matrix/known.c");
-    let made = compile(&source, &["-m32", "-O0", "-g", "-fobject-format=omf"], &object);
+    let made = compile(&source, &["-m32", "-O0", "-fomit-frame-pointer", "-g", "-fobject-format=omf"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let records = llrm_codegen::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
     let shape = llrm_codegen::objectfile::cv4info::shape(&records);

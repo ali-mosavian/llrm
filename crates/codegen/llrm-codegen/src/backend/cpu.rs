@@ -275,6 +275,18 @@ impl Profile {
         self.address_forms.iter().find(|form| form.index_width == 4)
     }
 
+    /// Which tied instructions become a `lea` here (`ThreeAddress`): the
+    /// target's address forms decide, so no pass names a register or a mode.
+    pub fn three_address(&self) -> crate::twoaddress::ThreeAddress {
+        use crate::twoaddress::ThreeAddress;
+        match self.dword_address_form() {
+            None if self.address_forms.iter().any(|form| form.index_width == 8) => ThreeAddress::Wide,
+            None => ThreeAddress::Off,
+            Some(form) if form.secondary => ThreeAddress::AddSubWords,
+            Some(_) => ThreeAddress::All,
+        }
+    }
+
     /// The dataclass constructor with every defaulted field at its default, and
     /// the registers and cost model of the target `arch`.
     pub fn new(
@@ -625,6 +637,22 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    /// TA-4 was written as a pass's own rule for the m16 prefixed `lea`; the
+    /// mode comes from the address forms, so a flat dword form, a 64-bit one
+    /// and none give their own modes, and the m16 profiles the prefixed
+    /// one.
+    #[test]
+    fn test_the_lea_mode_follows_the_targets_address_forms() {
+        use crate::twoaddress::ThreeAddress;
+        let m16 = profile("486").unwrap();
+        assert_eq!(m16.three_address(), ThreeAddress::AddSubWords);
+        let dword = m16.dword_address_form().expect("a dword form").clone();
+        let with = |forms: Vec<_>| Profile { address_forms: forms.into(), ..m16.clone() }.three_address();
+        assert_eq!(with(Vec::new()), ThreeAddress::Off);
+        assert_eq!(with(vec![AddressForm { secondary: false, ..dword.clone() }]), ThreeAddress::All);
+        assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }]), ThreeAddress::Wide);
+    }
 
     #[test]
     fn test_every_public_cpu_name_has_one_immutable_profile() {

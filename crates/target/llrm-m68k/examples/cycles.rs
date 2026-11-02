@@ -63,30 +63,37 @@ fn trace(exe: &Path) -> Vec<u32> {
     pcs
 }
 
-/// `(address, text)` of every instruction of `llvm-objdump -d`, and the
-/// address range of `k`.
+/// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
+/// difftest seed's `ours`) over those functions instead of the kernel `k`.
+fn functions() -> Vec<String> {
+    std::env::var("CYCLES_FUNCS")
+        .map_or_else(|_| vec!["k".to_owned()], |list| list.split(',').map(str::to_owned).collect())
+}
+
+/// `(address, text)` of every instruction of `objdump -d`, and the address
+/// ranges of the priced functions.
 fn listing(
     gcc: &Path,
     exe: &Path,
-) -> (Vec<(u32, String)>, std::ops::Range<u32>) {
+) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
         .args(["-d", "--no-show-raw-insn"])
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
+    let wanted = functions();
     let mut lines = Vec::new();
-    let mut range = 0..0;
-    let mut in_k = false;
+    let mut ranges = Vec::new();
+    let mut open: Option<u32> = None;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Some((address, name)) = line.split_once(" <").and_then(|(a, rest)| Some((a, rest.strip_suffix(">:")?))) {
-            if in_k {
-                range.end = u32::from_str_radix(address, 16).unwrap();
-                in_k = false;
+            let address = u32::from_str_radix(address, 16).unwrap();
+            if let Some(start) = open.take() {
+                ranges.push(start..address);
             }
-            if name == "k" {
-                range.start = u32::from_str_radix(address, 16).unwrap();
-                in_k = true;
+            if wanted.iter().any(|one| one == name) {
+                open = Some(address);
             }
             continue;
         }
@@ -94,10 +101,10 @@ fn listing(
         let Ok(address) = u32::from_str_radix(address.trim(), 16) else { continue };
         lines.push((address, from_gnu(&text.trim().replace('\t', " ")).unwrap_or_else(|why| why)));
     }
-    if in_k {
-        range.end = lines.last().map_or(0, |last| last.0 + 2);
+    if let Some(start) = open {
+        ranges.push(start..lines.last().map_or(0, |last| last.0 + 2));
     }
-    (lines, range)
+    (lines, ranges)
 }
 
 struct Total {
@@ -112,7 +119,7 @@ fn price(
     exe: &Path,
     models: &[Model],
 ) -> Total {
-    let (lines, range) = listing(gcc, exe);
+    let (lines, ranges) = listing(gcc, exe);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -127,7 +134,7 @@ fn price(
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
     for (index, pc) in pcs.iter().enumerate() {
-        if !range.contains(pc) {
+        if !ranges.iter().any(|range| range.contains(pc)) {
             continue;
         }
         total.insns += 1;
@@ -168,11 +175,74 @@ fn price(
     total
 }
 
+/// `CYCLES_LLC=llrm-m68k-llc`: the code of `k` is that driver's assembly for
+/// the kernel's IR, assembled by the gas of `$GCC_M68K`, instead of this
+/// crate's own output. Leaf code only: a relocation is not resolved.
+fn assembled(
+    llc: &Path,
+    gcc: &Path,
+    ir: &str,
+    size: bool,
+    dir: &Path,
+) -> Option<Vec<u8>> {
+    let input = dir.join("llc.ll");
+    std::fs::write(&input, ir).unwrap();
+    let asm = dir.join("llc.s");
+    let status = Command::new(llc)
+        .args(["-S", "-mcpu=68000", if size { "-Os" } else { "-O2" }, "-o"])
+        .arg(&asm)
+        .arg(&input)
+        .status()
+        .unwrap();
+    assert!(status.success(), "the llc failed");
+    let text = format!(".text\n{}", std::fs::read_to_string(&asm).unwrap());
+    let source = dir.join("llc_in.s");
+    std::fs::write(&source, text).unwrap();
+    let object = dir.join("llc.o");
+    let bin = |tool: &str| gcc.join("usr/bin").join(format!("m68k-linux-gnu-{tool}"));
+    let run = |tool: &str, args: Vec<&std::ffi::OsStr>| {
+        let status = Command::new(bin(tool))
+            .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{tool} failed");
+    };
+    run("as", vec!["-m68000".as_ref(), source.as_os_str(), "-o".as_ref(), object.as_os_str()]);
+    let relocations = Command::new(bin("objdump"))
+        .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
+        .arg("-r")
+        .arg(&object)
+        .output()
+        .unwrap();
+    if String::from_utf8_lossy(&relocations.stdout).contains("R_68K") {
+        return None;
+    }
+    let raw = dir.join("llc.bin");
+    run(
+        "objcopy",
+        vec!["-O".as_ref(), "binary".as_ref(), "-j".as_ref(), ".text".as_ref(), object.as_os_str(), raw.as_os_str()],
+    );
+    Some(std::fs::read(raw).unwrap())
+}
+
 fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
     let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let models = models();
+    if let Some(exe) = std::env::var_os("CYCLES_EXE") {
+        let total = price(&gcc, Path::new(&exe), &models);
+        let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
+        println!(
+            "insns {} clocks {} unpriced {} partial {}",
+            total.insns,
+            clocks.join(" "),
+            total.unknown,
+            total.partial
+        );
+        return;
+    }
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
     let (rows, block) = if set == "library" {
         (library_table(), library_data())
@@ -188,7 +258,12 @@ fn main() {
         |prefix: &str| names.iter().map(|name| format!("{prefix}{name} clk")).collect::<Vec<_>>().join(" | ");
     println!("| kernel | B | insns | {} | -Os B | -Os insns | {} |", clock_heads(""), clock_heads("-Os "));
     println!("|{}", "---|".repeat(5 + 2 * models.len()));
-    for (name, args, _, leaf) in rows {
+    let llc_mode = std::env::var_os("CYCLES_LLC").is_some();
+    for (name, args, expected, leaf) in rows {
+        if llc_mode && !leaf {
+            println!("| {name} | not a leaf: size and clocks need the runtime linked |");
+            continue;
+        }
         let mut text = source_in(&set, name);
         let mut runtime_names: Vec<&str> = Vec::new();
         if !leaf {
@@ -201,6 +276,13 @@ fn main() {
         let mut cells = Vec::new();
         for options in [Options::default(), Options { size: true, ..Options::default() }] {
             let mut code = items_with(&module, "k", Cpu::M68000, options).unwrap();
+            if let (Some(llc), true) = (std::env::var_os("CYCLES_LLC"), leaf) {
+                let Some(bytes) = assembled(Path::new(&llc), &gcc, &source_in(&set, name), options.size, &dir) else {
+                    cells.push("calls the runtime".to_owned());
+                    continue;
+                };
+                code = vec![Item::Label("k".to_owned()), Item::Bytes(bytes)];
+            }
             let size = {
                 let mut all = code.clone();
                 all.extend(runtime.iter().cloned());
@@ -210,6 +292,11 @@ fn main() {
             code.extend(runtime.clone());
             let exe = dir.join(format!("{name}.elf"));
             write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap()).unwrap();
+            if llc_mode {
+                let status =
+                    Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
+                assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
+            }
             let total = price(&gcc, &exe, &models);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };

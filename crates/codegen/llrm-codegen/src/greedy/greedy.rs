@@ -22,12 +22,9 @@
 //!           + evict  a round  (S2)                 recoloring
 //! ```
 //!
-//! DEVIATE (until S2, named, no number): `trySplitAroundHintReg` is not
-//! translated (LLVM skips it at `-Os`), so a
-//! range that cannot get a register goes from `RS_Split` straight to spill;
-//! this target's register costs are all zero (`RegCosts`), so the cost-per-use
-//! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
-//! wrapping pass's.
+//! DEVIATE (until S2, named, no number): this target's register costs are all
+//! zero (`RegCosts`), so the cost-per-use path of `tryAssign` is dropped.
+//! Callee-saved register cost is the shrink wrapping pass's.
 //!
 //! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
 //! allocator's size (QCport, 65 modules, 2026-10-19: 78518 against 77618
@@ -72,6 +69,11 @@ use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::SlotIndex;
 use crate::support::hash::{HashMap, HashSet};
+
+thread_local! {
+    /// `MF->getFunction().hasOptSize()` for the body being allocated.
+    pub static OPT_SIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// `-lcr-max-depth` (RegAllocGreedy.cpp#L95).
 pub const LAST_CHANCE_RECOLORING_MAX_DEPTH: u32 = 5;
@@ -1002,9 +1004,12 @@ impl<'a> RAGreedy<'a> {
                     self.evict_interference(virt, hint, new_vregs);
                     return Some(hint);
                 }
-                // DEVIATE (until S2): `trySplitAroundHintReg` is not
-                // translated. Record the missed hint, we may be able to
-                // recover at the end if the surrounding allocation changed.
+                // We can also split the virtual register in cold blocks.
+                if self.try_split_around_hint_reg(hint, virt, new_vregs) {
+                    return None;
+                }
+                // Record the missed hint, we may be able to recover at the end
+                // if the surrounding allocation changed.
                 self.record_broken_hint(virt.reg());
             }
         }
@@ -1017,6 +1022,64 @@ impl<'a> RAGreedy<'a> {
         // `phys` is available at a cost: evict interference from a cheaper
         // alternative, if a lighter range holds one.
         Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
+    }
+
+    /// `trySplitAroundHintReg` (RegAllocGreedy.cpp#L1376): `virt` has a
+    /// physical `hint`; split it around the hint where the new copies fall in
+    /// cold blocks. The ranges are in `new_vregs`.
+    fn try_split_around_hint_reg(
+        &mut self,
+        hint: RegId,
+        virt: &Rc<LiveInterval>,
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        // Split the VirtReg may generate COPY instructions in multiple cold
+        // basic blocks, and increase code size. So we avoid it when the
+        // function is optimized for size.
+        if OPT_SIZE.with(std::cell::Cell::get) {
+            return false;
+        }
+        // Don't allow repeated splitting as a safe guard against looping.
+        if self.extra.get_stage(virt.reg()) >= LiveRangeStage::Split2 {
+            return false;
+        }
+        // The total frequency of broken COPY instructions to/from Hint, which
+        // after the split can be deleted.
+        let reg = virt.reg();
+        let mut blocks: Vec<u32> = Vec::new();
+        for operand in self.lis.operands(reg) {
+            let instr = self.lis.instr(operand.instr);
+            let Some((dest, source)) = self.env.copy_of(instr) else { continue };
+            let other = if operand.is_def { source } else { dest };
+            if other == reg {
+                continue;
+            }
+            // Check if VirtReg interferes with OtherReg after this COPY
+            // instruction.
+            let index = self.lis.indexes.get_instruction_index(operand.instr);
+            if !operand.is_def && virt.live_at(&index.get_reg_slot(false)) {
+                continue;
+            }
+            let other_phys = self.env.pinned(other).or_else(|| self.matrix.vrm.get_phys(other));
+            if other_phys == Some(hint) {
+                blocks.push(self.lis.indexes.get_mbb_from_index(&index) as u32);
+            }
+        }
+        let Some(ss) = self.split.as_mut() else { return false };
+        let mut splitter = Splitter {
+            lis: &mut self.lis,
+            matrix: &mut self.matrix,
+            extra: &mut self.extra,
+            ss,
+            env: self.env,
+            original: &self.original,
+            hints: &mut self.hints,
+        };
+        let split = splitter.split_around_hint_reg(hint, virt, &blocks, new_vregs);
+        if split && llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("dec v{} hint-split around {hint:?} in {} blocks -> {new_vregs:?}", virt.reg(), blocks.len());
+        }
+        split
     }
 
     /// `isUrgentEviction` (RegAllocEvictionAdvisor.cpp#L146): an unspillable

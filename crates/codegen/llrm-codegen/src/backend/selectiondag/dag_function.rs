@@ -808,7 +808,10 @@ fn selected_in(
     } else if m64 {
         TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
     } else {
-        TargetLowering::x86_32(Features::default(), MVT::I32)
+        // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
+        // reads.
+        let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
+        TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
     };
     // SD214: with a math library the pin calls it for these; the call is not
     // translated yet, so the node is refused rather than selected inline.

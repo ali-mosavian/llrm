@@ -74,11 +74,22 @@ def stamped(found: Path) -> None:
 
 
 def declared(repo: Path) -> set[str]:
-    """The binaries `cargo build --bins` builds: the root package's [[bin]] names (others in target/ are leftovers)."""
+    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-c
+    needs `c-legacy`, so the runner's rebuild left a day-old llrm-c in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
     import tomllib
 
     manifest = repo / "Cargo.toml"
-    return {one["name"] for one in tomllib.loads(manifest.read_text()).get("bin", [])} if manifest.is_file() else set()
+    if not manifest.is_file():
+        return set()
+    data = tomllib.loads(manifest.read_text())
+    table = data.get("features", {})
+    enabled, todo = set(), list(table.get("default", []))
+    while todo:
+        name = todo.pop()
+        if name not in enabled:
+            enabled.add(name)
+            todo += [one for one in table.get(name, []) if not one.startswith("dep:") and "/" not in one]
+    return {one["name"] for one in data.get("bin", []) if set(one.get("required-features", [])) <= enabled}
 
 
 def built_from(directory: Path, default: Path) -> Path:

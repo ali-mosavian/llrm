@@ -21,6 +21,7 @@ impl Hand {
 }
 
 struct Shaped {
+    jumps: bool,
     hand: Hand,
     succs: Vec<Vec<usize>>,
     preds: Vec<Vec<usize>>,
@@ -35,7 +36,7 @@ impl Shaped {
                 preds[to].push(from);
             }
         }
-        Shaped { hand, succs, preds }
+        Shaped { jumps: false, hand, succs, preds }
     }
 }
 
@@ -88,6 +89,10 @@ impl Layout for Shaped {
     fn optimize_for_size(&self) -> bool {
         false
     }
+
+    fn counts_jumps(&self) -> bool {
+        self.jumps
+    }
 }
 
 /// A loop entered from a block that prefers another successor has no
@@ -115,6 +120,22 @@ fn a_loop_the_entry_falls_into_keeps_its_header_on_top() {
         loops: vec![Loop { header: 1, blocks: vec![1, 2], inner: vec![] }],
     });
     assert_eq!(place(&layout), vec![0, 1, 2, 3]);
+}
+
+/// Where a taken jump has a price, a loop the entry falls into rotates all the
+/// same when it runs more than once: the entry pays one jump and every trip
+/// saves one. The pin compares the entry with the exit, which a loop of one
+/// entry and one exit always ties (`strcpy` on the 6502: 40 clocks a byte,
+/// 3 of them the jump back).
+#[test]
+fn a_loop_the_entry_falls_into_rotates_where_jumps_are_counted() {
+    let mut layout = Shaped::new(Hand {
+        succs: vec![vec![(1, 100)], vec![(2, 90), (3, 10)], vec![(1, 100)], vec![]],
+        freqs: vec![1, 11, 10, 1],
+        loops: vec![Loop { header: 1, blocks: vec![1, 2], inner: vec![] }],
+    });
+    layout.jumps = true;
+    assert_eq!(place(&layout), vec![0, 2, 1, 3]);
 }
 
 fn terminator(

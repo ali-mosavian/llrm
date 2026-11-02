@@ -13,6 +13,10 @@
 //! Needs cc65, clang (msp430 front end), LLVM 20 `opt`, cl65 and sim65.
 
 mod common;
+#[path = "bench/llvmmos.rs"]
+mod llvmmos;
+#[path = "bench/sdcc.rs"]
+mod sdcc;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -568,7 +572,9 @@ fn hand_kernels() -> Vec<Kernel> {
 /// The hand corpus against cc65 -O, the hand code and ours, with the totals
 /// that say who wins.
 fn table4() {
-    let mut out = String::from("| kernel | cc65 -O | cc65 hand | ours | ours 65C02 |\n|---|---|---|---|---|\n");
+    let mut out = String::from(
+        "| kernel | cc65 -O | cc65 hand | ours | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 |\n|---|---|---|---|---|---|---|---|---|---|\n",
+    );
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) => format!("{} B, {} cy{}", r.bytes, r.cycles, r.executed()),
         Err(why) if why.starts_with("no hand") => "-".to_owned(),
@@ -584,6 +590,11 @@ fn table4() {
             hand_row(kernel),
             ours_row(kernel, ours_level("-O2"), "o2"),
             ours_row(kernel, ours_level("-O2"), "o2m"),
+            sdcc::row(kernel, false),
+            sdcc::row(kernel, true),
+            llvmmos::row(kernel, "-O2", false),
+            llvmmos::row(kernel, "-Os", false),
+            llvmmos::row(kernel, "-O2", true),
         ];
         for row in rows.iter().filter(|row| matches!(row, Err(why) if !why.starts_with("no hand"))) {
             eprintln!("{}: {}", kernel.name, row.as_ref().unwrap_err());
@@ -619,12 +630,19 @@ fn table4() {
         );
         out.push_str(&format!("\n{line}\n"));
     }
+    out.push_str(&format!(
+        "\nsdcc columns: {}; llvm-mos columns: {} in its own mos-sim (cycle-exact on the instructions checked), libc linked; sdcc: the image runs in the same sim65; SDCC's own library is linked, as cc65's is for its columns; a call is its argument set-up, the body and the return (see tests/bench/sdcc.rs)\n",
+        sdcc::versions(),
+            llvmmos::version()
+    ));
     println!("{out}");
     std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench4.md"), &out).unwrap();
 }
 
 fn table3() {
-    let mut out = String::from("| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 |\n|---|---|---|---|---|\n");
+    let mut out = String::from(
+        "| kernel | cc65 -O | cc65 lz4.s (hand) | ours | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 |\n|---|---|---|---|---|---|---|---|---|---|\n",
+    );
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) if r.body != r.bytes => {
             format!("{} B linked, {} B body, {} cy{}", r.bytes, r.body, r.cycles, r.executed())
@@ -640,6 +658,11 @@ fn table3() {
             hand,
             ours_row(kernel, ours_level("-O2"), "o2"),
             ours_row(kernel, ours_level("-O2"), "o2m"),
+            sdcc::row(kernel, false),
+            sdcc::row(kernel, true),
+            llvmmos::row(kernel, "-O2", false),
+            llvmmos::row(kernel, "-Os", false),
+            llvmmos::row(kernel, "-O2", true),
         ];
         for row in rows.iter().filter(|row| !matches!(row, Err(why) if why.starts_with("no hand"))) {
             if let Err(why) = row {
@@ -648,6 +671,11 @@ fn table3() {
         }
         out.push_str(&format!("| {} | {} |\n", kernel.name, rows.iter().map(cell).collect::<Vec<_>>().join(" | ")));
     }
+    out.push_str(&format!(
+        "\nsdcc columns: {}; llvm-mos columns: {} in its own mos-sim (cycle-exact on the instructions checked), libc linked; sdcc: the image runs in the same sim65; SDCC's own library is linked, as cc65's is for its columns; a call is its argument set-up, the body and the return (see tests/bench/sdcc.rs)\n",
+        sdcc::versions(),
+            llvmmos::version()
+    ));
     println!("{out}");
     std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bench3.md"), &out).unwrap();
 }
@@ -657,7 +685,7 @@ fn table(
     file: &str,
 ) {
     let mut out = String::from(
-        "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 |\n|---|---|---|---|---|---|---|\n",
+        "| kernel | cc65 | cc65 -O | ours (opt -O2 IR) | ours (opt -Os IR) | cc65 -O 65C02 | ours 65C02 | sdcc | sdcc 65C02 | llvm-mos -O2 | llvm-mos -Os | llvm-mos 65C02 |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let cell = |row: &Result<Row, String>| match row {
         Ok(r) if r.body != r.bytes => {
@@ -675,14 +703,26 @@ fn table(
             ours_row(kernel, "-Os", "os"),
             cc65_row(kernel, &[cc65_optimize()], "c1m"),
             ours_row(kernel, ours_level("-O2"), "o2m"),
+            sdcc::row(kernel, false),
+            sdcc::row(kernel, true),
+            llvmmos::row(kernel, "-O2", false),
+            llvmmos::row(kernel, "-Os", false),
+            llvmmos::row(kernel, "-O2", true),
         ];
-        for (tag, row) in ["c0", "c1", "o2", "os", "c1m", "o2m"].iter().zip(&rows) {
+        for (tag, row) in
+            ["c0", "c1", "o2", "os", "c1m", "o2m", "sdcc", "sdccm", "mos2", "mosz", "mos2m"].iter().zip(&rows)
+        {
             if let Err(why) = row {
                 eprintln!("{} {tag}: {why}", kernel.name);
             }
         }
         out.push_str(&format!("| {} | {} |\n", kernel.name, rows.iter().map(cell).collect::<Vec<_>>().join(" | ")));
     }
+    out.push_str(&format!(
+        "\nsdcc columns: {}; llvm-mos columns: {} in its own mos-sim (cycle-exact on the instructions checked), libc linked; sdcc: the image runs in the same sim65; SDCC's own library is linked, as cc65's is for its columns; a call is its argument set-up, the body and the return (see tests/bench/sdcc.rs)\n",
+        sdcc::versions(),
+            llvmmos::version()
+    ));
     println!("{out}");
     std::fs::write(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(file), &out).unwrap();
     let _ = common::build; // keep the shared module linked
@@ -711,6 +751,29 @@ fn the_third_table() {
 #[ignore = "needs cc65, clang and sim65"]
 fn the_hand_corpus() {
     table4();
+}
+
+/// The SDCC column's loop calibration against a hand count: `zero` is
+/// `jsr` 6 + `lda #0` 2 + `rts` 6 = 14 clocks and 3 bytes, whatever loop SDCC
+/// builds around the call. A calibration that left the loop in (or took the
+/// call out) would move every SDCC cell.
+#[test]
+#[ignore = "needs sdcc and sim65"]
+fn the_sdcc_column_prices_an_empty_call_by_hand() {
+    let row = sdcc::row(&KERNELS[0], false).unwrap();
+    assert_eq!((row.bytes, row.cycles), (3, 14));
+}
+
+/// The llvm-mos column against the same hand count (`zero` is `lda #0; rts`:
+/// 3 bytes, 14 clocks with the `jsr`), and against its LTO default: linked as
+/// one module the driver folds the call and the column would read 0 clocks.
+#[test]
+#[ignore = "needs the llvm-mos SDK (LLVM_MOS)"]
+fn the_llvm_mos_column_prices_an_empty_call_by_hand() {
+    let row = llvmmos::row(&KERNELS[0], "-O2", false).unwrap();
+    assert_eq!((row.bytes, row.cycles), (3, 14));
+    let find = llvmmos::row(KERNELS.iter().find(|k| k.name == "find").unwrap(), "-O2", false).unwrap();
+    assert!(find.cycles > 50, "find costs {} clocks: the call was folded away", find.cycles);
 }
 
 /// The instruction count of `LLRM_SIM65` (`tools/sim65-insns.sh`) against a

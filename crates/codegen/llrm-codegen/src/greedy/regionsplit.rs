@@ -28,10 +28,9 @@
 //! DEVIATE D-RS2: no `IMPLICIT_DEF`: `addSplitConstraints`' test of the last
 //! instruction for an implicit def is dropped, LIR has none.
 //!
-//! DEVIATE D-RS3: no `trySplitAroundHintReg` (as in `greedy`);
-//! `shouldRegionSplitForVirtReg` is true (it only declines a huge
-//! rematerializable value, and rematerialization is recognised per definition,
-//! `greedy/remat.rs`).
+//! DEVIATE D-RS3: `shouldRegionSplitForVirtReg` is true (it only declines a
+//! huge rematerializable value, and rematerialization is recognised per
+//! definition, `greedy/remat.rs`).
 //!
 //! DEVIATE D-RS4: `DebugVars->splitRegister` and the verifier calls are not
 //! here: LIR has neither.
@@ -48,6 +47,7 @@
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
+use llrm_mir::blockfrequency::branchprobability::BranchProbability;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
 use super::edgebundles::EdgeBundles;
@@ -1032,6 +1032,36 @@ impl Splitter<'_, '_> {
         // Perform the actual pre-splitting.
         self.do_region_split(virt, best_cand, false, new_vregs);
         false
+    }
+
+    /// The rest of `trySplitAroundHintReg`
+    /// (RegAllocGreedy.cpp#L1376): the cost is the frequency of the blocks
+    /// holding the copies the split would delete, scaled by
+    /// `SplitThresholdForRegWithHint` (75%) so that it splits in colder blocks.
+    pub fn split_around_hint_reg(
+        &mut self,
+        hint: RegId,
+        virt: &Rc<LiveInterval>,
+        blocks: &[u32],
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        let mut cost = BlockFrequency(0);
+        for block in blocks {
+            cost = cost + self.block_freq(*block);
+        }
+        cost = cost * BranchProbability::new(75, 100);
+        if cost == BlockFrequency(0) {
+            return false;
+        }
+        let mut num_cands = 0usize;
+        let mut best_cand = NO_CAND;
+        self.analyze(virt);
+        self.calculate_region_split_cost_around_reg(hint, &mut cost, &mut num_cands, &mut best_cand);
+        if best_cand == NO_CAND {
+            return false;
+        }
+        self.do_region_split(virt, best_cand, false, new_vregs);
+        true
     }
 
     /// `doRegionSplit`

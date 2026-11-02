@@ -823,9 +823,15 @@ fn a_loaded_value_compared_with_a_register_is_loaded_first_as_the_pin_does() {
 /// `split_flag_edges` (a DEVIATE from `PHIElimination::SplitPHIEdges`): without
 /// it the select-expansion's phi copy sits above the compare and the running
 /// maximum of a max loop takes a third register move per iteration (arrmax:
-/// +2 B, +24 executed insns over eight elements).
+/// +2 B, +24 executed insns over eight elements). The bar was 2 moves, which
+/// the spike allocator met through `split_flag_edges` and its own join order.
+/// The pin's `llc` (LLVM 24.0.0git, `llc
+/// -mtriple=m68k -mcpu=M68000 -O2 -disable-lsr` on tests/data/max-loop.ll)
+/// leaves 3 data-register moves in the loop (the index scaling, the else-path
+/// copy of the maximum, the latch copy). Greedy leaves 3 too; the bar is the
+/// pin's count.
 #[test]
-fn a_max_loop_carries_its_maximum_in_two_register_moves() {
+fn a_max_loop_carries_its_maximum_in_three_register_moves_at_most() {
     let ir = "define i32 @f(ptr %p, i32 %n) {
 entry:
   %f = load i32, ptr %p
@@ -847,5 +853,9 @@ exit:
     let body = text.split(".LBB0_1:").nth(1).and_then(|rest| rest.split("blt").next()).expect("the loop");
     let moves =
         body.lines().filter(|line| line.trim_start().starts_with("move.l\t%d") && line.contains(", %d")).count();
-    assert_eq!(moves, 2, "{text}");
+    assert!(moves <= 3, "{text}");
+    // the premise: the else path carries the copy, which is what the spike's
+    // join order removed (2 moves) and what greedy, like the pin, keeps
+    let else_path = text.split(".LBB0_3:").nth(1).and_then(|rest| rest.split(".LBB0_4:").next()).expect("else path");
+    assert!(else_path.contains("move.l\t%d"), "no copy on the else path:\n{text}");
 }

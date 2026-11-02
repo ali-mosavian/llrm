@@ -129,6 +129,8 @@ pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
 pub mod allocresult;
+pub mod assignment_tracking;
+pub mod livedebugvariables;
 
 pub mod arithmetic;
 pub mod arrival;
@@ -161,6 +163,7 @@ pub mod floatalloc;
 pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
+pub mod fmuladd;
 pub mod fpconvert;
 pub mod fpcopyprop;
 pub mod fpregs;

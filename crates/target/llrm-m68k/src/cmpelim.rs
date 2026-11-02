@@ -115,18 +115,23 @@ fn droppable(
         }
     }
     let Some(def) = def.filter(|def| def.sets_flags) else { return false };
-    // the flags the readers test, until the next setter
+    flags_read_after(insts, at).is_some_and(|needed| leaves_codes_of_test(def, v, size, needed))
+}
+
+/// The flags the readers of the codes after `insts[at]` test, up to the next
+/// setter; `None` when one is a reader the pass cannot read.
+pub fn flags_read_after(
+    insts: &[Inst],
+    at: usize,
+) -> Option<u32> {
     let mut needed = 0;
     for after in &insts[at + 1..] {
         if after.sets_flags || after.call {
             break;
         }
         if after.reads_flags {
-            match read_by(after) {
-                Some(flags) => needed |= flags,
-                None => return false,
-            }
+            needed |= read_by(after)?;
         }
     }
-    leaves_codes_of_test(def, v, size, needed)
+    Some(needed)
 }

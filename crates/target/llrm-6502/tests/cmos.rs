@@ -78,6 +78,11 @@ fn the_65c02_text_does_not_assemble_as_nmos() {
 /// refuses it; relaxed it is a `jmp`, and a near `bra` stays.
 #[test]
 fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
+    let relaxed = |text: &str| {
+        let mut asm = llrm_6502::asm::Asm::parse(text);
+        llrm_6502::relax::relax(&mut asm);
+        asm.text()
+    };
     let far = format!("  bra far\n{}far:\n  rts\n", "  lda $1234\n".repeat(60));
     let near = "  bra near\n  nop\nnear:\n  rts\n";
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cmos-bra");
@@ -92,9 +97,9 @@ fn a_far_bra_becomes_jmp_and_a_near_one_stays() {
             .success()
     };
     assert!(!assembles(&far), "the unrelaxed far bra assembled; the range check measures nothing");
-    let relaxed = llrm_6502::emit::relax_bra(&far);
-    assert!(relaxed.starts_with("  jmp far\n") && assembles(&relaxed));
-    assert!(llrm_6502::emit::relax_bra(near).starts_with("  bra near\n"));
+    let relaxed_far = relaxed(&far);
+    assert!(relaxed_far.starts_with("  jmp far\n") && assembles(&relaxed_far));
+    assert!(relaxed(near).starts_with("  bra near\n"));
 }
 
 /// `a` jumps over a block `b` of 38 ops (t0 = x + 1, t1 = t0 + x, t_n = t_(n-1)

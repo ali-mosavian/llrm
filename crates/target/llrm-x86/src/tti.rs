@@ -49,6 +49,8 @@ pub struct X86 {
     /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
     /// of the profiles has.
     pub macro_fusion: bool,
+    /// `FeatureCMOV` (X86.td): the i386, i486, pentium, k5 and k6 have none.
+    pub cmov: bool,
     /// Long mode: the integer registers are 64 bits wide (`is64Bit`).
     pub quad: bool,
     /// What real mode's addressing and register file make of the hooks LSR
@@ -127,6 +129,7 @@ impl X86 {
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                cmov: !matches!(cpu, "i386" | "i486" | "pentium" | "k5" | "k6"),
                 sse1: false,
                 sse2: false,
                 macro_fusion: false,
@@ -135,6 +138,7 @@ impl X86 {
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             "core2" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
@@ -145,6 +149,7 @@ impl X86 {
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
             "x86-64" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
@@ -539,6 +544,10 @@ impl Tti for X86 {
 
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
+    }
+
+    fn has_cmov(&self) -> bool {
+        self.cmov
     }
 
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {

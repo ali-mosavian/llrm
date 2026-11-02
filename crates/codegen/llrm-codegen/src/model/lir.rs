@@ -1387,6 +1387,19 @@ impl BlockOdds {
 }
 
 impl LirBody {
+    /// How many of `notes` stand before some instruction: the others were
+    /// lost by a pass (or belonged to code that was deleted).
+    #[must_use]
+    pub fn notes_standing(&self) -> usize {
+        let standing: std::collections::BTreeSet<u32> = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .flat_map(|one| one.debug.before.iter().copied())
+            .collect();
+        standing.len()
+    }
+
     /// The edges from a block with more than one successor into a block with
     /// more than one predecessor: code that must run on one of them has no
     /// block of its own to go in until one is made.
@@ -1704,6 +1717,25 @@ mod tests {
         let walked: Vec<_> = body.iter_insns().collect();
         assert_eq!(walked.len(), 5);
         assert!(listed.iter().zip(&walked).all(|(one, other)| Arc::ptr_eq(one, other)));
+    }
+
+    /// `-g`'s notes stand before instructions: a count of those that still do
+    /// is what the `notes` debug channel reports, so a pass that drops them
+    /// shows in the sweep.
+    #[test]
+    fn test_notes_standing_counts_the_notes_some_instruction_still_has() {
+        let tagged = |at: i64, before: Vec<u32>| {
+            let one = instruction(at, None);
+            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before }, ..(*one).clone() })
+        };
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![tagged(0, vec![0, 2]), tagged(1, vec![2]), tagged(2, vec![])]).into()],
+            Default::default(),
+            Default::default(),
+        );
+        assert_eq!(body.notes_standing(), 2);
     }
 
     /// A table kept past the instruction it named answered for whatever was

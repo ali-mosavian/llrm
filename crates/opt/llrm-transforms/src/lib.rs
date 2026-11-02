@@ -297,6 +297,9 @@ pub mod maskscale;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memloops;
+#[cfg(test)]
+mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
@@ -306,6 +309,9 @@ pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod pageindex;
+#[cfg(test)]
+mod pageindex_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;

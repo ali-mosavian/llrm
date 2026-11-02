@@ -709,6 +709,12 @@ pub fn machined(
             }
         }
     }
+    llrm_support::debug!(
+        "notes",
+        "{name} after allocation: {} of {} notes stand",
+        kept.body.notes_standing(),
+        kept.body.notes.len()
+    );
     // What the function's cost in `timefunc` is measured against.
     llrm_support::debug!("size", "{name} {}", kept.body.insns().len());
     // Reported once the choice is made: a rejected candidate is no function's
@@ -1208,6 +1214,13 @@ fn staged(
             )
         );
     }
+    llrm_support::debug!(
+        "notes",
+        "{} after selection: {} of {} notes stand",
+        body.name,
+        body.notes_standing(),
+        body.notes.len()
+    );
     let body = if llrm_support::debug::verifying() {
         timed("lir verify", || flow::verified(body, "isel", true, None, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?

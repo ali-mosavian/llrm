@@ -68,8 +68,8 @@ use crate::support::hash::{IndexMap, IndexSet};
 pub const _TIED: [Operation; 5] =
     [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select, Operation::Exchange];
 
-/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE
-/// TA-4, twoaddress.rs).
+/// `lea`: which tied instructions become a `lea` before allocation
+/// (`Profile::three_address`).
 #[derive(Default)]
 pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,

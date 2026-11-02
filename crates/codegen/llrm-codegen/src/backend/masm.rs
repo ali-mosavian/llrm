@@ -1795,6 +1795,13 @@ fn built(
     let (wrap, enter, unwrapped_leave) = (&sequences.wrap, sequences.entry.clone(), sequences.exit.clone());
     let item = |piece: &crate::backend::shrinkwrap::Piece| sequences.piece(piece);
     let blocks = &procedure.body.blocks;
+    llrm_support::debug!(
+        "notes",
+        "{}: {} of {} notes stand",
+        procedure.name,
+        procedure.body.notes_standing(),
+        procedure.body.notes.len()
+    );
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
     let last = lined().filter(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Return)).last();

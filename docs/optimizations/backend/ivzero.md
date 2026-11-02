@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/ivzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/ivzero.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/ivzero.rs sha256:4aefc624952fd88294a3da07038c7642f3ae808710ff4c22df3d31b2666d75e8 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/ivzero.rs sha256:c8202afed4aaa5209cc17d3a9bf7cd1cfbd69de0234a38cdcb208340de8bf253 -->
 
 # ivzero
 
@@ -37,7 +37,9 @@ naming it as base or index, whose displacement, shifted by `K` (times the
 scale for an index), still fits the address and the encoding it had: a
 frame cell is left, and so is a displacement that would grow from one byte
 to the full width. `step` is read by the test and the phi only, and `i`
-by no instruction outside the loop. The phi becomes `j` starting at
+by no instruction outside the loop. A copy of `i` that only feeds `and c, M`
+is a reader too when `K` is a multiple of `2^b`, `b` the bits `M` spans:
+then `(i - K) & M == i & M`. The phi becomes `j` starting at
 `start - K`, the test is gone.
 
 Bytes: the compare goes (2 or 3 B); the start is a `mov` of an immediate

@@ -58,13 +58,6 @@ size_t strlen(const char *text)
     return (size_t)(end - text);
 }
 
-/* The generated code's `setjmp` of a function with ON ERROR: never a second return (see include/setjmp.h). */
-int _setjmp(void *buffer)
-{
-    (void)buffer;
-    return 0;
-}
-
 /* Nothing sleeps: the tick thread (runtime/qb/dev/host/tick.c) never starts on one thread. */
 struct timespec;
 int nanosleep(const struct timespec *wait, struct timespec *left)

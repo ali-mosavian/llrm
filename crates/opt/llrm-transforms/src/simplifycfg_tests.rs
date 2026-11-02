@@ -627,6 +627,77 @@ b0:
     );
 }
 
+/// The fold with a `cmov`-less select, on the i486's `Flagged` profile.
+fn folded_without_cmov(text: &str) -> String {
+    let flagged = crate::testing::Flagged { no_cmov: true, ..Default::default() };
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &flagged, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::simplified(context, &spec, &mut declared, function);
+    printed(&module)
+}
+
+/// Where a select is a branch (no cmov, the i486) its price counts against the
+/// fold's budget, which the pin's does not: arms of two instructions each (the
+/// pin's 4) plus the select are over it, and keep their branch. m32 -O2 made
+/// x_isqrt's loop 11.7 instructions against gcc's 7.1, x_mergesort 1.63x gcc's
+/// clocks, and x_crc32 1179 B against gcc's 161.
+#[test]
+fn test_where_a_select_is_a_branch_arms_with_more_code_keep_their_branch() {
+    let diamond = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, 1
+  %y = mul i16 %a, 3
+  br label %b3
+
+b2:
+  %b = sub i16 %x, 1
+  %z = mul i16 %b, 5
+  br label %b3
+
+b3:
+  %p = phi i16 [ %y, %b1 ], [ %z, %b2 ]
+  ret i16 %p
+}
+";
+    assert_eq!(folded_without_cmov(diamond), diamond);
+}
+
+/// parity/control at m16 -O2 (`total += v + i` or `total -= v - i` by the
+/// parity of `i`): one instruction an arm is under the budget with the select
+/// counted, so it folds early as the pin's does, and the inlined loop is
+/// evaluated to its constant. Declining it left the loop (tip `mov eax, 15007`
+/// against #6318's 100 lines of loop).
+#[test]
+fn test_where_a_select_is_a_branch_a_diamond_of_one_instruction_an_arm_still_folds() {
+    let text = folded_without_cmov(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = add i16 %x, 1
+  br label %b3
+
+b2:
+  %z = sub i16 %x, 1
+  br label %b3
+
+b3:
+  %p = phi i16 [ %y, %b1 ], [ %z, %b2 ]
+  ret i16 %p
+}
+",
+    );
+    assert!(text.contains("select i1 %c"), "{text}");
+}
+
 /// Five instructions cost more than the budget (4): the branch stays.
 #[test]
 fn test_an_arm_dearer_than_the_budget_keeps_its_branch() {

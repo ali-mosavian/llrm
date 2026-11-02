@@ -110,7 +110,8 @@ pub fn select_function_with(
     let layout = DataLayout::parse(text)?;
     let arch = M68k;
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
-    let target = builder_target();
+    let mut target = builder_target();
+    target.ordered_copies = indexed;
     let mut info = FunctionLoweringInfo::new(function);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();

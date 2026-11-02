@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:01de55c3837bb495f46328166caa9995de003e28820e250cdd9eccb157b2a942 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:f3f22ffd7d99464e74b01bf161aa2559b8c390f0f4b076e64045afe5025b1296 -->
 
 # speculate
 
@@ -49,4 +49,4 @@ end:   %p = phi i32 [ %t, %then ], [ %x, %entry ]
 ```
 
 ## Used by
-Named by `branchtocommon`, `simplifycfg`.
+Named by `branchtocommon`, `simplifycfg`, `twoentryphi`.

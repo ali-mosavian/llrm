@@ -2,6 +2,7 @@
 # Regenerates one target's DAG selector tables from the pin's tblgen.
 #
 #   tools/dagisel/regen-target.sh RECORD [OUT_DIR]   # RECORD: crates/target/llrm-<t>/dagisel.toml
+#   CHECK_PATS=1 tools/dagisel/regen-target.sh RECORD   # also fails on a Pat the .td wrote and tblgen dropped
 #
 # The record names the root .td, the ids headers and the CPUs (see dagisel-gen's target.rs).
 # LLVM_SRC is a checkout of the pin, LLVM_BUILD a build of it with bin/llvm-tblgen and, for a
@@ -32,6 +33,11 @@ fi
 TBLGEN=("$LLVM_BUILD/bin/llvm-tblgen" "${INC[@]}" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" -omit-comments)
 
 "${TBLGEN[@]}" -gen-dag-isel "$T/$TD" -o "$WORK/GenDAGISel.inc"
+# CHECK_PATS=1: name each `def : Pat` of a crate-local .td that tblgen dropped without a word (check_pats.py).
+if [ -n "${CHECK_PATS:-}" ]; then
+  if [ -n "$DIR" ]; then echo "CHECK_PATS: $TD is in the LLVM tree, its Pats are not tried" >&2
+  else python3 -I "$ROOT/tools/dagisel/check_pats.py" "$T/$TD" -- "${TBLGEN[@]}"; fi
+fi
 "${TBLGEN[@]}" -gen-instr-info "$T/$TD" -o "$WORK/GenInstrInfo.inc"
 # An in-crate .td has no build directory: its enums come from these (ids_includes names them).
 "${TBLGEN[@]}" -gen-register-info "$T/$TD" -o "$WORK/GenRegisterInfo.inc"

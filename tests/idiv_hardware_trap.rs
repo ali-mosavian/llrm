@@ -38,14 +38,18 @@ fn test_an_integer_divide_at_m16_is_the_bare_16_bit_idiv_without_the_overflow_ch
     assert!(!text.contains("cdq") && !text.contains("idiv e"), "{text}");
 }
 
-/// ON ERROR with RESUME NEXT after the fault (BC's own behaviour: ERR 11, ERL
-/// 0, the program goes on; tests/qbrt/idiv_resume.bas against BCOM45) needs no
-/// check either.
+/// ON ERROR with RESUME NEXT after the fault resumed at the first statement row
+/// after the faulting address, which our block layout does not keep in order:
+/// differential overflow-ops ran the divide again to the 120 s limit (a million
+/// `err 11` lines). A program that handles errors keeps the check, whose error
+/// names its statement.
 #[test]
-fn test_a_program_that_handles_errors_leaves_the_overflow_to_the_fault_too() {
+fn test_a_program_that_handles_errors_keeps_the_overflow_check() {
     let source = format!("ON ERROR GOTO h\n{PLAIN}END\nh:\nRESUME NEXT\n");
-    let text = listing(&source, &["--runtime", "qb45"]);
-    assert!(!text.contains("32768"), "{text}");
+    for runtime in ["qb45", "llrm"] {
+        let text = listing(&source, &["--runtime", runtime]);
+        assert!(text.contains("32768"), "{runtime}: {text}");
+    }
 }
 
 /// The DOS extender's runtime takes exception 0 (runtime/qb/dos/m32/trap.asm,
