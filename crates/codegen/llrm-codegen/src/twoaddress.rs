@@ -636,8 +636,8 @@ pub fn three_address(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
-        && into.width == 4
-        && base.width == 4
+        && (into.width == 4 || (into.width == 8 && mode == ThreeAddress::Wide))
+        && base.width == into.width
         && into.value != base.value
     {
         let offset = if name == "inc" { 1 } else { -1 };
@@ -649,7 +649,7 @@ pub fn three_address(
             sources: vec![Loc::Mem(Mem {
                 base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
                 offset,
-                ..Mem::new(None, 4)
+                ..Mem::new(None, into.width)
             })],
             ..Semantics::new(Operation::Address)
         });
@@ -670,7 +670,8 @@ pub fn three_address(
     let word = width == 2
         && mode == ThreeAddress::AddSubWords
         && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
-    if !(width == 4 || word) || base.width != width || into.value == base.value {
+    let quad = width == 8 && mode == ThreeAddress::Wide;
+    if !(width == 4 || quad || word) || base.width != width || into.value == base.value {
         return None;
     }
     let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
@@ -686,7 +687,7 @@ pub fn three_address(
                 scale: if *shift == 1 { 1 } else { 1 << shift },
                 offset: 0,
                 disp_width: if *shift == 1 { 0 } else { 4 },
-                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), width)
             }
         }
         (_, Some("shl")) => return None,
@@ -700,8 +701,8 @@ pub fn three_address(
             }
             Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, width) }
         }
-        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
-            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
+        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
+            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, width) }
         }
         _ => return None,
     };
