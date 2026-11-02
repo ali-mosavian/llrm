@@ -13,7 +13,8 @@
 //! `SBFM`/`UBFM`, `MADD`, divide and one-source forms, `MOVi32imm`/`MOVi64imm`,
 //! a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`, `roW`)
 //! forms and the sub-register pseudos only (no `BFM`, no insert into a defined
-//! register), with no memory operand kept (`MemOperand::default`); a machine
+//! register), with a memory operand of the volatile flag and the global or
+//! frame object only (no offset); a machine
 //! opcode with no row is a named error (`machine opcode X has no arm64
 //! instruction yet`), which `--isel=shadow` falls back on. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
@@ -33,7 +34,7 @@ use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
 use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
-    Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
+    Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{Atomic, Barrier, Fill};
 use crate::mc::visit::Reg;
@@ -1210,6 +1211,46 @@ impl Emitter<'_> {
         Ok(())
     }
 
+    /// What `value`, an address, points into: a global or a frame object
+    /// (`MachineMemOperand`'s pointer, which the pin's load/store optimizer
+    /// asks whether two accesses may alias), read from the nodes that made
+    /// the address.
+    fn object_of(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<MemObject> {
+        if depth > 6 {
+            return None;
+        }
+        let node = self.dag.node(value);
+        match (&node.data, node.opcode) {
+            (NodeData::Global { symbol, .. }, ISD::TargetGlobalAddress) => {
+                Some(MemObject::Global(self.globals.get(*symbol)?.name.clone()))
+            }
+            (NodeData::FrameIndex(index), ISD::TargetFrameIndex | ISD::FrameIndex) if *index >= 0 => {
+                Some(MemObject::Slot(*index as u32))
+            }
+            (_, ISD::Machine(code)) if matches!(opcode_name(code), Some("ADRP" | "ADDXri" | "MOVaddr")) => {
+                node.ops.iter().find_map(|&op| self.object_of(op, depth + 1))
+            }
+            _ => None,
+        }
+    }
+
+    /// The memory operand of the load or store `id`: its volatile flag and
+    /// the object its address names.
+    fn memory_operand(
+        &self,
+        id: u32,
+        store: bool,
+    ) -> MemOperand {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let base = node.ops.get(usize::from(store)).copied();
+        let object = base.and_then(|base| self.object_of(base, 0)).unwrap_or_default();
+        MemOperand { object, volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() }
+    }
+
     fn memory(
         &mut self,
         id: u32,
@@ -1272,8 +1313,7 @@ impl Emitter<'_> {
         };
         // A selected node keeps the flag of the access it folded
         // (`set_node_mem_refs`).
-        let volatile = self.dag.volatile_accesses.contains(&id);
-        let mmo = MemOperand { volatile, ..MemOperand::default() };
+        let mmo = self.memory_operand(id, access.store);
         if access.fp {
             let reg = match fvalue {
                 Some(reg) => reg,
