@@ -327,6 +327,9 @@ pub fn compiled(
                 options.arch.layout().segment_bytes(),
             )
         })?;
+        if options.machine.near_bss {
+            data::zero_to_bss(&mut assembled, module, mir.segments.data_space, options.machine.bss_begin);
+        }
         let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
         stage_files(options, &suffix, &assembled)?;
         out.push(assembled);
