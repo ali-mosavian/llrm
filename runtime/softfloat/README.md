@@ -62,3 +62,7 @@ Not measured yet: m68k, m16/m32 and z80 against libgcc/compiler-rt/SDCC (needs t
 
 `src/6502/sf32_abi.s` holds the public `__addsf3/__subsf3/__mulsf3/__divsf3`: a in rc2..rc5, b's low half in rc6:rc7, its high half in the caller's stack words at (rc0:rc1)+0/+1, result A:X:rc2:rc3. The cores (`sf_add_c` ...) read b whole from rc6..rc9, so the shim copies the stack bytes into rc8/rc9 and restores the caller's values (they are callee-saved); `expf`/`logf` do the same. The driver checks that rc8/rc9 come back unchanged (leaving the restore out gives 105 fails of 300).
 Cycles per call with the shim on the Woz operands: add 506, sub 515, mul 1730, div 2456 (shim about 80). 8-bit FP8 (rc2, rc3), `di3.s` and the conversions already match the layout. When the convention changes to A:X first (feat/6502-abi-ax), only `sf32_abi.s` and the 8-bit and `di3.s` entries change.
+
+## m68k size vs compiler-rt (`tests/size_m68k.sh [CPU] [OPT]`)
+
+Both compiled by llrm-cc (keep/llrm-cc_soft + llc_soft_merged, 2026-11-02), text bytes per object. 68000 -O2: `sf32.c` (add, sub, mul, div, cmp, neg) 3148 B, `sf32_conv.c` 1274 B. At -Os that build panics on `sf32.c` (liverange "Cannot overlap d"); `sf32_conv.c` is 836 B. compiler-rt's addsf3, mulsf3, divsf3 and floatsisf do not compile with the same build (`CtLzZeroPoison` has no libcall, `BitCast` in the older one), so there is no compiler-rt column on m68k yet; compiler-rt's fixsfsi is 162 B.
