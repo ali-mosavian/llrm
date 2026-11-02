@@ -1052,7 +1052,10 @@ impl Emitter<'_> {
             }
             _ => return Err(format!("{name}: operands are not those of its form")),
         };
-        let mmo = MemOperand::default();
+        // A selected node keeps the flag of the access it folded
+        // (`set_node_mem_refs`).
+        let volatile = self.dag.volatile_accesses.contains(&id);
+        let mmo = MemOperand { volatile, ..MemOperand::default() };
         if access.fp {
             let reg = match fvalue {
                 Some(reg) => reg,

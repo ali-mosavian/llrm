@@ -221,3 +221,16 @@ fn a_tail_called_library_routine_is_a_branch_to_its_symbol() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("b _memmove"), "{asm}");
 }
+
+/// A pointer stepped past each store was `strh w9, [x0]` and `add x0, x0, #2`:
+/// the pin's LoadStoreOptimizer makes it `strh w9, [x0], #2`, and does not for
+/// a volatile store (scroll's copy loops ran 5 instructions for the pin's 4).
+#[test]
+fn a_store_and_the_step_of_its_pointer_are_one_post_indexed_store() {
+    let text = include_str!("data/post_index_store.ll");
+    let body = &text[text.find("define").expect("a function")..];
+    let asm = dag_at("-O2", body).unwrap_or_else(|why| panic!("{why}"));
+    let (stepping, volatile) = asm.split_once("_step_volatile:").expect("both functions");
+    assert!(stepping.contains("], #2"), "{asm}");
+    assert!(!volatile.contains("], #"), "{asm}");
+}

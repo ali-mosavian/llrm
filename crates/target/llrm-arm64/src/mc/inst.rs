@@ -48,6 +48,9 @@ pub enum MemObject {
 pub struct MemOperand {
     pub object: MemObject,
     pub offset: Option<i64>,
+    /// `MachineMemOperand::isVolatile`: the access is not made a writeback
+    /// form (`AArch64LoadStoreOpt::tryToMergeLdStUpdate`).
+    pub volatile: bool,
 }
 
 impl MemOperand {

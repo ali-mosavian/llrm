@@ -87,6 +87,9 @@ pub struct Selector<'a> {
     pub(crate) conjunctions: conjunction::Conjunctions,
     /// The block being filled.
     pub(crate) current: usize,
+    /// The load or store being selected is volatile: the accesses it makes say
+    /// so.
+    volatile_access: bool,
     /// Operations carry the source place they are selected from.
     lines: bool,
     /// The source place of the instruction being selected.
@@ -171,6 +174,7 @@ impl<'a> Selector<'a> {
             chains: chain::Chains::default(),
             conjunctions: conjunction::Conjunctions::default(),
             current: 0,
+            volatile_access: false,
             lines: false,
             place: None,
             global_uses: HashMap::new(),
@@ -257,6 +261,12 @@ impl<'a> Selector<'a> {
         &mut self,
         inst: Inst,
     ) {
+        let mut inst = inst;
+        if self.volatile_access
+            && let Inst::Load { mmo, .. } | Inst::Store { mmo, .. } = &mut inst
+        {
+            mmo.volatile = true;
+        }
         self.emit(Op::I(inst));
     }
 
@@ -558,8 +568,18 @@ impl<'a> Selector<'a> {
                 self.define(result, value)
             }
             Opcode::Alloca { allocated, align, .. } => self.alloca(inst, &instruction, *allocated, *align),
-            Opcode::Load { .. } => self.load(&instruction),
-            Opcode::Store { .. } => self.store(&instruction),
+            Opcode::Load { volatile, .. } => {
+                self.volatile_access = *volatile;
+                let selected = self.load(&instruction);
+                self.volatile_access = false;
+                selected
+            }
+            Opcode::Store { volatile, .. } => {
+                self.volatile_access = *volatile;
+                let selected = self.store(&instruction);
+                self.volatile_access = false;
+                selected
+            }
             Opcode::GetElementPtr { source } => self.gep(&instruction, *source),
             Opcode::Call(info) => self.call(inst, &instruction, info),
             // A call, then a branch to the normal block. The unwind edge is
