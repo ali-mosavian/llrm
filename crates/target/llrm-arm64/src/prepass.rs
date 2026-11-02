@@ -631,11 +631,48 @@ fn live_in(
     live
 }
 
+/// The most virtual registers (general, floating point) live at once at a
+/// point of `blocks`, leaving out `skip` (`MachineLICM`'s `RegPressure` over
+/// the loop: its temporaries count, not only what it holds across trips).
+fn peak_pressure(
+    function: &MFunc,
+    blocks: &[usize],
+    cfg: &Cfg,
+    live: &[HashSet<Reg>],
+    skip: &HashMap<Reg, &Op>,
+) -> (usize, usize) {
+    let count = |set: &HashSet<Reg>| {
+        let gprs = set.iter().filter(|register| matches!(register, Reg::Gpr(_))).count();
+        (gprs, set.len() - gprs)
+    };
+    let (mut gprs, mut fprs) = (0, 0);
+    for &block in blocks {
+        let mut now: HashSet<Reg> = cfg.successors[block]
+            .iter()
+            .flat_map(|&next| live[next].iter().copied())
+            .filter(|register| register.is_virtual() && !skip.contains_key(register))
+            .collect();
+        let (g, f) = count(&now);
+        (gprs, fprs) = (gprs.max(g), fprs.max(f));
+        for op in function.blocks[block].ops.iter().rev() {
+            let (defs, uses) = op.defs_and_uses();
+            for register in defs {
+                now.remove(&register);
+            }
+            now.extend(uses.into_iter().filter(|register| register.is_virtual() && !skip.contains_key(register)));
+            let (g, f) = count(&now);
+            (gprs, fprs) = (gprs.max(g), fprs.max(f));
+        }
+    }
+    (gprs, fprs)
+}
+
 fn within_pressure(
     probe: &MFunc,
     blocks: &[usize],
     candidates: &[Op],
-    held: &HashSet<Reg>,
+    cfg: &Cfg,
+    live: &[HashSet<Reg>],
 ) -> HashSet<Reg> {
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
@@ -649,9 +686,7 @@ fn within_pressure(
             }
         }
     }
-    // Held throughout the loop: what is live into its header (read from
-    // outside, or carried round it), which is not one of the values hoisted.
-    let outside: HashSet<Reg> = held.iter().copied().filter(|register| !made.contains_key(register)).collect();
+    let (held_gprs, held_fprs) = peak_pressure(probe, blocks, cfg, live, &made);
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
@@ -659,8 +694,7 @@ fn within_pressure(
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
-        (if calls { kept } else { kept + rest })
-            .saturating_sub(outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count())
+        (if calls { kept } else { rest }).saturating_sub(if gpr { held_gprs } else { held_fprs })
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
@@ -742,7 +776,7 @@ fn hoist(function: &mut MFunc) {
         // What the loop would hoist, on a copy, and how much of it fits.
         let mut probe = function.clone();
         let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
-        let chosen = within_pressure(&probe, &order, &candidates, &live[header]);
+        let chosen = within_pressure(&probe, &order, &candidates, &cfg, &live);
         let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;

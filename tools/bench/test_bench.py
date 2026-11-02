@@ -1063,6 +1063,15 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
 
 
+def test_an_x86_64_row_above_the_base_fails_and_one_that_could_not_run_says_why():
+    """Larger executable sections or more user instructions than the base fail like any count; a host without perf skips the row and an error fails."""
+    base = {"instructions": 1000, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0}
+    assert bench.native_problems("fib c64 -O2", {**base, "code_bytes": 101}, base, []) == ["fib c64 -O2: code_bytes 101 > 100 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 999}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1001}, base, []) == []  # the rounding of the mean
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1002}, base, []) == ["fib c64 -O2: instructions 1002 > 1001 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {"skip": "no perf"}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {"error": "compile: x"}, base, []) == ["fib c64 -O2: compile: x"]
 def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_padding_at_a_size_level():
     """Counting code without alignment padding must not hide records it could not read, nor padding where none is expected (-Os)."""
     got = {
@@ -1075,6 +1084,13 @@ def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_paddin
         "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
         "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
     ]
+
+
+def test_native_sources_exist_when_only_the_x86_64_language_is_selected(tmp_path, monkeypatch):
+    """`--lang c64` left no C variant, so no c64 row got the call-keeping pair: crc read 21 instructions, and -fno-inline-functions crashed llc on parity/qmove -Os."""
+    monkeypatch.setattr(bench, "ONLY", ["c64"])
+    directory = next(one for one in bench.benchmarks(["crc"]))
+    assert bench.native_sources("crc", directory, tmp_path) is not None
 
 
 def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds():
