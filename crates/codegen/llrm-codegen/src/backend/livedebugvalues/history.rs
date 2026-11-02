@@ -56,6 +56,31 @@ pub fn form(entries: &[Entry]) -> Form {
     }
 }
 
+/// The ranges of a variable's entries (`DwarfDebug::buildLocationList`): a
+/// value runs to the next entry; to the end of the instruction a clobber is
+/// at, since that instruction still reads the place; to `code_end` when no
+/// entry follows. `after` is the end of the instruction at a position. A
+/// range with no length is dropped.
+pub fn locations(
+    entries: &[Entry],
+    code_end: i64,
+    after: &dyn Fn(i64) -> i64,
+) -> Vec<(i64, i64, Where)> {
+    let mut out = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let Entry::Value { at, place } = *entry else { continue };
+        let end = match entries.get(index + 1) {
+            Some(Entry::Clobber { at: clobbered }) => after(*clobbered),
+            Some(Entry::Value { at: next, .. }) => *next,
+            None => code_end,
+        };
+        if at < end {
+            out.push((at, end, place));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +137,32 @@ mod tests {
         assert_eq!(form(&[value(0), Entry::Clobber { at: 9 }]), Form::Single);
         assert_eq!(form(&[value(0), value(4)]), Form::List);
         assert_eq!(form(&[value(0), Entry::Clobber { at: 4 }, value(6)]), Form::List);
+    }
+
+    /// A parameter in `rdi` until an instruction at 9 writes it: the range
+    /// runs to the end of that instruction (15), as in the pin, not to its
+    /// start. Ending at the start left the instruction that still reads the
+    /// register without a location.
+    #[test]
+    fn a_clobbered_range_ends_with_the_instruction_that_clobbers() {
+        let place = Where::Place(Place::Register(RegId::from_raw(5)));
+        let found = locations(&[Entry::Value { at: 0, place }, Entry::Clobber { at: 9 }], 100, &|at| at + 6);
+        assert_eq!(found, [(0, 15, place)]);
+    }
+
+    /// A value followed by another ends where the next begins; the last one
+    /// runs to the end of the code.
+    #[test]
+    fn a_value_runs_to_the_next_entry_and_the_last_to_the_end_of_the_code() {
+        let (one, two) = (Where::Place(Place::Register(RegId::from_raw(5))), Where::Place(Place::Register(RegId::from_raw(0))));
+        let entries = [Entry::Value { at: 0, place: one }, Entry::Value { at: 10, place: two }];
+        assert_eq!(locations(&entries, 40, &|at| at + 1), [(0, 10, one), (10, 40, two)]);
+    }
+
+    /// A clobber at the position a value starts leaves a range of no length.
+    #[test]
+    fn a_range_of_no_length_is_dropped() {
+        let place = Where::Place(Place::Register(RegId::from_raw(5)));
+        assert_eq!(locations(&[Entry::Value { at: 7, place }, Entry::Clobber { at: 7 }], 40, &|at| at), []);
     }
 }
