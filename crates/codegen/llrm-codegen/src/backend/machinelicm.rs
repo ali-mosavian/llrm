@@ -389,10 +389,10 @@ pub fn hoisted(
                             && crate::greedy::remat::is_trivially_re_materializable(one, false)
                             // DEVIATE LICM1: at -Os the constant is one
                             // instruction in the loop or one before it, so
-                            // hoisting saves no bytes; across a call it holds
-                            // a callee-saved register (push, pop) or is made
-                            // again. Exit: none while the bar is bytes.
-                            && !(size && calls)
+                            // hoisting saves no bytes and its register can
+                            // cost a push or a spill. Exit: none while the
+                            // bar is bytes.
+                            && !size
                     });
                     if constant && !movable {
                         hoisted_values.extend(value);
@@ -722,11 +722,11 @@ mod tests {
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
     }
 
-    /// m64 -Os overflow_builtins 613 -> 637 B: `mov r64, offset sa` hoisted out
-    /// of a loop of calls was held across them in a callee-saved register and
-    /// made again after the first call; main made it once per trip.
+    /// m64 -Os overflow_builtins 613 -> 637 B, int64_division 266 -> 284 B: a
+    /// `mov r64, offset sym` hoisted out of a loop was held in a callee-saved
+    /// register or spilled, and made again; main made it in the loop.
     #[test]
-    fn test_at_size_a_symbol_address_stays_in_a_loop_that_calls() {
+    fn test_at_size_a_symbol_address_stays_in_its_loop() {
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
@@ -743,7 +743,7 @@ mod tests {
             0,
             vec![
                 block(0, vec![1], vec![jump(0)]).into(),
-                block(1, vec![1, 2], vec![constant, insn(14, Operation::Call, "call", vec![], vec![], vec![], vec![]), branch(11)]).into(),
+                block(1, vec![1, 2], vec![constant, branch(11)]).into(),
                 block(2, vec![], vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
             ],
             IndexMap::default(),
@@ -752,6 +752,6 @@ mod tests {
         body.inputs = [1].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
         let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64), true);
-        assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (1, 3));
+        assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (1, 2));
     }
 }
