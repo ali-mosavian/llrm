@@ -476,9 +476,7 @@ fn cse(function: &mut MFunc) {
     let mut rename: HashMap<Reg, Reg> = HashMap::new();
     let mut removed: HashSet<(usize, usize)> = HashSet::new();
     let mut table: HashMap<String, Reg> = HashMap::new();
-    let mut compares: HashMap<String, (usize, usize)> = HashMap::new();
     let copies = single_copies(function, &definitions);
-    let mut defines: HashMap<(usize, usize), Gpr> = HashMap::new();
     let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {

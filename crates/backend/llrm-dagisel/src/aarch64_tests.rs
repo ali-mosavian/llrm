@@ -2,7 +2,7 @@
 //! with hooks that name no x86 concept: the table and `Hooks` are the target's,
 //! `X86Predicates` is not asked for.
 
-use crate::dag::{Dag, Hooks, SDValue};
+use crate::dag::{Hooks, SDValue};
 use crate::generated::aarch64::aarch64_apple_m1 as table;
 use crate::generated::ids::{isd, mvt};
 use crate::interp::{Outcome, Selector};
