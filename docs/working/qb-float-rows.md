@@ -26,4 +26,4 @@ Run 2026-11-02: main = the build of 65098fd950, head = release/next 17c5b8bec4 +
 | QF-17 | nbody_single/bq32/O2 | 859134 \| 972205 | 7923824 \| 7817102 | 1681 \| 528 |
 | QF-18 | nbody_single/bq32/O3 | 902132 \| 1020139 | 8309816 \| 8126832 | 2542 \| 1390 |
 
-Cause: the `bas` and `bq16` rows are noise (1 clock, 2 B). The `bq32` rows are the loop decisions at -O2/-O3 (code 1681 -> 528 B on nbody_single -O2 with +13% instructions and -1.3% clocks; fpbench -O2 1451 -> 838 B, +22% instructions, +2.8% clocks): not the rounding, which main has. The landing is not bisected yet.
+Cause: the `bas` and `bq16` rows are noise (1 clock, 2 B). The `bq32` rows are the loop decisions at -O2/-O3 (code 1681 -> 528 B on nbody_single -O2 with +13% instructions and -1.3% clocks; fpbench -O2 1451 -> 838 B, +22% instructions, +2.8% clocks): not the rounding, which main has. Landing (x86-m32, 2026-11-02): bf74ea331c (unroll size override, removed by #6404 d0eb0cc5b3) and the U3 float-stack decline, which keeps fpbench/nbody/nbody_single rolled; fix by x86-m32, exit 2026-11-06.
