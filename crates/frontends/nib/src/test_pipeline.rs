@@ -451,3 +451,13 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     assert!(spelled(&[]).contains(&"f_".to_owned()));
     assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
 }
+
+/// A `let` array of constants was built by stores on every call (crc: nine
+/// bytes, 102 B of code against C's 69 for the same loop). It is read-only data
+/// now, as clang's `const` array is.
+#[test]
+fn test_a_constant_let_array_is_data_not_stores_on_every_call() {
+    let function = _nib("consttable", "fold", "_fold");
+    assert!(!function.contains("[bp-"), "{function}");
+    assert!(!function.contains("mov byte ptr"), "{function}");
+}

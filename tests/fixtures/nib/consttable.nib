@@ -1,0 +1,11 @@
+# A constant table read by index: data, as clang's `const unsigned char t[] = {..}`, not stores on every call.
+fn fold(n: i16) -> u32:
+    let table: u8[9] = [49, 50, 51, 52, 53, 54, 55, 56, 57]
+    let mut acc: u32 = 0
+    for i in 0..n:
+        acc = (acc << 1) ^ table[i]
+    return acc
+
+fn main() -> i16:
+    print(i32(fold(9)))
+    return 0

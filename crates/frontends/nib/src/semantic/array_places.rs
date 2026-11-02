@@ -316,7 +316,14 @@ impl FunctionCompiler<'_> {
             mutable: true,
             owner: name.into(),
         };
-        if let Expr::Array(..) = value {
+        if let Some(stores) =
+            (!mutable).then(|| self.constant_array_copy(&destination, array, element, shape, value)).flatten()
+        {
+            // A constant table is data, as clang's `const T a[] = {..}` is: one
+            // copy of it, which the optimizer drops where the array
+            // is only read.
+            self.emit_stores(stores, span)?;
+        } else if let Expr::Array(..) = value {
             // No value reads the new place: each element is stored as it is
             // made.
             let slot = FieldLayout { type_: element, offset: 0, shape: None };
@@ -338,6 +345,36 @@ impl FunctionCompiler<'_> {
         let binding = Binding { type_: BindingType::Array { element, shape }, mutable, storage };
         self.scopes.last_mut().expect("scope").insert(name.into(), binding);
         Ok(())
+    }
+
+    /// The copy of `value`, a literal of constants, from read-only data into
+    /// `destination`; none where an element is not a constant
+    /// or the elements own something.
+    fn constant_array_copy(
+        &mut self,
+        destination: &StructView,
+        array: u32,
+        element: ElementType,
+        shape: Shape,
+        value: &Expr,
+    ) -> Option<Vec<Store>> {
+        let ElementType::Scalar(_) = element else { return None };
+        if !matches!(value, Expr::Array(..)) {
+            return None;
+        }
+        let mut bytes = vec![0; (shape.len() * self.types.width(element.id())) as usize];
+        self.types.encode(&mut bytes, 0, value, element, shape.dims(), value.span()).ok()?;
+        let count = bytes.len() as u32;
+        let symbol = self.literals.object(&format!("$const{}", self.next_place), bytes, true, None);
+        let place = self.static_array_place(symbol, array, count);
+        let source = StructView { place, mutable: false, ..destination.clone() };
+        let (type_name, cells) = self.types.array_run(element, shape);
+        Some(vec![Store::Run {
+            destination: destination.clone(),
+            element: ElementType::Scalar(type_name),
+            count: cells,
+            source: RunSource::Cells(source),
+        }])
     }
 
     /// Makes the prepared `stores`, in order.

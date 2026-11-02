@@ -9,9 +9,9 @@ fn sum_three(first: &[i16], second: &[i16], third: &[i16]) -> i16:
     return total
 
 fn main() -> i16:
-    let first: i16[4] = [1, 2, 3, 4]
-    let second: i16[4] = [10, 20, 30, 40]
-    let third: i16[4] = [100, 200, 300, 400]
+    let mut first: i16[4] = [1, 2, 3, 4]
+    let mut second: i16[4] = [10, 20, 30, 40]
+    let mut third: i16[4] = [100, 200, 300, 400]
     let result = sum_three(&first, &second, &third)
     if result == 1110:
         print("sum_three: ok")

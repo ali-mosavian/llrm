@@ -187,7 +187,7 @@ impl FunctionCompiler<'_> {
 impl TypeRegistry {
     /// Writes `value` into `bytes` at `at`: `element`s filling `dims`,
     /// row-major, a struct's fields at their offsets.
-    fn encode(
+    pub(super) fn encode(
         &self,
         bytes: &mut [u8],
         at: u32,

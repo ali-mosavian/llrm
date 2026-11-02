@@ -238,6 +238,30 @@ impl<'a> FunctionCompiler<'a> {
         id
     }
 
+    /// A read-only module array of `extent` bytes at data `symbol`: the source
+    /// of a constant literal's copy.
+    pub(super) fn static_array_place(
+        &mut self,
+        symbol: u32,
+        array: u32,
+        extent: u32,
+    ) -> u32 {
+        let id = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id,
+            name: format!("$literal{symbol}"),
+            type_id: array,
+            mutable: false,
+            offset: 0,
+            extent,
+            storage: "module",
+            symbol,
+            volatile: false,
+        });
+        id
+    }
+
     pub(super) fn static_string_place(
         &mut self,
         symbol: u32,
