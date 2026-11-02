@@ -1122,6 +1122,8 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+        args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
+    print("HARNESS", basecounts.harness_digest())
     if args.record:
         import measure
 

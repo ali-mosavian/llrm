@@ -400,3 +400,17 @@ def test_coverage_names_the_cells_without_a_base_or_a_head_row():
     assert "CELLS total: 1 cells over 1 programs" in lines
     assert any(line.startswith("NOBASE 1 cells: b bq16 -O2") for line in lines)
     assert any(line.startswith("NOHEAD 1 cells: c bq16 -O2") for line in lines)
+
+
+def test_a_base_measured_under_another_harness_is_flagged_not_compared():
+    """65098fd950's fpbench nib Os base read 156229 clocks from the old icount, 156261 under the tip's harness on the same binaries: the base was compared as if nothing differed."""
+    assert bc.harness_lines("aaaaaaaaaaaa", "aaaaaaaaaaaa", 82) == []
+    flagged = bc.harness_lines("aaaaaaaaaaaa", "bbbbbbbbbbbb", 82)
+    assert flagged and "82 base cells are not compared" in flagged[0]
+
+
+def test_the_harness_digest_follows_the_icount_file():
+    """The digest printed in a run's header must change when icount.py does, or two legs under different harnesses would carry the same one."""
+    one = bc.judge_digest(lambda name: b"old" if name.endswith("icount.py") else b"x")
+    other = bc.judge_digest(lambda name: b"new" if name.endswith("icount.py") else b"x")
+    assert one != other

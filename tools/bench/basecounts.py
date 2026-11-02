@@ -78,6 +78,17 @@ def _is_input(name: str) -> bool:
     return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
 
 
+def harness_digest(root: Path = ROOT) -> str:
+    """The judge's files as 12 hex digits: the harness a measurement ran under, printed in a run's header and kept beside its json."""
+    return judge_digest(lambda name: (root / name).read_bytes() if (root / name).is_file() else None).hex()[:12]
+
+
+def harness_lines(base: str, head: str, cells: int) -> list[str]:
+    """A base measured under another harness than the head's is not compared: its counters differ by what the harness changed (the 486
+    multiplier rule moved fpbench nib Os 156229 -> 156261 on the same binaries), so each of its `cells` is NOBASE."""
+    return [f"HARNESS-MISMATCH base {base} head {head}: {cells} base cells are not compared (NOBASE); re-measure the base under the head's harness"] if base != head else []
+
+
 def _hash(files: list[tuple[str, bytes]], judge: bytes = b"") -> str:
     digest = hashlib.sha256(judge)
     for name, data in sorted(files):
