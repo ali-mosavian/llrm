@@ -520,6 +520,7 @@ pub fn emit(
     }
     // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
     // the block the phi is in.
+    let leaves = llrm_spike_mf::regalloc::successors(&emitter.function);
     for (pred, one) in blocks.iter().enumerate() {
         for update in &one.phis {
             let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
@@ -540,10 +541,17 @@ pub fn emit(
             };
             let result = register(&mut emitter, update.result);
             let incoming = register(&mut emitter, update.incoming);
+            // `FinishBasicBlock`: a block the lowering of this one made, that
+            // leaves for the phi's block, takes the same input.
+            let edges = std::iter::once(pred).chain((0..blocks.len()).filter(|&other| {
+                other != pred && blocks[other].parent == Some(one.block) && leaves[other].contains(&at)
+            }));
             let phis = &mut emitter.function.blocks[at].phis;
-            match phis.iter_mut().find(|phi| phi.result == result) {
-                Some(phi) => phi.incoming.push((pred, incoming)),
-                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            for edge in edges {
+                match phis.iter_mut().find(|phi| phi.result == result) {
+                    Some(phi) => phi.incoming.push((edge, incoming)),
+                    None => phis.push(Phi { result, incoming: vec![(edge, incoming)] }),
+                }
             }
         }
     }

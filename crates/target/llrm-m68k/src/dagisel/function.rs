@@ -72,6 +72,9 @@ pub struct PhiUpdate {
 /// One block, selected and scheduled.
 pub struct Selected {
     pub block: BlockId,
+    /// The block whose lowering made this one (a `switch`'s or a split
+    /// condition's), which exports the phi inputs its successors read.
+    pub parent: Option<BlockId>,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     pub phis: Vec<PhiUpdate>,
@@ -126,12 +129,19 @@ pub fn select_function_with(
         let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
             .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        selected.push(Selected { block, parent: None, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
             let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
-            selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
+            selected.push(Selected {
+                block: id,
+                parent: Some(block),
+                dag: extra.dag,
+                units,
+                phis: Vec::new(),
+                locals: Vec::new(),
+            });
         }
     }
     // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
