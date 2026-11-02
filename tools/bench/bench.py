@@ -788,6 +788,8 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         if counter not in got:
             continue
         if counter not in want:
+            if counter in COUNTERS:  # a base without it ran no strict check on it: the gate would pass on a number never compared
+                problems.append(f"{label}: base has no {counter} (not judged; regenerate the base)")
             continue
         if priced and counter in ("instructions", "memory_operands", "clocks", "code_bytes"):
             continue

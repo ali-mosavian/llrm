@@ -1108,3 +1108,9 @@ def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_only(tmp_path, mon
     assert bench.rate_for("c", "O2") == 0
     sheet.write_text("cache_line - =\n")
     assert bench.rate_for("c", "O2") == 0
+
+
+def test_a_base_without_memory_operands_is_flagged_not_passed():
+    """The base file lacked memory_operands, so the -Os strict memory check never ran and every row passed it: the gate compared one metric of two."""
+    problems = bench.against("queens c -Os", {"instructions": 100, "memory_operands": 90}, {"instructions": 100})
+    assert any("base has no memory_operands" in one for one in problems)
