@@ -444,6 +444,19 @@ impl Printer<'_> {
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
             "CP16" | "CP16i" => self.compare16(inst, rest)?,
+            // `ld` leaves the flags alone: the byte is 1, and 0 when the condition fails
+            "SETCC8" => {
+                let to = name_of(self, 0)?;
+                let Some(Operand::Imm(cond)) = inst.operands.get(1) else {
+                    return Err("SETCC8 without a condition".to_owned());
+                };
+                let cond = ["nz", "z", "nc", "c"].get(*cond as usize).ok_or("SETCC8 with an unknown condition")?;
+                let skip = format!("{}$", self.out.len());
+                self.push(format!("ld {to}, #1"));
+                self.push(format!("jr {cond}, {skip}"));
+                self.push(format!("dec {to}"));
+                self.out.push(Line::Label(skip));
+            }
             "AND16i" | "OR16i" | "XOR16i" => {
                 let mnemonic = op[..op.len() - 3].to_lowercase();
                 let (to, a) = (self.register(inst, 0)?, self.register(inst, 1)?);
@@ -696,15 +709,16 @@ impl Printer<'_> {
             }
             other => return Err(format!("CP16 against {other:?}")),
         };
-        let reader = rest
-            .iter()
-            .find(|one| one.reads_flags)
-            .and_then(
-                |one| match one.kind {
-                    Kind::Op(name) => Some(name),
-                    Kind::Copy => None,
-                },
-            );
+        let reader = rest.iter().find(|one| one.reads_flags);
+        let reader = reader.and_then(
+            |one| match (one.kind, one.operands.get(1)) {
+                // a condition as a byte reads the flag its code names
+                (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3))) => Some("JPC"),
+                (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1))) => Some("JPZ"),
+                (Kind::Op(name), _) => Some(name),
+                (Kind::Copy, _) => None,
+            },
+        );
         match reader {
             Some("JPC" | "JPNC" | "RETC" | "RETNC") => {
                 self.push(format!("ld a, {}", name(al)));

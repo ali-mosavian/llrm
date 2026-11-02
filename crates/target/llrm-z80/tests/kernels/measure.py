@@ -27,6 +27,11 @@ K = [
     ("bsearch8", "i8", [("ptr", "@tab"), ("i8", "8"), ("i8", "17")], 5),
     ("sum16", "i16", [("ptr", "@buf"), ("i8", "16")], 80), ("schr", "i8", [("ptr", "@str"), ("i8", "111")], 4),
 ]
+# Correctness-only rows: no SDCC baseline, run only when named in --kernels.
+EXTRA = [
+    # the carry out of a 32-bit add is a compare used as a value (SETCC8)
+    ("carry32", "i16", [("i32", "65535"), ("i8", "1")], 1),
+]
 HEADER = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"\n'
 CRT0 = "\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n"
 DATA = """\t.module data
@@ -156,27 +161,27 @@ def main():
         q = sh(["sdasz80", "-g", "-o", f"{stem}.rel", f"{stem}.s"], w)
         return (f"{stem}.rel", None) if q.returncode == 0 else (None, "sdasz80: " + (q.stdout + q.stderr)[-200:])
 
-    print(f"| kernel | ours B | ours T | SDCC B | SDCC T | B | T |\n|---|---|---|---|---|---|---|")
-    for name, ret, params, expect in K:
+    print("| kernel | ours B | ours T | ours insn | SDCC B | SDCC T | SDCC insn | B | T | insn |\n|---|---|---|---|---|---|---|---|---|---|")
+    for name, ret, params, expect in K + EXTRA:
         if name not in want:
             continue
         src = f"{args.ir_dir}/{name}.ll"
         kernel, why = compile_ir(src, "k")
         if not kernel:
-            print(f"| {name} | refused: {why[:70]} | | | | | |")
+            print(f"| {name} | refused: {why[:70]} | | | | | | | | |")
             continue
         open(f"{w}/d.ll", "w").write(driver(name, ret, params, True))
         open(f"{w}/e.ll", "w").write(driver(name, ret, params, False))
         d, why = compile_ir(f"{w}/d.ll", "d")
         e, why2 = compile_ir(f"{w}/e.ll", "e")
         if not d or not e:
-            print(f"| {name} | driver refused: {(why or why2)[:70]} | | | | | |")
+            print(f"| {name} | driver refused: {(why or why2)[:70]} | | | | | | | | |")
             continue
         times = []
         for objs in (["e.rel"], ["d.rel", "k.rel"]):
             p = sh(["sdldz80", "-i", "-m", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "data.rel", *objs, "rt.rel"], w)
             if p.returncode:
-                times.append(None); print(f"| {name} | link: {(p.stdout+p.stderr)[-80:]} | | | | | |"); break
+                times.append(None); print(f"| {name} | link: {(p.stdout+p.stderr)[-80:]} | | | | | | | | |"); break
             times.append(run("x.ihx", w))
         if None in times:
             continue

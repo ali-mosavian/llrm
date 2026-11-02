@@ -318,3 +318,14 @@ fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld (_r), de") && !out.contains("ex de, hl"), "{out}");
 }
+
+/// The carry out of a 32-bit add is a compare used as a value (`SETCC8` after
+/// `CP16`). It was refused with "CP16 read by SETCC8": the compare did not know
+/// the byte reader and nothing expanded it. 30 functions of the C corpus beyond
+/// the 23 rows hit it.
+#[test]
+fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
+    let ir = include_str!("kernels/ir/carry32.ll");
+    let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("sbc a, ") && out.contains("dec "), "{out}");
+}
