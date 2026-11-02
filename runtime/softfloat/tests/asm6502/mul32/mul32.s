@@ -296,3 +296,130 @@ nt:
 .endrepeat
 .endrepeat
 .endif
+.if VAR = 4
+; the nibble-product multiply with the byte products in a loop: i over a's bytes, j over b's while i + j < 4
+ii=$e0
+jj=$e1
+xl=$e2          ; current byte pair, nibble forms
+xh=$e3
+yl=$e4
+yh=$e5
+qp=$e6
+qh=$e7
+rr=$b8          ; r0..r3 plus r4..r6 scratch for the carry chain
+mul32:
+    ldx #3
+sp: lda a0,x            ; split: al4, ah4 of a and bl, bh of b
+    and #$f0
+    sta n0+4,x
+    lda a0,x
+    asl a
+    asl a
+    asl a
+    asl a
+    sta n0,x
+    lda b0,x
+    and #$0f
+    sta m0,x
+    lda b0,x
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    sta m0+4,x
+    dex
+    bpl sp
+    lda #0
+    ldx #6
+:   sta rr,x
+    dex
+    bpl :-
+    sta ii
+outer:
+    lda #0
+    sta jj
+inner:
+    ldx ii
+    lda n0,x
+    sta xl
+    lda n0+4,x
+    sta xh
+    ldx jj
+    lda m0,x
+    sta yl
+    lda m0+4,x
+    sta yh
+    lda xl                  ; xl * yl
+    ora yl
+    tax
+    lda nt,x
+    sta ll
+    lda xl                  ; xl * yh
+    ora yh
+    tax
+    lda nt,x
+    sta t
+    lda xh                  ; xh * yl
+    ora yl
+    tax
+    lda nt,x
+    clc
+    adc t
+    sta t
+    ror a                   ; the ninth bit of the middle sum into bit 7
+    lsr a
+    lsr a
+    lsr a
+    sta qh
+    lda t
+    asl a
+    asl a
+    asl a
+    asl a
+    clc
+    adc ll
+    sta qp
+    lda xh                  ; xh * yh
+    ora yh
+    tax
+    lda nt,x
+    adc qh
+    sta qh
+    lda ii                  ; r[i+j..] += qh:qp, the carry runs through the scratch bytes
+    clc
+    adc jj
+    tax
+    clc
+    lda rr,x
+    adc qp
+    sta rr,x
+    lda rr+1,x
+    adc qh
+    sta rr+1,x
+    lda rr+2,x
+    adc #0
+    sta rr+2,x
+    lda rr+3,x
+    adc #0
+    sta rr+3,x
+    inc jj
+    lda ii
+    clc
+    adc jj
+    cmp #4
+    bcs :+
+    jmp inner
+:   inc ii
+    lda ii
+    cmp #4
+    bcs :+
+    jmp outer
+:   rts
+.segment "RODATA"
+nt:
+.repeat 16, i
+.repeat 16, j
+    .byte i * j
+.endrepeat
+.endrepeat
+.endif
