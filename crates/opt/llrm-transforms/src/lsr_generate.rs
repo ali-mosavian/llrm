@@ -645,8 +645,7 @@ impl Collection<'_, '_> {
         factor: i64,
         bits: u32,
     ) -> bool {
-        let kept = bits.saturating_sub(factor.trailing_zeros());
-        if factor & 1 == 1 || kept == 0 || kept >= 128 {
+        if factor & 1 == 1 {
             return false;
         }
         let mut parts: Vec<ScevUse> = base.base_regs.iter().map(|&r| ScevUse::of(r)).collect();
@@ -665,7 +664,7 @@ impl Collection<'_, '_> {
         };
         let lo = se.get_signed_range_min(cx, guarded).sext_value();
         let hi = se.get_signed_range_max(cx, guarded).sext_value();
-        lo.unsigned_abs().max(hi.unsigned_abs()) < 1u128 << kept
+        zero_test_survives(bits, factor, lo.unsigned_abs().max(hi.unsigned_abs()))
     }
 
     /// `GenerateScales`: formulae using a factor of the strides as the scale of
@@ -1144,4 +1143,16 @@ impl Collection<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// Whether `x * factor == 0` (mod 2^bits) iff `x == 0` for every `x` with
+/// `|x| <= reach`: the product is zero iff `x` is a multiple of
+/// 2^(bits - ctz(factor)).
+pub(crate) fn zero_test_survives(
+    bits: u32,
+    factor: i64,
+    reach: u128,
+) -> bool {
+    let kept = bits.saturating_sub(factor.trailing_zeros());
+    kept > 0 && kept < 128 && reach < 1u128 << kept
 }

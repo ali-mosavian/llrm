@@ -1105,3 +1105,21 @@ define i32 @dot(ptr %0, ptr %1, i16 %2) {
   ret i32 %20
 }
 ";
+
+/// The even-factor rule must agree with the wrapped product at every width
+/// it is allowed to claim: a nonzero `x` within reach never multiplies to 0.
+#[test]
+fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
+    for bits in [8u32, 16] {
+        let modulus = 1i128 << bits;
+        let span = modulus.min(512) / 2;
+        for factor in (-span..span).chain([1024, 16384]).filter(|&f| f != 0) {
+            let reach = (0..modulus / 2).take_while(|&r| crate::lsr_generate::zero_test_survives(bits, factor as i64, r as u128)).count() as i128;
+            for x in -reach.max(1) + 1..reach.max(1) {
+                let zero = (x * factor).rem_euclid(modulus) == 0;
+                let claimed = reach > 0 && x.abs() < reach;
+                assert!(!claimed || zero == (x == 0), "bits {bits} factor {factor} x {x}");
+            }
+        }
+    }
+}
