@@ -149,9 +149,14 @@ __addsf3:
 	bpl.s	.Labig
 	move.l	#0x7FC00000,%d0		| inf - inf
 	rts
-.Laqnan:
+.Laqnan:				| a if a is NaN, else b (big), quietened
+	move.l	4(%sp),%d0
+	move.l	%d0,%d1
+	add.l	%d1,%d1
+	cmp.l	#0xFF000000,%d1
+	bhi.s	1f
 	move.l	%a0,%d0
-	bset	#22,%d0
+1:	bset	#22,%d0
 	rts
 .Labig:
 	move.l	%a0,%d0
