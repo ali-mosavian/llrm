@@ -1410,27 +1410,28 @@ b0:
 }
 ";
 
-/// qlight c at m16 -O2 inlined a 30-instruction `ls_scale_byte` four times,
-/// 211 -> 376 bytes. The m16 description holds a speed caller to the callee's
-/// code size (`inline_size_guard_at_speed`) unless the call's clocks pay for
-/// the bytes (D13): a callee too big for that stays a call.
+/// A speed caller at m16 follows the pin's threshold, as main does: a callee
+/// that grows the code is copied. A guard that held it to the callee's size
+/// kept qlight's four `ls_scale_byte` calls at -O2 (472 clocks against main's
+/// 463, and a size bound that priced the copy at 1.4 to 1.8 times its bytes).
 #[test]
-fn test_an_o2_call_of_a_callee_that_stays_and_grows_past_what_its_clocks_pay_stays_a_call_at_m16() {
+fn test_an_o2_call_of_a_callee_that_grows_the_code_is_inlined_at_m16_as_the_pin_does() {
     let mut big = String::from("@g = global i32 0\n\ndefine i32 @callee(i32 %x) {\nb0:\n");
-    for step in 0..20 {
+    let steps = 10;
+    for step in 0..steps {
         let before = if step == 0 { "%x".to_owned() } else { format!("%w{}", step - 1) };
         big.push_str(&format!("  %v{step} = load volatile i32, ptr @g\n  %w{step} = add i32 {before}, %v{step}\n"));
     }
-    big.push_str("  ret i32 %w19\n}\n");
+    big.push_str(&format!("  ret i32 %w{}\n}}\n", steps - 1));
     let text = format!("{big}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
     let pin = at_o2_on(llrm_x86_m16::Dos::pin_tuned(), &text, "@top(");
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
     assert!(!pin.contains("call i32 @callee"), "premise: the pin inlines it:\n{pin}");
-    assert!(m16.contains("call i32 @callee"), "m16 copied it:\n{m16}");
+    assert!(!m16.contains("call i32 @callee"), "m16 kept the call:\n{m16}");
 }
 
-/// D13: a callee that grows the code a little is copied into a speed caller at
-/// m16 where the call's clocks pay for it (the 13-operation `GROWS`).
+/// A callee that grows the code a little is copied into a speed caller at m16
+/// (the 13-operation `GROWS`).
 #[test]
 fn test_an_o2_call_of_a_callee_whose_clocks_pay_for_its_growth_is_inlined_at_m16() {
     let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
@@ -1541,7 +1542,7 @@ b0:
 
 /// qlight c at m16 -O2: `ls_scale_byte` (a clamped multiply and a divide by
 /// 255) four times. Kept as calls it ran 472 clocks, above main's 463 (main
-/// inlines it); D13 inlines it where the sheet's call clocks pay (388 clocks).
+/// inlines it); inlined it ran 388 clocks.
 #[test]
 fn test_an_o2_call_of_a_clamped_divide_by_a_constant_is_inlined_at_m16_where_main_inlines_it() {
     let text = "@raw = global i16 200

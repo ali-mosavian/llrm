@@ -6,7 +6,7 @@
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 
-use crate::inlinecost::{CallerSize, InlineCost, InlineParams, PricedCall, Site, inline_cost};
+use crate::inlinecost::{CallerSize, InlineCost, InlineParams, Site, inline_cost};
 use crate::testing::parsed;
 
 const GLOBAL: &str = "@g = global i32 0\n\n";
@@ -305,95 +305,6 @@ b0:
     assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
     assert!(target >= held, "16-bit code inlined it, cost {target} threshold {held}");
     assert!(wide < kept, "32-bit code kept it, cost {wide} threshold {kept}");
-}
-
-/// A callee that stays is not copied into a speed caller where the target's
-/// `inline_size_guard_at_speed` says so: qlight c at -O2 inlined a
-/// 30-instruction `ls_scale_byte` four times, 211 -> 376 bytes. Off, the pin's
-/// decision stands.
-#[test]
-fn a_speed_caller_does_not_copy_a_callee_that_stays_where_the_target_guards_size() {
-    let text = format!(
-        "{GLOBAL}define i32 @callee(i32 %x) {{
-b0:
-  %a = load i32, ptr @g
-  %b = add i32 %a, %x
-  %c = add i32 %b, %a
-  %d = mul i32 %c, %x
-  %e = add i32 %d, %b
-  %f = mul i32 %e, %a
-  %g = add i32 %f, %c
-  %h = mul i32 %g, %d
-  %i = add i32 %h, %a
-  %j = mul i32 %i, %x
-  %k = add i32 %j, %c
-  %l = mul i32 %k, %b
-  %m = add i32 %l, %e
-  store i32 %m, ptr @g
-  ret i32 %m
-}}
-
-define i32 @f(i32 %y) {{
-b0:
-  %r = call i32 @callee(i32 %y)
-  ret i32 %r
-}}
-"
-    );
-    let guarded = x86_real()
-        .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_speed: true, ..llrm_mir::target::Tuning::PIN });
-    let (plain, bound) = priced_with(&text, 0, false, CallerSize::Speed, Some(&x86_real()));
-    let (cost, held) = priced_with(&text, 0, false, CallerSize::Speed, Some(&guarded));
-    assert!(plain < bound, "premise: without the guard the pin inlines it, cost {plain} threshold {bound}");
-    assert!(cost >= held, "the guard kept it, cost {cost} threshold {held}");
-}
-
-/// D13: the speed guard is lifted where the call's clocks pay for the copy's
-/// bytes at the target's rate. qlight c at -O2 kept four calls of
-/// `ls_scale_byte` (31 clocks and two argument words each, +9 bytes a copy)
-/// and ran 472 clocks against 463 inlined.
-#[test]
-fn a_speed_caller_copies_a_guarded_callee_where_the_calls_clocks_pay_for_its_bytes() {
-    let text = "@g = global i32 0
-define i32 @callee(i32 %x) {
-b0:
-  %a = load i32, ptr @g
-  %b = add i32 %a, %x
-  %c = add i32 %b, %a
-  %d = mul i32 %c, %x
-  %e = add i32 %d, %b
-  %f = mul i32 %e, %a
-  ret i32 %f
-}
-
-define i32 @f(i32 %y) {
-b0:
-  %r = call i32 @callee(i32 %y)
-  ret i32 %r
-}
-";
-    let guarded = x86_real()
-        .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_speed: true, ..llrm_mir::target::Tuning::PIN });
-    let bytes = {
-        use llrm_mir::target::Machine;
-        llrm_x86_m16::Dos::default().size_costs()
-    };
-    let at = |priced_call| {
-        let params = InlineParams {
-            compute_full_inline_cost: true,
-            priced_call: Some(priced_call),
-            byte_costs: Some(&bytes),
-            ..InlineParams::from_level(2)
-        };
-        let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&guarded), params, (2, false));
-        cost < threshold
-    };
-    let (dear, cheap) = (
-        PricedCall { clocks: 1000, per_argument: 6, milliclocks_per_byte: 500 },
-        PricedCall { clocks: 1, per_argument: 0, milliclocks_per_byte: 500 },
-    );
-    assert!(!at(cheap), "a call worth one clock does not pay for the bytes");
-    assert!(at(dear), "a call worth a thousand clocks pays for them");
 }
 
 /// A callee that dies with its calls is removed when they are all inlined, so
