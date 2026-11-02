@@ -66,7 +66,11 @@ static sf32 mul_bits(sf32 a, sf32 b)
     if (!(ma & 0x800000u)) { int s = sf_clz32(ma) - 8; ma <<= s; ea -= s; }
     if (!(mb & 0x800000u)) { int s = sf_clz32(mb) - 8; mb <<= s; eb -= s; }
     uint32_t hi, lo;
+#ifdef SF_MUL_LOOP
+    sf_mul24x24_loop(ma, mb, &hi, &lo);
+#else
     sf_mul32x32(ma, mb, &hi, &lo);
+#endif
     /* The product has its top bit at 47 or 46; keep 27 bits and fold the rest. */
     int e = ea + eb - 127, sh = 20;
     if (hi >> 15) { sh = 21; e++; }

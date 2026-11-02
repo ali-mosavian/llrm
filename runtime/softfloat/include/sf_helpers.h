@@ -55,4 +55,17 @@ static inline void sf_mul32x32(uint32_t a, uint32_t b, uint32_t *hi, uint32_t *l
 #define sf_mul32x32 SF_MUL32X32
 #endif
 
+/* 24x24 -> 48 as hi:lo by shift-add, one multiplier bit per step: no multiply instruction, a few bytes of code. */
+static inline void sf_mul24x24_loop(uint32_t a, uint32_t b, uint32_t *hi, uint32_t *lo)
+{
+    uint32_t h = 0, l = b;
+    for (int i = 0; i < 24; i++) {
+        if (l & 1) h += a;
+        l = (l >> 1) | (h << 31);
+        h >>= 1;
+    }
+    *lo = (h << 24) | (l >> 8);
+    *hi = h >> 8;
+}
+
 #endif

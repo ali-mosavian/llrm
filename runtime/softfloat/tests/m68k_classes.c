@@ -1,4 +1,5 @@
 /* Like m68k_main.c, but no cap: counts mismatches per op and class of the expected result (vectors.h from gen_vectors.c).
+ * Variant check: CFLAGS_EXTRA="... -DSF_MUL_LOOP" selects the shift-add multiply; the counts must stay 0.
  * Classes: zero sign (expected +-0, got the other zero), denormal (expected exponent 0, nonzero), special (inf/NaN), normal. */
 #include <stdint.h>
 #include "vectors.h"
