@@ -167,12 +167,16 @@ pub fn select_function_with(
         entry.locals = locals;
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
-        for (phi, incoming) in pending {
+        for (at, &(phi, incoming)) in pending.iter().enumerate() {
             let ValueDef::Instruction(def) = function.value(phi).def else {
                 return Err("a phi that is not an instruction".to_owned());
             };
             let phi_block = function.parent(def).ok_or("a phi outside a block")?;
-            let result = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            let first = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            // A value of two registers has an entry for each part, in order:
+            // the k-th is the phi's k-th register.
+            let part = pending[..at].iter().filter(|(one, _)| *one == phi).count();
+            let result = if part == 0 { first } else { info.part_regs(first, part + 1)[part] };
             let bits = module.context.types.int_bits(function.value(phi).ty).unwrap_or(32);
             one.phis.push(PhiUpdate { phi_block, result, incoming, bits });
         }
