@@ -269,6 +269,7 @@ pub fn run(function: &mut MFunc) {
     sink(function);
     dead_definitions(function);
     non_flag_setting(function);
+    redundant_zero_extends(function);
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -1026,5 +1027,84 @@ fn unsplit_edges(function: &mut MFunc) {
             ops.insert(at + offset, copy.0);
         }
         function.blocks.remove(edge);
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitORR`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp#L290>):
+/// `orr w, wzr, w` is how `zext i32 to i64` is made, and a 32-bit instruction
+/// already clears the upper half of its result, so the copy goes where the
+/// register it copies is the single result of such an instruction. Not
+/// translated: a source that is a copy of a float register (made an `fmov`).
+fn redundant_zero_extends(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let narrow_defs: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| clears_upper_half(op))
+        .filter_map(defined)
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::new();
+    for block in &mut function.blocks {
+        block.ops.retain(|op| {
+            let Op::I(Inst::LogicShifted {
+                op: Logic::Orr,
+                invert: false,
+                width: Width::W,
+                rd,
+                rn: Gpr::R31,
+                rm,
+                shift: Shift::Lsl,
+                amount: 0,
+            }) = op
+            else {
+                return true;
+            };
+            let (from, to) = (Reg::Gpr(*rd), Reg::Gpr(*rm));
+            if rd.is_virtual() && rm.is_virtual() && definitions.get(&from) == Some(&1) && narrow_defs.contains(&to) {
+                rename.insert(from, to);
+                return false;
+            }
+            true
+        });
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// Whether `op` is a 32-bit instruction (or a 32-bit constant) whose result
+/// register has its upper 32 bits cleared by the architecture.
+fn clears_upper_half(op: &Op) -> bool {
+    match op {
+        Op::Imm { bits: 32, .. } => true,
+        Op::I(
+            Inst::AddSubImm { width: Width::W, .. }
+            | Inst::AddSubShifted { width: Width::W, .. }
+            | Inst::AddSubExtended { width: Width::W, .. }
+            | Inst::LogicImm { width: Width::W, .. }
+            | Inst::LogicShifted { width: Width::W, .. }
+            | Inst::MoveWide { width: Width::W, .. }
+            | Inst::BitfieldMove { width: Width::W, .. }
+            | Inst::Extract { width: Width::W, .. }
+            | Inst::Divide { width: Width::W, .. }
+            | Inst::OneSource { width: Width::W, .. }
+            | Inst::ThreeSource { width: Width::W, .. }
+            | Inst::CondSelect { width: Width::W, .. },
+        ) => true,
+        _ => false,
     }
 }
