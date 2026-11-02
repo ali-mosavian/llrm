@@ -132,10 +132,7 @@ pub fn compile_function(
         crate::machine_sink::machine_sink(&mut f);
         f.edge_probs.clear();
     }
-    if matches!(
-        options.level,
-        crate::driver::Level::O2 | crate::driver::Level::O3 | crate::driver::Level::Os | crate::driver::Level::Oz
-    ) {
+    if options.level != crate::driver::Level::O0 {
         crate::phi_elimination::split_phi_edges(&mut f);
     }
     phi_elimination(&mut f);

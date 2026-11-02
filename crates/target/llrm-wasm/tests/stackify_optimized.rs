@@ -432,3 +432,14 @@ fn a_block_nothing_falls_into_moves_to_where_a_fall_through_happens() {
     let jumps = f.lines().filter(|line| line.split_whitespace().next() == Some("br")).count();
     assert_eq!(jumps, 1, "{text}");
 }
+
+/// At -O1 the loop exit edge had no block of its own: `SplitPHIEdges` ran only
+/// from -O2, so the phi copy sat in the latch and mandel ran 615,228
+/// instructions against the pin's 579,736. The pin splits at -O1 too (the
+/// coalescer is what it turns off); the exit is `br 2` out of the split block.
+#[test]
+fn a_loop_exit_phi_edge_has_a_block_of_its_own_at_o1() {
+    let text = asm(EXIT_CONSTANT, Level::O1);
+    let f = body(&text, "f");
+    assert!(f.lines().any(|line| line.split_whitespace().eq(["br", "2"])), "{text}");
+}
