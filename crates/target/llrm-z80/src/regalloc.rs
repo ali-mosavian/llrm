@@ -151,14 +151,19 @@ impl llrm_spike_mf::Jump for Z80Registers {
         inst
     }
 
-    /// `reverseBranchCondition`: `jp nz` and `jp z` swap, as do `jp nc` and `jp c`.
+    /// `reverseBranchCondition`: `jp nz` and `jp z` swap, as do `jp nc` and `jp
+    /// c`.
     fn reverse(branch: &Inst) -> Option<Inst> {
         let Kind::Op(name) = branch.kind else { return None };
-        let opposite = CONDITIONAL.iter().find_map(|&(one, two)| match () {
-            _ if one == name => Some(two),
-            _ if two == name => Some(one),
-            _ => None,
-        })?;
+        let opposite = CONDITIONAL
+            .iter()
+            .find_map(
+                |&(one, two)| match () {
+                    _ if one == name => Some(two),
+                    _ if two == name => Some(one),
+                    _ => None,
+                },
+            )?;
         Some(Inst { kind: Kind::Op(opposite), ..branch.clone() })
     }
 }

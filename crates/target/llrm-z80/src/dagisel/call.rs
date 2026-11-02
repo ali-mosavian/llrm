@@ -5,8 +5,8 @@
 //! # How it works
 //! A byte argument takes the first free of `a l h e d c b`, a word the first
 //! free pair of `hl de bc`, as `Convention::place` says. A byte result leaves
-//! in `a`, a word in the pair `de`, a long in `de` then `hl`. The values arrive already
-//! split into legal `i8` and `i16` parts, so an `i32` is two words.
+//! in `a`, a word in the pair `de`, a long in `de` then `hl`. The values arrive
+//! already split into legal `i8` and `i16` parts, so an `i32` is two words.
 //!
 //! An argument that fits no register goes on the stack at the offset
 //! `Convention::place` gives it, counted from the first stack argument. The
@@ -85,8 +85,8 @@ fn locations(
 }
 
 /// The register each part of one result leaves in, in order: the convention's
-/// row for the whole width, a word in the pair that holds its two bytes (`e`, `d`
-/// is `de`; a long is `de` then `hl`).
+/// row for the whole width, a word in the pair that holds its two bytes (`e`,
+/// `d` is `de`; a long is `de` then `hl`).
 fn result_registers(
     convention: &Convention,
     vts: &[EVT],

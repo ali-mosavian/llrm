@@ -1,9 +1,14 @@
-//! A runtime routine used once in a module is placed at its call site: the `call` and the routine's `ret` (or the
-//! tail `jp`) go, as the inliner drops the call to the last user of a static function. Only leaf routines qualify: no
-//! stack, no calls, jumps to their own local labels, one `ret` at the end.
+//! A runtime routine used once in a module is placed at its call site: the
+//! `call` and the routine's `ret` (or the tail `jp`) go, as the inliner drops
+//! the call to the last user of a static function. Only leaf routines qualify:
+//! no stack, no calls, jumps to their own local labels, one `ret` at the end.
 
-/// The module's assembly with each sole-use leaf routine of `runtime` expanded where it is called.
-pub fn inline_sole_uses(module: &str, runtime: &str) -> String {
+/// The module's assembly with each sole-use leaf routine of `runtime` expanded
+/// where it is called.
+pub fn inline_sole_uses(
+    module: &str,
+    runtime: &str,
+) -> String {
     let mut text = module.to_owned();
     for (name, body) in leaf_routines(runtime) {
         let mentions = mentions(&text, &name);
@@ -15,24 +20,37 @@ pub fn inline_sole_uses(module: &str, runtime: &str) -> String {
             _ => continue,
         };
         let expanded = expand(&name, &body, tail);
-        text = text.lines().enumerate().fold(String::new(), |mut out, (number, line)| {
-            if number == *site { out.push_str(&expanded) } else { out.push_str(line); out.push('\n') }
-            out
-        });
+        text = text
+            .lines()
+            .enumerate()
+            .fold(
+                String::new(),
+                |mut out, (number, line)| {
+                    if number == *site {
+                        out.push_str(&expanded)
+                    } else {
+                        out.push_str(line);
+                        out.push('\n')
+                    }
+                    out
+                },
+            );
     }
     text
 }
 
 /// The numbers of the lines that name `symbol`, as a whole word.
-fn mentions(text: &str, symbol: &str) -> Vec<usize> {
+fn mentions(
+    text: &str,
+    symbol: &str,
+) -> Vec<usize> {
     let word = |c: char| c.is_alphanumeric() || c == '_';
     text.lines()
         .enumerate()
         .filter(|(_, line)| {
             let code = line.split(';').next().unwrap_or("");
-            code.match_indices(symbol).any(|(at, _)| {
-                !code[..at].ends_with(word) && !code[at + symbol.len()..].starts_with(word)
-            })
+            code.match_indices(symbol)
+                .any(|(at, _)| !code[..at].ends_with(word) && !code[at + symbol.len()..].starts_with(word))
         })
         .map(|(number, _)| number)
         .collect()
@@ -91,8 +109,13 @@ fn is_leaf(body: &[String]) -> bool {
         })
 }
 
-/// The routine's lines with local labels made unique to `name`; a call drops the final `ret`.
-fn expand(name: &str, body: &[String], tail: bool) -> String {
+/// The routine's lines with local labels made unique to `name`; a call drops
+/// the final `ret`.
+fn expand(
+    name: &str,
+    body: &[String],
+    tail: bool,
+) -> String {
     let rename = |line: &str| {
         let mut out = String::new();
         let mut rest = line;

@@ -1,11 +1,12 @@
-//! Spill slots become `push` and `pop` only where that is what the code does: a byte slot saves its pair, so the other
-//! half must be dead once the pair is restored.
+//! Spill slots become `push` and `pop` only where that is what the code does: a
+//! byte slot saves its pair, so the other half must be dead once the pair is
+//! restored.
 
 use llrm_spike_mf::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use llrm_spike_mf::regalloc::Assignment;
 use llrm_z80::compile::slots_are_a_stack;
-use llrm_z80::regalloc::Class;
 use llrm_z80::reg;
+use llrm_z80::regalloc::Class;
 
 fn function(tail: Vec<Inst>) -> MFunction<Class> {
     let mut insts = vec![
@@ -19,7 +20,8 @@ fn function(tail: Vec<Inst>) -> MFunction<Class> {
     function
 }
 
-/// `c` is written between the push and the pop and read after: `pop bc` would put the old `c` back.
+/// `c` is written between the push and the pop and read after: `pop bc` would
+/// put the old `c` back.
 #[test]
 fn a_byte_slot_is_not_a_pop_while_the_other_half_of_its_pair_is_live() {
     let mut f = function(vec![Inst::new(Kind::Op("USE"), vec![Operand::Use(Reg::Phys(reg::C))])]);

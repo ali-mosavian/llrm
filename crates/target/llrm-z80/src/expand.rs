@@ -163,7 +163,8 @@ impl Printer<'_> {
         match (is_pair(to), is_pair(from)) {
             (false, false) => self.byte_move(to, from),
             (true, true) if to == from => {}
-            // `de` and `hl` trade places in one byte; the source is dead, so what lands in it is too
+            // `de` and `hl` trade places in one byte; the source is dead, so
+            // what lands in it is too
             (true, true) if to != reg::BC && from != reg::BC && self.pair_dead_after(from, rest) => {
                 self.push("ex de, hl");
             }
@@ -177,8 +178,8 @@ impl Printer<'_> {
         Ok(())
     }
 
-    /// `PACK pair, lo, hi`: two byte moves, ordered so that neither reads a byte
-    /// the other wrote.
+    /// `PACK pair, lo, hi`: two byte moves, ordered so that neither reads a
+    /// byte the other wrote.
     fn pack(
         &mut self,
         pair: RegId,
@@ -188,7 +189,8 @@ impl Printer<'_> {
     ) -> Result<(), String> {
         let (dl, dh) = lanes(pair)?;
         if dl == hi && dh == lo && lo != hi {
-            // the two bytes of a pair trade places: through `a`, if nothing needs it
+            // the two bytes of a pair trade places: through `a`, if nothing
+            // needs it
             if !self.dead_after(reg::A, rest) {
                 return Err(format!("PACK swapping {} and {} needs a, which is live", name(lo), name(hi)));
             }
@@ -284,7 +286,8 @@ impl Printer<'_> {
                 }
             }
             "SHL16" | "SRL16" if shift_count(inst)? >= 8 => {
-                // a whole byte moves across: the other byte is cleared, the rest is a byte shift
+                // a whole byte moves across: the other byte is cleared, the
+                // rest is a byte shift
                 let count = shift_count(inst)?;
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (kept, cleared, shifted) = if op == "SHL16" { (lo, hi, "sla") } else { (hi, lo, "srl") };
@@ -315,7 +318,8 @@ impl Printer<'_> {
             }
             "LD8ri" => {
                 let (to, value) = (name_of(self, 0)?, self.immediate(inst, 1, 0xFF)?);
-                // `xor a, a` is a byte and three clocks less, and sets the flags
+                // `xor a, a` is a byte and three clocks less, and sets the
+                // flags
                 if to == "a" && value == "#0" && flags_dead(rest) {
                     self.push("xor a, a");
                 } else {
@@ -327,7 +331,8 @@ impl Printer<'_> {
                 self.push(format!("ld {to}, {value}"));
             }
             "LD8rm" => {
-                // a byte widened at once is loaded into the low half of the pair: no byte register, no copy
+                // a byte widened at once is loaded into the low half of the
+                // pair: no byte register, no copy
                 let widened = match (inst.operands.first(), rest.first()) {
                     (Some(Operand::Def(Reg::Virt(loaded))), Some(next))
                         if next.kind == Kind::Op("ZEXT8")
@@ -367,7 +372,8 @@ impl Printer<'_> {
             "LD16rm" => {
                 let to = self.register(inst, 0)?;
                 if to == reg::HL {
-                    // the pointer is overwritten: the low byte waits in a, which the pseudo clobbers
+                    // the pointer is overwritten: the low byte waits in a,
+                    // which the pseudo clobbers
                     self.push("ld a, (hl)");
                     self.push("inc hl");
                     self.push("ld h, (hl)");
@@ -413,15 +419,18 @@ impl Printer<'_> {
             }
             "CP8i" => {
                 let value = self.immediate(inst, 2, 0xFF)?;
-                // `or a, a` is a byte and three clocks less. It differs from `cp a, 0` in
-                // the parity/overflow and half-carry flags, which no branch here reads.
+                // `or a, a` is a byte and three clocks less. It differs from
+                // `cp a, 0` in the parity/overflow and
+                // half-carry flags, which no branch here reads.
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
             "CP16" | "CP16i" => self.compare16(inst, rest)?,
             "AND16i" | "OR16i" | "XOR16i" => {
                 let mnemonic = op[..op.len() - 3].to_lowercase();
                 let (to, a) = (self.register(inst, 0)?, self.register(inst, 1)?);
-                let Some(Operand::Imm(mask)) = inst.operands.get(2) else { return Err("a word logic op with no mask".to_owned()) };
+                let Some(Operand::Imm(mask)) = inst.operands.get(2) else {
+                    return Err("a word logic op with no mask".to_owned());
+                };
                 let ((dl, dh), (al, ah)) = (lanes(to)?, lanes(a)?);
                 for (d, x, byte) in [(dl, al, mask & 0xFF), (dh, ah, (mask >> 8) & 0xFF)] {
                     match (mnemonic.as_str(), byte) {
@@ -485,18 +494,28 @@ impl Printer<'_> {
                 self.push(format!("jp {symbol}"));
             }
             "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" => {
-                if matches!(inst.operands.first(), Some(Operand::Imm(bytes)) if *bytes != 0) {
+                if matches!(
+                    inst.operands.first(),
+                    Some(Operand::Imm(bytes)) if *bytes != 0
+                ) {
                     return Err("stack arguments are not expanded yet".to_owned());
                 }
             }
             "LEAFI" => {
-                // the stack pointer sits at the bottom of the frame the prologue made
-                let offset = self.frame.offsets.get(&self.frame_index(inst, 1)?).copied().ok_or("a frame object with no place")?;
+                // the stack pointer sits at the bottom of the frame the
+                // prologue made
+                let offset = self
+                    .frame
+                    .offsets
+                    .get(&self.frame_index(inst, 1)?)
+                    .copied()
+                    .ok_or("a frame object with no place")?;
                 self.push(format!("ld hl, #{}", offset + self.frame.below_ix()));
                 self.push("add hl, sp");
             }
             "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
-                // register first for a load, the stored value first for a store; the frame object and its offset last
+                // register first for a load, the stored value first for a
+                // store; the frame object and its offset last
                 let load = op.ends_with("rf");
                 let at = 1;
                 let index = self.frame_index(inst, at)?;
@@ -516,7 +535,11 @@ impl Printer<'_> {
                     let (lo, hi) = lanes(self.register(inst, 0)?)?;
                     for (byte, plus) in [(lo, 0), (hi, 1)] {
                         let slot = self.slot(index, extra + plus)?;
-                        self.push(if load { format!("ld {}, {slot}", name(byte)) } else { format!("ld {slot}, {}", name(byte)) });
+                        self.push(if load {
+                            format!("ld {}, {slot}", name(byte))
+                        } else {
+                            format!("ld {slot}, {}", name(byte))
+                        });
                     }
                 }
             }
@@ -529,11 +552,8 @@ impl Printer<'_> {
                 self.push(format!("{} {}", if op == "PUSHP" { "push" } else { "pop" }, name(pair)));
             }
             "SPILL8" | "RELOAD8" => {
-                let (index, register) = if op == "SPILL8" {
-                    (self.frame_index(inst, 0)?, 1)
-                } else {
-                    (self.frame_index(inst, 1)?, 0)
-                };
+                let (index, register) =
+                    if op == "SPILL8" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (register, slot) = (name_of(self, register)?, self.slot(index, 0)?);
                 if op == "RELOAD8" && self.updated_in_place(inst, rest)? {
                     return Ok(());
@@ -542,14 +562,15 @@ impl Printer<'_> {
                     self.folded = Some((self.register(inst, 0)?, slot));
                     return Ok(());
                 }
-                self.push(if op == "SPILL8" { format!("ld {slot}, {register}") } else { format!("ld {register}, {slot}") });
+                self.push(if op == "SPILL8" {
+                    format!("ld {slot}, {register}")
+                } else {
+                    format!("ld {register}, {slot}")
+                });
             }
             "SPILL16" | "RELOAD16" => {
-                let (index, register) = if op == "SPILL16" {
-                    (self.frame_index(inst, 0)?, 1)
-                } else {
-                    (self.frame_index(inst, 1)?, 0)
-                };
+                let (index, register) =
+                    if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
                 for (byte, extra) in [(lo, 0), (hi, 1)] {
                     let slot = self.slot(index, extra)?;
@@ -605,11 +626,11 @@ impl Printer<'_> {
         matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
     }
 
-    /// Whether the byte register `register` holds nothing a later instruction of
-    /// the block reads: the first mention after this point defines it without
-    /// reading it. A block that ends with `ret` before any mention is dead too
-    /// (what the function returns is a `ret` operand); any other end is not
-    /// known.
+    /// Whether the byte register `register` holds nothing a later instruction
+    /// of the block reads: the first mention after this point defines it
+    /// without reading it. A block that ends with `ret` before any mention
+    /// is dead too (what the function returns is a `ret` operand); any
+    /// other end is not known.
     fn dead_after(
         &self,
         register: RegId,
@@ -617,11 +638,15 @@ impl Printer<'_> {
     ) -> bool {
         for inst in rest {
             let mentions = |want_def: bool| {
-                inst.operands.iter().any(|operand| match operand {
-                    Operand::Def(r) if want_def => self.physical(*r) == register,
-                    Operand::Use(r) if !want_def => self.physical(*r) == register,
-                    _ => false,
-                })
+                inst.operands
+                    .iter()
+                    .any(
+                        |operand| match operand {
+                            Operand::Def(r) if want_def => self.physical(*r) == register,
+                            Operand::Use(r) if !want_def => self.physical(*r) == register,
+                            _ => false,
+                        },
+                    )
             };
             if mentions(false) {
                 return false;
@@ -633,10 +658,10 @@ impl Printer<'_> {
         matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
     }
 
-    /// `CP16 a, b`: the flags of `a - b` through `a`, which the pseudo clobbers.
-    /// What follows says which flag is read: `sub` and `sbc` give the carry of the
-    /// word; zero needs both bytes, so the second compare is skipped when the first
-    /// differs.
+    /// `CP16 a, b`: the flags of `a - b` through `a`, which the pseudo
+    /// clobbers. What follows says which flag is read: `sub` and `sbc` give
+    /// the carry of the word; zero needs both bytes, so the second compare
+    /// is skipped when the first differs.
     fn compare16(
         &mut self,
         inst: &Inst,
@@ -652,10 +677,15 @@ impl Printer<'_> {
             }
             other => return Err(format!("CP16 against {other:?}")),
         };
-        let reader = rest.iter().find(|one| one.reads_flags).and_then(|one| match one.kind {
-            Kind::Op(name) => Some(name),
-            Kind::Copy => None,
-        });
+        let reader = rest
+            .iter()
+            .find(|one| one.reads_flags)
+            .and_then(
+                |one| match one.kind {
+                    Kind::Op(name) => Some(name),
+                    Kind::Copy => None,
+                },
+            );
         match reader {
             Some("JPC" | "JPNC" | "RETC" | "RETNC") => {
                 self.push(format!("ld a, {}", name(al)));
@@ -693,25 +723,33 @@ impl Printer<'_> {
 
     /// A byte reloaded, optionally stepped by one, and spilled back to the same
     /// cell, with nothing else reading it, is `inc d(ix)` / `dec d(ix)` or no
-    /// instruction at all (`foldMemoryOperand` of the frame cell). Prints it and
-    /// reports whether it did.
+    /// instruction at all (`foldMemoryOperand` of the frame cell). Prints it
+    /// and reports whether it did.
     fn updated_in_place(
         &mut self,
         reload: &Inst,
         rest: &[Inst],
     ) -> Result<bool, String> {
-        let (Some(Operand::Def(loaded @ Reg::Virt(_))), Some(Operand::Frame(cell))) = (reload.operands.first(), reload.operands.get(1)) else {
+        let (Some(Operand::Def(loaded @ Reg::Virt(_))), Some(Operand::Frame(cell))) =
+            (reload.operands.first(), reload.operands.get(1))
+        else {
             return Ok(false);
         };
         let register = self.physical(*loaded);
         // `inst` spills `register` back to the cell
         let spills = |inst: &Inst| {
             inst.kind == Kind::Op("SPILL8")
-                && matches!(&inst.operands[..], [Operand::Frame(one), Operand::Use(r)] if one == cell && self.physical(*r) == register)
+                && matches!(
+                    &inst.operands[..],
+                    [Operand::Frame(one), Operand::Use(r)] if one == cell && self.physical(*r) == register
+                )
         };
         let steps = |inst: &Inst| {
             matches!(inst.kind, Kind::Op("INC8" | "DEC8"))
-                && matches!(&inst.operands[..], [Operand::Def(d), Operand::Use(u)] if self.physical(*d) == register && self.physical(*u) == register)
+                && matches!(
+                    &inst.operands[..],
+                    [Operand::Def(d), Operand::Use(u)] if self.physical(*d) == register && self.physical(*u) == register
+                )
         };
         let (taken, step) = match rest {
             [back, ..] if spills(back) => (1, None),
@@ -738,7 +776,11 @@ impl Printer<'_> {
             _ => None,
         });
         let others = inside.keys().chain(step_made.as_ref());
-        if loaded_reads > 1 || others.into_iter().any(|v| self.reads.get(v).copied().unwrap_or(0) != inside.get(v).copied().unwrap_or(0)) {
+        if loaded_reads > 1
+            || others
+                .into_iter()
+                .any(|v| self.reads.get(v).copied().unwrap_or(0) != inside.get(v).copied().unwrap_or(0))
+        {
             return Ok(false);
         }
         if let Some(step) = step {
@@ -761,10 +803,19 @@ impl Printer<'_> {
         let (Some(Operand::Def(Reg::Virt(loaded))), Some(next)) = (reload.operands.first(), rest.first()) else {
             return false;
         };
-        matches!(next.kind, Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r"))
-            && matches!(next.operands.get(2), Some(Operand::Use(Reg::Virt(v))) if v == loaded)
+        matches!(
+            next.kind,
+            Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r")
+        )
+            && matches!(
+                next.operands.get(2),
+                Some(Operand::Use(Reg::Virt(v))) if v == loaded
+            )
             && self.reads.get(loaded) == Some(&1)
-            && !matches!(next.operands.get(1), Some(Operand::Use(Reg::Virt(v))) if v == loaded)
+            && !matches!(
+                next.operands.get(1),
+                Some(Operand::Use(Reg::Virt(v))) if v == loaded
+            )
     }
 
     /// `d(ix)` for byte `extra` of frame object `index`.
@@ -854,7 +905,11 @@ fn prologue(frame: &Frame) -> Vec<String> {
     if pushes <= 3 {
         lines.extend((0..pushes).map(|_| "push af".to_owned()));
     } else {
-        lines.extend(["ld iy, #".to_owned() + &format!("{}", -frame.size), "add iy, sp".to_owned(), "ld sp, iy".to_owned()]);
+        lines.extend([
+            "ld iy, #".to_owned() + &format!("{}", -frame.size),
+            "add iy, sp".to_owned(),
+            "ld sp, iy".to_owned(),
+        ]);
     }
     lines
 }
@@ -891,7 +946,8 @@ pub fn finish(
         .filter(|block| matches!(&block.insts[..], [one] if one.kind == Kind::Op("RET")))
         .map(|block| block.id)
         .collect();
-    let mut printer = Printer { assignment, number, out: Vec::new(), frame, returns_bare, reads, folded: None, skip: 0 };
+    let mut printer =
+        Printer { assignment, number, out: Vec::new(), frame, returns_bare, reads, folded: None, skip: 0 };
     if printer.frame.active {
         for line in prologue(&printer.frame) {
             printer.push(line);
@@ -916,8 +972,10 @@ pub fn finish(
 /// address, `(ix+d)` an indexed cell).
 fn form(text: &str) -> String {
     let (mnemonic, rest) = text.split_once(' ').unwrap_or((text, ""));
-    let mut operands: Vec<String> = rest.split(',').map(|one| one.trim().to_owned()).filter(|one| !one.is_empty()).collect();
-    // sub, and, or, xor and cp name the accumulator only implicitly in the table
+    let mut operands: Vec<String> =
+        rest.split(',').map(|one| one.trim().to_owned()).filter(|one| !one.is_empty()).collect();
+    // sub, and, or, xor and cp name the accumulator only implicitly in the
+    // table
     if matches!(mnemonic, "sub" | "and" | "or" | "xor" | "cp") && operands.first().is_some_and(|one| one == "a") {
         operands.remove(0);
     }
@@ -926,7 +984,11 @@ fn form(text: &str) -> String {
         match one {
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
             "a" | "b" | "c" | "d" | "e" | "h" | "l" => {
-                if mnemonic == "ld" && one == "a" && !first { "b".to_owned() } else { "b".to_owned() }
+                if mnemonic == "ld" && one == "a" && !first {
+                    "b".to_owned()
+                } else {
+                    "b".to_owned()
+                }
             }
             "bc" | "de" | "af" => "bc".to_owned(),
             "hl" | "ix" | "iy" | "sp" => one.to_owned(),
@@ -934,10 +996,25 @@ fn form(text: &str) -> String {
             "(bc)" | "(de)" => one.to_owned(),
             _ if one.ends_with("(ix)") || one.ends_with("(iy)") => "(ix+d)".to_owned(),
             _ if one.starts_with('(') => "(nn)".to_owned(),
-            _ if one.starts_with('#') => if wide || matches!(mnemonic, "jp" | "call") { "nn".to_owned() } else { "n".to_owned() },
+            _ if one.starts_with('#') => {
+                if wide || matches!(mnemonic, "jp" | "call") {
+                    "nn".to_owned()
+                } else {
+                    "n".to_owned()
+                }
+            }
             other if mnemonic == "jr" && other.starts_with('L') => "e".to_owned(),
-            other if mnemonic == "djnz" => { let _ = other; "e".to_owned() }
-            other => if matches!(mnemonic, "jp" | "call") || other.starts_with('L') { "nn".to_owned() } else { other.to_owned() },
+            other if mnemonic == "djnz" => {
+                let _ = other;
+                "e".to_owned()
+            }
+            other => {
+                if matches!(mnemonic, "jp" | "call") || other.starts_with('L') {
+                    "nn".to_owned()
+                } else {
+                    other.to_owned()
+                }
+            }
         }
     };
     let kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
@@ -1063,7 +1140,8 @@ fn tail_calls(function: &MFunction) -> MFunction {
         };
         if n >= 2 && insts[n - 1].kind == Kind::Op("RET") {
             let at = if bare_adjust(&insts[n - 2]) { n - 3 } else { n - 2 };
-            if n >= 2 && at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == n - 2 || at == n - 3) {
+            if n >= 2 && at < n && insts[at].call && insts[at].kind == Kind::Op("CALL") && (at == n - 2 || at == n - 3)
+            {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
                     let mut tail = Inst::new(Kind::Op("TAILCALL"), vec![symbol]);

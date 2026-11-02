@@ -1,5 +1,6 @@
-//! A runtime routine called once in a module is expanded at its call site. Left as `jp __mulqi3` it cost the
-//! `mul8` row 17 B against SDCC's 15; expanded it is 14.
+//! A runtime routine called once in a module is expanded at its call site. Left
+//! as `jp __mulqi3` it cost the `mul8` row 17 B against SDCC's 15; expanded it
+//! is 14.
 
 use llrm_z80::RUNTIME;
 use llrm_z80::inline_rt::inline_sole_uses;

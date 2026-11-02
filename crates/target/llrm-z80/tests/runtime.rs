@@ -27,8 +27,9 @@ fn the_runtime_computes_what_c_computes() {
     assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
 }
 
-/// `__udivhi3` called `__umodhi3` and swapped the pair back: 55 B against SDCC's 55, a tie on bytes. The divide rows
-/// must stay wins on both bytes and cycles.
+/// `__udivhi3` called `__umodhi3` and swapped the pair back: 55 B against
+/// SDCC's 55, a tie on bytes. The divide rows must stay wins on both bytes and
+/// cycles.
 #[test]
 fn the_divide_routines_beat_sdcc_on_bytes_and_cycles() {
     if !["sdasz80", "sdcc", "ucsim_z80"].into_iter().all(have) {

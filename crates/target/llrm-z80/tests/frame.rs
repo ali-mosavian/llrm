@@ -1,16 +1,23 @@
-//! Functions with frame objects, run on ucsim_z80. A local whose address reaches a call was refused
-//! ("LEAFI is not expanded yet"); a wrong `ld hl, off; add hl, sp` would hand the callee the wrong cell.
+//! Functions with frame objects, run on ucsim_z80. A local whose address
+//! reaches a call was refused ("LEAFI is not expanded yet"); a wrong `ld hl,
+//! off; add hl, sp` would hand the callee the wrong cell.
+
+use std::process::Command;
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
-use std::process::Command;
 
 fn have(tool: &str) -> bool {
     Command::new("which").arg(tool).output().is_ok_and(|o| o.status.success())
 }
 
 /// `ir`'s function `f` called with a = `a` and l = `l`; the byte it returns.
-fn run(ir: &str, a: u8, l: u8, callee: &str) -> u8 {
+fn run(
+    ir: &str,
+    a: u8,
+    l: u8,
+    callee: &str,
+) -> u8 {
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("z80-frame-{}-{n}", std::process::id()));
@@ -23,7 +30,12 @@ fn run(ir: &str, a: u8, l: u8, callee: &str) -> u8 {
     std::fs::write(dir.join("t.s"), asm).expect("writes");
     let sh = |cmd: &[&str]| {
         let out = Command::new(cmd[0]).args(&cmd[1..]).current_dir(&dir).output().expect("runs");
-        assert!(out.status.success(), "{cmd:?}: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{cmd:?}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
     sh(&["sdasz80", "-o", "t.rel", "t.s"]);
@@ -40,10 +52,12 @@ fn run(ir: &str, a: u8, l: u8, callee: &str) -> u8 {
     u8::from_str_radix(line.split_whitespace().nth(1).expect("a byte"), 16).expect("hex")
 }
 
-/// The callee returns the address it is given less the caller's `ix`, which it keeps: where the object is in the frame.
+/// The callee returns the address it is given less the caller's `ix`, which it
+/// keeps: where the object is in the frame.
 const OFFSET: &str = "_ext::\n\tpush ix\n\tpop de\n\tor a\n\tsbc hl,de\n\tld a,l\n\tret\n";
 
-/// Both cells are in the frame; the array is the second, 4 bytes below the first, so 5 below `ix`.
+/// Both cells are in the frame; the array is the second, 4 bytes below the
+/// first, so 5 below `ix`.
 const IR: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
     declare i8 @ext(ptr)\n\
     define i8 @f(i8 %a, i8 %b) {\n  %cell = alloca i8\n  %buf = alloca [4 x i8]\n  store volatile i8 %a, ptr %cell\n  \
@@ -62,7 +76,8 @@ fn a_local_whose_address_reaches_a_call_is_that_local() {
 /// The callee adds the bytes at 1, 2 and 3 from the address it is given.
 const SUM3: &str = "_ext::\n\tinc hl\n\tld a,(hl)\n\tinc hl\n\tadd a,(hl)\n\tinc hl\n\tadd a,(hl)\n\tret\n";
 
-/// Stored in place (`ld d(ix), r` and `ld d(ix), n`) and read through the address `LEAFI` makes: the two must agree.
+/// Stored in place (`ld d(ix), r` and `ld d(ix), n`) and read through the
+/// address `LEAFI` makes: the two must agree.
 #[test]
 fn a_local_written_in_place_is_where_its_address_says() {
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
@@ -81,7 +96,8 @@ fn a_local_written_in_place_is_where_its_address_says() {
 /// The callee returns the byte at 4 from the address it is given.
 const AT4: &str = "_ext::\n\tinc hl\n\tinc hl\n\tinc hl\n\tinc hl\n\tld a,(hl)\n\tret\n";
 
-/// A word stored at 4 and read back in place: the low byte is at 4, the high byte at 5.
+/// A word stored at 4 and read back in place: the low byte is at 4, the high
+/// byte at 5.
 #[test]
 fn a_word_local_is_its_two_bytes_in_order() {
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\

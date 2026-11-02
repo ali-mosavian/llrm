@@ -223,7 +223,8 @@ impl Emitter<'_> {
             (ISD::FrameIndex | ISD::TargetFrameIndex, NodeData::FrameIndex(index)) => Operand::Frame(index),
             (ISD::TargetGlobalAddress | ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
-                // C symbols take SDCC's underscore; the runtime's own routines are named as they are
+                // C symbols take SDCC's underscore; the runtime's own routines
+                // are named as they are
                 Operand::Symbol(format!("_{name}"), offset)
             }
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
@@ -290,8 +291,10 @@ impl Emitter<'_> {
                         flags_key = Some((node, at as u8));
                         Reg::Phys(crate::reg::FLAGS)
                     } else {
-                        // a result in a one-register class is copied out of that register: the copy
-                        // takes the general class (isel's CopyFromReg takes getRegClassFor(VT))
+                        // a result in a one-register class is copied out of
+                        // that register: the copy takes
+                        // the general class (isel's CopyFromReg takes
+                        // getRegClassFor(VT))
                         let class = wanted
                             .filter(|one| fixed_register(one.reg_class).is_none())
                             .and_then(|one| Class::of_pin(one.reg_class))
@@ -306,7 +309,8 @@ impl Emitter<'_> {
                     operands.push(Operand::Def(reg));
                 }
                 let mut reads_flags = false;
-                // flags another instruction overwrote since their compare: compare again
+                // flags another instruction overwrote since their compare:
+                // compare again
                 for op in &n.ops {
                     let key = (op.node, op.res);
                     if self.flags_now != Some(key) {
@@ -318,7 +322,10 @@ impl Emitter<'_> {
                 }
                 for op in n.ops.clone() {
                     if let Some(operand) = self.operand(op)? {
-                        reads_flags |= matches!(operand, Operand::Use(Reg::Phys(id)) if id == crate::reg::FLAGS);
+                        reads_flags |= matches!(
+                            operand,
+                            Operand::Use(Reg::Phys(id)) if id == crate::reg::FLAGS
+                        );
                         let wanted = desc.operands.get(operands.len());
                         let operand = if wanted.is_some_and(|one| fixed_register(one.reg_class).is_some()) {
                             operand
@@ -335,12 +342,14 @@ impl Emitter<'_> {
                 if desc.has(flag::CALL) {
                     self.commute_call_arguments(&operands, into);
                 }
-                // a register the instruction overwrites besides its results (`Defs = [A]`)
-                // is a def no one reads: the allocator keeps nothing else in it
+                // a register the instruction overwrites besides its results
+                // (`Defs = [A]`) is a def no one reads: the
+                // allocator keeps nothing else in it
                 operands.extend(
                     desc.implicit_defs.iter().filter_map(|&id| allocatable(id)).map(|id| Operand::Def(Reg::Phys(id))),
                 );
-                // operands in a one-register class: the register, copied in and out
+                // operands in a one-register class: the register, copied in and
+                // out
                 let mut after = Vec::new();
                 let group_start = into.len();
                 for (at, operand) in operands.iter_mut().enumerate() {
@@ -396,11 +405,11 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// A commutable instruction whose result is tied to a fixed register (`add a, r`)
-    /// takes as that operand the value that arrives in the register, if only
-    /// the other one does not: the copy into the register is then the identity
-    /// (`TwoAddressInstructionPass::tryInstructionCommute`, steered by the
-    /// argument copies it would otherwise leave).
+    /// A commutable instruction whose result is tied to a fixed register (`add
+    /// a, r`) takes as that operand the value that arrives in the register,
+    /// if only the other one does not: the copy into the register is then
+    /// the identity (`TwoAddressInstructionPass::tryInstructionCommute`,
+    /// steered by the argument copies it would otherwise leave).
     fn commute_into_fixed(
         &self,
         desc: &llrm_dagisel::instr::InstrDesc,
@@ -414,7 +423,8 @@ impl Emitter<'_> {
             Operand::Use(reg) => self.arrives_in.get(reg).copied(),
             _ => None,
         };
-        // made here and read by nothing else, so the instruction may overwrite it
+        // made here and read by nothing else, so the instruction may overwrite
+        // it
         let made = |operand: &Operand| {
             let Operand::Use(reg) = operand else { return false };
             self.made.contains(reg)
@@ -427,15 +437,18 @@ impl Emitter<'_> {
         // a value made just before can be made in the register; one that lived
         // on from an earlier block or iteration is wherever its loop keeps it
         if arrives(&operands[2]) == Some(fixed) && arrives(&operands[1]) != Some(fixed)
-            || arrives(&operands[1]) != Some(fixed) && arrives(&operands[2]) != Some(fixed) && made(&operands[2]) && !made(&operands[1])
+            || arrives(&operands[1]) != Some(fixed)
+                && arrives(&operands[2]) != Some(fixed)
+                && made(&operands[2])
+                && !made(&operands[1])
         {
             operands.swap(1, 2);
         }
     }
 
-    /// `LD8rm` and `LD8mr` become `LD8Arp` and `LD8prA` when the byte is read in
-    /// `a` anyway (an ALU operand, a compare, a return) or made there: the pointer
-    /// may then be any pair and need not be `hl`.
+    /// `LD8rm` and `LD8mr` become `LD8Arp` and `LD8prA` when the byte is read
+    /// in `a` anyway (an ALU operand, a compare, a return) or made there:
+    /// the pointer may then be any pair and need not be `hl`.
     fn byte_form(
         &self,
         node: u32,
@@ -489,12 +502,18 @@ impl Emitter<'_> {
         if !matches!(callee.as_str(), "__mulqi3" | "__mulhi3") {
             return;
         }
-        let args: Vec<_> = operands.iter().filter_map(|one| match one {
-            Operand::Use(Reg::Phys(register)) => Some(*register),
-            _ => None,
-        }).collect();
+        let args: Vec<_> = operands
+            .iter()
+            .filter_map(|one| match one {
+                Operand::Use(Reg::Phys(register)) => Some(*register),
+                _ => None,
+            })
+            .collect();
         let [first, second] = args[..] else { return };
-        let position = |register| into.iter().rposition(|inst| inst.kind == Kind::Copy && inst.operands[0] == Operand::Def(Reg::Phys(register)));
+        let position = |register| {
+            into.iter()
+                .rposition(|inst| inst.kind == Kind::Copy && inst.operands[0] == Operand::Def(Reg::Phys(register)))
+        };
         let (Some(a), Some(b)) = (position(first), position(second)) else { return };
         let source = |inst: &Inst| match inst.operands[1] {
             Operand::Use(reg) => reg,
@@ -560,7 +579,10 @@ impl Emitter<'_> {
             n.ops[1..].iter().copied().filter(|op| is_value(self.dag.value_type(*op)) && made(op)).collect();
         for part in pairs.chunks(2) {
             let [value, index] = part else {
-                return Err(format!("a REG_SEQUENCE with an odd operand: {:?}", n.ops.iter().map(|op| (self.dag.opcode(*op), self.dag.value_type(*op))).collect::<Vec<_>>()));
+                return Err(format!(
+                    "a REG_SEQUENCE with an odd operand: {:?}",
+                    n.ops.iter().map(|op| (self.dag.opcode(*op), self.dag.value_type(*op))).collect::<Vec<_>>()
+                ));
             };
             let reg = self.used(*value, "REG_SEQUENCE")?;
             match self.constant(*index)? {
@@ -596,7 +618,8 @@ pub fn emit(
         users: HashMap::new(),
         in_acc: Default::default(),
     };
-    // the frame objects the selector made; the allocas came first, at their index
+    // the frame objects the selector made; the allocas came first, at their
+    // index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
     let width_class = |bits: u32| if bits > 8 { Class::Gr16 } else { Class::Gr8 };
     for one in &selection.blocks {

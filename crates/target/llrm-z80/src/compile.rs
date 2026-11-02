@@ -1,9 +1,9 @@
 //! A function from IR to sdasz80 text: the shared DAG stages, then the Z80
 //! machine function, allocation, expansion and printing.
 
-use llrm_spike_mf::regalloc::{Assignment, eliminate_phis_with, two_address};
 use llrm_lir::registers::Regs;
 use llrm_spike_mf::cfg::Cfg;
+use llrm_spike_mf::regalloc::{Assignment, eliminate_phis_with, two_address};
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::{Request, selections};
@@ -30,7 +30,8 @@ fn machine_function_with(
     duplicate: bool,
 ) -> Result<MFunction, String> {
     let selected = selections(ir, request)?;
-    let (_, selection) = selected.into_iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
+    let (_, selection) =
+        selected.into_iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let mut function = emit(name, &selection?)?;
     expand_cmov(&mut function)?;
     if duplicate {
@@ -70,7 +71,12 @@ fn eliminate_dead(function: &mut MFunction) {
                 let defs: Vec<&Operand> = inst.operands.iter().filter(|o| matches!(o, Operand::Def(_))).collect();
                 let dead = !defs.is_empty()
                     && defs.iter().all(|o| matches!(o, Operand::Def(Reg::Virt(v)) if !read.contains(v)))
-                    && !(inst.call || inst.terminator || inst.barrier || inst.side_effects || inst.may_store || inst.may_load);
+                    && !(inst.call
+                        || inst.terminator
+                        || inst.barrier
+                        || inst.side_effects
+                        || inst.may_store
+                        || inst.may_load);
                 !dead
             });
             removed |= block.insts.len() != before;
@@ -106,8 +112,9 @@ fn allocated_with(
     if !hoist_constants(&mut hoisted) {
         return allocate(function, name);
     }
-    // the allocator does not see that a byte of a pair is read in place, so a constant kept across a loop can cost
-    // more than making it there: the hoisted loop stays only if it is no bigger and no slower
+    // the allocator does not see that a byte of a pair is read in place, so a
+    // constant kept across a loop can cost more than making it there: the
+    // hoisted loop stays only if it is no bigger and no slower
     let (plain, with) = (allocate(function, name), allocate(hoisted, name));
     let price = |one: &Allocated| {
         let (function, assignment, slots, reads) = one;
@@ -148,17 +155,22 @@ fn allocate(
     Ok((function, assignment, slots, reads))
 }
 
-/// The pair `register` is, or is half of, if `push` and `pop` can move it: not `a`, whose pair holds the flags.
+/// The pair `register` is, or is half of, if `push` and `pop` can move it: not
+/// `a`, whose pair holds the flags.
 fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
-/// Spill slots that nothing else needs a frame for become `push` and `pop`, and the frame goes: `digits` kept a counter
-/// across a call with `ld -1(ix), b` / `ld b, -1(ix)` and the 13 bytes of frame setup and teardown SDCC does without.
+/// Spill slots that nothing else needs a frame for become `push` and `pop`, and
+/// the frame goes: `digits` kept a counter across a call with `ld -1(ix), b` /
+/// `ld b, -1(ix)` and the 13 bytes of frame setup and teardown SDCC does
+/// without.
 ///
-/// Every path must treat the slots as a stack: a store with the slot empty, a load of the slot on top, an empty stack at
-/// each return, one stack where paths meet. A byte slot saves its pair, so the other half must not be live after the
-/// `pop` (`PhysLiveness`). `a` is not saved this way: its pair is the flags.
+/// Every path must treat the slots as a stack: a store with the slot empty, a
+/// load of the slot on top, an empty stack at each return, one stack where
+/// paths meet. A byte slot saves its pair, so the other half must not be live
+/// after the `pop` (`PhysLiveness`). `a` is not saved this way: its pair is the
+/// flags.
 pub fn slots_are_a_stack(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -172,8 +184,12 @@ pub fn slots_are_a_stack(
         Reg::Phys(id) => id,
     };
     let spill = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
-        (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(reg)]) => Some((true, *slot, register(*reg))),
-        (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => Some((false, *slot, register(*reg))),
+        (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(reg)]) => {
+            Some((true, *slot, register(*reg)))
+        }
+        (Kind::Op("RELOAD8" | "RELOAD16"), [Operand::Def(reg), Operand::Frame(slot)]) => {
+            Some((false, *slot, register(*reg)))
+        }
         _ => None,
     };
     let mut any = false;
@@ -218,7 +234,8 @@ pub fn slots_are_a_stack(
             }
         }
     }
-    // the other half of a pair a byte slot saves is dead once the pair is restored
+    // the other half of a pair a byte slot saves is dead once the pair is
+    // restored
     let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
     for (b, block) in function.blocks.iter().enumerate() {
         for (at, inst) in block.insts.iter().enumerate() {
@@ -252,9 +269,11 @@ pub fn slots_are_a_stack(
     true
 }
 
-/// A constant made in a loop is made once before it (`MachineLICM`'s hoisting of a trivially rematerializable
-/// instruction): `find` made `ld hl, #buf` on every trip. Where the registers run out the allocator makes the constant
-/// again at its uses, as it does for any rematerializable value. Whether anything moved.
+/// A constant made in a loop is made once before it (`MachineLICM`'s hoisting
+/// of a trivially rematerializable instruction): `find` made `ld hl, #buf` on
+/// every trip. Where the registers run out the allocator makes the constant
+/// again at its uses, as it does for any rematerializable value. Whether
+/// anything moved.
 fn hoist_constants(function: &mut MFunction) -> bool {
     let mut moved = false;
     let cfg = Cfg::new(function);
@@ -268,7 +287,10 @@ fn hoist_constants(function: &mut MFunction) -> bool {
     }
     let constant = |inst: &Inst| {
         inst.rematerializable
-            && matches!(&inst.operands[..], [Operand::Def(Reg::Virt(v)), Operand::Imm(_) | Operand::Symbol(..)] if defs[v] == 1)
+            && matches!(
+                &inst.operands[..],
+                [Operand::Def(Reg::Virt(v)), Operand::Imm(_) | Operand::Symbol(..)] if defs[v] == 1
+            )
     };
     // the innermost loop first, so a constant moves out as many loops as it can
     for (header, body) in cfg.loops().iter().rev() {
@@ -290,16 +312,24 @@ fn hoist_constants(function: &mut MFunction) -> bool {
                 _ => None,
             })
             .collect();
-        // a commutable instruction that adds the constant to a fixed register takes the other operand there
+        // a commutable instruction that adds the constant to a fixed register
+        // takes the other operand there
         for (_, block) in function.blocks.iter_mut().enumerate().filter(|(b, _)| body[*b]) {
             for at in 0..block.insts.len() {
                 let inst = &block.insts[at];
-                let uses: Vec<usize> =
-                    (0..inst.operands.len()).filter(|&n| matches!(inst.operands[n], Operand::Use(Reg::Virt(_)))).collect();
+                let uses: Vec<usize> = (0..inst.operands.len())
+                    .filter(|&n| matches!(inst.operands[n], Operand::Use(Reg::Virt(_))))
+                    .collect();
                 let (true, [other]) = (inst.commutable, &uses[..]) else { continue };
                 let Operand::Use(Reg::Virt(c)) = inst.operands[*other] else { continue };
-                let Some(copy) = (0..at).rev().find(|&n| matches!(&block.insts[n].operands[..],
-                    [Operand::Def(Reg::Phys(_)), Operand::Use(Reg::Virt(_))])) else { continue };
+                let Some(copy) = (0..at).rev().find(|&n| {
+                    matches!(
+                        &block.insts[n].operands[..],
+                        [Operand::Def(Reg::Phys(_)), Operand::Use(Reg::Virt(_))]
+                    )
+                }) else {
+                    continue;
+                };
                 let Operand::Use(Reg::Virt(x)) = block.insts[copy].operands[1] else { continue };
                 if block.insts[copy].kind == Kind::Copy
                     && made.contains(&x)
@@ -335,10 +365,14 @@ pub fn remove_identity_copies(
         Reg::Phys(id) => id,
     };
     for block in &mut function.blocks {
-        block.insts.retain(|inst| match (inst.kind, &inst.operands[..]) {
-            (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => register(*dst) != register(*src),
-            _ => true,
-        });
+        block
+            .insts
+            .retain(
+                |inst| match (inst.kind, &inst.operands[..]) {
+                    (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => register(*dst) != register(*src),
+                    _ => true,
+                },
+            );
     }
 }
 
@@ -373,7 +407,9 @@ pub fn use_lanes_in_place(
         let mut at = 0;
         while at < function.blocks[b].insts.len() {
             let inst = &function.blocks[b].insts[at];
-            let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(Reg::Virt(byte)), Operand::Use(source)]) = (inst.kind, &inst.operands[..]) else {
+            let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(Reg::Virt(byte)), Operand::Use(source)]) =
+                (inst.kind, &inst.operands[..])
+            else {
                 at += 1;
                 continue;
             };
@@ -393,10 +429,17 @@ pub fn use_lanes_in_place(
                     last = k;
                 }
             }
-            let clobbered = insts[at + 1..=last].iter().any(|later| {
-                later.call
-                    || later.operands.iter().any(|o| matches!(o, Operand::Def(r) if <Z80Registers as llrm_spike_mf::Target>::overlaps(register(*r), half)))
-            });
+            let clobbered = insts[at + 1..=last]
+                .iter()
+                .any(
+                    |later| later.call
+                        || later.operands.iter().any(|o| {
+                            matches!(
+                                o,
+                                Operand::Def(r) if <Z80Registers as llrm_spike_mf::Target>::overlaps(register(*r), half)
+                            )
+                        }),
+                );
             if clobbered {
                 at += 1;
                 continue;
@@ -418,7 +461,13 @@ fn dump(function: &MFunction) {
     for block in &function.blocks {
         eprintln!("bb{}:", block.id);
         for inst in &block.insts {
-            eprintln!("  {:?} {:?}{}{}", inst.kind, inst.operands, if inst.sets_flags { " SF" } else { "" }, if inst.reads_flags { " RF" } else { "" });
+            eprintln!(
+                "  {:?} {:?}{}{}",
+                inst.kind,
+                inst.operands,
+                if inst.sets_flags { " SF" } else { "" },
+                if inst.reads_flags { " RF" } else { "" }
+            );
         }
     }
 }
@@ -494,10 +543,10 @@ fn cmov_parts(inst: &Inst) -> Result<(Reg, Reg, Reg, i64), String> {
 /// takes, so the other path does not run them. They come back in order, taken
 /// out of `insts`; none when nothing but copies would move or a hazard shows.
 ///
-/// DEVIATE: the pin sinks one-use IR operands that cost at least `TCC_Expensive`
-/// before selection; this works on the selected instructions, on any side that
-/// holds a non-copy. Reason: the select is expanded here, not in CodeGenPrepare.
-/// Exit: the expansion at selection.
+/// DEVIATE: the pin sinks one-use IR operands that cost at least
+/// `TCC_Expensive` before selection; this works on the selected instructions,
+/// on any side that holds a non-copy. Reason: the select is expanded here, not
+/// in CodeGenPrepare. Exit: the expansion at selection.
 fn sunk_operand(
     function: &MFunction,
     block: usize,
@@ -519,11 +568,20 @@ fn sunk_operand(
         }
     }
     let movable = |inst: &Inst| {
-        !(inst.call || inst.terminator || inst.barrier || inst.reads_flags || inst.side_effects || inst.may_load || inst.may_store)
+        !(inst.call
+            || inst.terminator
+            || inst.barrier
+            || inst.reads_flags
+            || inst.side_effects
+            || inst.may_load
+            || inst.may_store)
     };
-    let touches = |inst: &Inst, reg: Reg| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == reg));
+    let touches = |inst: &Inst, reg: Reg| {
+        inst.operands.iter().any(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == reg))
+    };
     let cmov = &function.blocks[block].insts[p];
-    let reads = |inst: &Inst, reg: Reg| inst.operands.iter().filter(|o| matches!(o, Operand::Use(r) if *r == reg)).count();
+    let reads =
+        |inst: &Inst, reg: Reg| inst.operands.iter().filter(|o| matches!(o, Operand::Use(r) if *r == reg)).count();
     // From the last instruction back, so every reader of a result is in the
     // slice before its maker is looked at. A value made here that anything
     // else reads is an input, not part of the slice; a machine register a
@@ -541,26 +599,41 @@ fn sunk_operand(
                     .or(None)
             })
             .collect();
-        if let Some(&(_, Reg::Phys(_), true)) = pending.iter().map(|&(r, b, m)| (b, r, m)).find(|&(b, r, m)| {
-            m && !insts[..b].iter().any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(x) if *x == r)))
-        }).as_ref() {
+        if let Some(&(_, Reg::Phys(_), true)) = pending
+            .iter()
+            .map(|&(r, b, m)| (b, r, m))
+            .find(|&(b, r, m)| {
+                m && !insts[..b]
+                    .iter()
+                    .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(x) if *x == r)))
+            })
+            .as_ref()
+        {
             return None;
         }
         let Some(&(at, ..)) = resolved.iter().max_by_key(|one| one.0) else { break };
         let must = resolved.iter().any(|&(one, _, must)| one == at && must);
         pending.retain(|&(reg, before, _)| {
-            !insts[..before].iter().rposition(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == reg))).is_some_and(|one| one == at)
+            !insts[..before]
+                .iter()
+                .rposition(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(r) if *r == reg)))
+                .is_some_and(|one| one == at)
         });
         if slice.contains(&at) {
             continue;
         }
         let inst = &insts[at];
-        let alone = inst.operands.iter().all(|operand| {
-            let Operand::Def(reg @ Reg::Virt(_)) = operand else { return true };
-            let inside: usize = slice.iter().map(|&one| reads(&insts[one], *reg)).sum();
-            let by_cmov = if *reg == value { reads(cmov, *reg) } else { 0 };
-            defs.get(reg) == Some(&1) && uses.get(reg).copied().unwrap_or(0) == inside + by_cmov
-        });
+        let alone = inst
+            .operands
+            .iter()
+            .all(
+                |operand| {
+                    let Operand::Def(reg @ Reg::Virt(_)) = operand else { return true };
+                    let inside: usize = slice.iter().map(|&one| reads(&insts[one], *reg)).sum();
+                    let by_cmov = if *reg == value { reads(cmov, *reg) } else { 0 };
+                    defs.get(reg) == Some(&1) && uses.get(reg).copied().unwrap_or(0) == inside + by_cmov
+                },
+            );
         if !movable(inst) || !alone {
             if must {
                 return None;
@@ -591,7 +664,8 @@ fn sunk_operand(
         }
     }
     // the flags the branch reads are not made by the slice, and a flags reader
-    // after the diamond sees what the slice leaves only if the slice leaves none
+    // after the diamond sees what the slice leaves only if the slice leaves
+    // none
     let flags = Reg::Phys(crate::reg::FLAGS);
     let makes_flags = slice.iter().any(|&at| touches(&insts[at], flags));
     if makes_flags {
@@ -654,9 +728,8 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         let p = function.blocks[at].insts.iter().position(is_cmov).ok_or("the CMOV vanished")?;
         let mut tail = function.blocks[at].insts.split_off(p);
         let first = if flip { first ^ 1 } else { first };
-        let same = |inst: &Inst| {
-            is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1)
-        };
+        let same =
+            |inst: &Inst| is_cmov(inst) && cmov_parts(inst).is_ok_and(|(.., cond)| cond == first || cond == first ^ 1);
         let taken = tail.iter().take_while(|inst| same(inst)).count();
         let cmovs: Vec<Inst> = tail.drain(..taken).collect();
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
@@ -674,7 +747,8 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         }
         let (otherwise, join) = (next_id, next_id + 1);
         next_id += 2;
-        let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join), Operand::Use(Reg::Phys(crate::reg::FLAGS))]);
+        let mut jump =
+            Inst::new(Kind::Op(branch), vec![Operand::Block(join), Operand::Use(Reg::Phys(crate::reg::FLAGS))]);
         jump.terminator = true;
         jump.reads_flags = true;
         function.blocks[at].insts.push(jump);
@@ -715,7 +789,10 @@ fn tail_duplicate_returns(function: &mut MFunction) {
     while j < function.blocks.len() {
         let block = &function.blocks[j];
         let small = block.insts.len() <= TAIL_DUPLICATION_SIZE
-            && matches!(block.insts.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
+            && matches!(
+                block.insts.last().map(|inst| inst.kind),
+                Some(Kind::Op("RET"))
+            )
             && block.insts.iter().filter(|inst| inst.terminator).count() == 1;
         if !small {
             j += 1;
@@ -731,7 +808,8 @@ fn tail_duplicate_returns(function: &mut MFunction) {
                 Some(inst) if inst.barrier => {
                     matches!(inst.kind, Kind::Op("JP")) && inst.operands == [Operand::Block(id)]
                 }
-                // falls through: no branch at all, or a conditional one that goes elsewhere
+                // falls through: no branch at all, or a conditional one that
+                // goes elsewhere
                 last => {
                     p + 1 == j
                         && last.is_none_or(|inst| !inst.terminator || !inst.operands.contains(&Operand::Block(id)))
@@ -829,7 +907,20 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
     matches!(
         inst.kind,
         Kind::Op(
-            "INC8" | "DEC8" | "SHL8" | "SRL8" | "SRA8" | "ADD8r" | "ADD8i" | "SUB8r" | "SUB8i" | "AND8r" | "AND8i" | "OR8r" | "OR8i" | "XOR8r"
+            "INC8"
+                | "DEC8"
+                | "SHL8"
+                | "SRL8"
+                | "SRA8"
+                | "ADD8r"
+                | "ADD8i"
+                | "SUB8r"
+                | "SUB8i"
+                | "AND8r"
+                | "AND8i"
+                | "OR8r"
+                | "OR8i"
+                | "XOR8r"
                 | "XOR8i"
         )
     )
@@ -837,15 +928,18 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 
 /// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
 /// instruction that made the byte and set the flags by it is dropped when only
-/// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`. Every
-/// `ld` between leaves the flags alone.
+/// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
+/// Every `ld` between leaves the flags alone.
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
         while at < block.insts.len() {
             let compare = &block.insts[at];
             let is_test = compare.kind == Kind::Op("CP8i")
-                && matches!(compare.operands[..], [_, Operand::Use(Reg::Phys(a)), Operand::Imm(0)] if a == crate::reg::A);
+                && matches!(
+                    compare.operands[..],
+                    [_, Operand::Use(Reg::Phys(a)), Operand::Imm(0)] if a == crate::reg::A
+                );
             let copy = &block.insts[at - 1];
             let tested = match (&copy.kind, &copy.operands[..]) {
                 (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(v)]) if *a == crate::reg::A => Some(*v),
@@ -855,14 +949,16 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // the instruction that made `value`: it defines it, or copies it out of `a`
+            // the instruction that made `value`: it defines it, or copies it
+            // out of `a`
             let defines = |inst: &Inst, reg: Reg| inst.operands.contains(&Operand::Def(reg));
             let Some(made) = block.insts[..at - 1].iter().rposition(|inst| defines(inst, value)) else {
                 at += 1;
                 continue;
             };
             let setter = if block.insts[made].kind == Kind::Copy {
-                // `v = COPY a` after an instruction that defines `a` as its result
+                // `v = COPY a` after an instruction that defines `a` as its
+                // result
                 made.checked_sub(1).filter(|&before| defines(&block.insts[before], Reg::Phys(crate::reg::A)))
             } else {
                 Some(made)

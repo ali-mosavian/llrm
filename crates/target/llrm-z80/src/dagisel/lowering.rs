@@ -362,8 +362,9 @@ fn compare(
         let flags = dag.get_node(z80isd::TSTS, EVT::I8, &[op0]);
         return (if cc == SetLt { cond::NZ } else { cond::Z }, flags);
     }
-    // `cp (hl)` takes the memory operand second: a loaded byte compared with a register is compared the other way
-    // round, with the order of the condition reversed
+    // `cp (hl)` takes the memory operand second: a loaded byte compared with a
+    // register is compared the other way round, with the order of the
+    // condition reversed
     if vt == EVT::I8 && dag.opcode(op0) == ISD::Load && dag.opcode(op1) != ISD::Load && dag.constant(op1).is_none() {
         cc = match cc {
             SetULt => SetUGt,

@@ -46,10 +46,13 @@ fn dump() {
             }
             eprintln!("assignment {:?}", a.0.iter().map(|r| llrm_z80::REGISTER_INFO.name(*r)).collect::<Vec<_>>());
         }
-        eprintln!("{name}:\n{}", match text(&text_ir, name, 0, &request) {
-            Ok(t) => t,
-            Err(why) => format!("ERR {why}"),
-        });
+        eprintln!(
+            "{name}:\n{}",
+            match text(&text_ir, name, 0, &request) {
+                Ok(t) => t,
+                Err(why) => format!("ERR {why}"),
+            }
+        );
         let _ = compiled;
     }
 }
@@ -58,10 +61,10 @@ fn dump() {
 /// `bc`; a select then returned the wrong byte.
 #[test]
 fn a_copy_between_the_two_bytes_of_a_pair_is_kept() {
+    use llrm_spike_mf::regalloc::Assignment;
     use llrm_z80::compile::remove_identity_copies;
     use llrm_z80::mfunc::{Block, Inst, MFunction, Operand, Reg};
     use llrm_z80::regalloc::Class;
-    use llrm_spike_mf::regalloc::Assignment;
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Gr8, Class::Gr8];
     let copy = Inst::copy(Reg::Virt(1), Reg::Virt(0));
@@ -101,12 +104,14 @@ fn a_value_made_for_a_fixed_register_is_made_there() {
 fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
     let ir = include_str!("kernels/ir/crc16.ll");
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    let (test, xor) = (out.find("bit 7, d").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
+    let (test, xor) =
+        (out.find("bit 7, d").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
     assert!(test < xor, "{out}");
 }
 
 /// A spilled byte was reloaded into a register just to be compared
-/// (`ld c, -1(ix)` / `cp a, c`): a byte more and 4 T-states than `cp a, -1(ix)`.
+/// (`ld c, -1(ix)` / `cp a, c`): a byte more and 4 T-states than `cp a,
+/// -1(ix)`.
 #[test]
 fn a_reloaded_operand_is_read_from_the_frame() {
     let ir = include_str!("kernels/ir/crc16.ll");
@@ -135,7 +140,13 @@ fn a_reloaded_byte_stepped_and_spilled_back_is_stepped_in_the_frame() {
     function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
     let assignment = Assignment(vec![llrm_z80::reg::B, llrm_z80::reg::B]);
     let lines = finish(&function, &assignment, 0, &[(0, 1)], reads(&function)).unwrap_or_else(|why| panic!("{why}"));
-    let insts: Vec<&str> = lines.iter().filter_map(|line| match line { Line::Inst(text) => Some(text.as_str()), _ => None }).collect();
+    let insts: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
     assert!(insts.iter().any(|text| text.starts_with("inc ") && text.ends_with("(ix)")), "{insts:?}");
     assert!(!insts.iter().any(|text| text.starts_with("ld b")), "{insts:?}");
 }
@@ -181,8 +192,9 @@ fn a_flag_reader_after_a_clobber_compares_again() {
     assert_eq!(out.lines().filter(|line| line.trim().starts_with("cp a,")).count(), 2, "{out}");
 }
 
-/// A byte loaded into `a` and stored through a pair other than `hl` went through `hl` anyway
-/// (`ld a, (bc)` / `ex de, hl` / `ld (hl), a`): the check for a value made in `a` read the pointer operand.
+/// A byte loaded into `a` and stored through a pair other than `hl` went
+/// through `hl` anyway (`ld a, (bc)` / `ex de, hl` / `ld (hl), a`): the check
+/// for a value made in `a` read the pointer operand.
 #[test]
 fn a_byte_in_a_is_stored_through_any_pair() {
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
@@ -191,8 +203,8 @@ fn a_byte_in_a_is_stored_through_any_pair() {
     assert!(out.contains("ld (de), a") && out.contains("ld (bc), a") && !out.contains("ex de, hl"), "{out}");
 }
 
-/// `find` made `ld hl, #buf` on every trip of its loop: 415 T-states against SDCC's 387. Made once before the loop it
-/// is 365.
+/// `find` made `ld hl, #buf` on every trip of its loop: 415 T-states against
+/// SDCC's 387. Made once before the loop it is 365.
 #[test]
 fn a_constant_added_in_a_loop_is_made_before_the_loop() {
     let ir = include_str!("kernels/ir/find.ll");
@@ -201,8 +213,9 @@ fn a_constant_added_in_a_loop_is_made_before_the_loop() {
     assert!(made < looped && out.matches("#_buf").count() == 1, "{out}");
 }
 
-/// A byte loaded through `hl` and then compared or added was loaded into a register first (`ld a, (hl)` / `cp a, c`):
-/// `find` was 18 B and `sum_arr` 18 B. `cp a, (hl)` and `add a, (hl)` read the memory themselves.
+/// A byte loaded through `hl` and then compared or added was loaded into a
+/// register first (`ld a, (hl)` / `cp a, c`): `find` was 18 B and `sum_arr` 18
+/// B. `cp a, (hl)` and `add a, (hl)` read the memory themselves.
 #[test]
 fn a_byte_read_by_an_alu_op_is_read_from_memory() {
     let find = text(include_str!("kernels/ir/find.ll"), "find", 0, &Request::new(Level::O2)).expect("compiles");
@@ -211,18 +224,23 @@ fn a_byte_read_by_an_alu_op_is_read_from_memory() {
     assert!(sum.contains("add a, (hl)"), "{sum}");
 }
 
-/// A loaded byte that is widened went to a byte register and was copied to the pair's low half
-/// (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte and 4 T-states more per widened load.
+/// A loaded byte that is widened went to a byte register and was copied to the
+/// pair's low half (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte
+/// and 4 T-states more per widened load.
 #[test]
 fn a_widened_load_goes_to_the_pairs_low_half() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
 }
 
-/// `digits` kept its counter across the divide call in a frame slot (`ld -1(ix), b` / `ld b, -1(ix)`) with 13 bytes of
-/// frame setup and teardown: 89 B at -Oz against SDCC's 76. As `push bc` / `pop bc` it needs no frame.
+/// `digits` kept its counter across the divide call in a frame slot (`ld
+/// -1(ix), b` / `ld b, -1(ix)`) with 13 bytes of frame setup and teardown: 89 B
+/// at -Oz against SDCC's 76. As `push bc` / `pop bc` it needs no frame.
 #[test]
 fn a_spill_slot_that_is_a_stack_is_push_and_pop() {
     let out = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Oz)).expect("compiles");
-    assert!(out.contains("push bc") && out.contains("pop bc") && !out.contains("(ix)") && !out.contains("push ix"), "{out}");
+    assert!(
+        out.contains("push bc") && out.contains("pop bc") && !out.contains("(ix)") && !out.contains("push ix"),
+        "{out}"
+    );
 }
