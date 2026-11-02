@@ -436,6 +436,31 @@ mod tests {
         assert_eq!(found.last().map(|one| (one.at, one.end)), Some((Where::Undef, end)), "{found:?}");
     }
 
+    /// A note names a value by its SSA number, but the allocator's body has
+    /// other numbers: the table is found through the instruction that defines
+    /// the value (and the register a split cloned it from). Keyed by the
+    /// allocator's numbers, every `-g` variable read `Undef`.
+    #[test]
+    fn a_note_value_is_found_through_the_instruction_that_defines_it() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let mut define = Insn::new(0, None, None, vec![21], vec![]);
+        define.debug.defines = vec![7];
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::new(define)]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let table = BTreeMap::from([(20, vec![seg(4, 9, reg(3))]), (7, vec![seg(0, 1, reg(9))])]);
+        let parents: HashMap<u32, u32> = [(21, 20)].into_iter().collect();
+        let found = by_note_value(&body, &table, &parents);
+        assert_eq!(found, BTreeMap::from([(7, vec![seg(4, 9, reg(3))])]), "register 7 of the table is not value 7");
+    }
+
     /// A value spilled to a cell is in the cell over the stretches the spiller
     /// wrote, in the register over the rest: its variable has both places, in
     /// order, where it had only the register's before.
