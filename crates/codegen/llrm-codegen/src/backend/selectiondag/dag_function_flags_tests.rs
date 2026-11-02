@@ -862,7 +862,8 @@ b5:
 
 /// A `zext nneg` beside a `sext` of one load that a signed compare reads kept
 /// a `movzx` after the `movsx` load: parity/branch bq32 -Os, +2 B. The pin's
-/// `visitZERO_EXTEND` makes the `zext nneg` of the extended load's truncate the load.
+/// `visitZERO_EXTEND` makes the `zext nneg` of the extended load's truncate the
+/// load.
 #[test]
 fn a_zext_nneg_of_a_load_a_signed_compare_reads_is_the_sext() {
     let names = names(ZEXT_NNEG_BESIDE_SEXT).unwrap();

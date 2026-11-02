@@ -1345,13 +1345,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (ISD::ZeroExtend, ISD::Truncate) => {
                 // `zext nneg (trunc x)` of an `x` with sign bits to spare is
                 // `x` ([L16459][pin]): the sext of a load a `zext nneg` shares
-                // leaves no `movzx`. DEVIATE SD448: the pin's `sext x` where `x` is
-                // narrower than the result is not taken: at m64 it left a
-                // `movslq` where the pin has `mov r32, r32` (ring, tile +1 B).
+                // leaves no `movzx`. DEVIATE SD448: the pin's `sext x` where
+                // `x` is narrower than the result is not taken:
+                // at m64 it left a `movslq` where the pin has
+                // `mov r32, r32` (ring, tile +1 B).
                 // Exit 2026-11-04: `visitSIGN_EXTEND`'s `sext` to `zext nneg`
                 // fold of a value with a zero sign bit
                 // ([L16279](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16279)).
-                let (op_bits, mid_bits) = (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
+                let (op_bits, mid_bits) =
+                    (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
                 if self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
                     && super::known_bits::num_sign_bits(self.dag, x) > op_bits - mid_bits
                 {
