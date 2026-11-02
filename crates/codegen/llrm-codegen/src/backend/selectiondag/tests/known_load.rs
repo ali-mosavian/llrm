@@ -52,3 +52,45 @@ fn an_arithmetic_shift_right_by_a_constant_adds_its_amount_to_the_sign_bits() {
     let past = dag.get_node(ISD::Sra, EVT::I64, &[x, wide]);
     assert_eq!(num_sign_bits(&dag, past), 1, "an amount past the width says nothing");
 }
+
+fn masked(
+    dag: &mut SelectionDAG,
+    reg: u32,
+    mask: u128,
+) -> SDValue {
+    let x = dag.get_register(EVT::I32, reg);
+    let mask = dag.get_constant(mask, EVT::I32);
+    dag.get_node(ISD::And, EVT::I32, &[x, mask])
+}
+
+fn leading_zeros(
+    dag: &SelectionDAG,
+    v: SDValue,
+) -> u32 {
+    let zero = known_bits(dag, v).zero;
+    (0..32).take_while(|i| zero & (1u128 << (31 - i)) != 0).count() as u32
+}
+
+/// `computeKnownBits` knew nothing of the pin's arithmetic cases, so the
+/// divide-by-constant pricer saw a 32-bit dividend where it is 8 bits
+/// (`a & 0xFF` and `b & 0xF` gave 0 leading zeros for every node here).
+#[test]
+fn arithmetic_nodes_bound_the_bits_of_narrow_operands() {
+    let mut dag = dag();
+    let a = masked(&mut dag, 7, 0xFF);
+    let b = masked(&mut dag, 8, 0xF);
+    for (op, want) in [
+        (ISD::Mul, 20),
+        (ISD::UDiv, 24),
+        (ISD::URem, 28),
+        (ISD::MulHU, 32),
+        (ISD::SRem, 24),
+        (ISD::Shl, 9),
+        (ISD::Srl, 24),
+        (ISD::Sra, 24),
+    ] {
+        let v = dag.get_node(op, EVT::I32, &[a, b]);
+        let got = leading_zeros(&dag, v);
+        assert!(got >= want, "{op:?}: {got} leading zeros, want {want}");
+    }
+}
