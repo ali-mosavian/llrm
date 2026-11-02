@@ -1,4 +1,5 @@
-//! `MachineCombiner` madd patterns on arm64 (`AArch64InstrInfo::getMaddPatterns`).
+//! `MachineCombiner` madd patterns on arm64
+//! (`AArch64InstrInfo::getMaddPatterns`).
 
 use llrm_arm64::driver::{self, IselMode, Level};
 use llrm_arm64::machine::Platform;
