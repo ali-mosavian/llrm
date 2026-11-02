@@ -822,8 +822,11 @@ pub(crate) fn fills_pay(
     stores: i64,
     fills: i64,
     kept: i64,
+    at_speed: bool,
     clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
 ) -> bool {
+    // `clocks`' last entry is the cells the fill stores in all: a cell is a
+    // `stos` of a dword, or the pattern's own cell.
     // The loop stays for the stores of computed values: a fill saves one
     // store, less than itself.
     if kept > 0 {
@@ -833,14 +836,18 @@ pub(crate) fn fills_pay(
     // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
     // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
-    (stores < 2 || fills_cheaper(loop_bytes, fills, costs.fill))
+    // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
+    // known, the bytes are in the price: a fill larger than the loop still pays
+    // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
+    let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
             // backend prices a memset's fill against its stores. The loop
             // stays when its extra bytes buy fewer clocks than that.
-            let (Some(trips), Some(width)) = (trips, width) else { return true };
+            let (Some(trips), Some(cells)) = (trips, width) else { return true };
             let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
-            let fill = fills * clocks.fill + trips * width * clocks.fill_cell;
+            let fill = fills * clocks.fill + cells * clocks.fill_cell;
             let saved = loop_bytes - 3 * fills * costs.fill / 4;
             clocks_pay(saved, rate, fill, trips * each)
         })

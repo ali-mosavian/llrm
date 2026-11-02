@@ -550,8 +550,18 @@ impl Tti for X86 {
         self.cmov
     }
 
-    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+    fn unroll_threshold_overrides(
+        &self,
+        opt_level: u32,
+    ) -> (Option<u32>, Option<u32>) {
+        if self.tuning.unroll_override_max_level.is_some_and(|highest| opt_level > highest) {
+            return (None, None);
+        }
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
 
     fn unroll_partial_threshold_override(&self) -> Option<u32> {

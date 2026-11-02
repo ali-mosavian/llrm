@@ -287,6 +287,7 @@ impl Machine for Dos {
             // and 1350 bytes unrolled, 306 and 418 not.
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
+            x87_stack_slots: Some(8),
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.
