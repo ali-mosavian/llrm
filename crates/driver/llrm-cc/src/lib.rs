@@ -80,6 +80,11 @@ pub struct Target {
     /// departures from it.
     #[serde(default)]
     pub description: Option<String>,
+    /// The file of `description`'s `src/machines` that states the layout and
+    /// the C sizes, where it is not `datalayout.toml` (wasm's has a file per
+    /// pointer width).
+    #[serde(default)]
+    pub description_file: Option<String>,
     #[serde(default)]
     pub wchar_bytes: Option<u32>,
     #[serde(default)]
@@ -152,12 +157,20 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// The description file of crate `llrm-NAME`: `file`, else `datalayout.toml`.
+fn description_path(
+    name: &str,
+    file: Option<&str>,
+) -> String {
+    format!("{ROOT}/crates/target/llrm-{name}/src/machines/{}", file.unwrap_or("datalayout.toml"))
+}
+
 /// Whether the description's machine has a fused multiply-add: the one reason
 /// to turn off clang's default contraction (`-ffp-contract=on`), which changes
 /// results only where an instruction rounds once for two operations.
 fn has_fused_multiply_add(target: &Target) -> Result<bool, String> {
     let Some(name) = &target.description else { return Ok(false) };
-    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+    let path = description_path(name, target.description_file.as_deref());
     let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
     Ok(table.get("fused_multiply_add").and_then(toml::Value::as_bool).unwrap_or(false))
@@ -165,7 +178,7 @@ fn has_fused_multiply_add(target: &Target) -> Result<bool, String> {
 
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
-    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+    let path = description_path(name, target.description_file.as_deref());
     let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
     let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
