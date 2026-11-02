@@ -1,9 +1,9 @@
 #!/bin/sh
-# builds ours and libgcc exes per CPU and op into ~/scratch/handoff/m68k-clocks
+# builds ours and libgcc exes per CPU and op into ~/scratch/handoff/m68k-clocks LLRM_CC_DIR is required.
 set -e
-W=/home/alim/work/personal/llrm/.claude/worktrees/laughing-turing-6896b1/runtime/softfloat; cd $W
+W=$(cd "$(dirname "$0")/.." && pwd); cd $W
 export LD_LIBRARY_PATH=$HOME/scratch/gcc-m68k/root/usr/lib/x86_64-linux-gnu
-B=$HOME/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu; D=/home/alim/scratch/mfbuild/keep/ctlz_ac62374
+B=$HOME/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu; D=${LLRM_CC_DIR:?set LLRM_CC_DIR to the dir holding llrm-cc}
 O=$HOME/scratch/handoff/m68k-clocks; mkdir -p $O; T=$(mktemp -d)
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen 3000 > $T/vectors.h
 for c in 68000 68020; do for opt in Os O2; do
