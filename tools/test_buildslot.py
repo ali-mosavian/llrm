@@ -183,3 +183,30 @@ def test_the_seventh_slot_on_the_gate_cores_is_not_offered_while_a_gate_leg_hold
     wait_free, cpus_free = seventh_start(False)
     assert wait_locked >= 1.8 and "4-7" not in cpus_locked, (wait_locked, cpus_locked)
     assert wait_free < 1.0 and "4-7" in cpus_free, (wait_free, cpus_free)
+
+
+def _slot(tmp_path, argv, **env):
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    return subprocess.run([script, *argv], capture_output=True, text=True, env={**os.environ, "BUILDSLOT_DIR": str(tmp_path), **env})
+
+
+def test_a_non_cargo_command_under_a_slot_dies_alone_past_the_memory_cap(tmp_path):
+    """Two unbounded llrm-6502-llc (217 GB at 21:55, 190 GB at 22:07) took the host to 16 and 50 GB free: the slot itself must cap what it launches."""
+    grab = ["python3", "-c", "b = bytearray(4 << 30); print('ok')"]
+    over = _slot(tmp_path, grab, TEST_MEM_CAP_GB="1")
+    assert over.returncode != 0 and "ok" not in over.stdout and "MemoryError" in over.stderr, (over.returncode, over.stderr[-200:])
+
+
+def test_a_non_cargo_command_under_a_slot_is_killed_at_the_timeout(tmp_path):
+    done = _slot(tmp_path, ["sleep", "30"], BUILDSLOT_TIMEOUT="1")
+    assert done.returncode == 124, done.returncode
+
+
+def test_cargo_under_a_slot_keeps_no_cap_and_no_timeout_of_its_own(tmp_path):
+    """cargo's rustc and test binaries are capped through the runner; wrapping cargo itself would cap every build."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "cargo").write_text("#!/bin/sh\nulimit -d\n")
+    (fake / "cargo").chmod(0o755)
+    done = _slot(tmp_path, ["cargo"], PATH=f"{fake}:{os.environ['PATH']}", TEST_MEM_CAP_GB="1", BUILDSLOT_TIMEOUT="1")
+    assert done.stdout.strip() == "unlimited", (done.stdout, done.stderr[-200:])
