@@ -389,3 +389,11 @@ def test_a_change_to_the_judge_makes_every_program_edited_so_the_base_is_measure
 def test_programs_read_from_git_hash_as_the_working_tree_does_judge_files_included():
     """A base is hashed from git (programs_at), the head from the tree (programs): the two must agree on an unedited checkout."""
     assert bc.programs_at("HEAD") == bc.programs() or bc.subprocess.run(["git", "status", "--porcelain", "--", "bench", *bc.JUDGE_FILES], cwd=bc.ROOT, capture_output=True, text=True).stdout.strip()
+
+
+def test_a_cell_the_base_errored_on_is_listed_as_not_judged():
+    """nbody_single c64 printed 3731452 on main: the base row was an error, the head's was fine, the cell was skipped silently and the summary read clean."""
+    head = {("nbody_single", "c", "O2"): {"instructions": 1}, ("fib", "c", "O2"): {"instructions": 1}, ("x", "ow", "O2"): {"error": "e"}}
+    base = {("nbody_single", "c", "O2"): {"error": "prints ['3731452'], want ['86016']"}, ("fib", "c", "O2"): {"instructions": 1}, ("x", "ow", "O2"): {"error": "e"}}
+    assert bc.base_error_lines(head, base) == ["BASE-ERROR 1 cells ran on the head with no base row, not judged: nbody_single c -O2: error"]
+    assert bc.base_error_lines(head, {key: row for key, row in base.items() if key[0] != "nbody_single"}) == []

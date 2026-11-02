@@ -1121,6 +1121,7 @@ def main() -> int:
         judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
         problems += uncovered
         print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
+        print(*basecounts.base_error_lines(measured, base), sep="\n")
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")

@@ -275,6 +275,17 @@ def coverage(measured: dict, base: dict, same: set[str]) -> tuple[int, int, list
     return sum(rows.values()), len(rows), left_out, problems
 
 
+def base_error_lines(measured: dict, base: dict) -> list[str]:
+    """The cells of ours that ran on the head and had no usable base row (the base errored or was skipped): listed, so a summary never hides that they were not judged.
+    nbody_single on x86_64 printed 3731452 on main and read as an error row on the base side only, and nothing said so."""
+    cells = sorted(
+        f"{key[0]} {key[1]} -{key[2]}: {next(one for one in ('error', 'skip') if one in base[key])}"
+        for key, got in measured.items()
+        if key[1] in OURS and key in base and any(one in base[key] for one in ("error", "skip")) and not any(one in got for one in ("error", "skip", "known", "xpass"))
+    )
+    return [f"BASE-ERROR {len(cells)} cells ran on the head with no base row, not judged: " + "; ".join(cells[:20]) + (" ..." if len(cells) > 20 else "")] if cells else []
+
+
 def coverage_lines(judged: int, programs: int, left_out: list[str]) -> list[str]:
     return [f"JUDGED {judged} rows of {programs} programs" + (f"; left out, edited since the base: {' '.join(left_out)}" if left_out else "")]
 
