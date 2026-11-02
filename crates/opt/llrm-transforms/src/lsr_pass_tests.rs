@@ -1114,7 +1114,9 @@ fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
         let modulus = 1i128 << bits;
         let span = modulus.min(512) / 2;
         for factor in (-span..span).chain([1024, 16384]).filter(|&f| f != 0) {
-            let reach = (0..modulus / 2).take_while(|&r| crate::lsr_generate::zero_test_survives(bits, factor as i64, r as u128)).count() as i128;
+            let reach = (0..modulus / 2)
+                .take_while(|&r| crate::lsr_generate::zero_test_survives(bits, factor as i64, r as u128))
+                .count() as i128;
             for x in -reach.max(1) + 1..reach.max(1) {
                 let zero = (x * factor).rem_euclid(modulus) == 0;
                 let claimed = reach > 0 && x.abs() < reach;
@@ -1123,3 +1125,40 @@ fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
         }
     }
 }
+
+/// A counter that is both an address index and a value ended on a compare
+/// against 257 next to a pointer that stepped by 2 (bench/histo's sum loop,
+/// +256 instructions at m16): the first use's formulae hid the counter from
+/// the rest. The byte index ending at zero is one fewer instruction.
+#[test]
+fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero_in_real_mode() {
+    let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains(", 0\n") && !after.contains("257"), "{after}");
+}
+
+const SUM_OF_COUNTS: &str = "
+@counts = internal global [256 x i16] zeroinitializer
+define i32 @f() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sum = phi i32 [ 0, %entry ], [ %s1, %loop ]
+  %p = getelementptr i16, ptr @counts, i16 %i
+  %v = load i16, ptr %p
+  %w = sext i16 %v to i32
+  %k = add i16 %i, 1
+  %kw = sext i16 %k to i32
+  %m = mul i32 %w, %kw
+  %s1 = add i32 %sum, %m
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp eq i16 %i1, 256
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %s1
+}
+";

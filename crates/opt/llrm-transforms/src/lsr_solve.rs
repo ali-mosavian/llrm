@@ -34,6 +34,14 @@
 //! `lsr_implement.rs`; a store keeps the default position, as the pin's
 //! `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
 //! rewrite that spills (real mode).
+//!
+//! DEVIATE LS1: in real mode the visited-register rule is off. It exists to
+//! keep the search short, and the caps already hold the space under the pin's
+//! `ComplexityLimit`; with it on, a counter that serves two uses is lost to
+//! the first use's other formulae (bench/histo's sum loop: pointer plus
+//! counter and a `cmp`, 7 instructions, where the byte index ending at zero
+//! and the counter take 6). Exit: none while the pin's rule picks the worse
+//! solution under its own cost model.
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
@@ -89,7 +97,7 @@ impl Collection<'_, '_> {
                 workspace.push(f_idx);
                 if workspace.len() != self.uses.len() {
                     self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited);
-                    if f.num_regs() == 1 && workspace.len() == 1 {
+                    if f.num_regs() == 1 && workspace.len() == 1 && !self.tti.lsr_searches_exhaustively() {
                         visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
                     }
                 } else {

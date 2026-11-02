@@ -1011,6 +1011,10 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn lsr_searches_exhaustively(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn scaled_index_insns(&self) -> u32 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
