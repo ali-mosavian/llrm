@@ -38,3 +38,33 @@ exit:
     let jumps = asm.lines().filter(|l| l.trim_start().starts_with("b ")).count();
     assert_eq!(jumps, 0, "{asm}");
 }
+
+/// The exit reads the loop-carried value as it was on entry to the last trip,
+/// so the latch's copy into that register would overwrite it (the lost copy):
+/// the pin writes a temporary per phi; here the edge keeps its own block.
+#[test]
+fn a_loop_carried_value_the_exit_reads_keeps_its_edge_block() {
+    let ir = r#"
+target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
+define double @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %x = phi double [ 100.0, %entry ], [ %x2, %loop ]
+  %i = phi i32 [ %n, %entry ], [ %i2, %loop ]
+  %m = fmul double %x, 5.000000e-01
+  %x2 = fadd double %m, 1.000000e+00
+  %i2 = sub i32 %i, 1
+  %c = icmp eq i32 %i2, 0
+  br i1 %c, label %exit, label %loop
+exit:
+  %r = fadd double %x, %x2
+  ret double %r
+}
+"#;
+    driver::set_isel_mode(IselMode::Dag);
+    let asm = driver::assembly(ir, Platform::Darwin, true).expect("lowers");
+    assert!(asm.contains("fmov d"), "{asm}");
+    let jumps = asm.lines().filter(|l| l.trim_start().starts_with("b ")).count();
+    assert_eq!(jumps, 1, "{asm}");
+}
