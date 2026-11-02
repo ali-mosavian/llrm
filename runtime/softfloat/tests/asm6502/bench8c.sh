@@ -3,9 +3,10 @@
 # src/sf8.c compiled by llrm-cc for 6502-sim65: mean cycles per call over chunk 3 (4096 pairs, call minus a bare rts)
 # and the mismatches in that chunk. Correctness of the C itself is tests/host_fp8.c.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")"; T=$(mktemp -d); S=../..; M=${FP8_M:-2}; OPT=${OPT:-Os}
 MOS_RT=${MOS_RT:-$HOME/scratch/handoff/mos_rt.s}
-$LLRM_CC --target=6502-sim65 -$OPT -S -DFP8_M=$M -I$S/include '-DSF8_NAME(n)=__fp8_##n' $S/src/sf8.c -o $T/c.s
+timeout 900 $LLRM_CC --target=6502-sim65 -$OPT -S -DFP8_M=$M -I$S/include '-DSF8_NAME(n)=__fp8_##n' $S/src/sf8.c -o $T/c.s
 grep -h '^rc[0-9]* = ' $T/c.s | sort -u > $T/eq.s
 sed 's/^\.include "op.inc"//' drv8.s > $T/drv.s
 for op in add sub mul div; do

@@ -2,10 +2,11 @@
 # usage: tests/size_x86.sh [OPT] -> text bytes at x86_32-linux (llrm-cc, -march=i486): ours (sf32.c + sf32_conv.c, 17 symbols), compiler-rt (llrm-cc, the same
 # symbols it defines), libgcc soft-fp (host gcc -m32 -march=i486, GCC 15.2 libgcc/soft-fp + config/i386, extracted by the f32 m68k column). Library bytes only.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")/.."
 OPT=${1:-Os}; D=${LLRM_CC_DIR:-$HOME/targets/gs-out/rbase}; CRT=${COMPILER_RT:-$HOME/scratch/llvm-src-m16/compiler-rt/lib/builtins}
 S=${LIBGCC_SRC:-$HOME/scratch/sf-libgcc-src/libgcc}; T=$(mktemp -d); trap 'rm -r $T' EXIT
-cc1() { LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -$OPT -c "$@" 2>$T/err || { echo "  compile failed: $(head -c 100 $T/err)"; return 1; }; }
+cc1() { LLRM_CC_TARGET=x86_32-linux timeout 900 $D/llrm-cc -march=i486 -$OPT -c "$@" 2>$T/err || { echo "  compile failed: $(head -c 100 $T/err)"; return 1; }; }
 t() { size "$1" | awk 'NR==2{print $1}'; }
 echo "== x86_32-linux -march=i486 -$OPT, text bytes"
 for f in sf32 sf32_conv; do cc1 -Iinclude src/$f.c -o $T/$f.o && echo "ours $f $(t $T/$f.o)"; done

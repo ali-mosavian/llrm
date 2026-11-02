@@ -4,6 +4,7 @@
 # bytes = whole-image delta against a plain-copy build of the same program; mean = (full - copy) / 472 cycles; worst = the one-call run of 0xffffffff*0xffffffff
 # (full - copy). sim65 has no clock register, so worst is a run of its own for every compiler. Fails are counted by the program itself.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")"; T=$(mktemp -d); B=${LLVM_MOS:-$HOME/scratch/fetch-llvm-mos-sdk/x/llvm-mos}/bin
 LLRM_CC=${LLRM_CC:-$HOME/targets/gs-out/rbase/llrm-cc}; MOS_RT=${MOS_RT:-$HOME/scratch/handoff/mos_rt.s}
 python3 - $T <<'P'
@@ -52,7 +53,7 @@ row() { echo "$1: +bytes=$2 mean=$(( ($3 - $4) / 472 )) worst=$(( $5 - $6 )) fai
 # llrm-cc: $1 label, $2 runtime file (the base build links rt_stub.s: the routine replaced by rts, so the routine's bytes show in the delta)
 llrm() {
   for s in "" -DONE; do for k in base full; do d=""; [ $k = base ] && d=-DBASE
-    $LLRM_CC --target=6502-sim65 -Os -S $d $s -I$T $T/m.c -o $T/m.s 2>$T/err || { cat $T/err; exit 1; }
+    timeout 900 $LLRM_CC --target=6502-sim65 -Os -S $d $s -I$T $T/m.c -o $T/m.s 2>$T/err || { cat $T/err; exit 1; }
     { grep -h '^rc[0-9]* = ' $T/m.s | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; grep -v '^rc[0-9]* = ' $T/m.s; if [ $k = base ]; then cat $T/rt_stub.s; else cat $2; fi; } > $T/p.s
     cl65 -t sim6502 -o $T/p.bin $T/p.s 2>$T/err || { cat $T/err; exit 1; }
     set +e; o=$(sim65 -c -x 500000000 $T/p.bin 2>&1); f=$?; set -e

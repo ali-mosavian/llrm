@@ -1,6 +1,7 @@
 #!/bin/sh
 # usage: LLRM_CC_DIR=dir tests/run_m68k.sh CPU OPT [n]   - vectors from the host FPU, library built by llrm-cc, run under qemu-m68k.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")/.."
 CPU=$1; OPT=$2; N=${3:-3000}
 T=$(mktemp -d)

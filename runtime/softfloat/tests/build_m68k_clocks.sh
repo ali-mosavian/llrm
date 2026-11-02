@@ -1,6 +1,7 @@
 #!/bin/sh
 # builds ours and libgcc exes per CPU and op into ~/scratch/handoff/m68k-clocks LLRM_CC_DIR is required.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 W=$(cd "$(dirname "$0")/.." && pwd); cd $W
 export LD_LIBRARY_PATH=$HOME/scratch/gcc-m68k/root/usr/lib/x86_64-linux-gnu
 B=$HOME/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu; D=${LLRM_CC_DIR:?set LLRM_CC_DIR to the dir holding llrm-cc}
@@ -8,7 +9,7 @@ O=$HOME/scratch/handoff/m68k-clocks; mkdir -p $O; T=$(mktemp -d)
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen 3000 > $T/vectors.h
 for c in 68000 68020; do for opt in Os O2; do
   for f in sf32 sf32_conv int32; do
-    LLRM_CC_TARGET=m68k-$c $D/llrm-cc -$opt -S -Iinclude src/$f.c -o $T/$f.s
+    LLRM_CC_TARGET=m68k-$c timeout 900 $D/llrm-cc -$opt -S -Iinclude src/$f.c -o $T/$f.s
     awk 'BEGIN{print ".text"} /^[A-Za-z_][A-Za-z0-9_]*:$/ {l=$0; sub(/:$/,"",l); print ".globl " l} {print}' $T/$f.s > $T/$f.g.s
     $B-as -m$c -o $T/${f}_$c$opt.o $T/$f.g.s
   done

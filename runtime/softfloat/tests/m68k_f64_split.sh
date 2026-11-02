@@ -2,11 +2,12 @@
 # usage: LLRM_CC_DIR=<dir> tests/m68k_f64_split.sh [CPU] [OPT] -> per-function instruction counts of sf64.c on one vector per op and class (qemu trace, symbol column),
 # ours via llrm-cc -S with every label exported. Queue: add, mul, div on normal*normal, denormal operand, far exponents; read the share of each function.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")/.."
 D=${LLRM_CC_DIR:?set LLRM_CC_DIR}; c=${1:-68020}; opt=${2:-Os}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 export LD_LIBRARY_PATH=$HOME/scratch/gcc-m68k/root/usr/lib/x86_64-linux-gnu; B=$HOME/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu
 for f in sf64 sf32 sf32_conv sf32_conv64 int64 int32; do
-  LLRM_CC_TARGET=m68k-$c $D/llrm-cc -$opt -S -Iinclude src/$f.c -o $T/$f.s
+  LLRM_CC_TARGET=m68k-$c timeout 900 $D/llrm-cc -$opt -S -Iinclude src/$f.c -o $T/$f.s
   awk 'BEGIN{print ".text"} /^(__|sf)[A-Za-z0-9_]*:$/ {l=$0; sub(/:$/,"",l); print ".globl " l} {print}' $T/$f.s > $T/$f.g.s
   $B-as -m$c -o $T/$f.o $T/$f.g.s
 done

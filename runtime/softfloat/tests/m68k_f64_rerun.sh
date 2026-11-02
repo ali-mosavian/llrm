@@ -3,6 +3,7 @@
 # The f64 rerun in one command: int64 harness, f64 mismatches per op and class (60000 vectors), then the pricing executables.
 # Prints the compiler's sha first so a number is never quoted for the wrong build. Per-function split of sf64.c: tests/m68k_f64_split.sh.
 set -e
+ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")/.."
 D=${LLRM_CC_DIR:?set LLRM_CC_DIR}; RUN=${M68K_RUN_C:-$HOME/scratch/handoff/m68k-run-c.sh}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 strings $D/llrm-llc | grep -m1 -E '^[0-9a-f]{40}$' || echo "compiler sha: not stamped in $D"

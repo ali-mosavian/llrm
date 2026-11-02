@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.." || exit 1
 D=${LLRM_CC_DIR:?dir with llrm-cc and llrm-m68k-llc}
 t=$(mktemp)
 for o in O1 O2 Os; do
-  LLRM_CC_TARGET=m68k-68000 "$D/llrm-cc" -$o -S -Iinclude src/int32.c -o "$t" 2>/dev/null || continue
+  LLRM_CC_TARGET=m68k-68000 "timeout 900 $D/llrm-cc" -$o -S -Iinclude src/int32.c -o "$t" 2>/dev/null || continue
   awk '/^[A-Za-z_][A-Za-z0-9_]*:$/ {fn=$0} /jsr[ \t]+__mulsi3/ && fn=="__mulsi3:" {bad=1} END {exit bad}' "$t" || { echo "FAIL -$o: __mulsi3 calls itself"; rm -f "$t"; exit 1; }
 done
 rm -f "$t"
