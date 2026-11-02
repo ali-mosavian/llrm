@@ -187,6 +187,9 @@ struct Fps<'a> {
     next: Option<(usize, HashSet<u32>, Vec<u32>)>,
     /// Positions of stores already emitted with the one before them.
     swallowed: BTreeSet<usize>,
+    /// The order a block's stack had at its exit, by bundle, where the bundle
+    /// was fixed already and the exit shuffled to it.
+    natural: Vec<(usize, Vec<u32>)>,
 }
 
 /// `getNextFPInstruction`-free `PopTable` of the names this port emits: the
@@ -439,13 +442,17 @@ impl Fps<'_> {
         &mut self,
         bundle: &mut LiveBundle,
         hint: Option<Vec<u32>>,
+        id: usize,
+        forced: Option<&Vec<u32>>,
     ) -> Result<(), Raised> {
         self.adjust_live_regs(&bundle.mask.clone())?;
         if bundle.mask.is_empty() {
             return Ok(());
         }
         if bundle.fixed.is_none() {
-            bundle.fixed = hint.filter(|order| order.len() == self.values.len());
+            bundle.fixed = forced.cloned().or(hint).filter(|order| order.len() == self.values.len());
+        } else if bundle.fixed.as_ref() != Some(&self.values) {
+            self.natural.push((id, self.values.clone()));
         }
         match bundle.fixed.clone() {
             Some(fixed) => self.shuffle_stack_top(&fixed)?,
@@ -1131,17 +1138,61 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
     order
 }
 
+/// Exchanges a body holds, each weighted by 8 for every loop it is inside
+/// (`floatalloc::_modes`' weight).
+fn weighted_exchanges(body: &LirBody) -> u64 {
+    let depth = crate::analysis::loops::depth(&body.blocks, Some(body.entry));
+    body.blocks
+        .iter()
+        .map(|block| {
+            let exchanges = block
+                .insns
+                .iter()
+                .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Exchange))
+                .count() as u64;
+            exchanges * 8_u64.saturating_pow(depth.get(&block.at).copied().unwrap_or(0) as u32)
+        })
+        .sum()
+}
+
 /// The whole function in stack form.
+///
+/// DEVIATE 9: the first exit to reach a loop's header fixes its order and the
+/// latch pays every exchange that differs, a trip at a time. Where a latch
+/// shuffles, the function is converted again with the header taking the order
+/// the latch had, so the entry edge pays once instead; the smaller weighted
+/// count of exchanges (8 a loop deep) is kept. gcc's `better_edge` takes the
+/// order of the likelier predecessor, which for a header is the latch.
+/// x_nbody_f -O2 held six float values over its back edge and exchanged seven
+/// times a trip, four before. Exit: none.
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> Result<LirBody, Raised> {
+    let (first, natural) = convert_pass(body, classes, &IndexMap::default())?;
+    if natural.is_empty() {
+        return Ok(first);
+    }
+    let mut forced: IndexMap<usize, Vec<u32>> = IndexMap::default();
+    for (bundle, order) in natural {
+        forced.entry(bundle).or_insert(order);
+    }
+    // A function the second pass refuses stays as the first made it.
+    let Ok((second, _)) = convert_pass(body, classes, &forced) else { return Ok(first) };
+    Ok(if weighted_exchanges(&second) < weighted_exchanges(&first) { second } else { first })
+}
+
+fn convert_pass(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    forced: &IndexMap<usize, Vec<u32>>,
+) -> Result<(LirBody, Vec<(usize, Vec<u32>)>), Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
-        return Ok(body.clone());
+        return Ok((body.clone(), Vec::new()));
     }
     let (live_in, live_out) = live_among(body, |value| floating.contains(&value));
     let bundles = spillplacement::bundles(body);
@@ -1213,6 +1264,7 @@ pub(super) fn converted(
         deferred: None,
         next: None,
         swallowed: BTreeSet::new(),
+        natural: Vec::new(),
     };
     let border = |at: i64| Arc::new(inserted(at, semantics(Operation::Nothing, "", Vec::new(), Vec::new())));
     let mut made: IndexMap<i64, Block> = IndexMap::default();
@@ -1268,7 +1320,7 @@ pub(super) fn converted(
                 floating: &floating,
             };
             let hint = successor_order(&ahead, block, &bundle.mask);
-            let finished = fps.finish_block_stack(&mut bundle, hint);
+            let finished = fps.finish_block_stack(&mut bundle, hint, exit, forced.get(&exit));
             live_bundles.insert(exit, bundle);
             finished?;
         } else if !fps.values.is_empty() {
@@ -1281,7 +1333,7 @@ pub(super) fn converted(
     }
     let mut out = body.clone();
     out.blocks = body.blocks.iter().map(|block| made.shift_remove(&block.at).expect("every block converted")).collect();
-    Ok(out)
+    Ok((out, fps.natural))
 }
 
 #[cfg(test)]
