@@ -986,3 +986,80 @@ define i8 @probe() {
     assert!(!text.contains("__mulsi3"), "expanded through 32-bit multiplies:\n{text}");
     assert_eq!(exit_code_of(&text, "probe"), 4, "{text}");
 }
+
+/// A loaded `i1` that a `select` or an extension tests was selected into a
+/// compare of its own zero extension: `llrm-6502-llc` ran until it had taken
+/// 217 GB. A bit in memory is a byte, `x & 1`. `pick` is 7 for a stored 1 and
+/// 9 for a stored 0; `mask` is a sign-extended 1; `bump` stores the bit back.
+#[test]
+fn a_loaded_bit_is_a_condition_a_select_and_an_extension_can_test() {
+    let ir = module(
+        r#"@t = global i8 1
+@f = global i8 0
+define i8 @pick() {
+  %c = load i1, ptr @t
+  %d = load i1, ptr @f
+  %a = select i1 %c, i16 7, i16 1
+  %b = select i1 %d, i16 100, i16 2
+  %s = add i16 %a, %b
+  %r = trunc i16 %s to i8
+  ret i8 %r
+}
+define i8 @mask() {
+  %c = load i1, ptr @t
+  %s = sext i1 %c to i8
+  %d = load i1, ptr @f
+  %z = zext i1 %d to i8
+  %r = add i8 %s, %z
+  ret i8 %r
+}
+define i8 @bump() {
+  %c = load i1, ptr @t
+  store i1 %c, ptr @f
+  %d = load i8, ptr @f
+  ret i8 %d
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "pick"), 9, "{text}");
+    assert_eq!(exit_code_of(&text, "mask"), 0xFF, "{text}");
+    assert_eq!(exit_code_of(&text, "bump"), 1, "{text}");
+}
+
+/// `llvm.uadd.with.overflow.i16` and `usub` aborted the compiler the same way:
+/// the overflow bit is an `i1` leaf. 65535 + 2 wraps to 1 and sets it.
+#[test]
+fn a_word_add_and_subtract_with_overflow_run() {
+    let ir = module(
+        r#"declare { i16, i1 } @llvm.uadd.with.overflow.i16(i16, i16)
+declare { i16, i1 } @llvm.usub.with.overflow.i16(i16, i16)
+@x = global i16 65535
+@y = global i16 2
+define i8 @add_overflow() {
+  %a = load i16, ptr @x
+  %b = load i16, ptr @y
+  %p = call { i16, i1 } @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)
+  %v = extractvalue { i16, i1 } %p, 0
+  %o = extractvalue { i16, i1 } %p, 1
+  %lo = trunc i16 %v to i8
+  %ob = zext i1 %o to i8
+  %r = add i8 %lo, %ob
+  ret i8 %r
+}
+define i8 @sub_overflow() {
+  %a = load i16, ptr @y
+  %b = load i16, ptr @x
+  %p = call { i16, i1 } @llvm.usub.with.overflow.i16(i16 %a, i16 %b)
+  %v = extractvalue { i16, i1 } %p, 0
+  %o = extractvalue { i16, i1 } %p, 1
+  %lo = trunc i16 %v to i8
+  %ob = zext i1 %o to i8
+  %r = add i8 %lo, %ob
+  ret i8 %r
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    // 1 + 1; 2 - 65535 = 3 with a borrow: 3 + 1
+    assert_eq!(exit_code_of(&text, "add_overflow"), 2, "{text}");
+    assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
+}
