@@ -2,10 +2,14 @@
 #include "sf_int.h"
 #include "sf_helpers.h"
 
+/* Shift-add, not 16-bit partial products: those fold back into a*b, which is a call to this routine where
+ * there is no 32-bit multiply. */
 uint32_t SFB_NAME(mulsi3)(uint32_t a, uint32_t b)
 {
-    uint32_t al = a & 0xFFFFu, bl = b & 0xFFFFu;
-    return al * bl + (((a >> 16) * bl + al * (b >> 16)) << 16);
+    uint32_t r = 0;
+    for (; b; b >>= 1, a <<= 1)
+        if (b & 1) r += a;
+    return r;
 }
 
 /* Shift-subtract on operands aligned by clz; 16-bit operands take the short path. */
