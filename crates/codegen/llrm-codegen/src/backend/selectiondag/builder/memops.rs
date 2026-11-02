@@ -612,13 +612,14 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&stores)))
     }
 
-    /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
-    /// stores take more bytes than a `rep stosb` fill is the fill, unless the
-    /// fill's extra clocks outweigh the bytes it saves (`SizeTrade`). The pin
-    /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
-    /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
-    /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
-    /// hook on the target description.
+    /// DEVIATE SD223 (real mode): a constant memset whose stores take more
+    /// bytes than a `rep stosb` fill is the fill. The pin counts stores
+    /// (`MaxStoresPerMemset`); in real mode each dword store carries a `66`
+    /// prefix and the fill costs `FILL_BYTES`. Tuned for size the bytes
+    /// decide (clocks never do); at speed the fill is taken where the bytes
+    /// it saves, at the target's `milliclocks_per_byte`, pay for the clocks it
+    /// adds. Mirrors the old selector's `stored_bytes` rule. Owner w12. Exit:
+    /// a store-cost hook on the target description.
     fn fill_is_smaller(
         &self,
         length: u64,
@@ -628,23 +629,34 @@ impl Builder<'_> {
         if opt_size && zero && self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none() {
             return self.sse_fill_is_longer(length);
         }
-        if !opt_size || self.target.dag.pointer.size_in_bits() != 16 {
+        if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }
         let dwords = length / 4;
         let words = u64::from(length % 4 >= 2);
         let bytes = u64::from(length % 2 == 1);
-        let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
-        let stored = setup + dwords * each + words * 5 + bytes * 4;
+        // From two dwords on a register holds the value (`xor ecx, ecx` 3 B,
+        // `mov ecx, imm32` 6) and each store is that register's 4, 3 or 3
+        // bytes; a lone dword is `mov dword ptr [m], imm32`. A 10-byte clear
+        // is 14 bytes of stores against 16 of fill (the object's, measured).
+        let shared = dwords > 1;
+        let (each, setup, word, byte) = match (shared, zero) {
+            (true, true) => (4, 3, 3, 3),
+            (true, false) => (4, 6, 3, 3),
+            (false, _) => (8, 0, 5, 4),
+        };
+        let stored = setup + dwords * each + words * word + bytes * byte;
         if stored <= FILL_BYTES {
             return false;
         }
-        let Some(trade) = self.target.size_trade else {
+        if opt_size {
             return true;
+        }
+        let Some(trade) = self.target.size_trade else {
+            return false;
         };
         let stores = (dwords * (trade.store + trade.prefix) as u64 + (words + bytes) * trade.store as u64) as i64;
         let fill = trade.fill + length as i64 * trade.fill_cell;
-        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 

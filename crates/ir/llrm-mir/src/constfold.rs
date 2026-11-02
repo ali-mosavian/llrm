@@ -1040,6 +1040,7 @@ mod relation_tests {
         GlobalValue {
             name: Default::default(),
             linkage,
+            visibility: crate::module::Visibility::Default,
             unnamed_addr: UnnamedAddr::None,
             address_space: 0,
             kind: GlobalKind::Variable(GlobalVariable {
