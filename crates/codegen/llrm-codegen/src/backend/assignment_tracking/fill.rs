@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::{BlockId, DwOp, Function, InstId, MetadataId, Module, Operand};
 
 use super::{
@@ -123,7 +124,7 @@ struct Fill<'a> {
     bases: Vec<Vec<Operand>>,
     /// What each block adds, by point, in the order it was found; cleared
     /// each time the block is processed again.
-    inserts: HashMap<BlockId, Vec<(InsertPt, FragMemLoc)>>,
+    inserts: IdMap<BlockId, Vec<(InsertPt, FragMemLoc)>>,
 }
 
 impl Fill<'_> {
@@ -157,7 +158,7 @@ impl Fill<'_> {
             return;
         }
         let loc = FragMemLoc { variable, base, offset: range.0, size: range.1 - range.0, location };
-        self.inserts.entry(block).or_default().push((before, loc));
+        self.inserts.get_or_insert_with(block, Default::default).push((before, loc));
     }
 
     /// `addDef`.
@@ -253,12 +254,12 @@ pub(super) fn run(
     slots: &dyn Fn(InstId) -> u32,
     coalesce: bool,
 ) {
-    let mut fill = Fill { module, with_slot, coalesce, bases: Vec::new(), inserts: HashMap::new() };
+    let mut fill = Fill { module, with_slot, coalesce, bases: Vec::new(), inserts: IdMap::new() };
     let order = llrm_mir::blockorder::reverse_post_order_traversal(function);
-    let number: HashMap<BlockId, usize> = order.iter().enumerate().map(|(at, &b)| (b, at)).collect();
-    let mut live_in: HashMap<BlockId, VarFragMap> = HashMap::new();
-    let mut live_out: HashMap<BlockId, VarFragMap> = HashMap::new();
-    let mut visited: HashSet<BlockId> = HashSet::new();
+    let number: IdMap<BlockId, usize> = order.iter().enumerate().map(|(at, &b)| (b, at)).collect();
+    let mut live_in: IdMap<BlockId, VarFragMap> = IdMap::new();
+    let mut live_out: IdMap<BlockId, VarFragMap> = IdMap::new();
+    let mut visited: IdSet<BlockId> = IdSet::new();
     let mut worklist: BTreeSet<usize> = (0..order.len()).collect();
     let mut pending: BTreeSet<usize> = BTreeSet::new();
     while !worklist.is_empty() {
@@ -291,8 +292,8 @@ pub(super) fn run(
         std::mem::swap(&mut worklist, &mut pending);
     }
     let mut added: BTreeMap<usize, Vec<(InsertPt, FragMemLoc)>> = BTreeMap::new();
-    for (block, list) in fill.inserts.drain() {
-        added.insert(number[&block], list);
+    for (block, list) in fill.inserts.iter_mut() {
+        added.insert(number[&block], std::mem::take(list));
     }
     for (_, list) in added {
         for (at, loc) in list {
@@ -318,9 +319,9 @@ pub(super) fn run(
 fn meet(
     function: &Function,
     block: BlockId,
-    visited: &HashSet<BlockId>,
-    live_in: &mut HashMap<BlockId, VarFragMap>,
-    live_out: &HashMap<BlockId, VarFragMap>,
+    visited: &IdSet<BlockId>,
+    live_in: &mut IdMap<BlockId, VarFragMap>,
+    live_out: &IdMap<BlockId, VarFragMap>,
 ) -> bool {
     let mut joined = VarFragMap::new();
     let mut first = true;

@@ -41,6 +41,7 @@ mod track;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::nonzero::{get_pointer_offset_from, strip_and_accumulate_constant_offsets};
@@ -309,11 +310,11 @@ impl PartialEq for BlockInfo {
 }
 
 /// The result: the locations of one function (`FunctionVarLocs`).
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionVarLocs {
     variables: Vec<DebugVariable>,
     single: Vec<VarLocInfo>,
-    before: BTreeMap<InstId, Vec<VarLocInfo>>,
+    before: IdMap<InstId, Vec<VarLocInfo>>,
 }
 
 /// What [`FunctionVarLocs`] is built in (`FunctionVarLocsBuilder`).
@@ -397,10 +398,10 @@ impl FunctionVarLocsBuilder {
     pub fn finish(self) -> FunctionVarLocs {
         // The locations of the records standing before an instruction come
         // first, in record order, then its own (`FunctionVarLocs::init`).
-        let mut before: BTreeMap<InstId, Vec<VarLocInfo>> = BTreeMap::new();
+        let mut before: IdMap<InstId, Vec<VarLocInfo>> = IdMap::new();
         for ((inst, _), locs) in self.before {
             if !locs.is_empty() {
-                before.entry(inst).or_default().extend(locs);
+                before.get_or_insert_with(inst, Default::default).extend(locs);
             }
         }
         FunctionVarLocs { variables: self.variables, single: self.single, before }
@@ -430,7 +431,7 @@ impl FunctionVarLocs {
 
     /// The instructions with locations before them, in order.
     pub fn wedged(&self) -> impl Iterator<Item = InstId> + '_ {
-        self.before.keys().copied()
+        self.before.keys()
     }
 
     /// `FunctionVarLocs::print` for the parts that do not need the function:
@@ -471,7 +472,7 @@ impl FunctionVarLocs {
             line(&mut out, one);
         }
         out.push_str("=== In-line variable defs ===\n");
-        for (inst, wedge) in &self.before {
+        for (inst, wedge) in self.before.iter() {
             let _ = writeln!(out, "before %{}:", inst.0);
             for one in wedge {
                 line(&mut out, one);
@@ -755,11 +756,11 @@ pub struct Prepared {
     /// contains (`OverlapMap`).
     pub contains: HashMap<VariableId, Vec<VariableId>>,
     /// Per untagged store the variables it writes (`UntaggedStoreVars`).
-    pub untagged_stores: HashMap<InstId, Vec<(VariableId, AssignmentInfo)>>,
+    pub untagged_stores: IdMap<InstId, Vec<(VariableId, AssignmentInfo)>>,
     /// Per call that may write through a pointer to a tracked alloca, the
     /// variables of it, with the address and address expression of the
     /// record that names the alloca (`EscapingCallVars`).
-    pub escaping_calls: HashMap<InstId, Vec<(VariableId, Operand, MetadataId)>>,
+    pub escaping_calls: IdMap<InstId, Vec<(VariableId, Operand, MetadataId)>>,
     /// One more than the last variable the dataflow tracks
     /// (`TrackedVariablesVectorSize`).
     pub tracked_variables: usize,
@@ -846,7 +847,16 @@ fn escaping_call(
             let variable =
                 builder.insert_variable(DebugVariable { variable: record.variable, fragment: None, inlined_at: None });
             if seen.insert(variable) {
-                prepared.escaping_calls.entry(inst).or_default().push((variable, address, address_expression));
+                prepared
+                    .escaping_calls
+                    .get_or_insert_with(inst, Default::default)
+                    .push(
+                        (
+                            variable,
+                            address,
+                            address_expression,
+                        ),
+                    );
             }
         }
     }
@@ -871,9 +881,9 @@ pub fn build_overlap_map(
     callees: &llrm_mir::memory::Callees,
 ) -> Prepared {
     let function = q.function;
-    let mut before: HashMap<InstId, Vec<usize>> = HashMap::new();
+    let mut before: IdMap<InstId, Vec<usize>> = IdMap::new();
     for (at, record) in function.debug_records().iter().enumerate() {
-        before.entry(record.before).or_default().push(at);
+        before.get_or_insert_with(record.before, Default::default).push(at);
     }
     let mut prepared = Prepared::default();
     let mut seen: HashSet<DebugVariable> = HashSet::new();
@@ -919,7 +929,10 @@ pub fn build_overlap_map(
             // Only a store the ids do not tag is cached for later; a tagged
             // one is processed through its markers.
             if !function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "DIAssignID") {
-                prepared.untagged_stores.entry(inst).or_default().push((builder.insert_variable(variable), info));
+                prepared
+                    .untagged_stores
+                    .get_or_insert_with(inst, Default::default)
+                    .push((builder.insert_variable(variable), info));
             }
             note(variable);
         }
@@ -980,7 +993,7 @@ pub struct Lowering<'a> {
     prepared: Prepared,
     builder: FunctionVarLocsBuilder,
     /// The records standing before each instruction, in order.
-    records: HashMap<InstId, Vec<usize>>,
+    records: IdMap<InstId, Vec<usize>>,
     /// The locations to start, by point (`InsertBeforeMap`).
     insert_before: BTreeMap<InsertPt, Vec<VarLocInfo>>,
     /// The variables whose live kind was set in this frame.
@@ -999,9 +1012,9 @@ impl<'a> Lowering<'a> {
         prepared: Prepared,
         builder: FunctionVarLocsBuilder,
     ) -> Lowering<'a> {
-        let mut records: HashMap<InstId, Vec<usize>> = HashMap::new();
+        let mut records: IdMap<InstId, Vec<usize>> = IdMap::new();
         for (at, record) in q.function.debug_records().iter().enumerate() {
-            records.entry(record.before).or_default().push(at);
+            records.get_or_insert_with(record.before, Default::default).push(at);
         }
         Lowering {
             module,
@@ -1332,10 +1345,10 @@ impl<'a> Lowering<'a> {
         }
         let size = self.prepared.tracked_variables;
         let order = llrm_mir::blockorder::reverse_post_order_traversal(function);
-        let number: HashMap<llrm_mir::BlockId, usize> = order.iter().enumerate().map(|(at, &b)| (b, at)).collect();
-        let mut live_in: HashMap<llrm_mir::BlockId, BlockInfo> = HashMap::new();
-        let mut live_out: HashMap<llrm_mir::BlockId, BlockInfo> = HashMap::new();
-        let mut visited: HashSet<llrm_mir::BlockId> = HashSet::new();
+        let number: IdMap<llrm_mir::BlockId, usize> = order.iter().enumerate().map(|(at, &b)| (b, at)).collect();
+        let mut live_in: IdMap<llrm_mir::BlockId, BlockInfo> = IdMap::new();
+        let mut live_out: IdMap<llrm_mir::BlockId, BlockInfo> = IdMap::new();
+        let mut visited: IdSet<llrm_mir::BlockId> = IdSet::new();
         let mut worklist: BTreeSet<usize> = (0..order.len()).collect();
         let mut pending: BTreeSet<usize> = BTreeSet::new();
         while !worklist.is_empty() {
@@ -1368,10 +1381,10 @@ impl<'a> Lowering<'a> {
     fn join(
         &self,
         block: llrm_mir::BlockId,
-        visited: &HashSet<llrm_mir::BlockId>,
+        visited: &IdSet<llrm_mir::BlockId>,
         size: usize,
-        live_in: &mut HashMap<llrm_mir::BlockId, BlockInfo>,
-        live_out: &HashMap<llrm_mir::BlockId, BlockInfo>,
+        live_in: &mut IdMap<llrm_mir::BlockId, BlockInfo>,
+        live_out: &IdMap<llrm_mir::BlockId, BlockInfo>,
     ) -> bool {
         let preds: Vec<_> =
             self.q.function.predecessors(block).iter().copied().filter(|p| visited.contains(p)).collect();
@@ -1490,9 +1503,9 @@ pub fn analyze(
     let prepared = build_overlap_map(module, q, &mut builder, &markers, &with_slot, &callees);
     let (mut builder, changed) = Lowering::new(module, q, &markers, &with_slot, prepared, builder).run()?;
     if changed {
-        let mut count: HashMap<InstId, u32> = HashMap::new();
+        let mut count: IdMap<InstId, u32> = IdMap::new();
         for record in function.debug_records() {
-            *count.entry(record.before).or_default() += 1;
+            *count.get_or_insert_with(record.before, Default::default) += 1;
         }
         let slots = |inst: InstId| count.get(&inst).copied().unwrap_or(0);
         fill::run(module, function, &mut builder, &with_slot, &slots, coalesce);
@@ -2145,7 +2158,7 @@ define i32 @f(i32 %n) {\nentry:\n  %x = alloca i32, align 4\n  %s = alloca [2 x 
         let mut module = llrm_mir::parse::module(DECLARED).unwrap();
         assert!(tracked(&mut module).unwrap());
         let function = function_f(&module);
-        let order: HashMap<InstId, usize> = function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
+        let order: IdMap<InstId, usize> = function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
         let mut records = function.debug_records().to_vec();
         records.sort_by_key(|one| order[&one.before]);
         let seen: Vec<(u32, bool, Vec<DwOp>)> = records

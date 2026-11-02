@@ -5,9 +5,8 @@
 //! O(instructions + records): one scan collects the variables of each alloca,
 //! one the store-likes, and the records are rebuilt once.
 
-use std::collections::HashMap;
-
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::valuetracking::Query;
 use llrm_mir::{
     Attribute, ConstantKind, DebugRecord, DebugWhat, DwOp, GlobalId, InstId, MetadataId, MetadataNode, Module, Opcode,
@@ -46,7 +45,7 @@ fn function_tracked(
 ) -> bool {
     let function = module.global(at).function().expect("a function");
     // The variables of each static alloca, and the declares they replace.
-    let mut vars: HashMap<InstId, Vec<VarRecord>> = HashMap::new();
+    let mut vars: IdMap<InstId, Vec<VarRecord>> = IdMap::new();
     let mut declares: Vec<usize> = Vec::new();
     for (index, record) in function.debug_records().iter().enumerate() {
         let DebugWhat::Declare(Operand::Value(address)) = record.what else { continue };
@@ -59,7 +58,7 @@ fn function_tracked(
             continue;
         }
         let one = (record.variable, record.location);
-        let list = vars.entry(alloca).or_default();
+        let list = vars.get_or_insert_with(alloca, Default::default);
         if !list.contains(&one) {
             list.push(one);
         }
@@ -178,12 +177,11 @@ fn function_tracked(
     }
     // Each new record stands first before the instruction after its store,
     // the later ones ahead of the earlier (`insertDbgRecordAfter`).
-    let mut ahead: HashMap<InstId, Vec<DebugRecord>> = HashMap::new();
+    let mut ahead: IdMap<InstId, Vec<DebugRecord>> = IdMap::new();
     for (make, expression) in makes.iter().zip(fragments) {
         let (value, dest, next) = writes_info[make.write];
         ahead
-            .entry(next)
-            .or_default()
+            .get_or_insert_with(next, Default::default)
             .push(
                 DebugRecord {
                     before: next,
@@ -200,9 +198,9 @@ fn function_tracked(
             );
     }
     let mut records: Vec<DebugRecord> = Vec::new();
-    for mut list in ahead.into_values() {
+    for (_, list) in ahead.iter_mut() {
         list.reverse();
-        records.extend(list);
+        records.extend(std::mem::take(list));
     }
     let gone: std::collections::HashSet<usize> = declares.into_iter().collect();
     records.extend(

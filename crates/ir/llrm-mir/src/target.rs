@@ -39,6 +39,9 @@ pub struct Tuning {
     /// The highest optimization level the two entries above hold at; above it
     /// the pass's own. None: every level.
     pub unroll_override_max_level: Option<u32>,
+    /// DEVIATE U1 at -Os: a loop of at most this many trips is fully unrolled
+    /// up to this size (the pin's `OptSizeThreshold` is 0); none: the pin's.
+    pub unroll_size_few_trips: Option<(u32, u32)>,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -81,6 +84,7 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_override_max_level: None,
+        unroll_size_few_trips: None,
         unroll_partial_threshold: None,
         x87_stack_slots: None,
         unswitch_threshold: None,

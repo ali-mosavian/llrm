@@ -89,6 +89,12 @@ fn tuning() -> llrm_mir::target::Tuning {
         // (a 3-trip search copied out), -O2 does not. Owner
         // llrm-target-x86-m32.
         unroll_override_max_level: Some(2),
+        // DEVIATE (U1 at -Os, as m16): a loop of three trips is copied out
+        // where that is under 30 IR units, as gcc -Os does (x_life -25 B and
+        // -50% clocks, lru -10 B and -17%; no other corpus row moves). The
+        // bar is m16's, fitted there. Owner llrm-target-x86-m32, exit
+        // 2026-11-20.
+        unroll_size_few_trips: Some((3, 30)),
         x87_stack_slots: Some(8),
         ..llrm_mir::target::Tuning::PIN
     }

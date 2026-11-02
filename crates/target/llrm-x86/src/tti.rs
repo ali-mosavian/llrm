@@ -581,8 +581,10 @@ impl Tti for X86 {
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
-        let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
-        Some(real.unroll_size_few_trips)
+        match self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0) {
+            Some(real) => Some(real.unroll_size_few_trips),
+            None => self.tuning.unroll_size_few_trips,
+        }
     }
 
     /// SZ1: an inline that stays must not grow the code, where the target
