@@ -80,6 +80,7 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
     )
     .private(prices.private.clone())
     .calling(prices.calling);
+    dos.fixed = prices.fixed;
     // What the CPU's table states beside its clocks.
     dos.costs.jump_table = prices.operations.jump_table;
     dos.costs.cache_line = prices.operations.cache_line;
@@ -101,6 +102,14 @@ impl llrm_target::Target for M16 {
 
     fn register_capacity(&self) -> i64 {
         GENERAL.len() as i64
+    }
+
+    fn fixed_registers(&self) -> llrm_mir::target::FixedRegisters {
+        let pinned = |name: &str, dests: usize, sources: usize| {
+            rows(name, dests, sources).iter().map(llrm_lir::registers::Row::pinned).max().unwrap_or(0)
+        };
+        // The word-or-wider divide (the byte one pins `ax` alone) and the shift by `cl`.
+        llrm_mir::target::FixedRegisters { divide: pinned("idiv", 2, 3), shift: pinned("shl", 1, 2) }
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {

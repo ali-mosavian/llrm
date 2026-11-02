@@ -260,6 +260,16 @@ pub struct Row {
     pub flags_written: u32,
 }
 
+impl Row {
+    /// The registers it fixes: the distinct ones its pins name.
+    pub fn pinned(&self) -> i64 {
+        let mut names: Vec<&str> = self.pins.iter().map(|&(_, _, root)| root).collect();
+        names.sort_unstable();
+        names.dedup();
+        names.len() as i64
+    }
+}
+
 /// A target's rows of `name` with `dests` destinations and `sources` sources.
 pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 

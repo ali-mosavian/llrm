@@ -590,6 +590,7 @@ pub(crate) fn m32() -> Rc<dyn llrm_mir::target::Machine> {
         registers: 6,
         call_registers: 3,
         float_registers: 0,
+        fixed: Default::default(),
         address_forms: Vec::new(),
         operations: OperationCosts::default(),
         spaces: llrm_x86_m32::layout().spaces.roles,

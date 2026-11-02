@@ -6,6 +6,17 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// The registers an operation fixes, as the target's instruction table pins
+/// them (x86 `idiv`: `ax` and `dx`; a shift by `cl`): a value live across the
+/// operation cannot be held in them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FixedRegisters {
+    /// Signed or unsigned divide and remainder.
+    pub divide: i64,
+    /// A shift or rotate by an amount not known at compile time.
+    pub shift: i64,
+}
+
 /// The tuning limits of a target: one default (the pin's value, which every
 /// target without an entry takes) and the overrides a target description
 /// states. The names are the pin's `TargetLoweringBase` fields.
@@ -212,6 +223,13 @@ pub trait Machine {
     /// in, where only some can: none where any can.
     fn address_registers(&self) -> i64 {
         0
+    }
+
+    /// Of `registers`, how many the operations that pin their operands to
+    /// named ones (x86 `idiv`: `ax` and `dx`; a variable shift: `cx`) take
+    /// from a value live across them.
+    fn fixed_registers(&self) -> FixedRegisters {
+        FixedRegisters::default()
     }
 
     /// Of `registers`, how many survive a call to `callee`, named where the

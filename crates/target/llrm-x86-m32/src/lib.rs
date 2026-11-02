@@ -404,6 +404,14 @@ impl llrm_target::Target for M32 {
         llrm_target::registers::allocatable(&REGISTERS) as i64
     }
 
+    fn fixed_registers(&self) -> llrm_mir::target::FixedRegisters {
+        let pinned = |name: &str, dests: usize, sources: usize| {
+            rows(name, dests, sources).iter().map(llrm_lir::registers::Row::pinned).max().unwrap_or(0)
+        };
+        // The word-or-wider divide (the byte one pins `ax` alone) and the shift by `cl`.
+        llrm_mir::target::FixedRegisters { divide: pinned("idiv", 2, 3), shift: pinned("shl", 1, 2) }
+    }
+
     fn address_forms(
         &self,
         _: &OperationCosts,
@@ -556,6 +564,7 @@ mod tests {
             registers: 6,
             call_registers: 3,
             float_registers: 0,
+            fixed: Default::default(),
             address_forms: Vec::new(),
             operations: OperationCosts::default(),
             spaces: layout().spaces.roles,
@@ -582,6 +591,7 @@ mod tests {
             registers: 6,
             call_registers: 3,
             float_registers: 0,
+            fixed: Default::default(),
             address_forms: Vec::new(),
             operations: OperationCosts::default(),
             spaces: layout().spaces.roles,
@@ -608,6 +618,7 @@ mod tests {
             registers: 6,
             call_registers: 3,
             float_registers: 0,
+            fixed: Default::default(),
             address_forms: Vec::new(),
             operations: OperationCosts::default(),
             spaces: layout().spaces.roles,
@@ -640,6 +651,7 @@ mod tests {
             registers: 6,
             call_registers: 3,
             float_registers: 0,
+            fixed: Default::default(),
             address_forms: Vec::new(),
             operations: OperationCosts { load: 1, ..Default::default() },
             spaces: layout().spaces.roles,
@@ -683,6 +695,7 @@ mod tests {
             registers: M32.register_capacity(),
             call_registers: M32.callee_saved().len() as i64,
             float_registers: 0,
+            fixed: Default::default(),
             address_forms: forms.clone(),
             operations: OperationCosts::default(),
             spaces: layout().spaces.roles,

@@ -54,6 +54,8 @@ pub struct Dos {
     pub call_registers: i64,
     /// The floating values it holds in registers at once.
     pub float_registers: i64,
+    /// What the instruction table pins (`Target::fixed_registers`).
+    pub fixed: llrm_mir::target::FixedRegisters,
     pub address_forms: Vec<AddressForm>,
     /// Registers a far access takes for its selector.
     pub far_access: i64,
@@ -91,6 +93,7 @@ impl Default for Dos {
             registers: GENERAL.len() as i64,
             call_registers: PRESERVED.len() as i64,
             float_registers: 8,
+            fixed: Default::default(),
             address_forms,
             far_access: FAR_ACCESS,
             private: None,
@@ -144,6 +147,7 @@ impl Dos {
             registers,
             call_registers,
             float_registers,
+            fixed: Default::default(),
             address_forms,
             far_access: FAR_ACCESS,
             private: None,
@@ -354,6 +358,10 @@ impl Machine for Dos {
 
     fn float_registers(&self) -> i64 {
         self.float_registers
+    }
+
+    fn fixed_registers(&self) -> llrm_mir::target::FixedRegisters {
+        self.fixed
     }
 
     fn far_access_registers(&self) -> i64 {
