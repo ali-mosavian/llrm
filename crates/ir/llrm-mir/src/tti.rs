@@ -465,13 +465,6 @@ pub trait Tti {
         (None, None)
     }
 
-    /// How many values the x87 stack holds where this subtarget keeps floats
-    /// there (no SSE2 floating point); none: floats are in registers a
-    /// pressure rule need not count.
-    fn x87_stack_slots(&self) -> Option<u32> {
-        None
-    }
-
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
