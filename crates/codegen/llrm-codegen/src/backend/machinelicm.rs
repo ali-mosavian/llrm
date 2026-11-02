@@ -88,6 +88,34 @@ impl LIRTransform for MachineLicm {
     }
 }
 
+/// A move of the constant zero (`MOV32r0`, an `xor` where the flags are dead).
+fn zero(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::Move
+            && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.value == 0 && imm.address.is_none())
+    })
+}
+
+/// Whether a later instruction of the block reads the flags before any writes
+/// them.
+fn flags_live_after(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    later: &[Arc<Insn>],
+) -> bool {
+    let flags = |lanes: &crate::backend::lanes::Lanes| {
+        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+    };
+    for one in later {
+        match liveness::effect(regs, bits, one) {
+            Some(next) if flags(&next.all_reads()) => return true,
+            Some(next) if flags(&next.writes) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// The cell `one` loads into a value, where it is a plain load.
 fn loaded(one: &Insn) -> Option<&Mem> {
     let what = one.what.as_ref()?;
@@ -392,10 +420,14 @@ pub fn hoisted(
                             // always hoists): at -Os the constant is one
                             // instruction in the loop or one before it, so
                             // hoisting saves no bytes and its register can
-                            // cost a push or a spill. Exit 2026-11-20: when
-                            // the greedy allocator makes a hoisted constant
-                            // again at its uses, re-measure -Os and drop.
-                            && !size
+                            // cost a push or a spill. A zero where the flags
+                            // are live is the exception: there it is a
+                            // `mov r, 0` (5 bytes, an `xor` would clobber
+                            // them), in the preheader an `xor` (2). Exit
+                            // 2026-11-20: when the greedy allocator makes a
+                            // hoisted constant again at its uses, re-measure
+                            // -Os and drop.
+                            && !(size && !(zero(one) && flags_live_after(regs, body.bits, &insns[index + 1..])))
                     });
                     if constant && !movable {
                         hoisted_values.extend(value);
@@ -756,5 +788,67 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
         let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64), true);
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (1, 2));
+    }
+
+    /// m64 -Os compare_to_int64 (+3 B vs main), logical_value (+1): a zero made
+    /// between a flag writer and the branch that reads them can only be a 5
+    /// byte `mov r, 0`; hoisted it is an `xor` before the loop. Where the flags
+    /// are dead it stays in the loop at -Os (an `xor` of 2 bytes either way).
+    #[test]
+    fn test_at_size_a_zero_made_while_the_flags_are_live_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 4 });
+        let zero = |at: i64| {
+            let nothing = Loc::Imm(llrm_lir::Imm { value: 0, width: 4, address: None });
+            insn(at, Operation::Move, "mov", vec![wide(10)], vec![nothing], vec![10], vec![])
+        };
+        let flag_writer = insn(
+            9,
+            Operation::Binary,
+            "and",
+            vec![wide(9)],
+            vec![wide(1), wide(2)],
+            vec![9],
+            vec![1, 2],
+        );
+        let branch = Arc::new(Insn::new(
+            11,
+            Some((11, 11)),
+            Some(Semantics { name: Some("jne".into()), target: Some(1), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        ));
+        let run = |size: bool, mut insns: Vec<Arc<Insn>>| {
+            insns.push(branch.clone());
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    block(1, vec![1, 2], insns).into(),
+                    block(
+                        2,
+                        vec![],
+                        vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])],
+                    )
+                    .into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+            let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64), size);
+            (done.blocks[0].insns.len(), done.blocks[1].insns.len())
+        };
+        assert_eq!(
+            run(true, vec![flag_writer.clone(), zero(10)]),
+            (2, 2),
+            "flags live: the zero is made in the preheader"
+        );
+        // The flag writer after the zero ends its flags: they are dead at the zero.
+        assert_eq!(run(true, vec![zero(10), flag_writer.clone()]).0, 1, "flags dead at the zero: it stays at -Os");
     }
 }
