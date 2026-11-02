@@ -129,14 +129,26 @@ pub fn disable_frame_pointer_elim(
     attrs: &[Attribute],
     has_calls: bool,
 ) -> bool {
-    let policy = attrs
+    keeps_frame_pointer(frame_pointer_policy(attrs), has_calls)
+}
+
+/// The value of the function's `"frame-pointer"` attribute.
+pub fn frame_pointer_policy(attrs: &[Attribute]) -> Option<&str> {
+    attrs
         .iter()
         .find_map(
             |one| match one {
                 Attribute::Str(key, Some(value)) if key == "frame-pointer" => Some(value.as_str()),
                 _ => None,
             },
-        );
+        )
+}
+
+/// `disable_frame_pointer_elim` for a function whose attribute is already read.
+pub fn keeps_frame_pointer(
+    policy: Option<&str>,
+    has_calls: bool,
+) -> bool {
     match policy {
         Some("all") => true,
         Some("non-leaf" | "non-leaf-no-reserve") => has_calls,

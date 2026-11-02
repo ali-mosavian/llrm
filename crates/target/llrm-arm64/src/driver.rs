@@ -290,6 +290,8 @@ pub fn functions_with(
                 return Err(format!("@{name}: read before written: {undefined:?}"));
             }
         }
+        machine.frame_pointer =
+            llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
         if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {

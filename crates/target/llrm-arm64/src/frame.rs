@@ -78,7 +78,12 @@ fn layout(
     }
     // A moving stack pointer is addressed from, and put back by, the frame
     // pointer: a leaf with a dynamic alloca too.
-    let frame_record = (function.calls || function.dynamic).then(|| {
+    // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
+    // or a variable-sized object keeps the frame record; so does a call, which
+    // saves the link register beside it.
+    let keeps =
+        llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
+    let frame_record = (function.calls || function.dynamic || keeps).then(|| {
         let at = top;
         top += 16;
         at
