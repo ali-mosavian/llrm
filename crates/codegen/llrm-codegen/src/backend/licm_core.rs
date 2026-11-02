@@ -45,6 +45,24 @@ pub trait Inst: Clone {
     fn is_meta(&self) -> bool;
     /// An unconditional jump or a branch: where the preheader ends.
     fn is_jump(&self) -> bool;
+
+    /// Computes what `other` computes, from the same values (`isIdenticalTo`
+    /// with the result ignored): a hoisted copy of it is not made twice
+    /// (`EliminateCSE`). x86 states none.
+    fn identical(
+        &self,
+        _other: &Self,
+    ) -> bool {
+        false
+    }
+
+    /// Reads `to` where it read `from`.
+    fn rename_use(
+        &mut self,
+        _from: u32,
+        _to: u32,
+    ) {
+    }
 }
 
 /// A phi: the value it defines and the values it takes.
@@ -176,6 +194,7 @@ pub fn hoist<I: Inst, P: Policy<I>>(
         });
         loop {
             let mut any = false;
+            let mut renames: Vec<(u32, u32)> = Vec::new();
             for at in blocks.iter().map(|block| block.at).filter(|at| inside.contains(at)).collect::<Vec<_>>() {
                 let number = place[&at];
                 let insns = blocks[number].insns.clone();
@@ -194,13 +213,33 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                     };
                     if invariant && policy.movable(&facts, at, &insns, index) {
                         hoisted_values.extend(one.defines().iter().copied());
-                        moved.push(one.clone());
                         any = true;
+                        // `EliminateCSE`: the same computation hoisted before
+                        // stands for this one.
+                        match moved.iter().find(|before| before.identical(one)) {
+                            Some(before) if before.defines().len() == one.defines().len() => {
+                                renames.extend(one.defines().iter().copied().zip(before.defines().iter().copied()));
+                            }
+                            _ => moved.push(one.clone()),
+                        }
                     } else {
                         keep.push(one.clone());
                     }
                 }
                 blocks[number].insns = keep;
+            }
+            for (from, to) in renames {
+                for block in blocks.iter_mut() {
+                    for one in block.insns.iter_mut() {
+                        one.rename_use(from, to);
+                    }
+                    for phi in block.phis.iter_mut() {
+                        phi.incoming.iter_mut().filter(|value| **value == from).for_each(|value| *value = to);
+                    }
+                }
+                for one in moved.iter_mut() {
+                    one.rename_use(from, to);
+                }
             }
             if !any {
                 break;
