@@ -376,3 +376,13 @@ fn a_word_tested_for_zero_is_its_two_bytes_or_ed() {
     let out = text(ir, "count16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("or a, ") && !out.contains("sub a, #0"), "{out}");
 }
+
+/// A `freeze` is selected to a machine `COPY`, which the emitter had no arm
+/// for: "a machine node with no name: 20". 2 functions of the C corpus beyond
+/// the 23 rows hit it.
+#[test]
+fn a_freeze_is_a_copy() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @f(i16 %x, i8 %b) {\n  %c = icmp eq i8 %b, 0\n  %n = sub nsw i16 0, %x\n  %s = select i1 %c, i16 %x, i16 %n\n  %f = freeze i16 %s\n  %d = sdiv i16 %f, 3\n  %m = mul i16 %d, 3\n  %r = sub i16 %f, %m\n  ret i16 %r\n}\n";
+    text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+}

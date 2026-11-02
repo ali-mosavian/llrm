@@ -273,6 +273,14 @@ impl Emitter<'_> {
                 }
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::COPY`: what a `freeze` is selected to
+            // (`Select_FREEZE`)
+            ISD::Machine(20) => {
+                let src = self.used(n.ops[0], "COPY")?;
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
+                into.push(Inst::copy(dst, src));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| format!("a machine node with no name: {code}"))?;
                 match name {
