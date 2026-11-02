@@ -3206,6 +3206,26 @@ impl Emitter<'_, '_> {
                 self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Mem(cell)], ..what });
                 Ok(Some(()))
             }
+            // A jump through a register that holds a table entry's address
+            // (the position-independent table of 64-bit code): the table is
+            // the one the register's sum was made from.
+            "JMP64r" => {
+                let table = self
+                    .jump_table_behind(node.ops[0], 8)
+                    .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
+                let Loc::Held(target) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
+                };
+                let jump = self.jump_table(table)?;
+                let what = Semantics {
+                    indirect: true,
+                    table: jump.targets,
+                    table_id: Some(jump.id),
+                    ..Semantics::new(Operation::Jump)
+                };
+                self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Held(target)], ..what });
+                Ok(Some(()))
+            }
             "MOV32ImmSExti8" => {
                 let held = self.result_register(SDValue { node: n, res: 0 }, width);
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
@@ -3902,6 +3922,22 @@ impl Emitter<'_, '_> {
         };
         let addr = addr.map(|addr| if index.is_some() { Addr { base: through.iced(), ..addr } } else { addr });
         Ok(Mem { addr, through, index, scale, ..cell })
+    }
+
+    /// The jump table `value` is made from: the `TargetJumpTable` among the
+    /// operands `depth` levels down.
+    fn jump_table_behind(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<u32> {
+        if let NodeData::JumpTable(table) = self.dag.node(value).data {
+            return Some(table);
+        }
+        if depth == 0 {
+            return None;
+        }
+        self.dag.node(value).ops.iter().find_map(|&op| self.jump_table_behind(op, depth - 1))
     }
 
     fn jump_table(

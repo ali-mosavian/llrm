@@ -27,17 +27,16 @@ fn llc(flag: &str) -> (bool, String, String) {
 }
 
 /// `f` comes out of the DAG path as the pin's `add w0, w0, w1` / `ret`; `g`
-/// (an atomic add) is refused by `dag`, and by `shadow` counted and made
-/// by the hand selector.
+/// (an atomic add) was refused by `dag` and made by the hand selector under
+/// `shadow`, and is selected now (`LDADD`/`CAS`), so no function falls back.
 #[test]
-fn f_is_the_pins_add_and_ret_and_g_falls_back_in_shadow() {
+fn f_is_the_pins_add_and_ret_and_nothing_falls_back_in_shadow() {
     let (ok, _, why) = llc("--isel=dag");
-    assert!(!ok && why.contains("@g"), "dag refuses g: {why}");
+    assert!(ok, "dag takes g: {why}");
 
     let (ok, asm, why) = llc("--isel=shadow");
     assert!(ok, "{why}");
-    assert!(why.contains("isel-shadow: @g"), "the fallback is counted: {why}");
-    assert!(!why.contains("isel-shadow: @f"), "f needs no fallback: {why}");
+    assert!(!why.contains("isel-shadow"), "nothing needs a fallback: {why}");
     let f = &asm[asm.find("_f:").unwrap()..asm.find("_g:").unwrap()];
     let lines: Vec<&str> = f.lines().skip(1).map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('.')).collect();
     assert_eq!(lines, ["add w0, w0, w1, lsl #0", "ret x30"], "{f}");

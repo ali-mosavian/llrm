@@ -134,7 +134,7 @@ impl Rule<'_> {
         let fresh = |op: &str, name: String, dests: usize| -> Result<String, String> {
             let (dests, sources) = split(dests)?;
             Ok(format!(
-                "Semantics {{ op: Operation::{op}, name: Some({name}.into()), dests: vec![{dests}], sources: vec![{sources}], target: None, indirect: false, table: Vec::new(), repeat: false, pops: None }}"
+                "Semantics {{ op: Operation::{op}, name: Some({name}.into()), dests: vec![{dests}], sources: vec![{sources}], target: None, indirect: false, table: Vec::new(), table_id: None, repeat: false, pops: None }}"
             ))
         };
         match head {
