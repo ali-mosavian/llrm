@@ -9,6 +9,7 @@ fn main() {
         Some("pinned") => Options::PINNED,
         Some("raw") => Options { mid_end: false, ..Options::default() },
         Some("size") => Options { size: true, ..Options::default() },
+        Some("source") => Options { size: true, source_order: true, ..Options::default() },
         _ => Options::default(),
     };
     print!(

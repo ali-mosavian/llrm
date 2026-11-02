@@ -93,19 +93,22 @@ impl<T: Target> Converted<T> {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
+                    // an instruction is priced once however many operands name
+                    // the value
                     let extra = side
                         .uses
                         .iter()
-                        .flat_map(|(one, freq)| {
-                            operands_in(&infos, one)
+                        .map(|(one, freq)| {
+                            let worst = operands_in(&infos, one)
                                 .into_iter()
                                 .filter(|(value, _)| *value == side.value)
-                                .filter_map(
-                                    |(_, info)| {
-                                        let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
-                                        Some(*freq * will.saturating_sub(was) as f32)
-                                    },
-                                )
+                                .filter_map(|(_, info)| {
+                                    let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
+                                    Some(will.saturating_sub(was))
+                                })
+                                .max()
+                                .unwrap_or(0);
+                            *freq * worst as f32
                         })
                         .sum::<f32>();
                     (before, extra)
@@ -155,6 +158,7 @@ impl<T: Target> Converted<T> {
             tii: &self.tii,
             tri: &self.tri,
             lane_pins: true,
+            size: false,
         }
     }
 }
@@ -1374,7 +1378,7 @@ pub fn allocate_greedy<T: Target>(
         converted.coalesce(registers, size);
     }
     let order = |value: u32| converted.order(value);
-    let inputs = converted.inputs(registers, &order);
+    let inputs = ShadowInputs { size, ..converted.inputs(registers, &order) };
     let mut frame = SpikeFrame::of(function);
     let decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true)
         .ok_or_else(|| format!("{}: greedy refused", function.name))?;

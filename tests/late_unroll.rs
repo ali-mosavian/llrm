@@ -97,17 +97,28 @@ define i32 @bench_tile() {
     .replace("@LAYOUT@", &common::datalayout("x86-m32"))
 }
 
-#[test]
-fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o2() {
+fn movsx_count(level: &str) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.ll"), tile()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
         .current_dir(scratch.path())
-        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "-", "a.ll"])
+        .args(["-m32", "-mabi=sysv", "-march=i486", level, "--isel=dag", "-S", "-o", "-", "a.ll"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let asm = String::from_utf8_lossy(&output.stdout);
-    let loads = asm.matches("movsx").count();
-    assert!(loads >= 40, "the 40 loads are copied out ({loads} movsx): {asm}");
+    String::from_utf8_lossy(&output.stdout).matches("movsx").count()
+}
+
+#[test]
+fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o3() {
+    let loads = movsx_count("-O3");
+    assert!(loads >= 40, "the 40 loads are copied out ({loads} movsx)");
+}
+
+/// m32's table holds the full unroll to the code that does not grow below -O3
+/// (bench_tile 149 B against gcc's 161 and clang's 507 at -O2).
+#[test]
+fn test_the_same_loop_stays_rolled_at_o2() {
+    let loads = movsx_count("-O2");
+    assert!(loads < 40, "the loop is kept ({loads} movsx)");
 }

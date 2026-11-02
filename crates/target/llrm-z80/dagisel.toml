@@ -1,0 +1,45 @@
+# The Z80 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
+[target]
+name = "z80"
+ns = "Z80::"
+isd = "Z80ISD::"
+llvm_dir = ""
+td = "z80.td"
+llvm_build = "llvm-build-m68k"
+out = "src/dagisel/generated"
+cpus = ["z80", "z180"]
+own_ids = "own_ids.txt"
+# Named by the hand code: instructions no pattern selects, and every register (the pin numbers the pipeline maps to ours).
+extra_symbols = [
+  "Z80::COPY8", "Z80::COPY16", "Z80::sub_lo", "Z80::sub_hi", "MVT::i32",
+  "Z80::A", "Z80::B", "Z80::C", "Z80::D", "Z80::E", "Z80::H", "Z80::L", "Z80::BC", "Z80::DE", "Z80::HL", "Z80::IX", "Z80::IY", "Z80::SP", "Z80::F",
+]
+ids_includes = [
+  "#define GET_INSTRINFO_ENUM",
+  '#include "GenInstrInfo.inc"',
+  "#define GET_REGINFO_ENUM",
+  '#include "GenRegisterInfo.inc"',
+]
+
+[cpu.z80]
+features = []
+
+[cpu.z180]
+features = ["Z180"]
+
+[atom]
+"Subtarget->hasZ180()" = ["Z180"]
+
+[types]
+dead_prefixes = ["v", "nxv"]
+
+[node_predicate]
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+load = "non_extending_load"
+unindexedload = "unindexed_load"
+extloadi8 = "memory_vt_i8"
+sextload = "sext_load"
+zextload = "zext_load"
+extload = "ext_load"

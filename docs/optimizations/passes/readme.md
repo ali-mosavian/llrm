@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 229 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 231 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -170,11 +170,13 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
+| memloops | Turns the `llvm.memcpy` calls of chosen functions into byte loops, before instruction selection. | In a target's driver, on a copy of the module, for the functions it names. | [memloops](memloops.md) |
 | memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: `crate::lsr` calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | mldstmotion | Stores to one address on both arms of a diamond become one store below it, as LLVM's `MergedLoadStoreMotion` (`mldst-motion<no-split-footer-bb>`). | Named by `pipeline`. | [mldstmotion](mldstmotion.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
+| pageindex | Pointers that step through memory a byte at a time, as a base and a byte index, before instruction selection. | In a target's driver, after the mid-end, for a target whose | [pageindex](pageindex.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |
 | pipeline_text | The pass pipeline text of `opt -passes=`: `a,b(c,d),e<x;y>`. | Named by `main`. | [pipeline_text](pipeline_text.md) |
 | ports | Each I/O port call narrowed to the memory its device reaches, as the target describes the port. | Twice: once over every body before the per-body pipeline, so a caller's | [ports](ports.md) |
@@ -206,7 +208,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | sinkcommon | The code that ends every unconditional way into a block in the same way runs once in the block: SimplifyCFG's `sinkCommonCodeFromPredecessors`. | Named by `simplifycfg`, `switcharms`. | [sinkcommon](sinkcommon.md) |
 | slpcompares | Compares of adjacent bytes against constants become one wide compare: the part of LLVM's `SLPVectorizer` that matters here, where a vector of compares is `reduce.and`ed, `VectorCombine` and `InstCombine` then make it a compare of one integer. | At the pin's `slp-vectorizer` slot, after `simplifycfg` has made the | [slpcompares](slpcompares.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
-| speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. | Named by `branchtocommon`, `simplifycfg`. | [speculate](speculate.md) |
+| speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. | Named by `branchtocommon`, `simplifycfg`, `twoentryphi`. | [speculate](speculate.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
 | splitstore | CodeGenPrepare's `splitMergedValStore`: a store of two values merged into one wider integer is two stores ([CodeGenPrepare.cpp#L8608](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8608)). | In `cgpaddr`'s run, before the address-mode sinking (the stores it makes | [splitstore](splitstore.md) |

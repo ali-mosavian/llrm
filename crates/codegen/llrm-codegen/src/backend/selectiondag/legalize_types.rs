@@ -626,6 +626,58 @@ impl<'a> TypeLegalizer<'a> {
                     None => self.dag.get_node(op, to, &[input]),
                 }
             }
+            op @ (ISD::AtomicSwap
+            | ISD::AtomicLoadAdd
+            | ISD::AtomicLoadSub
+            | ISD::AtomicLoadAnd
+            | ISD::AtomicLoadClr
+            | ISD::AtomicLoadOr
+            | ISD::AtomicLoadXor) => {
+                // `PromoteIntRes_Atomic1`: the access keeps its memory type,
+                // the operand is the promoted value, the result
+                // is wider and the chain follows.
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let operand = self.promoted_integer(self.dag.operand(value, 2));
+                let new = if op == ISD::AtomicSwap {
+                    self.dag.get_atomic_swap(chain, ptr, operand, info)
+                } else {
+                    self.dag.get_atomic_rmw(op, chain, ptr, operand, info)
+                };
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
+                new
+            }
+            ISD::AtomicCmpSwapWithSuccess if value.res == 1 => {
+                // `PromoteIntRes_AtomicCmpSwap`: only the success flag is
+                // widened.
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let ops: Vec<SDValue> = (0..4).map(|at| self.dag.operand(value, at)).collect();
+                let new = self.dag.get_atomic_cmp_swap(Some(to), ops[0], ops[1], ops[2], ops[3], info);
+                self.replace_value_with(SDValue { node: value.node, res: 0 }, SDValue { node: new.node, res: 0 });
+                self.replace_value_with(SDValue { node: value.node, res: 2 }, SDValue { node: new.node, res: 2 });
+                SDValue { node: new.node, res: 1 }
+            }
+            ISD::AtomicLoad => {
+                // `PromoteIntRes_Atomic0`: a zero-extending atomic load.
+                let NodeData::Mem(info) = self.dag.node(value).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let new = self
+                    .dag
+                    .get_atomic_load(
+                        to,
+                        chain,
+                        ptr,
+                        super::dag::MemInfo { ext: Some(super::actions::LoadExt::ZExtLoad), ..info },
+                    );
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: new.node, res: 1 });
+                new
+            }
             ISD::Load => {
                 // The access keeps its memory type; the result is wider
                 // (an extending load), and the chain follows.
@@ -751,6 +803,14 @@ impl<'a> TypeLegalizer<'a> {
                     &[converted, ty],
                 )
             }
+            op @ (ISD::BitReverse | ISD::BSwap) => {
+                // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
+                // wider reversal, shifted down by the bits added.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let reversed = self.dag.get_node(op, to, &[promoted]);
+                let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
+                self.dag.get_node(ISD::Srl, to, &[reversed, added])
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -766,6 +826,16 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<bool, LegalizeError> {
         let node = SDValue { node: n, res: 0 };
         let result = match self.dag.opcode(node) {
+            ISD::AtomicStore if at == 1 => {
+                // `PromoteIntOp_ATOMIC_STORE`: the promoted value, the same
+                // memory type.
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("an atomic has a memory operand")
+                };
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
+                let operand = self.promoted_integer(self.dag.operand(node, 1));
+                self.dag.get_atomic_store(chain, ptr, operand, info)
+            }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
@@ -862,11 +932,23 @@ impl<'a> TypeLegalizer<'a> {
                     });
                 };
                 let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                // `SExtOrZExtPromotedOperands`: promoted operands whose
+                // significant bits fit the narrow type are
+                // compared as they are, with no zext_inreg.
+                let fits = |legalizer: &Self, value: SDValue| {
+                    let promoted = legalizer.promoted_integer(value);
+                    let wide = legalizer.dag.value_type(promoted).size_in_bits();
+                    let narrow = legalizer.dag.value_type(value).size_in_bits();
+                    wide + 1 - super::known_bits::num_sign_bits(legalizer.dag, promoted) <= narrow
+                };
+                let as_is = !code.is_signed_int() && fits(self, lhs) && fits(self, rhs);
                 let extend = |legalizer: &mut Self, value: SDValue| {
                     let bits = legalizer.dag.value_type(value).size_in_bits();
                     let promoted = legalizer.promoted_integer(value);
                     let wide = legalizer.dag.value_type(promoted);
-                    if code.is_signed_int() {
+                    if as_is {
+                        promoted
+                    } else if code.is_signed_int() {
                         let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
                         let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
                         legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
@@ -1005,6 +1087,9 @@ impl<'a> TypeLegalizer<'a> {
             return Ok(true);
         }
         self.replace_value_with(node, result);
+        // `ReplaceNodeWith` deletes the node it replaced, so what it read no
+        // longer counts it as a user.
+        self.dag.delete_replaced(n);
         Ok(false)
     }
 
@@ -1264,10 +1349,6 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Srl => ISD::SrlParts,
             _ => ISD::SraParts,
         };
-        let action = self.tli.operation_action(parts, half);
-        if !(action == crate::backend::selectiondag::Action::Custom || self.tli.is_operation_legal(parts, half)) {
-            return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
-        }
         let (lo, hi) = self.expanded_integer(input);
         let shift_vt = self.shift_amount_type(half);
         let amount = match self.dag.value_type(amount).size_in_bits().cmp(&shift_vt.size_in_bits()) {
@@ -1275,6 +1356,20 @@ impl<'a> TypeLegalizer<'a> {
             std::cmp::Ordering::Less => self.dag.get_node(ISD::ZeroExtend, shift_vt, &[amount]),
             std::cmp::Ordering::Equal => amount,
         };
+        let action = self.tli.operation_action(parts, half);
+        let parts_supported =
+            action == crate::backend::selectiondag::Action::Custom || self.tli.is_operation_legal(parts, half);
+        if !parts_supported {
+            // "Otherwise, emit a libcall." (`SHL_I32` and the others); the
+            // known-amount-bit forms need no call, so a target with
+            // the parts op takes them first, below.
+            if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
+                return Ok(pair);
+            }
+            return self
+                .expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount])
+                .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
+        }
         if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
             return Ok(pair);
         }
@@ -2011,6 +2106,24 @@ impl<'a> TypeLegalizer<'a> {
         (self.dag.get_select(half, lo_not_zero, lo_count, hi_plus), zero)
     }
 
+    /// `ExpandIntRes_SDIV`, `ExpandIntRes_Shift` and the others, last resort:
+    /// the routine the target names for `op` of this type
+    /// (`RTLIB::getSDIV`, `SHL_I32`), called through `makeLibCall`, its result
+    /// split. `None` where the target names none or makes no such call.
+    fn expand_by_libcall(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+        signed: bool,
+        args: [SDValue; 2],
+    ) -> Option<(SDValue, SDValue)> {
+        let vt = self.dag.value_type(value);
+        let name = self.tli.libcall_name(op, vt)?;
+        let result = self.hooks.as_mut()?.make_lib_call(self.dag, name, &args, vt, signed)?;
+        Some(self.split_integer(result, half))
+    }
+
     /// `ExpandIntRes_SDIV` and the others, as the library call the pin makes
     /// (`ExpandDivRemLibCall`): a call to the target's inline `i64` divide
     /// routine (`divide_routine`), operands and results in the registers it
@@ -2024,10 +2137,14 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<(SDValue, SDValue), LegalizeError> {
         use super::libcall::{CallEnv, Place, Returned, lib_call};
         let vt = self.dag.value_type(value);
+        let signed = matches!(op, ISD::SDiv | ISD::SRem);
+        let operands = [self.dag.operand(value, 0), self.dag.operand(value, 1)];
+        if let Some(halves) = self.expand_by_libcall(value, op, half, signed, operands) {
+            return Ok(halves);
+        }
         let Some(arch) = self.target else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand a division without a target" });
         };
-        let signed = matches!(op, ISD::SDiv | ISD::SRem);
         let wants_quotient = matches!(op, ISD::SDiv | ISD::UDiv);
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
@@ -2084,7 +2201,8 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_LOAD`, a plain load: the low dword at the address, the
-    /// high at +4 (little endian), both on the load's chain, the chains joined.
+    /// high at +4 (little endian; the other way round for big endian), both on
+    /// the load's chain, the chains joined.
     fn expand_load(
         &mut self,
         value: SDValue,
@@ -2115,11 +2233,11 @@ impl<'a> TypeLegalizer<'a> {
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);
         let high_ptr = self.address_plus(ptr, step);
-        let lo = self.dag.get_load(half, chain, ptr, info);
-        let hi = self.dag.get_load(half, chain, high_ptr, info);
+        let (lo, hi) = (self.dag.get_load(half, chain, ptr, info), self.dag.get_load(half, chain, high_ptr, info));
         let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
         self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
-        (lo, hi)
+        // big endian: the high dword is the one at the address
+        if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) }
     }
 
     /// Whether a far pointer may be addressed, so its selector must be in `ES`
@@ -2166,7 +2284,8 @@ impl<'a> TypeLegalizer<'a> {
         self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
     }
 
-    /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4.
+    /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4
+    /// (the other way round for big endian).
     fn expand_store(
         &mut self,
         store: SDValue,
@@ -2174,6 +2293,7 @@ impl<'a> TypeLegalizer<'a> {
         let (chain, value, ptr) = (self.dag.operand(store, 0), self.dag.operand(store, 1), self.dag.operand(store, 2));
         let NodeData::Mem(info) = self.dag.node(store).data else { unreachable!("a store has a memory operand") };
         let (lo, hi) = self.expanded_integer(value);
+        let (lo, hi) = if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) };
         let half = self.dag.value_type(lo);
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);

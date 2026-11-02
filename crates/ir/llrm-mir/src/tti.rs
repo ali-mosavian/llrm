@@ -422,6 +422,11 @@ pub trait Tti {
         false
     }
 
+    /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
+    fn has_cmov(&self) -> bool {
+        true
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -455,9 +460,19 @@ pub trait Tti {
     }
 
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
-    /// unroll (its tuning table); none: the pass's own.
-    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+    /// unroll (its tuning table) at `opt_level`; none: the pass's own.
+    fn unroll_threshold_overrides(
+        &self,
+        _opt_level: u32,
+    ) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// How many values the x87 stack holds where this subtarget keeps floats
+    /// there (no SSE2 floating point); none: floats are in registers a
+    /// pressure rule need not count.
+    fn x87_stack_slots(&self) -> Option<u32> {
+        None
     }
 
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
