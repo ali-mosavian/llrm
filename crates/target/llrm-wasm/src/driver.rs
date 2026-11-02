@@ -72,7 +72,12 @@ fn optimized(
     let options = MidEnd { library: Vec::new(), ..level.mid_end() };
     llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
-    Ok(program.modules.remove(0))
+    let module = program.modules.remove(0);
+    // `LLRM_WASM_IR=1`: the module the backend gets, on standard error.
+    if std::env::var_os("LLRM_WASM_IR").is_some() {
+        eprintln!("{}", llrm_mir::print::module(&module));
+    }
+    Ok(module)
 }
 
 pub fn module(
