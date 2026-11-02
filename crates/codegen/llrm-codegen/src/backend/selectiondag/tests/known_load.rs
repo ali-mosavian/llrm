@@ -94,3 +94,17 @@ fn arithmetic_nodes_bound_the_bits_of_narrow_operands() {
         assert!(got >= want, "{op:?}: {got} leading zeros, want {want}");
     }
 }
+
+/// A shift by an amount that may be zero or past the width keeps nothing of
+/// the operand's known bits: `(a & 0xFF) << b` and `(a & 0xFF) >> b` with `b`
+/// unknown must not claim the operand's zero high bits survive a left shift.
+#[test]
+fn a_shift_by_an_unknown_amount_left_keeps_no_known_zero_bits() {
+    let mut dag = dag();
+    let a = masked(&mut dag, 7, 0xFF);
+    let b = dag.get_register(EVT::I32, 8);
+    let shl = dag.get_node(ISD::Shl, EVT::I32, &[a, b]);
+    assert_eq!(known_bits(&dag, shl).zero, 0);
+    let sra = dag.get_node(ISD::Sra, EVT::I32, &[b, a]);
+    assert_eq!(known_bits(&dag, sra), super::super::known_bits::KnownBits::unknown(32));
+}

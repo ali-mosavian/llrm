@@ -47,15 +47,17 @@ impl KnownBits {
         KnownBits { zero: !value & all, one: value & all, width }
     }
 
-    /// `KnownBits::isConstant`.
+    /// The same bits as [`llrm_mir::knownbits::KnownBits`].
     fn to_mir(self) -> llrm_mir::knownbits::KnownBits {
         llrm_mir::knownbits::KnownBits::from_masks(self.width, self.zero, self.one)
     }
 
+    /// The same bits as this module's [`KnownBits`].
     fn from_mir(known: llrm_mir::knownbits::KnownBits) -> KnownBits {
         KnownBits { zero: known.zero, one: known.one, width: known.width }
     }
 
+    /// `KnownBits::isConstant`.
     pub fn is_constant(&self) -> bool {
         (self.zero | self.one) == mask(self.width)
     }
@@ -235,8 +237,10 @@ fn walk(
         ISD::Srl => binary(operand(0), operand(1), |a, b| Bits::lshr(a, b, false, false)),
         ISD::Sra => binary(operand(0), operand(1), |a, b| Bits::ashr(a, b, false, false)),
         ISD::Mul => {
-            let self_multiply = dag.operand(value, 0) == dag.operand(value, 1);
-            binary(operand(1), operand(0), |a, b| Bits::mul(a, b, false && self_multiply))
+            // The pin sets SelfMultiply only for a self-product that
+            // `isGuaranteedNotToBeUndefOrPoison`; there is no such query here,
+            // so it is never set.
+            binary(operand(1), operand(0), |a, b| Bits::mul(a, b, false))
         }
         ISD::MulHU => binary(operand(1), operand(0), Bits::mulhu),
         ISD::MulHS => binary(operand(1), operand(0), Bits::mulhs),
