@@ -16,7 +16,8 @@ import sizes  # noqa: E402
 DRIVER = Path(__file__).with_name("native_driver.c")
 POSIX = ROOT / "runtime" / "shared" / "posix"
 OURS = "c64"
-REPORTED = {"gcc64": "gcc", "clang64": "clang"}  # columns beside ours: their compilers, never gated
+NOPIC = "c64nopic"  # ours with -fno-pic: the column that compares to gcc and clang, which are -fno-pic; never gated, no base leg
+REPORTED = {NOPIC: "ours", "gcc64": "gcc", "clang64": "clang"}  # columns beside ours, never gated
 FAR = re.compile(r"\bfar\b")  # a DOS far pointer: the program has no x86_64 reading
 
 
@@ -51,11 +52,11 @@ def instructions_of(executable: Path, argument: str, cwd: Path, repeats: int = 7
 
 
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
-    """The command and environment that compile `source` to the object `out`: the same flags for every compiler, `-fno-pic` among them (llrm-cc -m64 without it writes rip-relative code: memcpy_runtime -Os 235 B against 209 B); `main` becomes `bench_main_`, which the driver runs."""
-    flags = [f"-{opt}", "-fno-pic", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
-    if compiler == OURS:
-        return [str(binary / "llrm-cc"), "-m64", *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
-    return [shutil.which(REPORTED[compiler]) or REPORTED[compiler], *flags], dict(os.environ)
+    """The command and environment that compile `source` to the object `out`: the same flags for every compiler; ours is flagless in the gated column (like for like with the base: main 65098fd950 ignores -fno-pic) and `-fno-pic` in its reported column, as gcc and clang are; `main` becomes `bench_main_`, which the driver runs."""
+    flags = [f"-{opt}", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
+    if compiler in (OURS, NOPIC):
+        return [str(binary / "llrm-cc"), "-m64", *(["-fno-pic"] if compiler == NOPIC else []), *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
+    return [shutil.which(REPORTED[compiler]) or REPORTED[compiler], "-fno-pic", *flags], dict(os.environ)
 
 
 def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt: str, work: Path, bench: Path) -> dict:

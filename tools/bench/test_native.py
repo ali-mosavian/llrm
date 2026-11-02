@@ -53,11 +53,15 @@ def test_a_program_that_prints_the_wrong_value_is_an_error_not_a_count(tmp_path)
     assert "prints" in row.get("error", "") and "instructions" not in row
 
 
-def test_every_column_compiles_without_pic_so_the_columns_compare_like_with_like(tmp_path):
-    """llrm-cc -m64 without -fno-pic wrote rip-relative `lea reg, sym` code (memcpy_runtime -Os 235 B, grep 700 B) against gcc and clang at -fno-pic (209 B, 606 B)."""
-    for column in (native.OURS, *native.REPORTED):
-        command, _ = native.compile_command(column, tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)
-        assert "-fno-pic" in command, column
+def test_the_gated_column_is_flagless_and_the_columns_beside_it_are_no_pic(tmp_path):
+    """llrm-cc -m64 without -fno-pic writes rip-relative code (memcpy_runtime -Os 235 B, 209 B with it) and main ignores the flag: the gate compares flagless head to flagless
+    base, and the column that compares to gcc and clang (both -fno-pic) is ours with the flag, reported only."""
+    def command(column):
+        return native.compile_command(column, tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)[0]
+
+    assert "-fno-pic" not in command(native.OURS)
+    assert all("-fno-pic" in command(column) for column in native.REPORTED)
+    assert command(native.NOPIC)[0] == command(native.OURS)[0]
 
 
 def test_one_binary_measured_twice_reads_the_same_count_to_the_rounding(tmp_path):
