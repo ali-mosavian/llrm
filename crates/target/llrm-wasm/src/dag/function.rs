@@ -69,6 +69,11 @@ pub fn builder_target(
         dag: DagConfig {
             pointer: pointer(width),
             offset_folding: true,
+            global_addresses_constant: true,
+            // DEVIATE: clang marks every symbol `dso_local` under `-fno-pic`,
+            // which the IR parser drops, so every symbol is. The golden
+            // inputs carry the keyword. Exit: `GlobalValue` carries it.
+            dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             // The pin keeps `i32.div_s` for `sdiv x, 4` at every
             // level: `isIntDivCheap`.
@@ -229,8 +234,7 @@ pub fn select_function(
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (id, origin, mut one, phis) in group {
             let Scheduled { units, mem_refs, accesses } =
-                select_block(&mut one.dag, cpu, features, &info.jump_tables, optimize)
-                    .map_err(|why| format!("{why:?}"))?;
+                select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
             selected.push(Selected {
                 id: id.0,

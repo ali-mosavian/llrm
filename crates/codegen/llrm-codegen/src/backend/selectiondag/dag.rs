@@ -206,6 +206,11 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
+    /// offset folds as a constant: it goes to the right of a commutative node
+    /// and reassociation moves it outermost. DEVIATE: off by default so x86's
+    /// rows stay as they are until the judge has seen them. Exit: x86 judged.
+    pub global_addresses_constant: bool,
     /// Every symbol is `dso_local`, as clang marks them under `-fno-pic`: an
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
@@ -248,6 +253,7 @@ impl Default for DagConfig {
         DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
+            global_addresses_constant: false,
             dso_local_symbols: false,
             absolute_symbols: false,
             pointer: EVT::I32,

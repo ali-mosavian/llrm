@@ -26,8 +26,10 @@ use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::{DagisAdapter, PinRegisters};
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue, SelectionDAG, TargetLowering};
 use llrm_dagisel::dag::{Dag, SDValue as PinValue};
@@ -124,6 +126,10 @@ impl CombineHooks for WasmCombines {
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
+
+    fn fold_and_of_extload(&self) -> bool {
+        true
+    }
 }
 
 /// `WebAssemblyDAGToDAGISel::Select` for `CALL` and `RET_CALL`.
@@ -196,11 +202,15 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     features: Features,
-    tables: &[Vec<u32>],
+    info: &mut FunctionLoweringInfo,
     optimize: bool,
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu, features);
+    let tables = &info.jump_tables;
     let mut lowering = WasmLowering { tables };
+    if optimize {
+        live_out::assert_live_out_copies(dag, info);
+    }
     combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, optimize);
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
@@ -210,6 +220,9 @@ pub fn select_block(
     combine(dag, CombineLevel::AfterLegalizeTypes, &tli, optimize);
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     combine(dag, CombineLevel::AfterLegalizeDag, &tli, optimize);
+    if optimize {
+        live_out::compute_live_out_vreg_info(dag, info);
+    }
 
     // `LLRM_DAGDUMP=all`: each block's DAG as selection sees it, as the x86
     // driver does.

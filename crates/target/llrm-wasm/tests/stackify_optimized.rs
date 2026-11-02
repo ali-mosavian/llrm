@@ -132,3 +132,60 @@ fn values_that_are_not_live_together_share_a_local_when_optimizing() {
     assert_eq!(locals(&o0, "k"), 2, "{o0}");
     assert_eq!(locals(&o2, "k"), 1, "{o2}");
 }
+
+const CROSS_BLOCK_ZEXT: &str =
+    "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+@t = global [256 x i8] zeroinitializer
+define void @f(ptr %p, ptr %q) {
+entry:
+  %v = load i8, ptr %p
+  %t = icmp eq i8 %v, 0
+  br i1 %t, label %b, label %a
+a:
+  %z = zext i8 %v to i32
+  %g = getelementptr i8, ptr @t, i32 %z
+  store i8 1, ptr %g
+  store i8 2, ptr %q
+  br label %b
+b:
+  ret void
+}
+";
+
+/// A byte loaded in one block and zero-extended in another got `and 255`
+/// masks in both: the block's load was known zero-extended
+/// (`ComputeLiveOutVRegInfo`) but the other block never heard. grep's
+/// scan loop ran 137,508 more instructions than the pin's.
+#[test]
+fn a_zero_extended_load_is_not_masked_in_the_next_block() {
+    let text = asm(CROSS_BLOCK_ZEXT, Level::O1);
+    assert!(!body(&text, "f").contains("i32.and"), "{text}");
+}
+
+const GLOBAL_PLUS_INDEXES: &str =
+    "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+@nxt = internal global [2560 x i8] zeroinitializer
+@classof = internal global [256 x i8] zeroinitializer
+define i32 @f(i32 %s, ptr %q) {
+  store i8 1, ptr @nxt
+  store i8 1, ptr @classof
+  %a = shl nuw nsw i32 %s, 5
+  %c8 = load i8, ptr %q
+  %c = zext i8 %c8 to i32
+  %g = getelementptr inbounds nuw i8, ptr @nxt, i32 %a
+  %h = getelementptr inbounds nuw i8, ptr %g, i32 %c
+  %v = load i8, ptr %h
+  %z = zext i8 %v to i32
+  ret i32 %z
+}
+";
+
+/// `@nxt + (s << 5) + c` was `i32.const nxt; ...; i32.add` before a load at
+/// offset 0: the global stayed innermost in the add chain, where the pin treats
+/// it as a constant and moves it out to the load's offset. grep's scan loop
+/// ran 65,520 more `const`/`add` pairs than clang's.
+#[test]
+fn a_global_in_an_index_sum_is_the_loads_offset() {
+    let text = asm(GLOBAL_PLUS_INDEXES, Level::O1);
+    assert!(body(&text, "f").contains("i32.load8_u\tnxt"), "{text}");
+}
