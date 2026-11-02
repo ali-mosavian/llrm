@@ -23,6 +23,7 @@ pub mod late_eh_prepare;
 pub mod liveness;
 pub mod lower_br_unless;
 pub mod machine;
+pub mod machine_sink;
 pub mod mem_intrinsic_results;
 pub mod mir;
 pub mod object;

@@ -217,3 +217,35 @@ fn a_branch_on_or_of_compares_is_two_branches() {
     assert_eq!(f.matches("br_if").count(), 2, "{text}");
     assert!(!f.contains("i32.and"), "{text}");
 }
+
+const SHARED_SUB: &str = "declare void @a()
+declare void @b()
+define void @f(ptr %p, i32 %y, i32 %z, i32 %w) {
+  %x = load i32, ptr %p
+  %d = sub i32 %x, %y
+  %c1 = icmp eq i32 %x, %y
+  %c2 = icmp eq i32 %z, %d
+  %o1 = select i1 %c1, i1 true, i1 %c2
+  %c3 = icmp eq i32 %w, %d
+  %o2 = select i1 %o1, i1 true, i1 %c3
+  br i1 %o2, label %t, label %e
+t:
+  call void @a()
+  ret void
+e:
+  call void @b()
+  ret void
+}
+";
+
+/// A value only the later compares of an `||` chain read was computed before
+/// the first compare's branch (queens: 329,279 instructions against the
+/// pin's 313,595): the pin's MachineSink moves it below that branch.
+#[test]
+fn a_value_the_later_compares_use_is_computed_after_the_first_branch() {
+    let text = asm(SHARED_SUB, Level::O2);
+    let f = body(&text, "f");
+    let branch = f.find("br_if").expect("a branch");
+    let sub = f.find("i32.sub").expect("the sub");
+    assert!(branch < sub, "{text}");
+}

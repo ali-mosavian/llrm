@@ -128,6 +128,9 @@ pub fn compile_function(
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
+    if options.level != crate::driver::Level::O0 {
+        crate::machine_sink::machine_sink(&mut f);
+    }
     if matches!(
         options.level,
         crate::driver::Level::O2 | crate::driver::Level::O3 | crate::driver::Level::Os | crate::driver::Level::Oz
