@@ -706,6 +706,9 @@ fn host_run(
             break status;
         }
         if std::time::Instant::now() > deadline {
+            // the program is gone when this returns, not when the kill was sent
+            let _ = child.kill();
+            let _ = child.wait();
             return None;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -941,9 +944,26 @@ fn a_reachable_routine_gets_the_macros_it_uses() {
 
 /// A host program that loops forever is killed at the limit and leaves no
 /// process behind. It was run with no limit, and the loops of differential
-/// seeds piled up at 97% CPU for an hour.
+/// seeds piled up at 97% CPU for an hour. `host_run` returned after sending
+/// the kill, not after the process had exited: at gate load (120) one copy was
+/// still there when the count ran. The test shares one CPU with twelve busy
+/// loops, so the killed program waits for its turn to die.
 #[test]
 fn a_host_program_that_never_exits_is_killed() {
+    use std::os::unix::process::CommandExt;
+    let thread = std::fs::read_link("/proc/thread-self").unwrap();
+    let tid = thread.file_name().unwrap().to_str().unwrap().to_owned();
+    let pinned = Command::new("taskset").args(["-p", "-c", "0", &tid]).output().is_ok_and(|out| out.status.success());
+    let mut busy = Vec::new();
+    for _ in 0..if pinned { 12 } else { 0 } {
+        busy.push(
+            Command::new("sh")
+                .args(["-c", "ulimit -t 20; while :; do :; done"])
+                .process_group(0)
+                .spawn()
+                .expect("spawns"),
+        );
+    }
     let dir = work(u64::MAX - 3);
     std::fs::write(dir.join("spin.c"), "int main(void) { for (;;) ; }\n").unwrap();
     tool(&dir, "gcc", &["-O0", "-o", "spin.bin", "spin.c"]).expect("builds");
@@ -956,6 +976,10 @@ fn a_host_program_that_never_exits_is_killed() {
         .flatten()
         .filter(|entry| std::fs::read_link(entry.path().join("exe")).is_ok_and(|exe| exe == bin))
         .count();
+    for mut one in busy {
+        let _ = one.kill();
+        let _ = one.wait();
+    }
     assert_eq!(alive, 0, "{alive} copies of {} still running", bin.display());
     let _ = std::fs::remove_dir_all(&dir);
 }
