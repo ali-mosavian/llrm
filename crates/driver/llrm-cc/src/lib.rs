@@ -111,6 +111,8 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -211,9 +213,6 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     for target in table.values_mut() {
         target.datalayout = expanded(&target.datalayout)?;
         target.c_abi = c_abi_of(target)?;
-        if has_fused_multiply_add(target)? {
-            target.clang.insert(0, "-ffp-contract=off".to_owned());
-        }
         target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);

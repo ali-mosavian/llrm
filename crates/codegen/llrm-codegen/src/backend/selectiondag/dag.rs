@@ -240,6 +240,8 @@ pub struct DagConfig {
     /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
     /// other end.
     pub big_endian: bool,
+    /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
+    pub fma_faster: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -263,6 +265,7 @@ impl Default for DagConfig {
             fp_extended: false,
             known_bits_for_target_node: None,
             big_endian: false,
+            fma_faster: false,
         }
     }
 }

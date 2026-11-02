@@ -176,6 +176,8 @@ const DEVIRT_REPEATS: usize = 4;
 /// loop is unrolled (`unroll@753`) with the calls in it already inlined.
 pub struct Walk {
     pub inline: crate::inline::Threshold,
+    /// -O2 and -O3: the target's byte price at speed counts.
+    pub speed_rate: bool,
     /// The Simplify list over one body, as the interprocedural step reruns it.
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
 }
@@ -461,7 +463,7 @@ impl ProgramPass for Walk {
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
                                 // clocks it saves are worth the growth.
-                                let rate = tti.speed_milliclocks_per_byte();
+                                let rate = if self.speed_rate { tti.speed_milliclocks_per_byte() } else { 0 };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
@@ -721,6 +723,8 @@ pub struct SelfInline {
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
     /// Sized for bytes: gcc does not inline recursively there.
     pub for_size: bool,
+    /// -O2 and -O3: the target's byte price at speed counts.
+    pub speed_rate: bool,
     /// `-finline-recursive`.
     pub flag: bool,
     /// Inlining is on (`Threshold.limit != 0`).
@@ -758,22 +762,24 @@ impl SelfInline {
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let tti = program.target.tti();
-                    let (depth, callee) =
-                        match (tti.as_deref().and_then(|tti| tti.priced_self_inlining()), tti.as_deref()) {
-                            (Some(ceilings), Some(tti)) => (
-                                priced_copy_depth(
-                                    module,
-                                    &program.layout,
-                                    &*program.target,
-                                    tti,
-                                    id,
-                                    &frequencies,
-                                    ceilings,
-                                ),
-                                ceilings.1,
+                    let (depth, callee) = match (
+                        tti.as_deref().filter(|_| self.speed_rate).and_then(|tti| tti.priced_self_inlining()),
+                        tti.as_deref(),
+                    ) {
+                        (Some(ceilings), Some(tti)) => (
+                            priced_copy_depth(
+                                module,
+                                &program.layout,
+                                &*program.target,
+                                tti,
+                                id,
+                                &frequencies,
+                                ceilings,
                             ),
-                            _ => (recursion.depth, recursion.callee),
-                        };
+                            ceilings.1,
+                        ),
+                        _ => (recursion.depth, recursion.callee),
+                    };
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function, metadata) = crate::interprocedural::function_and_metadata_mut(module, id);
                     let itself = crate::inline::Candidate {

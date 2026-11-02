@@ -323,3 +323,22 @@ fn a_copy_that_clobbers_the_flags_is_not_scheduled_between_the_compare_and_its_b
     let (between, order) = build(true);
     assert!(!between, "{order}");
 }
+
+/// A DAG in which two nodes are each other's operands is a cycle among the
+/// units. The z80 selected `select i1` of a loaded bit into a compare of its
+/// own result, and `calc_sethi_ullman` walked the cycle until the memory ran
+/// out (tests/run/c `huffman_decode`: no end after 5 minutes). It stops with a
+/// message naming the units.
+#[test]
+#[should_panic(expected = "dependence cycle")]
+fn a_cycle_among_the_units_stops_the_scheduler_with_a_message() {
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let a = load(&mut dag, 1, entry);
+    let p = machine(&mut dag, ADD, &[EVT::I32], &[a, a]);
+    let q = machine(&mut dag, MUL, &[EVT::I32], &[p, a]);
+    let r = machine(&mut dag, ADD, &[EVT::I32], &[q, a]);
+    dag.replace_all_uses_with(p, r);
+    let root = store(&mut dag, r, 4, chain_of(a));
+    schedule(&dag, root, &Info);
+}

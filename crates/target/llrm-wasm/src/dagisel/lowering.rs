@@ -199,11 +199,12 @@ impl Hooks for WasmLowering<'_> {
                 arg_vt: dag.value_type(value),
                 split: false,
                 variadic: false,
+                sret: false,
             })
             .collect();
         let callee = dag.get_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let results = [In { vt: ret, pointer: false, arg_vt: ret, split: false }];
+        let results = [In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }];
         let (_chain, values) =
             WasmCalling { pointer: EVT::I32, bulk_memory_opt: true }.lower_call(dag, root, callee, &outs, &results);
         values.first().copied()
