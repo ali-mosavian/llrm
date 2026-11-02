@@ -512,6 +512,25 @@ mod emitted {
         assert_eq!(llrm_arm64::mfunc::undefined_reads(&mf), vec![]);
     }
 
+    /// A `{ i64, i32 }` argument and result were refused ("an aggregate
+    /// argument with a target's calling hook"; 7 functions of `tests/run/c`
+    /// fell to the hand selector): each member takes its own register, `x0`
+    /// and `w1`, and is returned in `x0` and `w1`.
+    #[test]
+    fn an_aggregate_is_passed_and_returned_a_member_a_register() {
+        let mf = machine("define { i64, i32 } @f({ i64, i32 } %a) {\n  ret { i64, i32 } %a\n}");
+        let ops = &mf.blocks[0].ops;
+        let reads: Vec<u32> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Copy { src: Reg::Gpr(g), .. } if g.0 < 8 => Some(g.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reads, [0, 1], "{ops:?}");
+        assert!(matches!(ops.last(), Some(Op::Return { uses, .. }) if uses.len() == 2), "{ops:?}");
+    }
+
     /// `f(a, b) = a + b`: both arguments copied out of `w0`/`w1`, one `add`,
     /// the result copied into `w0`, a return reading `w0`. The hand selector
     /// makes the same ops (`isel/call.rs` `copy_in`, `ret`).

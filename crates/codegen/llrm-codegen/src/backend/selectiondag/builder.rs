@@ -1089,15 +1089,22 @@ impl Builder<'_> {
         let mut shapes = Vec::new();
         for &arg in &parameters {
             let ty = self.function.value(arg).ty;
-            if self.is_aggregate(ty) {
-                return Err(Refused("an aggregate argument with a target's calling hook"));
+            // An aggregate is passed leaf by leaf (`ComputeValueVTs`).
+            let leaf_types: Vec<TypeId> = if self.is_aggregate(ty) {
+                self.leaves(ty)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![ty]
+            };
+            let mut leaves = Vec::new();
+            for leaf in leaf_types {
+                let vt = self.type_of(leaf)?;
+                let pointer = self.is_pointer_type(leaf);
+                let parts = self.calling_parts(vt)?;
+                leaves.push((vt, parts.len(), pointer));
+                let split = parts.len() > 1;
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
             }
-            let vt = self.type_of(ty)?;
-            let pointer = self.is_pointer_type(ty);
-            let parts = self.calling_parts(vt)?;
-            shapes.push((vt, parts.len(), pointer));
-            let split = parts.len() > 1;
-            ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
+            shapes.push(leaves);
         }
         calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
@@ -1116,10 +1123,14 @@ impl Builder<'_> {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
         let mut next = 0;
-        for (at, (&arg, (vt, count, pointer))) in parameters.iter().zip(shapes).enumerate() {
+        for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
-            let value = self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs), pointer);
-            next += count;
+            let mut values = Vec::new();
+            for (vt, count, pointer) in leaves {
+                values.push(self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs), pointer));
+                next += count;
+            }
+            let value = self.merge(&values);
             self.node_map.insert(arg, value);
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
@@ -2271,10 +2282,12 @@ impl Builder<'_> {
         let mut outs = Vec::new();
         if let Some(&operand) = instruction.operands.first() {
             let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("a return of no type"))?;
-            if self.is_aggregate(ty) {
-                return Err(Refused("an aggregate result with a target's calling hook"));
-            }
-            let value = self.get_value(operand)?;
+            let values = self.value_parts(operand)?;
+            let leaf_types: Vec<TypeId> = if self.is_aggregate(ty) {
+                self.leaves(ty)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![ty]
+            };
             let attrs = &self.function.return_attrs;
             let ext = if llrm_mir::memory::has(attrs, "signext") {
                 Ext::Sign
@@ -2283,12 +2296,14 @@ impl Builder<'_> {
             } else {
                 Ext::Any
             };
-            let pointer = self.is_pointer_type(ty);
-            let arg_vt = self.dag.value_type(value);
-            let pieces = self.split_for_calling(value, ext)?;
-            let split = pieces.len() > 1;
-            for piece in pieces {
-                outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
+            for (value, leaf) in values.into_iter().zip(leaf_types) {
+                let pointer = self.is_pointer_type(leaf);
+                let arg_vt = self.dag.value_type(value);
+                let pieces = self.split_for_calling(value, ext)?;
+                let split = pieces.len() > 1;
+                for piece in pieces {
+                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
+                }
             }
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
