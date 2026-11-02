@@ -33,7 +33,7 @@ eb  = rc20
 mb  = rc21
 bm  = rc22              ; b aligned
 cd  = rc23              ; code under construction
-rsg = rc4               ; packer inputs: sign, exponent of the leading one (signed), significand with its one in bit 7
+rsg = rc16              ; packer inputs: sign (a's cell), exponent of the leading one (signed), significand with its one in bit 7
 pe  = rc6
 pm  = rc7
 t1  = rc24              ; |a| and |b| as codes
@@ -59,8 +59,6 @@ __fp8_add:
     sta rc2
     stx rc3
 :   jsr unpab
-    lda sa
-    sta rsg
     lda ea
     sta pe
     sec
