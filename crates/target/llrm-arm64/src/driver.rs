@@ -325,10 +325,13 @@ pub fn functions_with(
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
-        let blocks = crate::layout::fold(blocks);
+        let mut tables = crate::jumptable::tables_of(&machine);
+        let blocks = crate::layout::fold(blocks, &mut tables);
         let blocks = crate::pairs::fold(blocks);
-        let blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
+        let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
+        crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
         out.push(crate::emit::Function {
+            tables,
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),
             blocks,
@@ -428,6 +431,9 @@ pub fn assembly(
                 let directive = if chunk.len() == 4 { ".long" } else { ".quad" };
                 out.push_str(&format!("\t{directive} {:#x}\n", u64::from_le_bytes(word)));
             }
+        }
+        for table in &function.tables {
+            out.push_str(&table.assembly(platform));
         }
     }
     Ok(out)

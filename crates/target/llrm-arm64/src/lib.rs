@@ -13,6 +13,7 @@ pub mod expand_imm;
 pub mod flagcse;
 pub mod frame;
 pub mod isel;
+pub mod jumptable;
 pub mod layout;
 pub mod ldst_update;
 pub mod lir_view;

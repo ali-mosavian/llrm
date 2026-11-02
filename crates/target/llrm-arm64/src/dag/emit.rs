@@ -112,6 +112,8 @@ enum Operand {
     Fixed(i64),
     /// The flags a compare set: the instruction before this one wrote them.
     Flags,
+    /// A jump table, by the builder's number.
+    Table(u32),
 }
 
 /// `ADDWrr`, `SUBSXri` and the rest of the add/sub family: (subtract, set
@@ -684,6 +686,8 @@ struct Emitter<'a> {
     globals: &'a Globals,
     function: &'a str,
     layout: &'a [u32],
+    /// The blocks each jump table goes to, by table number.
+    tables: &'a [Vec<u32>],
     /// Blocks made for critical edges so far: their labels are numbered.
     edges_made: usize,
     mf: MFunc,
@@ -765,6 +769,7 @@ impl Emitter<'_> {
                 Ok(Operand::Imm(bits as u64))
             }
             NodeData::Block(id) => Ok(Operand::Block(id)),
+            NodeData::JumpTable(table) if node.opcode == ISD::TargetJumpTable => Ok(Operand::Table(table)),
             NodeData::Symbol(id) if node.opcode == ISD::TargetExternalSymbolNode => Ok(Operand::External(id)),
             NodeData::PoolIndex(index, 0) if node.opcode == ISD::TargetConstantPool => {
                 Ok(Operand::Pool(self.pool_entry(index)))
@@ -1422,6 +1427,19 @@ impl Emitter<'_> {
                     "ADJCALLSTACKUP" => return Ok(()),
                     "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
                     "LLRM_SAVE_Q" => return self.save_q(id),
+                    // The jump through a table is one terminator, made at its
+                    // `JumpTableDest32`: the debug info and the `BR` are no
+                    // code.
+                    "JUMP_TABLE_DEBUG_INFO" => return Ok(()),
+                    "BR" if node.ops.iter().any(|&op| {
+                        matches!(
+                            self.dag.opcode(op),
+                            ISD::Machine(code) if opcode_name(code) == Some("JumpTableDest32")
+                        )
+                    }) =>
+                    {
+                        return Ok(());
+                    }
                     "BL" | "BLR" => return self.call(id, name),
                     "TCRETURNdi" | "TCRETURNri" | "TCRETURNriBTI" => return self.tail_call(id, name),
                     _ => {}
@@ -1454,6 +1472,23 @@ impl Emitter<'_> {
                         _ => return Err(format!("{name}: operands are not those of its form")),
                     };
                     self.ops.push(Op::I(compare));
+                    return Ok(());
+                }
+                // The entry's address is read and jumped to.
+                if name == "JumpTableDest32" {
+                    let [Operand::Reg(table), Operand::Reg(index), Operand::Table(number)] = operands.as_slice() else {
+                        return Err("JumpTableDest32: operands are not those of its form".into());
+                    };
+                    let blocks = self.tables.get(*number as usize).ok_or("a jump table the builder did not make")?;
+                    let targets = blocks
+                        .iter()
+                        .map(|&block| match self.label(block)? {
+                            Target::Label(label) => Ok(label),
+                            _ => Err("a block without a label".to_owned()),
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    let (dst, scratch) = (self.mf.gpr(), self.mf.gpr());
+                    self.ops.push(Op::JumpTable { dst, scratch, table: *table, index: *index, id: *number, targets });
                     return Ok(());
                 }
                 if name == "COPY_TO_REGCLASS" || name == "COPY" {
@@ -1606,6 +1641,14 @@ impl Emitter<'_> {
                         let (target, _) = self.symbol_target(symbol)?;
                         self.ops.push(Op::I(Inst::Adr { page: true, rd, target, got: false }));
                     }
+                    // `ADRP` and `ADDXri` of a jump table's data object.
+                    ("MOVaddrJT", [Operand::Table(number), ..]) => {
+                        let target =
+                            Target::Symbol { name: crate::jumptable::symbol(self.function, *number), addend: 0 };
+                        let page = self.mf.gpr();
+                        self.ops.push(Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }));
+                        self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: page, target }));
+                    }
                     // `ADDXri page, :lo12:symbol, 0`
                     ("ADDXri", [Operand::Reg(rn), symbol @ (Operand::Symbol(..) | Operand::Pool(_)), _]) => {
                         let (target, _) = self.symbol_target(symbol)?;
@@ -1668,6 +1711,7 @@ pub fn emit(
         globals: &first.globals,
         function: name,
         layout: &first.layout,
+        tables: &first.tables,
         edges_made: 0,
         mf: MFunc::new(name),
         values: HashMap::new(),
