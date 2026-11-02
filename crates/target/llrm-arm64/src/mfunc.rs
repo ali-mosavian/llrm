@@ -359,6 +359,17 @@ pub struct MFunc {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The constants the function loads from memory (`MachineConstantPool`),
+    /// each under the label its address is taken from.
+    pub pool: Vec<PoolEntry>,
+}
+
+/// A constant pool entry: `bytes` at `align`, under `label`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PoolEntry {
+    pub label: String,
+    pub bytes: Vec<u8>,
+    pub align: usize,
 }
 
 impl MFunc {
@@ -584,4 +595,21 @@ mod verify_tests {
         function.blocks[0].ops.insert(0, Op::Copy { dst: Reg::Gpr(b), src: Reg::Gpr(Gpr(1)) });
         assert_eq!(undefined_reads(&function), vec![]);
     }
+}
+
+/// The registers `function` leaves live: those it returns and passes to a tail
+/// call.
+pub fn returned_registers(function: &MFunc) -> Vec<Reg> {
+    let mut out = Vec::new();
+    for block in &function.blocks {
+        for op in block.ops.iter() {
+            if let Op::Return { uses, tail } = op {
+                out.extend(uses.iter().copied());
+                if let Some(Callee::Register(register)) = tail {
+                    out.push(Reg::Gpr(*register));
+                }
+            }
+        }
+    }
+    out
 }

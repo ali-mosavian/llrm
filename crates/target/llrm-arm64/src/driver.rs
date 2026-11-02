@@ -210,10 +210,10 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
 /// Which instruction selector makes the machine function (`--isel=`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum IselMode {
-    #[default]
     Hand,
     Dag,
     /// The DAG path, the hand selector where it refuses (counted on stderr).
+    #[default]
     Shadow,
 }
 
@@ -229,7 +229,7 @@ impl IselMode {
     }
 }
 
-static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Hand);
+static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Shadow);
 
 /// Chooses the selector for the compiles that follow (the process's, as the
 /// pass flags are).
@@ -292,6 +292,19 @@ pub fn functions_with(
         }
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
+        if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
+            let size = function
+                .attrs
+                .iter()
+                .any(
+                    |attr| matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                    ),
+                );
+            crate::combine::run(&mut machine, size);
+            dump("Combine", &machine);
+        }
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
         crate::storecluster::run(&mut machine);
@@ -300,8 +313,9 @@ pub fn functions_with(
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
-        // A function greedy refuses goes to the linear scan, reported.
-        let greedy = llrm_support::env_flag!("LLRM_ARM64_GREEDY").then(|| crate::lir_view::allocate(&mut machine));
+        // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
+        // linear scan; a function greedy refuses goes to the scan, reported.
+        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
@@ -315,7 +329,8 @@ pub fn functions_with(
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
         let blocks = crate::layout::fold(blocks, &mut tables);
-        let mut blocks = crate::pairs::fold(blocks);
+        let blocks = crate::pairs::fold(blocks);
+        let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
         crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
         out.push(crate::emit::Function {
             tables,
@@ -323,6 +338,7 @@ pub fn functions_with(
             binding: crate::data::binding_of(global.linkage),
             blocks,
             variables,
+            pool: machine.pool.clone(),
         });
     }
     Ok(out)
@@ -407,6 +423,15 @@ pub fn assembly(
             // A frame mark is for the line table, not the assembler.
             for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
+            }
+        }
+        for entry in &function.pool {
+            out.push_str(&format!("{}:\n", entry.label));
+            for chunk in entry.bytes.chunks(8) {
+                let mut word = [0u8; 8];
+                word[..chunk.len()].copy_from_slice(chunk);
+                let directive = if chunk.len() == 4 { ".long" } else { ".quad" };
+                out.push_str(&format!("\t{directive} {:#x}\n", u64::from_le_bytes(word)));
             }
         }
         for table in &function.tables {

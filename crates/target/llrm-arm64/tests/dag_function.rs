@@ -399,18 +399,19 @@ define i32 @f(ptr %s, i32 %x, float %y, i8 %z) {\n  %r = call i32 (ptr, ...) @pr
     );
 }
 
-/// An `sret` parameter is in `x8`, not `x0`; a `byval` one is in memory. The
-/// hook placed both as plain pointers, so `scale(sret %0, ptr %1, i64)` read
-/// its source from `x0` while the caller passed the result slot in `x8`. They
-/// are refused.
+/// An `sret` parameter is in `x8`, not `x0`, and a `byval` one is in memory.
+/// The hook once placed both as plain pointers, so `scale(sret %0, ptr %1,
+/// i64)` read its source from `x0` while the caller passed the result slot in
+/// `x8`. The `sret` pointer now takes `x8` and no argument register (the
+/// emitted-ops test in `dag_emit_rows`); `byval` is refused.
 #[test]
-fn sret_and_byval_arguments_are_refused_not_placed_as_pointers() {
-    let sret = "%t = type { i64, i64, i64 }\n\
-define void @f(ptr sret(%t) %r, ptr %s) {\n  store i64 1, ptr %r\n  ret void\n}";
-    assert!(selected(sret).expect_err("refused").contains("moves it"));
-    let call = "%t = type { i64, i64, i64 }\ndeclare void @g(ptr sret(%t), ptr)\n\
-define void @f(ptr %r, ptr %s) {\n  call void @g(ptr sret(%t) %r, ptr %s)\n  ret void\n}";
-    assert!(selected(call).expect_err("refused").contains("moves it"));
+fn byval_arguments_are_refused_not_placed_as_pointers() {
+    let byval = "%t = type { i64, i64, i64 }\n\
+define void @f(ptr byval(%t) %r, ptr %s) {\n  store i64 1, ptr %s\n  ret void\n}";
+    assert!(selected(byval).expect_err("refused").contains("moves it"));
+    let call = "%t = type { i64, i64, i64 }\ndeclare void @g(ptr byval(%t), ptr)\n\
+define void @f(ptr %r, ptr %s) {\n  call void @g(ptr byval(%t) %r, ptr %s)\n  ret void\n}";
+    assert!(selected(call).expect_err("refused").contains("byval"));
 }
 
 /// Scalar floats: arithmetic, compares, conversions, loads and stores select
@@ -455,10 +456,9 @@ fn scalar_floats_select_the_pins_opcodes() {
 }
 
 /// Float constants: an `fmov` immediate, zero, or two `mov`s and an `fmov`
-/// are selected as the pin does; a constant that needs a pool is refused,
-/// not mis-materialised.
+/// are selected as the pin does; a constant that needs a pool is a pool load.
 #[test]
-fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
+fn float_constants_are_fmov_immediates_or_mov_pairs_or_a_pool_load() {
     let add = |ty: &str, constant: &str| {
         selected(&format!("define {ty} @f({ty} %a) {{\n  %r = fadd {ty} %a, {constant}\n  ret {ty} %r\n}}"))
     };
@@ -468,17 +468,18 @@ fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
         add("float", "0x3FB99999A0000000").unwrap(),
         [["MOVi32imm", "COPY_TO_REGCLASS", "FADDSrr", "RET_ReallyLR"]]
     );
-    let why = add("double", "3.14159").expect_err("a pool constant is refused");
-    assert!(why.contains("ConstantPool"), "{why}");
+    let pooled = add("double", "3.14159").unwrap();
+    assert!(pooled[0].contains(&"ADRP") && pooled[0].contains(&"LDRDui"), "{pooled:?}");
 }
 
 /// `memcpy` once reached the x86 `rep movs` expansion and panicked with `no
 /// arm64 register rcx`, which killed the whole compile in shadow mode. A target
-/// with no string instructions gets the library call.
+/// with no string instructions gets the library call past the pin's store limit
+/// (100 bytes are `q` accesses).
 #[test]
 fn memcpy_is_a_library_call_not_an_x86_expansion() {
     let ir = "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
-define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 100, i1 false)\n  ret void\n}";
+define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 1000, i1 false)\n  ret void\n}";
     let selected = selected(ir).expect("selected");
     assert!(selected[0].contains(&"BL"), "{selected:?}");
 }
@@ -496,6 +497,39 @@ mod emitted {
         let text = format!("target datalayout = \"{DATALAYOUT}\"\n{body}");
         let module = llrm_mir::parse::module(&text).expect("parses");
         emit("f", &select_function(&module, "f").expect("selects"), false).expect("emits")
+    }
+
+    /// Both members of an aggregate phi were copied into one register, so the
+    /// `i1` read a register nothing wrote (a retry loop on a `{ i64, i1 }`
+    /// panicked the greedy allocator, and miscompiled under the linear scan).
+    #[test]
+    fn the_members_of_an_aggregate_phi_have_registers_of_their_own() {
+        let mut ir = String::from("declare { i64, i1 } @step(i64)\n");
+        ir += "define i64 @f(i64 %start) {\nentry:\n  %first = call { i64, i1 } @step(i64 %start)\n  br label %loop\n";
+        ir += "loop:\n  %acc = phi { i64, i1 } [ %first, %entry ], [ %next, %loop ]\n";
+        ir += "  %v = extractvalue { i64, i1 } %acc, 0\n  %ok = extractvalue { i64, i1 } %acc, 1\n";
+        ir += "  %next = call { i64, i1 } @step(i64 %v)\n  br i1 %ok, label %done, label %loop\ndone:\n  ret i64 %v\n}";
+        let mf = machine(&ir);
+        assert_eq!(llrm_arm64::mfunc::undefined_reads(&mf), vec![]);
+    }
+
+    /// A `{ i64, i32 }` argument and result were refused ("an aggregate
+    /// argument with a target's calling hook"; 7 functions of `tests/run/c`
+    /// fell to the hand selector): each member takes its own register, `x0`
+    /// and `w1`, and is returned in `x0` and `w1`.
+    #[test]
+    fn an_aggregate_is_passed_and_returned_a_member_a_register() {
+        let mf = machine("define { i64, i32 } @f({ i64, i32 } %a) {\n  ret { i64, i32 } %a\n}");
+        let ops = &mf.blocks[0].ops;
+        let reads: Vec<u32> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Copy { src: Reg::Gpr(g), .. } if g.0 < 8 => Some(g.0),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reads, [0, 1], "{ops:?}");
+        assert!(matches!(ops.last(), Some(Op::Return { uses, .. }) if uses.len() == 2), "{ops:?}");
     }
 
     /// `f(a, b) = a + b`: both arguments copied out of `w0`/`w1`, one `add`,

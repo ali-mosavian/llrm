@@ -13,7 +13,8 @@
 //! `SBFM`/`UBFM`, `MADD`, divide and one-source forms, `MOVi32imm`/`MOVi64imm`,
 //! a frame address, the integer `LDR`/`STR` (`ui`, `UR`, `roX`, `roW`)
 //! forms and the sub-register pseudos only (no `BFM`, no insert into a defined
-//! register), with no memory operand kept (`MemOperand::default`); a machine
+//! register), with a memory operand of the volatile flag and the global or
+//! frame object only (no offset); a machine
 //! opcode with no row is a named error (`machine opcode X has no arm64
 //! instruction yet`), which `--isel=shadow` falls back on. Rows added
 //! to [`build`] each carry an encoder byte check. Exit: C2..Cn.
@@ -33,10 +34,11 @@ use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
 use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
-    Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
+    Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
+use crate::mc::inst::{Atomic, Barrier, Fill};
 use crate::mc::visit::Reg;
-use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, block_label};
+use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
 
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
@@ -48,6 +50,13 @@ fn opcode_name(code: u32) -> Option<&'static str> {
         .find(|(v, _)| u32::from(*v) == code)
         .map(|(_, name)| *name)
         .or((code == COPY).then_some("COPY"))
+        .or(match code {
+            super::call::MEMCPY_Q => Some("LLRM_MEMCPY_Q"),
+            super::call::MEMMOVE_Q => Some("LLRM_MEMMOVE_Q"),
+            super::call::MEMSET_Q => Some("LLRM_MEMSET_Q"),
+            super::call::SAVE_Q => Some("LLRM_SAVE_Q"),
+            _ => None,
+        })
 }
 
 /// The machine register number of an arm64 register id: `x5` and `w5` are 5.
@@ -94,6 +103,8 @@ enum Operand {
     Fpr(Vreg),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
+    /// A constant pool entry, by its place in the function's pool.
+    Pool(usize),
     /// A routine the legalizer named (a libcall), by index into the DAG's
     /// symbol names.
     External(u32),
@@ -194,6 +205,51 @@ enum AddressForm {
 
 /// `LDRWui`, `STURXi`, `LDRSBWroX` and the rest of the integer load/store
 /// family.
+/// The pin's load-acquire, store-release, LSE read-modify-write and `cas`
+/// machine opcodes (`LDARW`, `STLRX`, `LDADDALW`, `CASALX`, ...): what they
+/// do, log2 of the access size, and the ordering bits.
+fn atomic_form(name: &str) -> Option<(Atomic, u8, bool, bool)> {
+    let size = match name.chars().last()? {
+        'B' => 0,
+        'H' => 1,
+        'W' => 2,
+        'X' => 3,
+        _ => return None,
+    };
+    let stem = &name[..name.len() - 1];
+    for (prefix, op) in [("LDAPR", Atomic::Ldapr), ("LDAR", Atomic::Ldar)] {
+        if stem == prefix {
+            return Some((op, size, true, false));
+        }
+    }
+    if stem == "STLR" {
+        return Some((Atomic::Stlr, size, false, true));
+    }
+    let table = [
+        ("SWP", Atomic::Swp),
+        ("LDADD", Atomic::Ldadd),
+        ("LDCLR", Atomic::Ldclr),
+        ("LDEOR", Atomic::Ldeor),
+        ("LDSET", Atomic::Ldset),
+        ("LDSMAX", Atomic::Ldsmax),
+        ("LDSMIN", Atomic::Ldsmin),
+        ("LDUMAX", Atomic::Ldumax),
+        ("LDUMIN", Atomic::Ldumin),
+        ("CAS", Atomic::Cas),
+    ];
+    for (prefix, op) in table {
+        let Some(order) = stem.strip_prefix(prefix) else { continue };
+        return match order {
+            "" => Some((op, size, false, false)),
+            "A" => Some((op, size, true, false)),
+            "L" => Some((op, size, false, true)),
+            "AL" => Some((op, size, true, true)),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn memory_form(name: &str) -> Option<MemoryForm> {
     let (store, rest) = if let Some(rest) = name.strip_prefix("LDUR") {
         (false, ("UR", rest))
@@ -645,6 +701,8 @@ struct Emitter<'a> {
     fvregs: HashMap<u32, Vreg>,
     fvalues: HashMap<(u32, u8), Vreg>,
     ops: Vec<Op>,
+    /// The constant pool entries the function has used so far.
+    pool: std::cell::RefCell<Vec<PoolEntry>>,
 }
 
 impl Emitter<'_> {
@@ -715,6 +773,9 @@ impl Emitter<'_> {
             NodeData::Block(id) => Ok(Operand::Block(id)),
             NodeData::JumpTable(table) if node.opcode == ISD::TargetJumpTable => Ok(Operand::Table(table)),
             NodeData::Symbol(id) if node.opcode == ISD::TargetExternalSymbolNode => Ok(Operand::External(id)),
+            NodeData::PoolIndex(index, 0) if node.opcode == ISD::TargetConstantPool => {
+                Ok(Operand::Pool(self.pool_entry(index)))
+            }
             // The zero register as an operand of `CSINC` and the like.
             NodeData::PhysReg(id) if gpr_of(id).is_ok_and(|g| g == Gpr::R31) => Ok(Operand::Reg(Gpr::R31)),
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
@@ -799,6 +860,9 @@ impl Emitter<'_> {
                 Target::Symbol { name, .. } => Callee::Symbol(name),
                 _ => return Err("a callee that is no symbol".into()),
             },
+            ("TCRETURNdi", Operand::External(symbol)) => {
+                Callee::Symbol(self.globals.external(&self.dag.symbol_names[symbol as usize]))
+            }
             (_, Operand::Reg(register)) => {
                 let target = Gpr(9);
                 self.ops.push(Op::Copy { dst: Reg::Gpr(target), src: Reg::Gpr(register) });
@@ -983,6 +1047,39 @@ impl Emitter<'_> {
         }))
     }
 
+    /// The place in the function's pool of entry `index` of this block's DAG,
+    /// made on first use: equal constants of the function share one entry.
+    fn pool_entry(
+        &self,
+        index: u32,
+    ) -> usize {
+        let (bits, vt) = self.dag.constant_pool[index as usize];
+        let bytes = vt.size_in_bits().div_ceil(8) as usize;
+        let image = bits.to_le_bytes()[..bytes].to_vec();
+        let mut pool = self.pool.borrow_mut();
+        let at = match pool.iter().position(|entry| entry.bytes == image) {
+            Some(at) => at,
+            None => {
+                let label = format!("{}CPI_{}_{}", self.globals.local_prefix(), self.function, pool.len());
+                pool.push(PoolEntry { label, bytes: image, align: bytes });
+                pool.len() - 1
+            }
+        };
+        at
+    }
+
+    /// The relocation target of a symbol or pool operand.
+    fn symbol_target(
+        &self,
+        operand: &Operand,
+    ) -> Result<(Target, bool), String> {
+        match operand {
+            Operand::Symbol(id, addend) => self.target(*id, *addend),
+            Operand::Pool(at) => Ok((Target::Symbol { name: self.pool.borrow()[*at].label.clone(), addend: 0 }, false)),
+            _ => Err("an operand that is no symbol".into()),
+        }
+    }
+
     /// The relocation target of global `id` at `addend`, and whether it is a
     /// GOT slot.
     fn target(
@@ -995,6 +1092,166 @@ impl Emitter<'_> {
     }
 
     /// A load or store: operands are `[value,] base, offset...` without chains.
+    /// The address `offset` bytes past the pointer `value`.
+    fn pointer_at(
+        &self,
+        value: SDValue,
+        offset: u64,
+    ) -> Result<Addr, String> {
+        let imm = offset as i64;
+        match self.operand(value)? {
+            Operand::Reg(base) => Ok(Addr::Offset { base, imm }),
+            Operand::Slot(slot) => Ok(Addr::Slot { slot, offset: imm }),
+            Operand::Fixed(at) => Ok(Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm }),
+            _ => Err("a block of memory at something that is no pointer register or frame object".into()),
+        }
+    }
+
+    /// `str q<n>, [slot, #offset]`: an unnamed `q` argument register saved
+    /// whole.
+    fn save_q(
+        &mut self,
+        id: u32,
+    ) -> Result<(), String> {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let number = self.dag.constant(node.ops[2]).ok_or("a saved q register of no number")? as u32;
+        let offset = self.dag.constant(node.ops[3]).ok_or("a saved q register of no offset")? as u64;
+        let addr = self.pointer_at(node.ops[1], offset)?;
+        self.ops.push(Op::I(Inst::Store {
+            mem: Memory::Fp { bytes: 16, reg: Vreg(number) },
+            addr,
+            mmo: MemOperand::default(),
+        }));
+        Ok(())
+    }
+
+    /// A fresh register to carry `bytes` of a block.
+    fn piece(
+        &mut self,
+        bytes: u8,
+    ) -> Memory {
+        if bytes == 16 {
+            Memory::Fp { bytes, reg: self.mf.fpr() }
+        } else {
+            Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg: self.mf.gpr() }
+        }
+    }
+
+    /// A constant-size `memcpy`, `memmove` or `memset` as `q` and smaller
+    /// accesses (`findOptimalMemOpLowering`); a copy loads a batch before it
+    /// stores, a move all of it.
+    fn block_memory(
+        &mut self,
+        id: u32,
+        name: &str,
+    ) -> Result<(), String> {
+        use crate::isel::memops::{BATCH, pieces, wide_pieces};
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let operand = |at: usize| node.ops[at];
+        let mmo = MemOperand { volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() };
+        if name == "LLRM_MEMSET_Q" {
+            let total = self.dag.constant(operand(3)).ok_or("a fill of no size")? as u64;
+            let byte = self.dag.constant(operand(2)).map(|value| value as u8);
+            let ops = if byte.is_none() { wide_pieces(total) } else { pieces(total) };
+            let vector = if ops.iter().any(|&(bytes, _)| bytes == 16) {
+                let rd = self.mf.fpr();
+                let fill = match byte {
+                    Some(0) => Fill::Zero,
+                    Some(byte) => Fill::Byte(byte),
+                    None => {
+                        let Operand::Reg(reg) = self.operand(operand(2))? else { return Err("a fill byte".into()) };
+                        Fill::Gpr(reg)
+                    }
+                };
+                self.ops.push(Op::I(Inst::VectorFill { rd, fill }));
+                Some(rd)
+            } else {
+                None
+            };
+            let scalar = match byte {
+                Some(0) => Gpr::R31,
+                Some(byte) if ops.iter().any(|&(bytes, _)| bytes != 16) => {
+                    let reg = self.mf.gpr();
+                    self.ops.push(Op::Imm { dst: reg, bits: 64, value: u64::from(byte) * 0x0101_0101_0101_0101 });
+                    reg
+                }
+                _ => Gpr::R31,
+            };
+            for (bytes, offset) in ops {
+                let mem = match (bytes, vector) {
+                    (16, Some(reg)) => Memory::Fp { bytes, reg },
+                    _ => Memory::Int {
+                        width: if bytes == 8 { Width::X } else { Width::W },
+                        bytes,
+                        sign: false,
+                        reg: scalar,
+                    },
+                };
+                let addr = self.pointer_at(operand(1), offset)?;
+                self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
+            }
+            return Ok(());
+        }
+        let total = self.dag.constant(operand(3)).ok_or("a copy of no size")? as u64;
+        let ops = pieces(total);
+        let batch = if name == "LLRM_MEMMOVE_Q" { ops.len() } else { BATCH };
+        for chunk in ops.chunks(batch) {
+            let mut loaded = Vec::new();
+            for &(bytes, offset) in chunk {
+                let mem = self.piece(bytes);
+                let addr = self.pointer_at(operand(2), offset)?;
+                self.ops.push(Op::I(Inst::Load { mem, addr, mmo: mmo.clone() }));
+                loaded.push(mem);
+            }
+            for (&(_, offset), mem) in chunk.iter().zip(loaded) {
+                let addr = self.pointer_at(operand(1), offset)?;
+                self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
+            }
+        }
+        Ok(())
+    }
+
+    /// What `value`, an address, points into: a global or a frame object
+    /// (`MachineMemOperand`'s pointer, which the pin's load/store optimizer
+    /// asks whether two accesses may alias), read from the nodes that made
+    /// the address.
+    fn object_of(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<MemObject> {
+        if depth > 6 {
+            return None;
+        }
+        let node = self.dag.node(value);
+        match (&node.data, node.opcode) {
+            (NodeData::Global { symbol, .. }, ISD::TargetGlobalAddress) => {
+                Some(MemObject::Global(self.globals.get(*symbol)?.name.clone()))
+            }
+            (NodeData::PoolIndex(..), ISD::TargetConstantPool) => Some(MemObject::ConstantPool),
+            (NodeData::FrameIndex(index), ISD::TargetFrameIndex | ISD::FrameIndex) if *index >= 0 => {
+                Some(MemObject::Slot(*index as u32))
+            }
+            (_, ISD::Machine(code)) if matches!(opcode_name(code), Some("ADRP" | "ADDXri" | "MOVaddr")) => {
+                node.ops.iter().find_map(|&op| self.object_of(op, depth + 1))
+            }
+            _ => None,
+        }
+    }
+
+    /// The memory operand of the load or store `id`: its volatile flag and
+    /// the object its address names.
+    fn memory_operand(
+        &self,
+        id: u32,
+        store: bool,
+    ) -> MemOperand {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let base = node.ops.get(usize::from(store)).copied();
+        let object = base.and_then(|base| self.object_of(base, 0)).unwrap_or_default();
+        MemOperand { object, volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() }
+    }
+
     fn memory(
         &mut self,
         id: u32,
@@ -1041,8 +1298,8 @@ impl Emitter<'_> {
                     Addr::Pre { base: stepped, imm }
                 }
             }
-            (AddressForm::Scaled, [Operand::Reg(base), Operand::Symbol(id, offset)]) => {
-                Addr::PageOffset { base: *base, target: self.target(*id, *offset)?.0, got: false }
+            (AddressForm::Scaled, [Operand::Reg(base), symbol @ (Operand::Symbol(..) | Operand::Pool(_))]) => {
+                Addr::PageOffset { base: *base, target: self.symbol_target(symbol)?.0, got: false }
             }
             (form, [base, Operand::Imm(imm)]) => {
                 let imm = *imm as i64 * if form == AddressForm::Scaled { size } else { 1 };
@@ -1055,7 +1312,9 @@ impl Emitter<'_> {
             }
             _ => return Err(format!("{name}: operands are not those of its form")),
         };
-        let mmo = MemOperand::default();
+        // A selected node keeps the flag of the access it folded
+        // (`set_node_mem_refs`).
+        let mmo = self.memory_operand(id, access.store);
         if access.fp {
             let reg = match fvalue {
                 Some(reg) => reg,
@@ -1094,6 +1353,24 @@ impl Emitter<'_> {
         match node.opcode {
             // Lifetime markers make no code; stack coloring would read them.
             ISD::EntryToken | ISD::TokenFactor | ISD::Register | ISD::LifetimeStart | ISD::LifetimeEnd => Ok(()),
+            ISD::CopyFromReg
+                if matches!(
+                    self.dag.node(node.ops[1]).data,
+                    NodeData::PhysReg(id) if id == crate::reg::SP
+                ) =>
+            {
+                let rd = self.mf.gpr();
+                self.ops.push(Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd,
+                    rn: Gpr::R31,
+                    imm12: 0,
+                    shift12: false,
+                }));
+                self.values.insert((id, 0), rd);
+                Ok(())
+            }
             ISD::CopyFromReg if node.values[0].is_floating_point() => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {
@@ -1122,6 +1399,30 @@ impl Emitter<'_> {
                 Ok(())
             }
             // The flags are not moved: the compare before the user set them.
+            // The stack pointer is register 31 only in an add: `mov x, sp` and
+            // `mov sp, x` are `add #0`, and a body that writes it has a
+            // frame record (`dynamic`).
+            ISD::CopyToReg
+                if matches!(
+                    self.dag.node(node.ops[1]).data,
+                    NodeData::PhysReg(id) if id == crate::reg::SP
+                ) =>
+            {
+                let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
+                if self.mf.outgoing > 0 {
+                    return Err("a call with stack arguments in a function that moves the stack pointer".into());
+                }
+                self.mf.dynamic = true;
+                self.ops.push(Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd: Gpr::R31,
+                    rn: src,
+                    imm12: 0,
+                    shift12: false,
+                }));
+                Ok(())
+            }
             ISD::CopyToReg if self.is_flags(node.ops[1]) => Ok(()),
             ISD::CopyToReg if self.dag.value_type(node.ops[2]).is_floating_point() => {
                 let dst = match self.dag.node(node.ops[1]).data {
@@ -1133,6 +1434,19 @@ impl Emitter<'_> {
                     return Err("a float copy of a constant".into());
                 };
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
+                Ok(())
+            }
+            // `EmitCopyToRegNode`: the copy of an undefined value is an
+            // `IMPLICIT_DEF` of the register. It is defined as zero here (an
+            // undefined value is any value) until the MIR has an undef.
+            ISD::CopyToReg
+                if matches!(
+                    self.dag.opcode(node.ops[2]),
+                    ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                ) =>
+            {
+                let (dst, _) = self.register_operand(node.ops[1])?;
+                self.ops.push(Op::Imm { dst, bits: 32, value: 0 });
                 Ok(())
             }
             ISD::CopyToReg => {
@@ -1166,6 +1480,8 @@ impl Emitter<'_> {
                         return Ok(());
                     }
                     "ADJCALLSTACKUP" => return Ok(()),
+                    "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
+                    "LLRM_SAVE_Q" => return self.save_q(id),
                     // The jump through a table is one terminator, made at its
                     // `JumpTableDest32`: the debug info and the `BR` are no
                     // code.
@@ -1242,6 +1558,42 @@ impl Emitter<'_> {
                         self.fvalues.insert((id, 0), rd);
                     } else {
                         self.values.insert((id, 0), gd);
+                    }
+                    return Ok(());
+                }
+                if name == "DMB" {
+                    let barrier = match operands.as_slice() {
+                        [Operand::Imm(11)] => Barrier::Ish,
+                        [Operand::Imm(9)] => Barrier::IshLd,
+                        [Operand::Imm(10)] => Barrier::IshSt,
+                        _ => return Err("a barrier that is not ish, ishld or ishst".into()),
+                    };
+                    self.ops.push(Op::I(Inst::Dmb { barrier }));
+                    return Ok(());
+                }
+                if let Some((op, size, acquire, release)) = atomic_form(name) {
+                    let reg = |operand: &Operand| match operand {
+                        Operand::Reg(reg) => Ok(*reg),
+                        _ => Err(format!("{name}: an atomic operand that is not a register")),
+                    };
+                    // `LDAR p`, `STLR v, p`, `SWP/LDOP v, p`, `CAS expected,
+                    // new, p`.
+                    let (rs, rt, rn, result) = match (op, operands.as_slice()) {
+                        (Atomic::Ldar | Atomic::Ldapr, [pointer]) => (Gpr::R31, self.mf.gpr(), reg(pointer)?, true),
+                        (Atomic::Stlr, [value, pointer]) => (Gpr::R31, reg(value)?, reg(pointer)?, false),
+                        (Atomic::Cas, [expected, new, pointer]) => {
+                            // `cas` overwrites the expected value with the old
+                            // one.
+                            let old = self.mf.gpr();
+                            self.ops.push(Op::Copy { dst: Reg::Gpr(old), src: Reg::Gpr(reg(expected)?) });
+                            (old, reg(new)?, reg(pointer)?, true)
+                        }
+                        (_, [value, pointer]) => (reg(value)?, self.mf.gpr(), reg(pointer)?, true),
+                        _ => return Err(format!("{name}: operands are not those of its form")),
+                    };
+                    self.ops.push(Op::I(Inst::Atomic { op, size, acquire, release, rs, rt, rn }));
+                    if result {
+                        self.values.insert((id, 0), if op == Atomic::Cas { rs } else { rt });
                     }
                     return Ok(());
                 }
@@ -1340,8 +1692,8 @@ impl Emitter<'_> {
                     }
                 }
                 match (name, operands.as_slice()) {
-                    ("ADRP", [Operand::Symbol(global, addend)]) => {
-                        let (target, _) = self.target(*global, *addend)?;
+                    ("ADRP", [symbol @ (Operand::Symbol(..) | Operand::Pool(_))]) => {
+                        let (target, _) = self.symbol_target(symbol)?;
                         self.ops.push(Op::I(Inst::Adr { page: true, rd, target, got: false }));
                     }
                     // `ADRP` and `ADDXri` of a jump table's data object.
@@ -1353,13 +1705,13 @@ impl Emitter<'_> {
                         self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: page, target }));
                     }
                     // `ADDXri page, :lo12:symbol, 0`
-                    ("ADDXri", [Operand::Reg(rn), Operand::Symbol(global, addend), _]) => {
-                        let (target, _) = self.target(*global, *addend)?;
+                    ("ADDXri", [Operand::Reg(rn), symbol @ (Operand::Symbol(..) | Operand::Pool(_)), _]) => {
+                        let (target, _) = self.symbol_target(symbol)?;
                         self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: *rn, target }));
                     }
                     // `ADRP` and `ADDXri` of one symbol.
-                    ("MOVaddr", [Operand::Symbol(global, addend), _]) => {
-                        let (target, _) = self.target(*global, *addend)?;
+                    ("MOVaddr" | "MOVaddrCP", [symbol @ (Operand::Symbol(..) | Operand::Pool(_)), _]) => {
+                        let (target, _) = self.symbol_target(symbol)?;
                         let page = self.mf.gpr();
                         self.ops.push(Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }));
                         self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: page, target }));
@@ -1426,6 +1778,7 @@ pub fn emit(
         fvregs: HashMap::new(),
         fvalues: HashMap::new(),
         ops: Vec::new(),
+        pool: std::cell::RefCell::new(Vec::new()),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
@@ -1460,5 +1813,6 @@ pub fn emit(
     }
     // The blocks made for critical edges lie after the function's own.
     emitter.mf.blocks.extend(edges);
+    emitter.mf.pool = emitter.pool.take();
     Ok(emitter.mf)
 }

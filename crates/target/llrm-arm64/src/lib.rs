@@ -2,6 +2,7 @@
 
 pub mod cc;
 pub mod cfi;
+pub mod combine;
 pub mod dag;
 pub mod data;
 pub mod debug;
@@ -14,6 +15,8 @@ pub mod frame;
 pub mod isel;
 pub mod jumptable;
 pub mod layout;
+pub mod ldst_update;
+pub mod licm;
 pub mod lir_view;
 pub mod machine;
 pub mod mc;
