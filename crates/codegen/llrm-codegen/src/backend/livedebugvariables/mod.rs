@@ -108,14 +108,17 @@ pub fn locate(
             match &note.value {
                 NoteValue::Constant(value) => push(start, stop, Where::Constant(*value)),
                 NoteValue::Value(_) | NoteValue::Offset(..) | NoteValue::Arrived(..) | NoteValue::Expr(_) => {
-                    let (value, add, gap) = match &note.value {
-                        NoteValue::Value(value) => (*value, None, Where::Undef),
-                        NoteValue::Offset(value, add) => (*value, Some(*add), Where::Undef),
+                    let (value, add, gap, lead) = match &note.value {
+                        NoteValue::Value(value) => (*value, None, Where::Undef, Where::Undef),
+                        NoteValue::Offset(value, add) => (*value, Some(*add), Where::Undef, Where::Undef),
                         NoteValue::Arrived(value, register) => {
-                            (*value, None, if entry_values { Where::Entry(*register) } else { Where::Undef })
+                            let gap = if entry_values { Where::Entry(*register) } else { Where::Undef };
+                            // Before its first place it is still in the register it
+                            // arrived in (the pin's live-in `DBG_VALUE $reg`).
+                            (*value, None, gap, if entry_values { gap } else { Where::Place(Place::Register(*register)) })
                         }
                         NoteValue::Expr(expr) => match (expr.args.as_slice(), expr.ops.is_empty()) {
-                            ([NoteArg::Value(value)], true) if expr.value => (*value, None, Where::Undef),
+                            ([NoteArg::Value(value)], true) if expr.value => (*value, None, Where::Undef, Where::Undef),
                             _ => {
                                 push(start, stop, Where::Undef);
                                 continue;
@@ -129,7 +132,7 @@ pub fn locate(
                         if low >= high {
                             continue;
                         }
-                        push(from, low, gap);
+                        push(from, low, if from == start { lead } else { gap });
                         push(
                             low,
                             high,
@@ -137,7 +140,7 @@ pub fn locate(
                         );
                         from = high;
                     }
-                    push(from, stop, gap);
+                    push(from, stop, if from == start { lead } else { gap });
                 }
                 _ => push(start, stop, Where::Undef),
             }
@@ -412,7 +415,10 @@ mod tests {
     fn no_entry_value_and_no_address_as_a_place() {
         let table = BTreeMap::from([(5, vec![seg(20, 30, reg(1))])]);
         let found = locate(&[note(10, 1, NoteValue::Arrived(5, RegId::from_raw(7)))], &table, 40, false);
-        assert_eq!(ranges(&found), [(10, 20, Where::Undef), (20, 30, Where::Place(reg(1))), (30, 40, Where::Undef)]);
+        assert_eq!(
+            ranges(&found),
+            [(10, 20, Where::Place(Place::Register(RegId::from_raw(7)))), (20, 30, Where::Place(reg(1))), (30, 40, Where::Undef)]
+        );
         let address = NoteValue::Expr(std::sync::Arc::new(crate::model::lir::NoteExpr {
             args: vec![NoteArg::Value(5)],
             ops: vec![],
