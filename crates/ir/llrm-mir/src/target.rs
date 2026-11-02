@@ -424,6 +424,8 @@ pub struct OperationCosts {
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
+    /// Clocks to fill one such line from memory; 0: not stated.
+    pub line_fill_clocks: i64,
 }
 
 impl OperationCosts {
@@ -535,6 +537,7 @@ impl Default for OperationCosts {
             pieces_clear_size: 0,
             jump_table: 0,
             cache_line: 0,
+            line_fill_clocks: 0,
         }
     }
 }

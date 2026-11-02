@@ -1151,6 +1151,18 @@ fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
     assert_eq!(memset_shape(10, 0).0, 0);
 }
 
+/// The 10-byte clear was a fill because the model priced its stores at 19
+/// bytes (a 6-byte setup, 5 for the word) where the object has 14 (`xor ecx`,
+/// two dword stores and a word from the same register) against the fill's 16:
+/// the in-situ object grew. Whatever the boundary is, a longer clear never
+/// goes back to stores.
+#[test]
+fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
+    let first = (2..=64).find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
+    assert!(first > 8, "{first}");
+    assert!((first..=64).all(|n| memset_shape(n, 0).0 == 1));
+}
+
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
 #[test]
 fn at_os_a_14_byte_zero_fill_stays_rep_stos() {

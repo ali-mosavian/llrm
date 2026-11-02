@@ -391,6 +391,7 @@ pub fn compiled_dumping(
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
+    module.refuse_aliases("x86").map_err(|error| format!("{name}: {error}"))?;
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
         // front ends report as they link their MIR.
