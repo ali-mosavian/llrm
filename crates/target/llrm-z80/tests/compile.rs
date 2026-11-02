@@ -420,3 +420,13 @@ fn a_loaded_bit_read_by_a_branch_a_select_and_a_zext_compiles() {
     );
     assert!(text.contains("#_bad"), "{text}");
 }
+
+/// A result with no row in the convention (`i64`, eight bytes) panicked in
+/// `result_registers` ("calling.toml has a result row"): 7 programs of
+/// tests/run/c killed the compiler instead of being named as refused.
+#[test]
+fn a_result_the_convention_has_no_registers_for_is_refused_not_a_panic() {
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine i64 @f() {{\n  ret i64 5\n}}");
+    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses an eight-byte result");
+    assert!(why.contains("no registers"), "{why}");
+}
