@@ -369,13 +369,25 @@ impl Walk<'_> {
         self.block_of
             .get(&id)
             .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
-            .and_then(|one| one.what.as_ref())
-            .is_some_and(|what| {
-                what.op == Operation::Move
-                    && matches!(
-                        (what.dests.as_slice(), what.sources.as_slice()),
-                        ([Loc::Held(_)], [Loc::Held(_)])
-                    )
+            .is_some_and(|one| {
+                // A copy that feeds a phi is the pin's phi operand:
+                // `isCopyLike` is false for a PHI.
+                let feeds_phi = one
+                    .defines
+                    .iter()
+                    .any(
+                        |value| self.readers
+                            .get(value)
+                            .is_some_and(|readers| readers.iter().any(|reader| matches!(reader, Reader::Phi(_)))),
+                    );
+                !feeds_phi
+                    && one.what.as_ref().is_some_and(|what| {
+                        what.op == Operation::Move
+                            && matches!(
+                                (what.dests.as_slice(), what.sources.as_slice()),
+                                ([Loc::Held(_)], [Loc::Held(_)])
+                            )
+                    })
             })
     }
 
