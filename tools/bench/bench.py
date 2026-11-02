@@ -144,13 +144,13 @@ def benchmarks(selected: list[str]) -> list[Path]:
 ONLY: list[str] | None = None  # `--lang`: the languages measured; None: every one the directory has
 
 
-def variants(directory: Path) -> list[Variant]:
+def variants(directory: Path, every_language: bool = False) -> list[Variant]:
     settings = tomllib.loads((directory / "bench.toml").read_text())
     name = directory_name(directory)
     out = []
     for language, suffix in LANGUAGES.items():
         source = directory / f"{directory.name}{suffix}"
-        if source.exists() and (ONLY is None or language in ONLY):
+        if source.exists() and (every_language or ONLY is None or language in ONLY):
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
@@ -549,7 +549,7 @@ def stage(text: str) -> None:
 
 def native_sources(name: str, directory: Path, work: Path) -> tuple[Path, Path] | None:
     """The sources the x86_64 row runs and sizes: the harness's own (kept_a_call) for the program's C variant, in a folder of its own."""
-    variant = next((one for one in variants(directory) if one.language == "c"), None)
+    variant = next((one for one in variants(directory, every_language=True) if one.language == "c"), None)  # `--lang c64` leaves ONLY without "c"
     folder = work / "kept"
     folder.mkdir(parents=True, exist_ok=True)
     return kept_a_call(variant, folder, name.replace("/", "_")) if variant else None

@@ -89,7 +89,7 @@ def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt:
     if linked.returncode != 0:
         return {"error": "link: " + (linked.stderr.strip().splitlines() or ["failed"])[-1][:160]}
     ran = subprocess.run([str(exe), "31"], capture_output=True, text=True, cwd=directory, timeout=600)
-    want = source.with_suffix(".out").read_text().splitlines()[:1]
+    want = (directory / f"{directory.name}.out").read_text().splitlines()[:1]
     if ran.returncode != 0 or ran.stdout.split()[:1] != want[:1]:
         return {"error": f"prints {ran.stdout.split()[:1]}, want {want[:1]}"}
     few, many = instructions_of(exe, "1", directory), instructions_of(exe, "101", directory)

@@ -116,3 +116,15 @@ def test_the_counted_source_runs_and_the_sized_source_is_sized(tmp_path):
     assert "error" not in both, both
     assert both["instructions"] == plain["instructions"]
     assert both["code_bytes"] > plain["code_bytes"]
+
+
+def test_expected_output_is_read_from_the_program_not_the_counted_source(tmp_path):
+    """The counted source lives in the harness's folder, beside no `.out`: every c64 row with a call-keeping pair died on FileNotFoundError."""
+    if shutil.which("gcc") is None or native.perf_missing():
+        pytest.skip("needs gcc and perf")
+    directory = program(tmp_path, "g", PROGRAM)
+    elsewhere = tmp_path / "kept"
+    elsewhere.mkdir()
+    (elsewhere / "g.wrapped.c").write_text(PROGRAM)
+    row = native.measure_one("gcc64", tmp_path, directory, elsewhere / "g.wrapped.c", "O2", tmp_path / "w", tmp_path)
+    assert "error" not in row, row

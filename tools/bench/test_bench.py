@@ -1124,3 +1124,10 @@ def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_paddin
         "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
         "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
     ]
+
+
+def test_native_sources_exist_when_only_the_x86_64_language_is_selected(tmp_path, monkeypatch):
+    """`--lang c64` left no C variant, so no c64 row got the call-keeping pair: crc read 21 instructions, and -fno-inline-functions crashed llc on parity/qmove -Os."""
+    monkeypatch.setattr(bench, "ONLY", ["c64"])
+    directory = next(one for one in bench.benchmarks(["crc"]))
+    assert bench.native_sources("crc", directory, tmp_path) is not None
