@@ -64,6 +64,27 @@ fn test_a_variable_a_subtraction_reads_as_its_second_operand_is_not_defined_by_i
     assert_eq!(same, None, "{text}");
 }
 
+/// DEVIATE ZL1: a byte load on the 486 clears its register first (`xor eax,
+/// eax; mov al, [..]`, 2 clocks, against 3 for the pin's `movzx`). The pair is
+/// the pin's one instruction when loops are held to the pin's length.
+fn one_movzx_each(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let clears =
+            lines[at].trim().strip_prefix("xor ").and_then(|rest| rest.split_once(", ")).filter(|(a, b)| a == b);
+        let loads =
+            lines.get(at + 1).is_some_and(|next| next.trim().starts_with("mov ") && next.contains(", byte ptr"));
+        if clears.is_some() && loads {
+            at += 1;
+        }
+        out.push(lines[at]);
+        at += 1;
+    }
+    out.join("\n")
+}
+
 /// crc's loop copied the masked bit into a register of its own and the result
 /// back into the accumulator (`mov esi, eax` ... `mov eax, ebx`): +17% clocks
 /// and a fourth saved register.
@@ -79,7 +100,7 @@ fn test_a_crc_step_keeps_the_accumulator_in_one_register() {
     // %esi; shrl %esi; andl $1, %eax; negl; andl; xorl`, ESI saved), so the
     // loops are held to the pin's length instead of to a register count.
     let flags = ["--isel=dag", "-fno-unroll-loops", "-m32", "-mabi=sysv", "-march=i486", "-O2"];
-    let text = listing("bench/crc/crc.c", &["--isel=dag", "-fno-unroll-loops"]);
+    let text = one_movzx_each(&listing("bench/crc/crc.c", &["--isel=dag", "-fno-unroll-loops"]));
     let pin = common::pin::listing(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/crc/crc.c"), &flags);
     let (ours, pins) = (common::pin::loops(&text, Some("bench_crc")), common::pin::loops(&pin, Some("bench_crc")));
     assert!(!ours.is_empty() && ours.len() == pins.len(), "loops {ours:?} against the pin\'s {pins:?}:\n{text}");

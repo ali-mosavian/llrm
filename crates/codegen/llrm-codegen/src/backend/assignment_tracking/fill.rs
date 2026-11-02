@@ -6,7 +6,7 @@
 //! pass adds a location for them after the new one, so that "the variable is
 //! in memory" survives a store of one field.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::{BlockId, DwOp, Function, InstId, MetadataId, Module, Operand};
@@ -14,6 +14,7 @@ use llrm_mir::{BlockId, DwOp, Function, InstId, MetadataId, Module, Operand};
 use super::{
     DebugVariable, Fragment, FunctionVarLocsBuilder, InsertPt, VarLocInfo, fragment_of, variable_size_in_bits,
 };
+use crate::support::hash::{HashMap, HashSet};
 
 /// The bits of one variable that are in memory: half-open intervals, with the
 /// base address (an id, 0 for no memory location) each is at. Adjacent
@@ -323,7 +324,7 @@ fn meet(
     live_in: &mut IdMap<BlockId, VarFragMap>,
     live_out: &IdMap<BlockId, VarFragMap>,
 ) -> bool {
-    let mut joined = VarFragMap::new();
+    let mut joined = VarFragMap::default();
     let mut first = true;
     for pred in function.predecessors(block).iter().filter(|p| visited.contains(p)) {
         if first {

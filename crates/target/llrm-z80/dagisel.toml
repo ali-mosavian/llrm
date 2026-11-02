@@ -6,6 +6,8 @@ ns = "Z80::"
 isd = "Z80ISD::"
 llvm_dir = ""
 td = "z80.td"
+llvm_build = "llvm-build-m68k"
+out = "src/dagisel/generated"
 cpus = ["z80", "z180"]
 own_ids = "own_ids.txt"
 # Named by the hand code: instructions no pattern selects, and every register (the pin numbers the pipeline maps to ours).

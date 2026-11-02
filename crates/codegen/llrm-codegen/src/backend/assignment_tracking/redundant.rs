@@ -5,13 +5,12 @@
 //! the variable already is; and in the entry block a location of nothing
 //! before any real one goes (SelectionDAG hoists argument values over them).
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::{BlockId, ConstantKind, Context, Function, InstId, MetadataId, Module, Operand};
 
 use super::{
     DebugVariable, Fragment, FunctionVarLocsBuilder, InsertPt, VarLocInfo, fragment_of, variable_size_in_bits,
 };
+use crate::support::hash::{HashMap, HashSet};
 
 /// Variables above this many bytes are not scanned for covered bytes
 /// (`MaxSizeBytes`): the bit vector would cost more than it saves.
@@ -49,7 +48,7 @@ fn backward(
     order: &[InsertPt],
 ) -> bool {
     let mut changed = false;
-    let mut defined: HashMap<MetadataId, Vec<bool>> = HashMap::new();
+    let mut defined: HashMap<MetadataId, Vec<bool>> = HashMap::default();
     let mut last = None;
     for &at in order.iter().rev() {
         // A run of consecutive locations ends at an instruction.
@@ -98,7 +97,7 @@ fn undefs_in_entry(
     order: &[InsertPt],
 ) -> bool {
     let mut changed = false;
-    let mut with_def: HashMap<MetadataId, HashSet<Fragment>> = HashMap::new();
+    let mut with_def: HashMap<MetadataId, HashSet<Fragment>> = HashMap::default();
     for &at in order {
         let Some(locs) = builder.wedge(at).map(<[VarLocInfo]>::to_vec) else { continue };
         let mut kept = Vec::new();
@@ -131,7 +130,7 @@ fn forward(
     order: &[InsertPt],
 ) -> bool {
     let mut changed = false;
-    let mut said: HashMap<MetadataId, (Vec<Operand>, Vec<llrm_mir::DwOp>)> = HashMap::new();
+    let mut said: HashMap<MetadataId, (Vec<Operand>, Vec<llrm_mir::DwOp>)> = HashMap::default();
     for &at in order {
         let Some(locs) = builder.wedge(at).map(<[VarLocInfo]>::to_vec) else { continue };
         let mut kept = Vec::new();

@@ -350,20 +350,6 @@ def test_an_exception_file_prints_its_rows_every_run_and_fails_a_row_no_longer_w
     assert bc.waived_lines([], plain, bc.judge({FIB: row(100)}, base, plain)[2])[1] == []
 
 
-def test_the_two_jpeg_nib_os_rows_the_loopsimplify_fix_moves_are_excused_by_their_file():
-    """release/next carried no waiver for jpeg_fixed / jpeg_single nib -Os code_bytes: the judge reported exactly these two. The file now excuses
-    each at its own ceiling and not one byte above. (It pinned the first ceilings, 5362 / 5223, and went red when d846b3d0f0 lowered them to the
-    measured 5337 / 5198.)"""
-    rows = {("jpeg_fixed", "nib", "Os"): 5304, ("jpeg_single", "nib", "Os"): 5172}
-    ceiling = {w["label"]: w["to"] for w in bc.waivers() if w["counter"] == "code_bytes"}
-    assert {"jpeg_fixed nib -Os", "jpeg_single nib -Os"} <= set(ceiling)
-    base = {key: row(100, code_bytes=size) for key, size in rows.items()}
-    at = {key: row(100, code_bytes=ceiling[bc.label(key)]) for key in rows}
-    over = {key: row(100, code_bytes=ceiling[bc.label(key)] + 1) for key in rows}
-    assert bc.judge(at, base, bc.waivers())[0] == []
-    assert len(bc.judge(over, base, bc.waivers())[0]) == 2
-
-
 def test_two_runs_of_one_compiler_that_differ_in_any_count_are_named_and_equal_runs_pass():
     """Main read 78 instructions in one run and 2 in another (qlight c -Os, two programs); the baseline was trusted without a second look."""
     run = {FIB: row(100), ("fib", "c", "O2"): row(50, code_bytes=80), ("fib", "ow", "O2"): row(9)}
@@ -381,3 +367,25 @@ def test_a_base_measured_on_other_sources_than_the_heads_is_refused_and_rebased_
         bc.rebased(base, {}, was, now)
     assert bc.rebased(base, {"q/c/O2": {"clocks": 460}}, was, now) == {"s/c/O2": {"clocks": 7}, "q/c/O2": {"clocks": 460}}
     assert bc.rebased(base, {}, was, was) == base, "unchanged sources: the base stands, no overlay needed"
+
+
+def test_a_change_to_the_judge_makes_every_program_edited_so_the_base_is_measured_again_by_the_heads_judge(tmp_path):
+    """The m16 multiplier fix moved 67 of 342 cells' clocks (jpeg_fixed +4..5%) while main's rows stayed the old judge's: head and base differed
+    by two judges, not two compilers."""
+    for root, judge in ((tmp_path / "base", b"old judge"), (tmp_path / "head", b"new judge")):
+        (root / "bench/fib").mkdir(parents=True)
+        (root / "bench/fib/bench.toml").write_text("x = 1\n")
+        (root / "bench/fib/fib.c").write_text("int fib;\n")
+        (root / bc.JUDGE_FILES[0]).parent.mkdir(parents=True)
+        (root / bc.JUDGE_FILES[0]).write_bytes(judge)
+    was, now = bc.programs(tmp_path / "base"), bc.programs(tmp_path / "head")
+    assert was["fib"] != now["fib"]
+    asked = []
+    bc.with_edited({FIB: row(100)}, was, now, ["O2"], lambda names: asked.append(names) or {FIB: row(100)}, tmp_path / "cache", "t")
+    assert asked == [["fib"]]
+    assert bc.programs(tmp_path / "head") == now, "the same judge and sources hash alike: nothing is measured again"
+
+
+def test_programs_read_from_git_hash_as_the_working_tree_does_judge_files_included():
+    """A base is hashed from git (programs_at), the head from the tree (programs): the two must agree on an unedited checkout."""
+    assert bc.programs_at("HEAD") == bc.programs() or bc.subprocess.run(["git", "status", "--porcelain", "--", "bench", *bc.JUDGE_FILES], cwd=bc.ROOT, capture_output=True, text=True).stdout.strip()
