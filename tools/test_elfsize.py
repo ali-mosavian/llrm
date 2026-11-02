@@ -60,3 +60,33 @@ def test_the_pin_comparison_tools_count_main_in_text_startup(tmp_path):
     assert cc_cost.text_bytes(obj) == want
     assert m16_bytes.pin_text(size) == want
     assert pin_cg_ablate.text_bytes(str(obj)) == want
+
+
+def gcc_object(tmp_path, source, *flags):
+    gcc = shutil.which("gcc")
+    if not gcc:
+        pytest.skip("no gcc")
+    (tmp_path / "p.c").write_text(source)
+    subprocess.run([gcc, *flags, "-c", str(tmp_path / "p.c"), "-o", str(tmp_path / "p.o")], check=True)
+    return tmp_path / "p.o"
+
+
+def test_sizes_reads_an_elf_object_by_its_executable_sections_not_its_unwind_tables(tmp_path):
+    """sizes.code_bytes on an ELF object parsed it as OMF and failed; Berkeley `size` totals counted .eh_frame as code (+48..192 B a row, 25 false above-main cells)."""
+    import sizes
+
+    obj = gcc_object(tmp_path, "const int t[4] = {1,2,3,4}; int g = 5; int f(int x) { return x + t[x & 3] + g; }\nint main(void) { return f(2); }\n", "-O2", "-fno-pic", "-fasynchronous-unwind-tables")
+    out = subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True, check=True).stdout
+    assert ".eh_frame" in out
+    assert sizes.code_bytes(obj) == elfsize.text_bytes(out) > 0
+    initialised, bss = sizes.data_bytes(obj)
+    assert initialised >= 20 and bss == 0
+    assert initialised < 20 + 60  # .rodata + .data, not the unwind tables
+
+
+def test_uninitialised_data_is_counted_apart_from_initialised(tmp_path):
+    import sizes
+
+    obj = gcc_object(tmp_path, "int a[100]; int g = 3; int f(void) { return a[1] + g; }\n", "-O1", "-fno-pic")
+    initialised, bss = sizes.data_bytes(obj)
+    assert bss >= 400 and initialised >= 4 and initialised < 100
