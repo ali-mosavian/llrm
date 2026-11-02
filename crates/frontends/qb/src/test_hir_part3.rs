@@ -203,9 +203,10 @@ fn test_a_counter_whose_start_seeds_pointers_counts_up_to_its_symbolic_bound() {
     // The pin's indvars rewrites the exit to `icmp eq %next, lb + count`
     // (`opt -passes='default<O2>'` on our early IR gives ours instruction for
     // instruction since foldICmpBinOp's add/sub arms), so the counter runs
-    // down to zero: `dec; jne`, with the two reloads from [bp].
+    // down to zero: `dec; jne`. Since the m16 byte-to-word patterns the segment
+    // registers are loaded before the loop, not reloaded from [bp] in it.
     let loop_ = backward_loop(&sum_three(false));
-    assert_eq!(loop_.matches("[bp").count(), 2, "{loop_}");
+    assert_eq!(loop_.matches("[bp").count(), 0, "{loop_}");
     assert!(regex::Regex::new(r"\n    dec \w+\n    jne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
 }
 
@@ -2034,10 +2035,10 @@ fn test_a_loop_to_a_symbolic_bound_keeps_its_counter_and_compare() {
 #[test]
 fn test_a_masked_use_keeps_the_counter_and_its_end_test() {
     // `POKE o, ch + (o AND 15)` reads the counter through a mask, so FILL
-    // keeps its end test every trip. The pin's loop-reduce leaves the same
-    // loop (`opt -passes=loop-reduce` on our IR, i386/i486: one phi stepping
-    // by 2, `icmp ult %phi, 3997`), and its i486 loop is 9 instructions, as
-    // ours is.
+    // keeps its end test every trip. The pin's loop-reduce leaves one phi
+    // stepping by 2 with `icmp ult %phi, 3997`; our LFTR tests the stepped
+    // counter against its end, `cmp bx, 4000; jne` (textfill's bench run
+    // checks the output), in 8 instructions where the pin's i486 loop is 9.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/textfill.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -2045,7 +2046,7 @@ fn test_a_masked_use_keeps_the_counter_and_its_end_test() {
     let end = text.find("FILL endp").expect("FILL endp");
     let body = backward_loop(&text[start..end]);
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
-    assert!(body.contains("cmp ") && body.contains(", 3997") && body.contains("and ") && instructions <= 9, "{body}");
+    assert!(body.contains("cmp ") && body.contains(", 4000") && body.contains("and ") && instructions <= 9, "{body}");
 }
 
 #[test]

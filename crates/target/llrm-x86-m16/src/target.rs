@@ -193,6 +193,7 @@ impl Machine for Dos {
             // frames 169 -> 338 B at -O2) end past Borland C's bytes (83, 104,
             // 251) for clocks that were already ahead of it.
             recursive_inlining: self.recursive_inlining,
+            priced_self_inlining: self.recursive_inlining.map(|_| (4, 150)),
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?).map(|one| {
