@@ -57,4 +57,7 @@ ends at zero when `r` divides `z` and `r` is a legal scale: the address shares
 the exit counter, as gcc ivopts does (`ubase - ratio*cbase`). The pin has no
 such formula and keeps a pointer walk beside the counter (examples/dot m16:
 two address walks and a counter; 854 shares one). Exit: none, a gcc
-translation; if LLVM gains it, delete `generate_end_biased`.
+translation; if LLVM gains it, delete `generate_end_biased`. Not generated
+at -Os: it saves a loop instruction and adds setup ones the pin's order ranks
+last (jpeg c -Os +60/+76 B); delete the gate when the size comparison counts
+setup bytes.

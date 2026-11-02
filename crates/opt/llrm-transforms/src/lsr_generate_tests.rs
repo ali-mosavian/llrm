@@ -52,6 +52,17 @@ fn generated_marked(
     post_inc: bool,
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
 ) {
+    generated_sized(cpu, text, post_inc, false, body)
+}
+
+/// [`generated_marked`], for a compile for size where `size`.
+fn generated_sized(
+    cpu: &str,
+    text: &str,
+    post_inc: bool,
+    size: bool,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
+) {
     let module = llrm_mir::parse::module(text).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
@@ -93,6 +104,7 @@ fn generated_marked(
     let tti = X86::of_cpu(cpu).unwrap();
     let safe = |_: &mut ScalarEvolution, _: Scev| true;
     let mut lsr = Collection::new(&cx, &tti, header, &safe, false, latch_terminator);
+    lsr.size = size;
     lsr.collect_interesting_types_and_factors(&mut se, &users);
     lsr.collect_fixups_and_initial_formulae(&mut se, &users);
     lsr.collect_loop_invariant_fixups_and_formulae(&mut se);
@@ -248,6 +260,24 @@ fn the_solver_shares_the_exit_counter_with_the_store() {
         let (_, store) = chosen.iter().find(|(kind, _)| *kind == Kind::Address).expect("the store");
         assert!(exit.has_zero_end(), "{exit:?}");
         assert_eq!((store.scaled_reg, store.scale), (Some(exit.base_regs[0]), 4), "{store:?}");
+    });
+}
+
+/// The shared exit counter saves a loop instruction and costs setup ones; at
+/// -Os that is bytes lost (jpeg_single c -Os +76 B, jpeg_fixed c +60 B), so
+/// the store keeps its own recurrence there.
+#[test]
+fn at_size_the_store_does_not_take_the_exit_counter() {
+    generated_sized("i486", STORE, false, true, |_, se, lsr, _| {
+        let solution = lsr.solve(se);
+        let (_, store) = lsr
+            .uses
+            .iter()
+            .zip(&solution)
+            .find(|(lu, _)| lu.kind == Kind::Address)
+            .map(|(lu, &f)| (lu.kind, &lu.formulae[f]))
+            .expect("the store");
+        assert_eq!(store.scaled_reg, None, "{store:?}");
     });
 }
 

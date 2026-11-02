@@ -484,6 +484,9 @@ pub struct Collection<'a, 'b> {
     /// are not induction variables. The registers LSR may use are those the
     /// target has less these.
     pub other_register_units: u32,
+    /// The compile is for size: a setup instruction costs a byte like a loop
+    /// one.
+    pub size: bool,
     /// How many formulae were rated: the work the filter, narrowing and solver
     /// did.
     pub rated: std::cell::Cell<usize>,
@@ -520,6 +523,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             swapped_compares: Vec::new(),
             insert_attempts: 0,
             other_register_units: 0,
+            size: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
         }

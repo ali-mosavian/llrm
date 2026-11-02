@@ -1052,6 +1052,10 @@ impl Collection<'_, '_> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
+        // A loop instruction saved costs setup ones; at -Os that is bytes lost.
+        if self.size {
+            return;
+        }
         let cx = self.cx;
         // The registers that end at zero, in the exit test's formulae.
         let mut zero_ending: Vec<Scev> = Vec::new();
