@@ -1,0 +1,7 @@
+description = "Dot product of two 64-word vectors; the count is a parameter"
+repetitions = 1
+
+[region]
+bas = "BenchDot"
+c = "bench_dot"
+nib = "bench_dot"

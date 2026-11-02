@@ -1,0 +1,20 @@
+# Mirrors dot.c.
+var va: i16[64] = [0] * 64
+var vb: i16[64] = [0] * 64
+
+@noipa
+fn dot(n: i16) -> i32:
+    let mut total: i32 = 0
+    for i in 0..n:
+        total += i32(va[i]) * i32(vb[i])
+    return total
+
+fn bench_dot() -> i32:
+    for i in 0..64:
+        va[i] = 3 * i - 50
+        vb[i] = 100 - 5 * i
+    return dot(64)
+
+fn main() -> i16:
+    print(bench_dot())
+    return 0
