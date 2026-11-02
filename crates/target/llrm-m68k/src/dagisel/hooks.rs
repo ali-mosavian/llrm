@@ -114,13 +114,23 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
     fn check_complex_pattern(
         &mut self,
         dag: &mut D,
-        _root: u32,
+        root: u32,
         parent: Option<u32>,
         value: SDValue,
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
         let kind = self.complex[usize::from(pattern)].expect("a complex pattern the table does not name");
+        // DEVIATE: the pin's `CMP*pi` and `CMP*qi` rows take a PC-relative
+        // destination, which `cmpi` has only from the 68010 on. Reason:
+        // binutils rejects the output on the 68000. Exit: none, an ISA fact.
+        if self.cpu == Cpu::M68000
+            && matches!(kind, Complex::Pcd | Complex::Pci | Complex::Pcibd)
+            && dag.opcode(root) == m68k_isd::CMP
+            && dag.opcode(dag.operand(root, 0).node) == isd::Constant
+        {
+            return false;
+        }
         let mut push = |values: &[SDValue]| results.extend(values.iter().map(|&v| (v, None)));
         match kind {
             Complex::Ari => addr::select_ari(dag, value).map(|v| push(&[v])).is_some(),
