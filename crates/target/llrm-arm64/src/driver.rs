@@ -320,6 +320,7 @@ pub fn functions_with(
             binding: crate::data::binding_of(global.linkage),
             blocks,
             variables,
+            pool: machine.pool.clone(),
         });
     }
     Ok(out)
@@ -404,6 +405,15 @@ pub fn assembly(
             // A frame mark is for the line table, not the assembler.
             for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
+            }
+        }
+        for entry in &function.pool {
+            out.push_str(&format!("{}:\n", entry.label));
+            for chunk in entry.bytes.chunks(8) {
+                let mut word = [0u8; 8];
+                word[..chunk.len()].copy_from_slice(chunk);
+                let directive = if chunk.len() == 4 { ".long" } else { ".quad" };
+                out.push_str(&format!("\t{directive} {:#x}\n", u64::from_le_bytes(word)));
             }
         }
     }

@@ -246,3 +246,16 @@ fn a_pointer_step_below_a_conditional_exit_is_merged_into_the_load() {
     let asm = dag_at("-O2", &body).unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.lines().any(|line| line.contains("ldr w") && line.contains("], #4")), "{asm}");
 }
+
+/// A double needing four moves is a pool load, as in the pin; the DAG path
+/// failed with "custom lowering of ConstantPool" (nbody did not build), and
+/// once lowered left the page offset in a separate `add`.
+#[test]
+fn a_double_constant_is_a_pool_load_with_a_page_offset() {
+    let asm =
+        dag_at("-O2", "define double @f(double %x) {\n  %y = fmul double %x, 0x400921FB54442D18\n  ret double %y\n}\n")
+            .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("adrp x9, lCPI_f_0@PAGE"), "{asm}");
+    assert!(asm.contains("ldr d16, [x9, lCPI_f_0@PAGEOFF]"), "{asm}");
+    assert!(asm.contains(".quad 0x400921fb54442d18"), "{asm}");
+}

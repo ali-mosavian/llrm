@@ -27,6 +27,8 @@ pub struct Function {
     /// The source variables in the frame: each variable's metadata node and its
     /// distance below the canonical frame address.
     pub variables: Vec<(llrm_mir::MetadataId, i64)>,
+    /// The constants the code loads, each under its label.
+    pub pool: Vec<crate::mfunc::PoolEntry>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -129,7 +131,20 @@ pub fn object(
     name: &str,
     functions: &[Function],
 ) -> Result<Object, String> {
-    let placed = data::globals(module, layout, platform)?;
+    let mut placed = data::globals(module, layout, platform)?;
+    // The constant pools sit with the read-only data, local to the object.
+    for entry in functions.iter().flat_map(|function| &function.pool) {
+        placed.push(data::Placed {
+            name: entry.label.clone(),
+            binding: Binding::Local,
+            bytes: entry.bytes.clone(),
+            relocs: Vec::new(),
+            align: entry.align,
+            constant: true,
+            zero: false,
+            init_functions: false,
+        });
+    }
     let mut symbols = Symbols { list: Vec::new(), index: HashMap::default() };
     // Section indices: text, then each data role that has contents.
     let text_index = 0;

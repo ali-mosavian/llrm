@@ -340,6 +340,17 @@ pub struct MFunc {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The constants the function loads from memory (`MachineConstantPool`),
+    /// each under the label its address is taken from.
+    pub pool: Vec<PoolEntry>,
+}
+
+/// A constant pool entry: `bytes` at `align`, under `label`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PoolEntry {
+    pub label: String,
+    pub bytes: Vec<u8>,
+    pub align: usize,
 }
 
 impl MFunc {

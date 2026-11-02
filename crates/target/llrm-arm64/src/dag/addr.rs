@@ -21,7 +21,7 @@ use llrm_dagisel::generated::aarch64::ids::opcode as a64_opcode;
 use llrm_dagisel::generated::aarch64::ids::reg::sub_32;
 use llrm_dagisel::generated::ids::{isd, mvt, target_opcode};
 use llrm_dagisel::matcher::Vt;
-use llrm_dagisel::x86_addr::AddrDag;
+use llrm_dagisel::x86_addr::{AddrDag, SymbolKind};
 
 use super::globals::Globals;
 
@@ -273,9 +273,17 @@ pub fn addr_mode_indexed<D: AddrDag>(
         let (base, low) = (dag.operand(n.node, 0), dag.operand(n.node, 1));
         // A symbol the access is aligned to, at an offset it divides, folds as
         // a page offset.
-        let aligned = dag.wrapped_symbol(low).map(|w| {
-            w.offset % i64::from(size) == 0 && globals.get(w.symbol.id).is_some_and(|g| g.align >= u64::from(size))
-        });
+        let aligned = dag
+            .wrapped_symbol(low)
+            .map(
+                |w| {
+                    let align = match w.symbol.kind {
+                        SymbolKind::ConstantPool { align } => Some(u64::from(align)),
+                        _ => globals.get(w.symbol.id).map(|g| g.align),
+                    };
+                    w.offset % i64::from(size) == 0 && align.is_some_and(|a| a >= u64::from(size))
+                },
+            );
         if aligned != Some(false) {
             return Some([base, low]);
         }

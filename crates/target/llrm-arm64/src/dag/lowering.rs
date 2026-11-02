@@ -971,6 +971,20 @@ pub fn lower_jump_table(
     Some(dag.get_node(ISD::Target(a64::ADDlow), vt, &[page, target]))
 }
 
+/// `LowerConstantPool` for the small code model: `getAddr` makes the page and
+/// the offset within it of the entry.
+pub fn lower_constant_pool(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::PoolIndex(index, 0) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let (bits, entry) = dag.constant_pool[index as usize];
+    let target = dag.get_constant_pool(vt, bits, entry, true);
+    let page = dag.get_node(ISD::Target(a64::ADRP), vt, &[target]);
+    Some(dag.get_node(ISD::Target(a64::ADDlow), vt, &[page, target]))
+}
+
 /// `TargetOpcode::JUMP_TABLE_DEBUG_INFO`, in `MACHINE_OPCODES`.
 const JUMP_TABLE_DEBUG_INFO: u32 = 46;
 

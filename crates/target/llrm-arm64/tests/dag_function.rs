@@ -455,10 +455,9 @@ fn scalar_floats_select_the_pins_opcodes() {
 }
 
 /// Float constants: an `fmov` immediate, zero, or two `mov`s and an `fmov`
-/// are selected as the pin does; a constant that needs a pool is refused,
-/// not mis-materialised.
+/// are selected as the pin does; a constant that needs a pool is a pool load.
 #[test]
-fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
+fn float_constants_are_fmov_immediates_or_mov_pairs_or_a_pool_load() {
     let add = |ty: &str, constant: &str| {
         selected(&format!("define {ty} @f({ty} %a) {{\n  %r = fadd {ty} %a, {constant}\n  ret {ty} %r\n}}"))
     };
@@ -468,8 +467,8 @@ fn float_constants_are_fmov_immediates_or_mov_pairs_and_a_pool_is_refused() {
         add("float", "0x3FB99999A0000000").unwrap(),
         [["MOVi32imm", "COPY_TO_REGCLASS", "FADDSrr", "RET_ReallyLR"]]
     );
-    let why = add("double", "3.14159").expect_err("a pool constant is refused");
-    assert!(why.contains("ConstantPool"), "{why}");
+    let pooled = add("double", "3.14159").unwrap();
+    assert!(pooled[0].contains(&"ADRP") && pooled[0].contains(&"LDRDui"), "{pooled:?}");
 }
 
 /// `memcpy` once reached the x86 `rep movs` expansion and panicked with `no

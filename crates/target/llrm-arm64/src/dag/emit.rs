@@ -35,7 +35,7 @@ use crate::mc::inst::{
     Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::visit::Reg;
-use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, block_label};
+use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, PoolEntry, block_label};
 
 /// The machine opcode's name.
 fn opcode_name(code: u32) -> Option<&'static str> {
@@ -93,6 +93,8 @@ enum Operand {
     Fpr(Vreg),
     /// A global by id, and the offset into it.
     Symbol(u32, i64),
+    /// A constant pool entry, by its place in the function's pool.
+    Pool(usize),
     /// A routine the legalizer named (a libcall), by index into the DAG's
     /// symbol names.
     External(u32),
@@ -640,6 +642,8 @@ struct Emitter<'a> {
     fvregs: HashMap<u32, Vreg>,
     fvalues: HashMap<(u32, u8), Vreg>,
     ops: Vec<Op>,
+    /// The constant pool entries the function has used so far.
+    pool: std::cell::RefCell<Vec<PoolEntry>>,
 }
 
 impl Emitter<'_> {
@@ -709,6 +713,9 @@ impl Emitter<'_> {
             }
             NodeData::Block(id) => Ok(Operand::Block(id)),
             NodeData::Symbol(id) if node.opcode == ISD::TargetExternalSymbolNode => Ok(Operand::External(id)),
+            NodeData::PoolIndex(index, 0) if node.opcode == ISD::TargetConstantPool => {
+                Ok(Operand::Pool(self.pool_entry(index)))
+            }
             // The zero register as an operand of `CSINC` and the like.
             NodeData::PhysReg(id) if gpr_of(id).is_ok_and(|g| g == Gpr::R31) => Ok(Operand::Reg(Gpr::R31)),
             NodeData::Global { symbol, offset } if node.opcode == ISD::TargetGlobalAddress => {
@@ -980,6 +987,39 @@ impl Emitter<'_> {
         }))
     }
 
+    /// The place in the function's pool of entry `index` of this block's DAG,
+    /// made on first use: equal constants of the function share one entry.
+    fn pool_entry(
+        &self,
+        index: u32,
+    ) -> usize {
+        let (bits, vt) = self.dag.constant_pool[index as usize];
+        let bytes = vt.size_in_bits().div_ceil(8) as usize;
+        let image = bits.to_le_bytes()[..bytes].to_vec();
+        let mut pool = self.pool.borrow_mut();
+        let at = match pool.iter().position(|entry| entry.bytes == image) {
+            Some(at) => at,
+            None => {
+                let label = format!("{}CPI_{}_{}", self.globals.local_prefix(), self.function, pool.len());
+                pool.push(PoolEntry { label, bytes: image, align: bytes });
+                pool.len() - 1
+            }
+        };
+        at
+    }
+
+    /// The relocation target of a symbol or pool operand.
+    fn symbol_target(
+        &self,
+        operand: &Operand,
+    ) -> Result<(Target, bool), String> {
+        match operand {
+            Operand::Symbol(id, addend) => self.target(*id, *addend),
+            Operand::Pool(at) => Ok((Target::Symbol { name: self.pool.borrow()[*at].label.clone(), addend: 0 }, false)),
+            _ => Err("an operand that is no symbol".into()),
+        }
+    }
+
     /// The relocation target of global `id` at `addend`, and whether it is a
     /// GOT slot.
     fn target(
@@ -1038,8 +1078,8 @@ impl Emitter<'_> {
                     Addr::Pre { base: stepped, imm }
                 }
             }
-            (AddressForm::Scaled, [Operand::Reg(base), Operand::Symbol(id, offset)]) => {
-                Addr::PageOffset { base: *base, target: self.target(*id, *offset)?.0, got: false }
+            (AddressForm::Scaled, [Operand::Reg(base), symbol @ (Operand::Symbol(..) | Operand::Pool(_))]) => {
+                Addr::PageOffset { base: *base, target: self.symbol_target(symbol)?.0, got: false }
             }
             (form, [base, Operand::Imm(imm)]) => {
                 let imm = *imm as i64 * if form == AddressForm::Scaled { size } else { 1 };
@@ -1310,18 +1350,18 @@ impl Emitter<'_> {
                     }
                 }
                 match (name, operands.as_slice()) {
-                    ("ADRP", [Operand::Symbol(global, addend)]) => {
-                        let (target, _) = self.target(*global, *addend)?;
+                    ("ADRP", [symbol @ (Operand::Symbol(..) | Operand::Pool(_))]) => {
+                        let (target, _) = self.symbol_target(symbol)?;
                         self.ops.push(Op::I(Inst::Adr { page: true, rd, target, got: false }));
                     }
                     // `ADDXri page, :lo12:symbol, 0`
-                    ("ADDXri", [Operand::Reg(rn), Operand::Symbol(global, addend), _]) => {
-                        let (target, _) = self.target(*global, *addend)?;
+                    ("ADDXri", [Operand::Reg(rn), symbol @ (Operand::Symbol(..) | Operand::Pool(_)), _]) => {
+                        let (target, _) = self.symbol_target(symbol)?;
                         self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: *rn, target }));
                     }
                     // `ADRP` and `ADDXri` of one symbol.
-                    ("MOVaddr", [Operand::Symbol(global, addend), _]) => {
-                        let (target, _) = self.target(*global, *addend)?;
+                    ("MOVaddr" | "MOVaddrCP", [symbol @ (Operand::Symbol(..) | Operand::Pool(_)), _]) => {
+                        let (target, _) = self.symbol_target(symbol)?;
                         let page = self.mf.gpr();
                         self.ops.push(Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }));
                         self.ops.push(Op::I(Inst::AddPageOffset { rd, rn: page, target }));
@@ -1383,6 +1423,7 @@ pub fn emit(
         fvregs: HashMap::new(),
         fvalues: HashMap::new(),
         ops: Vec::new(),
+        pool: std::cell::RefCell::new(Vec::new()),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
@@ -1407,5 +1448,6 @@ pub fn emit(
     }
     // The blocks made for critical edges lie after the function's own.
     emitter.mf.blocks.extend(edges);
+    emitter.mf.pool = emitter.pool.take();
     Ok(emitter.mf)
 }
