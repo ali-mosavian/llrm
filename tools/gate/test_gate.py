@@ -1643,3 +1643,10 @@ def test_the_torture_step_runs_the_64_bit_sample_and_fails_when_either_sample_fa
     assert run() == 0
     assert run(FAIL64="1") == 1, "a wrong 64-bit result must fail the step"
     assert run(FAIL32="1") == 1, "the 32-bit sample still fails the step"
+
+
+def test_the_steps_that_wait_on_one_dist_build_get_it_built_once_before_them():
+    """pytest-perf and objsweep waited 10 minutes on the measure step's `cargo build --profile dist` lock, had no CPU of their own and were
+    killed as stalled (gate 9a0cd57af1: 2 of 14 reds, neither a code fault)."""
+    assert gate.shared_builds(["pytest-perf", "objsweep", "measure"]) == [("measure-dist", "python3 tools/measure.py dist")]
+    assert gate.shared_builds(["lib", "fmt"]) == []
