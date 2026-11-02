@@ -733,9 +733,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
                 Some(vec![super::expand_sat::expand_add_sub_sat(self.dag, self.tli, node)])
             }
-            ISD::UAddO | ISD::USubO => Some(super::expand_overflow::expand_uaddsubo(self.dag, self.tli, node)),
-            ISD::UMulO | ISD::SMulO => Some(super::expand_overflow::expand_mulo(self.dag, self.tli, node)),
-            ISD::SAddO | ISD::SSubO => Some(super::expand_overflow::expand_saddsubo(self.dag, self.tli, node)),
             ISD::BuildPair => {
                 // `ExpandNode`: `zext lo | (anyext hi << half)` ([L4318][pin]).
                 //

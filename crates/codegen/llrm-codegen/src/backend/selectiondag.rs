@@ -129,7 +129,6 @@ pub mod emit;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
-pub mod expand_overflow;
 pub mod expand_sat;
 pub mod fold;
 pub mod fp_combine;

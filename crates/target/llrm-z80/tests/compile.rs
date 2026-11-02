@@ -431,17 +431,6 @@ fn a_result_the_convention_has_no_registers_for_is_refused_not_a_panic() {
     assert!(why.contains("no registers"), "{why}");
 }
 
-/// `__builtin_add_overflow` on `unsigned` (`overflow_builtins`) was refused:
-/// `UAddO` on `i16` had no expansion ("convert node to libcall").
-#[test]
-fn an_unsigned_add_with_overflow_compiles() {
-    let text = compiled(
-        "declare { i16, i1 } @llvm.uadd.with.overflow.i16(i16, i16)\ndefine i16 @f(i16 %a, i16 %b) {\n  %p = call { i16, i1 } @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)\n  %s = extractvalue { i16, i1 } %p, 0\n  %o = extractvalue { i16, i1 } %p, 1\n  %z = zext i1 %o to i16\n  %r = add i16 %s, %z\n  ret i16 %r\n}",
-        "f",
-    );
-    assert!(text.contains("add hl"), "{text}");
-}
-
 /// `abi::z80()` parsed calling.toml on every call lowering: 12% of a debug
 /// compile of tests/run/c/memory_expansion.c. The convention is parsed once.
 #[test]
