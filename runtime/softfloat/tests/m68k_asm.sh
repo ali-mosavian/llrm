@@ -4,14 +4,14 @@
 #     GEN=tests/gen_vectors_edge.c: operands aimed at the rare paths
 #   tests/m68k_asm.sh clocks CPU OUT [vectors.h]   one exe per op (m68k_clocks.c -DOP=0..4) in OUT, priced with `cycles --exe`
 #   tests/m68k_asm.sh obj CPU OUT.o           the object alone (bytes: m68k-linux-gnu-size / nm -S)
-# CPU 68000 (base body) or 68020 (--defsym M68020=1). Env: GCC_M68K (default ~/scratch/gcc-m68k/root).
+# CPU 68000 (base body), 68020 (--defsym M68020=1) or 68060 (also M68060=1). Env: GCC_M68K (default ~/scratch/gcc-m68k/root).
 set -e
 cd "$(dirname "$0")/.."
 MODE=$1; CPU=$2
 R=${GCC_M68K:-$HOME/scratch/gcc-m68k/root}; B=$R/usr/bin/m68k-linux-gnu
 export LD_LIBRARY_PATH=$R/usr/lib/x86_64-linux-gnu
 T=$(mktemp -d); trap 'rm -r $T' EXIT
-DEF=; [ "$CPU" = 68000 ] || DEF="--defsym M68020=1"
+DEF=; [ "$CPU" = 68000 ] || DEF="--defsym M68020=1"; [ "$CPU" = 68060 ] && DEF="$DEF --defsym M68060=1"
 $B-as -m$CPU $DEF -o $T/sf32.o src/m68k/sf32.s
 [ "$MODE" = obj ] && { cp $T/sf32.o "$3"; exit 0; }
 CF="-m$CPU -msoft-float -O2 -nostdlib -static -ffreestanding -Iinclude -I$T"

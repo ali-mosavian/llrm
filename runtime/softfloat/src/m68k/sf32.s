@@ -1,11 +1,17 @@
 | IEEE-754 binary32 for the m68k: round to nearest even, denormals, inf, NaN.
 | libgcc's ABI: arguments on the stack, result in d0, d0-d1/a0-a1 scratch.
-| Base body 68000/68010; --defsym M68020=1 selects mulu.l, divu.l and bfffo.
+| Base body 68000/68010; --defsym M68020=1 selects bfffo and the 64-bit mulu.l/divu.l (68020/030/040);
+| add --defsym M68060=1 for the 68060, which traps on the 64-bit forms: mul and div keep the 16-bit cores.
 | Packing: sign | (e - 1) << 23 plus the 24-bit significand m (implicit bit at 23),
 | so a rounding carry moves into the exponent and reaches inf by itself.
 | Rounding: m with a 32-bit guard word (round bit 31, sticky below).
 
 	.text
+.ifdef M68020
+.ifndef M68060
+WIDE = 1
+.endif
+.endif
 
 	.globl	__negsf2
 	.type	__negsf2,@function
@@ -350,7 +356,7 @@ __mulsf3:
 	bset	#24,%d0			| ma << 1
 	lsl.l	#7,%d1
 	bset	#31,%d1			| mb << 8
-.ifdef M68020
+.ifdef WIDE
 	mulu.l	%d1,%d4:%d0
 .else
 	move.l	%d0,%d2
@@ -495,7 +501,7 @@ __divsf3:
 	bcc	.Ldrange
 .Ldgo:					| d0 = U < d1 = V: q = U * 2^32 / V, 2^31 <= q < 2^32
 	move.w	%d2,%a0
-.ifdef M68020
+.ifdef WIDE
 	move.l	%d0,%d4
 	moveq	#0,%d0
 	divu.l	%d1,%d4:%d0		| d0 = q, d4 = remainder

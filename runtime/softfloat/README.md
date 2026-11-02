@@ -72,8 +72,8 @@ Both compiled by llrm-cc (keep/llrm-cc_soft + llc_soft_merged, 2026-11-02), text
 
 ## m68k assembly (`src/m68k/sf32.s`)
 
-Hand-written `__addsf3 __subsf3 __mulsf3 __divsf3 __negsf2`, the compares, `__unordsf2` and `__floatsisf __floatunsisf __fixsfsi __fixunssfsi`, libgcc's ABI, exact like `sf32.c`. Base body 68000/68010; `as --defsym M68020=1` uses `mulu.l`, `divu.l`, `bfffo`.
-`tests/m68k_asm.sh run CPU [n] [main.c]` checks it under qemu-m68k (`GEN=tests/gen_vectors_edge.c` aims at the rare paths; `tests/m68k_asm_regs.c` the callee-saved registers, `tests/m68k_asm_conv.c` float to int saturation); `tests/m68k_asm.sh clocks CPU OUT [vectors.h]` builds the pricing executables.
+Hand-written `__addsf3 __subsf3 __mulsf3 __divsf3 __negsf2`, the compares, `__unordsf2` and `__floatsisf __floatunsisf __fixsfsi __fixunssfsi`, libgcc's ABI, exact like `sf32.c`. Base body 68000/68010; `as --defsym M68020=1` (68020/030/040) uses `mulu.l`, `divu.l`, `bfffo`; adding `--defsym M68060=1` keeps the 16-bit multiply and divide, since the 68060 traps on the 64-bit forms.
+`tests/m68k_asm.sh run CPU [n] [main.c]` checks it under qemu-m68k (`GEN=tests/gen_vectors_edge.c` aims at the rare paths; `tests/m68k_asm_regs.c` the callee-saved registers, `tests/m68k_asm_conv.c` float to int saturation, `tests/m68k_asm_rows.c` one row per fixed bug); `tests/m68k_asm.sh clocks CPU OUT [vectors.h]` builds the pricing executables.
 
 ## binary64 (C)
 
