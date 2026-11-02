@@ -2332,7 +2332,11 @@ fn priced_depth(
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
             let module = &program.modules[0];
-            let id = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).map(|(id, _, _)| id).unwrap();
+            let id = module
+                .functions()
+                .find(|(_, global, _)| global.name.as_deref() == Some(name))
+                .map(|(id, _, _)| id)
+                .unwrap();
             let frequencies = crate::walk::self_calls(module, &program.layout, id, false).expect("a tree");
             let tti = program.target.tti().expect("a cost model");
             depth = crate::walk::priced_copy_depth(

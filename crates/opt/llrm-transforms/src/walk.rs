@@ -250,6 +250,14 @@ impl ProgramPass for Walk {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
             let private = private(program, at);
             let module = &mut program.modules[at];
+            let words: std::collections::BTreeMap<GlobalId, i64> = module
+                .functions()
+                .map(|(id, _, function)| {
+                    (id, crate::calleepop::stack_words(module, &program.layout, &*program.target, function))
+                })
+                .collect();
+            let mut params = params;
+            params.stack_words = params.priced_call.map(|_| &words);
             let mut recursive = crate::inline::recursive(module);
             let addressed = llrm_mir::callgraph::addressed(module);
             // The calls to each function as the splices leave them, as LLVM's
@@ -681,8 +689,10 @@ pub(crate) fn priced_copy_depth(
         .walk()
         .filter_map(|(_, inst)| (llrm_mir::memory::callee(&module.context, body, inst) == Some(id)).then_some(inst))
         .collect();
-    let Some(&first) = sites.first() else { return 0 };
-    let arguments = body.instruction(first).operands.len().saturating_sub(1);
+    if sites.is_empty() {
+        return 0;
+    }
+    let arguments = crate::calleepop::stack_words(module, layout, program_target, body) as usize;
     let calls: f64 = sites.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum();
     let bytes = program_target.size_costs();
     let price = llrm_mir::callprice::CallPrice::new(&program_target.costs(), &bytes, arguments, rate);

@@ -17,11 +17,12 @@
 //! LLVM's `SelectionDAG::computeKnownBits`
 //! ([L3349](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L3349)).
 
+use llrm_mir::knownbits::Bits;
+
 use super::dag::{BooleanContents, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::ISD;
 use super::x86_lowering::x86isd;
-use llrm_mir::knownbits::Bits;
 
 /// `MaxRecursionDepth`.
 const MAX_DEPTH: u32 = 6;

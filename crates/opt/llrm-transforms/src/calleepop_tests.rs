@@ -227,3 +227,44 @@ b0:
     let marked = run(&format!("{}{caller}", CALLEE.replace("%c) {", "%c) noipa {")));
     assert!(!marked.contains("fastcc"), "{marked}");
 }
+
+/// D13 credited every call with a word of argument per operand (`mov_mr +
+/// mov_rm`), 12 clocks for two arguments at i386, though the register
+/// convention (qlight's `ls_scale_byte`, `cc 1005`) pushes none: the sheet said
+/// 67 clocks a call where the saving measured about 22.
+#[test]
+fn a_register_argument_call_pushes_no_stack_word() {
+    let text = format!(
+        "{}define internal i16 @on_stack(i16 %a, i16 %b) {{
+b0:
+  %x = add i16 %a, %b
+  ret i16 %x
+}}
+define internal cc 1005 i16 @in_registers(i16 %a, i16 %b) {{
+b0:
+  %x = add i16 %a, %b
+  ret i16 %x
+}}
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = parsed(&text);
+    let mut words = (-1, -1);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default().calling(Some(llrm_target::Target::calling(&llrm_x86_m16::M16)))),
+        |program: &mut llrm_mir::program::Program| {
+            let module = &program.modules[0];
+            let of = |name: &str| {
+                let (_, _, function) =
+                    module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap();
+                crate::calleepop::stack_words(module, &program.layout, &*program.target, function)
+            };
+            words = (of("on_stack"), of("in_registers"));
+            Ok::<(), String>(())
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(words, (2, 0));
+}

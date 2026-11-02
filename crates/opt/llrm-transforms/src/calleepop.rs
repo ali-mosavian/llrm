@@ -197,15 +197,7 @@ fn decided(
             let function = module.global(callee).function()?;
             let (_, parameters, variadic) = module.signature(function.ty);
             let twin = target.callee_pop(function.calling_convention)?;
-            // The stack words its arguments take: each a word at least, a dword
-            // or a far pointer two; the convention's registers take
-            // the ones it puts there.
-            let arguments: Vec<Argument> =
-                parameters.iter().map(|&ty| argument_of(&module.context.types, layout, ty)).collect();
-            let bytes = target
-                .stack_argument_bytes(function.calling_convention, &arguments)
-                .unwrap_or_else(|| arguments.iter().map(|one| one.bytes.max(2)).sum());
-            let words = (bytes + 1) / 2;
+            let words = stack_words(module, layout, target, function);
             let returns =
                 function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Ret)).count()
                     as i64;
@@ -226,6 +218,24 @@ fn decided(
         .flat_map(|(callee, &twin)| calls[callee].iter().map(move |&(caller, inst)| (caller, inst, twin)))
         .collect();
     (chosen, sites)
+}
+
+/// The stack words a call of `function` pushes: each argument a word at least,
+/// a dword or a far pointer two; the convention's registers take the ones it
+/// puts there, so a register-argument call pushes none.
+pub(crate) fn stack_words(
+    module: &Module,
+    layout: &DataLayout,
+    target: &dyn Machine,
+    function: &llrm_mir::module::Function,
+) -> i64 {
+    let (_, parameters, _) = module.signature(function.ty);
+    let arguments: Vec<Argument> =
+        parameters.iter().map(|&ty| argument_of(&module.context.types, layout, ty)).collect();
+    let bytes = target
+        .stack_argument_bytes(function.calling_convention, &arguments)
+        .unwrap_or_else(|| arguments.iter().map(|one| one.bytes.max(2)).sum());
+    (bytes + 1) / 2
 }
 
 /// What an argument of type `ty` is, for where a convention puts it.

@@ -72,9 +72,9 @@
 //!   of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
 //! - D13: at speed, the D11 bound is lifted where the call's clocks (the
-//!   target's call, return and argument words, by the site's frequency over
-//!   the caller's entry) are worth the copy's added bytes at the target's
-//!   rate (`InlineParams::priced_call`), the price REC-1 uses for its copies.
+//!   target's call, return and argument words, by the site's frequency over the
+//!   caller's entry) are worth the copy's added bytes at the target's rate
+//!   (`InlineParams::priced_call`), the price REC-1 uses for its copies.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot or a global the caller stored a constant to and
 //!   whose callee loads through that parameter, is inlined if the caller,
@@ -199,6 +199,10 @@ pub struct InlineParams<'a> {
     /// With `priced_call`, the target's code bytes by operation
     /// (`Machine::size_costs`), which price the copy.
     pub byte_costs: Option<&'a llrm_mir::target::OperationCosts>,
+    /// With `priced_call`, the stack words a call of each callee pushes
+    /// (`calleepop::stack_words`): a register-argument call pushes none, and
+    /// pays no word of argument.
+    pub stack_words: Option<&'a std::collections::BTreeMap<GlobalId, i64>>,
 }
 
 /// What a call costs in clocks beyond its own instruction, and what a byte of
@@ -242,6 +246,7 @@ impl InlineParams<'_> {
             tti: Tti::Generic,
             priced_call: None,
             byte_costs: None,
+            stack_words: None,
         }
     }
 
@@ -2044,8 +2049,12 @@ impl<'a> Analyzer<'a> {
         let Some(price) = self.params.priced_call.filter(|_| self.site.caller_size == CallerSize::Speed) else {
             return false;
         };
-        let arguments = self.site.caller.instruction(self.site.call).operands.len().saturating_sub(1) as i64;
-        let clocks = (price.clocks + arguments * price.per_argument) as f64 * self.site.relative_frequency.unwrap_or(1.0);
+        let arguments =
+            self.params.stack_words.and_then(|words| words.get(&self.site.callee_id).copied()).unwrap_or_else(|| {
+                self.site.caller.instruction(self.site.call).operands.len().saturating_sub(1) as i64
+            });
+        let clocks =
+            (price.clocks + arguments * price.per_argument) as f64 * self.site.relative_frequency.unwrap_or(1.0);
         let Some(bytes) = self.params.byte_costs else { return false };
         let growth = (crate::walk::function_bytes(self.site.module, self.site.layout, bytes, self.callee)
             - bytes.call_overhead(arguments as usize))
