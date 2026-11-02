@@ -927,6 +927,29 @@ def test_a_function_marked_by_name_stays_a_call_while_the_runtime_helpers_inline
     assert calls(crc, "BENCHCRC") == 1 and calls(kernel, r"B\$FMID") + calls(kernel, r"B\$FASC") == 0
 
 
+def test_basic_and_nib_rows_inline_their_helpers_as_c_does_and_keep_only_the_kernel_a_call():
+    """BASIC and Nib were built with `-fno-inline-functions`, C with its inlining on: parity/memory's helper stayed a call (bq16 186 clocks, nib
+    91, C 15, the kernel folded to a constant). The kernel is marked by name; what it calls inlines, so the three read the same program."""
+    import subprocess
+    import tempfile
+
+    def asm(variant) -> str:
+        with tempfile.TemporaryDirectory() as where:
+            out = Path(where) / "p.s"
+            tool = "llrm-nib" if variant.language == "nib" else "llrm-qb"
+            extra = ["--procedure-segments"] if variant.language == "nib" else ["--dialect", "qb45", "-fqb-runtime=llrm"]
+            flags = bench.nib_flags(variant) if variant.language == "nib" else bench.compile_flags(variant, "O2")
+            done = subprocess.run([str(bench.BIN / tool), str(variant.source), *extra, *flags, "-O2", "-S", "-o", str(out)], capture_output=True, text=True)
+            assert done.returncode == 0, done.stderr
+            return out.read_text()
+
+    for variant in bench.variants(bench.BENCH / "parity" / "memory"):
+        if variant.language not in ("nib", "bq16"):
+            continue
+        kernel = asm(variant).split(f"{variant.region.upper() if variant.language == 'bq16' else '_' + variant.region} proc")[1].split(" endp")[0]
+        assert "call" not in kernel, f"{variant.language}: the helper stayed a call in the kernel"
+
+
 def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     import subprocess
 
@@ -942,7 +965,7 @@ def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
     """ed700f10ce built float Nib rows with -fexcess-precision=standard: against main's rows (compiled fast; the flag recorded in them did nothing there) fpbench read 203869 clocks against 156348,
     a "regression" of the flag. The rows are measured fast, like main's."""
     float_nib = next(v for v in bench.variants(bench.BENCH / "nbody_single") if v.language == "nib")
-    assert not any("excess-precision" in one for one in bench.nib_flags())
+    assert not any("excess-precision" in one for one in bench.nib_flags(float_nib))
     assert not any("excess-precision" in one for one in bench.compiles(float_nib, "Os", Path("w"), "nbody_single")[0][1])
 
 

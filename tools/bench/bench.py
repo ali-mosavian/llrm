@@ -193,17 +193,18 @@ def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | 
 
 def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     """The flags the harness gives the compiler for `variant` at -`opt`: the kernel stays a call (inlined into main it has no entry to
-    count from), a C one by the volatile pointer in `kept_a_call` or else the flag, a BASIC one (a private SUB called once) by turning
-    called-once inlining off too. LLRM_BENCH_FLAGS: more flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it."""
-    flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    count from), a C one by the volatile pointer in `kept_a_call` or else the flag, a BASIC one by name (`-fno-inline=KERNEL`) so that its
+    helpers inline as C's do. LLRM_BENCH_FLAGS: more flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it."""
     if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
-        flags.append("-fno-inline-functions-called-once")
-    return flags
+        kernel = [f"-fno-inline={variant.region}"]
+    else:
+        kernel = [] if kept else ["-fno-inline-functions"]
+    return [f"-{opt}", *kernel, *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
-def nib_flags() -> list[str]:
-    """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+def nib_flags(variant: Variant) -> list[str]:
+    """What nib-build.sh is given for a Nib benchmark's compile: the kernel by name, as BASIC's."""
+    return [f"-fno-inline={variant.region}", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -212,7 +213,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -246,7 +247,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
