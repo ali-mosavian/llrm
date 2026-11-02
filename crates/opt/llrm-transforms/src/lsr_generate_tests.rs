@@ -235,27 +235,19 @@ fn too_many_formulae_are_narrowed_to_the_shared_register() {
 
 /// `opt -passes=loop-reduce` (LLVM 20, i386) on this loop gives a pointer
 /// advancing by 4 for the store and a counter from `%n` down to zero for the
-/// exit test: each use keeps its first formula, one register each, where
-/// sharing one induction variable would take a scaled index and a base.
+/// exit test. DEVIATE LG3: the address also takes the exit test's counter,
+/// `(p + 4n) + 4 * {-n,+,1}`, which ends at zero: one recurrence and no
+/// pointer walk, where the scaled index and a base are as cheap as the walk.
 #[test]
-fn the_solver_keeps_the_pointer_walk_and_counts_the_exit_down() {
+fn the_solver_shares_the_exit_counter_with_the_store() {
     generated_for("i486", STORE, |_, se, lsr, _| {
         let solution = lsr.solve(se);
         assert_eq!(solution.len(), 2);
-        for (lu, &f_idx) in lsr.uses.iter().zip(&solution) {
-            let f = &lu.formulae[f_idx];
-            assert_eq!((f.base_regs.len(), f.scaled_reg, f.scale), (1, None, 0), "{:?} {f:?}", lu.kind);
-            let reg = f.base_regs[0];
-            let step = se.as_constant(se.operands(reg)[1].scev).map(|c| c.sext_value());
-            match lu.kind {
-                Kind::Address => assert_eq!(step, Some(4)),
-                Kind::ICmpZero => {
-                    assert_eq!(step, Some(-1));
-                    assert!(f.counts_down_to_zero(se));
-                }
-                other => panic!("{other:?}"),
-            }
-        }
+        let chosen: Vec<_> = lsr.uses.iter().zip(&solution).map(|(lu, &f)| (lu.kind, &lu.formulae[f])).collect();
+        let (_, exit) = chosen.iter().find(|(kind, _)| *kind == Kind::ICmpZero).expect("the exit test");
+        let (_, store) = chosen.iter().find(|(kind, _)| *kind == Kind::Address).expect("the store");
+        assert!(exit.has_zero_end(), "{exit:?}");
+        assert_eq!((store.scaled_reg, store.scale), (Some(exit.base_regs[0]), 4), "{store:?}");
     });
 }
 

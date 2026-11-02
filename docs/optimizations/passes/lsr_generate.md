@@ -50,3 +50,11 @@ kept a second counter beside the byte index (examples/dot m16: `dec cx`, a
 32-bit spill). Proof: `the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively`
 (i8 all factors, i16 bounded). Exit: delete the check if the pin's SCEV proves
 the same sext through `isAddRecSExtable`.
+
+DEVIATE LG3: an address base that is an addrec of the loop, `R = r0 + r*i`, also
+gets the form `(r0 - r*z0) + r * Z` for each exit counter `Z = {z0,+,z}` that
+ends at zero when `r` divides `z` and `r` is a legal scale: the address shares
+the exit counter, as gcc ivopts does (`ubase - ratio*cbase`). The pin has no
+such formula and keeps a pointer walk beside the counter (examples/dot m16:
+two address walks and a counter; 854 shares one). Exit: none, a gcc
+translation; if LLVM gains it, delete `generate_end_biased`.

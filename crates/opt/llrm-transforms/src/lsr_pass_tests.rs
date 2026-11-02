@@ -968,11 +968,12 @@ fn lsr_scevs_made(loops: usize) -> usize {
 /// LSR forgot the expressions of every value an edit touched, which LLVM's
 /// never does (it has no `forget` call: only a deleted or replaced value is
 /// told to ScalarEvolution), and analysed them again for the next look: 30
-/// values a loop against 20 (branches1024: `mir lsr` 640 -> 320 Minstr).
+/// values a loop against 20 (branches1024: `mir lsr` 640 -> 320 Minstr). The
+/// end-biased formulae (LG3) make two more for the exit counter's bias: 22.
 #[test]
 fn the_expressions_of_a_value_an_edit_touched_are_kept_through_lsr() {
     let loops = 16;
-    assert!(lsr_scevs_made(loops) <= loops * 21, "{} values made", lsr_scevs_made(loops));
+    assert!(lsr_scevs_made(loops) <= loops * 22, "{} values made", lsr_scevs_made(loops));
 }
 
 /// bench/sieve at m16: the inner loop starts at `i * i`, a quadratic addrec of

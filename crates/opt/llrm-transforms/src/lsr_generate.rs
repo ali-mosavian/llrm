@@ -1035,6 +1035,101 @@ impl Collection<'_, '_> {
             }
         }
         self.generate_cross_use_constant_offsets(se);
+        self.generate_end_biased(se);
+    }
+
+    /// `GenerateEndBiased` (DEVIATE LG3, gcc's `ubase - ratio * cbase`,
+    /// `get_computation_aff_1`): an address that steps by `r` times the step of
+    /// a register `Z` that ends at zero on the exit trip is `(a - r * start(Z))
+    /// + r * Z`. Its formula shares `Z` with the exit test, so the loop keeps
+    /// one counter and the bases sit at the end of their arrays. Neither the
+    /// pin nor gcc builds it: the pin's address uses never name the exit
+    /// test's register, and gcc compares against the end instead.
+    ///
+    /// Work: one formula for each (zero-ending register, address formula
+    /// holding an addrec of this loop), the registers capped at four.
+    pub fn generate_end_biased(
+        &mut self,
+        se: &mut ScalarEvolution,
+    ) {
+        let cx = self.cx;
+        // The registers that end at zero, in the exit test's formulae.
+        let mut zero_ending: Vec<Scev> = Vec::new();
+        for lu in &self.uses {
+            if lu.kind != Kind::ICmpZero {
+                continue;
+            }
+            for f in &lu.formulae {
+                if f.has_zero_end()
+                    && let Some((_, _, header)) = se.match_affine_add_rec(f.base_regs[0])
+                    && header == self.l
+                    && !zero_ending.contains(&f.base_regs[0])
+                {
+                    zero_ending.push(f.base_regs[0]);
+                }
+            }
+        }
+        zero_ending.truncate(4);
+        if zero_ending.is_empty() {
+            return;
+        }
+        for lu_idx in 0..self.uses.len() {
+            if self.uses[lu_idx].kind != Kind::Address {
+                continue;
+            }
+            let (min, max, kind, space) = {
+                let lu = &self.uses[lu_idx];
+                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty)
+            };
+            for i in 0..self.uses[lu_idx].formulae.len() {
+                let f = self.uses[lu_idx].formulae[i].clone();
+                if f.scaled_reg.is_some() {
+                    continue;
+                }
+                for &z in &zero_ending {
+                    let Some((z_start, z_step, _)) = se.match_affine_add_rec(z) else { continue };
+                    for at in 0..f.base_regs.len() {
+                        let reg = f.base_regs[at];
+                        let Some((r_start, r_step, header)) = se.match_affine_add_rec(reg) else { continue };
+                        if header != self.l || se.type_of(r_step) != se.type_of(z) {
+                            continue;
+                        }
+                        // The address steps by a whole number of Z's steps.
+                        let Some(ratio) = get_exact_sdiv(se, cx, r_step, z_step, false) else { continue };
+                        let Some(r) = se.as_constant(ratio).map(|c| c.sext_value() as i64) else { continue };
+                        if r == 0 || !legal_scale(self.tti, min, max, kind, space, &f, r) {
+                            continue;
+                        }
+                        // a - r * start(Z), with the other registers of the
+                        // formula: one invariant register in the preheader.
+                        let ratio_s = se.get_constant_of_type(cx, se.type_of(z), -i128::from(r));
+                        let shifted = se
+                            .get_mul_expr(cx, vec![ScevUse::of(ratio_s), ScevUse::of(z_start)], Flags::default(), 0)
+                            .scev;
+                        let bias = se
+                            .get_add_expr(cx, vec![ScevUse::of(r_start), ScevUse::of(shifted)], Flags::default(), 0)
+                            .scev;
+                        let mut f2 = f.clone();
+                        f2.delete_base_reg(at);
+                        let mut sums: Vec<ScevUse> = f2.base_regs.iter().map(|&b| ScevUse::of(b)).collect();
+                        sums.push(ScevUse::of(bias));
+                        let base = se.get_add_expr(cx, sums, Flags::default(), 0).scev;
+                        if !se.is_loop_invariant(cx, base, Some(self.l)) {
+                            continue;
+                        }
+                        f2.base_regs.clear();
+                        if se.as_constant(base).is_none_or(|c| !c.is_zero()) {
+                            f2.base_regs.push(base);
+                        }
+                        f2.has_base_reg = !f2.base_regs.is_empty();
+                        f2.scaled_reg = Some(z);
+                        f2.scale = r;
+                        f2.canonicalize(se, self.l);
+                        let _ = self.insert_formula(se, lu_idx, &f2);
+                    }
+                }
+            }
+        }
     }
 
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4792
@@ -1156,4 +1251,18 @@ pub(crate) fn zero_test_survives(
 ) -> bool {
     let kept = bits.saturating_sub(factor.trailing_zeros());
     kept > 0 && kept < 128 && reach < 1u128 << kept
+}
+
+/// Whether `f` with its scaled register taken `scale` times is a legal
+/// address of the use.
+fn legal_scale(
+    tti: &dyn llrm_mir::tti::Tti,
+    min: Immediate,
+    max: Immediate,
+    kind: Kind,
+    access: crate::lsr_formula::MemAccessTy,
+    f: &Formula,
+    scale: i64,
+) -> bool {
+    is_legal_use(tti, min, max, kind, access, f.base_gv.is_some(), f.base_offset, true, scale)
 }
