@@ -81,13 +81,16 @@ pub fn fold(
         .collect();
     for at in 0..blocks.len() {
         let ret = match blocks[at].insts.last() {
-            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => {
-                blocks.iter().find(|block| &block.label == label).and_then(|block| block.insts.first().cloned())
-            }
+            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => blocks
+                .iter()
+                .find(|block| &block.label == label)
+                .and_then(|block| Some((block.insts.first().cloned()?, block.locs.first().copied().flatten()))),
             _ => None,
         };
-        if let Some(ret) = ret {
+        // The copy keeps the return's own source place, not the branch's.
+        if let Some((ret, place)) = ret {
             *blocks[at].insts.last_mut().expect("a branch") = ret;
+            *blocks[at].locs.last_mut().expect("a place per instruction") = place;
         }
     }
     // A fall-through becomes a branch, so that blocks can move.

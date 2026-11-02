@@ -13,6 +13,10 @@ use llrm_debug::Described;
 const FIXTURES: [(&str, Level); 2] =
     [(include_str!("data/debug_o0.ll"), Level::O0), (include_str!("data/debug_o2.ll"), Level::O2)];
 
+/// A loop with a branch in it: phis and critical edges at -O2.
+const PHI_FIXTURES: [(&str, Level); 2] =
+    [(include_str!("data/debug_phi_o0.ll"), Level::O0), (include_str!("data/debug_phi_o2.ll"), Level::O2)];
+
 /// The selector mode is process-wide: one compile sets it at a time.
 static MODE: Mutex<()> = Mutex::new(());
 
@@ -21,9 +25,18 @@ fn described(
     level: Level,
     mode: IselMode,
 ) -> Described {
+    described_on(Platform::Linux, text, level, mode)
+}
+
+fn described_on(
+    platform: Platform,
+    text: &str,
+    level: Level,
+    mode: IselMode,
+) -> Described {
     let _guard = MODE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     driver::set_isel_mode(mode);
-    driver::object_with(text, Platform::Linux, "t", level, true).expect("lowers")
+    driver::object_with(text, platform, "t", level, true).expect("lowers")
 }
 
 fn variables(described: &Described) -> Vec<(String, String)> {
@@ -117,5 +130,53 @@ fn debug_information_leaves_the_dag_code_as_it_was() {
                 .clone()
         };
         assert_eq!(code(false), code(true), "{level:?}");
+    }
+}
+
+fn row_lines(described: &Described) -> BTreeSet<u32> {
+    described.debug.as_ref().expect("debug information").lines.iter().map(|row| row.line).collect()
+}
+
+/// The copies of a phi and the blocks of a critical edge are made by the DAG
+/// path after the lines are known: a source line of the loop must still have a
+/// row, as the hand selector's object has.
+#[test]
+fn a_loop_with_phis_keeps_every_source_line_with_code() {
+    for (text, level) in PHI_FIXTURES {
+        let hand = row_lines(&described(text, level, IselMode::Hand));
+        let dag = row_lines(&described(text, level, IselMode::Dag));
+        assert!(hand.len() > 2, "premise: the hand selector has rows");
+        assert_eq!(dag, hand, "{level:?}");
+    }
+}
+
+/// The fixture for Mach-O: clang's Darwin datalayout and triple.
+fn darwin(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\""
+                    .to_owned()
+            } else if line.starts_with("target triple") {
+                "target triple = \"arm64-apple-macosx11.0.0\"".to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Mach-O: the rows and variable names are the hand selector's, as on Linux.
+#[test]
+fn the_dag_path_has_the_same_rows_and_variables_on_darwin() {
+    for (text, level) in FIXTURES.into_iter().chain(PHI_FIXTURES) {
+        let text = darwin(text);
+        let hand = described_on(Platform::Darwin, &text, level, IselMode::Hand);
+        let dag = described_on(Platform::Darwin, &text, level, IselMode::Dag);
+        assert!(row_lines(&hand).len() > 2, "premise: the hand selector has rows");
+        assert_eq!(row_lines(&dag), row_lines(&hand), "{level:?}");
+        let names = |described: &Described| variables(described).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert_eq!(names(&dag), names(&hand), "{level:?}");
     }
 }
