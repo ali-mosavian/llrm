@@ -127,7 +127,10 @@ pub fn compile_function(
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
-    if options.level != crate::driver::Level::O0 {
+    if matches!(
+        options.level,
+        crate::driver::Level::O2 | crate::driver::Level::O3 | crate::driver::Level::Os | crate::driver::Level::Oz
+    ) {
         crate::phi_elimination::split_phi_edges(&mut f);
     }
     phi_elimination(&mut f);
@@ -135,6 +138,9 @@ pub fn compile_function(
     remove_unreachable_blocks(&mut f);
     fix_irreducible_control_flow(&mut f);
     late_eh_prepare(&mut f);
+    if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
+        remove_unreachable_blocks(&mut f);
+    }
     if options.stackify {
         reg_stackify(&mut f);
     }

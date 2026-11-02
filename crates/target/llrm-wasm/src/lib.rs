@@ -3,6 +3,7 @@
 pub mod argument_move;
 pub mod asm_strings;
 pub mod branch;
+pub mod branch_fold;
 pub mod cfg;
 pub mod cfg_sort;
 pub mod cfg_stackify;

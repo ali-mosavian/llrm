@@ -131,6 +131,11 @@ fn liveness(f: &Function) -> (Vec<HashSet<VReg>>, Vec<HashSet<VReg>>) {
 /// needs sits on the edge and the coalescer can join it. Back edges of a loop
 /// are kept whole, to leave the loop free of out-of-line blocks.
 ///
+/// DEVIATE: run at -O2 and above only; the pin runs it wherever `LiveVariables`
+/// does, -O1 too, where it pays the split block's bytes (pin `llc -O1` sieve
+/// 529 B -> 539 B with it). Reason: wasm has no coalescer at -O1 either, and
+/// at -O2 the pin's size is the same with and without it. Exit: none.
+///
 /// DEVIATE: the edges are chosen on the function as it is before any split,
 /// and split afterwards; the pin decides one block at a time on the function
 /// so far. Reason: a split adds an empty block, which changes no register's
