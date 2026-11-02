@@ -45,8 +45,9 @@ impl Flags {
         right: u64,
         bits: u32,
     ) -> Self {
-        let mask = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
-        let top = 1u64 << (bits - 1);
+        let width = bits.clamp(1, 64);
+        let mask = u64::MAX >> (64 - width);
+        let top = 1u64 << (width - 1);
         let (left, right) = (left & mask, right & mask);
         if name == "test" {
             let result = left & right;
