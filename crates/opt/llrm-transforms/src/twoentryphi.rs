@@ -341,10 +341,17 @@ pub fn folded(
     // select is a branch, folding runs the arms' code on both paths and still
     // branches, so the selects count.
     if !spec.tti.has_cmov() && !hoist.is_empty() {
-        let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {
-            let ty = Ty::of(&context.types, function.instruction(phi).ty);
-            all + ty.map_or(Cost::INVALID, |ty| spec.tti.cmp_sel_cost(CmpSel::Select, ty, crate::speculate::cost_kind(function)))
-        });
+        let selects = edges::phis(function, block)
+            .iter()
+            .fold(
+                Cost::FREE,
+                |all, &phi| {
+                    let ty = Ty::of(&context.types, function.instruction(phi).ty);
+                    all + ty.map_or(Cost::INVALID, |ty| {
+                        spec.tti.cmp_sel_cost(CmpSel::Select, ty, crate::speculate::cost_kind(function))
+                    })
+                },
+            );
         if (cost + selects).value > THRESHOLD * Cost::BASIC.value || !(cost + selects).valid {
             return changed;
         }
