@@ -1065,3 +1065,43 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
     let after = printed(&module);
     assert!(after.contains("[ 5, %b1 ]"), "{after}");
 }
+
+/// A byte index stepping by 2 against a doubled limit kept a second counter
+/// (`{n,+,-1}`, `dec cx`) beside the index, and a spill: examples/dot m16.
+#[test]
+fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
+    let mut module = parsed(&format!("{DOS}{DOT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
+}
+
+const DOT: &str = "
+define i32 @dot(ptr %0, ptr %1, i16 %2) {
+  %4 = icmp sgt i16 %2, 0
+  br i1 %4, label %5, label %19
+5:
+  br label %6
+6:
+  %7 = phi i16 [ %17, %6 ], [ 0, %5 ]
+  %8 = phi i32 [ %16, %6 ], [ 0, %5 ]
+  %9 = getelementptr inbounds nuw [2 x i8], ptr %0, i16 %7
+  %10 = load i16, ptr %9, align 2
+  %11 = sext i16 %10 to i32
+  %12 = getelementptr inbounds nuw [2 x i8], ptr %1, i16 %7
+  %13 = load i16, ptr %12, align 2
+  %14 = sext i16 %13 to i32
+  %15 = mul nsw i32 %14, %11
+  %16 = add nsw i32 %15, %8
+  %17 = add nuw nsw i16 %7, 1
+  %exitcond = icmp eq i16 %17, %2
+  br i1 %exitcond, label %18, label %6
+18:
+  br label %19
+19:
+  %20 = phi i32 [ 0, %3 ], [ %16, %18 ]
+  ret i32 %20
+}
+";
