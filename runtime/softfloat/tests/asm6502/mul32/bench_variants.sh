@@ -52,7 +52,7 @@ j=i+1
 while s[j][0]==s[i][0]: j+=1
 print('  llvm-mos routine bytes (address span of __mulsi3 to the next symbol):', s[j][0]-s[i][0])
 PY
-for v in "" _v2 _v2b _v3; do
+for v in "" _v2 _v2y _v2b _v3; do
   n="ours$v"; [ -z "$v" ] && n="ours_v1"
   run "$n" llvmmos_mulsi3$v.s
   $B/clang --target=mos -I$INC -c llvmmos_mulsi3$v.s -o $T/o.o && echo "  routine bytes: $($B/llvm-size $T/o.o | awk 'NR==2{print $1}')"

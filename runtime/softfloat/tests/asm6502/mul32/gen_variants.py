@@ -33,6 +33,16 @@ def v2b():
     s += '.Ln:\n    asl %s\n' % A[0] + ''.join('    rol %s\n' % A[i] for i in range(1, 4))
     s += '    lsr %s\n    bne .Lb\n    inx\n    cpx #4\n    bne .Lby\n' % M
     return s + tail()
+def v2y():
+    s = HEAD + '    lda #0\n' + ''.join('    sta %s\n' % r for r in R[:3]) + '    tay\n    ldx #$fc\n.Lby:\n    lda __rc8,x\n    beq .Lmv\n    sec\n    ror a\n    sta %s\n.Lb:\n    bcc .Ln\n    clc\n' % M
+    for i in range(3): s += '    lda %s\n    adc %s\n    sta %s\n' % (R[i], A[i], R[i])
+    s += '    tya\n    adc %s\n    tay\n' % A[3]
+    s += '.Ln:\n    asl %s\n' % A[0] + ''.join('    rol %s\n' % A[i] for i in range(1, 4))
+    s += '    lsr %s\n    bne .Lb\n    beq .Lnx\n.Lmv:\n' % M
+    s += '    lda %s\n    sta %s\n    lda %s\n    sta %s\n    lda %s\n    sta %s\n    lda #0\n    sta %s\n' % (A[2], A[3], A[1], A[2], A[0], A[1], A[0])
+    s += '.Lnx:\n    inx\n    bne .Lby\n'
+    return s + '    lda __rc12\n    sta __rc2\n    sty __rc3\n    ldx __rc11\n    lda __rc10\n    rts\n'
+open('llvmmos_mulsi3_v2y.s', 'w').write(v2y())
 open('llvmmos_mulsi3_v2b.s', 'w').write(v2b())
 open('llvmmos_mulsi3_v2.s', 'w').write(v2())
 open('llvmmos_mulsi3_v3.s', 'w').write(v3())
