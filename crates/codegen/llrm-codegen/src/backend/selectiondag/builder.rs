@@ -158,12 +158,13 @@ pub struct TargetNodes {
     pub calling: Option<&'static dyn TargetCalling>,
 }
 
-/// The clock side of a size-only pick (`fill_is_smaller`): the longer form
-/// is taken only while the bytes it saves, at `milliclocks_per_byte` each,
-/// pay for the clocks it adds. All prices come from the target description.
+/// The clock side of a fill at speed (`fill_is_smaller`): the longer form is
+/// taken only while the bytes it saves, at the target's speed rate, pay for
+/// the clocks it adds. Tuned for size the bytes decide and no price is read.
+/// All prices come from the target description.
 #[derive(Clone, Copy, Debug)]
 pub struct SizeTrade {
-    /// Clocks a byte of code is worth, in thousandths.
+    /// Clocks a byte of code is worth at speed, in thousandths.
     pub milliclocks_per_byte: i64,
     /// A `rep stos` fill: its fixed clocks, and each byte it stores.
     pub fill: i64,
