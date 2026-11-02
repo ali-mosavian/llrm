@@ -33,7 +33,9 @@ Hand-written `__addsf3`/`__subsf3`: IEEE binary32, RNE, denormals, inf, NaN. Arg
 Measured: add+sub 672 B, mul+div 609 B; cycles per call add 426, sub 435, mul 1615, div 2377. `src/6502/sf32_conv.s` adds the four int conversions (380 B; itof about 275 cycles, ftoi about 190 on the run.sh mix).
 `src/6502/sf32_explog.s` adds `expf`/`logf` as byte-coded programs over the asm arithmetic (1042 B code, 83 B BSS, about 25k cycles per call), bit-exact against src/mathf.c; `tests/asm6502/runm.sh [n]` checks them on sim65.
 
-## FP8 E5M2 (`src/6502/sf8.s`)
+## FP8 (`src/6502/sf8.s`)
 
-`__fp8_add/sub/mul/div` (OCP E5M2: denormals, inf, NaN, round to nearest even), args rc2 and rc3, result A. `tests/asm6502/run8.sh` checks all 65536 pairs of each op against exact rational arithmetic on sim65: 0 mismatches.
-`tests/asm6502/bench8.sh` prints bytes and mean cycles over 4096 pairs. 562 B for the four ops (first version 680 B); cycles per call add 393, sub 397, mul 337, div 380.
+IEEE-style 8-bit float `__fp8_add/sub/mul/div` (denormals, inf, NaN, round to nearest even), args rc2 and rc3, result A.
+Build options (`ca65 -D`): `FP8_M` mantissa bits 1..4 (E6M1, E5M2 default, E4M3, E3M4; E + M = 7), `FP8_SPECIAL=0` drops inf/NaN, `FP8_DENORM=0` flushes denormals to zero, `FP8_ADD/SUB/MUL/DIV=0` leave a routine out.
+`FP8_M=n FP8_SPECIAL=n FP8_DENORM=n tests/asm6502/run8.sh [ops]` checks all 65536 pairs against exact rational arithmetic on sim65 (all four widths and the flag combinations: 0 mismatches). `bench8.sh` prints bytes and mean cycles.
+E5M2 sizes: 560 B everything; 438 B without inf/NaN; 541 B without denormals; 419 B without both; div alone 352 B. Cycles per call about add 393, sub 397, mul 337, div 380.

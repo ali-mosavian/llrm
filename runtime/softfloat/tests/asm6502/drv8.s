@@ -2,6 +2,11 @@
 .export _main
 .include "op.inc"
 .include "exp8.inc"
+.ifndef FP8_M
+FP8_M = 2
+.endif
+INF = ((1 << (7 - FP8_M)) - 1) << FP8_M
+QNAN = INF | (1 << (FP8_M - 1))
 rc2 = $82
 rc3 = $83
 ptr = $a0
@@ -28,15 +33,14 @@ loop:
     sta got
     ldy #0
     lda (ptr),y
-    cmp #$7e
+    cmp #$ff                ; not tested (inf or NaN operand in a build without them)
+    beq next
+    cmp #QNAN
     bne exact
     lda got                 ; any NaN
-    and #$7c
-    cmp #$7c
-    bne bad
-    lda got
-    and #3
-    bne next
+    and #$7f
+    cmp #INF + 1
+    bcs next
 bad:
     lda fail
     cmp #255
