@@ -1595,7 +1595,15 @@ impl<'a> TypeLegalizer<'a> {
             let (compared, with, cc) =
                 if op == ISD::Add { (lo, ll, CondCode::SetULt) } else { (ll, rl, CondCode::SetULt) };
             let cmp = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), compared, with, cc);
-            let carry = self.dag.get_zext_or_trunc(cmp, half);
+            // `BoolType == ZeroOrOne ? getZExtOrTrunc : getSelect(Cmp, 1, 0)`:
+            // a compare that is 0 or -1 (M68k's `scc`) is not the
+            // carry as it is
+            let carry = if self.dag.config().boolean_contents == BooleanContents::ZeroOrOne {
+                self.dag.get_zext_or_trunc(cmp, half)
+            } else {
+                let (one, zero) = (self.dag.get_constant(1, half), self.dag.get_constant(0, half));
+                self.dag.get_select(half, cmp, one, zero)
+            };
             let hi = self.dag.get_node(plain, half, &[lh, rh]);
             return Ok((lo, self.dag.get_node(plain, half, &[hi, carry])));
         }
