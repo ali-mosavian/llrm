@@ -289,6 +289,79 @@ pub fn by_note_value(
     out
 }
 
+/// The ranges `LiveDebugVariables` places (`location`, with entry values) and
+/// those `LiveDebugValues` leaves after them (`flow`), over the body the
+/// allocator wrote; the notes' slot positions as (note number, position).
+pub struct Ranges {
+    pub location: Vec<Located>,
+    pub flow: Vec<Located>,
+    pub notes: Vec<(u32, i64)>,
+}
+
+/// The ranges of every variable over `edited` (see `Ranges`). `home` is the
+/// cell a spilled value was given.
+pub fn ranges_of(
+    edited: &LirBody,
+    placed: &[(u32, RegId)],
+    spilled: &[u32],
+    parents: &HashMap<u32, u32>,
+    home: &dyn Fn(u32) -> Option<i64>,
+    stacks: &IndexMap<i64, Vec<(i64, i64)>>,
+    saved: &[RegId],
+) -> Ranges {
+    let mut lis = LiveIntervals::new(edited);
+    let mut placed: IndexMap<u32, RegId> = placed.iter().copied().collect();
+    // A pinned value (an argument, a call's result) is where its pin says.
+    for (&value, &register) in &edited.pins {
+        placed.entry(value).or_insert(register);
+    }
+    let mut table = segments_of(&mut lis, &placed, parents);
+    let root = |value: u32| parents.get(&value).copied().unwrap_or(value);
+    add_cells(&mut table, spilled.iter().map(|&value| root(value)), home, stacks);
+    let at = |id| i64::from(lis.indexes.get_instruction_index(id).get_index());
+    let mut notes = Vec::new();
+    for one in edited.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for &note in &one.debug.before {
+            notes.push((note, at(one.id())));
+        }
+    }
+    let end = lis.indexes.get_last_index().get_index();
+    if llrm_support::env_flag!("LLRM_LDV_DEBUG") {
+        eprintln!("LDVTABLE\t{}\t{:?}\tpins={:?}\tparents={:?}", edited.name, table, edited.pins, parents);
+        for one in positioned(edited, &lis) {
+            eprintln!("LDVPOS\t{:?}", one);
+        }
+    }
+    add_copies(edited, &mut table, parents);
+    let table = by_note_value(edited, &table, parents);
+    let positioned = positioned(edited, &lis);
+    let location = locate(&positioned, &table, i64::from(end), true);
+    // LiveDebugVariables knows no entry values: where no place holds the
+    // value it says nothing, and LiveDebugValues does the rest.
+    let bare = locate(&positioned, &table, i64::from(end), false);
+    // The pin's LiveDebugValues over those ranges: the stack pointer is not
+    // known here, so no register is spared a call's mask (none is given).
+    let target = crate::backend::livedebugvalues::FlowTarget {
+        parents,
+        home: &|value| home(value),
+        callee_saved: &|register| saved.contains(&register),
+    };
+    // A parameter is a variable the entry says arrived in a register
+    // (DEVIATE: the pin reads `DILocalVariable::isParameter`).
+    let params: std::collections::BTreeSet<u32> = edited
+        .notes
+        .iter()
+        .filter(|note| matches!(note.value, NoteValue::Arrived(..)))
+        .map(|note| note.variable)
+        .collect();
+    let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &bare, &target);
+    let flow = crate::backend::livedebugvalues::extend(
+        &flow,
+        &crate::backend::livedebugvalues::Flow { stack_pointer: RegId::None, params: &params },
+    );
+    Ranges { location, flow, notes }
+}
+
 /// Prints, for `LLRM_LDV_DUMP`, the notes' slot positions (`LDVNOTE`) and the
 /// ranges of every variable (`LDV`) over the body the allocator wrote, to be
 /// joined by note index with the same function's `valuetrack` rows. Reads
@@ -302,59 +375,14 @@ pub fn dump(
     saved: &[RegId],
 ) {
     use crate::backend::frame::FrameInfo;
-    let mut lis = LiveIntervals::new(edited);
-    let mut placed: IndexMap<u32, RegId> = placed.iter().copied().collect();
-    // A pinned value (an argument, a call's result) is where its pin says.
-    for (&value, &register) in &edited.pins {
-        placed.entry(value).or_insert(register);
+    let found = ranges_of(edited, placed, spilled, parents, &|value| frame.home(value), &frame.stacks, saved);
+    for (note, position) in &found.notes {
+        eprintln!("LDVNOTE\t{}\t{note}\t{position}", edited.name);
     }
-    let mut table = segments_of(&mut lis, &placed, parents);
-    let root = |value: u32| parents.get(&value).copied().unwrap_or(value);
-    add_cells(&mut table, spilled.iter().map(|&value| root(value)), |value| frame.home(value), &frame.stacks);
-    let at = |id| i64::from(lis.indexes.get_instruction_index(id).get_index());
-    for one in edited.blocks.iter().flat_map(|block| block.insns.iter()) {
-        for &note in &one.debug.before {
-            eprintln!("LDVNOTE\t{}\t{note}\t{}", edited.name, at(one.id()));
-        }
-    }
-    let end = lis.indexes.get_last_index().get_index();
-    if llrm_support::env_flag!("LLRM_LDV_DEBUG") {
-        eprintln!("LDVTABLE\t{}\t{:?}\tpins={:?}\tparents={:?}", edited.name, table, edited.pins, parents);
-        for one in positioned(edited, &lis) {
-            eprintln!("LDVPOS\t{:?}", one);
-        }
-    }
-    add_copies(edited, &mut table, parents);
-    let table = by_note_value(edited, &table, parents);
-    let notes = positioned(edited, &lis);
-    let located = locate(&notes, &table, i64::from(end), true);
-    // LiveDebugVariables knows no entry values: where no place holds the
-    // value it says nothing, and LiveDebugValues does the rest.
-    let bare = locate(&notes, &table, i64::from(end), false);
-    // The pin's LiveDebugValues over those ranges: the stack pointer is not
-    // known to this report, so no register is spared a call's mask (none is
-    // given).
-    let target = crate::backend::livedebugvalues::FlowTarget {
-        parents,
-        home: &|value| frame.home(value),
-        callee_saved: &|register| saved.contains(&register),
-    };
-    // A parameter is a variable the entry says arrived in a register
-    // (DEVIATE: the pin reads `DILocalVariable::isParameter`).
-    let params: std::collections::BTreeSet<u32> = edited
-        .notes
-        .iter()
-        .filter(|note| matches!(note.value, NoteValue::Arrived(..)))
-        .map(|note| note.variable)
-        .collect();
-    let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &bare, &target);
-    for one in crate::backend::livedebugvalues::extend(
-        &flow,
-        &crate::backend::livedebugvalues::Flow { stack_pointer: RegId::None, params: &params },
-    ) {
+    for one in found.flow {
         eprintln!("VLD\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
-    for one in located {
+    for one in found.location {
         eprintln!("LDV\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
 }
@@ -616,5 +644,40 @@ mod tests {
             [(10, 20, Where::Place(reg(1))), (20, 40, Where::Place(Place::Cell(-8))), (40, 50, Where::Undef)]
         );
         assert!(!table.contains_key(&8), "a value with no slot gains no entry");
+    }
+    /// The ranges the notes make were only printed (`LLRM_LDV_DUMP`), so
+    /// nothing else could read them: a value noted before an instruction that
+    /// uses it, in a register, is a range of the variable in that register.
+    #[test]
+    fn the_ranges_of_a_body_are_returned_not_only_printed() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Block, DebugNote, Insn, LirBlock};
+
+        let mut define = Insn::new(0, None, None, vec![21], vec![]);
+        define.debug.defines = vec![7];
+        let mut user = Insn::new(0, None, None, vec![], vec![21]);
+        user.debug.before = vec![0];
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::new(define), Arc::new(user)]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.notes = Arc::new(vec![DebugNote { variable: 9, piece: None, value: NoteValue::Value(7) }]);
+        let found = ranges_of(
+            &body,
+            &[(21, RegId::from_raw(3))],
+            &[],
+            &HashMap::default(),
+            &|_| None,
+            &IndexMap::default(),
+            &[],
+        );
+        let register = Where::Place(Place::Register(RegId::from_raw(3)));
+        assert!(found.location.iter().any(|one| one.variable == 9 && one.at == register), "{:?}", found.location);
+        assert!(found.flow.iter().any(|one| one.variable == 9 && one.at == register), "{:?}", found.flow);
+        assert_eq!(found.notes.len(), 1);
     }
 }
