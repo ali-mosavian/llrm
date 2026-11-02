@@ -69,11 +69,26 @@ fn registers(at: Where) -> Option<RegId> {
     }
 }
 
+/// What is open at a point: the ranges, and the entry values kept as a
+/// backup for parameters (`OpenRanges::Vars` and `EntryValuesBackupVars`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Locs {
+    pub open: BTreeMap<Var, Where>,
+    pub backup: BTreeMap<Var, RegId>,
+}
+
 /// The ranges open at the current position, and those closed so far.
 #[derive(Default)]
 pub struct Tracker {
     open: BTreeMap<Var, (Where, i64, u64)>,
     opened: u64,
+    /// The variables that are parameters, and so have an entry value.
+    params: BTreeSet<u32>,
+    /// Each parameter's entry value, in the register it arrived in, while the
+    /// parameter has not been changed.
+    backup: BTreeMap<Var, RegId>,
+    /// In the entry block: the registers an instruction has written so far.
+    entry_defined: Option<BTreeSet<RegId>>,
     closed: Vec<Located>,
 }
 
@@ -99,6 +114,31 @@ impl Tracker {
         var: Var,
         place: Option<Where>,
     ) {
+        // The first note of a parameter in the entry block makes its entry
+        // value (`recordEntryValue`); a later note says its value changed, and
+        // the entry value is no longer its value (`removeEntryValue`).
+        let had = self.backup.remove(&var).is_some();
+        self.open_range(at, var, place);
+        let candidate = match (place, &self.entry_defined) {
+            (Some(Where::Place(Place::Register(register))), Some(defined))
+                if self.params.contains(&var.variable) && var.piece.is_none() && !defined.contains(&register) =>
+            {
+                Some(register)
+            }
+            _ => None,
+        };
+        if let (false, Some(register)) = (had, candidate) {
+            self.backup.insert(var, register);
+        }
+    }
+
+    /// `debug_value` without its entry value bookkeeping.
+    fn open_range(
+        &mut self,
+        at: i64,
+        var: Var,
+        place: Option<Where>,
+    ) {
         let overlapping: Vec<Var> = self.open.keys().copied().filter(|open| open.overlaps(var)).collect();
         for open in overlapping {
             self.close(open, at);
@@ -117,7 +157,11 @@ impl Tracker {
         at: i64,
         clobber: &Clobber<'_>,
         stack_pointer: RegId,
+        livein: bool,
     ) {
+        if let (Some(defined), false) = (self.entry_defined.as_mut(), livein) {
+            defined.extend(clobber.written.iter().copied());
+        }
         let killed: Vec<Var> = self
             .open
             .iter()
@@ -131,6 +175,11 @@ impl Tracker {
             .collect();
         for var in killed {
             self.close(var, at);
+            // A parameter that lost its register is its entry value from here
+            // (`emitEntryValues`).
+            if let Some(&register) = self.backup.get(&var) {
+                self.open_range(at, var, Some(Where::Entry(register)));
+            }
         }
     }
 
@@ -151,7 +200,7 @@ impl Tracker {
         to: Where,
     ) {
         self.close(var, at);
-        self.debug_value(at, var, Some(to));
+        self.open_range(at, var, Some(to));
     }
 
     /// A copy at `at` into `dest` from `src` (`transferRegisterCopy`): only
@@ -223,20 +272,30 @@ impl Tracker {
 
     /// A tracker for a block at `start` that begins with `ins` open
     /// (`InLocs`): their ranges start at the block's first position.
+    /// `params` are the variables that are parameters; `entry_block` says the
+    /// block is the function's first, where a parameter's note makes its entry
+    /// value.
     pub fn entering(
         start: i64,
-        ins: &BTreeMap<Var, Where>,
+        ins: &Locs,
+        params: &BTreeSet<u32>,
+        entry_block: bool,
     ) -> Tracker {
-        let mut tracker = Tracker::default();
-        for (&var, &place) in ins {
-            tracker.debug_value(start, var, Some(place));
+        let mut tracker = Tracker {
+            params: params.clone(),
+            backup: ins.backup.clone(),
+            entry_defined: entry_block.then(BTreeSet::new),
+            ..Tracker::default()
+        };
+        for (&var, &place) in &ins.open {
+            tracker.open_range(start, var, Some(place));
         }
         tracker
     }
 
     /// What is open now: the block's `OutLocs` once its last instruction ran.
-    pub fn open_locs(&self) -> BTreeMap<Var, Where> {
-        self.open.iter().map(|(var, (place, ..))| (*var, *place)).collect()
+    pub fn open_locs(&self) -> Locs {
+        Locs { open: self.open.iter().map(|(var, (place, ..))| (*var, *place)).collect(), backup: self.backup.clone() }
     }
 
     /// The ranges closed so far, in the order they closed.
@@ -251,10 +310,12 @@ pub enum Event {
     /// A note: the variable is `place`, or nowhere.
     Note(Var, Option<Where>),
     /// An instruction writes `written` and a call's mask clobbers what it
-    /// names.
+    /// names. `livein`: the entry's arrival of the arguments, which no
+    /// instruction of the function wrote.
     Def {
         written: Vec<RegId>,
         mask: Option<Rc<dyn Fn(RegId) -> bool>>,
+        livein: bool,
     },
     Copy {
         dest: RegId,
@@ -283,17 +344,19 @@ pub struct FlowBlock {
 
 fn run(
     block: &FlowBlock,
-    ins: &BTreeMap<Var, Where>,
-    stack_pointer: RegId,
+    ins: &Locs,
+    flow: &Flow<'_>,
+    entry_block: bool,
 ) -> Tracker {
-    let mut tracker = Tracker::entering(block.start, ins);
+    let stack_pointer = flow.stack_pointer;
+    let mut tracker = Tracker::entering(block.start, ins, flow.params, entry_block);
     for (at, event) in &block.events {
         match event {
             Event::Note(var, place) => tracker.debug_value(*at, *var, *place),
-            Event::Def { written, mask } => {
+            Event::Def { written, mask, livein } => {
                 let mask = mask.as_ref().map(|mask| move |register: RegId| mask(register));
                 let clobber = Clobber { written, mask: mask.as_ref().map(|mask| mask as &dyn Fn(RegId) -> bool) };
-                tracker.register_def(*at, &clobber, stack_pointer);
+                tracker.register_def(*at, &clobber, stack_pointer, *livein);
             }
             Event::Copy { dest, src, src_dies, dest_callee_saved } => {
                 tracker.register_copy(*at, *dest, *src, *src_dies, *dest_callee_saved);
@@ -316,7 +379,7 @@ fn run(
 /// fixpoint.
 pub fn extend(
     blocks: &[FlowBlock],
-    stack_pointer: RegId,
+    flow: &Flow<'_>,
 ) -> Vec<Located> {
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
     for (index, block) in blocks.iter().enumerate() {
@@ -324,16 +387,17 @@ pub fn extend(
             succs[pred].push(index);
         }
     }
-    let mut ins: Vec<BTreeMap<Var, Where>> = vec![BTreeMap::new(); blocks.len()];
-    let mut outs: Vec<Option<BTreeMap<Var, Where>>> = vec![None; blocks.len()];
+    let mut ins: Vec<Locs> = vec![Locs::default(); blocks.len()];
+    let mut outs: Vec<Option<Locs>> = vec![None; blocks.len()];
     let mut worklist: BTreeSet<usize> = (0..blocks.len()).collect();
     while let Some(index) = worklist.pop_first() {
-        let mut joined: Option<BTreeMap<Var, Where>> = None;
+        let mut joined: Option<Locs> = None;
         for out in blocks[index].preds.iter().filter_map(|&pred| outs[pred].as_ref()) {
             joined = Some(match joined {
                 None => out.clone(),
                 Some(mut so_far) => {
-                    so_far.retain(|var, place| out.get(var) == Some(place));
+                    so_far.open.retain(|var, place| out.open.get(var) == Some(place));
+                    so_far.backup.retain(|var, register| out.backup.get(var) == Some(register));
                     so_far
                 }
             });
@@ -344,7 +408,7 @@ pub fn extend(
             continue;
         }
         ins[index] = joined;
-        let out = run(&blocks[index], &ins[index], stack_pointer).open_locs();
+        let out = run(&blocks[index], &ins[index], flow, index == 0).open_locs();
         if outs[index].as_ref() != Some(&out) || !visited {
             outs[index] = Some(out);
             worklist.extend(succs[index].iter().copied());
@@ -352,11 +416,18 @@ pub fn extend(
     }
     let mut found = Vec::new();
     for (index, block) in blocks.iter().enumerate() {
-        let mut tracker = run(block, &ins[index], stack_pointer);
+        let mut tracker = run(block, &ins[index], flow, index == 0);
         tracker.terminator(block.end);
         found.extend(tracker.finish());
     }
     found
+}
+
+/// What `extend` asks of the function.
+pub struct Flow<'a> {
+    pub stack_pointer: RegId,
+    /// The variables that are parameters.
+    pub params: &'a BTreeSet<u32>,
 }
 
 /// What `flow_of` asks of the target and the frame.
@@ -414,7 +485,7 @@ pub fn flow_of(
             written.extend(one.clobbers.iter().copied());
             written.extend(one.delivers.iter().map(|(_, register)| *register));
             if !written.is_empty() {
-                events.push((here, 0, Event::Def { written, mask: None }));
+                events.push((here, 0, Event::Def { written, mask: None, livein: one.arrival() }));
             }
             let root = |value: u32| target.parents.get(&value).copied().unwrap_or(value);
             let register = |value: &u32| placed.get(value).copied();
@@ -513,7 +584,7 @@ mod tests {
         let mut tracker = Tracker::default();
         tracker.debug_value(10, var(1), Some(at(1)));
         tracker.debug_value(10, var(2), Some(at(2)));
-        tracker.register_def(20, &Clobber { written: &[reg(1)], mask: None }, reg(9));
+        tracker.register_def(20, &Clobber { written: &[reg(1)], mask: None }, reg(9), false);
         tracker.terminator(40);
         assert_eq!(ranges(&tracker.finish()), [(1, 10, 20, at(1)), (2, 10, 40, at(2))]);
     }
@@ -526,7 +597,7 @@ mod tests {
         tracker.debug_value(10, var(2), Some(at(9)));
         tracker.debug_value(10, var(3), Some(at(3)));
         let mask = |register: RegId| register != reg(3);
-        tracker.register_def(20, &Clobber { written: &[], mask: Some(&mask) }, reg(9));
+        tracker.register_def(20, &Clobber { written: &[], mask: Some(&mask) }, reg(9), false);
         tracker.terminator(40);
         assert_eq!(ranges(&tracker.finish()), [(1, 10, 20, at(1)), (2, 10, 40, at(9)), (3, 10, 40, at(3))]);
     }
@@ -616,14 +687,14 @@ mod tests {
     /// open in the join; one a single arm overwrites is not.
     #[test]
     fn what_both_arms_agree_on_is_open_in_the_join() {
-        let kill = |register| Event::Def { written: vec![register], mask: None };
+        let kill = |register| Event::Def { written: vec![register], mask: None, livein: false };
         let blocks = [
             block(0, 10, &[], vec![(0, Event::Note(var(1), Some(at(1)))), (0, Event::Note(var(2), Some(at(2))))]),
             block(10, 20, &[0], vec![]),
             block(20, 30, &[0], vec![(22, kill(reg(2)))]),
             block(30, 40, &[1, 2], vec![]),
         ];
-        let mut found = ranges(&extend(&blocks, reg(9)));
+        let mut found = ranges(&extend(&blocks, &Flow { stack_pointer: reg(9), params: &BTreeSet::new() }));
         found.sort_by_key(|one| (one.0, one.1, one.2));
         assert_eq!(
             found,
@@ -643,13 +714,13 @@ mod tests {
     /// time, and the fixpoint takes back a location the body kills.
     #[test]
     fn a_location_the_loop_body_kills_is_not_open_at_the_header() {
-        let kill = Event::Def { written: vec![reg(1)], mask: None };
+        let kill = Event::Def { written: vec![reg(1)], mask: None, livein: false };
         let blocks = [
             block(0, 10, &[], vec![(0, Event::Note(var(1), Some(at(1))))]),
             block(10, 20, &[0, 2], vec![]),
             block(20, 30, &[1], vec![(25, kill)]),
         ];
-        let mut found = ranges(&extend(&blocks, reg(9)));
+        let mut found = ranges(&extend(&blocks, &Flow { stack_pointer: reg(9), params: &BTreeSet::new() }));
         found.sort_by_key(|one| (one.0, one.1, one.2));
         // The first visit takes the header's start from block 0 alone; the
         // body's kill comes back over the edge and takes it away again.
@@ -687,7 +758,7 @@ mod tests {
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|register| register == reg(5) };
         let blocks = flow_of(&body, &mut lis, &placed, &located, &target);
-        let found = extend(&blocks, reg(9));
+        let found = extend(&blocks, &Flow { stack_pointer: reg(9), params: &BTreeSet::new() });
         let places: Vec<Where> = found.iter().map(|one| one.at).collect();
         assert_eq!(places, [at(3), at(5)], "{found:?}");
     }
@@ -718,9 +789,53 @@ mod tests {
         let located = [Located { variable: 9, piece: None, start: first, end: first + 100, at: at(3) }];
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|_| false };
-        let found = extend(&flow_of(&body, &mut lis, &placed, &located, &target), reg(9));
+        let found = extend(
+            &flow_of(&body, &mut lis, &placed, &located, &target),
+            &Flow { stack_pointer: reg(9), params: &BTreeSet::new() },
+        );
         assert_eq!(found.len(), 1, "{found:?}");
         let end = i64::from(lis.indexes.get_mbb_range(0).1.get_index());
         assert_eq!((found[0].start, found[0].end, found[0].at), (first, end, at(3)));
+    }
+    fn entry_tracker(params: &[u32]) -> Tracker {
+        Tracker::entering(0, &Locs::default(), &params.iter().copied().collect(), true)
+    }
+
+    /// A parameter noted in the register it arrived in is its entry value once
+    /// something writes that register; its range ran out there.
+    #[test]
+    fn a_parameter_that_loses_its_register_is_its_entry_value() {
+        let mut tracker = entry_tracker(&[1]);
+        tracker.register_def(0, &Clobber { written: &[reg(1)], mask: None }, reg(9), true);
+        tracker.debug_value(4, var(1), Some(at(1)));
+        tracker.register_def(20, &Clobber { written: &[reg(1)], mask: None }, reg(9), false);
+        tracker.terminator(40);
+        assert_eq!(ranges(&tracker.finish()), [(1, 4, 20, at(1)), (1, 20, 40, Where::Entry(reg(1)))]);
+    }
+
+    /// A register an instruction of the function wrote before the note is not
+    /// an argument's: no entry value stands behind it. A variable that is not a
+    /// parameter has none either.
+    #[test]
+    fn a_register_the_function_wrote_has_no_entry_value() {
+        let mut tracker = entry_tracker(&[1, 2]);
+        tracker.register_def(2, &Clobber { written: &[reg(1)], mask: None }, reg(9), false);
+        tracker.debug_value(4, var(1), Some(at(1)));
+        tracker.debug_value(4, var(3), Some(at(3)));
+        tracker.register_def(20, &Clobber { written: &[reg(1), reg(3)], mask: None }, reg(9), false);
+        tracker.terminator(40);
+        assert_eq!(ranges(&tracker.finish()), [(1, 4, 20, at(1)), (3, 4, 20, at(3))]);
+    }
+
+    /// A new note of a parameter says its value changed, and the entry value
+    /// is not its value any more.
+    #[test]
+    fn a_parameter_noted_again_has_no_entry_value() {
+        let mut tracker = entry_tracker(&[1]);
+        tracker.debug_value(4, var(1), Some(at(1)));
+        tracker.debug_value(10, var(1), Some(at(2)));
+        tracker.register_def(20, &Clobber { written: &[reg(2)], mask: None }, reg(9), false);
+        tracker.terminator(40);
+        assert_eq!(ranges(&tracker.finish()), [(1, 4, 10, at(1)), (1, 10, 20, at(2))]);
     }
 }

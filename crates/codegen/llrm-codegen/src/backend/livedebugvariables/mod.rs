@@ -336,8 +336,12 @@ pub fn dump(
         home: &|value| frame.home(value),
         callee_saved: &|register| saved.contains(&register),
     };
+    let params = std::collections::BTreeSet::new();
     let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &bare, &target);
-    for one in crate::backend::livedebugvalues::extend(&flow, RegId::None) {
+    for one in crate::backend::livedebugvalues::extend(
+        &flow,
+        &crate::backend::livedebugvalues::Flow { stack_pointer: RegId::None, params: &params },
+    ) {
         eprintln!("VLD\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
     for one in located {
