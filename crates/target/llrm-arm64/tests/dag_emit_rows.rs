@@ -360,3 +360,19 @@ define i64 @caller(i64 %a) {\n  %t = alloca { i64, i64 }\n  call void @fill(ptr 
     assert!(asm.contains("str x0, [x8]"), "{asm}");
     assert!(asm.contains("add x8, sp, #0") && asm.contains("bl _fill"), "{asm}");
 }
+
+/// A dynamic `alloca` and `stacksave`/`stackrestore` were refused ("custom
+/// lowering of DynamicStackAlloc", "convert node to libcall" of
+/// `StackRestore`): the stack pointer is read, lowered by the size and
+/// written back (`add sp, x, #0`), and a restore writes the saved one.
+#[test]
+fn a_dynamic_alloca_moves_the_stack_pointer() {
+    let asm = dag_at(
+        "-O2",
+        "declare void @use(ptr)\ndeclare ptr @llvm.stacksave.p0()\ndeclare void @llvm.stackrestore.p0(ptr)\n\
+define void @f(i64 %n) {\n  %s = call ptr @llvm.stacksave.p0()\n  %a = alloca i8, i64 %n, align 1\n  call void @use(ptr %a)\n  call void @llvm.stackrestore.p0(ptr %s)\n  ret void\n}\n",
+    )
+    .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.matches("add sp, x").count() >= 2, "{asm}");
+    assert!(asm.contains("sub sp, x29"), "{asm}");
+}

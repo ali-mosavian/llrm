@@ -1287,6 +1287,24 @@ impl Emitter<'_> {
         match node.opcode {
             // Lifetime markers make no code; stack coloring would read them.
             ISD::EntryToken | ISD::TokenFactor | ISD::Register | ISD::LifetimeStart | ISD::LifetimeEnd => Ok(()),
+            ISD::CopyFromReg
+                if matches!(
+                    self.dag.node(node.ops[1]).data,
+                    NodeData::PhysReg(id) if id == crate::reg::SP
+                ) =>
+            {
+                let rd = self.mf.gpr();
+                self.ops.push(Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd,
+                    rn: Gpr::R31,
+                    imm12: 0,
+                    shift12: false,
+                }));
+                self.values.insert((id, 0), rd);
+                Ok(())
+            }
             ISD::CopyFromReg if node.values[0].is_floating_point() => {
                 let value = match self.dag.node(node.ops[1]).data {
                     NodeData::PhysReg(id) => {
@@ -1315,6 +1333,30 @@ impl Emitter<'_> {
                 Ok(())
             }
             // The flags are not moved: the compare before the user set them.
+            // The stack pointer is register 31 only in an add: `mov x, sp` and
+            // `mov sp, x` are `add #0`, and a body that writes it has a
+            // frame record (`dynamic`).
+            ISD::CopyToReg
+                if matches!(
+                    self.dag.node(node.ops[1]).data,
+                    NodeData::PhysReg(id) if id == crate::reg::SP
+                ) =>
+            {
+                let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };
+                if self.mf.outgoing > 0 {
+                    return Err("a call with stack arguments in a function that moves the stack pointer".into());
+                }
+                self.mf.dynamic = true;
+                self.ops.push(Op::I(Inst::AddSubImm {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd: Gpr::R31,
+                    rn: src,
+                    imm12: 0,
+                    shift12: false,
+                }));
+                Ok(())
+            }
             ISD::CopyToReg if self.is_flags(node.ops[1]) => Ok(()),
             ISD::CopyToReg if self.dag.value_type(node.ops[2]).is_floating_point() => {
                 let dst = match self.dag.node(node.ops[1]).data {

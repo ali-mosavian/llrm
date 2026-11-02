@@ -444,6 +444,9 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
+        // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
+        // type is asked.
+        t.set_ops(&[StackSave], &[MVT::I64], Expand);
         t.set_ops(&[FShr, FShl], &words, Custom);
         t.set_ops(&[Rotl], &words, Expand);
         t.set_ops(&[MulHU, MulHS], &[MVT::I32], Expand);

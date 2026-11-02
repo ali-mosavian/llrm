@@ -263,6 +263,10 @@ impl CombineHooks for Aarch64Lowering {
 }
 
 impl LegalizeHooks for Aarch64Lowering {
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        Some((crate::reg::SP, 16))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -289,6 +293,9 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
             ISD::FpRound => super::lowering::lower_fp_round(dag, node),
             ISD::AtomicLoadAnd => super::lowering::lower_atomic_load_and(dag, node),
+            // `LowerDYNAMIC_STACKALLOC` answers none off Windows without an
+            // inline probe: the legalizer expands it, with the others.
+            ISD::DynamicStackAlloc | ISD::StackSave | ISD::StackRestore => return None,
             _ => None,
         };
         if lowered.is_some() {
