@@ -222,3 +222,17 @@ fn data_bytes_in_the_file_are_counted() {
 
     assert_eq!(priced.bytes, 1 + 3 + 2);
 }
+
+/// A branch up to a block that ends in `rts` is an exit laid out above the
+/// code, not a loop: it priced the lines between at ten trips each, 62871
+/// clocks for a 96-byte `strcspn` against 3770 for its 103-byte twin, and the
+/// emitter kept the twin.
+#[test]
+fn a_branch_up_to_an_exit_is_not_a_loop() {
+    let text = "f:\n  jmp go\ndone:\n  rts\ngo:\n  lda #1\n  beq done\n  lda #2\n  rts\n";
+
+    let priced = llrm_6502::timing::estimate(Cpu::Mos6502, text).unwrap();
+
+    // jmp 3, rts 6, lda 2, beq 2 (not taken), lda 2, rts 6
+    assert_eq!(priced.cycles, 21);
+}

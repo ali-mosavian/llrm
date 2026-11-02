@@ -655,9 +655,11 @@ dependencies = [
 name = "llrm-spike-mf"
 version = "0.1.0"
 dependencies = [
+ "llrm-codegen",
  "llrm-lir",
  "llrm-mir",
  "llrm-support",
+ "llrm-x86-m16",
 ]
 
 [[package]]
@@ -826,6 +828,21 @@ dependencies = [
  "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
+]
+
+[[package]]
+name = "llrm-z80"
+version = "0.1.0"
+dependencies = [
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-debug",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-spike-mf",
+ "llrm-target",
+ "llrm-transforms",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ const R_X86_64_64: u32 = 1;
 const R_X86_64_PC32: u32 = 2;
 const R_X86_64_PLT32: u32 = 4;
 const R_X86_64_32: u32 = 10;
+const R_X86_64_32S: u32 = 11;
 const R_X86_64_16: u32 = 12;
 const R_X86_64_PC16: u32 = 13;
 const R_X86_64_8: u32 = 14;
@@ -43,6 +44,7 @@ impl Machine for X8664 {
             (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8),
             (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4),
             (fixup::BRANCH_4, true) => (R_X86_64_PLT32, 4),
+            (fixup::ABS_SIGNED_4, false) => (R_X86_64_32S, 4),
             (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4),
             (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2),
             (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1),
@@ -156,6 +158,17 @@ mod tests {
         assert_eq!(&bytes[text + 3..text + 7], [0, 0, 0, 0]);
         let data = rela_of(&bytes, ".rela.data", &named, &header);
         assert_eq!((word(&bytes, data + 8) & 0xFFFF_FFFF, word(&bytes, data + 16)), (1, 1));
+    }
+
+    /// A symbol beside a register in static code is a sign-extended `disp32`:
+    /// `R_X86_64_32S`, where the zero-extended `R_X86_64_32` is the
+    /// immediate's.
+    #[test]
+    fn a_signed_absolute_field_is_r_x86_64_32s() {
+        let signed = Reloc::new(0, fixup::abs_signed_4(), Target::Symbol(0), 0);
+        let plain = Reloc::new(0, Fix::abs(4), Target::Symbol(0), 0);
+        let kinds: Vec<u32> = [signed, plain].iter().map(|one| X8664::relocation(one).unwrap().kind).collect();
+        assert_eq!(kinds, [R_X86_64_32S, R_X86_64_32]);
     }
 
     fn rela_of(

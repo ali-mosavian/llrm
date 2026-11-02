@@ -698,10 +698,10 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
-            ISD::LRint => {
+            ISD::LRint | ISD::LLRint => {
                 // `PromoteIntRes_XRINT`: the same rounding to the wider type.
                 let input = self.dag.operand(value, 0);
-                self.dag.get_node(ISD::LRint, to, &[input])
+                self.dag.get_node(self.dag.opcode(value), to, &[input])
             }
             ISD::SignExtendInReg => {
                 // `PromoteIntRes_SIGN_EXTEND_INREG`: the promoted operand,
@@ -1152,6 +1152,7 @@ impl<'a> TypeLegalizer<'a> {
                 let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
                 (self.dag.get_node(ISD::Freeze, half, &[lo]), self.dag.get_node(ISD::Freeze, half, &[hi]))
             }
+            ISD::Abs | ISD::AbsMinPoison => self.expand_abs(value, half),
             ISD::CtPop => self.expand_ctpop(value, half),
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
             ISD::BitReverse => {
@@ -1263,10 +1264,6 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Srl => ISD::SrlParts,
             _ => ISD::SraParts,
         };
-        let action = self.tli.operation_action(parts, half);
-        if !(action == crate::backend::selectiondag::Action::Custom || self.tli.is_operation_legal(parts, half)) {
-            return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
-        }
         let (lo, hi) = self.expanded_integer(input);
         let shift_vt = self.shift_amount_type(half);
         let amount = match self.dag.value_type(amount).size_in_bits().cmp(&shift_vt.size_in_bits()) {
@@ -1274,6 +1271,20 @@ impl<'a> TypeLegalizer<'a> {
             std::cmp::Ordering::Less => self.dag.get_node(ISD::ZeroExtend, shift_vt, &[amount]),
             std::cmp::Ordering::Equal => amount,
         };
+        let action = self.tli.operation_action(parts, half);
+        let parts_supported =
+            action == crate::backend::selectiondag::Action::Custom || self.tli.is_operation_legal(parts, half);
+        if !parts_supported {
+            // "Otherwise, emit a libcall." (`SHL_I32` and the others); the
+            // known-amount-bit forms need no call, so a target with
+            // the parts op takes them first, below.
+            if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
+                return Ok(pair);
+            }
+            return self
+                .expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount])
+                .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });
+        }
         if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
             return Ok(pair);
         }
@@ -1413,6 +1424,48 @@ impl<'a> TypeLegalizer<'a> {
                 }
             }
         }
+    }
+
+    /// `ExpandIntRes_ABS`: the low half's own abs when the high half is all
+    /// sign bits; else the sra+xor+sub sequence on the halves with a borrow
+    /// chain; else the negation selected by the sign of the high half.
+    fn expand_abs(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let operand = self.dag.operand(value, 0);
+        let (lo, hi) = self.expanded_integer(operand);
+        let half_bits = half.size_in_bits();
+        let sign_bits = super::known_bits::num_sign_bits(self.dag, operand);
+        if sign_bits > half_bits {
+            let abs = if sign_bits > half_bits + 1 { ISD::AbsMinPoison } else { ISD::Abs };
+            return (self.dag.get_node(abs, half, &[lo]), self.dag.get_constant(0, half));
+        }
+        // `getTypeToExpandTo(NVT)`
+        let mut expands_to = half;
+        while !self.tli.types.is_type_legal(expands_to) {
+            expands_to = self.tli.types.type_conversion(expands_to).1;
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::USubOCarry, expands_to) {
+            let sign_shift = self.shift_const(u128::from(half_bits - 1), half);
+            let sign = self.dag.get_node(ISD::Sra, half, &[hi, sign_shift]);
+            let overflow_vt = self.tli.types.set_cc_result_type(half);
+            let lo = self.dag.get_node(ISD::Xor, half, &[lo, sign]);
+            let hi = self.dag.get_node(ISD::Xor, half, &[hi, sign]);
+            let lo = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[lo, sign]);
+            let borrow = SDValue { node: lo.node, res: 1 };
+            let hi = self.dag.get_node_multi(ISD::USubOCarry, &[half, overflow_vt], &[hi, sign, borrow]);
+            return (lo, hi);
+        }
+        let vt = self.dag.value_type(value);
+        let zero = self.dag.get_constant(0, vt);
+        let neg = self.dag.get_node(ISD::Sub, vt, &[zero, operand]);
+        let (neg_lo, neg_hi) = self.split_integer(neg, half);
+        let cc_vt = self.tli.types.set_cc_result_type(half);
+        let zero_half = self.dag.get_constant(0, half);
+        let negative = self.dag.get_setcc(cc_vt, hi, zero_half, CondCode::SetLt);
+        (self.dag.get_select(half, negative, neg_lo, lo), self.dag.get_select(half, negative, neg_hi, hi))
     }
 
     /// `ExpandIntRes_ADDSUB`, the carry forms: the low halves with an overflow
@@ -1968,6 +2021,24 @@ impl<'a> TypeLegalizer<'a> {
         (self.dag.get_select(half, lo_not_zero, lo_count, hi_plus), zero)
     }
 
+    /// `ExpandIntRes_SDIV`, `ExpandIntRes_Shift` and the others, last resort:
+    /// the routine the target names for `op` of this type
+    /// (`RTLIB::getSDIV`, `SHL_I32`), called through `makeLibCall`, its result
+    /// split. `None` where the target names none or makes no such call.
+    fn expand_by_libcall(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+        signed: bool,
+        args: [SDValue; 2],
+    ) -> Option<(SDValue, SDValue)> {
+        let vt = self.dag.value_type(value);
+        let name = self.tli.libcall_name(op, vt)?;
+        let result = self.hooks.as_mut()?.make_lib_call(self.dag, name, &args, vt, signed)?;
+        Some(self.split_integer(result, half))
+    }
+
     /// `ExpandIntRes_SDIV` and the others, as the library call the pin makes
     /// (`ExpandDivRemLibCall`): a call to the target's inline `i64` divide
     /// routine (`divide_routine`), operands and results in the registers it
@@ -1981,10 +2052,14 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<(SDValue, SDValue), LegalizeError> {
         use super::libcall::{CallEnv, Place, Returned, lib_call};
         let vt = self.dag.value_type(value);
+        let signed = matches!(op, ISD::SDiv | ISD::SRem);
+        let operands = [self.dag.operand(value, 0), self.dag.operand(value, 1)];
+        if let Some(halves) = self.expand_by_libcall(value, op, half, signed, operands) {
+            return Ok(halves);
+        }
         let Some(arch) = self.target else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand a division without a target" });
         };
-        let signed = matches!(op, ISD::SDiv | ISD::SRem);
         let wants_quotient = matches!(op, ISD::SDiv | ISD::UDiv);
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
