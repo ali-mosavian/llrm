@@ -1,0 +1,23 @@
+reason = "dot: competitor columns"
+blessed = "2026-11-02"
+
+[bc.O2]
+instructions = 3610
+memory_operands = 1393
+code_bytes = 306
+data_bytes = 7
+bss_bytes = 266
+
+[pds71.O2]
+instructions = 3676
+memory_operands = 1395
+code_bytes = 306
+data_bytes = 7
+bss_bytes = 266
+
+[vbdos.O2]
+instructions = 3710
+memory_operands = 1405
+code_bytes = 310
+data_bytes = 7
+bss_bytes = 266
