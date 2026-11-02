@@ -34,7 +34,8 @@ void fill(void)
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-    // the loop: from the target of the last jump back, widened by jumps inside it that go further back
+    // the loop: from the target of the last jump back, widened by jumps inside
+    // it that go further back
     let back: Vec<(usize, usize)> = lines
         .iter()
         .enumerate()
