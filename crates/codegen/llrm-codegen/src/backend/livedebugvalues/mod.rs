@@ -7,9 +7,16 @@
 //! it is in, when a call clobbers it, and at the end of a block. Each closed
 //! range is reported with the positions it spans.
 //!
+//! A copy into a callee-saved register whose source dies, a spill of a
+//! register and a reload of a spill slot move a variable's range to the new
+//! place (`transferRegisterCopy`, `transferSpillOrRestoreInst`), which ends
+//! at the old one.
+//!
 //! DEVIATE: the pin emits `DBG_VALUE` instructions where a range opens; this
 //! reports the closed ranges (`Located`) at slot positions the caller numbers.
-//! The block join, copies, spills and entry values are later slices.
+//! The pin's first-candidate-only rule picks by `VarLocMap` id; here by the
+//! order the ranges opened. The block join and entry values are later
+//! slices.
 //! O(1) per event plus the open ranges of the variable or register it touches.
 
 use std::collections::BTreeMap;
@@ -61,7 +68,8 @@ fn registers(at: Where) -> Option<RegId> {
 /// The ranges open at the current position, and those closed so far.
 #[derive(Default)]
 pub struct Tracker {
-    open: BTreeMap<Var, (Where, i64)>,
+    open: BTreeMap<Var, (Where, i64, u64)>,
+    opened: u64,
     closed: Vec<Located>,
 }
 
@@ -71,7 +79,7 @@ impl Tracker {
         var: Var,
         at: i64,
     ) {
-        if let Some((place, start)) = self.open.remove(&var)
+        if let Some((place, start, _)) = self.open.remove(&var)
             && start < at
         {
             self.closed.push(Located { variable: var.variable, piece: var.piece, start, end: at, at: place });
@@ -92,7 +100,8 @@ impl Tracker {
             self.close(open, at);
         }
         if let Some(place) = place.filter(|place| *place != Where::Undef) {
-            self.open.insert(var, (place, at));
+            self.opened += 1;
+            self.open.insert(var, (place, at, self.opened));
         }
     }
 
@@ -108,7 +117,7 @@ impl Tracker {
         let killed: Vec<Var> = self
             .open
             .iter()
-            .filter(|(_, (place, _))| {
+            .filter(|(_, (place, ..))| {
                 registers(*place).is_some_and(|register| {
                     clobber.written.contains(&register)
                         || (register != stack_pointer && clobber.mask.is_some_and(|mask| mask(register)))
@@ -119,6 +128,82 @@ impl Tracker {
         for var in killed {
             self.close(var, at);
         }
+    }
+
+    /// The variable open at `place` that opened first (the pin's lowest
+    /// `VarLocMap` id), if any.
+    fn first_in(
+        &self,
+        place: impl Fn(Where) -> bool,
+    ) -> Option<Var> {
+        self.open.iter().filter(|(_, (at, ..))| place(*at)).min_by_key(|(_, (.., seq))| *seq).map(|(var, _)| *var)
+    }
+
+    /// Moves `var`'s range to `to` from `at` on: the old one ends here.
+    fn transfer(
+        &mut self,
+        at: i64,
+        var: Var,
+        to: Where,
+    ) {
+        self.close(var, at);
+        self.debug_value(at, var, Some(to));
+    }
+
+    /// A copy at `at` into `dest` from `src` (`transferRegisterCopy`): only
+    /// into a callee-saved register, and only when `src` dies, the first
+    /// variable in `src` goes with it.
+    pub fn register_copy(
+        &mut self,
+        at: i64,
+        dest: RegId,
+        src: RegId,
+        src_dies: bool,
+        dest_callee_saved: bool,
+    ) {
+        if !dest_callee_saved || !src_dies {
+            return;
+        }
+        let Some(var) = self.first_in(|place| registers(place) == Some(src)) else { return };
+        let moved = match self.open[&var].0 {
+            Where::Offset(_, add) => Where::Offset(Place::Register(dest), add),
+            _ => Where::Place(Place::Register(dest)),
+        };
+        self.transfer(at, var, moved);
+    }
+
+    /// A store at `at` of `from` into the spill cell `slot`
+    /// (`transferSpillOrRestoreInst`): what was in the cell is gone, and the
+    /// first variable in `from` is in the cell from here.
+    pub fn spill(
+        &mut self,
+        at: i64,
+        from: RegId,
+        slot: i64,
+    ) {
+        let overwritten: Vec<Var> = self
+            .open
+            .iter()
+            .filter(|(_, (place, ..))| *place == Where::Place(Place::Cell(slot)))
+            .map(|(var, _)| *var)
+            .collect();
+        for var in overwritten {
+            self.close(var, at);
+        }
+        let Some(var) = self.first_in(|place| registers(place) == Some(from)) else { return };
+        self.transfer(at, var, Where::Place(Place::Cell(slot)));
+    }
+
+    /// A load at `at` of the spill cell `slot` into `into`: the first variable
+    /// in the cell is in the register from here.
+    pub fn reload(
+        &mut self,
+        at: i64,
+        slot: i64,
+        into: RegId,
+    ) {
+        let Some(var) = self.first_in(|place| place == Where::Place(Place::Cell(slot))) else { return };
+        self.transfer(at, var, Where::Place(Place::Register(into)));
     }
 
     /// The end of a block at `at` (`transferTerminator`): every range ends.
@@ -220,5 +305,49 @@ mod tests {
         tracker.debug_value(20, var(1), None);
         tracker.terminator(40);
         assert_eq!(ranges(&tracker.finish()), [(1, 10, 20, at(1))]);
+    }
+    /// A copy into a callee-saved register whose source dies carries the
+    /// variable; into a caller-saved one, or from a source that lives on, it
+    /// does not (the range stays where it was).
+    #[test]
+    fn a_dying_copy_into_a_callee_saved_register_carries_the_variable() {
+        let mut tracker = Tracker::default();
+        tracker.debug_value(10, var(1), Some(at(1)));
+        tracker.register_copy(20, reg(5), reg(1), true, true);
+        tracker.debug_value(20, var(2), Some(at(2)));
+        tracker.register_copy(25, reg(6), reg(2), true, false);
+        tracker.register_copy(26, reg(7), reg(2), false, true);
+        tracker.terminator(40);
+        assert_eq!(ranges(&tracker.finish()), [(1, 10, 20, at(1)), (1, 20, 40, at(5)), (2, 20, 40, at(2))]);
+    }
+
+    /// Of several variables in the copied register only the first to open
+    /// moves, as the pin returns after the first transfer.
+    #[test]
+    fn a_copy_moves_the_first_variable_in_the_register_only() {
+        let mut tracker = Tracker::default();
+        tracker.debug_value(10, var(2), Some(at(1)));
+        tracker.debug_value(10, var(1), Some(at(1)));
+        tracker.register_copy(20, reg(5), reg(1), true, true);
+        tracker.terminator(40);
+        assert_eq!(ranges(&tracker.finish()), [(2, 10, 20, at(1)), (1, 10, 40, at(1)), (2, 20, 40, at(5))]);
+    }
+
+    /// A spill puts the variable in the cell, a store over the cell ends what
+    /// was there, and a reload brings it back to a register.
+    #[test]
+    fn a_spill_and_a_reload_move_the_variable_through_the_cell() {
+        let cell = |slot| Where::Place(Place::Cell(slot));
+        let mut tracker = Tracker::default();
+        tracker.debug_value(10, var(1), Some(at(1)));
+        tracker.spill(20, reg(1), -8);
+        tracker.reload(30, -8, reg(2));
+        tracker.spill(35, reg(2), -8);
+        tracker.spill(38, reg(3), -8);
+        tracker.terminator(40);
+        assert_eq!(
+            ranges(&tracker.finish()),
+            [(1, 10, 20, at(1)), (1, 20, 30, cell(-8)), (1, 30, 35, at(2)), (1, 35, 38, cell(-8))]
+        );
     }
 }
