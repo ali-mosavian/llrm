@@ -301,13 +301,20 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
     return failed
 
 
+def code_fields(obj: Path) -> dict:
+    """The object's code bytes without alignment padding, the padding apart (`align_bytes`, reported not gated), and why the padding could
+    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`)."""
+    size = sizes.code_size(obj)
+    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {})}
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
     stem, exe, listing, region, want, obj, *more = job
     if region is None:  # timed only: its output is checked where it is timed
         data, bss = sizes.data_bytes(obj)
-        return {"code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+        return {**code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
         return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
@@ -326,8 +333,8 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
-        return {"instructions": 0, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+        return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -520,7 +527,7 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         if not ran.sized.get(region.upper()):
             print(f"WARNING {key}: {region} has no length in the image's debug info, so code after it that no symbol names is counted in it", file=sys.stderr)
         data, bss = sizes.data_bytes(obj)
-        return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
+        return key, {"instructions": ran.inclusive[region.upper()], **code_fields(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
     with ThreadPoolExecutor() as pool:
         found = dict(pool.map(one, flat.items()))
@@ -900,6 +907,21 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     return lines
 
 
+def align_lines(measured: dict) -> list[str]:
+    """Warnings, not failures: how many cells count some code bytes whole because those did not decode to their end, naming the cells where most of the
+    code is so (the padding there is not told), and padding in a size-optimised cell (no loop alignment is expected at -Os or -Oz)."""
+    lines, unread, mostly = [], [], []
+    for (name, language, opt), got in sorted(measured.items()):
+        if got.get("align_unread"):
+            unread.append(got["align_unread"])
+            if got["align_unread"] * 2 >= got["code_bytes"] + got.get("align_bytes", 0):
+                mostly.append(f"ALIGN-UNREAD {name} {language} -{opt}: {got['align_unread']} of {got['code_bytes']} bytes are counted with their padding")
+        if got.get("align_bytes", 0) and opt in ("Os", "Oz"):
+            lines.append(f"ALIGN {name} {language} -{opt}: {got['align_bytes']} bytes of alignment padding at a size level")
+    summary = [f"ALIGN-UNREAD {len(unread)} cells count {sum(unread)} bytes whole (data inside code: not decoded for padding)"] if unread else []
+    return summary + mostly + lines
+
+
 def geomean(values: list[float]) -> float:
     return math.exp(sum(map(math.log, values)) / len(values))
 
@@ -1142,6 +1164,7 @@ def main() -> int:
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
+    print(*align_lines(measured), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused

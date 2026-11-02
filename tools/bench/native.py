@@ -79,7 +79,8 @@ def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt:
     if few is None or many is None or many <= few:
         return {"error": f"instructions: {few} for one run, {many} for 101"}
     data, bss = sizes.data_bytes(obj)
-    return {"instructions": round((many - few) / 100), "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+    size = sizes.code_size(obj)
+    return {"instructions": round((many - few) / 100), "code_bytes": size.code, "align_bytes": size.align, "data_bytes": data, "bss_bytes": bss, **({"align_unread": size.unread} if size.unread else {})}
 
 
 def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], work: Path, bench: Path) -> dict[tuple[str, str, str], dict]:

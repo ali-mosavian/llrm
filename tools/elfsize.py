@@ -29,6 +29,30 @@ def sections(body: bytes) -> list[tuple[str, int, int, int]]:
     return [(name(h[0]), h[1], h[2], h[5]) for h in headers]
 
 
+def executable_contents(path) -> list[bytes]:
+    """The bytes of each executable section of an ELF64 object (SHF_EXECINSTR)."""
+    import struct
+
+    with open(path, "rb") as file:
+        body = file.read()
+    shoff = struct.unpack_from("<Q", body, 0x28)[0]
+    shentsize, shnum = struct.unpack_from("<HH", body, 0x3A)
+    headers = [struct.unpack_from("<IIQQQQIIQQ", body, shoff + i * shentsize) for i in range(shnum)]
+    return [body[h[4] : h[4] + h[5]] for h in headers if h[2] & SHF_EXECINSTR and h[1] != SHT_NOBITS]
+
+
+def code_size(path, padding) -> tuple[int, int, int]:
+    """(code bytes without alignment padding, the padding, bytes that start no instruction) of the object's executable sections; `padding(content, bits)` is sizes.padding,
+    each section read from its own start (its alignment is the section's)."""
+    code = align = unread = 0
+    for content in executable_contents(path):
+        found, skipped = padding(content, 64)
+        code += len(content) - found
+        align += found
+        unread += skipped
+    return code, align, unread
+
+
 def code_bytes(path) -> int:
     """Bytes of the object's executable sections (SHF_EXECINSTR): the program's code, whatever the section is called. Not `.eh_frame`."""
     with open(path, "rb") as file:

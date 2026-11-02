@@ -1112,3 +1112,15 @@ def test_an_x86_64_row_above_the_base_fails_and_one_that_could_not_run_says_why(
     assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1002}, base, []) == ["fib c64 -O2: instructions 1002 > 1001 (worse)"]
     assert bench.native_problems("fib c64 -O2", {"skip": "no perf"}, base, []) == []
     assert bench.native_problems("fib c64 -O2", {"error": "compile: x"}, base, []) == ["fib c64 -O2: compile: x"]
+def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_padding_at_a_size_level():
+    """Counting code without alignment padding must not hide records it could not read, nor padding where none is expected (-Os)."""
+    got = {
+        ("a", "c", "O2"): {"code_bytes": 5, "align_bytes": 9},
+        ("a", "c", "Os"): {"code_bytes": 50, "align_bytes": 3, "align_unread": 4},
+        ("b", "c", "Os"): {"code_bytes": 7, "align_bytes": 0, "align_unread": 7},
+    }
+    assert bench.align_lines(got) == [
+        "ALIGN-UNREAD 2 cells count 11 bytes whole (data inside code: not decoded for padding)",
+        "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
+        "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
+    ]

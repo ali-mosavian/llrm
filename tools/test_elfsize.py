@@ -100,3 +100,15 @@ def test_the_toolchains_property_note_is_not_program_data(tmp_path):
     out = subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True, check=True).stdout
     assert ".note.gnu.property" in out
     assert sizes.data_bytes(obj) == (4, 0)
+
+
+def test_alignment_padding_in_an_elf_object_is_counted_apart_from_code(tmp_path):
+    """gcc aligns a loop with `nop` runs: they are padding (align_bytes), not code, as in an OMF object; code plus padding is every executable byte."""
+    import sizes
+
+    source = "int f(int *a, int n) { int s = 0; for (int i = 0; i < n; i++) s += a[i] * 3; return s; }\n"
+    obj = gcc_object(tmp_path, source, "-O2", "-fno-pic", "-falign-loops=32")
+    whole = elfsize.code_bytes(obj)
+    got = sizes.code_size(obj)
+    assert got.align > 0 and got.code + got.align == whole
+    assert sizes.code_bytes(obj) == got.code < whole
