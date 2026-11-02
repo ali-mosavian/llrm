@@ -456,3 +456,20 @@ fn a_darwin_variadic_callee_stores_the_address_of_its_first_stack_argument() {
         "no stack-argument address in:\n{asm}"
     );
 }
+
+/// A phi whose entry value is `poison` exported a copy of a register nothing
+/// defined, and the allocator died on it ("a unique value", `@text_write` of
+/// the text driver). The pin gives the register an `IMPLICIT_DEF`.
+#[test]
+fn a_phi_input_that_is_poison_defines_its_register() {
+    let asm = full_greedy(&format!(
+        "{HEADER}define i8 @f(i32 %n) {{\n\
+         entry:\n  br label %loop\n\
+         loop:\n  %p = phi i8 [ poison, %entry ], [ %q, %loop ]\n\
+         %i = phi i32 [ 0, %entry ], [ %j, %loop ]\n  %q = trunc i32 %i to i8\n\
+         %j = add i32 %i, 1\n  %c = icmp ult i32 %j, %n\n  br i1 %c, label %loop, label %out\n\
+         out:\n  ret i8 %p\n}}\n"
+    ))
+    .expect("compiles");
+    assert!(asm.contains("ret"), "{asm}");
+}
