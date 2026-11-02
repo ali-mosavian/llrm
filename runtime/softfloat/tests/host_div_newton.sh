@@ -9,4 +9,10 @@ run() {
 }
 run
 run '-DSF_MUL32X32(a,b,h,l)=do{unsigned long long p_=(unsigned long long)(a)*(b);*(h)=(uint32_t)(p_>>32);*(l)=(uint32_t)p_;}while(0)'
+run64() {
+  cc -O2 -fno-builtin -ffp-contract=off -DSF_DIV_NEWTON "$@" -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c src/sf64.c -o $T/h64 || exit 1
+  $T/h64 | tail -1 | grep -qx 'fails=0' || { echo "f64 SF_DIV_NEWTON $*: mismatches"; exit 1; }
+}
+run64
+run64 '-DSF_MUL32X32(a,b,h,l)=do{unsigned long long p_=(unsigned long long)(a)*(b);*(h)=(uint32_t)(p_>>32);*(l)=(uint32_t)p_;}while(0)'
 echo ok
