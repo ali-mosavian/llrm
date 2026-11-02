@@ -1085,3 +1085,14 @@ def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds
     assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
     assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: instructions 11 > 10 (worse)", "a c -Os: code_bytes 113 > 100 (worse)"]
     assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]
+
+
+def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(tmp_path, monkeypatch):
+    """Rate 5 clocks per 16 bytes = 312 milliclocks/byte, read from the tune file the compiler reads; -Os and the other targets have none."""
+    tune = tmp_path / "i486.toml"
+    tune.write_text("cache_line = 16\nline_fill_clocks = 5\n")
+    monkeypatch.setattr(bench, "TUNE_486", tune)
+    assert [bench.rate_for("bq32", opt) for opt in ("O2", "O3", "Os")] == [312, 312, 0]
+    assert bench.rate_for("bas", "O2") == 0
+    tune.write_text("cache_line = 16\n")
+    assert bench.rate_for("bq32", "O2") == 0

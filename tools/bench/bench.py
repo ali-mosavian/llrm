@@ -744,10 +744,16 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     return True
 
 
+TUNE_486 = ROOT / "machine" / "tune" / "x86" / "i486.toml"  # the CPU the flat clocks are priced for (flatcount.py)
+
+
 def rate_for(language: str, opt: str) -> int:
-    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`, from the target's own rows (m16 -O2: 500; m32
-    -O2/-O3: line fill clocks / cache line bytes); 0 where the target trades none, and at -Os."""
-    return 0
+    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`: the flat x86-32 target at -O2/-O3, the 486's line
+    fill (clocks to fill a line, per byte of line) from the tune file the compiler reads. 0 where the target has none (m16 until its row exists) and at -Os."""
+    if opt not in ("O2", "O3") or language != FLAT:
+        return 0
+    tune = tomllib.loads(TUNE_486.read_text())
+    return 1000 * tune["line_fill_clocks"] // tune["cache_line"] if "line_fill_clocks" in tune else 0
 
 
 def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), rate: int = 0) -> list[str]:
