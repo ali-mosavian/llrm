@@ -1680,3 +1680,66 @@ fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
         assert!(kept, "v{dear} costs twice to spill and was spilled");
     }
 }
+
+/// A block that branches three ways, each way returning.
+fn three_ways() -> MFunction<()> {
+    let mut f = MFunction::<()>::new("three");
+    let mut entry = Block { id: 7, ..Block::default() };
+    let mut switch = op("switch", vec![Operand::Block(8), Operand::Block(9), Operand::Block(10)]);
+    switch.terminator = true;
+    entry.insts.push(switch);
+    f.blocks.push(entry);
+    for id in 8..=10 {
+        f.blocks.push(Block { id, insts: vec![ret()], phis: Vec::new() });
+    }
+    f
+}
+
+fn shares(f: &MFunction<()>) -> Vec<f64> {
+    let body = to_lir::<Flat>(f, regs()).expect("converts").body;
+    let frequencies = llrm_codegen::liveness::blockfrequency::MachineBlockFrequencyInfo::of(&body);
+    (1..4).map(|at| frequencies.get_block_freq_relative_to_entry_block(at)).collect()
+}
+
+/// A target that states the IR's branch odds gets them in greedy's block
+/// frequencies: a branch the IR makes 90/5/5 was weighed 1/3 each (seed 126,
+/// m68k: the hint split cost 0.75 where the pin's was 1.333).
+#[test]
+fn test_the_odds_a_function_states_are_the_block_frequencies_greedy_sees() {
+    let mut f = three_ways();
+    assert_eq!(shares(&f).iter().map(|share| (share * 100.0).round()).collect::<Vec<_>>(), [33.0, 33.0, 33.0]);
+    let share = |n, d| llrm_mir::blockfrequency::BranchProbability::new(n, d);
+    f.odds = Some(
+        [((7, 8), (share(90, 100), 0)), ((7, 9), (share(5, 100), 1)), ((7, 10), (share(5, 100), 2))]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(shares(&f).iter().map(|share| (share * 100.0).round()).collect::<Vec<_>>(), [90.0, 5.0, 5.0]);
+}
+
+/// An edge a pass made states no odds and takes the share the others leave.
+#[test]
+fn test_an_edge_with_no_stated_odds_takes_the_share_the_others_leave() {
+    let share = |n, d| llrm_mir::blockfrequency::BranchProbability::new(n, d);
+    let mut f = three_ways();
+    f.odds = Some([((7, 8), (share(50, 100), 0))].into_iter().collect());
+    assert_eq!(shares(&f).iter().map(|share| (share * 100.0).round()).collect::<Vec<_>>(), [50.0, 25.0, 25.0]);
+}
+
+/// A block put on an edge keeps the edge's odds, and a block that takes over
+/// a branch takes its odds.
+#[test]
+fn test_odds_follow_a_split_edge_and_a_taken_over_branch() {
+    let share = |n, d| llrm_mir::blockfrequency::BranchProbability::new(n, d);
+    let mut f = three_ways();
+    f.odds = Some([((7, 8), (share(90, 100), 0)), ((7, 9), (share(10, 100), 1))].into_iter().collect());
+    f.split_odds(7, 8, 11);
+    let odds = f.odds.clone().unwrap();
+    assert_eq!(odds[&(7, 11)].0, share(90, 100));
+    assert_eq!(odds[&(11, 8)].0, llrm_mir::blockfrequency::BranchProbability::get_one());
+    assert!(!odds.contains_key(&(7, 8)));
+    f.move_odds(7, 12);
+    let odds = f.odds.unwrap();
+    assert_eq!(odds[&(12, 9)].0, share(10, 100));
+    assert!(odds.keys().all(|(from, _)| *from != 7));
+}

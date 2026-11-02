@@ -800,6 +800,8 @@ pub fn split_critical_edge<C>(
         return None;
     }
     let new_id = function.fresh_block_id();
+    let from_id = function.blocks[from].id;
+    function.split_odds(from_id, to_id, new_id);
     for inst in function.blocks[from].insts.iter_mut().rev().take_while(|inst| inst.terminator) {
         for operand in &mut inst.operands {
             if matches!(operand, Operand::Block(id) if *id == to_id) {

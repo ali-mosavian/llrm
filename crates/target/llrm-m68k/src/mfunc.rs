@@ -725,6 +725,7 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         }
         let (otherwise, join) = (next_id, next_id + 1);
         next_id += 2;
+        function.move_odds(function.blocks[at].id, join);
         let mut jump = Inst::new(Kind::Op(branch), vec![Operand::Block(join)]);
         jump.terminator = true;
         jump.reads_flags = true;

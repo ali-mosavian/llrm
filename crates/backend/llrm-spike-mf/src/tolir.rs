@@ -23,10 +23,10 @@
 //! at another time are fine. Exit: D-6502, if a 6502 function needs both live
 //! together.
 //!
-//! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
-//! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
-//! loop branch heuristic); every other branch is even. Exit: the odds the
-//! front end knows (the IR's branch weights).
+//! DEVIATE 2: a target whose `MFunction` states no odds (`odds` is `None`)
+//! gets 31 in 32 to stay on a branch with one edge that stays in its loop and
+//! one that leaves (LLVM's loop branch heuristic); every other branch is
+//! even. Exit: each target states the IR's edge probabilities.
 
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
@@ -258,7 +258,10 @@ pub fn to_lir<T: Target>(
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
-    loop_branch_odds(&mut body);
+    match &function.odds {
+        Some(odds) => stated_odds(&mut body, function, odds),
+        None => loop_branch_odds(&mut body),
+    }
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
     for (v, class) in function.classes.iter().enumerate() {
@@ -302,6 +305,24 @@ pub fn to_lir<T: Target>(
             register_cost: T::register_cost,
         },
     })
+}
+
+/// The odds the `MFunction` states, by block number in `body`. An edge with
+/// none shares what the others leave (`getSuccProbability`).
+fn stated_odds<C>(
+    body: &mut LirBody,
+    function: &MFunction<C>,
+    odds: &crate::placement::Odds,
+) {
+    for block in body.blocks.iter() {
+        let from = function.blocks[block.at as usize].id;
+        for &to in block.succ.iter() {
+            let id = function.blocks[to as usize].id;
+            if let Some((probability, _)) = odds.get(&(from, id)) {
+                body.odds.taken.insert((block.at, to), probability.get_numerator());
+            }
+        }
+    }
 }
 
 /// The edge odds of a branch with one edge that stays in its innermost loop

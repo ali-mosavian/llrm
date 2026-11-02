@@ -99,6 +99,7 @@ pub fn items_with(
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
     }
+    function.odds = Some(edge_odds(module, name)?);
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);

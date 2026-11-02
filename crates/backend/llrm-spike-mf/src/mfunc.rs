@@ -126,6 +126,10 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The IR's edge probabilities by `(from, to)` block id, where the target
+    /// states them; `None` leaves the allocator the loop branch heuristic.
+    /// An edge a pass made is absent and takes its share of what is left.
+    pub odds: Option<crate::placement::Odds>,
 }
 
 impl<C> MFunction<C> {
@@ -136,7 +140,37 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            odds: None,
         }
+    }
+
+    /// `from`'s edges now leave `to` (the block that took over its branch):
+    /// the odds move with them.
+    pub fn move_odds(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
+        let Some(odds) = &mut self.odds else { return };
+        let moved: Vec<_> = odds.keys().filter(|(source, _)| *source == from).copied().collect();
+        for key in moved {
+            let one = odds.remove(&key).expect("a key just listed");
+            odds.insert((to, key.1), one);
+        }
+    }
+
+    /// `middle` is a block on the edge `from` -> `to`: the edge's odds are
+    /// `from` -> `middle`'s, and `middle` always goes on.
+    pub fn split_odds(
+        &mut self,
+        from: u32,
+        to: u32,
+        middle: u32,
+    ) {
+        let Some(odds) = &mut self.odds else { return };
+        let Some((probability, index)) = odds.remove(&(from, to)) else { return };
+        odds.insert((from, middle), (probability, index));
+        odds.insert((middle, to), (llrm_mir::blockfrequency::BranchProbability::get_one(), 0));
     }
 
     /// Lays `block` out at `at`; the phis name predecessors by index, so those
