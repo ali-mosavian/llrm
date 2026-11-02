@@ -777,6 +777,8 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
     clocks, code bytes, instructions and memory operands are not gated alone: they are in the row."""
     if want is None:
         return []
+    if want.get("instructions") == 0 and "error" not in got:  # a base that executed nothing is no base: parity/control Os read 0 on main and 158 B was compared
+        return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
     problems = []

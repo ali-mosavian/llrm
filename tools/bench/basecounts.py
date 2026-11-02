@@ -313,11 +313,11 @@ def coverage_detail(measured: dict, base: dict, same: set[str]) -> list[str]:
     judged: dict[tuple[str, str], set[str]] = {}
     for key in sorted(ours):
         was = base.get(key)
-        if key[0] in same and was is not None and not any(one in row for row in (measured[key], was) for one in ("error", "skip", "known", "xpass")):
+        if key[0] in same and was is not None and was.get("instructions") != 0 and not any(one in row for row in (measured[key], was) for one in ("error", "skip", "known", "xpass")):
             judged.setdefault((key[1], key[2]), set()).add(key[0])
     lines = [f"CELLS {language} -{opt}: {len(programs)} programs" for (language, opt), programs in sorted(judged.items())]
     lines.append(f"CELLS total: {sum(map(len, judged.values()))} cells over {len(set().union(*judged.values()))} programs" if judged else "CELLS total: 0 cells over 0 programs")
-    nobase = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key not in base]
+    nobase = [f"{key[0]} {key[1]} -{key[2]}" + (" (base executed 0 instructions)" if key in base else "") for key in sorted(ours) if key[0] in same and (key not in base or base[key].get("instructions") == 0)]
     nohead = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(base) if key[1] in OURS and key[0] in same and (key[1], key[2]) in levels and key not in measured]
     noclocks = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key in base and "clocks" not in measured[key] and "clocks" not in base[key]
                 and not any(one in row for row in (measured[key], base[key]) for one in ("error", "skip", "known", "xpass"))]

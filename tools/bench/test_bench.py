@@ -1020,12 +1020,12 @@ def test_compare_baselines_refuses_two_runs_that_differ_and_names_the_cells(tmp_
 
 def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_it():
     """With a size-guard candidate parity/control bas and bq16 read 0 instructions (the kernel inlined into the harness) and passed the gate as
-    -100%. A kernel that executes nothing measures nothing; a base that also folded it is not accused."""
+    -100%. A kernel that executes nothing measures nothing; a base that also folded it is no base: the cell is flagged, not compared (oversight, 11-02)."""
     import bench
 
     out = bench.against("control bas -Os", {"instructions": 0, "code_bytes": 100}, {"instructions": 156, "code_bytes": 246})
     assert len(out) == 1 and "INVALID" in out[0], out
-    assert bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0}) == []
+    assert any("INVALID BASE" in one for one in bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0})), "a base that ran nothing is no base, even when the head ran nothing too"
     assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
 
 
@@ -1127,3 +1127,9 @@ def test_the_emulation_cap_can_be_raised_for_cells_the_default_cannot_reach(monk
     assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {}
     monkeypatch.setenv("LLRM_FLAT_LIMIT", "2000000000")
     assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {"clocks": 1234, "emu_limit": 2000000000}
+
+
+def test_a_base_that_executed_zero_instructions_is_no_base():
+    """parity/control Os read 0 instructions on main (the kernel folded away) and its 158 B was handed to the compare as the base: the head's +108 B looked like a regression of a program that never ran."""
+    problems = bench.against("parity/control bq16 -Os", {"instructions": 147, "code_bytes": 285}, {"instructions": 0, "code_bytes": 157})
+    assert any("INVALID BASE" in one for one in problems)

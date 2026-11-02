@@ -463,3 +463,13 @@ def test_the_judge_reads_no_waiver_when_they_are_switched_off(tmp_path, monkeypa
     assert len(bc.waivers(tmp_path)) == 1
     monkeypatch.setenv("LLRM_BENCH_WAIVERS", "off")
     assert bc.waivers(tmp_path) == []
+
+
+def test_a_zero_instruction_base_cell_is_nobase_in_the_coverage():
+    """The same cell counted as judged: the coverage said 260 cells judged with two of them compared against a base that ran nothing."""
+    ran = {"instructions": 5, "code_bytes": 2}
+    measured = {("a", "bq16", "Os"): ran, ("control", "bq16", "Os"): ran}
+    base = {("a", "bq16", "Os"): ran, ("control", "bq16", "Os"): {"instructions": 0, "code_bytes": 9}}
+    lines = bc.coverage_detail(measured, base, {"a", "control"})
+    assert "CELLS total: 1 cells over 1 programs" in lines
+    assert any(line.startswith("NOBASE 1 cells: control bq16 -Os (base executed 0 instructions)") for line in lines)
