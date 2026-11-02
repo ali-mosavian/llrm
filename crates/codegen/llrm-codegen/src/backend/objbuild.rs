@@ -827,6 +827,7 @@ pub fn _code_by(
         }
         items.push(Encoded::End(end));
     }
+    _local_tail_jumps(&mut items, module.object.code_model());
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
     let size = !group.is_empty() && group.iter().all(|&number| module.procedures[number].size);
@@ -1053,6 +1054,33 @@ pub const SHORT_JUMP: i64 = 2;
 /// Whether a short jump reaches `displacement`, counted from its end.
 pub fn short_reaches(displacement: i64) -> bool {
     (-128..=127).contains(&displacement)
+}
+
+/// A sibling call (`jmp f`, or `jcc f` folded from a branch) to a procedure
+/// this group defines is a jump to a label, relaxed to the short form where it
+/// reaches (MC resolves a branch to a symbol of its own section; the pin's
+/// sibling_call_callees `je h` is 2 bytes, ours 6).
+pub fn _local_tail_jumps(
+    items: &mut [Encoded],
+    model: CodeModel,
+) {
+    if !model.flat() {
+        return;
+    }
+    let defined: BTreeSet<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            Encoded::Label(masm::Label { name }) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    for item in items.iter_mut() {
+        if let Encoded::Near(Near { name, tail: true, cond }) = item {
+            if defined.contains(name.as_str()) {
+                *item = Encoded::Jump(Jump::new(cond.as_deref().unwrap_or("jmp"), name.clone()));
+            }
+        }
+    }
 }
 
 /// Every label's offset, with each jump short unless its target is out of
@@ -1596,6 +1624,23 @@ mod tests {
             .map(|one| one.trim().to_owned())
             .collect();
         assert_eq!(lines, ["_next proc near", "L0_1:", "L0_2:", "ret", "_next endp"]);
+    }
+
+    /// m64 -Os sibling_call_callees 71 -> 75 B (pin 66): a sibling call to a
+    /// procedure of the same object was a `jmp rel32` / `jcc rel32` with a
+    /// displacement, the pin's MC makes it a 2-byte short jump in reach.
+    #[test]
+    fn test_a_sibling_call_to_a_procedure_of_the_object_is_a_short_jump_in_reach() {
+        let mut items = vec![
+            Encoded::Label(masm::Label { name: "f".into() }),
+            Encoded::Near(Near { name: "h".into(), tail: true, cond: Some("je".into()) }),
+            Encoded::Near(Near { name: "h".into(), tail: true, cond: None }),
+            Encoded::Near(Near { name: "other".into(), tail: true, cond: None }),
+            Encoded::Label(masm::Label { name: "h".into() }),
+        ];
+        _local_tail_jumps(&mut items, CodeModel::Flat64);
+        let labels = _relaxed(&mut items, CodeModel::Flat64).unwrap();
+        assert_eq!(labels["h"], 2 + 2 + 5, "je and jmp short, the call to another object stays near");
     }
 
     /// The pass measured each item after a jump in it had grown, against labels
