@@ -1010,7 +1010,9 @@ mod tests {
         in_loop: bool,
     ) -> LirBody {
         let reader = insn(16, Operation::FloatArith, "fsubr", vec![self::held(4)], vec![self::held(1), Loc::Mem(read)]);
-        let mut loop_body = vec![reader, fstp(17, 4, writes.unwrap_or_else(|| frame(-4)))];
+        let mut write = (*fstp(17, 4, writes.clone().unwrap_or_else(|| frame(-4)))).clone();
+        write.uses.extend(writes.iter().filter_map(|cell| cell.base).map(|base| base.value));
+        let mut loop_body = vec![reader, Arc::new(write)];
         let mut start = vec![fld(0, 1, held)];
         if !in_loop {
             start.append(&mut loop_body);
@@ -1053,6 +1055,18 @@ mod tests {
     fn test_a_loop_invariant_load_is_kept_where_the_loop_writes_its_cell() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
         let body = loop_reading(global(0, 0), global(1, 0), Some(global(0, 0)), true);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fsubr+m", "fstp"]);
+    }
+
+    /// nbody -Os: the swap must not make a read of a cell a store may have
+    /// changed (the 10-21 pair kernels: a store through a pointer between the
+    /// load and its use). A store through a pointer in the loop may reach the
+    /// cell loaded before it: the load stays.
+    #[test]
+    fn test_a_loop_invariant_load_is_kept_where_a_store_through_a_pointer_may_reach_its_cell() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let pointer = Mem { base: Some(Held { value: 8, width: 2 }), ..Mem::new(None, 8) };
+        let body = loop_reading(global(0, 0), global(1, 0), Some(pointer), true);
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fsubr+m", "fstp"]);
     }
 
