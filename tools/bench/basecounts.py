@@ -55,7 +55,7 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     rows = {k: v for k, v in rows.items() if k[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{key}-own.json"
-    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION}))
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION, "harness": harness_digest(root)}))
     return path
 
 
@@ -115,6 +115,15 @@ def programs(root: Path = ROOT) -> dict[str, str]:
     return out
 
 
+def harness_at(sha: str, root: Path = ROOT) -> str:
+    """`harness_digest()` of the tree of commit `sha`, read from git: what a base counted by that tree ran under."""
+    def blob(name):
+        done = subprocess.run(["git", "cat-file", "blob", f"{sha}:{name}"], cwd=root, capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    return judge_digest(blob).hex()[:12]
+
+
 def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
     """`programs()` of the tree of commit `sha`, read from git: the hash of a base that was stored under another HASH_VERSION."""
     listing = subprocess.run(["git", "ls-tree", "-r", "--name-only", sha, "--", "bench"], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
@@ -171,6 +180,9 @@ def base_counts(
     path = cache / f"{tree}-own{'-timed' if timed else ''}.json"
     stored = json.loads(path.read_text()) if path.is_file() else {"rows": {}, "programs": {}}
     have = rows_of(stored["rows"])
+    if have and stored.get("harness") != harness_at(sha, root):  # recorded under no known harness: unverified, never compared
+        print(f"NOBASE {len(have)} recorded rows of {sha[:9]} carry no matching harness digest; measured again")
+        have = {}
     if all(any(key[2] == opt for key in have) for opt in opts):
         if stored.get("hash_version") != HASH_VERSION:  # counts do not depend on the hash; the programs' hashes do
             return have, programs_at(sha, root)
@@ -182,7 +194,7 @@ def base_counts(
     have |= {key: value for key, value in rows.items() if key[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".part")
-    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION}))
+    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION, "harness": harness_at(sha, root)}))
     os.replace(part, path)
     return have, hashes
 

@@ -201,7 +201,7 @@ def test_the_counts_a_main_push_records_are_the_next_pull_requests_base_without_
     def never(*a):
         raise AssertionError("the base was built or measured")
 
-    have, hashes = bc.base_counts("sha", ["O2"], lambda sha: "k1", never, never, cache=cache)
+    have, hashes = bc.base_counts("HEAD", ["O2"], lambda sha: "k1", never, never, cache=cache)  # a real commit: the digest is read from its tree
     assert have == {("fib", "c", "O2"): {"instructions": 7}} and "fib" in hashes, "ours only: the reference's row is not recorded"
 
 
@@ -244,7 +244,7 @@ def test_a_base_stored_under_the_old_hash_is_judged_by_the_new_one_not_skipped_w
     old = hashlib_of_every_file(tmp_path / "bench/fib")
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / f"{sha}-own.json").write_text(json.dumps({"rows": {"fib/c/O2": {"instructions": 1}}, "programs": {"fib": old}}))
+    (cache / f"{sha}-own.json").write_text(json.dumps({"rows": {"fib/c/O2": {"instructions": 1}}, "programs": {"fib": old}, "harness": bc.harness_at(sha, tmp_path)}))
     (tmp_path / "bench/fib/fib.bcout").write_text("5\n")
     (tmp_path / "bench/fib/fib.out").write_text("6\n")
     _, hashes = bc.base_counts(sha, ["O2"], lambda s: s, None, None, cache=cache, root=tmp_path)
@@ -428,3 +428,18 @@ def test_a_program_hash_changes_with_the_icount_file(tmp_path):
     before = bc.programs(tmp_path)["fib"]
     icount.write_text("new\n")
     assert bc.programs(tmp_path)["fib"] != before
+
+
+def test_a_recorded_base_without_a_harness_digest_is_measured_again_not_compared(tmp_path, capsys):
+    """A cache file recorded before digests, or by another harness, was compared as the base: its counters can differ from the tip's by what the harness changed (fpbench nib Os 156229 vs 156261). Without a matching digest it is NOBASE: counted, named, measured again."""
+    made = []
+
+    def measure_with(directory, opts):
+        made.append(opts)
+        return {("fib", "c", "O2"): row(2)}, {"fib": "h1"}
+
+    (tmp_path / "ts1-own.json").write_text(json.dumps({"rows": {"fib/c/O2": row(1)}, "programs": {"fib": "h1"}, "hash_version": bc.HASH_VERSION}))
+    args = dict(tree_of=lambda sha: "t" + sha, build=lambda sha: Path("/b") / sha, measure_with=measure_with, cache=tmp_path)
+    rows, _ = bc.base_counts("s1", ["O2"], **args)
+    assert made == [["O2"]] and rows[("fib", "c", "O2")]["instructions"] == 2, "the unverified file was used"
+    assert "NOBASE 1 recorded rows of s1" in capsys.readouterr().out
