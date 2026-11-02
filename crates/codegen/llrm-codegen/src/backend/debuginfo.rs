@@ -1303,8 +1303,12 @@ pub fn laid_out(
                     rows.push(model::Line { offset: body, ..rows[at] });
                     rows[at] = model::Line { section, offset: start, file: 0, line, column: 0 };
                 }
-                Some(_) => {}
-                None => rows.push(model::Line { section, offset: start, file: 0, line, column: 0 }),
+                // A frameless function: the scope line's row and the first
+                // statement's share the first byte, as the pin's do.
+                _ => {
+                    let at = rows.iter().position(|row| row.offset >= start).unwrap_or(rows.len());
+                    rows.insert(at, model::Line { section, offset: start, file: 0, line, column: 0 });
+                }
             }
         }
         rows.sort_by_key(|row| row.offset);

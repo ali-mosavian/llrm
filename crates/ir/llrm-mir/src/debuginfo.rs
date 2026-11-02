@@ -704,6 +704,7 @@ mod tests {
             r#type: pt,
             parameters: vec![(1, "n".into(), int16)],
             all_calls: false,
+            scope_line: Some(7),
         };
         add_function(&mut module, &function);
         assert_eq!(functions(&module), [function]);
