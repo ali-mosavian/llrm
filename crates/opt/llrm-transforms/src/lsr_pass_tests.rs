@@ -1084,6 +1084,46 @@ fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
     assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
 }
 
+/// An `i32` chain xored with a loaded value and an `i32` sum, beside two
+/// strength-reduced `i32` recurrences, left a register short at -Os m16: the
+/// solver spent a third register on a formula to save an instruction and the
+/// allocator spilled the chain (shellsort bas -Os, +6 B, +129 memory operands
+/// against main). The temporaries now count against the registers.
+#[test]
+fn the_temporaries_of_the_body_count_against_the_registers() {
+    let mut module = parsed(&format!("{DOS}{SHELLSORT_INIT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("7013"), "the exit moved off the i32 recurrence: {after}");
+}
+
+const SHELLSORT_INIT: &str = "
+define i32 @f(ptr %v0, ptr %v5) {
+b1:
+  br label %b5
+b5:
+  %v10 = phi i16 [ 0, %b1 ], [ %v21, %b5 ]
+  %v11 = shl nuw nsw i16 %v10, 2
+  %v12 = getelementptr i8, ptr %v5, i16 %v11
+  %v13 = zext nneg i16 %v10 to i32
+  %v14 = mul nuw nsw i32 %v13, 109
+  %v15 = add nuw nsw i32 %v14, 37
+  %v16 = shl nuw nsw i32 %v13, 7
+  %v17 = xor i32 %v15, %v16
+  %v18 = load i32, ptr %v0
+  %v19 = and i32 %v18, 65535
+  %v20 = xor i32 %v17, %v19
+  store i32 %v20, ptr %v12
+  %v21 = add nuw nsw i16 %v10, 1
+  %exitcond2 = icmp eq i16 %v21, 64
+  br i1 %exitcond2, label %b6, label %b5
+b6:
+  ret i32 0
+}
+";
+
 const DOT: &str = "
 define i32 @dot(ptr %0, ptr %1, i16 %2) {
   %4 = icmp sgt i16 %2, 0

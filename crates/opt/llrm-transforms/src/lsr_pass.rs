@@ -254,7 +254,7 @@ fn plan_loop(
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
-    lsr.other_register_units = crate::lsr_collect::loop_carried_register_units(se, &cx, header);
+    lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
     lsr.size = size;
     lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);

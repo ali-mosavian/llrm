@@ -1024,30 +1024,41 @@ impl<'a, 'b> Collection<'a, 'b> {
     }
 }
 
-/// The registers, in the target's word, of the loop-carried phis of header
-/// `l` that are not recurrences LSR rewrites: the accumulators that stay in
-/// registers for the whole loop (an `i32` is two words on a 16-bit target).
-pub fn loop_carried_register_units(
+/// The registers the loop keeps live at once beside the
+/// recurrences LSR rewrites: the accumulators, the loaded values and the
+/// temporaries the body defines (an `i64` takes two on a 32-bit register file).
+/// They compete with the formulae for the target's registers, which the phis
+/// alone did not show (shellsort bas -Os: a third formula register spilled the
+/// `i32` chain).
+pub fn loop_register_units(
     se: &mut ScalarEvolution,
     cx: &Cx,
+    tti: &dyn Tti,
     l: BlockId,
 ) -> u32 {
-    let word = cx.layout.pointer(0).bits.max(8) as u32;
-    let phis: Vec<InstId> =
-        cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
-    let mut units = 0;
-    for phi in phis {
-        let Some(result) = cx.function.instruction(phi).result else { continue };
-        let value = Operand::Value(result);
-        if !se.is_value_scevable(cx, value) {
-            continue;
+    let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
+    let word = tti.gpr_bits();
+    let mut weights: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let Some(result) = cx.function.instruction(inst).result else { continue };
+            let value = Operand::Value(result);
+            if !se.is_value_scevable(cx, value) {
+                continue;
+            }
+            let s = se.get_scev(cx, value);
+            if se.addrec_header(s) == Some(l) {
+                continue;
+            }
+            let ty = se.type_of(s);
+            let bits = se.get_type_size_in_bits(cx, ty) as u32;
+            if bits <= 1 {
+                continue;
+            }
+            weights.insert(result, bits.div_ceil(word) as usize);
         }
-        let s = se.get_scev(cx, value);
-        if se.addrec_header(s) == Some(l) {
-            continue;
-        }
-        let bits = se.get_type_size_in_bits(cx, se.type_of(s)) as u32;
-        units += bits.div_ceil(word);
     }
-    units
+    let blocks: Vec<BlockId> = lp.get_blocks().to_vec();
+    llrm_analysis::liveness::pressure_weighted(cx.function, &blocks, &|one| weights.get(&one).copied().unwrap_or(0))
+        as u32
 }

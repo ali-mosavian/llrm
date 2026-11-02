@@ -339,10 +339,10 @@ fn the_whole_search_is_linear_in_the_uses() {
 }
 
 /// LSR's register budget counted the registers of the target as free for its
-/// own values although an accumulator held across the loop takes some: an
-/// `i32` sum is two words on a 16-bit target and the budget was five of six
-/// (bench/shellsort at -Os spilled the sum when LSR dropped a compare). The
-/// loop-carried phis that are not recurrences of the loop are the pressure.
+/// own values although the loop keeps others live (bench/shellsort at -Os
+/// spilled a sum when LSR dropped a compare). The values live beside the
+/// recurrences are the pressure: the sum and the extended load, one register
+/// each as an `i32`, two as an `i64`.
 #[test]
 fn loop_carried_values_that_are_not_recurrences_take_registers() {
     let looped = |acc: &str| {
@@ -353,9 +353,9 @@ fn loop_carried_values_that_are_not_recurrences_take_registers() {
     let mut units = Vec::new();
     for acc in ["i32", "i64"] {
         generated(&looped(acc), |cx, se, _, header| {
-            units.push(crate::lsr_collect::loop_carried_register_units(se, cx, header));
+            units.push(crate::lsr_collect::loop_register_units(se, cx, &X86::of_cpu("i486").unwrap(), header));
         });
     }
     // The index is a recurrence LSR rewrites; the sum is not.
-    assert_eq!(units, [1, 2]);
+    assert_eq!(units, [2, 4]);
 }

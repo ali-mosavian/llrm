@@ -989,6 +989,11 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
     }
 
+    /// 64 in long mode, else 32 (also at m16, on a 386 or later).
+    fn gpr_bits(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
     /// `lea` forms `base + index + displacement` in one instruction.
     fn address_form_adds_offsets(&self) -> bool {
         true

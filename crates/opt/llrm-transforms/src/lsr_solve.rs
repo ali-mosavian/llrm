@@ -46,6 +46,16 @@
 //! counter and a `cmp`, where the byte index ending at zero shares the
 //! counter and saves the `cmp`. Exit: none while the pin's rule picks the
 //! worse solution under its own cost model.
+//!
+//! DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
+//! values its body defines that SCEV does not make a recurrence, in registers
+//! of the target's width, `Tti::gpr_bits`) are taken off the budget the solver
+//! and the spill check count against; the pin counts none. Without it shellsort
+//! bas -Os spent a third formula register to save an instruction and the
+//! allocator spilled the `i32` chain (+6 B). No pin run can decide it: the pin
+//! has no m16 TTI. Exit: a pressure model on the pin's
+//! MachineLICM/RegisterPressure terms, by 2026-11-20, or when the allocator's
+//! spill cost is priced in the comparator.
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;

@@ -828,6 +828,12 @@ pub trait Tti {
         8
     }
 
+    /// The bits one general-purpose register holds: an `i32` takes one at 32,
+    /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
+    fn gpr_bits(&self) -> u32 {
+        32
+    }
+
     /// Instructions a scaled index (`base + scale * index`, scale above 1)
     /// costs beyond the address itself, once for each scaled register: the
     /// backend forms it once and every use of the register shares it. 0
