@@ -14,7 +14,8 @@ CONV = ('itof', 'utof', 'ftoi', 'ftou')
 for f in ('sf32', 'sf32_muldiv', 'sf32_conv'):
     assert sh('ca65', '-t', 'sim6502', '-I', I, '-DSTACKB=1', f'{I}/{f}.s', '-o', f'{T}/{f}.o').returncode == 0
 # The stub returns 0 and the base run's one record expects 0, so the driver takes the same success path as in a library run (a failing record costs ~150 cycles in its report loop).
-open(f'{T}/stub.s', 'w').write('.export ' + ','.join(SYM.values()) + '\n' + ':\n'.join(SYM.values()) + ':\n lda #0\n ldx #0\n sta $82\n sta $83\n rts\n')
+# The base run links the library too (crt0 initializes its DATA and BSS before main) and calls the stub instead.
+open(f'{T}/stub.s', 'w').write('.export stub_op\nstub_op:\n lda #0\n ldx #0\n sta $82\n sta $83\n rts\n')
 sh('ca65', '-t', 'sim6502', f'{T}/stub.s', '-o', f'{T}/stub.o')
 def ours(op):
     gen = sh('python3', 'gen.py', op, str(N + 361)).stdout.split('\n')
@@ -23,10 +24,15 @@ def ours(op):
     open(f'{T}/op.inc', 'w').write(f'.import {SYM[op]}\nOP = {SYM[op]}\n')
     assert sh('ca65', '-t', 'sim6502', '-U', '-I', T, *(['-DEXACT=1'] if op in CONV else []), f'{here}/drv.s', '-o', f'{T}/drv.o').returncode == 0
     os.makedirs(f'{T}/s', exist_ok=True)
-    open(f'{T}/s/vec.inc', 'w').write('nrec = 1\nvec:\n .dword 0, 0, 0\n'); open(f'{T}/s/op.inc', 'w').write(open(f'{T}/op.inc').read())
+    open(f'{T}/s/vec.inc', 'w').write('nrec = 1\nvec:\n .dword 0, 0, 0\n'); open(f'{T}/s/op.inc', 'w').write('.import stub_op\nOP = stub_op\n')
     assert sh('ca65', '-t', 'sim6502', '-U', '-I', f'{T}/s', *(['-DEXACT=1'] if op in CONV else []), f'{here}/drv.s', '-o', f'{T}/drv_s.o').returncode == 0
-    for k, objs in (('s', [f'{T}/stub.o']), ('r', [f'{T}/sf32.o', f'{T}/sf32_muldiv.o', f'{T}/sf32_conv.o'])):
-        assert sh('ld65', '-t', 'sim6502', f'{T}/drv_s.o' if k == 's' else f'{T}/drv.o', *objs, 'sim6502.lib', '-o', f'{T}/{k}.bin').returncode == 0
+    lib = [f'{T}/sf32.o', f'{T}/sf32_muldiv.o', f'{T}/sf32_conv.o']
+    for k, objs in (('s', [f'{T}/stub.o'] + lib), ('r', lib)):
+        assert sh('ld65', '-t', 'sim6502', '-m', f'{T}/{k}.map', f'{T}/drv_s.o' if k == 's' else f'{T}/drv.o', *objs, 'sim6502.lib', '-o', f'{T}/{k}.bin').returncode == 0
+    def ramsegs(k):
+        m = open(f'{T}/{k}.map').read().split('Segment list:')[1]
+        return {l.split()[0]: l.split()[3] for l in m.splitlines() if l.split()[:1] in (['DATA'], ['BSS'])}
+    assert ramsegs('s') == ramsegs('r'), 'base and library runs must link the same DATA and BSS: crt0 initializes them before main, and the difference lands in every delta'
     pat = bytes([0xA9, 0, 0x85, 0xA0, 0xA9, 0, 0x85, 0xA1, 0xA9, 0, 0x85, 0xA2, 0xA9, 0, 0x85, 0xA3])
     def find(data):
         for i in range(len(data) - 16):
