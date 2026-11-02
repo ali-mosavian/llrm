@@ -230,6 +230,24 @@ impl TypeRegistry {
             return Err(Diagnostic::new(value.span(), "a module variable holds no heap value"));
         }
         let folded = super::super::consts::folded(value, &BTreeMap::new());
+        if is_float(type_name) {
+            // IEEE bits, as `float` writes a literal into a constant: zero (a
+            // table's `[0.0] * N`) is all-zero bits, which
+            // the linker puts in bss, as C's `static float t[N]`.
+            let number = match folded.as_ref() {
+                Some(Expr::Float(spelling, _)) => spelling.parse::<f64>().ok(),
+                Some(Expr::Integer(value, _)) => Some(*value as f64),
+                _ => None,
+            }
+            .filter(|number| number.is_finite())
+            .ok_or_else(|| Diagnostic::new(value.span(), "a float module variable starts as a finite number"))?;
+            let start = at as usize;
+            match type_name {
+                TypeName::F32 => bytes[start..start + 4].copy_from_slice(&(number as f32).to_bits().to_le_bytes()),
+                _ => bytes[start..start + 8].copy_from_slice(&number.to_bits().to_le_bytes()),
+            }
+            return Ok(());
+        }
         let number = match folded.as_ref() {
             Some(Expr::Boolean(value, _)) => i64::from(*value),
             Some(Expr::Character(value, _)) => i64::from(*value),

@@ -451,3 +451,14 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     assert!(spelled(&[]).contains(&"f_".to_owned()));
     assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
 }
+
+/// `var table: f32[64]` was refused ("a module variable starts as an integer,
+/// char or bool"), so every Nib float table was a local, zeroed by `rep stos`
+/// and addressed through the frame on every call (stft_single: five of them, a
+/// kernel 1.6x C's `static float` bytes).
+#[test]
+fn test_a_float_module_variable_is_static_data_not_a_zeroed_frame() {
+    let function = _nib("floatvar", "total", "_total");
+    assert!(!function.contains("rep stos"), "{function}");
+    assert!(!function.contains("[bp-"), "{function}");
+}
