@@ -338,8 +338,9 @@ impl Builder<'_> {
         header: &BitTestHeader,
     ) -> EVT {
         let bits = vt.size_in_bits();
+        let legal = self.target.legal_ints.contains(&bits);
         let fits = bits >= 64 || header.masks.iter().all(|(mask, _)| mask >> bits == 0);
-        if fits { vt } else { self.target.dag.pointer }
+        if legal && fits { vt } else { self.target.dag.pointer }
     }
 
     /// `visitBitTestCase`.

@@ -801,3 +801,21 @@ fn a_selected_node_stops_the_spread_of_invalidated_ids() {
     assert!(adapter.id_of(nodes[1].node) < -1, "the unselected user of the replacement is invalidated");
     assert!(adapter.id_of(nodes[3].node) > 0, "invalidation ran through the selected node");
 }
+
+/// The arm64 bitfield matchers asked the structural `known_zero` (constants,
+/// `and`, shifts) for the non-zero bits of a value; a `umin` with 15 was
+/// unknown, so a field the pin proves narrow was matched wide or not at all.
+/// The adapter answers `computeKnownBits`.
+#[test]
+fn the_adapter_answers_the_known_zero_bits_of_the_dag() {
+    use llrm_dagisel::dag::SDValue as PinValue;
+    use llrm_dagisel::x86_addr::{AddrDag, known_zero};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let x = input(&mut dag, 40);
+    let fifteen = dag.get_constant(15, EVT::I32);
+    let min = dag.get_node(ISD::UMin, EVT::I32, &[x, fifteen]);
+    let adapter = DagisAdapter::new(&mut dag);
+    let value = PinValue::new(min.node, 0);
+    assert_eq!(known_zero(&adapter, value, 0), 0, "premise: the structural subset knows nothing of a umin");
+    assert_eq!(adapter.known_zero_bits(value), 0xffff_fff0);
+}

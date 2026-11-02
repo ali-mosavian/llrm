@@ -2787,3 +2787,16 @@ b:
     let (opt, min) = flags(pipeline::Options::min_size());
     assert!(opt && min, "-Oz: optsize and minsize");
 }
+
+/// The shadow harness left cgpaddr out by `LLRM_NO_CGPADDR`, an environment
+/// flag read inside the pipeline: a stray variable changed any compile. The
+/// option (`cgpaddr: false`, `-fno-llrm-cgpaddr`) leaves it out, and the
+/// variable does nothing.
+#[test]
+fn cgpaddr_is_left_out_by_its_option_and_not_by_the_environment() {
+    // SAFETY: the variable is read by no code; the test fails if one starts to.
+    unsafe { std::env::set_var("LLRM_NO_CGPADDR", "1") };
+    assert!(pipeline::Options::default().wanted("cgpaddr"));
+    let options = pipeline::Options { cgpaddr: false, ..pipeline::Options::default() };
+    assert!(!options.wanted("cgpaddr"));
+}

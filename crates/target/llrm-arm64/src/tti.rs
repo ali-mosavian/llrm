@@ -51,7 +51,7 @@
 //! # See also
 //! `llrm_mir::tti`, the interface; `llrm_x86::tti`, the x86 model.
 
-use llrm_mir::lowering::Lowering;
+use llrm_mir::lowering::{ExtUser, Lowering};
 use llrm_mir::tti::*;
 
 use crate::expand_imm::mov_imm;
@@ -246,7 +246,7 @@ fn int_imm_chunk(value: i64) -> i64 {
 
 /// `isLegalArithImmed`:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64AddressingModes.h#L355
-fn is_legal_arith_immediate(c: u64) -> bool {
+pub(crate) fn is_legal_arith_immediate(c: u64) -> bool {
     c >> 12 == 0 || (c & 0xfff == 0 && c >> 24 == 0)
 }
 
@@ -878,4 +878,57 @@ impl AArch64Lowering {
     }
 }
 
-impl Lowering for AArch64Lowering {}
+impl Lowering for AArch64Lowering {
+    // The register classes: GPR32 and GPR64 (AArch64ISelLowering.cpp,
+    // addRegisterClass).
+    fn is_type_legal(
+        &self,
+        bits: u32,
+    ) -> bool {
+        matches!(bits, 32 | 64)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942
+    fn is_truncate_free(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        from_bits > to_bits
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18984
+    fn is_zext_free(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        from_bits == 32 && to_bits == 64
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L19014
+    fn is_ext_free_impl(
+        &self,
+        users: &[ExtUser],
+    ) -> bool {
+        users
+            .iter()
+            .all(
+                |user| match *user {
+                    ExtUser::ConstShl | ExtUser::SameTypeTrunc => true,
+                    // A shift of 1..=4 folds into the addressing mode.
+                    ExtUser::Gep { store_bits } => (4..=7).contains(&store_bits.trailing_zeros()),
+                    ExtUser::Other => false,
+                },
+            )
+    }
+
+    // The base class (TargetLoweringBase.cpp#L1813): the register type, i32 for
+    // a narrower integer.
+    fn preferred_switch_condition_bits(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        bits.max(32)
+    }
+}

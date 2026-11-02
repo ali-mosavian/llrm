@@ -1,6 +1,9 @@
 # Copies of target facts left in shared code, per file: count path. Only shrinks.
 1 crates/backend/llrm-dagisel-gen/src/inc.rs
 8 crates/backend/llrm-dagisel-gen/src/main.rs
+2 crates/backend/llrm-dagisel/src/aarch64_predicates.rs
+10 crates/backend/llrm-dagisel/src/generated/aarch64/aarch64_apple_m1.rs
+1 crates/backend/llrm-dagisel/src/generated/aarch64/ids.rs
 158 crates/backend/llrm-dagisel/src/generated/instrinfo.rs
 1 crates/backend/llrm-dagisel/src/generated/mod.rs
 2 crates/backend/llrm-dagisel/src/generated/x86_i486.rs

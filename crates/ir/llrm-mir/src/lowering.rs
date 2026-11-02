@@ -28,6 +28,19 @@ pub enum Ext {
     FpExt,
 }
 
+/// How an extension's user reads it, for `is_ext_free_impl`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtUser {
+    /// A `shl` by a constant.
+    ConstShl,
+    /// An index of a `getelementptr` whose indexed type is `store_bits` wide.
+    Gep { store_bits: u64 },
+    /// A `trunc` back to the extended value's own type.
+    SameTypeTrunc,
+    /// Any other user.
+    Other,
+}
+
 /// The operations of `ISD` that an IR instruction becomes
 /// (`TargetLowering::InstructionOpcodeToISD`), for the legality hook.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,6 +183,17 @@ pub trait Lowering {
             Ext::ZExt => self.is_zext_free(from_bits, to_bits),
             Ext::SExt => false,
         }
+    }
+
+    /// `isExtFreeImpl(const Instruction*)` (TargetLowering.h#L3245), asked
+    /// after `is_ext_free` says no, with how each user reads the extension.
+    /// The base class says no.
+    fn is_ext_free_impl(
+        &self,
+        users: &[ExtUser],
+    ) -> bool {
+        let _ = users;
+        false
     }
 
     /// `isMaskAndCmp0FoldingBeneficial` (TargetLowering.h): whether an `and`

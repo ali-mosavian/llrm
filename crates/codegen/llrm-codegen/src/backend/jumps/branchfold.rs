@@ -18,6 +18,9 @@
 //! 5. a block of one conditional branch identical to the branch that ends the
 //!    block before it takes that branch away (L1586).
 //!
+//! A branch on a compare of a register the block just loaded with a constant
+//! is a jump or nothing (`knownflags`, DEVIATE B1).
+//!
 //! A block that nothing enters is dead; its source bytes are kept by `_prune`.
 //!
 //! # Deviations from the pin
@@ -30,6 +33,8 @@
 //!
 //! # See also
 //! `tailmerge` (the pass this one follows), `placement`.
+
+mod knownflags;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -134,6 +139,9 @@ struct Folder<'a> {
     /// The value an instruction of the other way, hoisted away, defined or
     /// read, to the hoisted instruction's (as in `tailmerge`).
     rename: IndexMap<u32, u32>,
+    /// Blocks that lost flow when a branch was decided (`knownflags`): their
+    /// recorded frequencies are stale, as are those of what they lead to.
+    stale: BTreeSet<i64>,
 }
 
 /// `body` with its branches folded; `protected` blocks are never bypassed.
@@ -155,6 +163,12 @@ pub fn folded(
     done.odds = folder.odds;
     super::_prune(&mut done);
     super::_forget_moved_inflow(body, &mut done);
+    if !folder.stale.is_empty()
+        && let Some(kept) = done.frequencies.as_ref()
+    {
+        let table = kept.0.iter().filter(|(at, _)| !folder.stale.contains(at)).map(|(at, runs)| (*at, *runs)).collect();
+        done.frequencies = Some(Arc::new(lir::BlockFrequencies(table)));
+    }
     done
 }
 
@@ -235,6 +249,7 @@ impl<'a> Folder<'a> {
             protected,
             regs: body.registers.map(|regs| (regs, body.bits)),
             rename: IndexMap::default(),
+            stale: BTreeSet::new(),
         }
     }
 
@@ -330,6 +345,10 @@ impl<'a> Folder<'a> {
         let exit = Exit::of(&block);
         if exit.cond.as_deref().is_some_and(counted) {
             return false;
+        }
+        // A branch on a compare of a constant just loaded.
+        if self.constant_branch(index, &exit) {
+            return true;
         }
         // A conditional whose two ways are one block.
         if let (Some(cond), Some(jump)) = (&exit.cond, &exit.jump)

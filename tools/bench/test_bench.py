@@ -6,6 +6,7 @@ import sys
 import json
 import subprocess
 import pytest
+import types
 import unittest
 from pathlib import Path
 
@@ -956,6 +957,7 @@ def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
 def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
     """branch, loop, qlight and qmove took literal arguments: the optimiser returned the constant (0 to 2 instructions, a 0.03x "gain" at m16 -Os and
     six "region never entered" rows). Their C inputs are volatile reads and their BASIC inputs READ from DATA, so every build runs the body."""
+    # Instrument config (owner w6, 2026-11-06): the parity kernels that once folded to constants, named because each had its own fold.
     for name in ("branch", "loop", "qlight", "qmove", "control"):  # control: bas/bq16 -Os ran 0 kernel instructions on the tip
         if name != "control":  # its C passes the inputs through pointers to statics, which the kernel reads
             assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
@@ -1065,3 +1067,37 @@ def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_
     assert len(out) == 1 and "INVALID" in out[0], out
     assert bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0}) == []
     assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
+
+
+def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
+    """jpeg_fixed, jpeg_single, stft_fixed and stft_single were timed only: 40 m16 rows had no instructions or clocks. Counted with no
+    input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
+    for name in ("jpeg_fixed", "jpeg_single", "stft_fixed", "stft_single"):
+        for variant in bench.variants(bench.BENCH / name):
+            assert variant.emulated and variant.ci_bytes == 0, (name, variant.language)
+    exe = tmp_path / "V0.exe"
+    exe.write_bytes(b"")
+    data = tmp_path / "PHOTO.JPG"
+    data.write_bytes(b"x")
+    seen = {}
+
+    def fake_run(exe_, entry, cwd, **_):
+        seen["files"] = sorted(p.name for p in Path(cwd).iterdir())
+        return types.SimpleNamespace(output=b"1\n", error="", region=None)
+
+    monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
+    monkeypatch.setattr(bench.icount, "run", fake_run)
+    monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "code_bytes", lambda obj: 0)
+    bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
+    assert seen["files"] == ["PHOTO.JPG"], seen
+
+
+def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path):
+    """grep (8 m16 rows) had no instructions or clocks: it was timed only. Its m16 rows are 22 to 35 M instructions on the 1 MiB cut; the 10 MB corpus would be ~10x that."""
+    variants = bench.variants(bench.BENCH / "grep")
+    assert variants and all(v.emulated and v.ci_bytes == 1048576 for v in variants)
+    fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
+    if "files" in fed:  # else the corpus is not cached here
+        assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]

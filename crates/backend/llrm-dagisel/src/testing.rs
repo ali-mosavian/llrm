@@ -24,6 +24,9 @@ pub struct Node {
     pub dead: bool,
     /// `SDNodeFlags::hasNoUnsignedWrap` (`add nuw`).
     pub no_unsigned_wrap: bool,
+    /// `AtomicSDNode::getMergedOrdering` as LLVM's number; none for a plain
+    /// access.
+    pub atomic_ordering: Option<u8>,
 }
 
 #[derive(Default)]
@@ -342,6 +345,12 @@ impl Dag for TestDag {
         _: u32,
     ) -> bool {
         false
+    }
+    fn atomic_ordering(
+        &self,
+        node: u32,
+    ) -> Option<u8> {
+        self.nodes[node as usize].atomic_ordering
     }
     fn has_no_unsigned_wrap(
         &self,

@@ -32,6 +32,10 @@ pub struct Style {
     /// What the node predicates take of the target: `Hooks`, or `X86Predicates`
     /// for x86's, whose PatFrags read the subtarget.
     pub hooks: &'static str,
+    /// The node predicates are listed by name (`NODE_PREDICATES`) instead of
+    /// called: the target has no predicate hooks yet, and a pattern
+    /// predicate left open is an error.
+    pub listed_predicates: bool,
 }
 
 impl Style {
@@ -44,6 +48,7 @@ impl Style {
         desc: "crate::instr::desc",
         local_desc: false,
         hooks: "X86Predicates",
+        listed_predicates: false,
     };
 }
 
@@ -95,6 +100,7 @@ fn item(m: &Matcher) -> String {
         M::RecordChild(c) => format!("RecordChild({c})"),
         M::RecordMemRef => "RecordMemRef".into(),
         M::CaptureGlueInput => "CaptureGlueInput".into(),
+        M::CaptureDeactivationSymbol => "CaptureDeactivationSymbol".into(),
         M::MoveChild(c) => format!("MoveChild({c})"),
         M::MoveSibling(c) => format!("MoveSibling({c})"),
         M::MoveParent => "MoveParent".into(),
@@ -201,7 +207,8 @@ pub fn render(src: &Source) -> Result<String, String> {
     let bound = if style.hooks == "Hooks" { String::new() } else { format!(", {}", style.hooks) };
     writeln!(w, "use {dagisel}::dag::{{Dag, Hooks, PatternContext, SDValue{bound}}};").unwrap();
     writeln!(w, "use {dagisel}::matcher::{{Emit, Matcher::*, Slice, Table, Vt}};").unwrap();
-    writeln!(w, "use {};\n", style.predicates).unwrap();
+    let alias = if style.predicates.ends_with("::predicates") { "" } else { " as predicates" };
+    writeln!(w, "use {}{alias};\n", style.predicates).unwrap();
 
     writeln!(w, "pub static ITEMS: [{dagisel}::matcher::Matcher; {}] = [", flat.items.len()).unwrap();
     for m in &flat.items {
@@ -211,32 +218,47 @@ pub fn render(src: &Source) -> Result<String, String> {
     writeln!(w, "pub static OPERANDS: [u16; {}] = {:?};\n", flat.operands.len(), flat.operands).unwrap();
     writeln!(w, "pub const TABLE: Table = Table {{ items: &ITEMS, operands: &OPERANDS }};\n").unwrap();
 
-    writeln!(w, "/// The pattern predicates still checked when a function is selected.").unwrap();
-    // With no open predicate nothing reads the context: the name says so (`-D
-    // warnings` refuses `ctx` unused).
-    let ctx = if src.open.is_empty() { "_ctx" } else { "ctx" };
-    writeln!(w, "pub fn pattern_predicate<C: PatternContext>({ctx}: &C, id: u16) -> bool {{\n    match id {{").unwrap();
-    for (id, e) in src.open {
-        writeln!(w, "        {id} => {},", expr(e, src.cpu)?).unwrap();
-    }
-    writeln!(w, "        _ => unreachable!(\"pattern predicate {{id}} is not in this table\"),\n    }}\n}}\n").unwrap();
-
     let used: BTreeSet<u16> =
         flat.items.iter().filter_map(|m| if let Matcher::CheckPredicate(p) = m { Some(*p) } else { None }).collect();
-    writeln!(w, "/// The node predicates the table checks.").unwrap();
-    writeln!(w, "pub fn node_predicate<D: Dag, H: {}<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {{\n    let args = (dag, hooks, value);\n    match id {{", style.hooks).unwrap();
-    let mut unmapped = Vec::new();
-    for id in &used {
-        let names = &src.node_predicates[usize::from(*id)];
-        match names.iter().find_map(|n| src.cpu.node_predicate_fn(n)) {
-            Some(function) => writeln!(w, "        {id} => predicates::{function}(args),").unwrap(),
-            None => unmapped.push(format!("{id}: {names:?}")),
+    if style.listed_predicates {
+        if let Some((id, _)) = src.open.iter().next() {
+            return Err(format!("pattern predicate {id} is open: the AArch64 table has no PatternContext yet"));
         }
+        writeln!(w, "/// The node predicates the table checks: `(number, the PatFrag names that define it)`.").unwrap();
+        writeln!(w, "pub const NODE_PREDICATES: &[(u16, &[&str])] = &[").unwrap();
+        for id in &used {
+            writeln!(w, "    ({id}, &{:?}),", src.node_predicates[usize::from(*id)]).unwrap();
+        }
+        writeln!(w, "];\n").unwrap();
+    } else {
+        writeln!(w, "/// The pattern predicates still checked when a function is selected.").unwrap();
+        // With no open predicate nothing reads the context: the name says so
+        // (`-D warnings` refuses `ctx` unused).
+        let ctx = if src.open.is_empty() { "_ctx" } else { "ctx" };
+        writeln!(w, "pub fn pattern_predicate<C: PatternContext>({ctx}: &C, id: u16) -> bool {{\n    match id {{")
+            .unwrap();
+        for (id, e) in src.open {
+            writeln!(w, "        {id} => {},", expr(e, src.cpu)?).unwrap();
+        }
+        writeln!(w, "        _ => unreachable!(\"pattern predicate {{id}} is not in this table\"),\n    }}\n}}\n")
+            .unwrap();
+
+        writeln!(w, "/// The node predicates the table checks.").unwrap();
+        writeln!(w, "pub fn node_predicate<D: Dag, H: {}<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {{\n    let args = (dag, hooks, value);\n    match id {{", style.hooks).unwrap();
+        let mut unmapped = Vec::new();
+        for id in &used {
+            let names = &src.node_predicates[usize::from(*id)];
+            match names.iter().find_map(|n| src.cpu.node_predicate_fn(n)) {
+                Some(function) => writeln!(w, "        {id} => predicates::{function}(args),").unwrap(),
+                None => unmapped.push(format!("{id}: {names:?}")),
+            }
+        }
+        if !unmapped.is_empty() {
+            return Err(format!("node predicates with no [node_predicate] entry:\n  {}", unmapped.join("\n  ")));
+        }
+        writeln!(w, "        _ => unreachable!(\"node predicate {{id}} is not in this table\"),\n    }}\n}}\n")
+            .unwrap();
     }
-    if !unmapped.is_empty() {
-        return Err(format!("node predicates with no [node_predicate] entry:\n  {}", unmapped.join("\n  ")));
-    }
-    writeln!(w, "        _ => unreachable!(\"node predicate {{id}} is not in this table\"),\n    }}\n}}\n").unwrap();
 
     writeln!(w, "/// The complex patterns the table checks: `(number, selector function, results)`.").unwrap();
     writeln!(w, "pub const COMPLEX_PATTERNS: &[(u8, &str, u8)] = &[").unwrap();

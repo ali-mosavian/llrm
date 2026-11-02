@@ -123,6 +123,33 @@ fn instruction(
     Arc::new(Insn::new(beside.at, Some(covers), Some(what), vec![into.value], uses))
 }
 
+/// Whether a conditional branch reads the flags `step` writes: no instruction
+/// that sets them stands between, only moves and the like.
+fn flags_end_the_loop(
+    body: &LirBody,
+    inside: &std::collections::BTreeSet<i64>,
+    at_of: &HashMap<i64, usize>,
+    step: &Arc<Insn>,
+) -> bool {
+    // Instructions that leave the flags as they are.
+    const KEEPS: [&str; 8] = ["mov", "lea", "movzx", "movsx", "push", "pop", "xchg", "cwd"];
+    for at in inside {
+        let insns = &body.blocks[at_of[at]].insns;
+        let Some(from) = insns.iter().position(|one| Arc::ptr_eq(one, step)) else { continue };
+        for one in &insns[from + 1..] {
+            let Some(what) = one.what.as_ref() else { return false };
+            let name = what.name.as_deref().unwrap_or_default();
+            if what.op == Operation::Branch {
+                return name.starts_with('j') && name != "jmp";
+            }
+            if !KEEPS.contains(&name) {
+                return false;
+            }
+        }
+    }
+    false
+}
+
 pub fn shared(
     body: &LirBody,
     classes: &RegisterClasses,
@@ -187,6 +214,11 @@ pub fn shared(
             }
         }
         let Some(mut index) = index else { continue };
+        // The step's flags end the loop: the index is the test, not only a
+        // stream's offset, and the pointer's step would test the pointer.
+        if flags_end_the_loop(&out, &inside, &at_of, &index.step) {
+            continue;
+        }
         // `add phi, phi`, the index of a two-byte element stepped by one.
         let doubler = inside.iter().find_map(|at| {
             out.blocks[at_of[at]].insns.iter().find(|one| {
@@ -442,6 +474,14 @@ mod tests {
     /// `total += a[i] + b[i] + c[i]` over three arrays: `streams` bases `1..`,
     /// the index `10` starting at `5`, stepped by 2 into `11`.
     fn sum_loop(streams: u32) -> LirBody {
+        sum_loop_ending(streams, true)
+    }
+
+    /// [`sum_loop`], the branch reading the step's flags where not `compared`.
+    fn sum_loop_ending(
+        streams: u32,
+        compared: bool,
+    ) -> LirBody {
         let cell = |base: u32| {
             Loc::Mem(Mem {
                 base: Some(Held { value: base, width: 2 }),
@@ -472,7 +512,18 @@ mod tests {
             vec![11],
             vec![10],
         ));
-        loop_insns.push(insn(21, Operation::Branch, "jne", vec![], vec![], vec![], vec![]));
+        if compared {
+            loop_insns.push(insn(
+                21,
+                Operation::Binary,
+                "cmp",
+                vec![],
+                vec![held(30), Loc::Imm(llrm_lir::Imm { value: 0, width: 2, address: None })],
+                vec![],
+                vec![30],
+            ));
+        }
+        loop_insns.push(insn(22, Operation::Branch, "jne", vec![], vec![], vec![], vec![]));
         let mut loop_block = block(1, vec![1, 2], loop_insns);
         loop_block.phis = vec![
             Phi { result: 10, incoming: vec![(0, 5), (1, 11)] },
@@ -534,6 +585,19 @@ mod tests {
             .filter_map(|one| Some(one.what.as_ref()?.name.as_deref()?.to_owned()))
             .collect();
         assert_eq!(pre, ["add", "sub", "sub", "jmp"]);
+    }
+
+    /// tests/run huffman_decode (-O2, m16) crashed: `build`'s loop ended on the
+    /// flags of its zero-ending index step (`add bx, 2; je`). The rewrite took
+    /// the step out, nothing reading its value, and the branch read the flags
+    /// of the pointer's step, which test the pointer against zero. A step
+    /// whose flags a branch reads is left alone.
+    #[test]
+    fn test_an_index_step_whose_flags_end_the_loop_is_left_alone() {
+        let classes = RegisterClasses::m16();
+        let done = shared(&sum_loop_ending(3, false), &classes);
+        assert_eq!(indexed(&done), 3, "the streams keep the index");
+        assert_eq!(done.blocks[1].phis.len(), 2);
     }
 
     /// Two streams and the index fit the three address registers: left alone.

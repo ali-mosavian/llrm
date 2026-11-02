@@ -554,6 +554,10 @@ impl Tti for X86 {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.tuning.x87_stack_slots.filter(|_| !self.sse2)
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }

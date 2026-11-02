@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_16, Uc, UcError
 from unicorn.x86_const import (
     UC_X86_REG_AX, UC_X86_REG_BX, UC_X86_REG_CS, UC_X86_REG_CX, UC_X86_REG_DS, UC_X86_REG_DX, UC_X86_REG_EFLAGS, UC_X86_REG_SI,
-    UC_X86_REG_ES, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
+    UC_X86_REG_ES, UC_X86_REG_FPCW, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
 )
 from iced_x86 import Decoder, Mnemonic, OpKind
 
@@ -80,6 +80,17 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
 
 
+def dos_file(cwd: Path, name: str) -> Path:
+    """`C:\\DIR\\FILE` as a path under the program's directory: the drive and the leading backslash name the root, which is `cwd`. DOS names
+    ignore case: an existing file of another case (`signal` for `SIGNAL`) is the one named; stft_fixed read -1 from a corpus file `signal`."""
+    path = cwd / (name[2:] if name[1:2] == ":" else name).replace("\\", "/").lstrip("/")
+    if not path.exists() and path.parent.is_dir():
+        for one in path.parent.iterdir():
+            if one.name.lower() == path.name.lower():
+                return one
+    return path
+
+
 def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
@@ -104,6 +115,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     for register, value in ((UC_X86_REG_DS, PSP), (UC_X86_REG_ES, PSP), (UC_X86_REG_SS, LOAD + ss), (UC_X86_REG_SP, sp), (UC_X86_REG_CS, LOAD + cs), (UC_X86_REG_IP, ip)):
         uc.reg_write(register, value)
 
+    uc.reg_write(UC_X86_REG_FPCW, 0x037F)  # DOS's FPU state; Unicorn's own is 0 (single precision)
     result = Run()
     state = {"active": whole, "done": False, "entry_sp": -1 if whole else 0, "files": {0: io.BytesIO(stdin)} if stdin is not None else {}, "next": 5, "vectors": {}}
     counts = Counts()
@@ -172,8 +184,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         uc.reg_write(UC_X86_REG_EFLAGS, (flags | 1) if on else (flags & ~1))
 
     def dos_path(name):
-        """`C:\\DIR\\FILE` as a path under the program's directory: the drive and the leading backslash name the root, which is `cwd`."""
-        return cwd / name[2:].replace("\\", "/").lstrip("/") if name[1:2] == ":" else cwd / name.replace("\\", "/").lstrip("/")
+        return dos_file(cwd, name)
 
     def exit_(ax):
         result.exit_code = ax & 0xFF

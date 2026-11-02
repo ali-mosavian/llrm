@@ -323,7 +323,7 @@ fn exts_optimized(
         {
             continue;
         }
-        changed |= crate::extpromotion::optimize_ext(unit.context, lowering, unit.function, state, ext);
+        changed |= crate::extpromotion::optimize_ext(unit.context, unit.layout, lowering, unit.function, state, ext);
     }
     changed
 }

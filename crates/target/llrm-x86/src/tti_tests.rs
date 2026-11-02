@@ -359,3 +359,13 @@ fn the_tti_states_a_divide_remainder_op_on_every_register_type() {
     assert!(!tti.has_div_rem_op(64, true), "no i64 register on a 32-bit target");
     assert!(!tti.has_div_rem_op(24, false));
 }
+
+/// The loop unroll counts float values against the x87 stack only where the
+/// subtarget keeps floats there: `-march=i486` has the 8 slots the tuning
+/// states, `core2` (SSE2 floating point) none.
+#[test]
+fn test_the_x87_stack_slots_reach_the_unroll_query_only_without_sse2() {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN };
+    let slots = |cpu: &str| X86::of_cpu(cpu).expect("a cpu").with_tuning(tuning.clone()).x87_stack_slots();
+    assert_eq!((slots("i486"), slots("pentium"), slots("core2")), (Some(8), Some(8), None));
+}

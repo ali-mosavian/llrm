@@ -307,6 +307,7 @@ impl LoopIdiomRecognize {
                 stores,
                 groups.len() as i64,
                 kept,
+                !self.for_size,
                 run.clocks.map(|(clocks, rate)| {
                     let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
                     let trips = be.filter(|be| be.active_bits() <= 32).map(|be| be.zext_value() as i64 + 1);
@@ -315,7 +316,21 @@ impl LoopIdiomRecognize {
                     // cells, one a store, not of bytes.
                     let cells = is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val).is_none()
                         && self.options.force_memset_pattern_intrinsic;
-                    (clocks, rate, trips, width.map(|width| if cells { stores } else { width * stores }))
+                    // DEVIATE: the -Os price counts a byte fill's cells per
+                    // byte (QCport -Os, 41 B, was fitted to
+                    // it); at speed they are dwords, as
+                    // `profit` counts them. Owner llrm-target-x86-m16,
+                    // exit 2026-11-20.
+                    let cells = trips
+                        .zip(width)
+                        .map(
+                            |(trips, width)| match (cells, self.for_size) {
+                                (true, _) => trips * stores,
+                                (false, true) => trips * width * stores,
+                                (false, false) => (trips * width * stores + 3) / 4,
+                            },
+                        );
+                    (clocks, rate, trips, cells)
                 }),
             ) {
                 return false;

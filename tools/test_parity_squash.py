@@ -2187,3 +2187,44 @@ def test_a_pass_pr_without_a_class_and_two_programs_warns_and_one_with_both_does
         line = ps.precheck(str(n), dev=tmp_path, checks=tree.checks(), merge=tree.merge, deletions=lambda *a: [], info={**info, "body": body}, cache=tmp_path / f"c{n}.json", base_sha="base")
         assert line == f"{n}: PASS"
         assert (f"{n}: WARN: pass code changed and the description lacks a `Class:`" in capsys.readouterr().err) == (n == 0)
+
+
+def fake_gh(state="MERGED", head="w6/some-work", cross=False, delete_rc=0):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"state": state, "headRefName": head, "isCrossRepository": cross}), stderr="")
+        return SimpleNamespace(returncode=delete_rc, stdout="", stderr="")
+
+    return run, calls
+
+
+def deletes(calls):
+    return [c for c in calls if c[:4] == ["gh", "api", "-X", "DELETE"]]
+
+
+def test_a_landed_prs_head_branch_is_deleted_because_the_runner_pushes_to_release_next_itself_and_github_never_deletes_it():
+    """Merged branches piled up (the runner lands by pushing to release/next, so GitHub's delete-on-merge never fires)."""
+    run, calls = fake_gh()
+    assert "deleted" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)
+    assert [c[-1] for c in deletes(calls)] == ["repos/{owner}/{repo}/git/refs/heads/w6/some-work"]
+
+
+def test_a_head_branch_is_kept_when_github_has_not_marked_the_pr_merged_because_deleting_it_would_close_the_pr_unmerged():
+    run, calls = fake_gh(state="OPEN")
+    assert "kept" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None, tries=3)
+    assert deletes(calls) == []
+
+
+@pytest.mark.parametrize("head,cross", [("release/next", False), ("main", False), ("their-fork-branch", True)])
+def test_the_integration_branches_and_forks_are_never_deleted(head, cross):
+    run, calls = fake_gh(head=head, cross=cross)
+    assert "kept" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)
+    assert deletes(calls) == []
+
+
+def test_a_failed_delete_is_reported_not_raised_because_the_landing_is_already_done():
+    run, calls = fake_gh(delete_rc=1)
+    assert "not deleted" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)

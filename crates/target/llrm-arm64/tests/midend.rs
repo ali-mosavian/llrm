@@ -645,6 +645,59 @@ fn a_loop_of_memset_patterns_is_not_fully_unrolled() {
     assert_eq!(stores, 1, "{asm}");
 }
 
+/// The arm64 `Lowering` answered the base class, so CodeGenPrepare left an
+/// `i8` switch narrow and a later `sext` of the loaded byte in its use block;
+/// the pin widens the switch to `i32` and sign-extends beside the load
+/// (or_chain_of_equalities `@g`).
+#[test]
+fn a_byte_switch_is_widened_and_the_sign_extension_follows_the_load() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"
+target triple = \"arm64-apple-macosx\"
+
+declare void @sink(i32)
+
+define void @f(ptr %p) {
+b0:
+  %v = load i8, ptr %p
+  switch i8 %v, label %other [
+    i8 33, label %hit
+    i8 35, label %hit
+    i8 37, label %hit
+    i8 38, label %hit
+  ]
+
+hit:
+  call void @sink(i32 7)
+  br label %other
+
+other:
+  %w = sext i8 %v to i32
+  call void @sink(i32 %w)
+  ret void
+}
+";
+    let mut program = driver::program(text, Platform::Darwin).expect("the module reads");
+    driver::optimized(&mut program).expect("the pipeline runs");
+    let after = llrm_mir::print::module(&program.modules[0]);
+    assert!(after.contains("switch i32"), "{after}");
+    let (entry, _) = after.split_once("\nhit:").or_else(|| after.split_once("\n8:")).unwrap_or((&after, ""));
+    assert!(entry.contains("sext i8"), "the sign extension follows the load: {after}");
+}
+
+/// `isExtFreeImpl` (AArch64ISelLowering.cpp#L19014): an extension read only
+/// by constant shifts, same-type truncs and GEP scales of 2..16 bytes is free;
+/// any other reader makes it cost an instruction.
+#[test]
+fn an_extension_is_free_only_for_the_users_the_bfm_family_folds() {
+    use llrm_arm64::tti::AArch64Lowering;
+    use llrm_mir::lowering::{ExtUser, Lowering};
+    let free = |users: &[ExtUser]| AArch64Lowering.is_ext_free_impl(users);
+    assert!(free(&[ExtUser::ConstShl, ExtUser::SameTypeTrunc, ExtUser::Gep { store_bits: 32 }]));
+    assert!(!free(&[ExtUser::Gep { store_bits: 8 }]), "scale 1 needs no shift");
+    assert!(!free(&[ExtUser::Gep { store_bits: 256 }]), "scale 32 does not fit the addressing mode");
+    assert!(!free(&[ExtUser::ConstShl, ExtUser::Other]));
+}
+
 /// `-g` on arm64 wrote no debug information at all (`Object::debug` was always
 /// none): a debugger could not name a function or print a variable. At -O0 each
 /// variable lives in its frame object, `a` at `sp+0` and the frame 32 bytes, so

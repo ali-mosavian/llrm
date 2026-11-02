@@ -74,19 +74,7 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 fn tuning() -> llrm_mir::target::Tuning {
-    llrm_mir::target::Tuning {
-        multiply_by_clocks: true,
-        // DEVIATE (full unroll): the pin's -O2/-O3 thresholds unroll the 8-trip
-        // loops of matmul, tile, fpbench and nbody to 2188, 489, 1724 and 827 B
-        // where gcc -O2, which does not unroll, has 382, 161, 503 and 394 B.
-        // The pass takes the size threshold (a full unroll must not grow the
-        // code), no boost, as m16 does. At
-        // -O2 bytes vs the best of gcc/clang: geomean 1.230 -> 1.059, sum
-        // 28114 -> 20618 B; clocks 0.915 -> 0.973. Owner llrm-target-x86-m32.
-        unroll_threshold: Some(0),
-        unroll_max_percent_threshold_boost: Some(100),
-        ..llrm_mir::target::Tuning::PIN
-    }
+    llrm_mir::target::Tuning { multiply_by_clocks: true, x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN }
 }
 
 impl M32 {
@@ -603,7 +591,9 @@ mod tests {
             ports: M32.flat_ports(),
         };
         let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
-        assert_eq!(tti.unroll_threshold_overrides(), (Some(0), Some(100)));
+        assert_eq!(tti.unroll_threshold_overrides(), (None, None));
+        // The x87 stack the unroll counts float values against.
+        assert_eq!(tti.x87_stack_slots(), Some(8));
     }
 
     /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86
