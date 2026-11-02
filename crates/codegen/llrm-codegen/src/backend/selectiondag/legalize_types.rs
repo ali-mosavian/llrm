@@ -774,6 +774,73 @@ impl<'a> TypeLegalizer<'a> {
                 let from = self.dag.operand(value, 1);
                 self.dag.get_node(ISD::SignExtendInReg, self.dag.value_type(promoted), &[promoted, from])
             }
+            op @ (ISD::UMulO | ISD::SMulO) if value.res == 0 => {
+                // `PromoteIntRes_XMULO` (result 0): the multiply in the wider
+                // type on extended operands; it overflowed there, or its high
+                // part is not the extension of its low part.
+                let signed = op == ISD::SMulO;
+                let narrow = self.dag.value_type(self.dag.operand(value, 0));
+                let ty = self.dag.get_value_type_node(narrow);
+                let mut extended = Vec::with_capacity(2);
+                for at in 0..2 {
+                    let promoted = self.promoted_integer(self.dag.operand(value, at));
+                    let wide = self.dag.value_type(promoted);
+                    extended.push(if signed {
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    });
+                }
+                let flag_vt = self.dag.value_type(SDValue { node: value.node, res: 1 });
+                let product = self.dag.get_node_multi(op, &[to, flag_vt], &[extended[0], extended[1]]);
+                let mul = SDValue { node: product.node, res: 0 };
+                let high_part = if signed {
+                    let extended_low = self.dag.get_node(ISD::SignExtendInReg, to, &[mul, ty]);
+                    self.dag.get_setcc(flag_vt, extended_low, mul, CondCode::SetNe)
+                } else {
+                    let shift = self.shift_const(u128::from(narrow.size_in_bits()), to);
+                    let high = self.dag.get_node(ISD::Srl, to, &[mul, shift]);
+                    let zero = self.dag.get_constant(0, to);
+                    self.dag.get_setcc(flag_vt, high, zero, CondCode::SetNe)
+                };
+                let wide_overflow = SDValue { node: product.node, res: 1 };
+                let overflow = self.dag.get_node(ISD::Or, flag_vt, &[high_part, wide_overflow]);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
+                mul
+            }
+            op @ (ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO) if value.res == 0 => {
+                // `PromoteIntRes_UADDSUBO` and `PromoteIntRes_SADDSUBO`
+                // (result 0): the arithmetic in the wider type on operands
+                // extended from the narrow one; it overflowed iff the result
+                // is not the extension of its truncation.
+                let signed = matches!(op, ISD::SAddO | ISD::SSubO);
+                let narrow = self.dag.value_type(self.dag.operand(value, 0));
+                let ty = self.dag.get_value_type_node(narrow);
+                let mut extended = Vec::with_capacity(2);
+                for at in 0..2 {
+                    let promoted = self.promoted_integer(self.dag.operand(value, at));
+                    let wide = self.dag.value_type(promoted);
+                    extended.push(if signed {
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
+                    } else {
+                        let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), wide);
+                        self.dag.get_node(ISD::And, wide, &[promoted, mask])
+                    });
+                }
+                let add = matches!(op, ISD::UAddO | ISD::SAddO);
+                let sum = self.dag.get_node(if add { ISD::Add } else { ISD::Sub }, to, &[extended[0], extended[1]]);
+                let truncated = if signed {
+                    self.dag.get_node(ISD::SignExtendInReg, to, &[sum, ty])
+                } else {
+                    let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), to);
+                    self.dag.get_node(ISD::And, to, &[sum, mask])
+                };
+                let flag_vt = self.dag.value_type(SDValue { node: value.node, res: 1 });
+                let overflow = self.dag.get_setcc(flag_vt, truncated, sum, CondCode::SetNe);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
+                sum
+            }
             ISD::UAddO
             | ISD::USubO
             | ISD::UAddOCarry
@@ -1075,17 +1142,30 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Store
                 if at == 1
                     && self.dag.value_type(self.dag.operand(node, 1)).is_integer()
-                    && self.dag.value_type(self.dag.operand(node, 1)).size_in_bits() % 8 == 0 =>
+                    && matches!(
+                        self.dag.value_type(self.dag.operand(node, 1)).size_in_bits(),
+                        1 | 8 | 16 | 32 | 64 | 128
+                    ) =>
             {
                 // `PromoteIntOp_STORE`: a truncating store of the promoted
-                // value.
+                // value (of an `i1`, which `LegalizeDAG` widens to a byte).
                 let (chain, value, ptr) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
                 let NodeData::Mem(info) = self.dag.node(node).data else {
                     unreachable!("a store has a memory operand")
                 };
                 let promoted = self.promoted_integer(value);
-                self.dag.get_store(chain, promoted, ptr, info)
+                if self.dag.value_type(value) == EVT::I1 {
+                    // A one-bit memory is a byte with the upper bits zero
+                    // (`LegalizeDAG`'s truncating store of a non-byte width:
+                    // `getZeroExtendInReg`, then the byte-sized store).
+                    let wide = self.dag.value_type(promoted);
+                    let one = self.dag.get_constant(1, wide);
+                    let bit = self.dag.get_node(ISD::And, wide, &[promoted, one]);
+                    self.dag.get_store(chain, bit, ptr, super::dag::MemInfo { mem_vt: EVT::I8, ..info })
+                } else {
+                    self.dag.get_store(chain, promoted, ptr, info)
+                }
             }
             op => {
                 return Err(LegalizeError::Unsupported {
@@ -1595,7 +1675,7 @@ impl<'a> TypeLegalizer<'a> {
             let (compared, with, cc) =
                 if op == ISD::Add { (lo, ll, CondCode::SetULt) } else { (ll, rl, CondCode::SetULt) };
             let cmp = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), compared, with, cc);
-            let carry = self.dag.get_zext_or_trunc(cmp, half);
+            let carry = self.dag.get_bool_as_bit(cmp, half);
             let hi = self.dag.get_node(plain, half, &[lh, rh]);
             return Ok((lo, self.dag.get_node(plain, half, &[hi, carry])));
         }

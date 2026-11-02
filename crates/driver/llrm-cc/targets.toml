@@ -4,7 +4,7 @@
 # that target's `datalayout.toml` string (stated once, there); a suffix after it is the row's own.
 # `description` names the crate whose `[c]` states sizeof(int, long, void *, ...); `wchar_bytes` and `long_double_bytes` are the row's libc's departures from it (tests/c_abi.rs
 # holds the front end to them; the triple's default decides nothing).
-# `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run.
+# `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run; a row without a level must give `llc_level_reason`.
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
@@ -43,7 +43,7 @@ datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i1
 clang = ["-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
 llc = []
 llc_program = "llrm-arm64-llc"
-llc_level = false
+llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
@@ -144,7 +144,7 @@ datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i1
 clang = ["-target", "aarch64-unknown-linux-gnu", "-nostdinc", "-isystem", "{env:LLRM_ARM64_SYSROOT}/usr/aarch64-linux-gnu/include"]
 llc = []
 llc_program = "llrm-arm64-llc"
-llc_level = false
+llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-glibc-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
@@ -220,3 +220,19 @@ llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
 object = "asm"
 link = []
+
+# WebAssembly, 32-bit linear memory, freestanding: the object for `wasm-ld`. The pinned clang is built for x86 only, so
+# `LLRM_CLANG_WASM` names a clang with the WebAssembly target (clang 20 until the pin is built with it). The platform libc row (wasm32-wasi, a
+# fetched sysroot) is planned in docs/working/wasm-libc-plan.md.
+[wasm32]
+description = "wasm"
+description_file = "datalayout32.toml"
+triple = "wasm32-unknown-unknown"
+clang_env = "LLRM_CLANG_WASM"
+datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"
+clang = ["-target", "wasm32-unknown-unknown", "-ffreestanding"]
+llc = ["-filetype=obj"]
+llc_program = "llrm-wasm-llc"
+llc_level = true
+object = "wasm"
+link = ["wasm-ld", "--no-entry", "--allow-undefined", "{objects}", "-o", "{output}"]

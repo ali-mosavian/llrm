@@ -299,7 +299,7 @@ fn a_load_feeding_the_return_stays_on_the_stack() {
         ],
     );
 
-    assert!(reg_stackify(&mut f));
+    assert!(reg_stackify(&mut f, false));
     explicit_locals(&mut f);
 
     assert_eq!(dump(&f), ["%2 = LOCAL_GET_I32 0", "%1 = LOAD_I32_A32 2, 0, %2", "RETURN %1"].map(String::from));
@@ -321,7 +321,7 @@ fn a_chain_of_adds_is_one_tree() {
         ],
     );
 
-    reg_stackify(&mut f);
+    reg_stackify(&mut f, false);
     explicit_locals(&mut f);
 
     assert_eq!(
@@ -353,7 +353,7 @@ fn an_add_is_commuted_to_stackify_both_operands() {
         ],
     );
 
-    reg_stackify(&mut f);
+    reg_stackify(&mut f, false);
 
     assert!((0..3).all(|r| f.is_stackified(r)));
     assert_eq!(f.blocks[0][2].operands, [Def(2), Use(0), Use(1)], "the operands swapped");
