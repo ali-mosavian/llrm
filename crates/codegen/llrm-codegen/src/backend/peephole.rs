@@ -211,8 +211,8 @@ pub struct Peephole {
     /// not share them.
     pub saved: Vec<RegId>,
     pub classes: Rc<RegisterClasses>,
-    /// DEVIATE ZL1 applies: the old selector's `movzx` loads only (the DAG
-    /// path keeps the pin's `movzx`).
+    /// DEVIATE ZL1 applies: `movzx` byte loads become the register cleared and
+    /// its low byte loaded, where the target prices the pair lower.
     pub zeroed_loads: bool,
 }
 
@@ -239,16 +239,9 @@ impl Peephole {
         rules: &'static peep::Rules,
         saved: Vec<RegId>,
         classes: Rc<RegisterClasses>,
-        selector: crate::backend::shadow::Selector,
+        _selector: crate::backend::shadow::Selector,
     ) -> Result<Self, String> {
-        Ok(Self {
-            frame,
-            cpu: targets::profile(cpu)?.clone(),
-            rules,
-            saved,
-            classes,
-            zeroed_loads: selector != crate::backend::shadow::Selector::Dag,
-        })
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved, classes, zeroed_loads: true })
     }
 
     /// The frame without the spill slots no cell names, and the cells where
@@ -508,9 +501,11 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner w1, exit: the old selector goes; the DAG path, the
-/// default, does not run it): the pin keeps `movzx` on the i486 as on every
-/// x86; this pair is two clocks against three there. Gated on
+/// DEVIATE ZL1 (owner w1, w2 for the DAG path; permanent target tuning): the
+/// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
+/// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
+/// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
+/// over main with the movzx). Gated on
 /// `Profile::clears_before_byte_load`, so off for size and where the extension
 /// is no slower or the partial register stalls. x_life -O2 m32 has 12 more
 /// `xor` than the pin from it.

@@ -203,9 +203,10 @@ fn test_a_counter_whose_start_seeds_pointers_counts_up_to_its_symbolic_bound() {
     // The pin's indvars rewrites the exit to `icmp eq %next, lb + count`
     // (`opt -passes='default<O2>'` on our early IR gives ours instruction for
     // instruction since foldICmpBinOp's add/sub arms), so the counter runs
-    // down to zero: `dec; jne`, with the two reloads from [bp].
+    // down to zero: `dec; jne`. Since the m16 byte-to-word patterns the segment
+    // registers are loaded before the loop, not reloaded from [bp] in it.
     let loop_ = backward_loop(&sum_three(false));
-    assert_eq!(loop_.matches("[bp").count(), 2, "{loop_}");
+    assert_eq!(loop_.matches("[bp").count(), 0, "{loop_}");
     assert!(regex::Regex::new(r"\n    dec \w+\n    jne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
 }
 
@@ -542,6 +543,24 @@ fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
 fn test_power_stays_the_x87_sequence_where_the_target_states_f80() {
     let text = listing_of("power_x87", "INPUT a#, b#\r\nPRINT a# ^ b#\r\nEND\r\n");
     assert!(!text.contains("B$LPOW") && text.contains("db 0d9h,0e8h,0d9h,0c9h,0d9h,0f1h"), "{text}");
+}
+
+/// A float scaled to CURRENCY is the runtime's `B$LFPC` only where the target
+/// states no `f80`: an x86 target keeps the x87 scaling and `fist`.
+#[test]
+fn test_currency_scaling_stays_the_x87_sequence_where_the_target_states_f80() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join("scale_x87.asm");
+    let input = written(
+        &directory,
+        "scale_x87.bas",
+        b"' dialect: pds71\r\nDIM c AS CURRENCY\r\nINPUT x#\r\nc = x#\r\nPRINT c\r\nEND\r\n",
+    );
+    let argv =
+        [input.to_str().unwrap(), "-m32", "-O2", "--isel=dag", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
+    assert_eq!(crate::cli::main(&argv), 0);
+    let text = std::fs::read_to_string(&out).expect("the listing");
+    assert!(!text.contains("B$LFPC") && !text.contains("B_LFPC"), "{text}");
 }
 
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
@@ -2034,10 +2053,10 @@ fn test_a_loop_to_a_symbolic_bound_keeps_its_counter_and_compare() {
 #[test]
 fn test_a_masked_use_keeps_the_counter_and_its_end_test() {
     // `POKE o, ch + (o AND 15)` reads the counter through a mask, so FILL
-    // keeps its end test every trip. The pin's loop-reduce leaves the same
-    // loop (`opt -passes=loop-reduce` on our IR, i386/i486: one phi stepping
-    // by 2, `icmp ult %phi, 3997`), and its i486 loop is 9 instructions, as
-    // ours is.
+    // keeps its end test every trip. The pin's loop-reduce leaves one phi
+    // stepping by 2 with `icmp ult %phi, 3997`; our LFTR tests the stepped
+    // counter against its end, `cmp bx, 4000; jne` (textfill's bench run
+    // checks the output), in 8 instructions where the pin's i486 loop is 9.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/textfill.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -2045,7 +2064,7 @@ fn test_a_masked_use_keeps_the_counter_and_its_end_test() {
     let end = text.find("FILL endp").expect("FILL endp");
     let body = backward_loop(&text[start..end]);
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
-    assert!(body.contains("cmp ") && body.contains(", 3997") && body.contains("and ") && instructions <= 9, "{body}");
+    assert!(body.contains("cmp ") && body.contains(", 4000") && body.contains("and ") && instructions <= 9, "{body}");
 }
 
 #[test]
@@ -4289,4 +4308,14 @@ fn test_no_far_allocation_needs_the_llrm_runtime_and_far_arrays() {
     assert_eq!(quiet_loops(false, &closing), 1, "CLOSE does not move a far array");
     let near = closing.replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
     assert_eq!(quiet_loops(false, &near), 0, "CLOSE slides the local heap, where a string array lives");
+    // FRE compacts the local heap as CLOSE does; the table names each routine
+    // that does.
+    for call in ["f& = FRE(\"\")", "f& = FRE(0)"] {
+        let freeing = SORTING
+            .replace("a(i) = hi - i", &format!("a(i) = hi - i: {call}"))
+            .replace("DIM v(0 TO 9) AS INTEGER", "DIM v(0 TO 9) AS INTEGER, names$(0 TO 3)");
+        assert_eq!(quiet_loops(false, &freeing), 0, "{call} slides the local heap");
+        let far = SORTING.replace("a(i) = hi - i", &format!("a(i) = hi - i: {call}"));
+        assert_eq!(quiet_loops(false, &far), 1, "{call} does not move a far array");
+    }
 }

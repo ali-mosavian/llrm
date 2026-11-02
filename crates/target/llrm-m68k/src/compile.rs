@@ -46,19 +46,19 @@ pub struct Options {
     pub push_frame: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
-    pub quick: bool,
+    pub short: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options =
-        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, quick: false };
+        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, short: false };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, quick: true }
+        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, short: true }
     }
 }
 
@@ -91,8 +91,14 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.quick)?;
+    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
     let mut function = emit(name, &blocks)?;
+    if options.short {
+        crate::cmpelim::eliminate_tests(&mut function);
+        crate::negadd::negative_adds_to_subq(&mut function);
+        crate::addrarith::address_adds(&mut function, cpu, wants_size);
+        crate::foldload::fold_loads(&mut function);
+    }
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
     crate::regalloc::split_flag_edges(&mut function);
@@ -102,8 +108,16 @@ pub fn items_with(
     two_address(&mut function);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
-    let (assignment, slots) = crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?;
+    let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
+        crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
+    } else {
+        crate::regalloc::allocate_greedy(&mut function, wants_size)?
+    };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    if options.short {
+        crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+        crate::narrow::narrow_logic_immediates(&mut function, &assignment);
+    }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
     preserve_flags(&mut function, &assignment)?;

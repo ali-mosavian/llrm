@@ -1,0 +1,105 @@
+# form,bytes,t_taken,t_not_taken,cpu
+# T-states and bytes of the Zilog Z80 CPU User Manual UM008011-0816, "Z80 Instruction Set" (one section per
+# instruction, each with an `M Cycles / T States` table). Fetched from https://www.zilog.com/docs/z80/um0080.pdf on
+# 2026-11-01, sha256 e3c83da5a5d8e372364c20fa53665e6fbb165ec6ac38c8c1eebc359603447b5e (kept in ~/scratch/refs, not in
+# the repo). Checked by tests/timing/manual_check.py (90 forms against the manual's rows), and by tests/timing/probe.py
+# (bytes against two assemblers, T-states against ucsim_z80, which is wrong on inc/dec (hl) and bit n,(hl)).
+# Z180-only forms are in z180.csv.
+# t_not_taken is blank for an instruction with one timing. ldir/cpir: t_taken is a repeating pass, t_not_taken the last.
+ld b;c,1,4,,z80
+ld b;n,2,7,,z80
+ld b;(hl),1,7,,z80
+ld (hl);b,1,7,,z80
+ld (hl);n,2,10,,z80
+ld a;(bc),1,7,,z80
+ld a;(de),1,7,,z80
+ld (bc);a,1,7,,z80
+ld a;(nn),3,13,,z80
+ld (nn);a,3,13,,z80
+ld hl;(nn),3,16,,z80
+ld (nn);hl,3,16,,z80
+ld bc;(nn),4,20,,z80
+ld bc;nn,3,10,,z80
+ld hl;nn,3,10,,z80
+ld ix;nn,4,14,,z80
+ld sp;hl,1,6,,z80
+ld b;(ix+d),3,19,,z80
+ld (ix+d);b,3,19,,z80
+ld (ix+d);n,4,19,,z80
+push bc,1,11,,z80
+pop bc,1,10,,z80
+push ix,2,15,,z80
+pop ix,2,14,,z80
+ex de;hl,1,4,,z80
+ex (sp);hl,1,19,,z80
+add a;b,1,4,,z80
+add a;n,2,7,,z80
+add a;(hl),1,7,,z80
+add a;(ix+d),3,19,,z80
+adc a;b,1,4,,z80
+sub b,1,4,,z80
+sub n,2,7,,z80
+sbc a;b,1,4,,z80
+and b,1,4,,z80
+and n,2,7,,z80
+or b,1,4,,z80
+or n,2,7,,z80
+xor b,1,4,,z80
+xor n,2,7,,z80
+cp b,1,4,,z80
+cp n,2,7,,z80
+cp (hl),1,7,,z80
+sub (ix+d),3,19,,z80
+and (ix+d),3,19,,z80
+or (ix+d),3,19,,z80
+xor (ix+d),3,19,,z80
+cp (ix+d),3,19,,z80
+inc b,1,4,,z80
+dec b,1,4,,z80
+inc (hl),1,11,,z80
+dec (hl),1,11,,z80
+inc (ix+d),3,23,,z80
+dec (ix+d),3,23,,z80
+inc bc,1,6,,z80
+dec bc,1,6,,z80
+inc ix,2,10,,z80
+add hl;bc,1,11,,z80
+add hl;sp,1,11,,z80
+adc hl;bc,2,15,,z80
+sbc hl;bc,2,15,,z80
+add ix;bc,2,15,,z80
+sla b,2,8,,z80
+sra b,2,8,,z80
+srl b,2,8,,z80
+rl b,2,8,,z80
+rr b,2,8,,z80
+rlc b,2,8,,z80
+sla (hl),2,15,,z80
+rlca,1,4,,z80
+rrca,1,4,,z80
+rla,1,4,,z80
+rra,1,4,,z80
+cpl,1,4,,z80
+neg,2,8,,z80
+scf,1,4,,z80
+ccf,1,4,,z80
+bit 0;b,2,8,,z80
+bit 0;(hl),2,12,,z80
+set 0;b,2,8,,z80
+res 0;b,2,8,,z80
+nop,1,4,,z80
+djnz e,2,13,8,z80
+jp nn,3,10,,z80
+jp nz;nn,3,10,,z80
+jp (hl),1,4,,z80
+jr e,2,12,,z80
+jr nz;e,2,12,7,z80
+jr c;e,2,12,7,z80
+call nn,3,17,,z80
+call nz;nn,3,17,10,z80
+ret,1,10,,z80
+ret nz,1,11,5,z80
+ldir,2,21,16,z80
+cpir,2,21,16,z80
+inc hl,1,6,,z80
+jr nc;e,2,12,7,z80

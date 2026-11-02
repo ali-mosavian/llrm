@@ -5,7 +5,7 @@
 use llrm_support::hash::HashSet;
 
 use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
-use crate::regalloc::{Assignment, GraphColoring, Target, Uncolourable, successors};
+use crate::regalloc::{Assignment, GraphColoring, Target, Uncolourable, call_crossings, successors};
 
 /// How much more a use inside a loop costs per level of nesting.
 const LOOP_WEIGHT: u64 = 10;
@@ -117,6 +117,62 @@ fn spill<T: Target>(
         function.blocks[at].insts = out;
     }
     Ok(made)
+}
+
+/// Keep each of `values` in its slot across the calls it is live across, and
+/// nowhere else: stored before the call, loaded back after it, so no range of
+/// it spans a call and it can take a register the call clobbers. A value
+/// already stored since it was last written is not stored again.
+///
+/// DEVIATE (row S1): this is `RAGreedy`'s split of a range around the calls
+/// that clobber every register it could take (`SplitEditor`, regmask
+/// interference), done on a register that keeps its name instead of a new one
+/// per piece, so both sides of a call get one register. Exit: retire when the
+/// 6502 moves onto a target-generic greedy allocator.
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1216>
+fn split_around_calls<T: Target>(
+    function: &mut MFunction<T::Class>,
+    values: &[(u32, i32)],
+    crossings: &[Vec<(usize, usize)>],
+) -> Result<(), String> {
+    let mut at_call: std::collections::BTreeMap<(usize, usize), Vec<(u32, i32)>> = Default::default();
+    for &(v, slot) in values {
+        for &site in &crossings[v as usize] {
+            at_call.entry(site).or_default().push((v, slot));
+        }
+    }
+    let mut blocks: Vec<usize> = at_call.keys().map(|&(block, _)| block).collect();
+    blocks.dedup();
+    for block in blocks {
+        let insts = std::mem::take(&mut function.blocks[block].insts);
+        let mut out = Vec::with_capacity(insts.len());
+        // the values whose slot holds what they hold now
+        let mut clean: HashSet<u32> = HashSet::default();
+        for (i, inst) in insts.into_iter().enumerate() {
+            clean.retain(|&v| !mentions(&inst, v).1);
+            if let Some(kept) = at_call.get(&(block, i)) {
+                for &(v, slot) in kept {
+                    if clean.insert(v) {
+                        let class = function.classes[v as usize];
+                        let store = T::spill_store(class, Reg::Virt(v), slot)
+                            .ok_or_else(|| format!("the target cannot spill v{v} ({class:?})"))?;
+                        out.push(store);
+                    }
+                }
+                out.push(inst);
+                for &(v, slot) in kept {
+                    let class = function.classes[v as usize];
+                    let load = T::spill_load(class, Reg::Virt(v), slot)
+                        .ok_or_else(|| format!("the target cannot spill v{v} ({class:?})"))?;
+                    out.push(load);
+                }
+            } else {
+                out.push(inst);
+            }
+        }
+        function.blocks[block].insts = out;
+    }
+    Ok(())
 }
 
 fn temporary_index(register: Reg) -> u32 {
@@ -353,13 +409,13 @@ pub fn minimal_vregs<C>(function: &MFunction<C>) -> Vec<bool> {
 /// The register to spill for `failed`: the cheapest that spilling can free
 /// (not a spill temporary, not already as short as a range gets) of those
 /// holding a register `failed` could have used and `failed` itself; failing
-/// that, of the crowd.
+/// that, of the crowd. `cost` is what each costs to relieve.
 fn victim<T: Target>(
     function: &MFunction<T::Class>,
     failed: &Uncolourable,
     temporaries: &HashSet<u32>,
+    cost: &[u64],
 ) -> Option<u32> {
-    let cost = costs(function);
     let minimal = minimal_vregs(function);
     let cheapest = |from: &[u32]| {
         from.iter()
@@ -369,6 +425,22 @@ fn victim<T: Target>(
     };
     let near: Vec<u32> = failed.blockers.iter().copied().chain([failed.vreg]).collect();
     cheapest(&near).or_else(|| cheapest(&failed.crowd))
+}
+
+/// What keeping each register in a slot across its calls costs instead of in
+/// one all along: a store and a load at each call it is live across, weighed
+/// by the loops the call is in. None where it is live across no call.
+fn split_costs<C>(
+    function: &MFunction<C>,
+    crossings: &[Vec<(usize, usize)>],
+) -> Vec<Option<u64>> {
+    let depths = loop_depths(function);
+    crossings
+        .iter()
+        .map(|sites| {
+            (!sites.is_empty()).then(|| sites.iter().map(|&(block, _)| 2 * LOOP_WEIGHT.pow(depths[block].min(4))).sum())
+        })
+        .collect()
 }
 
 /// Whether `inst` stores to (`true`) or loads from a spill slot in `slots`: a
@@ -518,7 +590,7 @@ pub fn verify_sharing<C>(
 /// together share one, and a copy from a slot to another that ends up the same
 /// slot moves nothing, so it goes. A copy is a load into a register followed
 /// at once by a store of that register.
-fn share_slots<C: Copy + PartialEq>(
+pub fn share_slots<C: Copy + PartialEq>(
     function: &mut MFunction<C>,
     slots: &mut Vec<(i32, C)>,
 ) {
@@ -715,6 +787,18 @@ pub fn allocate_spilling_ordered<T: Target>(
     first_slot: i32,
     by_frequency: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    allocate_spilling_splitting::<T>(function, first_slot, by_frequency, false)
+}
+
+/// [`allocate_spilling_ordered`], where `split_calls` keeps a register that is
+/// live across calls in a slot across them only, where that costs less than
+/// keeping it there all along (see [`split_around_calls`]).
+pub fn allocate_spilling_splitting<T: Target>(
+    function: &mut MFunction<T::Class>,
+    first_slot: i32,
+    by_frequency: bool,
+    split_calls: bool,
+) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     let mut slots = Vec::new();
     let mut temporaries = HashSet::default();
     loop {
@@ -732,10 +816,17 @@ pub fn allocate_spilling_ordered<T: Target>(
         // at most a quarter more than the function has spilled so far: the
         // first spills are chosen one at a time, a long function's in
         // O(log) rounds.
+        let cost = costs(function);
+        let has_calls = split_calls && function.blocks.iter().any(|block| block.insts.iter().any(|inst| inst.call));
+        let crossings = if has_calls { call_crossings::<T>(function) } else { Vec::new() };
+        let split = if has_calls { split_costs(function, &crossings) } else { Vec::new() };
+        let cheaper_split = |v: u32| split.get(v as usize).copied().flatten().filter(|&c| c < cost[v as usize]);
+        // what relieving a register costs: splitting it where that is cheaper
+        let relief: Vec<u64> = (0..cost.len() as u32).map(|v| cheaper_split(v).unwrap_or(cost[v as usize])).collect();
         let mut victims: Vec<u32> = Vec::new();
         let mut excluded = temporaries.clone();
         for failed in failures.iter().take(slots.len() / 4 + 1) {
-            match victim::<T>(function, failed, &excluded) {
+            match victim::<T>(function, failed, &excluded, &relief) {
                 Some(v) => {
                     excluded.insert(v);
                     victims.push(v);
@@ -749,6 +840,17 @@ pub fn allocate_spilling_ordered<T: Target>(
                 None => {}
             }
         }
+        // The registers kept in a slot only across their calls, in one pass
+        // before anything else changes the instructions' places.
+        let (splitting, victims): (Vec<u32>, Vec<u32>) =
+            victims.into_iter().partition(|&v| cheaper_split(v).is_some() && remat_source(function, v).is_none());
+        let mut kept = Vec::new();
+        for v in splitting {
+            let slot = first_slot + slots.len() as i32;
+            slots.push((slot, function.classes[v as usize]));
+            kept.push((v, slot));
+        }
+        split_around_calls::<T>(function, &kept, &crossings)?;
         for v in victims {
             if let Some(made) = rematerialize(function, v) {
                 temporaries.extend(made);

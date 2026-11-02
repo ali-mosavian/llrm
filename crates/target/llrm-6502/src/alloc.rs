@@ -22,6 +22,7 @@ use llrm_spike_mf::{
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
 
+use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
 use crate::emit::{MInst, Operand as Machine, address, spill};
@@ -40,6 +41,8 @@ impl Class {
     const M: u8 = 8;
     const P: u8 = 16;
     pub const ANY: Class = Class(15);
+    /// What `cmp`, `cpx` and `cpy` test as their first operand.
+    pub const COMPARED: Class = Class(Class::A | Class::X | Class::Y);
     /// A zero-page pair, for `(zp),y`.
     pub const PAIR: Class = Class(Class::P);
     /// What an ALU instruction reads as its second operand.
@@ -78,6 +81,7 @@ thread_local! {
     static SHARED_SAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
+    static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -143,6 +147,11 @@ fn lane(
     rc(2 * (pair.index() as u8 - reg::RS0.index() as u8) + lane)
 }
 
+/// Whether `order` holds a zero-page pair.
+fn is_pair_order(order: &[RegId]) -> bool {
+    order.iter().any(|register| is_pair(*register))
+}
+
 fn is_cell(register: RegId) -> bool {
     register.index() >= reg::RC0.index()
 }
@@ -152,6 +161,58 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// A copy is priced as the load of a cell into a register, `ldx rc2`: the
+    /// join of a value with its argument cell removes that copy.
+    fn copy_cost() -> u32 {
+        crate::timing::estimate(Cpu::Mos6502, "ldx rc2").map_or(1, |priced| priced.bytes + priced.cycles as u32)
+    }
+
+    /// A byte class the compare class narrowed has `any` as its larger class.
+    fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
+        if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register))
+            || is_pair_order(order)
+        {
+            return None;
+        }
+        let any = Self::candidates(Class::ANY);
+        (any.len() > order.len()).then_some(any)
+    }
+
+    /// What `inst` costs with its operand `operand` in `register`: the bytes
+    /// and the clocks of its form in the timing tables (a step is 1 byte and 2
+    /// clocks in `x`, 2 and 5 on a cell, 3 and 4 in `a`). The operand's other
+    /// appearances in the instruction are in `register` too; any other
+    /// register is priced where it stands, a virtual one as `a`. An
+    /// instruction with no register-dependent form costs 0.
+    fn operand_cost(
+        inst: &Inst,
+        operand: usize,
+        register: RegId,
+    ) -> u32 {
+        let priced = inst.operands.get(operand);
+        let regs: Vec<RegId> = inst
+            .operands
+            .iter()
+            .filter_map(|o| match o {
+                Operand::Def(r) | Operand::Use(r)
+                    if Some(o) == priced
+                        || matches!(
+                            (o, priced),
+                            (Operand::Def(a) | Operand::Use(a), Some(Operand::Def(b) | Operand::Use(b))) if a == b
+                        ) =>
+                {
+                    let _ = r;
+                    Some(register)
+                }
+                Operand::Def(Reg::Phys(r)) | Operand::Use(Reg::Phys(r)) => Some(*r),
+                Operand::Def(_) | Operand::Use(_) => Some(reg::A),
+                _ => None,
+            })
+            .collect();
+        form_cost(Cpu::Mos6502, inst.kind, &inst.operands, &regs)
+            .map_or(0, |priced| priced.bytes + priced.cycles as u32)
+    }
+
     type Class = Class;
 
     fn meet(
@@ -197,6 +258,49 @@ impl<const STACK: bool> Target for Mos<STACK> {
 
     fn root(register: RegId) -> RegId {
         register
+    }
+
+    /// `tax`, `tay`, `txa`, `tya` and the loads `lda`, `ldx`, `ldy` set N and
+    /// Z; a store sets nothing.
+    fn copy_sets_flags(
+        to: RegId,
+        _: RegId,
+    ) -> bool {
+        [reg::A, reg::X, reg::Y].contains(&to)
+    }
+
+    /// In stack mode a spill is `ldy #offset; sta (rc0),y`: it overwrites `y`.
+    fn reads_flags_set_just_before(inst: &Inst) -> bool {
+        inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
+    }
+
+    fn moves_lanes(inst: &Inst) -> bool {
+        matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
+    }
+
+    /// A byte cell: `lda cell; pha` on entry, `pla; sta cell` on exit.
+    fn csr_first_use_cost() -> u32 {
+        4
+    }
+
+    fn csr_cost_scale() -> u32 {
+        100
+    }
+
+    fn csr_spill_first() -> bool {
+        true
+    }
+
+    /// A zero-page byte costs more per use than `A`, `X` and `Y`: an
+    /// instruction on a cell is a byte longer and a clock slower than the
+    /// same on a register, and a transfer is two clocks against three.
+    fn register_cost(register: RegId) -> u8 {
+        let first = reg::RC0.index();
+        u8::from((first..first + usize::from(imaginary())).contains(&register.index()))
+    }
+
+    fn spill_clobbers() -> Vec<RegId> {
+        if STACK { vec![reg::Y] } else { Vec::new() }
     }
 
     /// `rc0` and `rc1` are the software stack pointer.
@@ -294,6 +398,8 @@ struct Builder {
     packs: Vec<(Reg, Reg, Reg)>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
+    /// Cells loaded once from a global and read once by an add, subtract or
+    /// logic op after it with no store between: the op reads the global.
     /// The block each label names.
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
@@ -324,6 +430,20 @@ impl Builder {
     fn fresh(&mut self) -> Reg {
         self.function.classes.push(Class::ANY);
         Reg::Virt(self.function.classes.len() as u32 - 1)
+    }
+
+    /// `value` copied to a register of `class`, as LLVM's `InstrEmitter` copies
+    /// an operand to the class its instruction needs: the allocator joins the
+    /// copy to `value` when `value` is already in the class.
+    fn copy_to_class(
+        &mut self,
+        value: Reg,
+        class: Class,
+    ) -> Reg {
+        self.function.classes.push(class);
+        let copy = Reg::Virt(self.function.classes.len() as u32 - 1);
+        self.copy(copy, value);
+        copy
     }
 
     /// The register a byte operand names: `a`, `x`, `y`, `rcN`, or a cell.
@@ -548,6 +668,7 @@ impl Builder {
     fn redo_compare(
         &mut self,
         code: i64,
+        branch: bool,
     ) -> Result<(), Unsupported> {
         let Compare { a, b, word, zero } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
@@ -589,10 +710,15 @@ impl Builder {
         }
         if word && matches!(code, 4 | 5) && self.word_constant(&b.0) == Some([0, 0]) {
             let (_, ah) = self.read_word(&a.0)?;
-            self.copy(acc, ah);
+            let tested = if branch {
+                self.copy_to_class(ah, Class::COMPARED)
+            } else {
+                self.copy(acc, ah);
+                acc
+            };
             let mut test = Inst::new(
                 Kind::Op("CMP"),
-                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), Operand::Imm(0)],
+                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), Operand::Imm(0)],
             );
             test.sets_flags = true;
             self.push(test);
@@ -623,9 +749,18 @@ impl Builder {
             };
             ([lhs, lhs], [rhs.clone(), rhs])
         };
-        self.copy(acc, lhs[0]);
+        // A branch on a byte tests the flags and nothing else: any of `a`,
+        // `x`, `y` compares. A select or a set reads `a` as the compare left
+        // it, and a word's high byte is subtracted in `a`, so those compare
+        // there.
+        let tested = if branch && !word {
+            self.copy_to_class(lhs[0], Class::COMPARED)
+        } else {
+            self.copy(acc, lhs[0]);
+            acc
+        };
         let mut cmp =
-            Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(acc), rhs[0].clone()]);
+            Inst::new(Kind::Op("CMP"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(tested), rhs[0].clone()]);
         cmp.sets_flags = true;
         self.push(cmp);
         if word {
@@ -719,9 +854,6 @@ impl Builder {
         a: &str,
         b: &str,
     ) -> Result<(), Unsupported> {
-        let acc = Reg::Phys(reg::A);
-        self.define(d);
-        let (d, a) = (self.byte(d)?, self.byte(a)?);
         let second = match self.constants.get(b) {
             Some(value) => Operand::Imm(*value & 0xFF),
             None => {
@@ -730,6 +862,21 @@ impl Builder {
                 Operand::Use(b)
             }
         };
+        self.alu_with(mnemonic, carry, d, a, second)
+    }
+
+    /// The same with the second operand made.
+    fn alu_with(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        second: Operand,
+    ) -> Result<(), Unsupported> {
+        let acc = Reg::Phys(reg::A);
+        self.define(d);
+        let (d, a) = (self.byte(d)?, self.byte(a)?);
         if is_identity(mnemonic, &second) {
             self.copy(d, a);
             return Ok(());
@@ -788,6 +935,20 @@ impl Builder {
             self.push(bump);
             return Ok(());
         }
+        // a pointer plus a page: the high byte steps, in place
+        if mnemonic == "ADC"
+            && self.in_pair(d)
+            && self.in_pair(a)
+            && let Some([0, 1]) = self.word_constant(b)
+        {
+            let source = self.pointer(a)?;
+            self.define(d);
+            let dest = self.pointer(d)?;
+            let mut bump = Inst::new(Kind::Op("PINCH"), vec![Operand::Def(dest), Operand::Use(source)]);
+            bump.ties = vec![(0, 1)];
+            self.push(bump);
+            return Ok(());
+        }
         // a commutative op reads the operand with the known identity half as
         // its second
         let (a, b) = if matches!(mnemonic, "EOR" | "ORA" | "AND")
@@ -821,13 +982,32 @@ impl Builder {
         };
         let (dl, dh) = self.write_word(d)?;
         let acc = Reg::Phys(reg::A);
-        if let Some(carry) = carry {
-            self.push(Inst::new(Kind::Op(carry), vec![]));
-        }
-        for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
-            if is_identity(mnemonic, &b) {
+        let mut carried = false;
+        // the low byte is left as it is, with the carry clear (set) for the
+        // high
+        let mut low_kept = false;
+        for (half, ((d, a), b)) in [(dl, al), (dh, ah)].into_iter().zip(second).enumerate() {
+            // the carry is clear (set) going in: adding (subtracting) 0 to the
+            // low byte leaves it, and the high byte steps by the constant
+            let spent = matches!((mnemonic, carry), ("ADC", Some("CLC")) | ("SBC", Some("SEC")));
+            if half == 0 && spent && b == Operand::Imm(0) {
+                low_kept = true;
+            }
+            if is_identity(mnemonic, &b) || low_kept && half == 0 {
                 self.copy(d, a);
                 continue;
+            }
+            if half == 1 && low_kept && b == Operand::Imm(1) {
+                self.copy(d, a);
+                self.push(Inst::new(
+                    Kind::Op(if mnemonic == "ADC" { "INC" } else { "DEC" }),
+                    vec![Operand::Def(d), Operand::Use(d)],
+                ));
+                continue;
+            }
+            if let Some(carry) = carry.filter(|_| !carried) {
+                carried = true;
+                self.push(Inst::new(Kind::Op(carry), vec![]));
             }
             self.copy(acc, a);
             self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
@@ -869,6 +1049,12 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 /// A pointer stays one through a copy and through an add of a constant 1..=255
 /// (`p++`, `p += k`), in both directions, so a pointer walked round a loop is
 /// bumped in its pair instead of unpacked, added and packed every trip.
+///
+/// DEVIATE (6502-7): pointer-ness is worked out from how the cells are used,
+/// and an add of a constant is found by following the cell that holds it; the
+/// pin gets both from the register class a pattern constrains an operand to
+/// and from an immediate-form pattern. Exit: the class constraint of the
+/// greedy PR (#6259) and `ADD16` immediate forms in `mos6502.td`.
 fn pointer_cells(
     items: &[Item],
     constants: &HashMap<String, i64>,
@@ -877,7 +1063,7 @@ fn pointer_cells(
     let constant = |cell: &String| {
         let low = constants.get(cell).copied();
         let high = constants.get(&format!("{cell}+1")).copied();
-        matches!((low, high), (Some(1..=255), Some(0)))
+        matches!((low, high), (Some(1..=255), Some(0)) | (Some(0), Some(1)))
     };
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::new();
@@ -1086,6 +1272,17 @@ pub fn build(
                 }
             }
             op::ADD8 => b.alu("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD8M | op::SUB8M | op::AND8M | op::OR8M | op::XOR8M => {
+                let (mnemonic, carry) = match inst.opcode {
+                    op::ADD8M => ("ADC", Some("CLC")),
+                    op::SUB8M => ("SBC", Some("SEC")),
+                    op::AND8M => ("AND", None),
+                    op::OR8M => ("ORA", None),
+                    _ => ("EOR", None),
+                };
+                let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
+                b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
+            }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
             op::INC8 | op::DEC8 => {
@@ -1200,7 +1397,7 @@ pub fn build(
                 b.push(Inst::new(Kind::Op("LOADC"), vec![Operand::Def(acc), Operand::Use(acc)]));
             }
             op::SETCC8 => {
-                b.redo_compare(immediate(&o[1])?)?;
+                b.redo_compare(immediate(&o[1])?, false)?;
                 b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 let mut set = Inst::new(
@@ -1346,7 +1543,7 @@ pub fn build(
             }
             code @ (op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL) => {
                 let condition = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL].iter().position(|c| *c == code);
-                b.redo_compare(condition.map_or(-1, |c| c as i64))?;
+                b.redo_compare(condition.map_or(-1, |c| c as i64), true)?;
                 let mnemonic = match code {
                     op::BEQ => "BEQ",
                     op::BNE => "BNE",
@@ -1369,7 +1566,7 @@ pub fn build(
                 b.push(jump);
             }
             op::CMOV8 => {
-                b.redo_compare(immediate(&o[3])?)?;
+                b.redo_compare(immediate(&o[3])?, false)?;
                 b.define(name(&o[0])?);
                 let d = b.byte(name(&o[0])?)?;
                 let value = |b: &mut Builder, operand: &Machine| -> Result<Operand, Unsupported> {
@@ -1406,7 +1603,7 @@ pub fn build(
                 let (nl, nh) = (b.fresh(), b.fresh());
                 b.copy(nl, fl);
                 b.copy(nh, fh);
-                b.redo_compare(immediate(&o[3])?)?;
+                b.redo_compare(immediate(&o[3])?, false)?;
                 for r in [nl, nh, tl, th] {
                     b.require(r, Class(Class::X | Class::Y | Class::M))?;
                 }
@@ -1675,12 +1872,14 @@ impl<const STACK: bool> Jump for Mos<STACK> {
 }
 
 /// The physical registers the run of copies just before the return sets: the
-/// result.
+/// result. The frame is released between the copies of a result that does not
+/// need `a`, and those of the rest.
 fn results(insts: &[Inst]) -> Vec<RegId> {
     let mut out = Vec::new();
     for inst in insts.iter().rev() {
         match (inst.kind, inst.operands.first()) {
             (Kind::Copy, Some(Operand::Def(Reg::Phys(p)))) => out.push(*p),
+            (Kind::Op("ADJSP"), _) => {}
             _ => break,
         }
     }
@@ -1759,6 +1958,65 @@ fn remove_dead(function: &mut MFunction<Class>) {
 }
 
 /// The ca65 name of an allocated register.
+/// The assembly of an instruction whose form depends only on the registers it
+/// reads and writes: `inc`/`dec` (one byte in `x` or `y`, a cell in place, two
+/// instructions in `a`), an ALU op with its second operand, and a compare,
+/// whose opcode follows the register the left side is in. `None` for any other.
+fn form_text(
+    kind: Kind,
+    operands: &[Operand],
+    regs: &[RegId],
+    cmos: bool,
+    slot_name: &dyn Fn(i32) -> String,
+) -> Option<String> {
+    let second = |at: usize| match &operands[at] {
+        Operand::Imm(value) => format!("#{value}"),
+        Operand::Symbol(symbol, _) => symbol.clone(),
+        Operand::Frame(slot) => slot_name(*slot),
+        _ => register_name(regs[at.min(regs.len() - 1)]),
+    };
+    Some(match kind {
+        Kind::Op(step @ ("INC" | "DEC")) => {
+            let (inc, r) = (step == "INC", regs[0]);
+            let (short, long) = if inc { ("in", "adc #1") } else { ("de", "sbc #1") };
+            if r == reg::X || r == reg::Y {
+                format!("  {short}{}\n", register_name(r))
+            } else if r != reg::A {
+                format!("  {short}c {}\n", register_name(r))
+            } else if cmos {
+                format!("  {short}c a\n")
+            } else {
+                format!("  {}\n  {long}\n", if inc { "clc" } else { "sec" })
+            }
+        }
+        Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")) if operands.len() >= 3 => {
+            format!("  {} {}\n", mnemonic.to_lowercase(), second(2))
+        }
+        Kind::Op("CMP") if operands.len() == 3 => {
+            let compare = match regs[1] {
+                r if r == reg::X => "cpx",
+                r if r == reg::Y => "cpy",
+                _ => "cmp",
+            };
+            format!("  {compare} {}\n", second(2))
+        }
+        _ => return None,
+    })
+}
+
+/// What `kind` costs on `cpu` with `operands` in `regs`, from the timing
+/// tables: the data a hint or a join weighs (an `inc` is 1 byte and 2 clocks in
+/// `x`, 2 and 5 in a cell, 3 and 4 in `a`).
+pub fn form_cost(
+    cpu: Cpu,
+    kind: Kind,
+    operands: &[Operand],
+    regs: &[RegId],
+) -> Option<crate::timing::Estimate> {
+    let text = form_text(kind, operands, regs, cpu == Cpu::W65c02, &|slot| format!("s_{slot}"))?;
+    crate::timing::estimate(cpu, &text).ok()
+}
+
 fn register_name(register: RegId) -> String {
     if register == reg::A {
         "a".into()
@@ -1825,7 +2083,7 @@ fn live_after(
 /// through `a`, bracketed by `pha`/`pla` when it is live. `body` is a plain
 /// `lda`/`sta` pair.
 fn through_a(
-    out: &mut String,
+    out: &mut Asm,
     a_live: bool,
     spare: Option<&str>,
     body: &str,
@@ -1845,7 +2103,7 @@ fn through_a(
 /// wrote, and `a` is saved around the sequence when it is live after it. A
 /// cycle (a swap of two cells) goes through the stack.
 pub fn parallel_move(
-    out: &mut String,
+    out: &mut Asm,
     moves: &[(RegId, RegId)],
     a_live: bool,
 ) {
@@ -1891,15 +2149,17 @@ pub fn parallel_move(
                 // reads it, or only cycles of cells are left. Park the value
                 // on the stack and read it from there (two moves at most, so
                 // one parked value).
-                let free = |i: usize, pending: &[(RegId, Option<RegId>)]| {
-                    !pending.iter().enumerate().any(|(j, (_, s))| j != i && *s == Some(pending[i].0))
-                };
-                let parked = if (0..pending.len()).any(|i| free(i, &pending)) {
+                let parked = if pending.iter().any(|(_, s)| *s == Some(reg::A)) {
                     out.push_str("  pha\n");
                     reg::A
                 } else {
-                    let (d, _) = pending[0];
-                    writeln!(out, "  lda {}\n  pha", register_name(d)).unwrap();
+                    // no move reads `a`: a cell another move reads is held up
+                    let (d, _) = *pending
+                        .iter()
+                        .find(|(d, _)| pending.iter().any(|(_, s)| *s == Some(*d)))
+                        .expect("a blocked sequence without `a` has a cycle");
+                    move_byte(out, reg::A, d, false, None);
+                    out.push_str("  pha\n");
                     d
                 };
                 for (_, s) in pending.iter_mut().filter(|(_, s)| *s == Some(parked)) {
@@ -1914,7 +2174,7 @@ pub fn parallel_move(
 }
 
 fn move_byte(
-    out: &mut String,
+    out: &mut Asm,
     to: RegId,
     from: RegId,
     a_live: bool,
@@ -1976,43 +2236,70 @@ fn emit_on(
     stack: bool,
     cmos: bool,
 ) -> Result<(String, Vec<(String, usize)>), String> {
-    let run = |function: MFunction<Class>, sink: bool, share: bool| {
+    let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share)
+            emit_with::<true>(function, labels, cmos, sink, share, split, place)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share)
+            emit_with::<false>(function, labels, cmos, sink, share, split, place)
         }
     };
-    let (code, slots, sunk, shared) = run(function.clone(), true, true)?;
-    if !sunk && !shared {
-        return Ok((code, slots));
-    }
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
     let price = |code: &str, slots: &[(String, usize)]| {
         crate::timing::estimate(cpu, code)
             .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
+    let (mut code, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    // a layout that rotates a loop is kept only where it is no larger and no
+    // slower than the order the blocks came in
+    let mut place = true;
+    if moved
+        && let Ok((other, other_slots, ..)) = run(function.clone(), true, true, false, false)
+        && let (Ok(kept), Ok(candidate)) = (price(&code, &slots), price(&other, &other_slots))
+        && (kept.0 > candidate.0 || kept.1 > candidate.1)
+    {
+        (code, slots, place) = (other, other_slots, false);
+    }
+    // a function with calls that spilled may do better with a register kept in
+    // a slot across them only
+    let splittable = !slots.is_empty() && function.blocks.iter().any(|b| b.insts.iter().any(|i| i.call));
+    if !sunk && !shared && !splittable {
+        return Ok((code, slots));
+    }
     // each change is kept only where it is no larger and no slower than the
     // function without it
     let mut best = (code, slots);
+    let mut settings = (true, true);
     let mut variants = vec![(false, false)];
     if sunk && shared {
         variants.extend([(true, false), (false, true)]);
     }
+    if !sunk && !shared {
+        variants.clear();
+    }
     for (sink, share) in variants {
-        let Ok((other, other_slots, _, _)) = run(function.clone(), sink, share) else { continue };
+        let Ok((other, other_slots, ..)) = run(function.clone(), sink, share, false, place) else { continue };
         if let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots)) {
             if kept.0 > candidate.0 || kept.1 > candidate.1 {
                 best = (other, other_slots);
+                settings = (sink, share);
             }
         }
+    }
+    if splittable
+        && let Ok((other, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
+        && let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots))
+        && candidate.0 <= kept.0
+        && candidate.1 <= kept.1
+        && candidate != kept
+    {
+        best = (other, other_slots);
     }
     Ok(best)
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
 fn adjust(
-    out: &mut String,
+    out: &mut Asm,
     n: i64,
 ) {
     let n = n as u16;
@@ -2120,16 +2407,33 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     }
 }
 
-/// Whether the emitted line leaves the zero and sign flags describing what `a`
-/// now holds.
-fn sets_nz_of_a(line: &str) -> bool {
-    let line = line.trim();
-    let (mnemonic, operand) = line.split_once(' ').unwrap_or((line, ""));
-    match mnemonic {
-        "lda" | "txa" | "tya" | "tax" | "tay" | "pla" | "and" | "ora" | "eor" | "adc" | "sbc" => true,
-        "asl" | "lsr" | "rol" | "ror" | "inc" | "dec" => operand == "a",
-        _ => false,
+/// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop
+/// heuristic gives them with no profile: the edge that stays in the innermost
+/// loop of its block takes 124 of 128, the edge that leaves it the rest.
+fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
+    use llrm_mir::blockfrequency::BranchProbability;
+    let cfg = llrm_spike_mf::cfg::Cfg::new(function);
+    let mut odds = llrm_spike_mf::placement::Odds::default();
+    for (from, succs) in cfg.succs.iter().enumerate() {
+        if succs.len() != 2 {
+            continue;
+        }
+        let innermost = cfg
+            .loops()
+            .iter()
+            .filter(|(_, body)| body[from])
+            .min_by_key(|(_, body)| body.iter().filter(|b| **b).count());
+        let Some((_, body)) = innermost else { continue };
+        let leaves: Vec<bool> = succs.iter().map(|&to| !body[to]).collect();
+        if leaves[0] == leaves[1] {
+            continue;
+        }
+        for (rank, &to) in succs.iter().enumerate() {
+            let share = if leaves[rank] { 4 } else { 124 };
+            odds.insert((function.blocks[from].id, function.blocks[to].id), (BranchProbability::new(share, 128), rank));
+        }
     }
+    odds
 }
 
 fn emit_with<const STACK: bool>(
@@ -2138,7 +2442,9 @@ fn emit_with<const STACK: bool>(
     cmos: bool,
     sink: bool,
     share: bool,
-) -> Result<(String, Vec<(String, usize)>, bool, bool), String> {
+    _split: bool,
+    place: bool,
+) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
@@ -2146,7 +2452,7 @@ fn emit_with<const STACK: bool>(
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
     two_address(&mut function);
-    let (assignment, mut slots) = allocate_spilling::<Mos<STACK>>(&mut function, 0)?;
+    let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
@@ -2189,11 +2495,35 @@ fn emit_with<const STACK: bool>(
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
+    let moved = place && {
+        let odds = loop_odds(&function);
+        llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
+    };
     let after = live_after(&function, &at);
     let slot_name = |slot: i32| format!("s_{}_{}", function.name, slot);
-    let mut out = String::new();
+    let mut out = Asm::new();
     let mut made = 0;
     let mut pending: Option<i64> = None;
+    // A call that returns at once is a jump: the callee's `rts` returns from
+    // here. `__csave` keeps the return address, and a frame to release stands
+    // between the call and the return.
+    //
+    // DEVIATE (6502-2): decided at emission, where the pin's `isTailCall` is
+    // decided in call lowering (as llvm-mos does). Exit: tail calls in the
+    // 6502's call lowering.
+    let tail_call = |block: &Block, i: usize, pending: Option<i64>| {
+        let named = |inst: &Inst| {
+            matches!(
+                &inst.operands[..],
+                [Operand::Symbol(callee, _), ..] if !callee.starts_with("__csave")
+            )
+        };
+        block.insts[i].kind == Kind::Op("JSR")
+            && named(&block.insts[i])
+            && block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("RTS"))
+            && pending.is_none()
+            && !(spilled > 0 && !has_frame)
+    };
     let target = |operand: &Operand| match operand {
         Operand::Block(id) => labels[*id as usize][0].clone(),
         other => unreachable!("{other:?} is not a block"),
@@ -2253,6 +2583,11 @@ fn emit_with<const STACK: bool>(
                         .unwrap();
                     }
                 }
+                (Kind::Op("PINCH"), _) => {
+                    let (d, s) = (regs[0], regs[1]);
+                    parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live);
+                    writeln!(out, "  inc {}", register_name(lane(d, 1))).unwrap();
+                }
                 (Kind::Op("LDPX"), _) => writeln!(out, "  lda ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
@@ -2297,7 +2632,10 @@ fn emit_with<const STACK: bool>(
                     parallel_move(&mut out, &[(regs[0], regs[5]), (regs[1], regs[6])], false);
                     writeln!(out, "{done}:").unwrap();
                 }
-                (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => writeln!(out, "  jsr {callee}").unwrap(),
+                (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => {
+                    let jump = tail_call(block, i, pending);
+                    writeln!(out, "  {} {callee}", if jump { "jmp" } else { "jsr" }).unwrap()
+                }
                 // return address, then target-1, then rts into the callee; its
                 // own rts lands on the label
                 (Kind::Op("JSRI"), _) => {
@@ -2342,10 +2680,23 @@ fn emit_with<const STACK: bool>(
                         .count();
                     let (saved, slower) = (4 * run as i64 - 9, 5 * run as u32 + 1);
                     let pays = saved > 0 && slower <= TUNING.with(|t| t.get()).clocks_per_byte * saved as u32;
+                    // the byte that shifts alone rides in `a` for a run: 7
+                    // clocks a step where memory is 10 (`asl a; rol hi` against
+                    // `asl lo; rol hi`), for the two bytes of the load and
+                    // the store; a byte longer under three steps
+                    let in_a = run >= if TUNING.with(|t| t.get()).clocks_per_byte > 1 { 5 } else { 3 };
                     match spare {
                         Some(index) if pays => {
                             made += 1;
                             writeln!(out, "  ld{index} #{run}\n_sh{made}:\n  {first} {one}\n  {second} {two}\n  de{index}\n  bne _sh{made}").unwrap();
+                            repeated = run - 1;
+                        }
+                        _ if in_a && !a_live => {
+                            writeln!(out, "  lda {one}").unwrap();
+                            for _ in 0..run {
+                                writeln!(out, "  {first} a\n  {second} {two}").unwrap();
+                            }
+                            writeln!(out, "  sta {one}").unwrap();
                             repeated = run - 1;
                         }
                         _ => writeln!(out, "  {first} {one}\n  {second} {two}").unwrap(),
@@ -2357,7 +2708,7 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("CMPZ"), [_, _, _, _, low, high]) => {
                     made += 1;
-                    let load = |out: &mut String, r: RegId| match r {
+                    let load = |out: &mut Asm, r: RegId| match r {
                         r if r == reg::X => out.push_str("  txa\n"),
                         r if r == reg::Y => out.push_str("  tya\n"),
                         r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
@@ -2386,39 +2737,27 @@ fn emit_with<const STACK: bool>(
                         }
                     }
                 }
-                (Kind::Op(step @ ("INC" | "DEC")), _) => {
-                    let (inc, r) = (step == "INC", regs[0]);
-                    let (short, long) = if inc { ("in", "adc #1") } else { ("de", "sbc #1") };
-                    if r == reg::X || r == reg::Y {
-                        writeln!(out, "  {short}{}", register_name(r)).unwrap();
-                    } else if r != reg::A {
-                        writeln!(out, "  {short}c {}", register_name(r)).unwrap();
-                    } else if cmos {
-                        writeln!(out, "  {short}c a").unwrap();
-                    } else {
-                        writeln!(out, "  {}\n  {long}", if inc { "clc" } else { "sec" }).unwrap();
-                    }
+                (Kind::Op("INC" | "DEC"), _) => {
+                    out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),
-                (Kind::Op(mnemonic @ ("ADC" | "SBC" | "AND" | "ORA" | "EOR")), [_, _, second, ..]) => {
-                    let text = match second {
-                        Operand::Imm(value) => format!("#{value}"),
-                        Operand::Frame(slot) => slot_name(*slot),
-                        _ => register_name(regs[2]),
-                    };
-                    writeln!(out, "  {} {text}", mnemonic.to_lowercase()).unwrap();
+                (Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR"), [_, _, _, ..]) => {
+                    out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op("RTS"), _) => {
                     // on the stack the frame is released last: the result
                     // copies after the epilogue may still reload spills
+                    let jumped = i.checked_sub(1).is_some_and(|before| tail_call(block, before, pending));
                     let release = pending.take().or((spilled > 0 && !has_frame).then_some(spilled));
                     if let Some(n) = release {
                         out.push_str("  pha\n");
                         adjust(&mut out, n);
                         out.push_str("  pla\n");
                     }
-                    out.push_str("  rts\n")
+                    if !jumped {
+                        out.push_str("  rts\n");
+                    }
                 }
                 (Kind::Op("ADJSP"), [_, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16 as i16);
@@ -2439,15 +2778,34 @@ fn emit_with<const STACK: bool>(
                 // against zero, a load or an ALU result has already set the
                 // flags a zero or sign test reads
                 (Kind::Op("CMP"), [_, _, Operand::Imm(0)])
-                    if block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
-                        && out.lines().last().is_some_and(sets_nz_of_a) => {}
-                (Kind::Op("CMP"), [_, _, second]) => {
-                    let text = match second {
-                        Operand::Imm(value) => format!("#{value}"),
-                        Operand::Frame(slot) => slot_name(*slot),
-                        _ => register_name(regs[2]),
-                    };
-                    writeln!(out, "  cmp {text}").unwrap();
+                    if regs[1] == reg::A
+                        && block.insts.get(i + 1).is_some_and(reads_zero_or_sign_only)
+                        && out.last_inst().is_some_and(crate::peephole::sets_nz_of_a) =>
+                {
+                    // `iny; tya; bne`: the step set the flags of y itself
+                    // DEVIATE (6502-3): looks back at the emitted
+                    // instructions. Exit: the peephole on allocated MIR (D-6502
+                    // of #6259, see peephole.rs).
+                    let n = out.lines.len();
+                    let stepped = n >= 2
+                        && matches!(
+                            (&out.lines[n - 2], &out.lines[n - 1]),
+                            (
+                                Line::Inst(AsmInst { op: AsmOp::Iny | AsmOp::Dey, .. }),
+                                Line::Inst(AsmInst { op: AsmOp::Tya, .. })
+                            ) | (
+                                Line::Inst(AsmInst { op: AsmOp::Inx | AsmOp::Dex, .. }),
+                                Line::Inst(AsmInst { op: AsmOp::Txa, .. })
+                            )
+                        );
+                    let next_reads_a = block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("CMOV"));
+                    if !a_live && !next_reads_a && stepped {
+                        out.pop();
+                    }
+                }
+                // the register the left side is in decides the opcode
+                (Kind::Op("CMP"), [_, _, _]) => {
+                    out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
                 (Kind::Op(branch @ ("BEQ" | "BNE" | "BCC" | "BCS" | "BMI" | "BPL")), [to, _]) => {
                     writeln!(out, "  {} {}", branch.to_lowercase(), target(to)).unwrap();
@@ -2464,32 +2822,26 @@ fn emit_with<const STACK: bool>(
                     made += 1;
                     let (taken, done) = (format!("_cmt{made}"), format!("_cmd{made}"));
                     let branch = ["beq", "bne", "bcc", "bcs", "bmi", "bpl"][*code as usize];
-                    let load = |out: &mut String, value: &Operand, at: Option<RegId>| match (value, at) {
+                    let load = |out: &mut Asm, value: &Operand, at: Option<RegId>| match (value, at) {
                         (Operand::Imm(v), _) => writeln!(out, "  lda #{v}").unwrap(),
+                        // a value already in `a`
+                        (_, Some(r)) if r == reg::A => {}
                         (_, Some(r)) if r == reg::X => out.push_str("  txa\n"),
                         (_, Some(r)) if r == reg::Y => out.push_str("  tya\n"),
                         (_, Some(r)) => writeln!(out, "  lda {}", register_name(r)).unwrap(),
                         (_, None) => unreachable!(),
                     };
-                    let mut read = inst
-                        .operands
-                        .iter()
-                        .filter_map(
-                            |o| match o {
-                                Operand::Use(Reg::Virt(_)) => Some(at(match o {
-                                    Operand::Use(r) => *r,
-                                    _ => unreachable!(),
-                                })),
-                                _ => None,
-                            },
-                        );
+                    let mut read =
+                        inst.operands.iter().filter_map(|o| if let Operand::Use(r) = o { Some(at(*r)) } else { None });
                     let false_at = matches!(if_false, Operand::Use(_)).then(|| read.next()).flatten();
                     let true_at = matches!(if_true, Operand::Use(_)).then(|| read.next()).flatten();
                     // `a` holds the compare's left side: `lda lhs; cmp rhs`
                     // just before
                     let held = i.checked_sub(2).and_then(|first| match (&block.insts[first], &block.insts[i - 1]) {
                         (copy, compare) if compare.kind == Kind::Op("CMP") => match (copy.kind, &copy.operands[..]) {
-                            (Kind::Copy, [Operand::Def(Reg::Phys(a)), Operand::Use(lhs)]) if *a == reg::A => {
+                            (Kind::Copy, [Operand::Def(tested), Operand::Use(lhs)])
+                                if compare.operands.get(1) == Some(&Operand::Use(*tested)) && at(*tested) == reg::A =>
+                            {
                                 Some(at(*lhs))
                             }
                             _ => None,
@@ -2625,7 +2977,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&crate::emit::relax_bra(&relax(&drop_reloads(&out))), &function.name), slots, sunk, shared))
+    Ok((own_labels(&finish(out), &function.name), slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -2663,121 +3015,85 @@ fn own_labels(
     out
 }
 
-/// A conditional branch reaches 127 bytes. An instruction is at most 3 bytes,
-/// so one whose target is within 40 instruction lines stays and any other
-/// becomes the opposite branch over a `jmp`.
-///
-/// DEVIATE: line counting, not sizes (as `emit::relax_bra`). Exit: the shared
-/// branch relaxation.
-/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell:
-/// the register still holds it, so the load goes. It also set the zero and sign
-/// flags, so it stays when a branch reads them before anything sets them again.
-pub fn drop_reloads(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let cell = |operand: &str| operand.starts_with("rc") || operand.starts_with("s_");
-    let sets_flags = |mnemonic: &str| {
-        matches!(
-            mnemonic,
-            "lda"
-                | "ldx"
-                | "ldy"
-                | "adc"
-                | "sbc"
-                | "cmp"
-                | "cpx"
-                | "cpy"
-                | "and"
-                | "ora"
-                | "eor"
-                | "asl"
-                | "lsr"
-                | "rol"
-                | "ror"
-                | "inc"
-                | "dec"
-                | "inx"
-                | "iny"
-                | "dex"
-                | "dey"
-                | "tax"
-                | "tay"
-                | "txa"
-                | "tya"
-                | "pla"
-                | "bit"
-                | "jsr"
-                | "rts"
-        )
-    };
-    let flags_unread_after = |from: usize| {
-        for line in &lines[from..] {
-            let mnemonic = line.trim().split(' ').next().unwrap_or("");
-            if !line.starts_with("  ") {
-                return false;
-            }
-            if sets_flags(mnemonic) {
-                return true;
-            }
-            if !matches!(
-                mnemonic,
-                "sta" | "stx" | "sty" | "stz" | "clc" | "sec" | "pha" | "nop"
-            ) {
-                return false;
-            }
-        }
-        false
-    };
-    let mut out = String::with_capacity(text.len());
-    for (at, line) in lines.iter().enumerate() {
-        let reload = at > 0
-            && lines[at - 1].starts_with("  st")
-            && line.starts_with("  ld")
-            && lines[at - 1].trim()[2..] == line.trim()[2..]
-            && line.trim().split(' ').nth(1).is_some_and(cell)
-            && flags_unread_after(at + 1);
-        if !reload {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
+/// The function's text: the peepholes, then the branches out of reach made
+/// long.
+fn finish(mut code: Asm) -> String {
+    crate::peephole::run(&mut code);
+    crate::relax::relax(&mut code);
+    code.text()
 }
 
-fn relax(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let is_instruction = |l: &str| l.starts_with("  ") && !l.trim_start().starts_with('.');
-    let mut out = String::new();
-    let mut far = 0;
-    for (at, line) in lines.iter().enumerate() {
-        let parts: Vec<&str> = line.trim_start().split(' ').collect();
-        let opposite = match parts[..] {
-            ["beq", _] => "bne",
-            ["bne", _] => "beq",
-            ["bcc", _] => "bcs",
-            ["bcs", _] => "bcc",
-            ["bmi", _] => "bpl",
-            ["bpl", _] => "bmi",
-            _ => {
-                writeln!(out, "{line}").unwrap();
-                continue;
+/// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
+/// measure against.
+fn spike_asked() -> bool {
+    SPIKE.with(|one| one.get()) || std::env::var_os("LLRM_6502_SPIKE").is_some()
+}
+
+/// `f` with the spike allocator doing the allocation: the tests of its spill
+/// policy (a slot, not a callee-saved cell) run on it until it is deleted.
+pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
+    let before = SPIKE.with(|one| one.replace(true));
+    let result = f();
+    SPIKE.with(|one| one.set(before));
+    result
+}
+
+/// The function allocated: by the shared greedy allocator, which this target
+/// moves onto (`Target::register_allocator`), else by the spike allocator.
+///
+/// A function greedy cannot take is an error, not a quiet fall back to the
+/// spike allocator: that hid 600 failures in 300 differential programs.
+fn allocate<const STACK: bool>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
+    // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
+    let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();
+    if only.as_deref() == Some("?") {
+        eprintln!("FUNCTION {}", function.name);
+    }
+    let wanted = only.as_deref().is_none_or(|names| names == "?" || names.split(',').any(|n| n == function.name));
+    if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
+        for (at, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                eprintln!(
+                    "in bb{at}.{i}: {:?} {:?}{}{}",
+                    inst.kind,
+                    inst.operands,
+                    if inst.sets_flags { " SF" } else { "" },
+                    if inst.reads_flags { " RF" } else { "" }
+                );
             }
-        };
-        let label = format!("{}:", parts[1]);
-        let near = lines
-            .iter()
-            .position(|l| *l == label)
-            .is_some_and(
-                |to| {
-                    let (from, until) = if to > at { (at + 1, to) } else { (to, at) };
-                    lines[from..until].iter().filter(|l| is_instruction(l)).count() <= 40
-                },
-            );
-        if near {
-            writeln!(out, "{line}").unwrap();
-        } else {
-            far += 1;
-            writeln!(out, "  {opposite} _far{far}\n  jmp {}\n_far{far}:", parts[1]).unwrap();
         }
     }
-    out
+    if spike_asked() || !wanted {
+        return allocate_spilling::<Mos<STACK>>(function, 0);
+    }
+    allocate_greedy::<Mos<STACK>>(function)
+}
+
+/// `function` allocated by greedy (`llrm_spike_mf::tolir::allocate_greedy`).
+fn allocate_greedy<T: Target<Class = Class>>(
+    function: &mut MFunction<Class>
+) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
+    use llrm_lir::registers::Regs;
+    let size = TUNING.with(|t| t.get()) == Tuning::SIZE;
+    let (assignment, slots) = llrm_spike_mf::tolir::allocate_greedy::<T>(function, Regs(&crate::REGISTER_INFO), size)?;
+    if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
+        for (at, block) in function.blocks.iter().enumerate() {
+            for (i, inst) in block.insts.iter().enumerate() {
+                eprintln!(
+                    "bb{at}.{i}: {:?} {:?}{}{}",
+                    inst.kind,
+                    inst.operands,
+                    if inst.sets_flags { " SF" } else { "" },
+                    if inst.reads_flags { " RF" } else { "" }
+                );
+            }
+        }
+    }
+    if std::env::var_os("LLRM_6502_CHECK").is_some() {
+        llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &assignment)?;
+    }
+    Ok((assignment, slots))
 }

@@ -175,13 +175,13 @@ pub fn select_block(
 
 /// [`select_block`], with the pin's source-order scheduler where
 /// `source_order`, `(An)+` and `-(An)` accesses where `indexed`, and `addq`
-/// and `subq` where `quick`.
+/// and `subq` where `short`.
 pub fn select_block_with(
     dag: &mut SelectionDAG,
     cpu: Cpu,
     source_order: bool,
     indexed: bool,
-    quick: bool,
+    short: bool,
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
@@ -194,7 +194,7 @@ pub fn select_block_with(
         tli: &tli,
         lowering: &mut lowering,
         chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
-        quick,
+        short,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
         llrm_codegen::backend::selectiondag::dag_select::Refusal::Legalize(why) => Refusal::Legalize(why),
@@ -206,7 +206,7 @@ struct M68kTarget<'a> {
     tli: &'a llrm_codegen::backend::selectiondag::actions::TargetLowering,
     lowering: &'a mut M68kLowering,
     chooser: M68kChooser<'a>,
-    quick: bool,
+    short: bool,
 }
 
 struct M68kChooser<'a> {
@@ -239,8 +239,8 @@ impl DagTarget for M68kTarget<'_> {
         &mut self,
         dag: &mut SelectionDAG,
     ) {
-        if self.quick {
-            super::quick::narrow(dag);
+        if self.short {
+            super::short::narrow(dag);
         }
     }
 }

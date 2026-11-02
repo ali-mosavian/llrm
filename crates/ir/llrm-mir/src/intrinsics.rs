@@ -89,6 +89,9 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
+    /// `llvm.llrint`: `LRint` with a `long long` result, which a target
+    /// without the instruction calls `llrint` for.
+    LLRint,
     MemSet,
     /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
     /// as the third says and as wide as the second, each become the second.
@@ -510,7 +513,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 75] = [
+const TABLE: [Spec; 76] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -584,6 +587,14 @@ const TABLE: [Spec; 75] = [
     Spec {
         name: "llvm.lrint",
         intrinsic: Intrinsic::LRint,
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.llrint",
+        intrinsic: Intrinsic::LLRint,
         overloads: &[Kind::Int, Kind::Float],
         returns: Slot::Any(0),
         parameters: &[Slot::Any(1)],

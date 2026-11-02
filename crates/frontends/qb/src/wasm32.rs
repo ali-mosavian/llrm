@@ -9,8 +9,8 @@
 //! is `signext`.
 //!
 //! DEVIATE W16: the module still goes through LLVM IR text with `--arm64`'s
-//! name mapping (the runtime's `B_X` names, the exports, the `Q_` prefix,
-//! `framed`). Reason: the symbol spelling of an object format is not in the
+//! name mapping (the runtime's `B_X` names, the exports, the `Q_` prefix).
+//! Reason: the symbol spelling of an object format is not in the
 //! target description. Exit: that spelling in the object format's description,
 //! then the module in memory. The conventions (`cc 10NN`) and 16-bit offsets of
 //! the 32-bit mid-end are no longer rewritten: the offset is as wide as the
@@ -29,7 +29,7 @@ use llrm_wasm::dag::{ExceptionModel, Options as WasmOptions};
 use llrm_wasm::driver;
 
 use super::arm64::{
-    EXPORTS, block_entry, framed, host_module, renamed, signext_i16_arguments, without_llrm_attributes,
+    EXPORTS, block_entry, host_module, ports_as_calls, renamed, signext_i16_arguments, without_llrm_attributes,
     without_results_on_void,
 };
 use super::compile::CompileError;
@@ -38,7 +38,6 @@ use super::compile::CompileError;
 fn wasm32_text(
     mir: &str,
     read_data: &[u8],
-    exceptions: bool,
 ) -> Result<String, String> {
     let mut out = String::with_capacity(mir.len());
     for line in mir.lines() {
@@ -47,7 +46,7 @@ fn wasm32_text(
             continue;
         }
         let mut line = line.replace(" \"llrm-fp-eval\"=\"x87-extended\"", "");
-        line = without_llrm_attributes(&line);
+        line = ports_as_calls(&without_llrm_attributes(&line));
         line = line.replace("@llrm.qb.B$", "@B_").replace("@B$", "@B_");
         line = signext_i16_arguments(&block_entry(&line));
         for (from, to) in EXPORTS {
@@ -64,10 +63,8 @@ fn wasm32_text(
         out.push_str(&line);
         out.push('\n');
     }
-    // With exception handling the module keeps its `invoke`s and `landingpad`s
-    // for the backend; otherwise a function with a handler registers a
-    // `setjmp` frame.
-    let mut out = if exceptions { without_results_on_void(&out) } else { framed(&without_results_on_void(&out)) };
+    // The module keeps its `invoke`s and `landingpad`s for the backend.
+    let mut out = without_results_on_void(&out);
     let bytes: String = read_data.iter().map(|byte| format!("\\{byte:02X}")).collect();
     out.push_str(&format!("@QB_DATA = constant [{} x i8] c\"{bytes}\"\n", read_data.len()));
     if !out.contains("@QB_STATEMENTS = ") {
@@ -84,16 +81,14 @@ pub fn object_bytes(
 ) -> Result<Vec<u8>, CompileError> {
     let fail = |why: String| CompileError::Value(why);
     let (mir, read_data) = host_module(program, codegen)?;
-    let exceptions = codegen.wasm_exceptions;
-    let text = wasm32_text(&mir, &read_data, exceptions).map_err(fail)?;
+    let text = wasm32_text(&mir, &read_data).map_err(fail)?;
     if let Some(path) = std::env::var_os("LLRM_WASM32_TEXT") {
         std::fs::write(path, &text).map_err(|error| fail(error.to_string()))?;
     }
-    let model = if exceptions { ExceptionModel::Wasm } else { ExceptionModel::None };
     driver::object(
         &text,
         llrm_wasm::Width::W32,
-        WasmOptions { exception_model: model, calls_unwind: !exceptions, ..WasmOptions::default() },
+        WasmOptions { exception_model: ExceptionModel::Wasm, ..WasmOptions::default() },
     )
     .map_err(fail)
 }
@@ -109,8 +104,23 @@ mod tests {
     #[test]
     fn attributes_only_llrm_reads_are_not_handed_over() {
         let mir = "define cc 1000 i16 @\"DEEP%\"(ptr %0) stackcheck stackcheck nounwind {\nb1:\n  ret i16 0\n}\n";
-        let text = wasm32_text(mir, &[], false).unwrap();
+        let text = wasm32_text(mir, &[]).unwrap();
         assert!(!text.contains("stackcheck") && text.contains("nounwind {"), "{text}");
+    }
+
+    /// `OUT` and `INP` stayed `llrm.ia16.out.i8` and `llrm.ia16.in.i8`: wasm
+    /// selects no port node, and arm64 linked an undefined symbol. The text
+    /// calls the runtime's `qb_port_out` and `qb_port_in`.
+    #[test]
+    fn port_intrinsics_are_calls_of_the_runtimes_port_routines() {
+        let mir = "declare void @llrm.ia16.out.i8(i16, i8)\ndeclare i8 @llrm.ia16.in.i8(i16)\n\
+            define internal void @__main() {\nb1:\n  call void @llrm.ia16.out.i8(i16 968, i8 7)\n  %v = call i8 @llrm.ia16.in.i8(i16 969)\n  ret void\n}\n";
+        let text = wasm32_text(mir, &[]).unwrap();
+        assert!(!text.contains("llrm.ia16"), "{text}");
+        assert!(
+            text.contains("declare void @qb_port_out(i16, i8)") && text.contains("call i8 @qb_port_in(i16 969)"),
+            "{text}"
+        );
     }
 
     /// `PRINT "hello"` through the 32-bit mid-end: the module's names are the
@@ -122,7 +132,7 @@ mod tests {
             @$string3 = internal constant <{ [4 x i8], ptr }> <{ [4 x i8] c\"\\05\\00\\00\\00\", ptr getelementptr (i8, ptr @$string3, i32 8) }>\n\
             define internal void @__main() {\nb1:\n  tail call cc 1002 void @llrm.qb.B$PESD(ptr @$string3)\n  ret void\n}\n\
             declare cc 1002 void @llrm.qb.B$PESD(ptr) nocallback\n";
-        let text = wasm32_text(mir, &[0xff, 0xff, 0x01], false).unwrap();
+        let text = wasm32_text(mir, &[0xff, 0xff, 0x01]).unwrap();
         assert!(text.contains("getelementptr (i8, ptr @Q_string3, i32 8)"), "{text}");
         assert!(
             text.contains("define void @QB_MAIN()") && text.contains("call cc 1002 void @B_PESD(ptr @Q_string3)"),

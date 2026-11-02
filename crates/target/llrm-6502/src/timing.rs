@@ -299,11 +299,54 @@ pub fn estimate(
     cpu: Cpu,
     text: &str,
 ) -> Result<Estimate, String> {
+    estimate_calling(cpu, text, &[], None)
+}
+
+/// [`estimate`], a `jsr` of one of `routines` also costing the clocks given,
+/// and the lines of a block `n` (label `<function>_b<n>`) weighed by the loops
+/// `depth_of(n)` says it is in, where the text's own jumps back would say more:
+/// a function laid out with far branches has them nested into one another.
+pub fn estimate_calling(
+    cpu: Cpu,
+    text: &str,
+    routines: &[(&str, u64)],
+    depth_of: Option<&dyn Fn(u32) -> u32>,
+) -> Result<Estimate, String> {
     let expanded = expand_macros(text);
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
     let label_at =
         |name: &str| lines.iter().position(|l| l.trim_end().strip_suffix(':').is_some_and(|label| label == name));
-    // a backward branch makes the lines from its label to it a loop
+    // a backward branch makes the lines from its label to it a loop, if the
+    // code at the label can run on to the branch: a branch up to a block that
+    // ends in `rts` is an exit placed above the code, not a loop
+    let branch_target = |line: &str| {
+        let mut parts = line.split_whitespace();
+        let mnemonic = parts.next()?;
+        matches!(
+            mnemonic,
+            "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp"
+        )
+            .then(|| parts.next().and_then(label_at))
+            .flatten()
+    };
+    let reaches = |from: usize, to: usize| {
+        let mut seen = vec![false; lines.len()];
+        let mut work = vec![from];
+        while let Some(at) = work.pop() {
+            if at == to {
+                return true;
+            }
+            if at >= lines.len() || std::mem::replace(&mut seen[at], true) {
+                continue;
+            }
+            let mnemonic = lines[at].split_whitespace().next();
+            if !matches!(mnemonic, Some("jmp" | "bra" | "rts" | "rti")) {
+                work.push(at + 1);
+            }
+            work.extend(branch_target(lines[at]));
+        }
+        false
+    };
     let mut depth = vec![0u32; lines.len()];
     let mut backward = vec![false; lines.len()];
     for (at, line) in lines.iter().enumerate() {
@@ -315,7 +358,7 @@ pub fn estimate(
         ) {
             continue;
         }
-        if let Some(to) = label_at(target).filter(|to| *to <= at) {
+        if let Some(to) = label_at(target).filter(|to| *to <= at && reaches(*to, at)) {
             backward[at] = true;
             for d in &mut depth[to..=at] {
                 *d += 1;
@@ -323,6 +366,7 @@ pub fn estimate(
         }
     }
     let mut out = Estimate::default();
+    let mut block = None;
     let mut in_data = false;
     let mut segment = "CODE";
     // a macro's body is text for ca65, not code until it is used
@@ -337,7 +381,13 @@ pub fn estimate(
             in_macro = true;
             continue;
         }
-        if trimmed.is_empty() || trimmed.ends_with(':') {
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if let Some((_, number)) = label.rsplit_once("_b") {
+                block = number.parse().ok().or(block);
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
             continue;
         }
         if let Some(directive) = trimmed.strip_prefix('.') {
@@ -365,7 +415,9 @@ pub fn estimate(
         let cost = instruction(cpu, mnemonic, operand).ok_or_else(|| format!("cannot price `{trimmed}`"))?;
         let taken = u32::from(backward[at] && mnemonic != "jmp" && mnemonic != "bra");
         out.bytes += cost.bytes;
-        out.cycles += u64::from(cost.cycles + taken) * 10u64.pow(depth[at].min(3));
+        let called = routines.iter().find(|(name, _)| mnemonic == "jsr" && operand.trim() == *name).map_or(0, |r| r.1);
+        out.cycles += (u64::from(cost.cycles + taken) + called)
+            * 10u64.pow(block.zip(depth_of).map_or(depth[at], |(block, depth_of)| depth_of(block)).min(3));
     }
     Ok(out)
 }

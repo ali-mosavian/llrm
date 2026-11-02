@@ -7,8 +7,9 @@
 //! run tests failed that way (status 1, not a wrong result) until the file
 //! was written executable.
 
-use std::path::PathBuf;
 use std::process::Command;
+
+mod support;
 
 use llrm_m68k::compile::{Item, Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -56,12 +57,11 @@ fn a_call_encodes_as_llvm_mc_does() {
 /// The loop's `blt` is pc-relative, to a label two instructions in.
 #[test]
 fn a_loop_branch_is_resolved_as_llvm_mc_does() {
+    // greedy keeps the running sum in d0 and the index in d1 (the spike's
+    // allocator had them the other way round, hex 7200...2001...): the
+    // allocation order differs, the code is the same size
     let code = assemble(&function("sum"), 0).unwrap().code;
-    assert_eq!(hex(&code), "7200206f00042001d081d2bc00000001b2886df44e75");
-}
-
-fn qemu() -> Option<PathBuf> {
-    ["/usr/bin/qemu-m68k", "/usr/local/bin/qemu-m68k"].iter().map(PathBuf::from).find(|path| path.exists())
+    assert_eq!(hex(&code), "7000206f00042200d081d2bc00000001b2886df44e75");
 }
 
 /// Links `_start` calling `callee(args)` with the functions and runs it.
@@ -70,10 +70,7 @@ fn status(
     args: &[i64],
     others: &[&str],
 ) -> Option<i32> {
-    let qemu = qemu().or_else(|| {
-        eprintln!("qemu-m68k is not installed: not run");
-        None
-    })?;
+    let qemu = support::qemu()?;
     let mut all = start(callee, args);
     for name in others.iter().chain([&callee]) {
         all.extend(function(name));

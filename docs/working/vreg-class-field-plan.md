@@ -25,7 +25,7 @@ A LIR value is a `u32`. `LirBody` has `origin` and `pins` per value and no class
 
 ## Numbered DEVIATEs
 
-- CF-1: the m16 `[base+index]` two-colouring (base {BX}, index {SI,DI}) has no pin function; `recompute_class` respects it for a pair that names the value. Exit: none while the target needs it.
+- CF-1 (a target fact, from `RegisterClasses`, not a deviation): the m16 `[base+index]` two-colouring (base {BX}, index {SI,DI}) has no pin function; `recompute_class` respects it for a pair that names the value. Exit: none while the target needs it.
 - CF-2: during the change a value with no entry reads its class from `regclass::classes` as today, so passes move over one at a time. Exit: every site sets a class; the fallback is deleted with the last site.
 
 ## Order

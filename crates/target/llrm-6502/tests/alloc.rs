@@ -4,9 +4,20 @@
 mod common;
 
 use llrm_6502::alloc::Tuning;
+use llrm_6502::asm::Asm;
 use llrm_6502::dagisel::function::select_function;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::select::function_text;
+
+/// The text of `code` after one pass over its instructions.
+fn pass(
+    pass: fn(&mut Asm),
+    code: &str,
+) -> String {
+    let mut asm = Asm::parse(code);
+    pass(&mut asm);
+    asm.text()
+}
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8";
 
@@ -142,7 +153,7 @@ fn a_global_at_a_constant_offset_is_an_absolute_load() {
     let ir = "@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]\n\
         define i8 @pair() {\n  %p = getelementptr i8, ptr @buf, i16 1\n  %a = load i8, ptr %p\n  %q = getelementptr i8, ptr @buf, i16 3\n  %b = load i8, ptr %q\n  %r = add i8 %a, %b\n  ret i8 %r\n}";
     let text = compile(ir, "pair");
-    assert!(text.contains("lda buf+1") && text.contains("buf+3"), "{text}");
+    assert!(text.contains("buf+1") && text.contains("buf+3"), "{text}");
     assert!(!text.contains("),y"), "{text}");
     let data = ".segment \"DATA\"\nbuf: .byte 1, 2, 3, 4\n.segment \"CODE\"\n";
     assert_eq!(common::run_with("alloc-pair", "  jsr pair\n", &format!("{text}{data}")), 6);
@@ -347,9 +358,10 @@ fn moved(
         _ => llrm_6502::reg::RC3,
     };
     let moves: Vec<_> = moves.iter().map(|(d, s)| (id(d), id(s))).collect();
-    let mut code = String::from("pmove:\n");
+    let mut code = Asm::parse("pmove:\n");
     parallel_move(&mut code, &moves, a_live);
     code.push_str(&format!("  {}\n  rts\n", if read == "a" { "nop".to_owned() } else { format!("lda {read}") }));
+    let code = code.text();
     let main = "  lda #1\n  sta rc2\n  lda #2\n  sta rc3\n  lda #3\n  sta rc4\n  ldx #5\n  lda #9\n  jsr pmove\n";
     common::run_with(&format!("pm-{}", code.len()), main, &code)
 }
@@ -375,6 +387,37 @@ fn parallel_moves_swap_and_keep_a() {
     assert_eq!(moved(&into_a, false, "rc3"), 3);
     let to_x = [("rc2", "x"), ("x", "rc2")];
     assert_eq!(moved(&to_x, true, "rc2"), 5);
+}
+
+/// A move into `a` waits for the others, and the others are a swap of two
+/// cells: nothing is ready and no move reads `a`, so the loop parked `a`
+/// forever and the emitter asked for 7.7 GB (8 of 300 difftest programs).
+#[test]
+fn a_move_into_a_waits_for_a_swap_of_two_cells() {
+    let moves = [("a", "x"), ("rc2", "rc3"), ("rc3", "rc2")];
+    assert_eq!(moved(&moves, false, "a"), 5);
+    assert_eq!(moved(&moves, false, "rc2"), 2);
+    assert_eq!(moved(&moves, false, "rc3"), 1);
+}
+
+/// A pointer kept across one call on a path that may not run took two
+/// callee-saved cells, saved and restored with `pha`/`pla`: `k_memset` of the
+/// bench grew from 67 to 85 bytes. A static slot costs a store and a load.
+#[test]
+fn a_value_kept_across_one_call_does_not_take_a_callee_saved_cell() {
+    let ir = "declare ptr @memset(ptr, i16, i16)
+define ptr @keep(ptr %d, i16 %c, i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %go
+go:
+  %r = call ptr @memset(ptr %d, i16 %c, i16 %n)
+  br label %done
+done:
+  ret ptr %d
+}";
+    let code = compile(ir, "keep");
+    assert!(!code.contains("pha"), "{code}");
 }
 
 /// A byte loaded, widened and used in a word subtract was a zero-extending
@@ -1486,7 +1529,7 @@ fn a_remainder_alone_is_the_remainder_routine() {
             "define i{bits} @{name}(i{bits} %x, i{bits} %y) {{\n  %r = urem i{bits} %x, %y\n  ret i{bits} %r\n}}"
         );
         let text = compile(&ir, name);
-        assert!(text.contains(&format!("jsr {routine}")), "{bits}: {text}");
+        assert!(text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")), "{bits}: {text}");
         assert!(!text.contains("rc6"), "{bits}: {text}");
         let setup = if bits == 16 {
             set("rc2", x & 0xFF) + &set("rc3", x >> 8) + &set("rc4", y & 0xFF) + &set("rc5", y >> 8)
@@ -2224,16 +2267,199 @@ fn an_undefined_value_is_stored_as_zero() {
 /// reads the flags the load set.
 #[test]
 fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
-    use llrm_6502::alloc::drop_reloads;
+    use llrm_6502::peephole::drop_reloads;
     assert_eq!(
-        drop_reloads("  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"),
+        pass(drop_reloads, "  lda rc4\n  sta rc2\n  lda rc2\n  ora rc3\n  rts\n"),
         "  lda rc4\n  sta rc2\n  ora rc3\n  rts\n"
     );
-    assert_eq!(drop_reloads("  stx s_f_3\n  ldx s_f_3\n  inx\n"), "  stx s_f_3\n  inx\n");
+    assert_eq!(pass(drop_reloads, "  stx s_f_3\n  ldx s_f_3\n  inx\n"), "  stx s_f_3\n  inx\n");
     let branch = "  sta rc2\n  lda rc2\n  bne l\n";
-    assert_eq!(drop_reloads(branch), branch, "bne reads the zero flag the load set");
+    assert_eq!(pass(drop_reloads, branch), branch, "bne reads the zero flag the load set");
     let other = "  sta rc2\n  lda rc3\n  ldx rc2\n  sta (rc2),y\n  lda (rc2),y\n  sty rc2\n  lda rc2\n  rts\n";
-    assert_eq!(drop_reloads(other), other, "only the same register and cell");
+    assert_eq!(pass(drop_reloads, other), other, "only the same register and cell");
+}
+
+/// `ldx #0` twice, or after `lda #0; tax`, loaded what the register held; a
+/// label, a call or a write in between makes it unknown again. The load goes
+/// only when no branch reads the flags it set.
+#[test]
+fn a_load_of_the_immediate_a_register_holds_goes() {
+    use llrm_6502::peephole::drop_known_loads;
+    assert_eq!(pass(drop_known_loads, "  ldx #0\n  sta rc2\n  ldx #0\n  inx\n"), "  ldx #0\n  sta rc2\n  inx\n");
+    assert_eq!(pass(drop_known_loads, "  lda #0\n  tax\n  ldx #0\n  inx\n"), "  lda #0\n  tax\n  inx\n");
+    let label = "  ldx #0\nl:\n  ldx #0\n  inx\n";
+    assert_eq!(pass(drop_known_loads, label), label, "a label joins other paths");
+    let call = "  ldx #0\n  jsr f\n  ldx #0\n  inx\n";
+    assert_eq!(pass(drop_known_loads, call), call, "a call may change x");
+    let branch = "  ldx #0\n  sta rc2\n  ldx #0\n  beq l\n";
+    assert_eq!(pass(drop_known_loads, branch), branch, "beq reads the flags the load set");
+}
+
+/// `cmp #0` after a load, an ALU op or a transfer into `a` tested what the
+/// flags already said (`strcpy`, 2 bytes and 2 clocks a trip); a store between
+/// leaves the flags as they were, any other op does not.
+#[test]
+fn a_zero_compare_after_an_op_that_set_the_flags_goes() {
+    use llrm_6502::peephole::drop_zero_compares;
+    assert_eq!(
+        pass(drop_zero_compares, "  lda rc2\n  sta rc3\n  cmp #0\n  bne l\n"),
+        "  lda rc2\n  sta rc3\n  bne l\n"
+    );
+    assert_eq!(pass(drop_zero_compares, "  txa\n  cmp #0\n  beq l\n"), "  txa\n  beq l\n");
+    let other = "  ldx rc2\n  cmp #0\n  bne l\n";
+    assert_eq!(pass(drop_zero_compares, other), other, "ldx set the flags of x");
+    let carry = "  lda rc2\n  cmp #0\n  bcs l\n";
+    assert_eq!(pass(drop_zero_compares, carry), carry, "bcs reads the carry the compare set");
+}
+
+/// `sta m; sec; lda m` reloaded what `a` held (`atoi`, 7 kernels, 2 bytes and
+/// 3 clocks each): a carry flag op or a store to another cell leaves both the
+/// register and the cell. A store to the cell itself from another register, a
+/// store through a pointer and a label do not.
+#[test]
+fn a_reload_across_a_carry_op_or_another_cells_store_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(pass(drop_reloads, "  sta rc5\n  clc\n  lda rc5\n  adc rc6\n"), "  sta rc5\n  clc\n  adc rc6\n");
+    assert_eq!(
+        pass(drop_reloads, "  sta rc5\n  stx rc6\n  sec\n  lda rc5\n  sbc rc7\n"),
+        "  sta rc5\n  stx rc6\n  sec\n  sbc rc7\n"
+    );
+    for kept in [
+        "  sta rc5\n  stx rc5\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  sta (rc2),y\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  sta rc6,y\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\nl:\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  inc rc5\n  lda rc5\n  adc rc6\n",
+        "  sta rc5\n  clc\n  lda rc5\n  beq l\n",
+    ] {
+        assert_eq!(pass(drop_reloads, kept), kept);
+    }
+}
+
+/// `cmp #0` with a label between it and its branch (`lz4`, 4 sites): a path
+/// that jumps to the label brings its own flags, and this path's come from `a`.
+/// A label before the compare joins paths whose flags differ.
+#[test]
+fn a_zero_compare_goes_across_a_label_before_its_branch() {
+    use llrm_6502::peephole::drop_zero_compares;
+    assert_eq!(pass(drop_zero_compares, "  tya\n  cmp #0\nl:\n  bne x\n"), "  tya\nl:\n  bne x\n");
+    assert_eq!(pass(drop_zero_compares, "  tya\n  cmp #0\nl:\nm:\n  beq x\n"), "  tya\nl:\nm:\n  beq x\n");
+    let before = "  tya\nl:\n  cmp #0\n  bne x\n";
+    assert_eq!(pass(drop_zero_compares, before), before);
+    let carry = "  tya\n  cmp #0\nl:\n  bcs x\n";
+    assert_eq!(pass(drop_zero_compares, carry), carry);
+}
+
+/// `cpx #0` / `cpy #0` after an instruction that set the flags from that
+/// register (`ldx`, `inx`, `tax`, `ldy`, `dey`, `tay`) tested what the flags
+/// already said (`strlower`: 2 bytes and 2 clocks a trip); a load of another
+/// register does not set them.
+#[test]
+fn a_zero_compare_of_x_or_y_after_an_op_that_set_its_flags_goes() {
+    use llrm_6502::peephole::drop_zero_compares;
+    for (before, compare) in
+        [("ldx rc4", "cpx"), ("inx", "cpx"), ("tax", "cpx"), ("ldy rc4", "cpy"), ("dey", "cpy"), ("tay", "cpy")]
+    {
+        let text = format!("  {before}\n  sta rc2\n  {compare} #0\n  bne l\n");
+        assert_eq!(pass(drop_zero_compares, &text), format!("  {before}\n  sta rc2\n  bne l\n"), "{before}; {compare}");
+    }
+    for kept in [
+        "  ldy rc4\n  cpx #0\n  bne l\n",
+        "  lda rc4\n  cpx #0\n  bne l\n",
+        "  ldx rc4\n  cpy #0\n  bne l\n",
+        "  ldx rc4\n  cpx #0\n  bcs l\n",
+        "  ldx rc4\nl:\n  cpx #0\n  bne l\n",
+    ] {
+        assert_eq!(pass(drop_zero_compares, kept), kept);
+    }
+}
+
+/// `jmp l` to an `rts` (11 sites in 7 kernels) is the `rts`: a byte and a jump
+/// less. Only a label that is directly a return counts.
+#[test]
+fn a_jump_to_a_return_is_the_return() {
+    use llrm_6502::peephole::jump_to_return;
+    assert_eq!(pass(jump_to_return, "  jmp l\n  nop\nl:\n  rts\n"), "  rts\n  nop\nl:\n  rts\n");
+    assert_eq!(pass(jump_to_return, "f:\n  jmp m\nl:\nm:\n  rts\n"), "f:\n  rts\nl:\nm:\n  rts\n");
+    let kept = "  jmp l\nl:\n  nop\n  rts\n";
+    assert_eq!(pass(jump_to_return, kept), kept);
+    let outside = "  jmp elsewhere\n  rts\n";
+    assert_eq!(pass(jump_to_return, outside), outside);
+}
+
+/// `tya; tay` (`itoa`) moved what it had just moved.
+#[test]
+fn a_transfer_and_its_reverse_are_one_transfer() {
+    use llrm_6502::peephole::drop_cancelling_transfers;
+    assert_eq!(pass(drop_cancelling_transfers, "  tya\n  tay\n  rts\n"), "  tya\n  rts\n");
+    assert_eq!(pass(drop_cancelling_transfers, "  tax\n  txa\n  rts\n"), "  tax\n  rts\n");
+    for kept in ["  tya\n  tax\n", "  tya\nl:\n  tay\n", "  txa\n  tay\n"] {
+        assert_eq!(pass(drop_cancelling_transfers, kept), kept);
+    }
+}
+
+/// A conditional branch is long only when its target is out of reach in bytes:
+/// 127 forward, 128 back. Counting 40 instruction lines made 14 of 19 long
+/// branches in the corpus (3 bytes each) that the assembler would have reached.
+#[test]
+fn a_branch_is_long_only_when_the_bytes_between_miss_the_target() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    let pad = |bytes: usize| format!("{}{}", "  lda $1234\n".repeat(bytes / 3), "  nop\n".repeat(bytes % 3));
+    for bytes in [41, 125] {
+        let near = format!("  bne l\n{}l:\n", pad(bytes));
+        assert_eq!(relax(&near), near, "{bytes} bytes ahead is in reach");
+    }
+    let edge = format!("  bne l\n{}l:\n", pad(127));
+    assert_eq!(relax(&edge), edge, "127 bytes past the branch is the limit");
+    let past = format!("  bne l\n{}l:\n", pad(128));
+    assert!(relax(&past).starts_with("  beq _far1\n  jmp l\n_far1:\n"), "{}", relax(&past));
+    let back = format!("l:\n{}  bne l\n", pad(126));
+    assert_eq!(relax(&back), back, "126 bytes and the branch are 128 back");
+    let behind = format!("l:\n{}  bne l\n", pad(127));
+    assert!(relax(&behind).contains("  beq _far1\n  jmp l\n"), "129 back is out");
+}
+
+/// A long branch is three bytes longer and can push another out of reach: the
+/// `bne` is 127 bytes from `outer` until the `beq` behind it is long.
+#[test]
+fn a_branch_made_long_pushes_a_neighbour_out_of_reach() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    let pad = |bytes: usize| format!("{}{}", "  lda $1234\n".repeat(bytes / 3), "  nop\n".repeat(bytes % 3));
+    let held = format!("top:\n  bne outer\n{}  beq top\nouter:\n", pad(124));
+    assert_eq!(relax(&held), held, "both reach");
+    let pushed = relax(&format!("top:\n  bne outer\n{}  beq top\nouter:\n", pad(125)));
+    assert!(pushed.contains("  beq _far1\n  jmp outer\n") && pushed.contains("  bne _far2\n  jmp top\n"), "{pushed}");
+}
+
+/// Zero-page cells are two bytes, `lda m,y` has no zero-page form, and a name
+/// the assembler places is three: the bytes a branch spans add up from these.
+#[test]
+fn instruction_sizes_follow_the_addressing_form() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    // 63 ops of two bytes and the branch are 128 bytes: in reach. Of three:
+    // not.
+    let span = |op: &str| format!("  bne l\n{}l:\n", format!("  {op}\n").repeat(63));
+    for op in ["lda rc2", "lda #1", "lda (rc2),y", "ldx rc2,y", "sta rc2,x"] {
+        assert!(relax(&span(op)).starts_with("  bne l\n"), "{op} is two bytes");
+    }
+    for op in ["lda rc2,y", "lda buf", "lda s_f_1", "jsr f"] {
+        assert!(relax(&span(op)).starts_with("  beq _far1\n"), "{op} is three bytes");
+    }
+}
+
+/// A `bra` out of reach, or to a label outside the function, can only be a
+/// `jmp`.
+#[test]
+fn a_bra_out_of_reach_or_to_another_function_is_a_jump() {
+    use llrm_6502::relax::relax;
+    let relax = |text: &str| pass(relax, text);
+    assert_eq!(relax("  bra l\n  nop\nl:\n"), "  bra l\n  nop\nl:\n");
+    assert_eq!(relax("  bra elsewhere\n"), "  jmp elsewhere\n");
+    let body = "  lda $1234\n".repeat(43);
+    assert_eq!(relax(&format!("  bra l\n{body}l:\n")), format!("  jmp l\n{body}l:\n"));
 }
 
 /// A spilled byte used as the second operand of an ALU op is read from its cell
@@ -2243,10 +2469,14 @@ fn a_reload_of_the_cell_just_stored_goes_unless_a_branch_reads_its_flags() {
 #[test]
 fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
     const N: usize = 16;
-    let mut ir = String::from("@buf = external global [16 x i8]\ndefine i8 @fold() {\n");
+    // each byte is stored too, so no load is the memory operand of its one
+    // user and the pressure stays
+    let mut ir =
+        String::from("@buf = external global [16 x i8]\n@out = external global [16 x i8]\ndefine i8 @fold() {\n");
     for i in 0..N {
-        ir +=
-            &format!("  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n");
+        ir += &format!(
+            "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n  %q{i} = getelementptr inbounds i8, ptr @out, i16 {i}\n  store i8 %b{i}, ptr %q{i}, align 1\n"
+        );
     }
     for i in 0..N / 2 {
         ir += &format!("  %x{i} = xor i8 %b{i}, %b{}\n  %m{i} = add i8 %x{i}, {}\n", N - 1 - i, 7 * i + 3);
@@ -2267,7 +2497,10 @@ fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
             .iter()
             .enumerate()
     {
-        let data = format!(".export buf\nbuf: .byte {}\n", buf.iter().map(u8::to_string).collect::<Vec<_>>().join(","));
+        let data = format!(
+            ".export buf\nbuf: .byte {}\n.export out\nout: .res 16\n",
+            buf.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+        );
         let got = common::run_with(&format!("alloc-fold-{k}"), "  jsr fold\n", &format!("{text}{data}"));
         assert_eq!(got, i32::from(want(buf)), "buf {k}");
     }
@@ -2480,5 +2713,179 @@ define void @fill(ptr %p, i8 %c, i16 %n) {
 
     let text = compile(ir, "fill");
 
-    assert!(text.contains("jsr memset") || text.contains("jsr _memset"), "no call of memset in:\n{text}");
+    assert!(
+        ["jsr memset", "jsr _memset", "jmp memset", "jmp _memset"].iter().any(|call| text.contains(call)),
+        "no call of memset in:\n{text}"
+    );
+}
+
+/// A 32-bit result computed before the frame is released is read by the
+/// return: `results` stopped at the frame release, so the copies into `rc2`
+/// and `rc3` were no result and greedy, which drops what nothing reads, left
+/// them out (differential seed 250: the high word came back as garbage).
+#[test]
+fn a_long_result_set_before_the_frame_is_released_is_returned_whole() {
+    let ir = "define i32 @widen(i16 %a) {\n  %slot = alloca i16\n  store i16 %a, ptr %slot\n  %v = load i16, ptr %slot\n  %r = zext i16 %v to i32\n  ret i32 %r\n}";
+    let text = compile(ir, "widen");
+    // rc2:rc3 hold the argument 0x1234 on entry and must hold zero on return
+    let setup = set("rc2", 0x1234) + &set("rc3", 0x1234 >> 8);
+    let run = |after: &str| common::run_with("alloc-long-result", &format!("{setup}  jsr widen\n{after}"), &text);
+    assert_eq!(run("  lda rc2\n"), 0, "{text}");
+    assert_eq!(run("  lda rc3\n"), 0, "{text}");
+    assert_eq!(run(""), 0x34, "{text}");
+}
+
+/// `lda` of a reload or a copy overwrites the zero and negative flags, so the
+/// allocator may put nothing between a compare and what reads its flags: the
+/// branches and every conditional move (`CMOV16` was missed, and a reload
+/// between its `CMP` and it chose the wrong side: differential seeds 192, 283).
+#[test]
+fn every_reader_of_the_flags_is_kept_with_the_compare_before_it() {
+    use llrm_spike_mf::regalloc::Target;
+    use llrm_spike_mf::{Inst, Kind};
+    let reader = |kind: &'static str, terminator: bool| {
+        let mut inst = Inst::new(Kind::Op(kind), vec![]);
+        inst.reads_flags = true;
+        inst.terminator = terminator;
+        inst
+    };
+    type M = llrm_6502::alloc::Mos<false>;
+    for kind in ["CMOV", "CMOV16"] {
+        assert!(M::reads_flags_set_just_before(&reader(kind, false)), "{kind}");
+    }
+    assert!(M::reads_flags_set_just_before(&reader("BEQ", true)));
+    assert!(!M::reads_flags_set_just_before(&Inst::new(Kind::Op("ADC"), vec![])));
+}
+
+/// Two counted copy loops, the second one's count loaded before the first.
+const TWO_COPIES: &str = "@io0 = global i16 0
+@io1 = global i16 0
+define ptr @two(ptr %d, ptr %s) {
+entry:
+  %m = load volatile i16, ptr @io0
+  %n = load volatile i16, ptr @io1
+  %n0 = icmp eq i16 %n, 0
+  br i1 %n0, label %mid, label %loop1
+loop1:
+  %i = phi i16 [ %n, %entry ], [ %i2, %loop1 ]
+  %p = phi ptr [ %d, %entry ], [ %p2, %loop1 ]
+  %q = phi ptr [ %s, %entry ], [ %q2, %loop1 ]
+  %i2 = sub i16 %i, 1
+  %b = load i8, ptr %q
+  store i8 %b, ptr %p
+  %p2 = getelementptr i8, ptr %p, i16 1
+  %q2 = getelementptr i8, ptr %q, i16 1
+  %c = icmp eq i16 %i2, 0
+  br i1 %c, label %mid, label %loop1
+mid:
+  %pm = phi ptr [ %d, %entry ], [ %p2, %loop1 ]
+  %qm = phi ptr [ %s, %entry ], [ %q2, %loop1 ]
+  %m0 = icmp eq i16 %m, 0
+  br i1 %m0, label %done, label %loop2
+loop2:
+  %j = phi i16 [ %m, %mid ], [ %j2, %loop2 ]
+  %pp = phi ptr [ %pm, %mid ], [ %pp2, %loop2 ]
+  %j2 = sub i16 %j, 1
+  store i8 7, ptr %pp
+  %pp2 = getelementptr i8, ptr %pp, i16 1
+  %c2 = icmp eq i16 %j2, 0
+  br i1 %c2, label %done, label %loop2
+done:
+  %r = phi ptr [ %pm, %mid ], [ %pp2, %loop2 ]
+  ret ptr %r
+}";
+
+/// The count of the first loop took a pair of zero-page bytes while `x`, with
+/// a count that is not used until after that loop, went idle through it: greedy
+/// takes the first free register and a zero-page byte cost the same as `x`.
+/// With a cost per cell it evicts the lighter holder (the lz4 kernel ran 1.5%
+/// slower in clocks than the spike's).
+#[test]
+fn a_hot_count_takes_x_from_a_count_held_for_later() {
+    let text = compile(TWO_COPIES, "two");
+    let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
+    assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
+}
+
+/// A byte stored before it is tested against zero is still the byte in `a`,
+/// and the load set the flags: the test cost a `cmp #0` (2 bytes, 2 clocks a
+/// pass of strcspn's outer loop) because the store sat between the two.
+#[test]
+fn a_store_between_a_load_and_its_zero_test_keeps_the_flags() {
+    let ir = "@g = global i8 0
+define i8 @f(ptr %p) {
+  %x = load volatile i8, ptr %p
+  store volatile i8 %x, ptr @g
+  %c = icmp eq i8 %x, 0
+  br i1 %c, label %a, label %b
+a:
+  ret i8 1
+b:
+  ret i8 2
+}";
+    let text = compile(ir, "f");
+    assert!(!text.contains("cmp #0"), "{text}");
+}
+
+/// One CRC step tests bit 15 of `c` and shifts `c` left: `lda rc3; sta rc4;
+/// asl rc2; rol rc4; ldx rc3; bpl l` read the top bit twice, a load and three
+/// clocks over `bcc l` on the carry the `rol` made (crc16 bit loop, 14 bytes
+/// and 20% over Greg Cook's hand CRC16_S). The register the load set must be
+/// written again before it is read, and the copy must hold the tested cell.
+#[test]
+fn a_sign_test_of_the_cell_just_shifted_is_a_branch_on_the_carry() {
+    use llrm_6502::peephole::branch_on_shift_carry;
+    let step = "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
+    assert_eq!(
+        pass(branch_on_shift_carry, step),
+        "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  bcc l\n  eor #33\nl:\n  ldx rc4\n  rts\n"
+    );
+    assert_eq!(
+        pass(branch_on_shift_carry, &step.replace("bpl", "bmi")),
+        "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  bcs l\n  eor #33\nl:\n  ldx rc4\n  rts\n"
+    );
+    let live = "  lda rc3\n  sta rc4\n  asl rc2\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, live), live, "rts returns x");
+    let other = "  lda rc5\n  sta rc4\n  asl rc2\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, other), other, "rc4 holds rc5, not rc3");
+    let written = "  lda rc3\n  sta rc4\n  inc rc3\n  rol rc4\n  ldx rc3\n  bpl l\n  eor #33\nl:\n  ldx rc4\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, written), written, "rc3 changed after the copy");
+    let register =
+        "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  txa\n  bmi l\n  lda rc6\nl:\n  tya\n  rts\n";
+    assert_eq!(
+        pass(branch_on_shift_carry, register),
+        "  stx rc6\n  asl rc5\n  rol rc6\n  lda rc5\n  eor #33\n  bcs l\n  lda rc6\nl:\n  tya\n  rts\n",
+        "x held the old byte of rc6"
+    );
+    let moved = "  stx rc6\n  inx\n  asl rc5\n  rol rc6\n  txa\n  bmi l\n  lda rc6\nl:\n  tya\n  rts\n";
+    assert_eq!(pass(branch_on_shift_carry, moved), moved, "x changed after the copy");
+}
+
+/// The same fold for a right shift: `lsr|ror c` moves bit 0 into the carry and
+/// `and #1; bne` (with or without the load before it) asked for it again.
+#[test]
+fn a_low_bit_test_of_the_cell_just_shifted_right_is_a_branch_on_the_carry() {
+    use llrm_6502::peephole::branch_on_shift_carry;
+    let cell =
+        "  lda rc2\n  sta rc4\n  lsr rc3\n  ror rc4\n  lda rc2\n  and #1\n  bne l\n  ldx rc3\nl:\n  lda rc4\n  rts\n";
+    assert_eq!(
+        pass(branch_on_shift_carry, cell),
+        "  lda rc2\n  sta rc4\n  lsr rc3\n  ror rc4\n  bcs l\n  ldx rc3\nl:\n  lda rc4\n  rts\n"
+    );
+    assert_eq!(
+        pass(branch_on_shift_carry, &cell.replace("bne", "beq")),
+        "  lda rc2\n  sta rc4\n  lsr rc3\n  ror rc4\n  bcc l\n  ldx rc3\nl:\n  lda rc4\n  rts\n"
+    );
+    let alone = "  sta rc4\n  lsr rc3\n  ror rc4\n  and #1\n  bne l\n  ldx rc3\nl:\n  lda rc4\n  rts\n";
+    assert_eq!(
+        pass(branch_on_shift_carry, alone),
+        "  sta rc4\n  lsr rc3\n  ror rc4\n  bcs l\n  ldx rc3\nl:\n  lda rc4\n  rts\n",
+        "a still holds the byte rc4 was copied from"
+    );
+    let mask = cell.replace("and #1", "and #3");
+    assert_eq!(pass(branch_on_shift_carry, &mask), mask, "bit 1 is not what the shift moved out");
+    let left = cell.replace("lsr", "asl");
+    assert_eq!(pass(branch_on_shift_carry, &left.replace("ror", "rol")), left.replace("ror", "rol"), "asl moves bit 7");
+    let live = cell.replace("l:\n  lda rc4\n  rts", "l:\n  rts");
+    assert_eq!(pass(branch_on_shift_carry, &live), live, "a is returned");
 }

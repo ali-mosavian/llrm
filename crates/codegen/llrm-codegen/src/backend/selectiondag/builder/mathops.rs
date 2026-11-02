@@ -131,6 +131,7 @@ impl Builder<'_> {
                 self.dag.get_node(if poison { ISD::AbsMinPoison } else { ISD::Abs }, dest, &[first])
             }
             Intrinsic::LRint => self.dag.get_node_flags(ISD::LRint, dest, &[first], flags),
+            Intrinsic::LLRint => self.dag.get_node_flags(ISD::LLRint, dest, &[first], flags),
             Intrinsic::Unary(function) => {
                 let code = match function {
                     FloatFunction::Fabs => ISD::FAbs,

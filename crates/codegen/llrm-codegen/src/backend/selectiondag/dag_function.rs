@@ -721,12 +721,24 @@ impl super::emit::ConstantCells for PoolCells<'_> {
 /// target that does not price a divide above a multiply, which then keeps the
 /// pin's rule.
 fn div_prices(
-    costs: &llrm_mir::target::OperationCosts,
+    cpu: &crate::backend::cpu::Profile,
     bitness: u32,
 ) -> Option<super::dag::DivPrices> {
+    let costs = cpu.target().costs();
     if costs.divide <= costs.multiply {
         return None;
     }
+    let owned = cpu.clone();
+    let multiply = costs.multiply;
+    // What `combine_mul` emits for the constant: the `imul` by its immediate
+    // or a chain, whichever costs fewer clocks (`Machine::multiply_by`).
+    let product = move |factor: i64| {
+        let imul = crate::backend::arithmetic::immediate_multiply(&owned, factor).unwrap_or(multiply);
+        match crate::backend::arithmetic::cheapest_chain(factor, &owned) {
+            Ok(Some((_, clocks))) => clocks.min(imul),
+            _ => imul,
+        }
+    };
     Some(super::dag::DivPrices {
         operand: i64::from(bitness.min(32) / 8),
         prefix: costs.prefix,
@@ -738,6 +750,7 @@ fn div_prices(
         divide: costs.divide,
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
+        product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
     })
 }
 
@@ -795,7 +808,10 @@ fn selected_in(
     } else if m64 {
         TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
     } else {
-        TargetLowering::x86_32(Features::default(), MVT::I32)
+        // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
+        // reads.
+        let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
+        TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
     };
     // SD214: with a math library the pin calls it for these; the call is not
     // translated yet, so the node is refused rather than selected inline.
@@ -823,6 +839,7 @@ fn selected_in(
     let mut builder_target = builder_target;
     // The frontends compile static code: every symbol is `dso_local`.
     builder_target.dag.dso_local_symbols = true;
+    builder_target.dag.absolute_symbols = !module.position_independent();
     let builder_target = builder_target
         .with_tuning(cpu.target().tuning())
         .with_runtime_calls(libcalls)
@@ -835,7 +852,7 @@ fn selected_in(
         // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
-        .with_div_prices(div_prices(&cpu.target().costs(), bitness))
+        .with_div_prices(div_prices(&cpu, bitness))
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -1052,7 +1069,9 @@ fn selected_in(
     } else {
         cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
     };
-    let frequencies = (mul_rate > 0).then(|| {
+    let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
+    let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let frequencies = (mul_rate > 0 && !mul_by_clocks).then(|| {
         let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
             llrm_analysis::bpi::Module {
                 context: &module.context,
@@ -1077,16 +1096,27 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
-                profile: frequencies
-                    .as_ref()
-                    .map(
-                        |frequencies| super::x86_lowering::MulPricing {
-                            cpu,
-                            arch,
-                            freq: frequencies.relative_to_entry(parent),
-                            milliclocks_per_byte: mul_rate,
-                        },
-                    ),
+                profile: if mul_by_clocks {
+                    Some(super::x86_lowering::MulPricing {
+                        cpu,
+                        arch,
+                        freq: 1.0,
+                        milliclocks_per_byte: mul_rate,
+                        by_clocks: true,
+                    })
+                } else {
+                    frequencies
+                        .as_ref()
+                        .map(
+                            |frequencies| super::x86_lowering::MulPricing {
+                                cpu,
+                                arch,
+                                freq: frequencies.relative_to_entry(parent),
+                                milliclocks_per_byte: mul_rate,
+                                by_clocks: false,
+                            },
+                        )
+                },
             },
             &selector,
             &mut hooks,

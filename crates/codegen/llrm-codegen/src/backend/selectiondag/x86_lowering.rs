@@ -159,9 +159,80 @@ pub struct MulPricing<'a> {
     pub freq: f64,
     /// `Tti::speed_milliclocks_per_byte`.
     pub milliclocks_per_byte: i64,
+    /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
+    pub by_clocks: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    fn pack_word_pairs(&self) -> bool {
+        true
+    }
+
+    fn is_compare_with_flags(
+        &self,
+        user: ISD,
+    ) -> bool {
+        user == x86isd::CMP
+    }
+
+    /// DEVIATE G1 (x87 only: with SSE the conversion is in registers): the
+    /// `fist` to a scratch slot, the load of the slot and the store of it
+    /// become one `fist` to the store's address.
+    ///
+    /// Taken only when the slot is the pair's alone (the `fist` is read by
+    /// that load, the slot node by those two), the load's value is the store's
+    /// only input, all three are plain accesses of one width, and the
+    /// conversion does not widen (an unsigned `i32` goes through an `i64` slot
+    /// and is left). The new `fist` takes the store's chain, so it runs where
+    /// the store did and orders against every access as the store did.
+    /// O(1) per store.
+    fn store_of_converted_slot(
+        &self,
+        dag: &mut SelectionDAG,
+        store: SDValue,
+    ) -> Option<SDValue> {
+        if self.sse2 {
+            return None;
+        }
+        let (chain, value, address) = (dag.operand(store, 0), dag.operand(store, 1), dag.operand(store, 2));
+        let NodeData::Mem(stored) = dag.node(store).data else { return None };
+        let plain = |info: &MemInfo| !info.volatile && info.ordering.is_none() && info.ext.is_none();
+        if dag.opcode(value) != ISD::Load || !dag.has_one_use(value.node) || !plain(&stored) {
+            return None;
+        }
+        let NodeData::Mem(loaded) = dag.node(value).data else { return None };
+        if !plain(&loaded) || loaded.mem_vt != stored.mem_vt || dag.value_type(value) != stored.mem_vt {
+            return None;
+        }
+        let fist = dag.operand(value, 0);
+        if fist.res != 0 || !matches!(dag.opcode(fist), x86isd::FIST | x86isd::FP_TO_INT_IN_MEM) {
+            return None;
+        }
+        let NodeData::Mem(converted) = dag.node(fist).data else { return None };
+        let slot = dag.operand(fist, 2);
+        if !plain(&converted)
+            || converted.mem_vt != loaded.mem_vt
+            || dag.opcode(slot) != ISD::FrameIndex
+            || dag.operand(value, 1) != slot
+            || !dag.has_one_use(fist.node)
+            || dag.use_count_up_to(slot.node, 3) != 2
+        {
+            return None;
+        }
+        let info = MemInfo { align: stored.align, base: stored.base, space: stored.space, ..converted };
+        let opcode = dag.opcode(fist);
+        let converted_value = dag.operand(fist, 1);
+        // Chained where the store was, so every access that came before it in
+        // the program still comes before the `fist`, whatever it aliases.
+        Some(dag.intern(
+            opcode,
+            &[EVT::OTHER],
+            &[chain, converted_value, address],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        ))
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
@@ -352,7 +423,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
-            ISD::LRint => lower_lrint(dag, node),
+            ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
@@ -1344,10 +1415,14 @@ fn combine_cmov(
     None
 }
 
-/// `getGlobalWrapperKind`: every symbol is addressed from `%rip` in 64-bit
-/// mode (small code model), the absolute `Wrapper` elsewhere.
-fn wrapper_kind(vt: EVT) -> ISD {
-    if vt == EVT::I64 { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
+/// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
+/// position-independent code (small code model), the absolute `Wrapper`
+/// elsewhere.
+fn wrapper_kind(
+    dag: &SelectionDAG,
+    vt: EVT,
+) -> ISD {
+    if vt == EVT::I64 && !dag.config().absolute_symbols { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
@@ -1367,7 +1442,7 @@ fn lower_global_address(
         SDNodeFlags::default(),
         NodeData::Global { symbol, offset: folded },
     );
-    let wrapped = dag.get_node(wrapper_kind(vt), vt, &[target]);
+    let wrapped = dag.get_node(wrapper_kind(dag, vt), vt, &[target]);
     Some(if rest == 0 {
         wrapped
     } else {
@@ -1385,7 +1460,7 @@ fn lower_constant_pool(
     let vt = dag.value_type(node);
     let target =
         dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, offset));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
@@ -1396,7 +1471,7 @@ fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerXALUO`: the flags of `X86ISD::ADD`/`SUB`/`UMUL`/`SMUL`, and the
@@ -1643,6 +1718,19 @@ fn lower_int_to_fp(
             return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
         }
     }
+    // DEVIATE SD332 (exit: the pin gains it; re-check at each pin bump): a
+    // plain one-use load of an `i16` or `i32` is `fild`ed from its own
+    // address, as combineSIntToFP does for `i64` only. The stack slot's store
+    // and reload are gone and `fimul`/`fiadd` read the operand in place.
+    if signed && matches!(src_vt, EVT::I16 | EVT::I32) && is_non_ext_load(dag, src) && dag.users(src).count() == 1 {
+        let NodeData::Mem(info) = dag.node(src).data else { return None };
+        if !info.volatile && info.ordering.is_none() && info.mem_vt == src_vt {
+            let (load_chain, address) = (dag.operand(src, 0), dag.operand(src, 1));
+            let fild = build_fild(dag, dst, src_vt, load_chain, address, info);
+            dag.replace_all_uses_with(SDValue { node: src.node, res: 1 }, SDValue { node: fild.node, res: 1 });
+            return Some(fild);
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
@@ -1732,12 +1820,11 @@ fn lower_vastart(
         };
         return Some(dag.get_store(chain, first, list, info));
     }
-    let (save, gp_offset) = dag.var_args_save?;
+    let (save, gp_offset, fp_offset) = dag.var_args_save?;
     let mut stores = Vec::new();
     let fields: [(u128, EVT, SDValue); 4] = [
         (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
-        // 6 * 8: the vector registers' part of the area starts there
-        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (4, EVT::I32, dag.get_constant(u128::from(fp_offset), EVT::I32)),
         (8, pointer, dag.get_frame_index(pointer, index)),
         (16, pointer, dag.get_frame_index(pointer, save)),
     ];
@@ -1940,8 +2027,13 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte } = pricing;
-    let chain = arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte).ok()??;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
+    let chain = if by_clocks {
+        arithmetic::chain_by_clocks(c, width, cpu)
+    } else {
+        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
+    }
+    .ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
@@ -2135,7 +2227,7 @@ fn mask_address(
     let splat = (0..128 / lane).fold(0u128, |all, at| all | mask << (at * lane));
     let pointer = dag.config().pointer;
     let pool = dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
-    dag.get_node(wrapper_kind(pointer), pointer, &[pool])
+    dag.get_node(wrapper_kind(dag, pointer), pointer, &[pool])
 }
 
 /// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign

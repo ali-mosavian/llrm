@@ -36,11 +36,10 @@ fn compare_at(
     let compare = insts.get(at).filter(|i| i.kind == Kind::Op("CMP"))?;
     let copy = insts.get(at.checked_sub(1)?).filter(|i| i.kind == Kind::Copy)?;
     match (&copy.operands[..], &compare.operands[..]) {
-        ([Operand::Def(Reg::Phys(a)), lhs @ Operand::Use(_)], [_, _, rhs @ Operand::Use(Reg::Virt(_))])
-            if *a == reg::A =>
-        {
-            Some((lhs.clone(), rhs.clone()))
-        }
+        (
+            [Operand::Def(tested), lhs @ Operand::Use(_)],
+            [_, Operand::Use(compared), rhs @ Operand::Use(Reg::Virt(_))],
+        ) if tested == compared => Some((lhs.clone(), rhs.clone())),
         _ => None,
     }
 }
