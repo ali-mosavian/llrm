@@ -16,11 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = llrmbin.bin_dir()
 DOT = ROOT / "examples" / "dot"
 
+# (target row, the function's symbol, the backend program it needs)
 CASES = [
-    # C's function is spelled as the default ABI of m16 spells it (`_dot@3`); Nib's own procedures are not decorated.
-    ("C", [str(BIN / "llrm-c"), "dot.c", "-march=i486"], linkrecipe.symbol("x86-m16", "dot")),
-    ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "-march=i486"], "_dot"),
-    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "pds71", "--runtime", "qb45", "-march=i486", "-Omax", "--whole-program", "-fno-inline=DOT"], "DOT"),
+    ("x86_64-linux", "dot", "llrm-llc"),
+    ("arm64-linux", "dot", "llrm-arm64-llc"),
+    ("m68k-68020", "dot", "llrm-m68k-llc"),
+    ("x86_16-dos", "_dot", "llrm-llc"),
 ]
 
 
@@ -45,25 +46,29 @@ def test_local_labels_are_compared_by_where_they_first_appear():
     assert _renumbered(shown) != _renumbered(["_f proc", "L0_0:", "    jne L0_30", "L0_30:", "    jmp L0_30", "L0_23:"])
 
 
-def _listing(command: list[str], name: str, out: Path) -> str:
-    subprocess.run([*command, "-S", "-o", str(out)], cwd=DOT, check=True, capture_output=True)
+def _listing(target: str, name: str, out: Path) -> str:
+    command = [str(BIN / "llrm-cc"), "-target", target, "-O2", "-S", "-o", str(out), str(DOT / "dot.c")]
+    subprocess.run(command, cwd=DOT, check=True, capture_output=True, env={**os.environ, **llrmbin.cc_environment()})
     text = out.read_text().replace("\r", "")
-    return re.search(rf"^{re.escape(name)} proc.*?^{re.escape(name)} endp$", text, re.S | re.M).group(0)
+    found = re.search(rf"^{re.escape(name)} proc.*?^{re.escape(name)} endp$", text, re.S | re.M)
+    return found.group(0) if found else text.strip("\n")
 
 
-@pytest.mark.parametrize(("language", "command", "name"), CASES, ids=[one[0] for one in CASES])
-def test_a_readme_listing_is_what_the_compiler_prints(language, command, name, tmp_path):
+@pytest.mark.parametrize(("target", "name", "backend"), CASES, ids=[one[0] for one in CASES])
+def test_a_readme_listing_is_what_the_compiler_prints(target, name, backend, tmp_path):
     """The readme's first C listing was written by hand, and nobody noticed it stop being the output."""
-    if not Path(command[0]).exists():
-        pytest.skip(f"{Path(command[0]).name} is not built (debt skip-readme-c covers llrm-c; else cargo build --release --bins)")
-    blocks = re.findall(r"```asm\n(.*?)\n```", (ROOT / "readme.md").read_text(), re.S)
-    shown = blocks[[one[0] for one in CASES].index(language)]
-    assert _renumbered(_uncommented(shown)) == _renumbered(_uncommented(_listing(command, name, tmp_path / "out.asm")))
+    env = {**os.environ, **llrmbin.cc_environment()}
+    needs = "LLRM_CLANG_M16" if target == "x86_16-dos" else "LLRM_PIN_CLANG"
+    if not (BIN / "llrm-cc").exists() or not (BIN / backend).exists() or needs not in env:
+        pytest.skip(f"llrm-cc, {backend} or {needs} is missing (cargo build --release --bins)")
+    text = (ROOT / "readme.md").read_text()
+    found = re.search(rf"`-target {re.escape(target)}`:\n\n```asm\n(.*?)\n```", text, re.S)
+    assert found, f"the readme shows no listing for -target {target}"
+    assert _renumbered(_uncommented(found.group(1))) == _renumbered(_uncommented(_listing(target, name, tmp_path / "out.asm")))
 
 
-@pytest.mark.parametrize(("heading", "source"), [("C, `llrm-c", "dot.c"), ("Nib, `llrm-nib", "dot.nib"), ("BASIC, `llrm-qb", "dot.bas")])
-def test_a_readme_source_is_the_example_file(heading, source):
+def test_the_readme_source_is_the_example_file():
     """The BASIC source shown was the Frontends block's, and the example kept an older source over a newer listing."""
     text = (ROOT / "readme.md").read_text()
-    shown = re.search(r"```[a-z]*\n(.*?)\n```", text[text.index(f"\n{heading}") :], re.S).group(1)
-    assert shown.strip() == (DOT / source).read_text().replace("\r", "").strip()
+    shown = re.search(r"```c\n(.*?)\n```", text, re.S).group(1)
+    assert shown.strip() == (DOT / "dot.c").read_text().replace("\r", "").strip()

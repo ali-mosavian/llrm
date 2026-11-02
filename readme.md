@@ -65,110 +65,121 @@ long dot(const int *a, const int *b, int n)
 }
 ```
 
-x86-64 (`-target x86_64-linux`):
+x86-64, `-target x86_64-linux`:
 
 ```asm
-dot:
+dot proc near
+L0_1:
     test edx, edx
-    jle  L2
+    jle L0_2_1
+L0_2:
     movzx rcx, edx
-    xor  eax, eax
-    xor  edx, edx
-L3: movsx r8, dword ptr [rdi+rdx*4]
+    xor eax, eax
+    xor edx, edx
+L0_3:
+    movsx r8, dword ptr [rdi+rdx*4]
     movsx r9, dword ptr [rsi+rdx*4]
     imul r9, r8
-    add  rax, r9
-    inc  rdx
-    cmp  rcx, rdx
-    jne  L3
+    add rax, r9
+    inc rdx
+    cmp rcx, rdx
+    jne L0_3
+L0_4:
     ret
-L2: xor  eax, eax
+L0_2_1:
+    xor eax, eax
     ret
+dot endp
 ```
 
-arm64 (`-target arm64-linux`):
+arm64, `-target arm64-linux`:
 
 ```asm
 dot:
-    orr  x11, xzr, x0, lsl #0
-    subs wzr, w2, #0
-    b.le .Lzero
-    movz x0, #0, lsl #0
-.Lloop:
-    ldrsw x10, [x11]
-    ldrsw x9, [x1]
-    madd x0, x9, x10, x0
-    sub  x2, x2, #1
-    cbz  x2, .Ldone
-    add  x11, x11, #4
-    add  x1, x1, #4
-    b    .Lloop
-.Ldone:
-    ret  x30
-.Lzero:
-    movz x0, #0, lsl #0
-    ret  x30
+.Ldot.0:
+	orr x11, xzr, x0, lsl #0
+	subs wzr, w2, #0
+	b.le .Ldot.e4
+.Ldot.1:
+	movz x0, #0, lsl #0
+.Ldot.2:
+	ldrsw x10, [x11]
+	ldrsw x9, [x1]
+	madd x0, x9, x10, x0
+	sub x2, x2, #1
+	cbz x2, .Ldot.e5
+.Ldot.e6:
+	add x11, x11, #4
+	add x1, x1, #4
+	b .Ldot.2
+.Ldot.e5:
+	ret x30
+.Ldot.e4:
+	movz x0, #0, lsl #0
+	ret x30
 ```
 
-m68k, 68020 (`-target m68k-68020`):
+m68k, 68020, `-target m68k-68020`:
 
 ```asm
 dot:
-    movem.l %d2-%d3, -(%sp)
-    move.l  (20,%sp), %d2
-    ble     .Lzero
-    move.l  (16,%sp), %a0
-    move.l  (12,%sp), %a1
-    moveq   #0, %d0
-.Lloop:
-    move.l  (%a1)+, %d3
-    move.l  (%a0)+, %d1
-    muls.l  %d3, %d1
-    add.l   %d0, %d1
-    move.l  %d1, %d0
-    subq.l  #1, %d2
-    bne     .Lloop
-    bra     .Ldone
-.Lzero:
-    moveq   #0, %d0
-.Ldone:
-    movem.l (%sp)+, %d2-%d3
-    rts
+	movem.l	%d2-%d3, -(%sp)
+	move.l	(20,%sp), %d2
+	ble	.LBB0_3
+	move.l	(16,%sp), %a0
+	move.l	(12,%sp), %a1
+	moveq	#0, %d0
+.LBB0_2:
+	move.l	(%a1)+, %d3
+	move.l	(%a0)+, %d1
+	muls.l	%d3, %d1
+	add.l	%d0, %d1
+	move.l	%d1, %d0
+	subq.l	#1, %d2
+	bne	.LBB0_2
+	bra	.LBB0_4
+.LBB0_3:
+	moveq	#0, %d0
+.LBB0_4:
+	movem.l	(%sp)+, %d2-%d3
+	rts
 ```
 
-x86 16-bit, medium model, `int` is 16 bits (`-target x86_16-dos`):
+x86 16-bit, medium model, `int` is 16 bits, `-target x86_16-dos`:
 
 ```asm
 _dot proc far
     push bp
-    mov  bp, sp
+    mov bp, sp
     push si
     push di
-    mov  cx, word ptr [bp+10]       ; n
+L0_1:
+    mov cx, word ptr [bp+10]
     test cx, cx
-    jle  zero
-    mov  di, word ptr [bp+6]        ; a
-    xor  eax, eax
-    xor  bx, bx
-loop:
+    jle L0_2_1
+L0_2:
+    mov di, word ptr [bp+6]
+    xor eax, eax
+    xor bx, bx
+L0_3:
     movsx edx, word ptr [bx+di]
-    mov  si, word ptr [bp+8]        ; b, reloaded every iteration
+    mov si, word ptr [bp+8]
     movsx esi, word ptr [bx+si]
     imul esi, edx
-    add  eax, esi
-    add  bx, 2
-    dec  cx
-    jne  loop
-    jmp  done
-zero:
-    xor  eax, eax
-done:
-    shld edx, eax, 16               ; the long returns in DX:AX
-    pop  di
-    pop  si
-    pop  bp
+    add eax, esi
+    add bx, 2
+    dec cx
+    jne L0_3
+    jmp L0_4
+L0_2_1:
+    xor eax, eax
+L0_4:
+    shld edx, eax, 16
+    pop di
+    pop si
+    pop bp
     retf
 _dot endp
 ```
 
-The listings are `llrm-cc -O2 -S` output at the commit that wrote this section; labels are shortened and comments added.
+The listings are `llrm-cc -O2 -S` output of the function, verbatim; `tests/test_readme.py` holds them to it.
