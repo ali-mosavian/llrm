@@ -751,6 +751,14 @@ impl<'a> TypeLegalizer<'a> {
                     &[converted, ty],
                 )
             }
+            op @ (ISD::BitReverse | ISD::BSwap) => {
+                // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
+                // wider reversal, shifted down by the bits added.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let reversed = self.dag.get_node(op, to, &[promoted]);
+                let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
+                self.dag.get_node(ISD::Srl, to, &[reversed, added])
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -2116,7 +2124,8 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `ExpandIntRes_LOAD`, a plain load: the low dword at the address, the
-    /// high at +4 (little endian), both on the load's chain, the chains joined.
+    /// high at +4 (little endian; the other way round for big endian), both on
+    /// the load's chain, the chains joined.
     fn expand_load(
         &mut self,
         value: SDValue,
@@ -2147,11 +2156,11 @@ impl<'a> TypeLegalizer<'a> {
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);
         let high_ptr = self.address_plus(ptr, step);
-        let lo = self.dag.get_load(half, chain, ptr, info);
-        let hi = self.dag.get_load(half, chain, high_ptr, info);
+        let (lo, hi) = (self.dag.get_load(half, chain, ptr, info), self.dag.get_load(half, chain, high_ptr, info));
         let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
         self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
-        (lo, hi)
+        // big endian: the high dword is the one at the address
+        if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) }
     }
 
     /// Whether a far pointer may be addressed, so its selector must be in `ES`
@@ -2198,7 +2207,8 @@ impl<'a> TypeLegalizer<'a> {
         self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
     }
 
-    /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4.
+    /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4
+    /// (the other way round for big endian).
     fn expand_store(
         &mut self,
         store: SDValue,
@@ -2206,6 +2216,7 @@ impl<'a> TypeLegalizer<'a> {
         let (chain, value, ptr) = (self.dag.operand(store, 0), self.dag.operand(store, 1), self.dag.operand(store, 2));
         let NodeData::Mem(info) = self.dag.node(store).data else { unreachable!("a store has a memory operand") };
         let (lo, hi) = self.expanded_integer(value);
+        let (lo, hi) = if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) };
         let half = self.dag.value_type(lo);
         let info = super::dag::MemInfo { mem_vt: half, ..info };
         let step = u128::from(half.size_in_bits() / 8);

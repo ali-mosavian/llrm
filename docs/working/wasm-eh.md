@@ -56,8 +56,12 @@ No `llrm-mir` type changed; the wasm MIR (`mir.rs`, DEVIATE W15) is the spike's 
   ownf_err_{pds71,qb45,vbdos} range_exp range_log_trig range_on_error range_power resdiv resnext resume0
   resume_next_print_last resumelocals
 - ON LOCAL ERROR (3, `B_OEGP` from #6293): ownf_local_pds71, ownf_local_vbdos, resumelocals_local
-- Do not build, unrelated (3): currency_arith_pds71, currency_convert_pds71 (x86_fp80 `LRint` in the mid-end),
-  palette_using_pds71 (`Target(24586)` legalize). None touches EH.
+- currency_arith_pds71 and currency_convert_pds71 match: `B$LFPC` (DOUBLE to CURRENCY without `f80`), the integer
+  indefinite for an out-of-range CURRENCY (`indefinite_integer`), and PDS 7.1's 15-digit PRINT (`B$LMPK`).
+- palette_using_pds71 matches: `OUT`/`INP` are calls of `qb_port_out`/`qb_port_in`.
+- Open row (owner llrm-target-wasm, 2026-11-04): `llvm.lrint.i64.*` calls `lrint` with an i64 result (the pin's choice,
+  `RTLIB::getLRINT` ignores the result type), where C's `lrint` returns a 32-bit `long` on wasm32; a module with both
+  widths imports one name twice. `llvm.llrint.*` is lowered as a libcall. Exit: select `llrint` by result width.
 
 wasm32 always uses exceptions: the `setjmp` stub, its header and the flag are gone.
 

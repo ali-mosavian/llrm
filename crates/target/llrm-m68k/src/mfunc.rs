@@ -304,6 +304,8 @@ impl Emitter<'_> {
         mask.sets_flags = true;
         mask.ties = vec![(0, 1)];
         into.push(mask);
+        // the mask sets the codes the cleared word (`CLR16dd`) was to set
+        self.flags_from = None;
         Ok(())
     }
 
@@ -322,7 +324,8 @@ impl Emitter<'_> {
                 match self.dag.opcode(value) {
                     ISD::Machine(code) => {
                         let Some(desc) = local::desc(code as u16) else { continue };
-                        let sets = desc.implicit_defs.contains(&pin::CCR);
+                        // `SUBREG_TO_REG` of a cleared word is an `and`
+                        let sets = desc.implicit_defs.contains(&pin::CCR) || opcode_name(code) == Some("SUBREG_TO_REG");
                         if sets || desc.has(flag::CALL) {
                             flags_from = (sets && !desc.has(flag::CALL)).then_some(node);
                         }
