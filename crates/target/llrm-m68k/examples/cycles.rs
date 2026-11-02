@@ -5,6 +5,11 @@
 //! and the 68020, cache case). Needs
 //! `$GCC_M68K` (the unpacked m68k binutils, for `objdump`: the pin's
 //! `llvm-objdump` shows `addq` and `tst` as `<unknown>`) and `qemu-m68k`.
+//! `cycles --exe PATH...`: prices each prebuilt ELF: every executed instruction
+//! outside the functions `h_*`, `main` and `_start`, per processor of
+//! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
+//! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
+//! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
@@ -40,10 +45,14 @@ fn models() -> Vec<Model> {
 }
 
 /// The program counters qemu executed, in order.
-fn trace(exe: &Path) -> Vec<u32> {
+fn trace(
+    exe: &Path,
+    cap: usize,
+    cpu: &str,
+) -> Vec<u32> {
     use std::io::{BufRead, BufReader};
     let mut child = Command::new("timeout")
-        .args(["10", "qemu-m68k", "-cpu", "m68000", "-one-insn-per-tb", "-d", "exec", "-D", "/dev/stderr"])
+        .args(["120", "qemu-m68k", "-cpu", cpu, "-one-insn-per-tb", "-d", "exec", "-D", "/dev/stderr"])
         .arg(exe)
         .stderr(Stdio::piped())
         .spawn()
@@ -54,7 +63,7 @@ fn trace(exe: &Path) -> Vec<u32> {
         if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
             pcs.push(pc);
         }
-        if pcs.len() > CAP {
+        if pcs.len() > cap {
             child.kill().ok();
             break;
         }
@@ -75,6 +84,7 @@ fn functions() -> Vec<String> {
 fn listing(
     gcc: &Path,
     exe: &Path,
+    harness: bool,
 ) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
@@ -92,7 +102,9 @@ fn listing(
             if let Some(start) = open.take() {
                 ranges.push(start..address);
             }
-            if wanted.iter().any(|one| one == name) {
+            // `harness`: every function but the test harness's own
+            let outside = harness && !(name.starts_with("h_") || name == "main" || name == "_start");
+            if outside || wanted.iter().any(|one| one == name) {
                 open = Some(address);
             }
             continue;
@@ -118,8 +130,9 @@ fn price(
     gcc: &Path,
     exe: &Path,
     models: &[Model],
+    harness: bool,
 ) -> Total {
-    let (lines, ranges) = listing(gcc, exe);
+    let (lines, ranges) = listing(gcc, exe, harness);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -127,7 +140,14 @@ fn price(
             (*address, (lines.get(index + 1).map_or(2, |next| next.0 - address) as usize, text.as_str()))
         })
         .collect();
-    let pcs = trace(exe);
+    let (cap, cpu) = if harness {
+        let cpu = std::env::var("CYCLES_QEMU_CPU")
+            .unwrap_or_else(|_| if exe.to_string_lossy().contains("68020") { "m68020" } else { "m68000" }.to_owned());
+        (200_000_000, cpu)
+    } else {
+        (CAP, "m68000".to_owned())
+    };
+    let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
@@ -231,8 +251,29 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let models = models();
+    if std::env::args().nth(1).as_deref() == Some("--exe") {
+        let calls: f64 = std::env::var("CYCLES_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(3000.0);
+        let heads: Vec<String> = models
+            .iter()
+            .map(|cpu| {
+                let name = format!("{cpu:?}");
+                format!("{0} clk | {0} clk/call", name.trim_start_matches('M'))
+            })
+            .collect();
+        println!("| exe | insns | {} |", heads.join(" | "));
+        for path in std::env::args().skip(2) {
+            let total = price(&gcc, Path::new(&path), &models, true);
+            let mark = if total.partial { "*" } else { "" };
+            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
+            let cells: Vec<String> =
+                total.clocks.iter().map(|one| format!("{one}{mark}{unknown} | {:.1}", *one as f64 / calls)).collect();
+            let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+            println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
+        }
+        return;
+    }
     if let Some(exe) = std::env::var_os("CYCLES_EXE") {
-        let total = price(&gcc, Path::new(&exe), &models);
+        let total = price(&gcc, Path::new(&exe), &models, false);
         let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
         println!(
             "insns {} clocks {} unpriced {} partial {}",
@@ -297,7 +338,7 @@ fn main() {
                     Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
                 assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
             }
-            let total = price(&gcc, &exe, &models);
+            let total = price(&gcc, &exe, &models, false);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
             let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();

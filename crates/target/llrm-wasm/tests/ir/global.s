@@ -39,8 +39,8 @@ ag:
 	.type	ra2,@function
 ra2:
 	.functype	ra2 () -> (i32)
-	i32.const	8
-	i32.load	arr
+	i32.const	0
+	i32.load	arr+8
 	return
 	end_function
 	.section	.text.rai,"",@

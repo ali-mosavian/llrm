@@ -189,6 +189,7 @@ impl Options {
             self.spills_extended,
             self.pipeline.stable_loads,
             self.pipeline.has_min_size,
+            self.pipeline.prices_bytes(),
         )
     }
 }

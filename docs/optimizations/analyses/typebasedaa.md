@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/typebasedaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/typebasedaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/typebasedaa.rs sha256:86d82aa2a4d4d59cc10afb12106c2f22a64fee4d2a985ecb006053435d0cd2d8 -->
+<!-- src: crates/opt/llrm-analysis/src/typebasedaa.rs sha256:d00cf619a88d825a2dc9a234ea7c5b733a4f1cb98148d8b59f29257ef9b6f87c -->
 
 # typebasedaa
 
@@ -36,7 +36,7 @@ From unit test `unrelated_scalar_types_are_apart_and_an_ancestor_is_not` in
 `typebasedaa_tests.rs`.
 
 ## Provides
-`TypeBasedAA`, `aliases`.
+`TypeBasedAA`, [`aliases`](https://github.com/ali-mosavian/llrm/blob/main/crates/driver/llrm-driver/tests/aliases.rs).
 
 ## Needs
 [`crate::aa`](aa.md) (`AAResults`, `AAInfo`), [`crate::aggregate`](aggregate.md).

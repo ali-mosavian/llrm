@@ -482,6 +482,7 @@ fn rewrite(
                 GlobalValue {
                     name: unique.into(),
                     linkage: Linkage::Internal,
+                    visibility: llrm_mir::Visibility::Default,
                     unnamed_addr: Default::default(),
                     address_space: space,
                     kind: GlobalKind::Variable(GlobalVariable {
