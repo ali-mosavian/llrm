@@ -2,12 +2,10 @@
 # The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
 [target]
 name = "z80"
-llvm_build = "llvm-build"
 ns = "Z80::"
 isd = "Z80ISD::"
 llvm_dir = ""
 td = "z80.td"
-out = "src/dagisel/generated"
 cpus = ["z80", "z180"]
 own_ids = "own_ids.txt"
 # Named by the hand code: instructions no pattern selects, and every register (the pin numbers the pipeline maps to ours).
