@@ -602,3 +602,37 @@ fn palette_using_prints_the_bc_output_on_wasm32() {
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// PDS 7.1 prints a DOUBLE with 15 digits, rounded half up; the runtime had
+/// QB 4.5's 16 for every dialect, so 999999999999999.5 printed as itself where
+/// PDS 7.1 BC prints `1D+15`, and 922337203685477.625 as `.6` where it prints
+/// `922337203685478`. The rows are from a probe of 64 doubles under PDS 7.1 BC
+/// (~/scratch/fout-probe/BC_pds71.TXT); a rule of exact half-up at 15 digits
+/// fits all 64.
+#[test]
+fn pds_prints_a_double_with_15_digits_on_wasm32() {
+    let path = root().join("tests/run/qb/fout_pds15_pds71.bas");
+    let dir = built_with("foutpds", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
+    let (text, code) = run(&dir, "foutpds", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The other dialects keep QB 4.5's 16 digits (pow_unrolled.out has
+/// 999999999999999.5).
+#[test]
+fn qb45_prints_a_double_with_16_digits_on_wasm32() {
+    let dir = built_with(
+        "foutqb",
+        "DIM x AS DOUBLE\nx = 999999999999999#\nPRINT x + .5#\nPRINT x + .125#\nEND\n",
+        "--dialect qb45",
+    );
+    let (text, code) = run(&dir, "foutqb", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["999999999999999.5", "999999999999999.1"]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
