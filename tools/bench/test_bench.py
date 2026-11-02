@@ -1101,3 +1101,14 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
     fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
     if "files" in fed:  # else the corpus is not cached here
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
+
+
+def test_a_leftover_bench_flags_variable_makes_the_run_refuse(monkeypatch):
+    """A tip's D13 table was measured under LLRM_BENCH_FLAGS=-march=i386 (the m16 loop inlined, parity/loop 170 clocks against 244 at the default arch): the docstring said the gate fails on it and nothing did."""
+    monkeypatch.setenv("LLRM_BENCH_FLAGS", "-march=i386")
+    assert "-march=i386" in bench.bench_flags_refused()
+    assert bench.bench_flags_refused(allowed=True) is None
+    monkeypatch.setenv("LLRM_BENCH_FLAGS", "  ")
+    assert bench.bench_flags_refused() is None
+    monkeypatch.delenv("LLRM_BENCH_FLAGS")
+    assert bench.bench_flags_refused() is None

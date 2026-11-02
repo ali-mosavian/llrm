@@ -193,6 +193,13 @@ def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | 
     return counted, sized
 
 
+def bench_flags_refused(allowed: bool = False) -> str | None:
+    """Why a run may not measure: LLRM_BENCH_FLAGS adds flags to every compile (`-march=i386` made the m16 loop inline and parity/loop read 170 clocks against 244
+    at the default arch), so its counts are not the gate's, and a base or a head measured with it is void."""
+    flags = os.environ.get("LLRM_BENCH_FLAGS", "").strip()
+    return None if allowed or not flags else f"LLRM_BENCH_FLAGS={flags!r} is set: the counts would not be the default arch's (--allow-bench-flags for an ablation)"
+
+
 def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     """The flags the harness gives the compiler for `variant` at -`opt`: the kernel stays a call (inlined into main it has no entry to
     count from), a C one by the volatile pointer in `kept_a_call` or else the flag, a BASIC one (a private SUB called once) by turning
@@ -1060,7 +1067,11 @@ def main() -> int:
     parser.add_argument("--compare-baselines", nargs=2, type=Path, metavar=("A", "B"), help="judge nothing: refuse (exit 1, cells named) when two --json runs of one compiler differ in any count")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
+    parser.add_argument("--allow-bench-flags", action="store_true", help="measure with the LLRM_BENCH_FLAGS in the environment (an ablation); its counts are not the gate's")
     args = parser.parse_args()
+    if why := bench_flags_refused(args.allow_bench_flags):
+        print("FAIL", why)
+        return 1
     global ONLY
     ONLY = args.lang
     if args.compare_baselines:
