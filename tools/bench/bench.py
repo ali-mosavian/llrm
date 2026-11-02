@@ -41,6 +41,7 @@ import benchlist  # noqa: E402
 import basecounts  # noqa: E402
 import shards  # noqa: E402
 import maps  # noqa: E402
+import native  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
@@ -550,6 +551,8 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         with ProcessPoolExecutor(max_workers=len(opts)) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
+    if ONLY is None or native.OURS in ONLY:
+        out |= native.measure([(directory_name(one), one) for one in benchmarks(selected)], BIN, opts, work / "native", BENCH)
     return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
 
 
@@ -819,6 +822,15 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
     return problems
 
 
+def native_problems(label: str, got: dict, want: dict | None, waived: list[dict]) -> list[str]:
+    """The x86_64 row: an error fails; a count above the base's fails (code bytes: executable sections of the object; instructions: user-mode, per run)."""
+    if "skip" in got:
+        return []
+    if "error" in got:
+        return [f"{label}: {got['error']}"]
+    return against(label, got, want, waived)
+
+
 def judge(measured: dict, selected: list[str], opts: list[str], base: dict | None = None, same: set[str] | None = None) -> list[str]:
     """What fails the gate. `base`: the base's rows of ours (basecounts.base_counts), what a row of ours may not exceed; `same`: the programs
     the base and this tree have alike (a row of another program compares two programs, not two compilers). The references' rows come from
@@ -861,6 +873,10 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
                     if (name, reference, level) in measured:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
+        for opt in opts:  # the x86_64 row: no variant of its own, it runs the C source
+            got = measured.get((name, native.OURS, opt))
+            if got is not None:
+                problems += native_problems(f"{name} {native.OURS} -{opt}", got, (base or {}).get((name, native.OURS, opt)) if same is None or name in same else None, waived)
     return problems
 
 
@@ -1048,7 +1064,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
-    parser.add_argument("--lang", nargs="+", choices=list(LANGUAGES), help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
+    parser.add_argument("--lang", nargs="+", choices=[*LANGUAGES, native.OURS], help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")

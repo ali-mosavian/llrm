@@ -1101,3 +1101,12 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
     fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
     if "files" in fed:  # else the corpus is not cached here
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
+
+
+def test_an_x86_64_row_above_the_base_fails_and_one_that_could_not_run_says_why():
+    """Larger executable sections or more user instructions than the base fail like any count; a host without perf skips the row and an error fails."""
+    base = {"instructions": 1000, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0}
+    assert bench.native_problems("fib c64 -O2", {**base, "code_bytes": 101}, base, []) == ["fib c64 -O2: code_bytes 101 > 100 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 999}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {"skip": "no perf"}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {"error": "compile: x"}, base, []) == ["fib c64 -O2: compile: x"]
