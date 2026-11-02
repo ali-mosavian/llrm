@@ -623,54 +623,56 @@ divgo:	call	unp
 	add	hl,bc
 	ld	22(iy),l
 	ld	23(iy),h
-	ld	l,0(iy)		; remainder in d:hl starts as ma; the divisor's low half in bc, its top byte at 6(iy)
+	ld	l,0(iy)		; remainder in a:hl starts as ma; the divisor in e:bc
 	ld	h,1(iy)
-	ld	d,2(iy)
+	ld	a,2(iy)
 	ld	c,4(iy)
 	ld	b,5(iy)
-	ld	13(iy),#4	; 28 quotient bits: a group of 4, then three of 8, each collected in e behind a sentinel
-	ld	e,#0x10
+	ld	e,6(iy)
+	ld	13(iy),#4	; 28 quotient bits, complemented: a group of 4, then three of 8, each collected in d behind a sentinel
+	ld	d,#0x10
 11$:	or	a,a
 	sbc	hl,bc
-	ld	a,d
-	sbc	a,6(iy)
-	ld	d,a
-	jr	c,12$
-	scf
-	rl	e
-	jr	13$
-12$:	add	hl,bc		; too far: put it back, the bit is 0
-	ld	a,d
-	adc	a,6(iy)
-	ld	d,a
-	or	a,a
-	rl	e
-13$:	jr	c,15$		; the sentinel fell out: a group is complete
+	sbc	a,e
+	jr	nc,12$
+	add	hl,bc		; too far: put it back; the carry (1) is the complemented bit 0
+	adc	a,e
+12$:	rl	d
+	jr	c,15$		; the sentinel fell out: a group is complete
 14$:	add	hl,hl
-	rl	d
+	adc	a,a
 	jr	nc,11$
 	or	a,a		; the remainder reached bit 24: above the divisor, the bit is 1
 	sbc	hl,bc
-	ld	a,d
-	sbc	a,6(iy)
-	ld	d,a
-	scf
-	rl	e
-	jr	13$
-15$:	ld	a,2(iy)		; the group joins the quotient from below
-	ld	3(iy),a
-	ld	a,1(iy)
-	ld	2(iy),a
-	ld	a,0(iy)
-	ld	1(iy),a
-	ld	0(iy),e
+	sbc	a,e
+	or	a,a
+	jr	12$
+15$:	push	de		; groups wait on the stack
+	ld	d,#1
 	dec	13(iy)
-	jr	z,16$
-	ld	e,#1
-	jr	14$
-16$:	ld	a,h		; a remainder left over sets the sticky bit
+	jr	nz,14$
+	or	a,h		; a remainder left over sets the sticky bit
 	or	a,l
-	or	a,d
+	ld	13(iy),a
+	pop	de
+	ld	a,d
+	cpl
+	ld	0(iy),a
+	pop	de
+	ld	a,d
+	cpl
+	ld	1(iy),a
+	pop	de
+	ld	a,d
+	cpl
+	ld	2(iy),a
+	pop	de
+	ld	a,d
+	cpl
+	and	a,#0x0f
+	ld	3(iy),a
+	ld	a,13(iy)
+	or	a,a
 	jr	z,3$
 	set	0,0(iy)
 3$:	ld	c,22(iy)
