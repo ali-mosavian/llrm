@@ -5,13 +5,13 @@
 set -e
 ulimit -v 16777216   # one unbounded compiler run must not take the machine
 cd "$(dirname "$0")/.."
-D=${LLRM_CC_DIR:?set LLRM_CC_DIR}; RUN=${M68K_RUN_C:-$HOME/scratch/handoff/m68k-run-c.sh}; T=$(mktemp -d); trap 'rm -r $T' EXIT
+D=${LLRM_CC_DIR:?set LLRM_CC_DIR}; RUN=${M68K_RUN_C:-tests/m68k_run_c.sh}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 strings $D/llrm-llc | grep -m1 -E '^[0-9a-f]{40}$' || echo "compiler sha: not stamped in $D"
 export LLRM_CC_DIR=$D
 for c in ${CPUS:-68000 68020}; do for opt in Os O2; do
-  echo "== int64 $c $opt"; (cd tests/m68k_int64 && python3 gen.py > $T/v.h && CFLAGS_EXTRA="-I$T -I. -I../../include" sh $RUN $c $opt main.c ops64.c ../../src/int64.c ../../src/int32.c)
+  echo "== int64 $c $opt"; (cd tests/m68k_int64 && python3 gen.py > $T/v.h && CFLAGS_EXTRA="-I$T -I. -I../../include" sh ../../$RUN $c $opt main.c ops64.c ../../src/int64.c ../../src/int32.c)
   echo "== f64 classes $c $opt"; cc -O2 -ffp-contract=off tests/gen_vectors64.c -o $T/gen64 && $T/gen64 60000 > $T/vectors64.h
-  CFLAGS_EXTRA="-I$T -Iinclude" sh $RUN $c $opt tests/m68k_classes64.c src/sf64.c src/sf32_conv64.c src/int64.c src/int32.c
+  CFLAGS_EXTRA="-I$T -Iinclude" sh $RUN $c $opt tests/m68k_classes64.c src/sf64.c src/sf32_conv64.c src/sf32.c src/sf32_conv.c src/int64.c src/int32.c
 done; done
 echo "== pricing executables"; tests/build_m68k_clocks64.sh
 echo "price with: cycles --exe ~/scratch/handoff/m68k-clocks/{ours,libgcc}64_*"
