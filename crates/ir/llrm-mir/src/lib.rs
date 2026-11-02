@@ -86,9 +86,9 @@ pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, Glo
 pub use edit::Position;
 pub use lexer::ParseError;
 pub use module::{
-    Block, BlockId, Change, DebugRecord, DebugWhat, DwOp, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
+    Alias, Block, BlockId, Change, DebugRecord, DebugWhat, DwOp, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
     Instruction, Linkage, Metadata, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use,
-    ValueData, ValueDef, ValueId,
+    ValueData, ValueDef, ValueId, Visibility,
 };
 pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
@@ -97,6 +97,8 @@ pub use types::{FloatKind, Type, TypeId, Types};
 mod apfloat_tests;
 #[cfg(test)]
 mod build_tests;
+#[cfg(test)]
+mod visibility_tests;
 #[cfg(test)]
 mod constantfolding_tests;
 #[cfg(test)]
