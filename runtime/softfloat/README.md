@@ -39,3 +39,16 @@ IEEE-style 8-bit float `__fp8_add/sub/mul/div` (denormals, inf, NaN, round to ne
 Build options (`ca65 -D`): `FP8_M` mantissa bits 1..4 (E6M1, E5M2 default, E4M3, E3M4; E + M = 7), `FP8_SPECIAL=0` drops inf/NaN, `FP8_DENORM=0` flushes denormals to zero, `FP8_ADD/SUB/MUL/DIV=0` leave a routine out.
 `FP8_M=n FP8_SPECIAL=n FP8_DENORM=n tests/asm6502/run8.sh [ops]` checks all 65536 pairs against exact rational arithmetic on sim65 (all four widths and the flag combinations: 0 mismatches). `bench8.sh` prints bytes and mean cycles.
 E5M2 sizes: 560 B everything; 438 B without inf/NaN; 541 B without denormals; 419 B without both; div alone 352 B. Cycles per call about add 393, sub 397, mul 337, div 380.
+
+## 6502 size and speed table (sim65, 64 identical operands, call minus bare rts)
+
+| op | Woz asm (not IEEE) B / cyc | generic C (llrm-cc -Os) B / cyc | IEEE asm B / cyc |
+|---|---|---|---|
+| add | 84 / 587 | 3109 / 3983 | 672 (add+sub) / 426 |
+| sub | 191 / 775 | 3111 / 4014 | same code / 435 |
+| mul | 196 / 3335 | 3409 / 13060 | 615 (mul+div, without the ~215 B shared with sf32.s) / 1615 |
+| div | 163 / 3421 | 2911 / 7733 | same code / 2377 |
+| i2f | 23 / 300 | 1735 / 2346 | 380 (four conversions) / ~275 |
+| f2i | 51 / 913 | 611 / 1238 | same code / ~190 |
+
+Not measured yet: m68k, m16/m32 and z80 against libgcc/compiler-rt/SDCC (needs the per-target runners and a free buildslot); the generic C columns come from the older pb3 build. No FP8 baseline exists in compiler-rt or libgcc.
