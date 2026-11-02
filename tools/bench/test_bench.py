@@ -1096,3 +1096,15 @@ def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(t
     assert bench.rate_for("bas", "O2") == 0
     tune.write_text("cache_line = 16\n")
     assert bench.rate_for("bq32", "O2") == 0
+
+
+def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_only(tmp_path, monkeypatch):
+    """500 milliclocks/byte on every CPU column: the policy row, read where the compiler reads it; a sheet whose columns disagree prices nothing."""
+    sheet = tmp_path / "timings.times"
+    sheet.write_text("cache_line - = =\nspeed_milliclocks_per_byte 500 500 500\n")
+    monkeypatch.setattr(bench, "M16_TIMINGS", sheet)
+    assert [bench.rate_for(language, opt) for language, opt in (("c", "O2"), ("bq16", "O2"), ("c", "Os"), ("c", "O3"))] == [500, 500, 0, 0]
+    sheet.write_text("speed_milliclocks_per_byte 500 250\n")
+    assert bench.rate_for("c", "O2") == 0
+    sheet.write_text("cache_line - =\n")
+    assert bench.rate_for("c", "O2") == 0
