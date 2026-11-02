@@ -318,6 +318,35 @@ fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
     });
 }
 
+/// `lea edx, [edx+edx*4]` at m16 carried a dword displacement of zero: nine
+/// bytes against the five of mod 00 (lru -O2 +27 B). Only an index alone needs
+/// the disp32.
+#[test]
+fn a_lea_of_a_base_and_a_scaled_dword_index_at_m16_has_no_displacement() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let base = copy_from(&mut dag, entry, 10);
+    let index = copy_from(&mut dag, entry, 11);
+    let scale = dag.get_constant(4, EVT::I8);
+    let disp = dag.get_constant(0, EVT::I32);
+    let noreg = dag.get_register(EVT::I16, 0);
+    let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[base, scale, index, disp, noreg]);
+    let root = copy_to(&mut dag, entry, 12, lea);
+    context_in(AddrMode::Real16, |ctx| {
+        let units = schedule(&dag, root, &Info);
+        let emitted = emit(&dag, &units, ctx).expect("emits");
+        let lea = emitted.blocks[0]
+            .insns
+            .iter()
+            .find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("lea")))
+            .expect("a lea");
+        let Some(llrm_lir::Loc::Mem(cell)) = lea.what.as_ref().and_then(|w| w.sources.first()) else {
+            panic!("{lea:?}")
+        };
+        assert_eq!(cell.disp_width, 0, "{cell:?}");
+    });
+}
+
 /// `r3 = r1 + r2` on the x87 stack through `ADD_Fp64` and a copy: the add
 /// defines r3 itself, as `CreateVirtualRegisters` has it. Made apart with a
 /// `mov` after it, a loop's old-value copy stayed where the pin coalesces it

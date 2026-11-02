@@ -234,7 +234,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
+        Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
@@ -243,16 +243,7 @@ pub fn machine_with<'a>(
             status_word: classes.status_word(),
         }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress {
-            lea: match target.dword_address_form() {
-                None if target.address_forms.iter().any(|form| form.index_width == 8) => {
-                    crate::twoaddress::ThreeAddress::Wide
-                }
-                None => crate::twoaddress::ThreeAddress::Off,
-                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
-                Some(_) => crate::twoaddress::ThreeAddress::All,
-            },
-        }),
+        Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.

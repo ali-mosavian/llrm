@@ -29,6 +29,7 @@ fn x86_real() -> llrm_x86::tti::X86 {
                 float_code_size_percent: 100,
                 unroll_size_few_trips: (0, 0),
                 recursive_inlining: None,
+                priced_self_inlining: None,
             },
         )
 }

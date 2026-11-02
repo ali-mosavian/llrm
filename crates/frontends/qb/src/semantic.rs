@@ -3521,6 +3521,11 @@ impl Compiler {
         module: &Module,
     ) -> Result<(), SemanticError> {
         self.handles_errors = handles_errors(&module.statements);
+        // The llrm runtime has one math pack for the digits of a number; PDS
+        // 7.1's is not QB 4.5's, and the Microsoft runtimes bring their own.
+        if self.runtime == "llrm" && self.dialect == Dialect::Pds71 {
+            self.emit_runtime_call("B$LMPK", Vec::new(), vec![Operand::Constant(INTEGER, Number::Integer(1))]);
+        }
         self.statement_list(&module.statements)
     }
 
