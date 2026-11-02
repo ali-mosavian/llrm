@@ -73,12 +73,14 @@ pub struct Located {
 /// The ranges of every variable. `segments` gives each value's stretches
 /// (sorted, not overlapping); `end` is where the code ends. A note of a value
 /// the table does not know, or of an `Expr` that is not its one argument as it
-/// is, is `Undef` over its range. A parameter that `Arrived` is `Entry` where
-/// no place holds it.
+/// is, is `Undef` over its range (an address is not a value). A parameter that
+/// `Arrived` is `Entry` where no place holds it, if the target has entry
+/// values.
 pub fn locate(
     notes: &[Positioned],
     segments: &BTreeMap<u32, Vec<Segment>>,
     end: i64,
+    entry_values: bool,
 ) -> Vec<Located> {
     let mut by_variable: BTreeMap<(u32, Option<(u32, u32)>), Vec<&Positioned>> = BTreeMap::new();
     for note in notes {
@@ -109,9 +111,11 @@ pub fn locate(
                     let (value, add, gap) = match &note.value {
                         NoteValue::Value(value) => (*value, None, Where::Undef),
                         NoteValue::Offset(value, add) => (*value, Some(*add), Where::Undef),
-                        NoteValue::Arrived(value, register) => (*value, None, Where::Entry(*register)),
+                        NoteValue::Arrived(value, register) => {
+                            (*value, None, if entry_values { Where::Entry(*register) } else { Where::Undef })
+                        }
                         NoteValue::Expr(expr) => match (expr.args.as_slice(), expr.ops.is_empty()) {
-                            ([NoteArg::Value(value)], true) => (*value, None, Where::Undef),
+                            ([NoteArg::Value(value)], true) if expr.value => (*value, None, Where::Undef),
                             _ => {
                                 push(start, stop, Where::Undef);
                                 continue;
@@ -248,7 +252,7 @@ mod tests {
     fn an_arrived_parameter_falls_back_to_its_entry_register() {
         let entry = RegId::from_raw(7);
         let table = BTreeMap::from([(5, vec![seg(20, 30, reg(1))])]);
-        let found = locate(&[note(10, 1, NoteValue::Arrived(5, entry))], &table, 40);
+        let found = locate(&[note(10, 1, NoteValue::Arrived(5, entry))], &table, 40, true);
         assert_eq!(
             ranges(&found),
             [(10, 20, Where::Entry(entry)), (20, 30, Where::Place(reg(1))), (30, 40, Where::Entry(entry))]
@@ -258,8 +262,24 @@ mod tests {
             ops: vec![],
             value: true,
         }));
-        let found = locate(&[note(10, 1, same)], &table, 40);
+        let found = locate(&[note(10, 1, same)], &table, 40, true);
         assert_eq!(ranges(&found), [(10, 20, Where::Undef), (20, 30, Where::Place(reg(1))), (30, 40, Where::Undef)]);
+    }
+
+    /// Without entry values a parameter is `Undef` off its place, and an
+    /// `Expr` that makes the argument's address is never the argument's place:
+    /// both read as a place or an entry value they are not.
+    #[test]
+    fn no_entry_value_and_no_address_as_a_place() {
+        let table = BTreeMap::from([(5, vec![seg(20, 30, reg(1))])]);
+        let found = locate(&[note(10, 1, NoteValue::Arrived(5, RegId::from_raw(7)))], &table, 40, false);
+        assert_eq!(ranges(&found), [(10, 20, Where::Undef), (20, 30, Where::Place(reg(1))), (30, 40, Where::Undef)]);
+        let address = NoteValue::Expr(std::sync::Arc::new(crate::model::lir::NoteExpr {
+            args: vec![NoteArg::Value(5)],
+            ops: vec![],
+            value: false,
+        }));
+        assert_eq!(ranges(&locate(&[note(10, 1, address)], &table, 40, true)), [(10, 40, Where::Undef)]);
     }
 
     /// A value split into a register and then a cell is two ranges, one per
@@ -267,7 +287,7 @@ mod tests {
     #[test]
     fn a_value_moved_between_places_is_a_range_for_each() {
         let table = BTreeMap::from([(7, vec![seg(10, 20, reg(1)), seg(20, 40, Place::Cell(-4))])]);
-        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 50);
+        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 50, true);
         assert_eq!(
             ranges(&found),
             [(10, 20, Where::Place(reg(1))), (20, 40, Where::Place(Place::Cell(-4))), (40, 50, Where::Undef)]
@@ -279,7 +299,7 @@ mod tests {
     #[test]
     fn the_next_note_of_a_variable_ends_the_range() {
         let table = BTreeMap::from([(7, vec![seg(0, 100, reg(1))]), (8, vec![seg(0, 100, reg(2))])]);
-        let found = locate(&[note(10, 1, NoteValue::Value(7)), note(30, 1, NoteValue::Value(8))], &table, 100);
+        let found = locate(&[note(10, 1, NoteValue::Value(7)), note(30, 1, NoteValue::Value(8))], &table, 100, true);
         assert_eq!(ranges(&found), [(10, 30, Where::Place(reg(1))), (30, 100, Where::Place(reg(2)))]);
     }
 
@@ -288,7 +308,7 @@ mod tests {
     #[test]
     fn a_hole_in_the_value_is_undef_between_its_places() {
         let table = BTreeMap::from([(7, vec![seg(10, 20, reg(1)), seg(30, 40, reg(1))])]);
-        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 40);
+        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 40, true);
         assert_eq!(
             ranges(&found),
             [(10, 20, Where::Place(reg(1))), (20, 30, Where::Undef), (30, 40, Where::Place(reg(1)))]
@@ -300,14 +320,15 @@ mod tests {
     #[test]
     fn of_two_notes_at_one_position_the_later_says() {
         let table = BTreeMap::from([(7, vec![seg(0, 10, reg(1))])]);
-        let found = locate(&[note(5, 1, NoteValue::Constant(3)), note(5, 1, NoteValue::Value(7))], &table, 10);
+        let found = locate(&[note(5, 1, NoteValue::Constant(3)), note(5, 1, NoteValue::Value(7))], &table, 10, true);
         assert_eq!(ranges(&found), [(5, 10, Where::Place(reg(1)))]);
     }
 
     /// A constant is its own place; another variable's notes do not end it.
     #[test]
     fn a_constant_holds_until_its_variables_next_note() {
-        let found = locate(&[note(2, 1, NoteValue::Constant(9)), note(4, 2, NoteValue::Nothing)], &BTreeMap::new(), 8);
+        let found =
+            locate(&[note(2, 1, NoteValue::Constant(9)), note(4, 2, NoteValue::Nothing)], &BTreeMap::new(), 8, true);
         let one = found.iter().find(|one| one.variable == 1).unwrap();
         assert_eq!((one.start, one.end, one.at), (2, 8, Where::Constant(9)));
     }
@@ -317,7 +338,7 @@ mod tests {
     #[test]
     fn an_offset_note_keeps_its_constant_in_every_place() {
         let table = BTreeMap::from([(7, vec![seg(0, 5, reg(1)), seg(5, 9, Place::Cell(-8))])]);
-        let found = locate(&[note(0, 1, NoteValue::Offset(7, 12))], &table, 9);
+        let found = locate(&[note(0, 1, NoteValue::Offset(7, 12))], &table, 9, true);
         assert_eq!(ranges(&found), [(0, 5, Where::Offset(reg(1), 12)), (5, 9, Where::Offset(Place::Cell(-8), 12))]);
     }
 
@@ -350,7 +371,7 @@ mod tests {
         let notes = positioned(&body, &lis);
         assert_eq!(notes.len(), 1);
         let end = notes[0].at + 100;
-        let found = locate(&notes, &table, end);
+        let found = locate(&notes, &table, end, true);
         assert_eq!(found.first().map(|one| one.at), Some(Where::Place(reg(3))), "{found:?} from {table:?}");
         assert_eq!(found.last().map(|one| (one.at, one.end)), Some((Where::Undef, end)), "{found:?}");
     }
@@ -363,7 +384,7 @@ mod tests {
         let mut table = BTreeMap::from([(7, vec![seg(10, 20, reg(1))])]);
         let stacks: IndexMap<i64, Vec<(i64, i64)>> = [(-8, vec![(20, 40)])].into_iter().collect();
         add_cells(&mut table, [7, 8], |value| (value == 7).then_some(-8), &stacks);
-        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 50);
+        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 50, true);
         assert_eq!(
             ranges(&found),
             [(10, 20, Where::Place(reg(1))), (20, 40, Where::Place(Place::Cell(-8))), (40, 50, Where::Undef)]
