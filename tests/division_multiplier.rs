@@ -56,5 +56,8 @@ unsigned nonnegative(unsigned x) { return (x & 0x7fffffff) / 10; }",
     // runs far lower.
     assert!(nonnegative.contains("mul ") && !nonnegative.contains("div "), "{nonnegative}");
     let narrow = function(&listing("unsigned narrow(unsigned x) { return (x & 0xffff) / 10; }", "dag"), "narrow");
-    assert!(narrow.contains("mul ") && !narrow.contains("div "), "{narrow}");
+    // The reciprocal multiply (`x * 52429 >> 19`) is a chain of `lea`s where that
+    // takes the fewest clocks (m32 -O2 prices a constant multiply by clocks, SD446):
+    // what matters is that the divide is gone.
+    assert!(narrow.contains("shr eax, 19") && !narrow.contains("div "), "{narrow}");
 }
