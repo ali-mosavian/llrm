@@ -457,8 +457,9 @@ impl<'a> Promotion<'a> {
         // `isNonPositive`: as an `iN` signed number.
         let non_positive = overflow == 0 || (overflow >> (bits - 1)) & 1 == 1;
         if !non_positive {
-            // The promoted width is not known here; 64 gives an `i64`.
-            if bits >= 64 {
+            // The promoted width is not known here; the register's gives its
+            // integer.
+            if bits >= self.tti.scalar_register_bits() {
                 return false;
             }
             let wide = negate(overflow);
