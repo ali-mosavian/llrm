@@ -158,6 +158,91 @@ impl Hooks for MosLowering {
             _ => None,
         }
     }
+
+    /// `makeLibCall` through `LowerCall`: the routine's address is a target
+    /// external symbol, the chain is the entry node (the result is the value,
+    /// nothing orders the call after a store). A wide integer travels as
+    /// words, low first, as the builder passes one to a C routine.
+    ///
+    /// DEVIATE: a shift count goes as a word. Reason: the routines are
+    /// libgcc's `__ashldi3 (u64, int)` and `int` is a word here, the pin
+    /// passes the count at the target's shift type (a byte). Exit: none.
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out, lower_call};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let shift = name.starts_with("__ashl") || name.starts_with("__lshr") || name.starts_with("__ashr");
+        let mut outs = Vec::new();
+        for (at, &value) in args.iter().enumerate() {
+            let value = if shift && at == 1 && dag.value_type(value).size_in_bits() < 16 {
+                dag.get_node(ISD::ZeroExtend, EVT::I16, &[value])
+            } else {
+                value
+            };
+            let vt = dag.value_type(value);
+            let parts = words(dag, value);
+            let split = parts.len() > 1;
+            outs.extend(parts.into_iter().map(|part| Out {
+                value: part,
+                ext,
+                pointer: false,
+                arg_vt: vt,
+                split,
+                variadic: false,
+            }));
+        }
+        let count = (ret.size_in_bits() as usize).div_ceil(16).max(1);
+        let part = if count > 1 { EVT::I16 } else { ret };
+        let ins = vec![In { vt: part, pointer: false, arg_vt: ret, split: count > 1 }; count];
+        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let root = dag.entry_node();
+        let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        Some(join_words(dag, &values, ret))
+    }
+}
+
+/// `value` as words, low first: an integer wider than a word is shifted and
+/// truncated, a byte or a word is itself.
+fn words(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> Vec<SDValue> {
+    let vt = dag.value_type(value);
+    if vt.size_in_bits() <= 16 {
+        return vec![value];
+    }
+    (0..vt.size_in_bits() / 16)
+        .map(|at| {
+            let shifted = if at == 0 {
+                value
+            } else {
+                let by = dag.get_constant(u128::from(16 * at), EVT::I8);
+                dag.get_node(ISD::Srl, vt, &[value, by])
+            };
+            dag.get_node(ISD::Truncate, EVT::I16, &[shifted])
+        })
+        .collect()
+}
+
+/// The words `words` made, joined into `vt` by halves.
+fn join_words(
+    dag: &mut SelectionDAG,
+    pieces: &[SDValue],
+    vt: EVT,
+) -> SDValue {
+    if let [one] = pieces {
+        return *one;
+    }
+    let (low, high) = pieces.split_at(pieces.len() / 2);
+    let half = EVT::integer(vt.size_in_bits() / 2);
+    let pair = [join_words(dag, low, half), join_words(dag, high, half)];
+    dag.get_node(ISD::BuildPair, vt, &pair)
 }
 
 /// `expandROT`: `rotl x, c` is `(x << c) | (x >> (w - c))`, the amounts taken

@@ -904,3 +904,42 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// A variable `i64` shift is a call to libgcc's `__ashldi3 (u64, int)`. The
+/// hook that makes the call was missing: `u64.c` (`shl`, `mul`) was refused
+/// ("no library call"), so no program shifting or multiplying a `long long`
+/// compiled. The routine here is the loop a C library would hold; the call
+/// passes the value as four words and the count as a word, and `3 << 37 >> 32`
+/// is 96.
+#[test]
+fn a_variable_i64_shift_calls_the_library_routine() {
+    let ir = module(
+        r#"@k = internal global i8 37
+define i64 @__ashldi3(i64 %a, i16 %n) {
+entry:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %loop
+loop:
+  %x = phi i64 [ %a, %entry ], [ %y, %loop ]
+  %i = phi i16 [ %n, %entry ], [ %j, %loop ]
+  %y = shl i64 %x, 1
+  %j = sub i16 %i, 1
+  %c = icmp eq i16 %j, 0
+  br i1 %c, label %done, label %loop
+done:
+  %r = phi i64 [ %a, %entry ], [ %y, %loop ]
+  ret i64 %r
+}
+define i8 @probe() {
+  %k = load volatile i8, ptr @k
+  %n = zext i8 %k to i64
+  %v = shl i64 3, %n
+  %h = lshr i64 %v, 32
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("jsr __ashldi3"), "no call:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 96, "{text}");
+}
