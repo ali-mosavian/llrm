@@ -219,8 +219,10 @@ fn bytewise(
         // stack a double zero is `fldz` and an `fst` per cell, not two dword
         // zeros. One `fldz` serves the whole run: for k cells k + 1
         // instructions and k memory operands against 2k, and 3 bytes a cell
-        // against 14. Exit: none while the pin writes dwords; a hot site can
-        // be priced by its block frequency.
+        // against 14. Kept while the corpus A/B shows no cell worse (main
+        // wrote these stores before `isBytewiseValue` read floats);
+        // re-evaluated against the pin at 2026-11-20 with the other numbered
+        // DEVIATEs.
         Type::Float(FloatKind::Double) if x87_stack => return None,
         Type::Float(FloatKind::Double) => 64,
         _ => return None,

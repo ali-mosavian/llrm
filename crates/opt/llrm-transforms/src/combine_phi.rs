@@ -35,10 +35,11 @@
 //!
 //! DEVIATE 5: in a function for size (`optsize`), the fold is not made when
 //! the target prices the constants it swaps (`Tti::constant_code_bytes`) and
-//! the folded ones take two bytes or more over the ones they replace. The pin
+//! the folded ones take more bytes than the ones they replace. The pin
 //! folds (`foldOpIntoPhi` carries no cost): `fadd (phi float [0.0, %x]), 0.5`
 //! to `phi float [0.5, ..]` swaps `fldz` (2 B) for a pool load (4 B at m16)
-//! and moves the one addition. Exit 2026-11-20: the pin's
+//! and moves the one addition; the instruction count does not change, so the
+//! constants are the net. Exit 2026-11-20: the pin's
 //! `TargetTransformInfo` prices a fold through a phi.
 //!
 //! # Used by
@@ -170,8 +171,8 @@ impl Combiner<'_> {
         Some(Operand::Constant(self.context.int(ty, implied as i128)))
     }
 
-    /// DEVIATE 5: whether a function for size would hold two or more constant
-    /// bytes over its incoming ones after the fold.
+    /// DEVIATE 5: whether a function for size would hold more constant bytes
+    /// after the fold than before it.
     fn fold_swaps_in_bigger_constants(
         &self,
         incoming: &[(Operand, BlockId)],
@@ -203,10 +204,7 @@ impl Combiner<'_> {
             before += old;
             after += new;
         }
-        // A byte is an encoding detail (`xor` against `mov`, an operand-size
-        // prefix) the merge of the join repays: sieve m16 -Os grew 2 B when
-        // a zero widened from i16 to i32 stayed behind a phi.
-        after >= before + 2
+        after > before
     }
 
     /// `foldOpIntoPhi(I, PN, AllowMultipleUses)`.

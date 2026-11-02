@@ -471,10 +471,14 @@ fn _refolded(
             if cpu.size || cpu.min_size { cpu.size_milliclocks_per_byte() } else { cpu.speed_milliclocks_per_byte() };
         // A target with an exchange rate takes clocks for bytes at it, and
         // never grows code built for size; one without takes neither worse.
+        // The load goes and each fold adds a memory operand, so more than one
+        // fold grows the count that code built for size, and a target with no
+        // exchange rate, may not.
+        let folds = plan.iter().filter(|(_, planned)| matches!(planned, Planned::Fold(_))).count();
         let pays = if rate == 0 {
-            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
+            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0) && folds <= 1
         } else if cpu.size || cpu.min_size {
-            bytes > 0
+            bytes > 0 && folds <= 1
         } else {
             saved * 1000 + bytes * rate > 0
         };
@@ -634,12 +638,10 @@ fn _pooled(
             } else {
                 cpu.speed_milliclocks_per_byte()
             };
-            let pays = if plan.is_empty() {
+            // A pool operand is a memory operand where the register held the
+            // constant: only a rate that takes it for clocks pays.
+            let pays = if plan.is_empty() || rate == 0 || cpu.size || cpu.min_size {
                 false
-            } else if rate == 0 {
-                saved > 0.0 && bytes >= 0
-            } else if cpu.size || cpu.min_size {
-                bytes > 0
             } else {
                 saved * 1000.0 + (bytes * rate) as f64 > 0.0
             };
@@ -1205,6 +1207,22 @@ mod tests {
             fstp(4, 4, frame(-4)),
         ]);
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
+    }
+
+    /// qmove bq16 -Os: the load of a float two instructions read was read from
+    /// its cell by both, one memory operand more than the `fld` it replaced
+    /// (33 against main's 32). Code built for size keeps the load.
+    #[test]
+    fn test_a_load_two_instructions_read_stays_in_code_built_for_size() {
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(2, "fmul", 3, 2, 1),
+            arith(3, "fadd", 4, 3, 1),
+            fstp(4, 4, frame(-4)),
+        ]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fld1", "fmul", "fadd", "fstp"]);
     }
 
     /// A store to the cell between two reads changes the value the second one

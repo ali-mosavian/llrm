@@ -42,7 +42,8 @@ pub struct Tuning {
     pub unroll_partial_threshold: Option<u32>,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
-    /// held on a stack. The x87 passes (homes, stores, constant folds) key on it.
+    /// held on a stack. The x87 passes (homes, stores, constant folds) key on
+    /// it.
     pub x87_stack_slots: Option<u32>,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
