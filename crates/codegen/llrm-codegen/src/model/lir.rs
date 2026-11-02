@@ -128,6 +128,12 @@ pub struct Insn {
     /// in `uses`, no live range starts at them, and the allocator gives them
     /// any register of their class.
     pub undefs: Vec<u32>,
+    /// Values it defines a narrower part of and keeps the rest of: the def
+    /// also reads the value (a sub-register def without `undef`,
+    /// `MachineOperand::readsReg`), so the value is live into it. Nothing sets
+    /// it before the coalescer joins copies of different widths; a narrow def
+    /// not listed starts the value, as it always has.
+    pub partial_defs: Vec<u32>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -496,7 +502,7 @@ impl Insn {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameAsks);
         let moves = |value: u32| -> Result<bool, E> { Ok(rename(value)? != value) };
         let mut any = false;
-        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs) {
+        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
         }
         for (held, _) in self.requires.iter().chain(&self.delivers) {
@@ -539,6 +545,7 @@ impl Insn {
         made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
+        made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
                 .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
@@ -588,6 +595,7 @@ impl Insn {
             defines,
             uses,
             undefs: Vec::new(),
+            partial_defs: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
