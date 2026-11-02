@@ -27,6 +27,9 @@
 //! a constant `ConstantExpr` would keep as an expression, or a shift amount
 //! that is not an integer constant, skips the fold.
 //!
+//! DEVIATE 6: the float casts run `commonCastTransforms` alone
+//! (`visit_fp_cast`).
+//!
 //! # Used by
 //! `combine::visit`, once the casts family's slot is flipped.
 //!
@@ -1787,6 +1790,18 @@ fn transform_sext_icmp(
         }
     }
     None
+}
+
+/// `visitFPTrunc`, `visitFPExt`, `visitFPToUI`, `visitFPToSI`, `visitUIToFP`
+/// and `visitSIToFP`: `commonCastTransforms` (the pair of casts, a select
+/// operand, a phi operand folded into the phi). DEVIATE 6: the folds each of
+/// them tries before it (`foldItoFPtoI`, `foldFPtoI`, the fptrunc of a
+/// math intrinsic, the int-to-float width narrowing) are not translated.
+pub fn visit_fp_cast(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    common_cast_transforms(c, inst).unwrap_or(Visit::None)
 }
 
 /// `InstCombinerImpl::visitSExt` (:1915).

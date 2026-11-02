@@ -1,6 +1,6 @@
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::InstId;
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 
 use crate::combine::{Combiner, Visit, combine_with};
 use crate::testing::{parsed, printed};
@@ -14,6 +14,9 @@ fn visit(
         Opcode::Binary(BinaryOp::FDiv) => super::visit_fdiv(c, inst),
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => super::visit_fadd_or_fmul(c, inst),
         Opcode::Binary(BinaryOp::FSub) => super::visit_fsub(c, inst),
+        Opcode::Cast(
+            CastOp::FPTrunc | CastOp::FPExt | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP,
+        ) => crate::combine_casts::visit_fp_cast(c, inst),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
         Opcode::Call(_) => c.visit_call(inst),
@@ -207,4 +210,25 @@ fn test_a_subtraction_and_a_division_of_phis_are_made_in_the_predecessors() {
 fn test_a_fmuladd_on_phis_is_made_in_the_predecessors() {
     let out = guarded("  %r = call float @llvm.fmuladd.f32(float %p, float %p, float %q)\n  ret float %r\n");
     assert!(out.contains("7.000000e+00"), "the guard's edge folds to 2*2+3: {out}");
+}
+
+/// recfloat -Os on the pin: `(long)(decay(..) * 1000 + 0.5)` after a guarded
+/// loop. The pin moves the `fptosi` into the loop's exit as well, so the
+/// guard's edge is the integer 0 and the tail (control-word switch, `fistp`) is
+/// not shared. Ours kept `fptosi (phi float [0.5, ..])` in the join, the
+/// guard's edge a `fld` of the constant: 4 B over main at -Os.
+#[test]
+fn test_a_float_to_integer_conversion_of_a_phi_is_made_in_the_predecessors() {
+    let mut module = parsed(
+        "define i32 @f(i1 %c, float %v) {\nentry:\n  br i1 %c, label %loop, label %m\n\n\
+         loop:\n  %x = fadd float %v, 1.0\n  br label %m\n\n\
+         m:\n  %p = phi float [ 0.5, %entry ], [ %x, %loop ]\n  %r = fptosi float %p to i32\n  ret i32 %r\n}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let out = printed(&module);
+    assert!(out.contains("phi i32 [ 0, %entry ]"), "the guard's edge is the integer 0: {out}");
+    assert!(!out.contains("fptosi float %p"), "{out}");
 }
