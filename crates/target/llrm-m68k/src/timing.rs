@@ -396,6 +396,19 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
     let text = text.split(" <").next().unwrap_or(text).trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let name = gnu_mnemonic(name);
-    let operands: Vec<String> = split_operands(rest.trim()).into_iter().map(gnu_operand).collect();
+    // objdump prints an absolute address bare, as it does a branch target: only
+    // a branch or `dbcc` takes it as a target
+    let target = name.starts_with('b') || name.starts_with("db");
+    let operands: Vec<String> = split_operands(rest.trim())
+        .into_iter()
+        .map(gnu_operand)
+        .map(|one| {
+            if !target && one.len() >= 4 && one.chars().all(|c| c.is_ascii_hexdigit()) {
+                format!("0x{one}:l")
+            } else {
+                one
+            }
+        })
+        .collect();
     Ok(if operands.is_empty() { name } else { format!("{name} {}", operands.join(", ")) })
 }

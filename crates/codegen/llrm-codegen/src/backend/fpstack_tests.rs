@@ -298,6 +298,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
         indirect: false,
         table: vec![],
         repeat: false,
+        table_id: None,
         pops: None,
     };
     let body = _body(vec![_load(1, &cell), out, _store(&cell, 1)]);

@@ -595,7 +595,12 @@ mod tuning_tests {
         assert_eq!(table.max_stores_per_memset_opt_size, 4);
         assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
         assert_eq!(table.size_milliclocks_per_byte, 10_000);
-        assert_eq!(table.speed_milliclocks_per_byte, 500);
+        assert_eq!(
+            table.speed_milliclocks_per_byte,
+            crate::timings::speed_milliclocks_per_byte(),
+            "the compiler reads the judge's row"
+        );
+        assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));

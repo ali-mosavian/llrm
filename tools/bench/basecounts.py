@@ -27,7 +27,7 @@ ROOT = HERE.parents[1]
 CACHE = Path(os.environ.get("LLRM_BENCH_BASE_DIR") or Path.home() / ".cache/llrm/bench-base")
 # The rows the compiler under test makes: the reference compilers' (bas, ow, bcc, ...) do not move with it.
 OURS = ("bas", "c", "nib", "bq16", "bq32", "c64")
-COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_bytes")
+COUNTERS = ("instructions", "memory_operands", "clocks", "code_bytes", "data_bytes", "bss_bytes")
 # Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
 WAIVERS = "tools/bench/waivers"
 
@@ -55,7 +55,7 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     rows = {k: v for k, v in rows.items() if k[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{key}-own.json"
-    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION}))
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION, "harness": harness_digest(root)}))
     return path
 
 
@@ -70,6 +70,7 @@ JUDGE_FILES = (
     "crates/target/llrm-x86-m32/vsgcc/harness.py",
     "crates/target/llrm-x86-m32/vsgcc/clocks.py",
     "tools/sizes.py",
+    "crates/target/llrm-x86/bench/padding.py",
     "tools/bench/flatcount.py",
     "tools/bench/native.py",
     "tools/bench/native_driver.c",
@@ -79,6 +80,17 @@ JUDGE_FILES = (
 
 def _is_input(name: str) -> bool:
     return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
+
+
+def harness_digest(root: Path = ROOT) -> str:
+    """The judge's files as 12 hex digits: the harness a measurement ran under, printed in a run's header and kept beside its json."""
+    return judge_digest(lambda name: (root / name).read_bytes() if (root / name).is_file() else None).hex()[:12]
+
+
+def harness_lines(base: str, head: str, cells: int) -> list[str]:
+    """A base measured under another harness than the head's is not compared: its counters differ by what the harness changed (the 486
+    multiplier rule moved fpbench nib Os 156229 -> 156261 on the same binaries), so each of its `cells` is NOBASE."""
+    return [f"HARNESS-MISMATCH base {base} head {head}: {cells} base cells are not compared (NOBASE); re-measure the base under the head's harness"] if base != head else []
 
 
 def _hash(files: list[tuple[str, bytes]], judge: bytes = b"") -> str:
@@ -105,6 +117,15 @@ def programs(root: Path = ROOT) -> dict[str, str]:
         files = [(path.name, path.read_bytes()) for path in settings.parent.iterdir() if path.is_file() and _is_input(path.name)]
         out[str(settings.parent.relative_to(root / "bench"))] = _hash(files, judge)
     return out
+
+
+def harness_at(sha: str, root: Path = ROOT) -> str:
+    """`harness_digest()` of the tree of commit `sha`, read from git: what a base counted by that tree ran under."""
+    def blob(name):
+        done = subprocess.run(["git", "cat-file", "blob", f"{sha}:{name}"], cwd=root, capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    return judge_digest(blob).hex()[:12]
 
 
 def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
@@ -163,6 +184,9 @@ def base_counts(
     path = cache / f"{tree}-own{'-timed' if timed else ''}.json"
     stored = json.loads(path.read_text()) if path.is_file() else {"rows": {}, "programs": {}}
     have = rows_of(stored["rows"])
+    if have and stored.get("harness") != harness_at(sha, root):  # recorded under no known harness: unverified, never compared
+        print(f"NOBASE {len(have)} recorded rows of {sha[:9]} carry no matching harness digest; measured again")
+        have = {}
     if all(any(key[2] == opt for key in have) for opt in opts):
         if stored.get("hash_version") != HASH_VERSION:  # counts do not depend on the hash; the programs' hashes do
             return have, programs_at(sha, root)
@@ -174,7 +198,7 @@ def base_counts(
     have |= {key: value for key, value in rows.items() if key[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".part")
-    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION}))
+    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION, "harness": harness_at(sha, root)}))
     os.replace(part, path)
     return have, hashes
 
@@ -197,6 +221,8 @@ def waivers(root: Path = ROOT) -> list[dict]:
     """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
     a failure once a row is no longer worse than the base."""
     out = []
+    if os.environ.get("LLRM_BENCH_WAIVERS") == "off":  # the second main merge takes no waiver: the judge then reads none
+        return out
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
@@ -281,6 +307,25 @@ def coverage(measured: dict, base: dict, same: set[str]) -> tuple[int, int, list
 
 def coverage_lines(judged: int, programs: int, left_out: list[str]) -> list[str]:
     return [f"JUDGED {judged} rows of {programs} programs" + (f"; left out, edited since the base: {' '.join(left_out)}" if left_out else "")]
+
+
+def coverage_detail(measured: dict, base: dict, same: set[str]) -> list[str]:
+    """Per language and level, the cells judged over the programs they cover, and the cells that were not: NOBASE (measured, the base has no row)
+    and NOHEAD (the base has the row, this run measured none). `JUDGED rows of programs` alone let 21 of 46 programs stand for the corpus."""
+    ours = {key for key in measured if key[1] in OURS}
+    levels = {(key[1], key[2]) for key in ours}
+    judged: dict[tuple[str, str], set[str]] = {}
+    for key in sorted(ours):
+        was = base.get(key)
+        if key[0] in same and was is not None and was.get("instructions") != 0 and not any(one in row for row in (measured[key], was) for one in ("error", "skip", "known", "xpass")):
+            judged.setdefault((key[1], key[2]), set()).add(key[0])
+    lines = [f"CELLS {language} -{opt}: {len(programs)} programs" for (language, opt), programs in sorted(judged.items())]
+    lines.append(f"CELLS total: {sum(map(len, judged.values()))} cells over {len(set().union(*judged.values()))} programs" if judged else "CELLS total: 0 cells over 0 programs")
+    nobase = [f"{key[0]} {key[1]} -{key[2]}" + (" (base executed 0 instructions)" if key in base else "") for key in sorted(ours) if key[0] in same and (key not in base or base[key].get("instructions") == 0)]
+    nohead = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(base) if key[1] in OURS and key[0] in same and (key[1], key[2]) in levels and key not in measured]
+    noclocks = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key in base and "clocks" not in measured[key] and "clocks" not in base[key]
+                and not any(one in row for row in (measured[key], base[key]) for one in ("error", "skip", "known", "xpass"))]
+    return lines + ([f"NOCLOCKS both sides: {', '.join(noclocks)}"] if noclocks else []) + ([f"NOBASE {len(nobase)} cells: {', '.join(nobase)}"] if nobase else []) + ([f"NOHEAD {len(nohead)} cells: {', '.join(nohead)}"] if nohead else [])
 
 
 def stale_summary(stale: list[str]) -> list[str]:
