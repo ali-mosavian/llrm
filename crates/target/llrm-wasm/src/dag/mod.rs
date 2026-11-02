@@ -138,6 +138,13 @@ pub fn compile_function(
     remove_unreachable_blocks(&mut f);
     fix_irreducible_control_flow(&mut f);
     late_eh_prepare(&mut f);
+    // The pin turns off `RegisterCoalescer` at -O1.
+    if matches!(
+        options.level,
+        crate::driver::Level::O2 | crate::driver::Level::O3 | crate::driver::Level::Os | crate::driver::Level::Oz
+    ) {
+        crate::spike_coalesce::coalesce(&mut f);
+    }
     if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
         remove_unreachable_blocks(&mut f);
     }

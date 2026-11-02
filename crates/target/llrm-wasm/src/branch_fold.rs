@@ -8,10 +8,11 @@
 //! `SplitPHIEdges` makes for a PHI copy is such a block once the coalescer has
 //! removed the copy.
 //!
-//! DEVIATE: only this case of `OptimizeBlock` (no tail merging, no branch
+//! DEVIATE 1: only this case of `OptimizeBlock` (no tail merging, no branch
 //! reversal, no moving of blocks), and not in a function with a personality
 //! (try scopes name their blocks). Exit: the shared branch folder over the
-//! neutral machine function (S4).
+//! neutral machine function (S4), no later than 2026-11-20; deleting this
+//! file is part of that PR.
 //!
 //! # See also
 //! `BranchFolding.cpp`, pin d1106deb71cc: `OptimizeBlock`, `IsBranchOnlyBlock`.
