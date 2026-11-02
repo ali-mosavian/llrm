@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: tests/x86_m16_kernels.sh [NV] [BENCH_DIR] -> bench programs sfm16_{add,mul,div} (ours) and sfm16crt_{add,mul,div} (compiler-rt) in BENCH_DIR
 # (default <repo>/bench) for tools/bench/bench.py --lang c: NV vectors from tests/gen_vectors.c, flattened to one freestanding file with 32-bit long,
-# expected output from the same file run natively at -O0. compiler-rt is preprocessed for a 16-bit int (msp430) so its types match llrm-cc's x86_16.
+# SF_EXTRA="#define SF_DIV_NEWTON 1" adds a line to the flattened ours. Expected output from the same file run natively at -O0. compiler-rt is preprocessed for a 16-bit int (msp430) so its types match llrm-cc's x86_16.
 set -e
 cd "$(dirname "$0")/.."
 NV=${1:-400}; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
@@ -22,7 +22,7 @@ for op in add mul div; do
   { echo "$TYPES"; echo '#define UINT32_C(x) x##ul'; echo '#define UINT64_C(x) x##ull'; echo '#define INT32_MAX 2147483647L'; echo '#define INT32_MIN (-2147483647L-1)'; echo '#define UINT32_MAX 4294967295ul'
     for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
       sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
-    done | awk 'BEGIN{print "#define SF_INTABI 1"} {print}'
+    done | awk 'BEGIN{print "#define SF_INTABI 1"; if (ENVIRON["SF_EXTRA"]) print ENVIRON["SF_EXTRA"]} {print}'
     echo "sfu32 __${op}sf3(sfu32, sfu32);"; } > $T/body.c
   sed -i 's/unsigned long/sfu32/' $T/vectors.h 2>/dev/null || true
   emit sfm16_$op "ours $op" __${op}sf3

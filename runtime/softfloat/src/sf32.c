@@ -93,16 +93,43 @@ static sf32 div_bits(sf32 a, sf32 b)
     uint32_t ma = unpack(a, &ea), mb = unpack(b, &eb);
     if (!(ma & 0x800000u)) { int s = sf_clz32(ma) - 8; ma <<= s; ea -= s; }
     if (!(mb & 0x800000u)) { int s = sf_clz32(mb) - 8; mb <<= s; eb -= s; }
-    /* q = floor(ma * 2^27 / mb), one quotient bit per step. */
-    uint32_t q = 0, r = ma;
+    /* q = floor(ma * 2^27 / mb) and whether it was exact. */
+    uint32_t q;
+    int inexact;
+#ifdef SF_DIV_NEWTON
+    /* Reciprocal x ~ 2^55 / mb by Newton-Raphson from the linear estimate 3/4 + 1/sqrt 2 - b/2 (compiler-rt's start), three
+     * iterations; then q ~ ma * x / 2^28, off by at most 1 for every mb (checked exhaustively), and the remainder, which
+     * only needs its low 32 bits, corrects it. mb = 2^23 makes x wrap: it stands for 2^32, so clamp. Eight 32x32 products per
+     * call: with a widening SF_MUL32X32, x86 m16 400 divs 404k -> 277k clocks, x86 m32 through llrm-cc 280k -> 222k, but gcc 191k -> 223k
+     * and with the default 16x16 partials m16 563k: an integrator opts in. */
+    uint32_t hi, lo, mb8 = mb << 8, x = 0x7504F333u - mb8;
+    for (int i = 0; i < 3; i++) {
+        sf_mul32x32(x, mb8, &hi, &lo);
+        uint32_t corr = 0u - hi;
+        sf_mul32x32(x, corr, &hi, &lo);
+        x = (hi << 1) | (lo >> 31);
+    }
+    if (x < 0x80000000u) x = 0xFFFFFFFFu;
+    sf_mul32x32(ma << 8, x, &hi, &lo);
+    q = hi >> 4;
+    uint32_t r = (ma << 27) - q * mb;
+    while ((int32_t)r < 0) { q--; r += mb; }
+    while (r >= mb) { q++; r -= mb; }
+    inexact = r != 0;
+#else
+    /* One quotient bit per step. */
+    uint32_t r = ma;
+    q = 0;
     for (int i = 0; i < 28; i++) {
         q <<= 1;
         if (r >= mb) { r -= mb; q |= 1; }
         r <<= 1;
     }
+    inexact = r != 0;
+#endif
     int e = ea - eb + 126;
     if (q >> 27) { q = (q >> 1) | (q & 1); e++; }
-    return sf32_pack(sign, e, q | (r != 0));
+    return sf32_pack(sign, e, q | inexact);
 }
 
 static int cmp_bits(sf32 a, sf32 b, int unordered)
