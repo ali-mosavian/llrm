@@ -21,8 +21,9 @@ int input_read(char *buffer, int count)
 {
     static const char *const words[] = {"Oliver ", "Scrooge ", "ghost ", "Marley ", "and ", "the ", "of ", "Tiny Tim\n", "a "};
     static unsigned long seed = 1, sent;
+    enum { input_bytes = 64 << 10 };
     int n = 0;
-    while (n < count && sent < 65536) {
+    while (n < count && sent < input_bytes) {
         const char *w;
         seed = seed * 1103515245u + 12345u;
         for (w = words[(seed >> 16) % 9]; *w && n < count; ++w, ++sent) buffer[n++] = *w;

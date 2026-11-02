@@ -167,17 +167,6 @@ fn description_path(
     format!("{ROOT}/crates/target/llrm-{name}/src/machines/{}", file.unwrap_or("datalayout.toml"))
 }
 
-/// Whether the description's machine has a fused multiply-add: the one reason
-/// to turn off clang's default contraction (`-ffp-contract=on`), which changes
-/// results only where an instruction rounds once for two operations.
-fn has_fused_multiply_add(target: &Target) -> Result<bool, String> {
-    let Some(name) = &target.description else { return Ok(false) };
-    let path = description_path(name, target.description_file.as_deref());
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
-    let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
-    Ok(table.get("fused_multiply_add").and_then(toml::Value::as_bool).unwrap_or(false))
-}
-
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
     let path = description_path(name, target.description_file.as_deref());

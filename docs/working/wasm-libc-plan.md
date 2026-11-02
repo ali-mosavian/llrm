@@ -16,7 +16,7 @@ the frontend stays clang; cards compare library bytes separately from program by
 2. The platform libc for wasm32 is wasi-libc (musl-derived, WASI preview1). Fetched 2026-11-02 with the user's yes
    (05:25): wasi-sdk-34's `wasi-sysroot-34.0.tar.gz`, 119,283,116 bytes, sha256
    `9d813544eeebe38b7b8f2244ed591de46b6db812c6dd1a257ff9f0d2a905a2be` (verified), extracted to
-   `~/scratch/wasi-sysroot-34/sysroot/wasi-sysroot-34.0` (outside the repo; wasi-libc 2e6fb9d8ee0c, llvm 23.1.0 headers;
+   a scratch directory outside the repo, `wasi-sysroot-34/sysroot/wasi-sysroot-34.0` (wasi-libc 2e6fb9d8ee0c, llvm 23.1.0 headers;
    targets wasm32-wasip1/-threads/wasip2/wasip3). The tarball carries no licence file; the wasi-libc repo has LICENSE,
    LICENSE-APACHE, LICENSE-APACHE-LLVM and LICENSE-MIT. Nothing else is cleared to fetch.
 3. `llrm-cc` row `wasm32-wasi`: clang `--target=wasm32-wasi --sysroot=...`, `llc_program = "llrm-wasm-llc"`, object
