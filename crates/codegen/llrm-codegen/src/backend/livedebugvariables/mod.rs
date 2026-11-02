@@ -219,8 +219,9 @@ pub fn positioned(
 
 /// Re-keys `table` (by the allocator's registers) by the number a note names
 /// a value with: the register the instruction defining the value writes first
-/// (what `masm` marks as the value's place), or the register a split cloned it
-/// from. O(instructions + segments).
+/// (what `masm` marks as the value's place; the entry's, one per register it
+/// delivers), or the register a split cloned it from. O(instructions +
+/// segments).
 pub fn by_note_value(
     body: &LirBody,
     table: &BTreeMap<u32, Vec<Segment>>,
@@ -228,9 +229,12 @@ pub fn by_note_value(
 ) -> BTreeMap<u32, Vec<Segment>> {
     let mut out: BTreeMap<u32, Vec<Segment>> = BTreeMap::new();
     for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-        let Some(&defined) = one.defines.first() else { continue };
-        let Some(segments) = table.get(&parents.get(&defined).copied().unwrap_or(defined)) else { continue };
-        for &tag in one.debug.defines.iter().filter(|&&tag| tag != u32::MAX) {
+        for (index, &tag) in one.debug.defines.iter().enumerate().filter(|(_, tag)| **tag != u32::MAX) {
+            // The entry's values are marked one per register it delivers;
+            // any other instruction's all at the register it writes first.
+            let defined = if one.arrival() { one.defines.get(index) } else { one.defines.first() };
+            let Some(&defined) = defined else { continue };
+            let Some(segments) = table.get(&parents.get(&defined).copied().unwrap_or(defined)) else { continue };
             out.entry(tag).or_insert_with(|| segments.clone());
         }
     }
@@ -459,6 +463,33 @@ mod tests {
         let parents: HashMap<u32, u32> = [(21, 20)].into_iter().collect();
         let found = by_note_value(&body, &table, &parents);
         assert_eq!(found, BTreeMap::from([(7, vec![seg(4, 9, reg(3))])]), "register 7 of the table is not value 7");
+    }
+
+    /// The entry marks one value per register it delivers: the second value of
+    /// an entry that delivers two is the second register it defines, not the
+    /// first, which gave a second parameter its first parameter's place.
+    #[test]
+    fn the_entrys_values_are_found_one_per_register_it_defines() {
+        use std::sync::Arc;
+
+        use crate::model::ir::{Held, Operation, Semantics};
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
+        let mut entry = Insn::new(0, None, Some(what), vec![21, 22], vec![]);
+        entry.delivers =
+            vec![(Held { value: 7, width: 4 }, RegId::from_raw(1)), (Held { value: 8, width: 4 }, RegId::from_raw(2))];
+        entry.debug.defines = vec![7, 8];
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::new(entry)]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let table = BTreeMap::from([(21, vec![seg(0, 5, reg(1))]), (22, vec![seg(0, 6, reg(2))])]);
+        let found = by_note_value(&body, &table, &HashMap::default());
+        assert_eq!(found, BTreeMap::from([(7, vec![seg(0, 5, reg(1))]), (8, vec![seg(0, 6, reg(2))])]));
     }
 
     /// A value spilled to a cell is in the cell over the stretches the spiller
