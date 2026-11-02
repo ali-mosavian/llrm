@@ -38,7 +38,9 @@
 //! an instruction.
 //!
 //! DEVIATE MC-P (owner w15, review 2026-11-07): the flag-setting forms and the
-//! floating-point and vector patterns are not made yet.
+//! vector patterns are not made. The floating-point patterns need the
+//! `contract` flag on the `fadd`/`fsub` (`isCombineInstrCandidateFP`), which
+//! `MFunc` does not carry; `fmuladd` is already fused in selection.
 //!
 //! # Runs
 //! After `prepass` (which sinks and drops dead flag settings) and before the
