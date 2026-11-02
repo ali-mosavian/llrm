@@ -1,4 +1,5 @@
 | IEEE-754 binary32 for the m68k: round to nearest even, denormals, inf, NaN.
+| Hand written; no libgcc source is copied (libgcc is only a binary comparison column).
 | libgcc's ABI: arguments on the stack, result in d0, d0-d1/a0-a1 scratch.
 | Base body 68000/68010; --defsym M68020=1 selects bfffo and the 64-bit mulu.l/divu.l (68020/030/040);
 | add --defsym M68060=1 for the 68060, which traps on the 64-bit forms: mul and div keep the 16-bit cores.
