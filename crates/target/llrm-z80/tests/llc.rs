@@ -28,3 +28,34 @@ fn a_refused_function_fails_the_exit_status() {
     assert_eq!(done.status.code(), Some(1), "{dir}");
     assert!(String::from_utf8_lossy(&done.stderr).contains("REFUSED @g"));
 }
+
+/// Defined variables were dropped: a program with a table, a string and a
+/// pointer into one produced code that named `_tab` and no `_tab` to link.
+#[test]
+fn defined_variables_are_written_as_data() {
+    let source = std::env::temp_dir().join("llrm-z80-llc-data.ll");
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              @tab = constant [4 x i8] c\"\\01\\02\\03\\04\"\n\
+              @.str.1 = private constant [3 x i8] c\"ab\\00\"\n\
+              @p = global ptr getelementptr (i8, ptr @tab, i16 2)\n\
+              @z = global [20 x i8] zeroinitializer\n\
+              define i8 @f() {\n  %v = load i8, ptr @tab\n  ret i8 %v\n}\n";
+    std::fs::write(&source, ir).unwrap();
+    let out = std::env::temp_dir().join("llrm-z80-llc-data.s");
+    let done = llc(&["-S", "-O0", "-o", out.to_str().unwrap(), source.to_str().unwrap()]);
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let text = std::fs::read_to_string(&out).expect("the output file");
+    for line in [
+        ".area _CONST",
+        "_tab::",
+        ".db 1,2,3,4",
+        "_$2estr$2e1::",
+        ".db 97,98,0",
+        ".area _DATA",
+        "_p::",
+        ".dw _tab+2",
+        "_z::",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+}

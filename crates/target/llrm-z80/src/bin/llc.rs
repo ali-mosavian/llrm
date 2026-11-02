@@ -58,7 +58,7 @@ fn run() -> i32 {
     let mut status = 0;
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
-        module.push_str(&format!("\t.globl _{name}\n"));
+        module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
         match text(&ir, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => {
@@ -67,7 +67,14 @@ fn run() -> i32 {
             }
         }
     }
-    let out = inline_sole_uses(&module, llrm_z80::RUNTIME);
+    let mut out = inline_sole_uses(&module, llrm_z80::RUNTIME);
+    match llrm_z80::data::text(&ir, &request) {
+        Ok(data) => out.push_str(&data),
+        Err(why) => {
+            eprintln!("llrm-z80-llc: REFUSED data: {why}");
+            status = 1;
+        }
+    }
     let path =
         output.unwrap_or_else(|| std::path::Path::new(&input).with_extension("s").to_string_lossy().into_owned());
     match std::fs::write(&path, out) {

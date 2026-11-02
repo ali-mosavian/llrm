@@ -226,7 +226,7 @@ impl Emitter<'_> {
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 // C symbols take SDCC's underscore; the runtime's own routines
                 // are named as they are
-                Operand::Symbol(format!("_{name}"), offset)
+                Operand::Symbol(crate::data::symbol(name), offset)
             }
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;

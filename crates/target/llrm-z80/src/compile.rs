@@ -503,7 +503,7 @@ pub fn text(
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
-    let mut out = format!("_{name}::\n");
+    let mut out = format!("{}::\n", crate::data::symbol(name));
     for line in lines(ir, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
