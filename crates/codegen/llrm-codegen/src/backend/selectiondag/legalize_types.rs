@@ -76,6 +76,8 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// The integer a softened float is carried as (`SoftenedFloats`).
+    softened: HashMap<SDValue, SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -118,6 +120,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            softened: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -1197,6 +1200,12 @@ impl<'a> TypeLegalizer<'a> {
                     (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
                 let ((tl, th), (fl, fh)) = (self.expanded_integer(then), self.expanded_integer(other));
                 (self.dag.get_select(half, cond, tl, fl), self.dag.get_select(half, cond, th, fh))
+            }
+            ISD::BitCast if self.action(self.dag.value_type(self.dag.operand(value, 0))) == TypeAction::SoftenFloat => {
+                // `ExpandRes_BITCAST` of a softened float: the halves of its
+                // integer.
+                let soft = self.softened_float(self.dag.operand(value, 0));
+                self.split_integer(soft, half)
             }
             ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
                 // `ExpandRes_BITCAST` of a float: stored to a stack slot, the

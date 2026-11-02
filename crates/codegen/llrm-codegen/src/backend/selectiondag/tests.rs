@@ -82,6 +82,7 @@ mod setcc_simplify;
 mod sext_in_reg;
 mod shift_amount;
 mod shift_simplify;
+mod soften_float;
 mod srl_of_trunc;
 mod store_fp_const;
 mod store_load_forward;
