@@ -14,9 +14,10 @@ fn every_x86_cpu_machine_has_a_tti() {
     let mut checked = 0;
     for arch in llrm_driver::all() {
         for cpu in arch.cpus() {
-            let profile =
-                tuned_optimizing(&*arch, cpu, false, false, false, true, false, false, false, false, false, false, false)
-                    .unwrap_or_else(|why| panic!("{}: {why}", arch.name()));
+            let profile = tuned_optimizing(
+                &*arch, cpu, false, false, false, true, false, false, false, false, false, false, false,
+            )
+            .unwrap_or_else(|why| panic!("{}: {why}", arch.name()));
             checked += 1;
             if profile.target().tti().is_none() {
                 without.push(format!("{} {cpu}", arch.name()));
