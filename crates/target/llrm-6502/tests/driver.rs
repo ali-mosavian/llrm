@@ -943,3 +943,46 @@ define i8 @probe() {
     assert!(text.contains("jsr __ashldi3"), "no call:\n{text}");
     assert_eq!(exit_code_of(&text, "probe"), 96, "{text}");
 }
+
+/// A 64-bit multiply is one call to libgcc's `__muldi3`. The legalizer expanded
+/// it into four calls of `__mulsi3` and the adds between them (445 lines of
+/// assembly for `a * b` in `u64.c`, 13161 clocks), and `__muldi3`, which the
+/// runtime holds, was never called. The routine here is the shift-and-add loop
+/// a C library would hold; `(2^32 + 3) * (2^32 + 1) >> 32` is 4.
+#[test]
+fn a_64_bit_multiply_is_one_call_to_the_library_routine() {
+    let ir = module(
+        r#"@a = internal global i64 4294967299
+@b = internal global i64 4294967297
+define i64 @__muldi3(i64 %a, i64 %b) {
+entry:
+  br label %loop
+loop:
+  %acc = phi i64 [ 0, %entry ], [ %acc2, %loop ]
+  %x = phi i64 [ %a, %entry ], [ %x2, %loop ]
+  %y = phi i64 [ %b, %entry ], [ %y2, %loop ]
+  %bit = and i64 %y, 1
+  %mask = sub i64 0, %bit
+  %add = and i64 %x, %mask
+  %acc2 = add i64 %acc, %add
+  %x2 = shl i64 %x, 1
+  %y2 = lshr i64 %y, 1
+  %done = icmp eq i64 %y2, 0
+  br i1 %done, label %out, label %loop
+out:
+  ret i64 %acc2
+}
+define i8 @probe() {
+  %x = load volatile i64, ptr @a
+  %y = load volatile i64, ptr @b
+  %p = mul i64 %x, %y
+  %h = lshr i64 %p, 32
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("jsr __muldi3"), "no call to the routine:\n{text}");
+    assert!(!text.contains("__mulsi3"), "expanded through 32-bit multiplies:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 4, "{text}");
+}
