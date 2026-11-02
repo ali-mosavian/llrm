@@ -26,8 +26,9 @@
 //! sdag-b. Review 2026-11-13.
 //!
 //! DEVIATE SD205: `visitSIGN_EXTEND`/`ZERO_EXTEND`/`ANY_EXTEND` fold a
-//! simple, non-extending load before operations are legal, with the table
-//! given by `with_tli` (no table: only a load nothing else reads); every
+//! non-extending load only before operations are legal (the pin also folds
+//! after, where the extending load is legal), with the table given by
+//! `with_tli` (no table: only a simple load nothing else reads); every
 //! integer truncate is taken as free (`isTruncateFree`). Exit: the target's
 //! truncate query. Owner sdag-b. Review 2026-11-27.
 //!
@@ -1372,9 +1373,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        if info.volatile {
-            return None;
-        }
         let op = self.dag.opcode(node);
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
@@ -1389,6 +1387,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             Some(_) => return None,
         };
         let wide = self.dag.value_type(node);
+        // `tryToFoldExtOfLoad`: a load that is not simple is folded only where
+        // the extending load is legal.
+        if info.volatile {
+            let (EVT::Simple(wide_mvt), EVT::Simple(mem_mvt)) = (wide, info.mem_vt) else { return None };
+            if !self.tli.is_some_and(|tli| tli.load_ext_action(ext, wide_mvt, mem_mvt) == Action::Legal) {
+                return None;
+            }
+        }
         let others: Vec<u32> = self.dag.users(load).filter(|&user| user != node.node).collect();
         let mut compares = Vec::new();
         if !others.is_empty() {
