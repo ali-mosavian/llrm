@@ -4484,6 +4484,20 @@ pub fn simplify_binop_operands(
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
+/// `simplifyCall` for a caller that has the callees and the operands it wants
+/// `inst` asked with (the unrolled-cost estimator's).
+pub fn simplify_call_operands(
+    context: &Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    function: &Function,
+    inst: InstId,
+    operands: &[Operand],
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals, analyses: None, cxt: Some(inst), can_use_undef: true };
+    calls::simplify_call(&mut q, inst, operands)
+}
+
 /// `simplifyBinOp(Opcode, LHS, RHS, SQ.getWithInstruction(&cxt))` for a caller
 /// that has a module (its callees, dominator tree and assumptions) and the
 /// instruction it asks at.
