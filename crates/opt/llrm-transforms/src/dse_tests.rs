@@ -742,3 +742,23 @@ fn test_a_load_at_an_unbounded_index_still_observes_the_cell() {
     );
     assert!(after.contains("store"), "{after}");
 }
+
+/// A load at `slot + sext(i16) + 8` reads `slot + 4` when the index is -4:
+/// a signed index range includes negatives, so the store stays.
+#[test]
+fn test_a_load_at_a_negative_capable_index_still_observes_the_cell() {
+    let after = ran(
+        "define float @f(i16 %n, float %v) {\nb0:\n  %a = alloca [6 x float], align 4\n  %p1 = getelementptr inbounds i8, ptr %a, i32 4\n  store float %v, ptr %p1, align 4\n  %i = sext i16 %n to i32\n  %q = getelementptr i8, ptr %a, i32 %i\n  %q8 = getelementptr i8, ptr %q, i32 8\n  %r = load float, ptr %q8, align 4\n  ret float %r\n}\n",
+    );
+    assert!(after.contains("store"), "{after}");
+}
+
+/// An index scaled past the pointer width wraps: `zext(i16) * 131072` in 32
+/// bits reaches `slot` (n = 32768 wraps to 0), so the store stays.
+#[test]
+fn test_a_load_at_a_wrapping_scaled_index_still_observes_the_cell() {
+    let after = ran(
+        "define float @f(i16 %n, float %v) {\nb0:\n  %a = alloca [6 x float], align 4\n  store float %v, ptr %a, align 4\n  %i = zext i16 %n to i32\n  %q = getelementptr [131072 x i8], ptr %a, i32 %i\n  %r = load float, ptr %q, align 4\n  ret float %r\n}\n",
+    );
+    assert!(after.contains("store"), "{after}");
+}
