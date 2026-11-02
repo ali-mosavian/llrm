@@ -68,6 +68,7 @@ use crate::support::hash::{HashMap, HashSet};
 
 pub struct MachineLicm {
     pub classes: Rc<RegisterClasses>,
+    pub size: bool,
 }
 
 impl LIRTransform for MachineLicm {
@@ -83,7 +84,7 @@ impl LIRTransform for MachineLicm {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(hoisted(&body, &self.classes))
+        Ok(hoisted(&body, &self.classes, self.size))
     }
 }
 
@@ -183,6 +184,7 @@ fn candidate(
 pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
+    size: bool,
 ) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
     let found = loopy::loops(&body.blocks, Some(body.entry));
@@ -385,6 +387,12 @@ pub fn hoisted(
                             && one.requires.is_empty()
                             && one.delivers.is_empty()
                             && crate::greedy::remat::is_trivially_re_materializable(one, false)
+                            // DEVIATE LICM1: at -Os the constant is one
+                            // instruction in the loop or one before it, so
+                            // hoisting saves no bytes; across a call it holds
+                            // a callee-saved register (push, pop) or is made
+                            // again. Exit: none while the bar is bytes.
+                            && !(size && calls)
                     });
                     if constant && !movable {
                         hoisted_values.extend(value);
@@ -513,7 +521,7 @@ mod tests {
         body.inputs = [1, 2, 3].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let classes = RegisterClasses::m16();
-        let done = hoisted(&body, &classes);
+        let done = hoisted(&body, &classes, false);
         let names = |at: usize| -> Vec<String> {
             done.blocks[at]
                 .insns
@@ -573,7 +581,7 @@ mod tests {
             );
             body.inputs = [1, 2, 3].into_iter().collect();
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16());
+            let done = hoisted(&body, &RegisterClasses::m16(), false);
             let names = |at: usize| -> Vec<String> {
                 done.blocks[at]
                     .insns
@@ -627,7 +635,7 @@ mod tests {
             body.inputs = [1].into_iter().collect();
             body.float_stack = 8;
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16());
+            let done = hoisted(&body, &RegisterClasses::m16(), false);
             done.blocks[0]
                 .insns
                 .iter()
@@ -673,7 +681,7 @@ mod tests {
             );
             body.inputs = [1].into_iter().collect();
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16());
+            let done = hoisted(&body, &RegisterClasses::m16(), false);
             (done.blocks[0].insns.len(), done.blocks[1].insns.len())
         };
         assert_eq!(run(true), (1, 2), "the phi's copy stays");
@@ -710,7 +718,40 @@ mod tests {
         );
         body.inputs = [1].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
-        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64), false);
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
+    }
+
+    /// m64 -Os overflow_builtins 613 -> 637 B: `mov r64, offset sa` hoisted out
+    /// of a loop of calls was held across them in a callee-saved register and
+    /// made again after the first call; main made it once per trip.
+    #[test]
+    fn test_at_size_a_symbol_address_stays_in_a_loop_that_calls() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let address = Loc::Imm(llrm_lir::Imm {
+            value: 0,
+            width: 8,
+            address: Some(llrm_lir::Addr::new(llrm_lir::Space::Segment, 0)),
+        });
+        let constant = insn(10, Operation::Move, "mov", vec![wide(10)], vec![address], vec![10], vec![]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![constant, insn(14, Operation::Call, "call", vec![], vec![], vec![], vec![]), branch(11)]).into(),
+                block(2, vec![], vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64), true);
+        assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (1, 3));
     }
 }
