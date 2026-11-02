@@ -14,13 +14,13 @@ static uint64_t d2b(double d) { uint64_t b; memcpy(&b, &d, 8); return b; }
 static uint64_t mk(uint64_t s, uint64_t e, uint64_t m) { return s << 63 | (e & 0x7FF) << 52 | (m & 0xFFFFFFFFFFFFFull); }
 #define HID (1ull << 52)
 
-/* The divide: U = ma << 11 (halved when ma >= mb), V = mb << 11, quotient digits of w bits (16: 68000/68060, 32: 68020).
+/* The divide: U = ma << 3, V = mb << 11, quotient digits of w bits (16: 68000/68060, 32: 68020).
  * qhat comes from the remainder's top 2w bits over V's top w bits; ovf[w/16-1][k] counts digit k with equal top halves
  * (qhat forced to all ones), fix[w/16-1][c] digits whose qhat was c too big. */
 static long ovf[2][4], fix[2][3];
 static void div_model(uint64_t ma, uint64_t mb, int w)
 {
-    uint64_t U = ma << 11, V = mb << 11, vt = V >> (64 - w), R = ma >= mb ? U >> 1 : U, mask = (1ull << w) - 1;
+    uint64_t V = mb << 11, vt = V >> (64 - w), R = ma << 3, mask = (1ull << w) - 1;
     for (int k = 0; k < 64 / w; k++) {
         uint64_t rt = R >> (64 - w), qhat = rt == vt ? mask : (uint64_t)((R >> (64 - 2 * w)) / vt);
         if (rt == vt) ovf[w / 16 - 1][k]++;
@@ -31,27 +31,24 @@ static void div_model(uint64_t ma, uint64_t mb, int w)
     }
 }
 
-/* ma, mb whose remainder before digit k (0-based, w-bit digits) has V's top w bits: U * 2^(wk) = Q * V + R with R's top w bits
- * those of V and U's low 11 bits zero. Q is drawn until R's forced low bits and top bits agree. */
+/* ma, mb whose remainder before digit k (1-based: U < 2^56 cannot tie V's top bits) has V's top w bits:
+ * U * 2^(wk) = Q * V + R with R's top w bits those of V and U's low 3 bits zero. Q is drawn until R's forced low bits and top bits agree. */
 static void div_digit_overflow(int w, int k, uint64_t *ma, uint64_t *mb)
 {
     for (;;) {
         uint64_t V = (HID | (rnd() & (HID - 1))) << 11, top = V >> (64 - w) << (64 - w);
-        if (k == 0) { /* U < V with the same top bits */
-            uint64_t U = top | ((rnd() % (V - top)) & ~0x7FFull);
-            *ma = U >> 11, *mb = V >> 11; return;
-        }
-        int L = w * k + 11;
-        u128 Q = (u128)1 << (w * k - 1) | (((u128)rnd() << 64 | rnd()) & (((u128)1 << (w * k - 1)) - 1));
+        int L = w * k + 3;
+        u128 lo = ((u128)1 << (w * k + 55)) / V, span = lo, r = (u128)rnd() << 64 | rnd();
+        u128 Q = lo + r % span;
         uint64_t topmask = ~0ull << (64 - w), lowmask = (1ull << L) - 1, low = (uint64_t)(-(Q * V)) & lowmask;
         if ((low & topmask) != (top & lowmask)) continue;
         uint64_t R = top | (low & ~topmask) | (rnd() & ~lowmask & ~topmask);
         if (R >= V) continue;
         u128 n = Q * V + R;
-        if ((uint64_t)n & 0x7FF || (n >> (w * k)) >> 64) continue;
+        if ((uint64_t)n & 7 || (n >> (w * k)) >> 64) continue;
         uint64_t U = (uint64_t)(n >> (w * k));
-        if (U < V >> 1 || U >= V) continue;
-        *ma = U >> 11, *mb = V >> 11; return;
+        if (U >> 55 != 1) continue;
+        *ma = U >> 3, *mb = V >> 11; return;
     }
 }
 
@@ -85,7 +82,7 @@ static void pair(uint64_t *a, uint64_t *b)
     case 11: /* denormal times a large normal: results anywhere around the bottom of the normal range */
         *a = mk(s1, 0, m >> (rnd() % 52)), *b = mk(s2, 1000 + rnd() % 100, m2); if (rnd() & 1) { uint64_t t = *a; *a = *b; *b = t; } return;
     case 0: case 1: { /* divide digit k with equal top halves, 16- and 32-bit digits */
-        int w = rnd() & 1 ? 32 : 16, k = rnd() % (64 / w);
+        int w = rnd() & 1 ? 32 : 16, k = 1 + rnd() % (64 / w - 1);
         div_digit_overflow(w, k, &ma, &mb);
         uint64_t ea = 1 + rnd() % 2046, eb = 1 + rnd() % 2046;
         *a = mk(s1, ea, ma), *b = mk(s2, eb, mb); return;
@@ -131,12 +128,12 @@ int main(int argc, char **argv)
     printf("};\n");
     int miss = 0;
     for (int w = 0; w < 2; w++) {
-        for (int k = 0; k < 4 / (w + 1); k++) miss |= !ovf[w][k];
+        for (int k = 1; k < 4 / (w + 1); k++) miss |= !ovf[w][k];
         miss |= !fix[w][1] || !fix[w][2];
     }
     if (n >= 2000 && miss) {
-        fprintf(stderr, "gen_vectors64_edge: a divide step never hit: ovf16 %ld %ld %ld %ld ovf32 %ld %ld fix16 %ld %ld fix32 %ld %ld\n", ovf[0][0],
-                ovf[0][1], ovf[0][2], ovf[0][3], ovf[1][0], ovf[1][1], fix[0][1], fix[0][2], fix[1][1], fix[1][2]);
+        fprintf(stderr, "gen_vectors64_edge: a divide step never hit: ovf16 %ld %ld %ld ovf32 %ld fix16 %ld %ld fix32 %ld %ld\n", ovf[0][1],
+                ovf[0][2], ovf[0][3], ovf[1][1], fix[0][1], fix[0][2], fix[1][1], fix[1][2]);
         return 1;
     }
     return 0;

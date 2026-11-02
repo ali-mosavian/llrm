@@ -28,6 +28,18 @@ SAVED = 36				| movem.l %d2-%d7/%a2-%a4
 	or.l	\t,\hi
 	.endm
 
+| d0:d1 = ma << 3 from a's fields
+	.macro	ushl3
+	and.l	#0xFFFFF,%d0
+	bset	#20,%d0
+	add.l	%d1,%d1
+	addx.l	%d0,%d0
+	add.l	%d1,%d1
+	addx.l	%d0,%d0
+	add.l	%d1,%d1
+	addx.l	%d0,%d0
+	.endm
+
 | \e = the exponent field of \hi
 	.macro	expo hi, e
 	move.l	\hi,\e
@@ -577,21 +589,13 @@ __divdf3:
 	beq	.Ldodd
 	cmp.w	#0x7FF,%d5
 	beq	.Ldodd
-	shl11	%d0,%d1,%d6
-	bset	#31,%d0			| U
+	ushl3
 	shl11	%d2,%d3,%d6
 	bset	#31,%d2			| V
-.Ldgo:					| d0:d1 = U, d2:d3 = V, d4.w = ea, d5.w = eb
+.Ldgo:					| d0:d1 = U = ma << 3 < V = d2:d3 = mb << 11, d4.w = ea, d5.w = eb
 	sub.w	%d5,%d4
-	add.w	#1021,%d4		| e - 1 when U < V
-	cmp.l	%d2,%d0
-	bne.s	1f
-	cmp.l	%d3,%d1
-1:	bcs.s	2f
-	lsr.l	#1,%d0
-	roxr.l	#1,%d1
-	addq.w	#1,%d4
-2:	move.w	%d4,%a4
+	add.w	#1021,%d4		| e - 1 when q < 2^56
+	move.w	%d4,%a4
 .ifdef WIDE
 | Two 32-bit digits: q = (R1:R0) / V1, R = R << 32 - q * V, corrected by adding V back.
 	.macro	digit
@@ -680,22 +684,23 @@ __divdf3:
 	or.l	%d0,%d1			| remainder: sticky
 	sne	%d5
 	move.l	%a2,%d0
-	move.l	%d7,%d1			| q, implicit bit 63
-	move.l	%d1,%d3
-	swap	%d3
-	clr.w	%d3
-	lsl.l	#5,%d3			| guard
-	or.b	%d5,%d3
-	lsr.l	#8,%d1
-	lsr.l	#3,%d1
-	move.l	%d0,%d6
-	swap	%d6
-	clr.w	%d6
-	lsl.l	#5,%d6
-	or.l	%d6,%d1
-	lsr.l	#8,%d0
-	lsr.l	#3,%d0
+	move.l	%d7,%d1			| q = U * 2^64 / V, 2^55 <= q < 2^57
 	move.l	%a4,%d4
+	moveq	#3,%d6
+	btst	#24,%d0
+	beq.s	1f
+	moveq	#4,%d6
+	addq.w	#1,%d4
+1:	move.l	%d1,%d3
+	lsr.l	%d6,%d1
+	ror.l	%d6,%d3
+	eor.l	%d1,%d3			| guard: the bits shifted out
+	or.b	%d5,%d3
+	move.l	%d0,%d7
+	lsr.l	%d6,%d0
+	ror.l	%d6,%d7
+	eor.l	%d0,%d7
+	or.l	%d7,%d1
 	bra	.Lpack
 
 .Ldodd:					| an exponent field is 0 or 2047
@@ -724,9 +729,11 @@ __divdf3:
 	beq	.Lzero			| 0 / x
 	bsr	.Lnorm
 	move.w	%d6,%d4
+	move.b	%d0,%d1
+	ror.l	#8,%d1
+	lsr.l	#8,%d0			| m << 3
 	bra.s	4f
-3:	shl11	%d0,%d1,%d6
-	bset	#31,%d0
+3:	ushl3
 4:	exg	%d0,%d2
 	exg	%d1,%d3
 	tst.w	%d5
