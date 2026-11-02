@@ -547,68 +547,63 @@ mulgo:	call	unp
 	sbc	hl,de
 	ld	22(iy),l
 	ld	23(iy),h
-	ld	a,4(iy)		; product 14..19: the multiplier in the low half, the sum in the high half
-	ld	14(iy),a
-	ld	a,5(iy)
-	ld	15(iy),a
-	ld	a,6(iy)
-	ld	16(iy),a
-	ld	c,0(iy)		; the sum in d:h:l, the multiplicand's low half in bc, its top byte at 2(iy)
+	ld	c,0(iy)		; multiplicand a in e:bc, sum in a:hl, multiplier byte in d: one rr chain per bit
 	ld	b,1(iy)
-	ld	hl,#0
-	ld	d,h
-	ld	e,#24
-1$:	bit	0,14(iy)
-	jr	z,2$
-	add	hl,bc
-	ld	a,d
-	adc	a,2(iy)
-	ld	d,a
-	jr	3$
-2$:	or	a,a
-3$:	rr	d
+	ld	e,2(iy)
+	xor	a,a
+	ld	h,a
+	ld	l,a
+	ld	d,4(iy)
+	call	m8
+	ld	14(iy),d
+	ld	d,5(iy)
+	call	m8
+	ld	15(iy),d
+	ld	d,6(iy)
+	call	m8
+	ld	c,22(iy)
+	ld	b,23(iy)
+	jr	nc,1$		; the adds came one place early: a:h:l:d is twice the product's top 32 bits
+	rra			; product >= 2: once more right, exponent up
 	rr	h
 	rr	l
-	rr	16(iy)
-	rr	15(iy)
-	rr	14(iy)
-	dec	e
-	jr	nz,1$
-	ld	17(iy),l
-	ld	18(iy),h
-	ld	19(iy),d
-	ld	c,22(iy)	; the product has its top bit at 47 or 46: keep 27 bits, fold the rest into bit 0
-	ld	b,23(iy)
-	ld	e,#4
-	bit	7,19(iy)
-	jr	z,4$
+	rr	d
 	inc	bc
-	inc	e
-4$:	ld	13(iy),#0
-	ld	a,14(iy)
-	or	a,15(iy)
-	jr	z,5$
-	set	0,13(iy)
-5$:	ld	a,16(iy)
-	ld	0(iy),a
-	ld	a,17(iy)
-	ld	1(iy),a
-	ld	a,18(iy)
+	jr	nc,1$
+	set	0,14(iy)
+1$:	ld	e,#0		; 27-bit block: e:a:h:l:d << 3, then d holds the rest of the sticky bits
+	sla	d
+	adc	hl,hl
+	rla
+	rl	e
+	sla	d
+	adc	hl,hl
+	rla
+	rl	e
+	sla	d
+	adc	hl,hl
+	rla
+	rl	e
+	ld	3(iy),e
 	ld	2(iy),a
-	ld	a,19(iy)
-	ld	3(iy),a
-6$:	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,7$
-	set	0,13(iy)
-7$:	dec	e
-	jr	nz,6$
-	bit	0,13(iy)
-	jp	z,packbc
-	set	0,0(iy)
+	ld	1(iy),h
+	ld	a,d
+	or	a,14(iy)
+	or	a,15(iy)
+	jr	z,2$
+	set	0,l
+2$:	ld	0(iy),l
 	jp	packbc
+m8:	.rept	8		; eight multiplier bits from d; the add carry enters the next rr chain
+	rra
+	rr	h
+	rr	l
+	rr	d
+	jr	nc,.+4
+	add	hl,bc
+	adc	a,e
+	.endm
+	ret
 
 divgo:	call	unp
 	ld	a,8(iy)		; e = ea - eb + 126 + nb - na
