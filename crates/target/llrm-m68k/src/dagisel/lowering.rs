@@ -79,8 +79,10 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu == Cpu::M68020;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type());
+    let mut tl =
+        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float());
     tl.init_actions();
+    tl.set_soft_float_libcalls();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, MVT::I1, Action::Promote);
@@ -211,28 +213,49 @@ impl Hooks for M68kLowering {
     ) -> Option<SDValue> {
         use super::call::{Ext, In, Out};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
-        let outs: Vec<Out> = args
-            .iter()
-            .map(|&value| Out {
-                value,
-                ext,
-                pointer: false,
-                arg_vt: dag.value_type(value),
-                split: false,
-                variadic: false,
-            })
-            .collect();
+        let out = |value: SDValue, dag: &SelectionDAG| Out {
+            value,
+            ext,
+            pointer: false,
+            arg_vt: dag.value_type(value),
+            split: false,
+            variadic: false,
+        };
+        // `getCopyToParts`: a 64-bit argument is two words, the high one
+        // first on a big-endian target.
+        let mut outs: Vec<Out> = Vec::new();
+        for &value in args {
+            if dag.value_type(value) == EVT::I64 {
+                let [low, high] = split_words(dag, value);
+                outs.push(out(high, dag));
+                outs.push(out(low, dag));
+            } else {
+                outs.push(out(value, dag));
+            }
+        }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let (_chain, values) = super::call::M68kCalling::default().lower_call(
-            dag,
-            root,
-            callee,
-            &outs,
-            &[In { vt: ret, pointer: false, arg_vt: ret, split: false }],
-        );
+        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false };
+        let wide = ret == EVT::I64;
+        let ins = if wide { vec![word, word] } else { vec![In { vt: ret, pointer: false, arg_vt: ret, split: false }] };
+        let (_chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &ins);
+        if wide {
+            // the high word in `d0`, the low in `d1`
+            return Some(dag.get_node(ISD::BuildPair, EVT::I64, &[values[1], values[0]]));
+        }
         values.first().copied()
     }
+}
+
+/// The low and the high word of a 64-bit value.
+fn split_words(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> [SDValue; 2] {
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[value]);
+    let by = dag.get_constant(32, EVT::I32);
+    let upper = dag.get_node(ISD::Srl, EVT::I64, &[value, by]);
+    [low, dag.get_node(ISD::Truncate, EVT::I32, &[upper])]
 }
 
 /// `LowerXALUO` (with `lowerOverflowArithmetic`): the arithmetic as one node

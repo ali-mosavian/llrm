@@ -38,6 +38,7 @@ pub fn builder_target() -> BuilderTarget {
             ..BuilderTarget::m32().dag
         },
         shift_amount: EVT::I32,
+        soft_float: true,
         jump_tables: false,
         string_instructions: false,
         // past the inline limit a copy or a fill is a call (the
