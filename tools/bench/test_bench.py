@@ -1075,3 +1075,13 @@ def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_paddin
         "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
         "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
     ]
+
+
+def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds():
+    """m16 -O2 (500 milliclocks/byte): +13 B and -12 clocks passes (6500 - 12000 <= 0), +13 B and -5 clocks fails; the same cell at a level without a rate fails on its bytes."""
+    base = {"instructions": 10, "memory_operands": 4, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0, "clocks": 50}
+    more = {**base, "instructions": 11, "code_bytes": 113}
+    assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
+    assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
+    assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: instructions 11 > 10 (worse)", "a c -Os: code_bytes 113 > 100 (worse)"]
+    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]

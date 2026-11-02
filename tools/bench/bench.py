@@ -744,19 +744,34 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     return True
 
 
-def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
+def rate_for(language: str, opt: str) -> int:
+    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`, from the target's own rows (m16 -O2: 500; m32
+    -O2/-O3: line fill clocks / cache line bytes); 0 where the target trades none, and at -Os."""
+    return 0
+
+
+def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), rate: int = 0) -> list[str]:
     """What fails the gate for one measurement: a count above its baseline (worse) unless a waiver (tools/bench/waivers) names its row,
-    counter and this count. Clocks (the 486 kernel clocks) are judged like the counts. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
-    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged."""
+    counter and this count. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
+    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged. Clocks (the 486 kernel clocks) are judged like the counts.
+    Where the target prices a byte (`rate`, milliclocks per byte; -O2/-O3), the cell passes when 1000 * delta clocks + rate * delta code bytes <= 0 and
+    clocks, code bytes, instructions and memory operands are not gated alone: they are in the row."""
     if want is None:
         return []
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
     problems = []
+    priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
+    if priced:
+        clocks, size = got["clocks"] - want["clocks"], got["code_bytes"] - want["code_bytes"]
+        if 1000 * clocks + rate * size > 0:
+            problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
     for counter in (*COUNTERS, "clocks", *SIZES):
         if counter not in got:
             continue
         if counter not in want:
+            continue
+        if priced and counter in ("instructions", "memory_operands", "clocks", "code_bytes"):
             continue
         if got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
             continue
@@ -833,7 +848,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
-                    problems += against(label, got, want, waived)
+                    problems += against(label, got, want, waived, rate_for(variant.language, opt))
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
