@@ -13,7 +13,7 @@ WIDE = 1
 .endif
 .endif
 
-SAVED = 40				| movem.l %d2-%d7/%a2-%a5
+SAVED = 36				| movem.l %d2-%d7/%a2-%a4
 
 | hi:lo <<= 11 (t scratch)
 	.macro	shl11 hi, lo, t
@@ -285,7 +285,7 @@ __adddf3:
 	add.l	%d4,%d0
 	add.l	%a3,%d0
 .Lret:
-	movem.l	(%sp)+,%d2-%d7/%a2-%a5
+	movem.l	(%sp)+,%d2-%d7/%a2-%a4
 	rts
 3:	addq.l	#1,%d1			| tie: to even
 	bcc.s	4f
@@ -442,7 +442,7 @@ __adddf3:
 	.globl	__muldf3
 	.type	__muldf3,@function
 __muldf3:
-	movem.l	%d2-%d7/%a2-%a5,-(%sp)
+	movem.l	%d2-%d7/%a2-%a4,-(%sp)
 	movem.l	SAVED+4(%sp),%d0-%d3
 	move.l	%d0,%d4
 	eor.l	%d2,%d4
@@ -563,7 +563,7 @@ __muldf3:
 	.globl	__divdf3
 	.type	__divdf3,@function
 __divdf3:
-	movem.l	%d2-%d7/%a2-%a5,-(%sp)
+	movem.l	%d2-%d7/%a2-%a4,-(%sp)
 	movem.l	SAVED+4(%sp),%d0-%d3
 	move.l	%d0,%d4
 	eor.l	%d2,%d4
@@ -619,19 +619,16 @@ __divdf3:
 2:
 	.endm
 	digit
-	move.l	%d7,%a5
+	move.l	%d7,%a2
 	digit
 .else
 | Four 16-bit digits: q = (R3:R2) / V3, R = R << 16 - q * (V2:V1:V0), corrected by adding V back.
 	move.l	%d2,%a0			| V hi
 	move.l	%d3,%a1			| V lo
-	clr.w	%d2
-	move.l	%d2,%a2			| V3 << 16
 	swap	%d2			| V3
 	.macro	digit
-	cmp.l	%a2,%d0
-	bcc.s	3f			| R3 = V3
 	divu.w	%d2,%d0			| r : q
+	bvs.s	3f			| R3 = V3: q would not fit
 	move.w	%d0,%d7
 	swap	%d1
 	move.w	%d1,%d0			| r : R1
@@ -675,14 +672,14 @@ __divdf3:
 	digit
 	swap	%d7
 	digit
-	move.l	%d7,%a5
+	move.l	%d7,%a2
 	digit
 	swap	%d7
 	digit
 .endif
 	or.l	%d0,%d1			| remainder: sticky
 	sne	%d5
-	move.l	%a5,%d0
+	move.l	%a2,%d0
 	move.l	%d7,%d1			| q, implicit bit 63
 	move.l	%d1,%d3
 	swap	%d3
