@@ -135,7 +135,7 @@ mfin:
     sta rc16                ; guard byte with the sticky bit
     jmp mdtail
 
-; ---- divide: R = rc23..25 (low first), D = rc20..22, quotient rc16..19 (the rounding block)
+; ---- divide: R = rc23, rc24, A (low first), D = rc20..22, quotient rc17..19, guard and sticky rc16 (the rounding block)
 divbody:
     tya
     sec
@@ -155,91 +155,98 @@ divbody:
     txa
     sbc #0
     sta e16hi
-    lda rc16
+    lda rc16                ; R = rc23, rc24 and A (top byte); D = rc20..22
     sta rc23
     lda rc17
     sta rc24
+    ldy #1                  ; three 8-bit quotient groups, each collected in rc4 behind a sentinel bit, go to rc16+X
+    sty rc4
+    ldx #3
     lda rc18
-    sta rc25
-    lda #$40                ; the quotient's 26 bits come in groups of 2, 8, 8, 8, each collected in rc4 behind a sentinel bit
-    sta rc4
-    ldx #3                  ; the group goes to rc16+X
+    cmp rc22                ; ratio < 1: one step down, so the first quotient bit is always 1
+    bne :+
+    ldy rc24
+    cpy rc21
+    bne :+
+    ldy rc23
+    cpy rc20
+:   bcs dsub
+    ldy e16lo
+    bne :+
+    dec e16hi
+:   dec e16lo
+    jmp dnext
 dloop:
-    lda rc25                ; compare first: the top byte nearly always decides, and only a quotient bit of 1 pays for the subtract
-    cmp rc22
+    cmp rc22                ; compare first: the top byte nearly always decides, and only a quotient bit of 1 pays for the subtract
     bne dcmp
-    lda rc24
-    cmp rc21
+    ldy rc24
+    cpy rc21
     bne dcmp
-    lda rc23
-    cmp rc20
+    ldy rc23
+    cpy rc20
 dcmp:
     bcc dno                 ; R < D: quotient bit 0 (carry clear)
-    lda rc23                ; carry is set: R - D, and the quotient bit 1 is the carry left by the last sbc
+dsub:
+    tay                     ; carry is set: R - D, and the quotient bit 1 is the carry left by the last sbc
+    lda rc23
     sbc rc20
     sta rc23
     lda rc24
     sbc rc21
     sta rc24
-    lda rc25
+    tya
     sbc rc22
-    sta rc25
 dno:
     rol rc4
     bcs dgroup
 dnext:
     asl rc23
     rol rc24
-    rol rc25
+    rol a
     bcc dloop
-    sec                     ; R overflowed 24 bits: the next bit is 1 and R - D is exact modulo 2^24
+    tay                     ; R overflowed 24 bits: the next bit is 1 and R - D is exact modulo 2^24
     lda rc23
     sbc rc20
     sta rc23
     lda rc24
     sbc rc21
     sta rc24
-    lda rc25
+    tya
     sbc rc22
-    sta rc25
     sec
     bcs dno
 dgroup:                     ; the sentinel fell out: rc4 holds the group
-    lda rc4
-    sta rc16,x
-    dex
-    bmi ddone
-    lda #1
-    sta rc4
-    bne dnext
-ddone:
-    ldy #0                  ; sticky: any remainder
-    lda rc23
-    ora rc24
-    ora rc25
-    beq :+
+    ldy rc4
+    sty rc16,x
     ldy #1
-:   ldx #0                  ; align the 26-bit quotient to bit 31: 6 shifts, or 7 when the ratio was < 1
-dnorm:
-    lda rc19
-    bmi dnormd
-    asl rc16
-    rol rc17
-    rol rc18
-    rol rc19
-    inx
-    bne dnorm
-dnormd:
-    cpx #7
-    bne dnd2
-    lda e16lo
-    bne dnd1
-    dec e16hi
-dnd1:
-    dec e16lo
-dnd2:
-    tya
-    ora rc16
+    sty rc4
+    dex
+    bne dnext
+    asl rc23                ; guard and sticky from 2R against D
+    rol rc24
+    rol a
+    bcs dabove
+    cmp rc22
+    bne :+
+    ldy rc24
+    cpy rc21
+    bne :+
+    ldy rc23
+    cpy rc20
+:   bcc dbelow
+    beq dhalf
+dabove:
+    lda #$81
+    bne dst
+dhalf:
+    lda #$80
+    bne dst
+dbelow:
+    ora rc24
+    ora rc23
+    beq dst
+    lda #1
+dst:
     sta rc16
 ; ---- shared tail: block rc16..19 normalized, e16 = biased exponent of its top bit, sign from rc5/rc9
 mdtail:
