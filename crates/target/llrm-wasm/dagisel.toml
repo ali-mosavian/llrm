@@ -2,10 +2,12 @@
 # No ByHwMode types in the table: the `hw_modes` list is empty.
 [target]
 name = "wasm"
+llvm_build = "llvm-build-wasm"
 ns = "WebAssembly::"
 isd = "WebAssemblyISD::"
 llvm_dir = "WebAssembly"
 td = "WebAssembly.td"
+out = "src/dagisel/generated"
 cpus = ["wasm32", "wasm64"]
 # The registers the hand code names (the others are virtual).
 registers = ["ARGUMENTS", "SP32", "SP64", "VALUE_STACK"]
