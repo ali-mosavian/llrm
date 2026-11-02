@@ -72,7 +72,8 @@ fn a_volatile_load_keeps_its_count_and_width_when_the_extend_folds() {
         for cpu in [Cpu::M68000, Cpu::M68020] {
             for level in [Level::O2, Level::Os] {
                 let text = assembly(&ir, cpu, level).expect("compiles");
-                // a read is a move whose source is memory; the address may be in a register
+                // a read is a move whose source is memory; the address may be
+                // in a register
                 let reads = text.lines().filter(|line| line.trim_start().starts_with("move.b\t(")).count();
                 assert_eq!(reads, loads, "{name} {cpu:?} {level:?}: the volatile is read {reads} times:\n{text}");
                 let words = text

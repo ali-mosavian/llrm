@@ -18,9 +18,9 @@ define i32 @f() {
 
 /// The pin's `tryToFoldExtOfLoad` (`NonNegZExt`, DAGCombiner.cpp L15727) makes
 /// a `zext nneg` of a load that a signed compare reads the sign-extending load,
-/// which the compare shares. Without it the byte was masked for the stored value
-/// (`and.l #255`) and compared narrow (`cmpi.b`): a load, a mask and a compare
-/// where the pin has a load, `ext.w`/`ext.l` and one `cmpi.l`.
+/// which the compare shares. Without it the byte was masked for the stored
+/// value (`and.l #255`) and compared narrow (`cmpi.b`): a load, a mask and a
+/// compare where the pin has a load, `ext.w`/`ext.l` and one `cmpi.l`.
 #[test]
 fn a_zext_nneg_of_a_load_a_signed_compare_reads_is_one_sign_extended_load() {
     for cpu in [Cpu::M68000, Cpu::M68020] {

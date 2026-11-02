@@ -335,7 +335,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if bits > widest {
                     break;
                 }
-                if tli.types.is_type_legal(EVT::integer(bits)) {
+                // `canMergeStoresTo` and `allowsMemoryAccess` of the joined
+                // type at the first store's alignment
+                if tli.types.is_type_legal(EVT::integer(bits))
+                    && self.hooks.allows_memory_access(EVT::integer(bits), first_info.align)
+                {
                     last_trunc = false;
                     last_legal = i + 1;
                 } else if self.hooks.merge_stores_via_trunc_store() && self.trunc_store_is_legal(tli, bits) {
@@ -388,9 +392,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let element_bits = mem.size_in_bits();
         let total = element_bits * stores.len() as u32;
         let mask = super::fold::mask(element_bits);
-        // Little endian: the lowest address is the lowest bits.
+        // The lowest address is the lowest bits on a little-endian target and
+        // the highest on a big-endian one (the pin's `IsLE ? NumStores - 1 - i
+        // : i`).
+        let big_endian = self.dag.config().big_endian;
         let mut joined = 0u128;
-        for link in stores.iter().rev() {
+        for i in 0..stores.len() {
+            let link = &stores[if big_endian { i } else { stores.len() - 1 - i }];
             joined =
                 (joined << element_bits) | (self.dag.constant(self.dag.operand(link.store, 1)).unwrap_or(0) & mask);
         }
@@ -521,7 +529,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if bits > widest {
                     break;
                 }
-                if tli.types.is_type_legal(EVT::integer(bits)) {
+                if tli.types.is_type_legal(EVT::integer(bits))
+                    && self.hooks.allows_memory_access(EVT::integer(bits), first_store_align)
+                    && self.hooks.allows_memory_access(EVT::integer(bits), first_align)
+                {
                     last_legal = i + 1;
                 }
             }

@@ -101,6 +101,21 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::allowsMemoryAccess` (and `IsFast`) for an access of
+    /// `vt` whose alignment is `align` bytes: `tryStoreMergeOfConstants` and
+    /// `tryStoreMergeOfLoads` join stores only into an access the target
+    /// takes at that alignment. DEVIATE: true by default, because this
+    /// combiner was written for x86 and arm64, which take any alignment
+    /// (the pin's default is false and they override it). A strict-alignment
+    /// target answers as the pin does.
+    fn allows_memory_access(
+        &self,
+        _vt: EVT,
+        _align: u32,
+    ) -> bool {
+        true
+    }
+
     /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its
     /// load, and puts the freeze back on the narrowed load. Default false
     /// until x86 is judged.

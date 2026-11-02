@@ -148,6 +148,17 @@ pub struct M68kLowering {
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    /// The pin's `M68kTargetLowering` does not override
+    /// `allowsMisalignedMemoryAccesses`, so a word or long access is taken
+    /// only at the ABI alignment (2 for every integer wider than a byte).
+    fn allows_memory_access(
+        &self,
+        vt: EVT,
+        align: u32,
+    ) -> bool {
+        vt.size_in_bits() <= 8 || align >= 2
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,
