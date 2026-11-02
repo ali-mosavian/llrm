@@ -47,4 +47,13 @@ for O in -Os -O2; do
   done
   echo "llvm-mos $O: +bytes=$(( s_full - s_base )) fails=$f_full cycles=$(( (c_full - c_base) / 64 ))"
 done
+# ours (shift-add, llvm_mos_mulsi3.s) in the llvm-mos __mulsi3 ABI: same C harness, same call glue as the llvm-mos row above
+for k in base full; do
+  d=""; [ $k = base ] && d=-DBASE
+  $B/mos-sim-clang -Os $d -I$B/../mos-platform/common/asminc -Wl,--allow-multiple-definition -I$T -o $T/$k llvmmos_mulsi3.s $T/m.c 2>$T/err || { cat $T/err; exit 1; }
+  set +e; $B/mos-sim --cycles $T/$k 2>$T/$k.out >/dev/null; eval "f_$k=\$?"; set -e
+  eval "c_$k=\$(sed -n 's/^\([0-9][0-9]*\) cycles.*/\1/p' $T/$k.out | head -1)"
+  eval "s_$k=\$($B/llvm-size $T/$k.elf | awk 'NR==2{print \$1}')"
+done
+echo "ours shift-add through the llvm-mos ABI (-Os harness): routine bytes=$($B/clang --target=mos -I$B/../mos-platform/common/asminc -c llvmmos_mulsi3.s -o $T/o.o && $B/llvm-size $T/o.o | awk 'NR==2{print $1}') (the link delta is not meaningful, mul.cc.obj stays in the image) fails=$f_full cycles=$(( (c_full - c_base) / 64 ))"
 rm -r $T
