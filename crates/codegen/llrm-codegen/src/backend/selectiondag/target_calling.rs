@@ -111,6 +111,13 @@ pub trait TargetCalling: Debug + Sync {
         false
     }
 
+    /// Whether a function with an `sret` parameter returns that pointer in the
+    /// result register as well (the pin's `SRetReturnReg`; M68k copies it to
+    /// `d0`), as an extra integer part of `lower_return`'s `outs`.
+    fn returns_sret_pointer(&self) -> bool {
+        false
+    }
+
     /// Whether the target places these parts (`outs` the values sent, `ins` the
     /// values received); the builder refuses with the reason when it does not.
     fn accepts(

@@ -10,7 +10,7 @@
 //! LLVM's `Outs` and `Ins` are.
 //!
 //! DEVIATE: not translated are `inreg` (`d0`, `d1`), `nest` (`a1`), `byval`,
-//! `sret`, varargs, tail calls, the Fast convention and callee-pop. Reason:
+//! varargs, tail calls, the Fast convention and callee-pop. Reason:
 //! the slice does not reach them. Exit: M3d.
 //!
 //! DEVIATE: the DAG's global node carries no target flag (`TF=`): a callee is
@@ -241,6 +241,20 @@ impl M68kCalling {
 }
 
 impl TargetCalling for M68kCalling {
+    /// A hidden result pointer is the first stack argument, as any pointer.
+    fn passes_in_place(
+        &self,
+        attribute: &str,
+    ) -> bool {
+        attribute == "sret"
+    }
+
+    /// `ABI require that for returning structs by value we copy the sret
+    /// argument into %D0`.
+    fn returns_sret_pointer(&self) -> bool {
+        true
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
