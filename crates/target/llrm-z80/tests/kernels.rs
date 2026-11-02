@@ -12,8 +12,33 @@ fn have(tool: &str) -> bool {
 
 /// Rows that compile and run correctly now; a row is added when it does.
 const WORKING: &[&str] = &[
-    "zero", "add8", "add16", "max8", "max16", "sum_arr", "find", "fill", "popcount", "mul8", "fib", "sum4", "slen",
-    "mcopy", "crc16", "mul16", "digits", "reverse", "bsearch8", "sum16", "schr", "gcd", "scmp", "carry32", "stackargs", "bigframe", "indirect",
+    "zero",
+    "add8",
+    "add16",
+    "max8",
+    "max16",
+    "sum_arr",
+    "find",
+    "fill",
+    "popcount",
+    "mul8",
+    "fib",
+    "sum4",
+    "slen",
+    "mcopy",
+    "crc16",
+    "mul16",
+    "digits",
+    "reverse",
+    "bsearch8",
+    "sum16",
+    "schr",
+    "gcd",
+    "scmp",
+    "carry32",
+    "stackargs",
+    "bigframe",
+    "indirect",
 ];
 
 #[test]

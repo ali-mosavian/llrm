@@ -73,7 +73,8 @@ struct Printer<'a> {
     folded: Option<(RegId, String)>,
     /// Instructions after the current one that were printed with it.
     skip: usize,
-    /// Bytes of stack arguments reserved below the frame, while a call is being set up.
+    /// Bytes of stack arguments reserved below the frame, while a call is being
+    /// set up.
     call_bytes: i64,
     /// The live lanes of the allocated function, and the block and
     /// instruction being printed.
@@ -189,13 +190,15 @@ impl Printer<'_> {
             (true, true) => {
                 let ((dl, dh), (sl, sh)) = (lanes(to)?, lanes(from)?);
                 // a half nothing reads before it is written again is not moved
-                let after = self.liveness.live_before::<Z80Registers>(
-                    self.function,
-                    self.assignment,
-                    &REGISTER_INFO,
-                    self.at.0,
-                    self.at.1 + 1,
-                );
+                let after = self
+                    .liveness
+                    .live_before::<Z80Registers>(
+                        self.function,
+                        self.assignment,
+                        &REGISTER_INFO,
+                        self.at.0,
+                        self.at.1 + 1,
+                    );
                 if after.is_live(&REGISTER_INFO, dl) {
                     self.byte_move(dl, sl);
                 }
@@ -455,7 +458,8 @@ impl Printer<'_> {
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
             "CP16" | "CP16i" => self.compare16(inst, rest)?,
-            // `ld` leaves the flags alone: the byte is 1, and 0 when the condition fails
+            // `ld` leaves the flags alone: the byte is 1, and 0 when the
+            // condition fails
             "SETCC8" => {
                 let to = name_of(self, 0)?;
                 let Some(Operand::Imm(cond)) = inst.operands.get(1) else {
@@ -537,8 +541,9 @@ impl Printer<'_> {
                 }
                 self.push(format!("jp {symbol}"));
             }
-            // The area is `push bc`s (bc is only saved and restored: no register is lost, and no
-            // result lives in it); a store into it is addressed from IX, so the frame is set up.
+            // The area is `push bc`s (bc is only saved and restored: no
+            // register is lost, and no result lives in it); a store into it is
+            // addressed from IX, so the frame is set up.
             "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" => {
                 let Some(Operand::Imm(bytes)) = inst.operands.first() else { return Ok(()) };
                 if *bytes == 0 {
@@ -753,15 +758,13 @@ impl Printer<'_> {
             other => return Err(format!("CP16 against {other:?}")),
         };
         let reader = rest.iter().find(|one| one.reads_flags);
-        let reader = reader.and_then(
-            |one| match (one.kind, one.operands.get(1)) {
-                // a condition as a byte reads the flag its code names
-                (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3))) => Some("JPC"),
-                (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1))) => Some("JPZ"),
-                (Kind::Op(name), _) => Some(name),
-                (Kind::Copy, _) => None,
-            },
-        );
+        let reader = reader.and_then(|one| match (one.kind, one.operands.get(1)) {
+            // a condition as a byte reads the flag its code names
+            (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3))) => Some("JPC"),
+            (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1))) => Some("JPZ"),
+            (Kind::Op(name), _) => Some(name),
+            (Kind::Copy, _) => None,
+        });
         match reader {
             Some("JPC" | "JPNC" | "RETC" | "RETNC") => {
                 self.push(format!("ld a, {}", name(al)));
@@ -769,7 +772,8 @@ impl Printer<'_> {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("sbc a, {bh}"));
             }
-            // a word against zero: its two bytes or-ed, which is zero only when both are
+            // a word against zero: its two bytes or-ed, which is zero only when
+            // both are
             Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") if bl == "#0" && bh == "#0" => {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
@@ -913,9 +917,10 @@ impl Printer<'_> {
         Ok(format!("{at}(ix)"))
     }
 
-    /// The operands of `count` bytes of frame object `index` from `extra`. Within the byte
-    /// displacement of IX they are `d(ix)`; beyond it they are `d(iy)` with IY set to the
-    /// first byte (`ld iy, #n; add iy, sp`), when nothing holds IY at this instruction.
+    /// The operands of `count` bytes of frame object `index` from `extra`.
+    /// Within the byte displacement of IX they are `d(ix)`; beyond it they
+    /// are `d(iy)` with IY set to the first byte (`ld iy, #n; add iy, sp`),
+    /// when nothing holds IY at this instruction.
     fn frame_slots(
         &mut self,
         index: i32,
@@ -927,13 +932,9 @@ impl Printer<'_> {
         if (-128..=127).contains(&at) && (-128..=127).contains(&(at + count - 1)) {
             return Ok((0..count).map(|byte| format!("{}(ix)", at + byte)).collect());
         }
-        let live = self.liveness.live_before::<Z80Registers>(
-            self.function,
-            self.assignment,
-            &REGISTER_INFO,
-            self.at.0,
-            self.at.1,
-        );
+        let live = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1);
         if live.is_live(&REGISTER_INFO, reg::IY) {
             return Err(format!("frame object {index} is {at} from ix and iy is live"));
         }
@@ -1002,9 +1003,17 @@ fn layout(
     for (&index, &offset) in &function.fixed {
         frame.offsets.insert(index, FIRST_ARGUMENT + offset);
     }
-    let stack_arguments = function.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
-        inst.kind == Kind::Op("ADJCALLSTACKDOWN") && matches!(inst.operands.first(), Some(Operand::Imm(bytes)) if *bytes != 0)
-    });
+    let stack_arguments = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| inst.kind == Kind::Op("ADJCALLSTACKDOWN")
+                && matches!(
+                    inst.operands.first(),
+                    Some(Operand::Imm(bytes)) if *bytes != 0
+                ),
+        );
     frame.active = frame.size > 0 || !function.fixed.is_empty() || stack_arguments;
     frame
 }

@@ -410,7 +410,12 @@ fn the_difference_of_truncated_pointers_is_the_truncated_offset() {
 #[test]
 fn the_difference_of_extended_pointers_is_the_extended_offset() {
     let sub = "  %a = ptrtoint ptr %g to i64\n  %b = ptrtoint ptr %p to i64\n  %c = zext i64 %a to i128\n  %d = zext i64 %b to i128\n  %r = sub i128 %c, %d\n  ret i128 %r\n";
-    check("i128", "ptr %p, i64 %n", &format!("  %g = getelementptr nuw i8, ptr %p, i64 %n\n{sub}"), "  %0 = zext i64 %n to i128\n  ret i128 %0\n");
+    check(
+        "i128",
+        "ptr %p, i64 %n",
+        &format!("  %g = getelementptr nuw i8, ptr %p, i64 %n\n{sub}"),
+        "  %0 = zext i64 %n to i128\n  ret i128 %0\n",
+    );
     check(
         "i128",
         "ptr %p, i64 %n",

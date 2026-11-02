@@ -105,7 +105,8 @@ impl Target for Z80Registers {
         operand: usize,
         register: RegId,
     ) -> RegId {
-        // the sign test of a pair, and the byte halves taken from one, read a single byte
+        // the sign test of a pair, and the byte halves taken from one, read a
+        // single byte
         let half = match inst.kind {
             Kind::Op("BIT7_16" | "HI") if operand == 1 => 1,
             Kind::Op("LO") if operand == 1 => 0,

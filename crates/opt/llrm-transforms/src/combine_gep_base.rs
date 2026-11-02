@@ -160,7 +160,8 @@ impl Combiner<'_> {
         let mut one_use_flags = GepFlags::ALL;
         for &gep in geps.iter().rev() {
             // At the GEP, so it can be rewritten; the sums go at `at`.
-            let mut offset = if rewrite { self.emit_gep_offset(gep, false) } else { self.emit_gep_offset_at(at, gep, false) };
+            let mut offset =
+                if rewrite { self.emit_gep_offset(gep, false) } else { self.emit_gep_offset_at(at, gep, false) };
             let found = self.gep_of(gep).expect("a getelementptr");
             let gep_flags = GepFlags::of(found.flags);
             if self.has_one_use(self.value_of(gep)) {

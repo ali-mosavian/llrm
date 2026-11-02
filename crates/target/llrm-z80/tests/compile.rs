@@ -258,11 +258,12 @@ fn a_select_is_a_branch_and_gcd_is_the_branch_loop() {
 
 /// `slen`'s pointer loop is `strlen` (LoopIdiomRecognize, once the compile
 /// states the routine) and the runtime's `cpir` routine, expanded at its sole
-/// call, replaces it: a counter loop was 10 B / 482 T-states, this is 12 B / 340
-/// against SDCC's 13 / 437.
+/// call, replaces it: a counter loop was 10 B / 482 T-states, this is 12 B /
+/// 340 against SDCC's 13 / 437.
 #[test]
 fn a_loop_over_a_string_is_the_runtimes_strlen() {
-    let out = text(include_str!("kernels/ir/slen.ll"), "slen", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(include_str!("kernels/ir/slen.ll"), "slen", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("jp _strlen") && !out.contains("jr"), "{out}");
 }
 
@@ -283,16 +284,18 @@ fn a_pair_copy_moves_only_the_halves_that_are_read() {
 #[test]
 #[ignore = "greedy evicts the long-lived pair for a short byte that has a free register"]
 fn a_function_whose_values_fit_in_registers_makes_no_frame_access() {
-    let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(include_str!("kernels/ir/crc16.ll"), "crc16", 0, &Request::new(Level::Oz))
+        .unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("(ix)"), "{out}");
 }
 
-/// bsearch8: the base pointer and a bound spill (`ld l, -2(ix)`, `ld -3(ix), d`)
-/// in a loop with registers to spare: 68 B / 790 T against SDCC's 56 / 702.
+/// bsearch8: the base pointer and a bound spill (`ld l, -2(ix)`, `ld -3(ix),
+/// d`) in a loop with registers to spare: 68 B / 790 T against SDCC's 56 / 702.
 #[test]
 #[ignore = "greedy spills pair values in a loop with registers to spare"]
 fn a_search_loop_keeps_its_base_pointer_in_a_register() {
-    let out = text(include_str!("kernels/ir/bsearch8.ll"), "bsearch8", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(include_str!("kernels/ir/bsearch8.ll"), "bsearch8", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("(ix)"), "{out}");
 }
 
@@ -302,7 +305,8 @@ fn a_search_loop_keeps_its_base_pointer_in_a_register() {
 #[test]
 #[ignore = "greedy has no hint to keep the pointers read through (hl) in hl"]
 fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
-    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2))
+        .unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("ld l, e") && !out.contains("ld l, c"), "{out}");
 }
 
@@ -331,8 +335,8 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
 }
 
 /// A call with more arguments than registers was refused: "stack arguments are
-/// not expanded yet". 8 functions of the C corpus beyond the 23 rows hit it. The
-/// caller reserves the area, stores through IX and pops it after the call.
+/// not expanded yet". 8 functions of the C corpus beyond the 23 rows hit it.
+/// The caller reserves the area, stores through IX and pops it after the call.
 #[test]
 fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
     let ir = include_str!("kernels/ir/stackargs.ll");
@@ -341,8 +345,8 @@ fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
 }
 
 /// A frame object out of the byte displacement of IX was refused: "frame object
-/// N is -306 from ix, out of the byte displacement". 7 functions of the C corpus
-/// beyond the 23 rows hit it. IY, when nothing holds it, is the base.
+/// N is -306 from ix, out of the byte displacement". 7 functions of the C
+/// corpus beyond the 23 rows hit it. IY, when nothing holds it, is the base.
 #[test]
 fn a_frame_object_out_of_ixs_reach_is_addressed_through_iy() {
     let ir = include_str!("kernels/ir/bigframe.ll");
@@ -351,9 +355,9 @@ fn a_frame_object_out_of_ixs_reach_is_addressed_through_iy() {
 }
 
 /// A call through a pointer was refused: `CannotSelect(Target(CALL))`, nothing
-/// selects a call whose callee is a register. 4 functions of the C corpus beyond
-/// the 23 rows hit it. The address goes in iy and the call is the runtime's
-/// `jp (iy)`, as SDCC's `___sdcc_call_iy`.
+/// selects a call whose callee is a register. 4 functions of the C corpus
+/// beyond the 23 rows hit it. The address goes in iy and the call is the
+/// runtime's `jp (iy)`, as SDCC's `___sdcc_call_iy`.
 #[test]
 fn a_call_through_a_pointer_puts_the_address_in_iy() {
     let ir = include_str!("kernels/ir/indirect.ll");
