@@ -1395,6 +1395,19 @@ impl<'a> TypeLegalizer<'a> {
                 }
             }
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
+            op @ (ISD::FShl | ISD::FShr) => {
+                let (first, second) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let (first, second) = (self.expanded_integer(first), self.expanded_integer(second));
+                self.expand_funnel_shift(op, first, second, self.dag.operand(value, 2), half)
+            }
+            // `ExpandIntRes_Rotate` makes shifts and ORs (`expandROT`); a
+            // funnel shift of the value with itself is the same value in
+            // half-width nodes
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                let operand = self.expanded_integer(self.dag.operand(value, 0));
+                let funnel = if op == ISD::Rotl { ISD::FShl } else { ISD::FShr };
+                self.expand_funnel_shift(funnel, operand, operand, self.dag.operand(value, 1), half)
+            }
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
                 let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
@@ -1428,6 +1441,34 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.set_expanded_integer(value, lo, hi);
         Ok(())
+    }
+
+    /// `ExpandIntRes_FunnelShift`: an amount of at least half the width swaps
+    /// the inputs (`Cond` = the half-width bit of the amount, selecting a
+    /// register further along), then a pair of half-width funnel shifts.
+    fn expand_funnel_shift(
+        &mut self,
+        op: ISD,
+        (in3, in4): (SDValue, SDValue),
+        (in1, in2): (SDValue, SDValue),
+        amount: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let amount_vt = self.dag.value_type(amount);
+        let bits = self.dag.get_constant(u128::from(half.size_in_bits()), amount_vt);
+        let masked = self.dag.get_node(ISD::And, amount_vt, &[amount, bits]);
+        let zero = self.dag.get_constant(0, amount_vt);
+        let cond_code = if op == ISD::FShl { CondCode::SetNe } else { CondCode::SetEq };
+        let cond = self.dag.get_setcc(self.tli.types.set_cc_result_type(amount_vt), masked, zero, cond_code);
+        let shift_vt = self.shift_amount_type(half);
+        let amount = self.dag.get_any_ext_or_trunc(amount, shift_vt);
+        let select1 = self.dag.get_select(half, cond, in1, in2);
+        let select2 = self.dag.get_select(half, cond, in2, in3);
+        let select3 = self.dag.get_select(half, cond, in3, in4);
+        (
+            self.dag.get_node(op, half, &[select2, select1, amount]),
+            self.dag.get_node(op, half, &[select3, select2, amount]),
+        )
     }
 
     /// `ExpandIntRes_Shift`: by a constant, or as the target's double-width
