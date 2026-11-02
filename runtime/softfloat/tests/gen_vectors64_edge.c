@@ -58,7 +58,19 @@ static void div_digit_overflow(int w, int k, uint64_t *ma, uint64_t *mb)
 static void pair(uint64_t *a, uint64_t *b)
 {
     uint64_t s1 = rnd() & 1, s2 = rnd() & 1, e = 1 + rnd() % 2046, m = rnd(), m2 = rnd(), ma, mb;
-    switch (rnd() % 8) {
+    switch (rnd() % 12) {
+    case 8: /* mul ties: 27-bit mantissas make 54-bit products */
+        *a = mk(s1, e, m & 0xFFFFFFC000000ull), *b = mk(s2, 1 + rnd() % 2046, m2 & 0xFFFFFFC000000ull); return;
+    case 9: /* mul products just under a power of two: the rounding carry moves the exponent */
+        ma = HID | (m & (HID - 1)), mb = (uint64_t)(((u128)1 << 105) / ma) + (rnd() % 3) - 1;
+        if (mb >= HID << 1) mb = (HID << 1) - 1;
+        *a = mk(s1, e, ma), *b = mk(s2, 1 + rnd() % 2046, mb); return;
+    case 10: /* mul results in or near the denormal range and at the overflow edge */
+        if (rnd() & 1) { uint64_t ea = 1 + rnd() % 1000; *a = mk(s1, ea, m), *b = mk(s2, 1023 - 60 - ea + rnd() % 64, rnd() & 1 ? m2 : 0); }
+        else { uint64_t ea = 1024 + rnd() % 1000; *a = mk(s1, ea, m), *b = mk(s2, 3069 - ea - rnd() % 3, rnd() & 1 ? m2 : 0xFFFFFFFFFFFFFull); }
+        return;
+    case 11: /* denormal times a large normal: results anywhere around the bottom of the normal range */
+        *a = mk(s1, 0, m >> (rnd() % 52)), *b = mk(s2, 1000 + rnd() % 100, m2); if (rnd() & 1) { uint64_t t = *a; *a = *b; *b = t; } return;
     case 0: case 1: { /* divide digit k with equal top halves, 16- and 32-bit digits */
         int w = rnd() & 1 ? 32 : 16, k = rnd() % (64 / w);
         div_digit_overflow(w, k, &ma, &mb);

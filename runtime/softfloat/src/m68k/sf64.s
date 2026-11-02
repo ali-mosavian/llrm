@@ -1,4 +1,4 @@
-| IEEE-754 binary64 for the m68k: div; round to nearest even, denormals, inf, NaN as sf64.c.
+| IEEE-754 binary64 for the m68k: mul, div; round to nearest even, denormals, inf, NaN as sf64.c.
 | Hand written; no libgcc source is copied (libgcc is only a binary comparison column).
 | libgcc's ABI: arguments on the stack (a hi, a lo, b hi, b lo), result in d0:d1, d0-d1/a0-a1 scratch.
 | Base body 68000/68010; --defsym M68020=1 selects bfffo and the 64-bit mulu.l/divu.l (68020/030/040);
@@ -187,6 +187,153 @@ SAVED = 40				| movem.l %d2-%d7/%a2-%a5
 	bpl.s	4b
 .endif
 	rts
+
+| ---- mul ----
+
+| \x * \y -> \hi:\x, \y kept
+	.macro	mul32 x, y, hi, t1, t2
+.ifdef WIDE
+	mulu.l	\y,\hi:\x
+.else
+	move.l	\x,\t1
+	swap	\t1			| xh
+	move.l	\y,\t2
+	swap	\t2			| yh
+	move.w	\t2,\hi
+	mulu.w	\t1,\hi			| xh * yh
+	mulu.w	\y,\t1			| xh * yl
+	mulu.w	\x,\t2			| xl * yh
+	mulu.w	\y,\x			| xl * yl
+	add.l	\t1,\t2
+	bcc.s	1f
+	add.l	#0x10000,\hi
+1:	swap	\t2
+	moveq	#0,\t1
+	move.w	\t2,\t1
+	clr.w	\t2
+	add.l	\t2,\x
+	addx.l	\t1,\hi
+.endif
+	.endm
+
+	.globl	__muldf3
+	.type	__muldf3,@function
+__muldf3:
+	movem.l	%d2-%d7/%a2-%a5,-(%sp)
+	movem.l	SAVED+4(%sp),%d0-%d3
+	move.l	%d0,%d4
+	eor.l	%d2,%d4
+	and.l	#0x80000000,%d4
+	move.l	%d4,%a3			| sign
+	expo	%d0,%d4
+	beq	.Lmodd
+	cmp.w	#0x7FF,%d4
+	beq	.Lmodd
+	expo	%d2,%d5
+	beq	.Lmodd
+	cmp.w	#0x7FF,%d5
+	beq	.Lmodd
+	shl11	%d0,%d1,%d6
+	bset	#31,%d0			| A = ma << 11
+	and.l	#0xFFFFF,%d2
+	bset	#20,%d2
+	add.l	%d3,%d3
+	addx.l	%d2,%d2			| B = mb << 1: the product's m lands in its top 64 bits
+.Lmgo:					| d0:d1 = A, d2:d3 = B, d4.w = ea, d5.w = eb (the m << 11 form)
+	add.w	%d5,%d4
+	sub.w	#1024,%d4		| e - 1 if the product's top bit is 116
+	move.w	%d4,%a4
+	move.l	%d0,%d4
+	mul32	%d4,%d3,%d5,%d6,%d7	| AH * BL
+	move.l	%d5,%a0
+	move.l	%d4,%a1
+	move.l	%d1,%d4
+	mul32	%d4,%d3,%d5,%d6,%d7	| AL * BL
+	move.l	%d4,%a2			| P0
+	move.l	%a0,%d4
+	add.l	%a1,%d5
+	bcc.s	1f
+	addq.l	#1,%d4			| d4:d5 = P2:P1 so far
+1:	mul32	%d1,%d2,%d3,%d6,%d7	| AL * BH
+	add.l	%d1,%d5
+	moveq	#0,%d6
+	addx.l	%d6,%d3
+	add.l	%d3,%d4
+	moveq	#0,%d3
+	addx.l	%d3,%d3			| P3 so far
+	mul32	%d0,%d2,%d1,%d6,%d7	| AH * BH
+	add.l	%d0,%d4
+	addx.l	%d3,%d1
+	move.l	%d1,%d0			| P3, top bit 20 or 21
+	move.l	%d4,%d1			| P2
+	move.l	%d5,%d3			| P1: guard
+	move.l	%a2,%d5
+	move.l	%a4,%d4
+	btst	#21,%d0
+	beq.s	2f
+	lsr.l	#1,%d0
+	roxr.l	#1,%d1
+	roxr.l	#1,%d3
+	bcc.s	1f
+	moveq	#1,%d5
+1:	addq.w	#1,%d4
+2:	tst.l	%d5
+	beq	.Lpack
+	or.b	#1,%d3
+	bra	.Lpack
+
+.Lmodd:					| an exponent field is 0 or 2047
+	bsr	.Lnan
+	expo	%d0,%d4
+	expo	%d2,%d5
+	cmp.w	#0x7FF,%d4
+	bne.s	1f
+	tst.w	%d5			| inf * x
+	bne	.Linf
+	mant0	%d2,%d3,%d6
+	beq	.Lqnan
+	bra	.Linf
+1:	cmp.w	#0x7FF,%d5
+	bne.s	2f
+	tst.w	%d4			| x * inf
+	bne	.Linf
+	mant0	%d0,%d1,%d6
+	beq	.Lqnan
+	bra	.Linf
+2:	tst.w	%d4
+	bne.s	3f
+	mant0	%d0,%d1,%d6
+	beq	.Lzero
+3:	tst.w	%d5
+	bne.s	4f
+	mant0	%d2,%d3,%d6
+	beq	.Lzero
+4:	tst.w	%d4			| no zero, inf or NaN: denormals
+	bne.s	5f
+	bsr	.Lnorm
+	move.w	%d6,%d4
+	bra.s	6f
+5:	shl11	%d0,%d1,%d6
+	bset	#31,%d0
+6:	exg	%d0,%d2
+	exg	%d1,%d3
+	tst.w	%d5
+	bne.s	7f
+	bsr	.Lnorm
+	move.w	%d6,%d5
+	moveq	#9,%d6
+8:	lsr.l	#1,%d0
+	roxr.l	#1,%d1
+	dbra	%d6,8b			| m << 1
+	bra.s	9f
+7:	and.l	#0xFFFFF,%d0
+	bset	#20,%d0
+	add.l	%d1,%d1
+	addx.l	%d0,%d0
+9:	exg	%d0,%d2
+	exg	%d1,%d3
+	bra	.Lmgo
+	.size	__muldf3,.-__muldf3
 
 | ---- div ----
 
