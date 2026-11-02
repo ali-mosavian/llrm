@@ -945,6 +945,9 @@ def test_a_basic_row_is_built_as_the_whole_program_with_only_its_kernel_public()
         text = out.read_text()
     assert "public BENCHFIB" in text and "public FIB" not in text
     assert "FIB proc near" in text and "call far ptr FIB" not in text
+    # The flat target's calls are near already: queens read +6% instructions and four more cells worse with the flag.
+    flat = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq32")
+    assert "--whole-program" not in bench.compile_flags(flat, "O2")
 
 
 def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
