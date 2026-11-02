@@ -9,11 +9,19 @@ const HEADER: &str = "target triple = \"arm64-apple-macosx\"\n\
 target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
 fn dag(body: &str) -> Result<String, String> {
+    dag_with(body, &[])
+}
+
+fn dag_with(
+    body: &str,
+    env: &[(&str, &str)],
+) -> Result<String, String> {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("t.ll");
     std::fs::write(&input, format!("{HEADER}{body}")).unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .envs(env.iter().copied())
         .args(["-S", "--no-opt", "--isel=dag", "-o"])
         .arg(&output)
         .arg(&input)
@@ -93,4 +101,29 @@ fn the_entries_of_a_darwin_table_reach_the_block_of_their_case() {
 #[test]
 fn the_entries_of_a_linux_table_reach_the_block_of_their_case() {
     entries_reach_their_calls(llrm_arm64::machine::Platform::Linux);
+}
+
+/// The jump of `text`: the line numbers of its `ldrb` and `adr`, the register
+/// it loads into, the register of the table, the register of the address.
+fn jump_lines(text: &str) -> (usize, usize, String, String, String) {
+    let at = |start: &str| text.lines().position(|line| line.trim_start().starts_with(start)).expect(text);
+    let (load, adr) = (at("ldrb"), at("adr x"));
+    let load_line = text.lines().nth(load).unwrap().trim_start().trim_start_matches("ldrb ");
+    let loaded = load_line.split(',').next().unwrap().replace('w', "x");
+    let table = load_line.split('[').nth(1).unwrap().split(',').next().unwrap().to_owned();
+    let address = text.lines().nth(adr).unwrap().trim_start().trim_start_matches("adr ").split(',').next().unwrap();
+    (load, adr, loaded, table, address.to_owned())
+}
+
+/// `adr` ran before the load and took the table's own register, so the load
+/// read through the entry's address (a wrong jump); the offset and the address
+/// must also be two registers, or the sum adds the address to itself.
+#[test]
+fn the_address_of_a_jump_does_not_clobber_what_the_load_reads() {
+    for env in [&[][..], &[("LLRM_ARM64_GREEDY", "1")][..]] {
+        let text = dag_with(&switch_ir(), env).expect("the DAG path takes the switch");
+        let (load, adr, loaded, table, address) = jump_lines(&text);
+        assert!(load < adr || address != table, "{env:?}\n{text}");
+        assert_ne!(loaded, address, "{env:?}\n{text}");
+    }
 }
