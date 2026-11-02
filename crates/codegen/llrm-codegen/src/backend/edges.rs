@@ -27,7 +27,9 @@ use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 
 /// `blocks` with the end of each block `touched` names settled for the order:
 /// a last jump to the block laid out next is dropped, and in `jcc next; jmp m`
-/// the branch takes the other condition to `m`.
+/// the branch takes the other condition to `m`. `succ` keeps its order, as the
+/// pin's does, so a walk over the successors (the x87 stackifier's) sees the
+/// order isel made.
 ///
 /// A split puts a block between two that were next to each other, so the
 /// jumps it adds or retargets are explicit until the order is final; this is
@@ -48,7 +50,6 @@ pub fn without_jumps_to_next(
             continue;
         };
         let Some(onward) = what.target else { continue };
-        let mut flips = false;
         let insns = if onward == next {
             lir::without(insns, |one| Arc::ptr_eq(one, &jump), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
         } else if let Some(branch) = before.filter(|one| {
@@ -69,17 +70,11 @@ pub fn without_jumps_to_next(
                 .iter()
                 .map(|one| if Arc::ptr_eq(one, &branch) { Arc::clone(&flipped) } else { Arc::clone(one) })
                 .collect();
-            flips = true;
             lir::without(&flipped_in, |one| Arc::ptr_eq(one, &jump), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
         } else {
             continue;
         };
-        let mut block = blocks[index].with_insns(insns);
-        if flips {
-            // The first successor is the branch's target.
-            block.succ = std::iter::once(onward).chain(block.succ.iter().copied().filter(|&at| at != onward)).collect();
-        }
-        blocks[index] = block;
+        blocks[index] = blocks[index].with_insns(insns);
     }
 }
 

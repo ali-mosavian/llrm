@@ -1179,7 +1179,7 @@ mod tests {
         let flipped = done.blocks[0].insns[0].what.as_ref().unwrap();
         assert_eq!((flipped.name.as_deref(), flipped.target), (Some("jnz"), Some(10)));
         assert_eq!(done.blocks[2].at, 10);
-        assert_eq!(done.blocks[0].succ.to_vec(), vec![10, edge], "the first successor is the branch's target");
+        assert_eq!(done.blocks[0].succ.to_vec(), vec![10, edge], "the successors keep isel's order, as the pin's do");
     }
 
     #[test]
