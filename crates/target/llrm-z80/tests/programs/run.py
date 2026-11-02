@@ -4,7 +4,7 @@
     run.py [--llc BIN] [--level 2|z|s] [--jobs N] [--src DIR] [--json OUT] [NAME ...]
 
 Each `report(long)` call stores its four bytes in a log the harness reads back and compares with the .out lines.
-Verdicts: PASS, WRONG (output differs), REFUSED (backend), CLANG, ASM, LINK (undefined symbols named), HALT.
+Verdicts: PASS, WRONG (output differs), REFUSED (backend), SLOW (llc timed out), CLANG, ASM, LINK (undefined symbols named), HALT.
 """
 import argparse, json, os, re, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -84,7 +84,10 @@ def one(job):
         return name, "CLANG", (c.stderr.strip().splitlines() or [""])[-1][:100]
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
     ll.write_text(DATALAYOUT + "\n" + "\n".join(text) + "\n")
-    p = sh([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w)
+    try:
+        p = sh([args.llc, "-S", f"-O{args.llc_level or args.level}", "-o", str(w / "p.s"), str(ll)], w, timeout=args.compile_timeout)
+    except subprocess.TimeoutExpired:
+        return name, "SLOW", f"llc over {args.compile_timeout} s"
     if p.returncode:
         why = [l for l in p.stderr.splitlines() if "REFUSED" in l or "llrm-z80-llc" in l]
         return name, "REFUSED", (why or [p.stderr.strip()[-100:]])[0][:140]
@@ -121,7 +124,8 @@ def main():
     ap.add_argument("--level", default="2")
     ap.add_argument("--llc-level", help="the backend's level when it differs from clang's")
     ap.add_argument("--jobs", type=int, default=4)
-    ap.add_argument("--timeout", type=int, default=60)
+    ap.add_argument("--timeout", type=int, default=60, help="seconds the program may run on ucsim")
+    ap.add_argument("--compile-timeout", type=int, default=120)
     ap.add_argument("--json")
     ap.add_argument("--src", default=str(ROOT / "tests/run/c"))
     args = ap.parse_args()
