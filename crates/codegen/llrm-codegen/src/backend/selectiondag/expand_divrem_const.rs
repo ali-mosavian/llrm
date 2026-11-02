@@ -211,7 +211,7 @@ fn via_urem_decomposition(
         } else {
             let plain = dag.get_node(ISD::Add, half, &[ll, lh]);
             let wrapped = dag.get_setcc(bool_vt, plain, ll, super::isd::CondCode::SetULt);
-            let carry = dag.get_zext_or_trunc(wrapped, half);
+            let carry = dag.get_bool_as_bit(wrapped, half);
             sum = dag.get_node(ISD::Add, half, &[plain, carry]);
         }
     } else {

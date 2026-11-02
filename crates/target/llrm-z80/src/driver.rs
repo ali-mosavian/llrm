@@ -79,6 +79,7 @@ pub fn program(
     request: &Request,
 ) -> Result<Program, String> {
     let mut module = llrm_mir::parse::module(&without_triple(text)).map_err(|error| error.to_string())?;
+    module.refuse_aliases("the z80")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Z80.layout().datalayout;
     match module.datalayout.as_deref() {

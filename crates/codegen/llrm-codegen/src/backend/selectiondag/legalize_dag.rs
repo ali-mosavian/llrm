@@ -59,6 +59,13 @@ pub trait Hooks {
     /// `TargetLowering::makeLibCall`: a call to the routine `name` with
     /// `args`, whose result is a `ret`; `None` where the target cannot make
     /// one.
+    /// `getStackPointerRegisterToSaveRestore` and the frame's stack alignment:
+    /// the register `STACKSAVE` reads and `STACKRESTORE` and
+    /// `DYNAMIC_STACKALLOC` write; none: the target lowers them itself.
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        None
+    }
+
     fn make_lib_call(
         &mut self,
         _dag: &mut SelectionDAG,
@@ -464,7 +471,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> SDValue {
         let (chain, table, index) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let pointer = self.dag.config().pointer;
-        let entry = pointer.size_in_bits() / 8;
+        // A 64-bit table is position independent: 32-bit offsets from the
+        // table (`EK_LabelDifference32`), a pointer's worth of entry otherwise.
+        let relative = self.dag.relative_jump_tables();
+        let entry = if relative { 4 } else { pointer.size_in_bits() / 8 };
         let index_vt = self.dag.value_type(index);
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
@@ -478,6 +488,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             space: 0,
             ordering: None,
         };
+        if relative {
+            let info = MemInfo { mem_vt: EVT::I32, ..info };
+            let offset = self.dag.get_ext_load(super::actions::LoadExt::SExtLoad, pointer, chain, address, info);
+            // `getPICJumpTableRelocBase`: the table itself at 64 bits.
+            let target = self.dag.get_node(ISD::Add, pointer, &[offset, table]);
+            return self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: offset.node, res: 1 }, target]);
+        }
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
@@ -777,6 +794,48 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
             ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
+            // `ExpandNode`: a copy from and to the stack pointer register.
+            ISD::StackSave if self.hooks.stack_pointer().is_some() => {
+                let (sp, _) = self.hooks.stack_pointer().expect("checked");
+                let vt = self.dag.value_type(node);
+                let chain = self.dag.operand(node, 0);
+                let read = self.dag.get_copy_from_phys_reg_plain(chain, sp, vt);
+                Some(vec![SDValue { node: read.node, res: 0 }, SDValue { node: read.node, res: 1 }])
+            }
+            // `ExpandDYNAMIC_STACKALLOC`: the stack pointer lowered by the size
+            // and aligned past the frame's alignment, inside a call sequence
+            // of no bytes.
+            ISD::DynamicStackAlloc if self.hooks.stack_pointer().is_some() => {
+                let (sp, stack_align) = self.hooks.stack_pointer().expect("checked");
+                let vt = self.dag.value_type(node);
+                let (chain, size) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let align = self.dag.constant(self.dag.operand(node, 2)).unwrap_or(0) as u64;
+                let chain = self.dag.get_callseq_start(chain, 0);
+                let chain = SDValue { node: chain.node, res: 0 };
+                let read = self.dag.get_copy_from_phys_reg_plain(chain, sp, vt);
+                let (current, chain) = (SDValue { node: read.node, res: 0 }, SDValue { node: read.node, res: 1 });
+                let mut lowered = self.dag.get_node(ISD::Sub, vt, &[current, size]);
+                if align > stack_align {
+                    let mask = self
+                        .dag
+                        .get_constant(
+                            (align as i128).wrapping_neg() as u128 & super::fold::mask(vt.size_in_bits()),
+                            vt,
+                        );
+                    lowered = self.dag.get_node(ISD::And, vt, &[lowered, mask]);
+                }
+                let register = self.dag.get_phys_register(vt, sp);
+                let chain = self.dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, register, lowered]);
+                let glue = self.dag.get_node(ISD::Undef, EVT::GLUE, &[]);
+                let end = self.dag.get_callseq_end(chain, 0, 0, glue);
+                Some(vec![lowered, SDValue { node: end.node, res: 0 }])
+            }
+            ISD::StackRestore if self.hooks.stack_pointer().is_some() => {
+                let (sp, _) = self.hooks.stack_pointer().expect("checked");
+                let (chain, value) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let register = self.dag.get_phys_register(self.dag.value_type(value), sp);
+                Some(vec![self.dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, register, value])])
+            }
             ISD::VACopy => {
                 let (chain, dest, src) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
@@ -969,7 +1028,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
+            // Only when the target has a native extending load from the smaller
+            // type (`TLI.isLoadLegal(.., EXTLOAD)`); AArch64 expands it.
+            MVT::F64
+                if self.tli.should_shrink_fp_constant(mvt)
+                    && self.tli.load_ext_action(super::actions::LoadExt::ExtLoad, MVT::F64, MVT::F32)
+                        == Action::Legal =>
+            {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {
