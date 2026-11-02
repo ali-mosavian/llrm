@@ -5,9 +5,14 @@
 //! so the list only shrinks. `IVSHARE_BLESS=1` rewrites the list from the run.
 //!
 //! Forms:
-//! - `end`: one induction register besides the accumulators, and the exit
-//!   compares it with 0 (the step's flags end the loop), no limit register.
-//! - `keep`: the end form must not appear.
+//! - every positive row, on every width: exactly one loop-carried induction
+//!   register besides the accumulators (no second counter, no pointer bump per
+//!   array);
+//! - `end`, where the width's costs say a zero test pays (p16, p32): the exit
+//!   also compares that register with 0 (the step's flags end the loop), no
+//!   limit register. At p64 the compare macro-fuses, so a zero-based index and
+//!   a `cmp` is as good (the pin's choice);
+//! - `keep` (negative rows): the end form must not appear.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -32,8 +37,12 @@ fn loop_block(text: &str) -> Vec<String> {
     lines.take_while(|l| !l.is_empty() && !l.ends_with(':')).map(|l| l.trim().to_owned()).collect()
 }
 
+fn induction_registers(block: &[String]) -> usize {
+    block.iter().filter(|l| l.contains("= phi ") && !l.starts_with("%acc")).count()
+}
+
 fn has_end_form(block: &[String]) -> bool {
-    let ivs = block.iter().filter(|l| l.contains("= phi ") && !l.starts_with("%acc")).count();
+    let ivs = induction_registers(block);
     let compares: Vec<&String> = block.iter().filter(|l| l.contains("= icmp ")).collect();
     ivs == 1 && compares.len() == 1 && compares[0].trim_end().ends_with(", 0")
 }
@@ -112,7 +121,11 @@ fn every_shape_has_its_form_or_a_reason() {
         let (id, width) = name.split_once('.').unwrap();
         let after = reduced(width, &fs::read_to_string(&file).unwrap());
         let block = loop_block(&after);
-        let ok = has_end_form(&block) == (expected(id) == "end");
+        let ok = if expected(id) == "end" {
+            induction_registers(&block) == 1 && (width == "p64" || has_end_form(&block))
+        } else {
+            !has_end_form(&block)
+        };
         let row = format!("{id}.{width}");
         match (ok, listed.contains_key(&row)) {
             (false, false) => failing.push(row.clone()),
@@ -123,7 +136,7 @@ fn every_shape_has_its_form_or_a_reason() {
     if std::env::var_os("IVSHARE_BLESS").is_some() {
         let mut out = String::from("# rows that do not have their form yet: row reason\n");
         for row in listed.keys().chain(failing.iter()).collect::<std::collections::BTreeSet<_>>() {
-            let reason = listed.get(row).map_or("end-biased formulae not built (S3)", String::as_str);
+            let reason = listed.get(row).map_or("shared counter or end form not built (S3)", String::as_str);
             out += &format!("{row} {reason}\n");
         }
         fs::write(&xfail_path, out).unwrap();
