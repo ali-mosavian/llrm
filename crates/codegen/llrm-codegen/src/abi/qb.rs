@@ -655,6 +655,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.segment_registers()
     }
 
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        self.machine.size_rotation_header_limit()
+    }
+
     fn two_address(&self) -> bool {
         self.machine.two_address()
     }

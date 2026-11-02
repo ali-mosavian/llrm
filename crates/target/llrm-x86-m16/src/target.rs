@@ -364,6 +364,22 @@ impl Machine for Dos {
         SEGMENT_REGISTERS
     }
 
+    /// DEVIATE: under `-Os` a header is copied only when it has four
+    /// instructions or fewer (`RotationMaxHeaderSize` is 16 in the pin,
+    /// `hasMinSize` alone lowers it; LoopRotation.cpp#L80-L85). Fitted,
+    /// sweep-confirmed: code bytes m16 -Os, QCport 65 modules + 71 vsgcc
+    /// programs, by limit: 16 = 262435 + 14831, 4 = 262098 + 14745 (-337 B,
+    /// -86 B) with no object larger than at 16; 3 and 2 save more (261979,
+    /// 260491) but x_mergesort +21 and, at 2, x_base64 +23 and d_alias +20.
+    /// Not derived from the sheet: a copied header (cmp + jcc, 4 B or more)
+    /// outweighs the 2-3 B jmp rotation removes, so the gain is the follow-on
+    /// (an unrotated counted loop loses its SCEV trip count, a `div` appears;
+    /// sum loop: 21 B rotated, 23 B with -fno-tree-ch). Exit 2026-11-20: a
+    /// priced follow-on replaces the 4, or the pin's 16 returns.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        Some(4)
+    }
+
     fn two_address(&self) -> bool {
         true
     }

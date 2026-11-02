@@ -186,6 +186,12 @@ pub trait Machine {
         0
     }
 
+    /// Header instructions loop rotation may copy in a size build
+    /// (`RotationMaxHeaderSize`): none stated, the pin's 16.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// Segment registers a far pointer's selector can be held in, besides
     /// `registers`: none where the target has none.
     fn segment_registers(&self) -> i64 {

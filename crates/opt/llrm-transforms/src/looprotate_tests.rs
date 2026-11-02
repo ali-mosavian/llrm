@@ -336,8 +336,9 @@ b3:
 }
 
 /// -Os cut the header limit to 4 on every target; the byte sweep that showed it
-/// to be smaller was m16 only. m32 keeps the pin's 16 (`hasMinSize` alone
-/// lowers it), so a five-instruction header is copied there at -Os.
+/// to be smaller was m16 only (a target states its own limit). m32 keeps the
+/// pin's 16 (`hasMinSize` alone lowers it), so a five-instruction header is
+/// copied there at -Os.
 #[test]
 fn test_the_size_header_limit_is_m16_only() {
     use llrm_mir::target::Neutral;
@@ -345,4 +346,13 @@ fn test_the_size_header_limit_is_m16_only() {
     assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default()), 4);
     assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default()), 16);
     assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default()), 0);
+}
+
+/// The -Os limit of 4 followed `segment_registers() > 0`, so any target with
+/// segment registers copied at most four header instructions; the sweep
+/// behind 4 was m16's, which now states it itself.
+#[test]
+fn test_the_size_header_limit_comes_from_the_target_not_its_segments() {
+    let segmented = crate::testing::Tuned { segments: 2, ..Default::default() };
+    assert_eq!(super::header_limit(true, true, &segmented), 16);
 }

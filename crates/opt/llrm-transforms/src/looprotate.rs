@@ -953,18 +953,10 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     changed
 }
 
-/// DEVIATE (m16 only): under `-Os` a header is copied only when it has four
-/// instructions or fewer (`RotationMaxHeaderSize` is 16 in the pin,
-/// `hasMinSize` alone lowers it). Code bytes m16 -Os, QCport 65 modules + 71
-/// vsgcc programs, by limit: 16 = 262435 + 14831, 4 = 262098 + 14745 with no
-/// object larger than at 16; 3 and 2 save more (261979, 260491) but x_mergesort
-/// +21 and, at 2, x_base64 +23 and d_alias +20: an unrotated counted loop loses
-/// its trip count to SCEV (a `div` appears), which no header size predicts.
-const SIZE_MAX_HEADER: u32 = 4;
-
 /// The header instructions a loop may copy: none without header duplication,
-/// the pin's 16, or `SIZE_MAX_HEADER` for a size build on a target with
-/// segment registers (m16), the only target the byte sweep was run for.
+/// else the pin's 16, or the target's own limit for a size build
+/// (`Machine::size_rotation_header_limit`; the pin lowers it for `minsize`
+/// only).
 pub fn header_limit(
     duplicate_headers: bool,
     size: bool,
@@ -972,8 +964,8 @@ pub fn header_limit(
 ) -> u32 {
     if !duplicate_headers {
         0
-    } else if size && target.segment_registers() > 0 {
-        SIZE_MAX_HEADER
+    } else if size {
+        target.size_rotation_header_limit().unwrap_or(16)
     } else {
         16
     }
@@ -981,7 +973,7 @@ pub fn header_limit(
 
 /// `LoopRotatePass`: every loop of the function rotated with header
 /// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
-/// default of 16 header instructions (`SIZE_MAX_HEADER` at -Os), or none where
+/// default of 16 header instructions (the target's at -Os), or none where
 /// the function is optimized for size or `-fno-tree-ch` says so.
 pub struct LoopRotate {
     pub duplicate_headers: bool,
