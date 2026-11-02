@@ -40,7 +40,10 @@ fn test_the_counts_of_a_built_object_are_right() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .and_then(|mut child| {
-            std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"#include <stdio.h>\nint main(void) { return 0; }\n")?;
+            std::io::Write::write_all(
+                child.stdin.as_mut().unwrap(),
+                b"#include <stdio.h>\nint main(void) { return 0; }\n",
+            )?;
             child.wait()
         });
     if !probe.is_ok_and(|status| status.success()) {
