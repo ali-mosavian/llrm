@@ -1684,7 +1684,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
             {
                 let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
-                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
+                // Both adds `nuw` keep the regrouped one so (`reassociateOps`'s
+                // `NewFlags`); DEVIATE: only where `global_addresses_constant`
+                // is set, until x86 is judged.
+                let nuw = |dag: &SelectionDAG, v: SDValue| dag.node(v).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
+                let keep = self.dag.config().global_addresses_constant && nuw(self.dag, n0) && nuw(self.dag, node);
+                let flags = if keep { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::default() };
+                return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
         }
         let is_neg =

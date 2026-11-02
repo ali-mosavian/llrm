@@ -296,3 +296,26 @@ fn a_join_of_returns_returns_in_each_predecessor() {
     assert!(!f.contains("local.set"), "{text}");
     assert!(f.contains("return"), "{text}");
 }
+
+const OBJECT_OFFSETS: &str = "declare void @use(ptr)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f() {
+  %a = alloca [4 x double], align 16
+  %p = getelementptr inbounds nuw i8, ptr %a, i32 16
+  call void @llvm.memset.p0.i32(ptr align 16 %p, i8 0, i32 16, i1 false)
+  call void @use(ptr %a)
+  ret void
+}
+";
+
+/// The second store of a `memset` of a stack object got `add nuw (add nuw
+/// slot, 16), 8` regrouped without `nuw`, so it was `local.get; i32.const 24;
+/// i32.add; ...; i64.store 0` instead of `i64.store 24` (nbody O2: 158,944
+/// instructions against the pin's 147,730).
+#[test]
+fn the_stores_of_a_memset_on_a_stack_object_take_their_offsets() {
+    let text = asm(OBJECT_OFFSETS, Level::O2);
+    let f = body(&text, "f");
+    assert!(f.contains("i64.store\t24"), "{text}");
+    assert_eq!(f.matches("i32.add").count(), 1, "{text}");
+}
