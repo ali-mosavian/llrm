@@ -259,3 +259,13 @@ fn a_double_constant_is_a_pool_load_with_a_page_offset() {
     assert!(asm.contains("ldr d16, [x9, lCPI_f_0@PAGEOFF]"), "{asm}");
     assert!(asm.contains(".quad 0x400921fb54442d18"), "{asm}");
 }
+
+/// `llvm.fmuladd` was a multiply and an add on the DAG path (nbody O2 ran
+/// 18245 instructions for the pin's 16859); arm64 has
+/// `isFMAFasterThanFMulAndFAdd`.
+#[test]
+fn fmuladd_is_one_fused_multiply_add() {
+    let asm = dag_at("-O2", "declare double @llvm.fmuladd.f64(double, double, double)\ndefine double @f(double %a, double %b, double %c) {\n  %r = call double @llvm.fmuladd.f64(double %a, double %b, double %c)\n  ret double %r\n}\n").unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("fmadd d0, d0, d1, d2"), "{asm}");
+    assert!(!asm.contains("fmul"), "{asm}");
+}

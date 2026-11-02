@@ -35,6 +35,7 @@ pub fn builder_target() -> BuilderTarget {
             dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             known_bits_for_target_node: Some(known_bits_for_target_node),
+            fma_faster: true,
             ..DagConfig::default()
         },
         shift_amount: EVT::I64,
