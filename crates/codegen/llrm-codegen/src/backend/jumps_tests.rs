@@ -2486,6 +2486,8 @@ fn test_a_branch_on_a_compare_of_a_loaded_constant_goes_one_way() {
             assert!(ends.is_none_or(|at| at + 1 == block.insns.len()), "{name} {cc} {value}: {:?}", block.insns);
         }
         assert!(!got.iter().any(|one| one == cc), "{name} {cc} {value}: the branch stays {got:?}");
+        let jumps = got.iter().filter(|one| *one == "jmp").count();
+        assert_eq!(jumps > 0, taken, "{name} {cc} {value}: a decided branch is a jump or nothing {got:?}");
     }
 }
 
