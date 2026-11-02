@@ -420,7 +420,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let pointer = self.dag.config().pointer;
         // A 64-bit table is position independent: 32-bit offsets from the
         // table (`EK_LabelDifference32`), a pointer's worth of entry otherwise.
-        let relative = pointer == EVT::I64;
+        let relative = self.dag.relative_jump_tables();
         let entry = if relative { 4 } else { pointer.size_in_bits() / 8 };
         let index_vt = self.dag.value_type(index);
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);

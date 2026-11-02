@@ -2357,3 +2357,35 @@ fn dense_switch_ir() -> String {
     }
     text + "d:\n  ret void\n}\n"
 }
+
+/// A switch table at m16 with the DAG selector lost its index (m32 never did;
+/// its scaled form is checked too):
+/// folding the table into the address mode (for the 64-bit table) left the
+/// index register as the address's base, which the jump ignored, so
+/// `add ax, ax; jmp word ptr $J26` jumped to the table's first entry whatever
+/// the case.
+#[test]
+fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
+    for (mode, layout, int, jump, tail) in [
+        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr $J", "]"),
+        ("-m32", "@m32-datalayout@", "i32", "jmp dword ptr $J", "*4]"),
+    ] {
+        let mut text = format!("target datalayout = \"{layout}\"\n");
+        for i in 0..8 {
+            text += &format!("declare void @g{i}()\n");
+        }
+        text += &format!("define void @f({int} %x) {{\n  switch {int} %x, label %d [\n");
+        for i in 0..8 {
+            text += &format!("    {int} {i}, label %l{i}\n");
+        }
+        text += "  ]\n";
+        for i in 0..8 {
+            text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+        }
+        text += "d:\n  ret void\n}\n";
+        let (built, _) = compiled(&flags(&[mode, "-O2", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let line = listing.lines().map(str::trim).find(|line| line.starts_with(jump)).expect(&listing);
+        assert!(line.ends_with(tail), "{mode}: the jump names no index: {line}\n{listing}");
+    }
+}

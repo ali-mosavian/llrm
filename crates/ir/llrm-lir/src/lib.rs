@@ -503,7 +503,7 @@ impl fmt::Display for Operation {
 }
 
 /// Typed selected semantics for one instruction.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
     pub name: Option<std::sync::Arc<str>>,
@@ -526,6 +526,26 @@ pub struct Semantics {
     /// `None` where unknown, which an indirect call keeps the frame register
     /// for.
     pub pops: Option<i64>,
+}
+
+impl std::hash::Hash for Semantics {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        // `table_id` is left out: a field added to the derived hash reordered
+        // a hash-keyed container (two edge landings swapped their labels in
+        // `level.nib` at m16). Equal values still hash alike.
+        self.op.hash(state);
+        self.name.hash(state);
+        self.dests.hash(state);
+        self.sources.hash(state);
+        self.target.hash(state);
+        self.indirect.hash(state);
+        self.table.hash(state);
+        self.repeat.hash(state);
+        self.pops.hash(state);
+    }
 }
 
 impl Semantics {
