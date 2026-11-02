@@ -507,6 +507,17 @@ fn dag_name(
 /// An attribute that moves an argument out of the place its type gives it
 /// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a
 /// target's calling hook that does not place them refuses.
+fn has_sret(attrs: &[llrm_mir::opcode::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Type(name, _) if name == "sret"
+            ),
+        )
+}
+
 fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
     use llrm_mir::opcode::Attribute;
     const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
@@ -621,6 +632,7 @@ impl<'a> Builder<'a> {
             sibcall: false,
             variadic_call: false,
             call_attrs_move_arguments: false,
+            call_sret: Vec::new(),
             call_result_assert: None,
             fixed_args: 0,
             had_tail_call: false,
@@ -666,6 +678,8 @@ struct Builder<'a> {
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
+    /// The arguments of the call being lowered that carry `sret`.
+    call_sret: Vec<bool>,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -1095,6 +1109,8 @@ impl Builder<'_> {
             } else {
                 vec![ty]
             };
+            let at = parameters.iter().position(|one| *one == arg).unwrap_or(0);
+            let sret = self.function.parameter_attrs.get(at).is_some_and(|attrs| has_sret(attrs));
             let mut leaves = Vec::new();
             for leaf in leaf_types {
                 let vt = self.type_of(leaf)?;
@@ -1102,7 +1118,7 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 leaves.push((vt, parts.len(), pointer));
                 let split = parts.len() > 1;
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret }));
             }
             shapes.push(leaves);
         }
@@ -1632,6 +1648,7 @@ impl Builder<'_> {
         self.variadic_call = variadic;
         self.call_result_assert = extension_assert(&info.return_attrs);
         self.fixed_args = named;
+        self.call_sret = info.argument_attrs.iter().map(|attrs| has_sret(attrs)).collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -1864,6 +1881,7 @@ impl Builder<'_> {
         }
         let mut outs = Vec::new();
         let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
@@ -1875,7 +1893,15 @@ impl Builder<'_> {
             let pieces = self.split_for_calling(*value, ext)?;
             let split = pieces.len() > 1;
             for piece in pieces {
-                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split, variadic: at >= variadic_from });
+                outs.push(Out {
+                    value: piece,
+                    ext,
+                    pointer: false,
+                    arg_vt,
+                    split,
+                    variadic: at >= variadic_from,
+                    sret: sret_args.get(at).copied().unwrap_or(false),
+                });
             }
         }
         let void = self.module.context.types.is_void(result_type);
@@ -1896,7 +1922,7 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 let split = parts.len() > 1;
                 layout.push((vt, parts.len(), pointer));
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret: false }));
             }
         }
         let vt = layout.first().map_or(EVT::OTHER, |(vt, _, _)| *vt);
@@ -2302,7 +2328,7 @@ impl Builder<'_> {
                 let pieces = self.split_for_calling(value, ext)?;
                 let split = pieces.len() > 1;
                 for piece in pieces {
-                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
+                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false });
                 }
             }
         }

@@ -53,6 +53,8 @@ pub struct Out {
     pub arg_vt: EVT,
     /// `ArgFlags.isSplit()`: one of several parts of a value.
     pub split: bool,
+    /// `ArgFlags.isSRet()`: the pointer to the result a callee writes.
+    pub sret: bool,
     /// The argument is one of a call's variadic ones
     /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
     pub variadic: bool,
@@ -67,6 +69,8 @@ pub struct In {
     pub arg_vt: EVT,
     /// `ArgFlags.isSplit()`.
     pub split: bool,
+    /// `ArgFlags.isSRet()`.
+    pub sret: bool,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first

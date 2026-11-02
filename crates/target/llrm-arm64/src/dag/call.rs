@@ -75,16 +75,21 @@ enum Location {
 }
 
 /// A part to place: its register type, the type of the whole value, whether the
-/// value was split, and whether it is a variadic argument
-/// (`CC_AArch64_DarwinPCS_VarArg`: everything on the stack, in 8-byte slots).
-type Part = (EVT, EVT, bool, bool);
+/// value was split, whether it is a variadic argument and whether it is the
+/// `sret` pointer (`x8`) (`CC_AArch64_DarwinPCS_VarArg`: everything on the
+/// stack, in 8-byte slots).
+type Part = (EVT, EVT, bool, bool, bool);
 
 /// The location of each part, and the bytes of stack they take.
 fn place(parts: &[Part]) -> (Vec<Location>, u64) {
     let (mut next, mut next_float, mut stack) = (0, 0, 0u64);
     let locations = parts
         .iter()
-        .map(|&(vt, arg_vt, split, variadic)| {
+        .map(|&(vt, arg_vt, split, variadic, sret)| {
+            // `CCIfSRet<CCAssignToReg<[X8]>>`: no argument register is taken.
+            if sret {
+                return Location::Register(reg::X8);
+            }
             if variadic {
                 let align = if split { 16 } else { 8 };
                 let offset = stack.next_multiple_of(align);
@@ -223,6 +228,15 @@ impl TargetCalling for Aarch64Calling {
         Some(dag.get_node(ISD::Machine(MEMSET_Q), EVT::OTHER, &[chain, dst, value, size]))
     }
 
+    /// An `sret` pointer is an ordinary pointer to the builder; `x8` carries
+    /// it.
+    fn passes_in_place(
+        &self,
+        attribute: &str,
+    ) -> bool {
+        attribute == "sret"
+    }
+
     fn accepts(
         &self,
         dag: &SelectionDAG,
@@ -238,9 +252,10 @@ impl TargetCalling for Aarch64Calling {
                 arg_vt.size_in_bits() <= 64 && (arg_vt.is_integer() || arg_vt.is_floating_point())
             }
         };
-        let outs: Vec<Part> = outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic)).collect();
-        let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false)).collect();
-        if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split, _)| integer(vt) && known(arg_vt, split)) {
+        let outs: Vec<Part> =
+            outs.iter().map(|o| (dag.value_type(o.value), o.arg_vt, o.split, o.variadic, o.sret)).collect();
+        let ins: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
+        if !outs.iter().chain(&ins).all(|&(vt, arg_vt, split, ..)| integer(vt) && known(arg_vt, split)) {
             return Err("an arm64 argument or result that is no integer or float");
         }
         // A result is in registers.
@@ -265,8 +280,11 @@ impl TargetCalling for Aarch64Calling {
         outs: &[Out],
     ) -> Option<SDValue> {
         let values: Vec<SDValue> = outs.iter().map(|out| out.value).collect();
-        let parts: Vec<Part> =
-            outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
+        let parts: Vec<Part> = outs
+            .iter()
+            .zip(&values)
+            .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret))
+            .collect();
         let (locations, _) = place(&parts);
         let mut chain = chain;
         let mut glue = None;
@@ -318,8 +336,11 @@ impl TargetCalling for Aarch64Calling {
                 _ => out.value,
             })
             .collect();
-        let parts: Vec<Part> =
-            outs.iter().zip(&values).map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic)).collect();
+        let parts: Vec<Part> = outs
+            .iter()
+            .zip(&values)
+            .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret))
+            .collect();
         let (locations, stack) = place(&parts);
         let bytes = stack.next_multiple_of(16);
         let mut chain = dag.get_callseq_start(chain, bytes);
@@ -407,7 +428,7 @@ impl TargetCalling for Aarch64Calling {
         fixed: FixedObject,
         live_in: LiveIn,
     ) -> Vec<SDValue> {
-        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false)).collect();
+        let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
         let (locations, _) = place(&parts);
         ins.iter()
             .zip(locations)

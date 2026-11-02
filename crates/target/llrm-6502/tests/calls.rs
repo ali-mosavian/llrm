@@ -35,10 +35,26 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
         entry,
         callee,
         &[
-            Out { value: a, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false },
-            Out { value: b, ext: Ext::Any, pointer: false, arg_vt: EVT::I16, split: false, variadic: false },
+            Out {
+                value: a,
+                ext: Ext::Any,
+                pointer: false,
+                arg_vt: EVT::I8,
+                split: false,
+                variadic: false,
+                sret: false,
+            },
+            Out {
+                value: b,
+                ext: Ext::Any,
+                pointer: false,
+                arg_vt: EVT::I16,
+                split: false,
+                variadic: false,
+                sret: false,
+            },
         ],
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false }],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false }],
     )
     .unwrap();
 
@@ -70,6 +86,7 @@ fn a_fourth_word_is_stored_on_the_soft_stack() {
             arg_vt: EVT::I16,
             split: false,
             variadic: false,
+            sret: false,
         })
         .collect();
     let callee = dag.get_global_address(EVT::I16, 7, 0);
@@ -104,7 +121,7 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     let args = lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false }; 4],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false }; 4],
         &mut fixed,
         &mut |_| 4096,
     )
@@ -128,8 +145,8 @@ fn formal_arguments_are_live_in_at_rc2_and_rs2() {
     };
 
     let ins = [
-        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false },
-        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false },
+        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false },
+        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false },
     ];
     let args = lower_formal_arguments(&mut dag, entry, &ins, &mut |_, _, _| 0, &mut live_in).unwrap();
 
@@ -149,7 +166,7 @@ fn a_returned_byte_is_copied_to_a() {
     let ret = lower_return(
         &mut dag,
         entry,
-        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false }],
+        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false, sret: false }],
     )
     .unwrap();
 

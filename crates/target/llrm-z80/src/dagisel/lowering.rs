@@ -200,11 +200,12 @@ impl Hooks for Z80Lowering {
                 arg_vt: vt,
                 split,
                 variadic: false,
+                sret: false,
             }));
         }
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
         let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32 };
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false };
             if ret == EVT::I32 { 2 } else { 1 }
         ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);

@@ -343,3 +343,20 @@ fn atomics_and_fences_are_selected() {
         assert!(asm.contains(wanted), "{wanted} missing:\n{asm}");
     }
 }
+
+/// An `sret` parameter was refused ("a parameter attribute that moves it";
+/// `make_big` of `tail_calls_edges` fell to the hand selector): the result
+/// pointer is in `x8`, the argument registers start at `x0`, and the caller
+/// puts the buffer in `x8`.
+#[test]
+fn an_sret_pointer_is_x8_and_takes_no_argument_register() {
+    let asm = dag_at(
+        "-O2",
+        "declare void @fill(ptr sret({ i64, i64 }), i64)\n\
+define void @make(ptr sret({ i64, i64 }) %out, i64 %a) {\n  store i64 %a, ptr %out\n  ret void\n}\n\
+define i64 @caller(i64 %a) {\n  %t = alloca { i64, i64 }\n  call void @fill(ptr sret({ i64, i64 }) %t, i64 %a)\n  %v = load i64, ptr %t\n  ret i64 %v\n}\n",
+    )
+    .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("str x0, [x8]"), "{asm}");
+    assert!(asm.contains("add x8, sp, #0") && asm.contains("bl _fill"), "{asm}");
+}
