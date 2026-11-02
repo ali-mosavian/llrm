@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """gen_f32.py OP [edge] -> table of a, b, expected binary32 (add sub mul div) from the host; any NaN result is 0x7fc00000.
 edge: 1800 records near the edges instead: add/sub exponent gaps 20..34, mul/div results near the denormal range, ftoi/ftou exponents 126..160."""
-import math, random, struct, sys
+import math, os, random, struct, sys
 op = sys.argv[1]
 random.seed(3)
+NV = int(os.environ.get('NV', '700'))
 f = lambda b: struct.unpack('<f', struct.pack('<I', b))[0]
 def bits(x):
     try: return struct.unpack('<I', struct.pack('<f', x))[0]
@@ -28,7 +29,7 @@ sp = [0, 0x80000000, 1, 0x80000001, 0x007fffff, 0x00800000, 0x3f800000, 0xbf8000
       0x7f800000, 0xff800000, 0x7fc00000, 0x40000000, 0x3f800001, 0x4b000000, 0x4b800000, 0x33800000, 0x34000000, 0x00800001, 0x3f7fffff]
 conv = op in ('itof', 'utof', 'ftoi', 'ftou')
 recs = [(a, 0) for a in sp + [0x4f000000, 0xcf000000, 0x4effffff, 0xcf000001, 0x4f800000, 0x4f7fffff, 0x3f7fffff, 0xbf7fffff, 0x3fc00000, 0xbfc00000, 0x4b7fffff, 0x7fffffff, 0xffffffff, 0x7fa00000, 0x01000001, 0x7fffff80, 0x80000000]] if conv else [(a, b) for a in sp for b in sp]
-while conv and len(recs) < 700:
+while conv and len(recs) < NV:
     if op in ('itof', 'utof'):
         a = random.getrandbits(random.choice([3, 8, 16, 24, 25, 26, 31, 32])) if random.random() < .8 else random.choice([0x80000000, 0x7fffffff, 0xffffffff, 0x01000001, 0x01000003, 0x7fffff80, 0x7fffffc0])
         if random.random() < .3: a = (-a) & 0xffffffff
@@ -36,7 +37,7 @@ while conv and len(recs) < 700:
         a = (random.getrandbits(32) & 0x807fffff) | random.randint(110, 165) << 23
         if random.random() < .1: a = random.getrandbits(32)
     recs.append((a, 0))
-while not conv and len(recs) < 700:
+while not conv and len(recs) < NV:
     a = random.getrandbits(32)
     if random.random() < .12: a &= 0x807fffff
     ea = (a >> 23) & 255

@@ -21,11 +21,15 @@ for op in $OPS; do
    sdldz80 -i -m -b _CODE=0x100 $L r.ihx crt0.rel drv.rel int32.rel sf32_cmp.rel sf32_arith.rel >/dev/null)
   if [ -n "$L" ]; then c=$(awk '$1=="_CODE" {print "0x" $2 " + 0x" $3}' $T/r.map); t=$(awk '$1=="_SFLUT" {print "0x" $2}' $T/r.map)
     [ $(( $c )) -le $(( $t )) ] || { echo "$op: code and vectors run into the tables at $t"; exit 1; }; fi
-  run() { printf 'run\nstate\ndump rom 0x8f00 0x8f01\ndump rom 0x8f10 0x8f1f\nquit\n' | ucsim_z80 -t Z80 -q -w $T/$1.ihx -c - 2>&1; }
-  os=$(run s); b=$(echo "$os" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
+  e=$(awk '$1=="_CODE" {print "0x" $2 " + 0x" $3}' $T/r.map)
+  [ $(( $e )) -le $(( 0x8f00 )) ] || { echo "$op: code and vectors end at $(( $e )), past the results at 0x8f00 (z80 has 64 KB; fewer vectors)"; exit 1; }
+  run() { printf 'run\nstate\ndump rom 0x8f00 0x8f01\ndump rom 0x8f10 0x8f1f\nquit\n' | timeout ${RUN_TIMEOUT:-300} ${SIM:-ucsim_z80} -t Z80 -q -w $T/$1.ihx -c - 2>&1; }
+  os=$(run s) || { echo "$op: the stub run did not finish in ${RUN_TIMEOUT:-300} s"; exit 1; }
+  b=$(echo "$os" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
   fb=$(echo "$os" | sed -n 's/^0x8f00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
   [ "${fb:-ffff}" = 0000 ] || { echo "$op: the stub run must pass its records (basevec.py), got $fb"; exit 1; }
-  o=$(run r); c=$(echo "$o" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
+  o=$(run r) || { echo "$op: the run did not finish in ${RUN_TIMEOUT:-300} s"; exit 1; }
+  c=$(echo "$o" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
   f2=$(echo "$o" | sed -n 's/^0x8f00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
   [ "${f2:-ffff}" != 0000 ] && echo "$o" | grep -E "^0x8f1" | head -3
   nv=$(sed -n 's/^NV = //p' $T/vec.inc)
