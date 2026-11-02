@@ -484,6 +484,10 @@ pub struct Collection<'a, 'b> {
     /// are not induction variables. The registers LSR may use are those the
     /// target has less these.
     pub other_register_units: u32,
+    /// Set by `solve` when no solution fits the registers left after
+    /// `other_register_units`: every one spills, and the count no longer tells
+    /// them apart (DEVIATE LU3b).
+    pub ignore_pressure: std::cell::Cell<bool>,
     /// The compile is for size: a setup instruction costs a byte like a loop
     /// one.
     pub size: bool,
@@ -496,6 +500,11 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// The registers other values of the loop hold, as the rating counts them.
+    pub fn pressure_units(&self) -> u32 {
+        if self.ignore_pressure.get() { 0 } else { self.other_register_units }
+    }
+
     pub fn new(
         cx: &'a Cx<'b>,
         tti: &'a dyn Tti,
@@ -523,6 +532,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             swapped_compares: Vec::new(),
             insert_attempts: 0,
             other_register_units: 0,
+            ignore_pressure: std::cell::Cell::new(false),
             size: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
@@ -900,7 +910,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
                     as_written: true,
-                    other_register_units: self.other_register_units,
+                    other_register_units: self.pressure_units(),
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);

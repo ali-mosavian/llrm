@@ -1208,3 +1208,68 @@ exit:
   ret i32 %s1
 }
 ";
+
+/// The loop that reads a block (bench/stft_fixed: `_re[_rev[i]] = _window[i] *
+/// _block[i] / 4`) took the fewest registers at -Os m16 once the loop's other
+/// values were counted, and the allocator was 16 B larger for it (+11 B against
+/// main). No solution fits beside those values, so the count told them apart
+/// by registers alone; the pointer over `_rev` is the choice without it.
+#[test]
+fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
+    let mut module = parsed(&format!("{DOS}{BLOCK_LOOP}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr"), "{after}");
+}
+
+const BLOCK_LOOP: &str = "
+@_window = internal global [256 x i32] zeroinitializer, align 2
+@_rev = internal global [256 x i8] zeroinitializer, align 1
+@_re = internal global [256 x i32] zeroinitializer, align 2
+@_im = internal global [256 x i32] zeroinitializer, align 2
+@_block = internal global [2 x [128 x i16]] zeroinitializer, align 2
+define void @f(i16 %v60) {
+entry:
+  %v68 = getelementptr inbounds nuw [256 x i8], ptr @_block, i16 %v60
+  %v62 = getelementptr inbounds nuw [256 x i8], ptr @_block, i16 1
+  br label %v69
+v69:
+  %v70 = phi i16 [ 0, %entry ], [ %v96, %v69 ]
+  %v71 = getelementptr inbounds nuw [2 x i8], ptr %v68, i16 %v70
+  %v72 = load i16, ptr %v71, align 2
+  %v73 = sdiv i16 %v72, 4
+  %v74 = sext i16 %v73 to i32
+  %v75 = getelementptr inbounds nuw [4 x i8], ptr @_window, i16 %v70
+  %v76 = load i32, ptr %v75, align 2
+  %v77 = mul nsw i32 %v76, %v74
+  %v78 = getelementptr inbounds nuw i8, ptr @_rev, i16 %v70
+  %v79 = load i8, ptr %v78, align 1
+  %v80 = zext i8 %v79 to i16
+  %v81 = getelementptr inbounds nuw [4 x i8], ptr @_re, i16 %v80
+  store i32 %v77, ptr %v81, align 2
+  %v82 = getelementptr inbounds nuw [2 x i8], ptr %v62, i16 %v70
+  %v83 = load i16, ptr %v82, align 2
+  %v84 = sdiv i16 %v83, 4
+  %v85 = sext i16 %v84 to i32
+  %v86 = or disjoint i16 %v70, 128
+  %v87 = getelementptr inbounds nuw [4 x i8], ptr @_window, i16 %v86
+  %v88 = load i32, ptr %v87, align 2
+  %v89 = mul nsw i32 %v88, %v85
+  %v90 = getelementptr inbounds nuw i8, ptr @_rev, i16 %v86
+  %v91 = load i8, ptr %v90, align 1
+  %v92 = zext i8 %v91 to i16
+  %v93 = getelementptr inbounds nuw [4 x i8], ptr @_re, i16 %v92
+  store i32 %v89, ptr %v93, align 2
+  %v94 = getelementptr inbounds nuw [4 x i8], ptr @_im, i16 %v80
+  store i32 0, ptr %v94, align 2
+  %v95 = getelementptr inbounds nuw [4 x i8], ptr @_im, i16 %v92
+  store i32 0, ptr %v95, align 2
+  %v96 = add nuw nsw i16 %v70, 1
+  %exitcond2 = icmp eq i16 %v96, 128
+  br i1 %exitcond2, label %exit, label %v69
+exit:
+  ret void
+}
+";

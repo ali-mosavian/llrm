@@ -1224,7 +1224,7 @@ impl Collection<'_, '_> {
             l: self.l,
             hardware_loop_profitable: self.hardware_loop_profitable,
             as_written: false,
-            other_register_units: self.other_register_units,
+            other_register_units: self.pressure_units(),
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }

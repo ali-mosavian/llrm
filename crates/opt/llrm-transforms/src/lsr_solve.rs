@@ -53,9 +53,11 @@
 //! and the spill check count against; the pin counts none. Without it shellsort
 //! bas -Os spent a third formula register to save an instruction and the
 //! allocator spilled the `i32` chain (+6 B). No pin run can decide it: the pin
-//! has no m16 TTI. Exit: a pressure model on the pin's
-//! MachineLICM/RegisterPressure terms, by 2026-11-20, or when the allocator's
-//! spill cost is priced in the comparator.
+//! has no m16 TTI. Where no solution fits the registers left, the cut is
+//! dropped and the search runs again without it: every one spills and the count
+//! no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model
+//! on the pin's MachineLICM/RegisterPressure terms, by 2026-11-20, or when the
+//! allocator's spill cost is priced in the comparator.
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
@@ -216,18 +218,30 @@ impl Collection<'_, '_> {
         }
         let mut solution = Vec::new();
         let mut solution_cost = Cost::new();
-        solution_cost.lose();
-        let mut workspace = Vec::with_capacity(self.uses.len());
-        let mut visited = HashSet::default();
-        self.solve_recurse(
-            se,
-            &mut solution,
-            &mut solution_cost,
-            &mut workspace,
-            &Cost::new(),
-            &HashSet::default(),
-            &mut visited,
-        );
+        loop {
+            solution.clear();
+            solution_cost = Cost::new();
+            solution_cost.lose();
+            let mut workspace = Vec::with_capacity(self.uses.len());
+            let mut visited = HashSet::default();
+            self.solve_recurse(
+                se,
+                &mut solution,
+                &mut solution_cost,
+                &mut workspace,
+                &Cost::new(),
+                &HashSet::default(),
+                &mut visited,
+            );
+            // DEVIATE LU3b: where the loop's other values leave less than a
+            // base and an index, the cut tells no solution from
+            // another; search again without it.
+            let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
+            if solution.is_empty() || budget >= 2 || solution_cost.c.num_regs <= budget || self.pressure_units() == 0 {
+                break;
+            }
+            self.ignore_pressure.set(true);
+        }
         if solution.is_empty() {
             return solution;
         }
@@ -238,7 +252,7 @@ impl Collection<'_, '_> {
         }
         // DEVIATE LU3: a rewrite that needs more registers than the loop and
         // than the target has, and costs two instructions more, is dropped.
-        let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.other_register_units);
+        let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
         let spills = solution_cost.c.num_regs > budget
             && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;

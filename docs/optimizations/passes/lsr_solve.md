@@ -58,5 +58,7 @@ of the target's width, `Tti::gpr_bits`) are taken off the budget the solver
 and the spill check count against; the pin counts none. Without it shellsort
 bas -Os spent a third formula register to save an instruction and the
 allocator spilled the `i32` chain (+6 B). No pin run can decide it: the pin
-has no m16 TTI. Exit: a pressure model on the pin's
+has no m16 TTI. Where the other values leave less than a base and an index and no
+solution fits, the cut is dropped and the search runs again without it: the
+count no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model on the pin's
 MachineLICM/RegisterPressure terms, by 2026-11-20, or when the allocator's
