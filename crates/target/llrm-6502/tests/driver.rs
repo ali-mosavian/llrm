@@ -1004,3 +1004,22 @@ define i64 @f() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("jsr g"), "{text}");
 }
+
+/// The same pair read by two calls, the second taking the first's `long` (its
+/// bytes live across the second call's pair): the read ends at the clobber's
+/// dead slot and the result bytes start there.
+#[test]
+fn two_calls_taking_a_pointer_and_returning_a_long_allocate() {
+    let ir = module(
+        r#"declare i64 @g(ptr)
+define i64 @f() {
+  %t = alloca i16
+  %a = call i64 @g(ptr %t)
+  %b = call i64 @g(ptr %t)
+  %s = add i64 %a, %b
+  ret i64 %s
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(text.matches("jsr g").count(), 2, "{text}");
+}

@@ -1502,6 +1502,13 @@ pub fn decide_with_split(
                             // `bd0` that clobbers `wd0`): the clobber holds
                             // nothing, also where the register was live into
                             // the instruction and the run it ends is longer.
+                            // DEVIATE: the pin has no such check: the defs of
+                            // one unit at one instruction are one value
+                            // (`LiveRange::createDeadDef`, LiveInterval.cpp
+                            // L100-L115, at d1106deb71cc) and a read ends its
+                            // value at the read slot, so a pair read at the
+                            // call never overlaps the bytes it returns. Exit:
+                            // pins as one value per unit and instruction.
                             let clobber = written_dead.as_ref() == Some(&start) && last.1 == start.get_dead_slot();
                             conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead && !clobber;
                             last.1 = std::cmp::max(last.1.clone(), end.clone())
