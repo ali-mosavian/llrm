@@ -632,7 +632,7 @@ fn _pooled(
             let rate = if cpu.size || cpu.min_size {
                 cpu.size_milliclocks_per_byte()
             } else {
-                cpu.target().tuning().speed_milliclocks_per_byte
+                cpu.speed_milliclocks_per_byte()
             };
             let pays = if plan.is_empty() {
                 false

@@ -28,7 +28,10 @@
 //! that is not an integer constant, skips the fold.
 //!
 //! DEVIATE 6: the float casts run `commonCastTransforms` alone
-//! (`visit_fp_cast`).
+//! (`visit_fp_cast`); the pin's
+//! [`visitFPToSI`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L2616)
+//! and its siblings try `foldItoFPtoI`, `foldFPtoI` and the narrowing folds
+//! first. Exit: translate them when a float row differs from the pin's.
 //!
 //! # Used by
 //! `combine::visit`, once the casts family's slot is flipped.
