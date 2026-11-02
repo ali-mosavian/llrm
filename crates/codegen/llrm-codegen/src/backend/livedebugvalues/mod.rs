@@ -359,6 +359,15 @@ pub fn extend(
     found
 }
 
+/// What `flow_of` asks of the target and the frame.
+pub struct FlowTarget<'a> {
+    /// The register a split clone was cloned from.
+    pub parents: &'a HashMap<u32, u32>,
+    /// The frame cell a value was spilled to (`VirtRegMap::getStackSlot`).
+    pub home: &'a dyn Fn(u32) -> Option<i64>,
+    pub callee_saved: &'a dyn Fn(RegId) -> bool,
+}
+
 /// The blocks of `body` as `extend` takes them, in reverse post-order, from
 /// what the allocator decided: a register an instruction defines (through
 /// `placed`), clobbers or delivers is written there, and a located range
@@ -367,13 +376,13 @@ pub fn extend(
 /// instruction.
 ///
 /// DEVIATE: the pin reads the final instructions' operands; this reads the
-/// allocator's body and its decisions, which agree. Copies, spills and
-/// reloads are not recognised yet.
+/// allocator's body and its decisions, which agree.
 pub fn flow_of(
     body: &LirBody,
-    lis: &LiveIntervals,
+    lis: &mut LiveIntervals,
     placed: &IndexMap<u32, RegId>,
     located: &[Located],
+    target: &FlowTarget<'_>,
 ) -> Vec<FlowBlock> {
     let order = crate::backend::postrasink::reverse_post_order(body);
     let index_of: HashMap<i64, usize> = order.iter().enumerate().map(|(rank, &at)| (at, rank)).collect();
@@ -397,11 +406,43 @@ pub fn flow_of(
             if !written.is_empty() {
                 events.push((here, 0, Event::Def { written, mask: None }));
             }
+            let root = |value: u32| target.parents.get(&value).copied().unwrap_or(value);
+            let register = |value: &u32| placed.get(value).copied();
+            match (one.defines.as_slice(), one.uses.as_slice()) {
+                // A store of a register the spiller wrote, and a load of a value back.
+                (_, [stored]) if one.spill_store => {
+                    if let (Some(from), Some(slot)) = (register(stored), (target.home)(root(*stored))) {
+                        events.push((here, 2, Event::Spill { from, slot }));
+                    }
+                }
+                ([loaded], _) if one.spill_reload => {
+                    if let (Some(into), Some(slot)) = (register(loaded), (target.home)(root(*loaded))) {
+                        events.push((here, 2, Event::Reload { slot, into }));
+                    }
+                }
+                ([dest], [src])
+                    if one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move) =>
+                {
+                    if let (Some(dest), Some(from)) = (register(dest), register(src)) {
+                        // The source dies here when its interval ends within this instruction.
+                        let here_index = lis.indexes.get_instruction_index(one.id());
+                        let dies = lis.interval(*src).segments.last().is_some_and(|segment| {
+                            crate::liveness::slotindex::SlotIndex::is_earlier_equal_instr(&segment.end, &here_index)
+                        });
+                        events.push((
+                            here,
+                            1,
+                            Event::Copy { dest, src: from, src_dies: dies, dest_callee_saved: (target.callee_saved)(dest) },
+                        ));
+                    }
+                }
+                _ => {}
+            }
         }
         let (low, high) = (i64::from(start.get_index()), i64::from(end.get_index()));
         for one in located.iter().filter(|one| (low..high).contains(&one.start)) {
             let place = (one.at != Where::Undef).then_some(one.at);
-            events.push((one.start, 1, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
+            events.push((one.start, 3, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
         }
         events.sort_by_key(|(here, phase, _)| (*here, *phase));
         blocks.push(FlowBlock {
@@ -420,6 +461,10 @@ mod tests {
 
     fn reg(n: u8) -> RegId {
         RegId::from_raw(n)
+    }
+
+    fn as_reg(register: RegId) -> RegId {
+        register
     }
 
     fn at(n: u8) -> Where {
@@ -592,5 +637,40 @@ mod tests {
         // The first visit takes the header's start from block 0 alone; the
         // body's kill comes back over the edge and takes it away again.
         assert_eq!(found, [(1, 0, 10, at(1))]);
+    }
+
+    /// A copy into a callee-saved register whose source dies, seen in the
+    /// allocator's body, carries the variable to the new register: `flow_of`
+    /// ignored copies and the variable was nowhere after the source's last
+    /// use.
+    #[test]
+    fn flow_of_sees_a_dying_copy_into_a_callee_saved_register() {
+        use std::sync::Arc;
+
+        use crate::model::ir::{Operation, Semantics};
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let define = Arc::new(Insn::new(0, None, None, vec![1], vec![]));
+        let what = Semantics::new(Operation::Move);
+        let copy = Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]));
+        let last = Arc::new(Insn::new(0, None, None, vec![], vec![2]));
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::clone(&define), Arc::clone(&copy), last]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let slot = |lis: &LiveIntervals, one: &Insn| i64::from(lis.indexes.get_instruction_index(one.id()).get_index());
+        let (first, second) = (slot(&lis, &define), slot(&lis, &copy));
+        let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(5))].into_iter().map(|(v, p)| (v, as_reg(p))).collect();
+        let located = [Located { variable: 9, piece: None, start: first, end: second + 100, at: at(3) }];
+        let parents = HashMap::default();
+        let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|register| register == reg(5) };
+        let blocks = flow_of(&body, &mut lis, &placed, &located, &target);
+        let found = extend(&blocks, reg(9));
+        let places: Vec<Where> = found.iter().map(|one| one.at).collect();
+        assert_eq!(places, [at(3), at(5)], "{found:?}");
     }
 }

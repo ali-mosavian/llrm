@@ -251,6 +251,7 @@ pub fn dump(
     spilled: &[u32],
     parents: &HashMap<u32, u32>,
     frame: &crate::backend::frame::Frame,
+    saved: &[RegId],
 ) {
     use crate::backend::frame::FrameInfo;
     let mut lis = LiveIntervals::new(edited);
@@ -280,7 +281,12 @@ pub fn dump(
     // The pin's LiveDebugValues over those ranges: the stack pointer is not
     // known to this report, so no register is spared a call's mask (none is
     // given).
-    let flow = crate::backend::livedebugvalues::flow_of(edited, &lis, &placed, &located);
+    let target = crate::backend::livedebugvalues::FlowTarget {
+        parents,
+        home: &|value| frame.home(value),
+        callee_saved: &|register| saved.contains(&register),
+    };
+    let flow = crate::backend::livedebugvalues::flow_of(edited, &mut lis, &placed, &located, &target);
     for one in crate::backend::livedebugvalues::extend(&flow, RegId::None) {
         eprintln!("VLD\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
