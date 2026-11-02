@@ -444,12 +444,14 @@ loop:	ld	b,#32
 	pop	ix
 	ret
 
-; ---- libc: strlen --------------------------------------------------------------------------------
+; ---- the compiler's library calls -----------------------------------------------------------------
+; Reserved `__` names: a program may define its own strlen, memcpy, memmove or memset and none of them clashes.
+; tests/programs/libc/ has the C library entries over these.
 
 ; The length of the string at hl -> de. cpir scans from a count of 0 (the 65536 bytes it can take) for the zero byte;
 ; the count is then minus the bytes scanned, the zero included, and the length is its complement.
-	.globl _strlen
-_strlen:
+	.globl __strlen
+__strlen:
 	xor	a
 	ld	b,a
 	ld	c,a
@@ -463,8 +465,8 @@ _strlen:
 	ret
 
 ; memcpy (dst hl, src de, n bc) -> dst in de; the areas do not overlap.
-	.globl _memcpy
-_memcpy:
+	.globl __memcpy
+__memcpy:
 	push	hl
 	ex	de,hl
 	ld	a,b
@@ -476,8 +478,8 @@ _memcpy:
 	ret
 
 ; memmove (dst hl, src de, n bc) -> dst in de: forward when dst is below src, else from the ends.
-	.globl _memmove
-_memmove:
+	.globl __memmove
+__memmove:
 	push	hl
 	ld	a,b
 	or	a,c
@@ -503,19 +505,22 @@ _memmove:
 	pop	de
 	ret
 
-; memset (dst hl, value e, n bc) -> dst in de: the first byte, then ldir copies it forward.
-	.globl _memset
-_memset:
+; memset (dst hl, value a, n de) -> dst in de: the first byte, then ldir copies it forward.
+	.globl __memseta
+__memseta:
 	push	hl
-	ld	a,b
-	or	a,c
+	ld	b,a
+	ld	a,d
+	or	a,e
 	jr	z,4$
-	ld	a,e
+	ld	a,b
 	ld	(hl),a
-	dec	bc
-	ld	a,b
-	or	a,c
+	dec	de
+	ld	a,d
+	or	a,e
 	jr	z,4$
+	ld	c,e
+	ld	b,d
 	ld	e,l
 	ld	d,h
 	inc	de
@@ -523,15 +528,6 @@ _memset:
 4$:
 	pop	de
 	ret
-
-; The compiler's memset (dst hl, value a, n de): the registers C's memset (value in de, n in bc) takes.
-	.globl __memseta
-__memseta:
-	ld	b,d
-	ld	c,e
-	ld	e,a
-	ld	d,#0
-	jp	_memset
 
 ; A call through a pointer: the address is in iy.
 	.globl __call_iy

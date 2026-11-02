@@ -13,6 +13,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
+LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
 CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
 LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
@@ -51,6 +52,19 @@ _report::
 
 def sh(cmd, cwd, inp=None, timeout=300):
     return subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, text=True, timeout=timeout)
+
+
+def libc_library(work):
+    """The library directory of LIBC's objects: sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
+    lib = Path(work) / "lib"
+    lib.mkdir()
+    stems = []
+    for s in sorted(LIBC.glob("*.s")):
+        a = sh(["sdasz80", "-g", "-o", f"lib/{s.stem}.rel", str(s)], work)
+        assert a.returncode == 0, a.stdout + a.stderr
+        stems.append(s.stem)
+    (lib / "libc.lib").write_text("\n".join(stems) + "\n")
+    return str(lib)
 
 
 def expected(path):
@@ -98,7 +112,7 @@ def one(job):
         a = sh(["sdasz80", "-g", "-o", f"{stem}.rel", f"{stem}.s"], w)
         if a.returncode:
             return name, "ASM", (a.stdout + a.stderr).strip().splitlines()[-1][:100]
-    k = sh(["sdldz80", "-i", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel"], w)
+    k = sh(["sdldz80", "-i", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
     if k.returncode or "?ASlink-W-Undefined" in k.stdout + k.stderr:
         undefined = sorted(set(re.findall(r"Undefined Global (\S+)", k.stdout + k.stderr)))
         return name, "LINK", " ".join(undefined)[:140] or (k.stdout + k.stderr)[-100:]
@@ -133,6 +147,7 @@ def main():
     if args.names:
         sources = [p for p in sources if p.stem in args.names]
     work = tempfile.mkdtemp(prefix="z80prog-")
+    args.libc = libc_library(work)
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(one, [(s, args, work) for s in sources]))
     tally = {}

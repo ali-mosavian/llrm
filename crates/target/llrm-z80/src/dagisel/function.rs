@@ -45,7 +45,7 @@ pub fn builder_target() -> BuilderTarget {
         // take the C library's registers. The compiler's `memset` has the byte
         // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
         libcalls: Some(
-            [("memcpy", "_memcpy"), ("memmove", "_memmove"), ("memset", "__memseta")]
+            [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")]
                 .map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned()))
                 .to_vec(),
         ),

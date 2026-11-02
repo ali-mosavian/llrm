@@ -95,8 +95,11 @@ pub fn program(
         options.unroll = false;
         options.loop_unrolling = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
-        options.library =
-            vec![llrm_mir::libfunc::Routine { standard: "strlen", symbol: "strlen".to_owned(), calling_convention: 0 }];
+        options.library = vec![llrm_mir::libfunc::Routine {
+            standard: "strlen",
+            symbol: "_strlen".to_owned(),
+            calling_convention: 0,
+        }];
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }

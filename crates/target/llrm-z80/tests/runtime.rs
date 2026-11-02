@@ -90,3 +90,18 @@ fn the_memory_routines_move_what_c_moves() {
     let text = String::from_utf8_lossy(&done.stdout);
     assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
 }
+
+/// The runtime exported `_strlen`, `_memcpy`, `_memmove` and `_memset`: a
+/// program defining its own `strlen` failed to link (2 programs of
+/// tests/run/c). Its exports are `__` names, which C reserves.
+#[test]
+fn the_runtime_exports_no_name_a_program_may_define() {
+    let clashing: Vec<_> = llrm_z80::RUNTIME
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(".globl"))
+        .flat_map(|names| names.split(','))
+        .map(str::trim)
+        .filter(|name| name.starts_with('_') && !name.starts_with("__"))
+        .collect();
+    assert!(clashing.is_empty(), "{clashing:?} are C library names a program may define");
+}

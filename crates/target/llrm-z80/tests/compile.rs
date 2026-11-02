@@ -264,7 +264,7 @@ fn a_select_is_a_branch_and_gcd_is_the_branch_loop() {
 fn a_loop_over_a_string_is_the_runtimes_strlen() {
     let out = text(include_str!("kernels/ir/slen.ll"), "slen", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("jp _strlen") && !out.contains("jr"), "{out}");
+    assert!(out.contains("jp __strlen") && !out.contains("jr"), "{out}");
 }
 
 /// A pair copy moved both halves: crc16's `bit 7, h` on a copy of `de` came

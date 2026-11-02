@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""memcpy, memmove and memset of runtime/z80_rt.s against C's meaning, on ucsim_z80: n of 0, 1, a few and 300 (the count
+"""the memcpy, memmove and memset entries of runtime/z80_rt.s against C's meaning, on ucsim_z80: n of 0, 1, a few and 300 (the count
 crosses 8 bits), overlap both ways and the same pointer. The result register (dst in de) is checked too.
 
     memops.py RUNTIME.s      prints ALL OK
@@ -12,7 +12,6 @@ A, B, RES, N = 0x9000, 0xA000, 0x8F00, 0x500
 # (routine, dst, src-or-value, n)
 OPS = [("copy", B, A, 0), ("copy", B, A, 1), ("copy", B + 0x10, A + 3, 5), ("copy", B + 0x100, A, 300),
        ("move", A + 5, A, 20), ("move", A, A + 5, 20), ("move", A + 0x40, A + 0x40, 10), ("move", A + 0x80, A + 0x100, 0),
-       ("set", B + 0x200, 0xAB, 0), ("set", B + 0x210, 0x5A, 1), ("set", B + 0x220, 0xCC, 5), ("set", B + 0x300, 0x11, 300),
        ("seta", B + 0x440, 0x77, 0), ("seta", B + 0x450, 0x78, 1), ("seta", B + 0x460, 0x79, 300)]
 mem = bytearray(0x10000)
 for i in range(N):
@@ -21,16 +20,16 @@ for i in range(N):
 init = bytes(mem)
 want_ret = []
 for op, dst, src, n in OPS:
-    if op in ("set", "seta"):
+    if op == "seta":
         for i in range(n): mem[dst + i] = src
     else:
         mem[dst:dst + n] = bytes(mem[src:src + n])
     want_ret.append(dst)
 def db(base):
     return "\n".join("\t.db " + ",".join(str(b) for b in init[base + i:base + i + 16]) for i in range(0, N, 16))
-code = "\t.module t\n\t.globl _main, _memcpy, _memmove, _memset, __memseta\n\t.area _CODE\n_main:\n"
+code = "\t.module t\n\t.globl _main, __memcpy, __memmove, __memseta\n\t.area _CODE\n_main:\n"
 for k, (op, dst, src, n) in enumerate(OPS):
-    name = {"copy": "_memcpy", "move": "_memmove", "set": "_memset", "seta": "__memseta"}[op]
+    name = {"copy": "__memcpy", "move": "__memmove", "seta": "__memseta"}[op]
     if op == "seta":  # the compiler's entry: value in a, n in de
         code += f"\tld hl,#{dst}\n\tld a,#{src}\n\tld de,#{n}\n\tcall {name}\n\tld ({RES + 2 * k}),de\n"
     else:
