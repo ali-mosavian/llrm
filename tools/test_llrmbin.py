@@ -184,3 +184,19 @@ def test_the_stamp_is_read_from_llrm_llc_when_there_is_no_llrm_c(tmp_path, monke
         (tmp_path / name).write_text("")
     llrmbin.stamped(tmp_path)
     assert seen == ["llrm-llc"]
+
+
+def test_a_binary_that_needs_a_feature_the_rebuild_lacks_is_not_judged_stale(tmp_path):
+    """The runner rebuilds with `cargo build --release --bins`, which skips llrm-c (required-features c-legacy): a llrm-c left from an earlier build was older than a source, and every PR was REFUSED
+    "binaries still older than the merged tree after a rebuild: llrm-c" (#6302, 01:00). A binary the rebuild does build is still judged."""
+    repo, release = tmp_path / "repo", tmp_path / "t" / "release"
+    release.mkdir(parents=True)
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[features]\ndefault = ["toolchain"]\ntoolchain = []\nc-legacy = []\n[[bin]]\nname = "llrm-c"\npath = "x.rs"\nrequired-features = ["c-legacy"]\n[[bin]]\nname = "llrm-cc"\npath = "y.rs"\n')
+    source = repo / "lib.rs"
+    source.write_text("")
+    for name in ("llrm-c", "llrm-cc"):
+        (release / name).write_text("")
+        (release / f"{name}.d").write_text(f"{release}/{name}: {source}\n")
+        os.utime(release / name, (1000, 1000))
+    assert llrmbin.stale_binaries(release, repo) == ["llrm-cc"]

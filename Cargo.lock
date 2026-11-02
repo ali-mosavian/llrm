@@ -834,6 +834,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-z80"
+version = "0.1.0"
+dependencies = [
+ "llrm-codegen",
+ "llrm-dagisel",
+ "llrm-debug",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-object",
+ "llrm-spike-mf",
+ "llrm-target",
+ "llrm-transforms",
+]
+
+[[package]]
 name = "logos"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

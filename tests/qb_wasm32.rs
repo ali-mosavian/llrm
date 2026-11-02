@@ -176,19 +176,16 @@ fn a_frame_and_a_key_leave_the_programs_locals_alone() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-/// ON ERROR cannot land on wasm32 (no unwinding): an error that reaches a
-/// handler stops the program with a named failure, not by running on past it or
-/// by a bare trap. Gorillas' SCREEN 9 and PALETTE probes raise nothing, so it
-/// never lands.
+/// An error that reaches a handler lands in it and the program goes on from
+/// there; with the `setjmp` stub it stopped with "ON ERROR landed: longjmp is
+/// not supported on wasm32".
 #[test]
-fn an_error_that_reaches_a_handler_stops_with_a_named_failure() {
+fn an_error_that_reaches_a_handler_lands_in_it() {
     let dir =
         built("onerror", "ON ERROR GOTO Handler\nERROR 5\nPRINT \"went on\"\nEND\nHandler:\nPRINT \"handled\"\nEND\n");
-    let ran = run_raw(&dir, "onerror", &[]);
-    let (out, err) = (String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
-    assert!(!out.contains("went on") && !out.contains("handled"), "{out:?}");
-    assert!(err.contains("ON ERROR landed: longjmp is not supported on wasm32"), "{err}");
-    assert_ne!(ran.status.code(), Some(0));
+    let (text, code) = run(&dir, "onerror", &[]);
+    assert_eq!(text.trim_end(), "handled");
+    assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -416,10 +413,10 @@ fn clear_closes_the_open_files_on_wasm32() {
 /// branches back into the function (RESUME NEXT, RESUME 0), which a `catch`
 /// cannot do, so the function runs inside a dispatch loop.
 #[test]
-fn on_error_lands_with_wasm_exceptions() {
+fn on_error_lands_on_wasm32() {
     let source = "ON ERROR GOTO h\nPRINT \"a\"\nERROR 5\nPRINT \"b\"\nERROR 6\nPRINT \"c\"\nEND\n\
         h:\nPRINT \"err\"; ERR\nRESUME NEXT\n";
-    let dir = built_with("eh_land", source, "--wasm-exceptions");
+    let dir = built("eh_land", source);
     let (text, code) = run(&dir, "eh_land", &[]);
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["a", "err", "5", "b", "err", "6", "c"], "{text}");
     assert_eq!(code, Some(0));
@@ -500,20 +497,125 @@ fn on_local_error_registers_and_the_program_runs_on_wasm32() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// A DOUBLE converted to CURRENCY ran the x87 sequence in 80 bits: wasm32 has
+/// no `f80`, so a program that did it at run time did not build
+/// (`CannotSelect(LRint)`: currency_arith_pds71). The runtime's `B$LFPC` scales
+/// and rounds as the x87 does: the product to 64 bits, then to the nearest
+/// integer, ties to even, an overflow the integer indefinite. The expected
+/// values are the x87's (`llrintl` of the `long double` product).
+#[test]
+fn a_double_converted_to_currency_rounds_as_the_x87_does_on_wasm32() {
+    let dir = built(
+        "cyscale",
+        "' dialect: pds71\nDIM c AS CURRENCY, x AS DOUBLE\nFOR n = 1 TO 10\n  READ x\n  c = x\n  PRINT c\nNEXT\n\
+         DATA .00005, .00015, .00025, .00035, -.00005, -.00015, 1D+30, 922337203685477, 922337203685478, -922337203685477.5\nEND\n",
+    );
+    let (text, code) = run(&dir, "cyscale", &[]);
+    assert_eq!(
+        text.split_whitespace().collect::<Vec<_>>(),
+        [
+            ".0001",
+            ".0001",
+            ".0003",
+            ".0003",
+            "-.0001",
+            "-.0001",
+            "-922337203685477.5808",
+            "922337203685477",
+            "-922337203685477.5808",
+            "-922337203685477.5"
+        ]
+    );
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// A procedure's ON LOCAL ERROR handler takes the error and resumes: the
 /// ownf_local and resumelocals_local programs did not link (B$OEGP) and then
 /// ended at the first error.
 #[test]
 fn on_local_error_lands_in_its_handler_on_wasm32() {
-    let dir = built_with(
+    let dir = built(
         "locland",
         "' dialect: pds71\nDECLARE SUB top ()\ntop\nPRINT \"done\"\nEND\nSUB top\nON LOCAL ERROR GOTO th\nPRINT \"in\"\nERROR 5\nPRINT \"after\"\nEXIT SUB\nth:\nPRINT \"err\"; ERR\nRESUME NEXT\nEND SUB\n",
-        "--wasm-exceptions",
     );
     let (text, code) = run(&dir, "locland", &[]);
     assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["in", "err", "5", "after", "done"], "{text}");
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// CURRENCY to INTEGER or LONG out of range is the x87's `fist`: the integer
+/// indefinite, no error (currency_convert_pds71). wasm's `lrint` truncated:
+/// 100000.5 gave -31072 as an INTEGER and -2147483649 gave 2147483647 as a
+/// LONG. The pairs are the rows of that program's expected output.
+#[test]
+fn a_currency_past_an_integer_type_is_the_indefinite_on_wasm32() {
+    let dir = built(
+        "cyfist",
+        "' dialect: pds71\nDIM c AS CURRENCY, i AS INTEGER, l AS LONG\nFOR n = 1 TO 8\n  READ x#\n  c = x#\n  i = c\n  l = c\n  PRINT i; l\nNEXT\n\
+         DATA 32767.5, -32768.5, -32768.5001, 100000.5, 2147483647.4999, 2147483647.5, -2147483648.5, -2147483649\nEND\n",
+    );
+    let (text, code) = run(&dir, "cyfist", &[]);
+    assert_eq!(
+        text.split_whitespace().collect::<Vec<_>>(),
+        [
+            "-32768",
+            "32768",
+            "-32768",
+            "-32768",
+            "-32768",
+            "-32769",
+            "-32768",
+            "100000",
+            "-32768",
+            "2147483647",
+            "-32768",
+            "-2147483648",
+            "-32768",
+            "-2147483648",
+            "-32768",
+            "-2147483648"
+        ]
+    );
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// currency_arith_pds71 converts DOUBLEs and SINGLEs to CURRENCY at run time
+/// and did not build; it prints what BC's build prints (its overflow is a
+/// handled error, so the build lands by exceptions).
+#[test]
+fn currency_arithmetic_prints_the_bc_output_on_wasm32() {
+    let path = root().join("tests/run/qb/currency_arith_pds71.bas");
+    let dir = built_with("curarith", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
+    let (text, code) = run(&dir, "curarith", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The ON LOCAL ERROR programs ended at their first error with "ON ERROR
+/// landed: longjmp is not supported" while a handler landed through the
+/// `setjmp` stub. Built as they are, they print what the DOS build prints.
+#[test]
+fn the_on_local_error_programs_print_their_expected_output_on_wasm32() {
+    for name in ["ownf_local_pds71", "ownf_local_vbdos", "resumelocals_local"] {
+        let path = root().join(format!("tests/run/qb/{name}.bas"));
+        let mut source = std::fs::read(&path).unwrap();
+        source.extend_from_slice(b"\r\nEND\r\n");
+        let dir = built(name, &String::from_utf8_lossy(&source));
+        let (text, code) = run(&dir, name, &[]);
+        let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+        let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+        let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+        assert_eq!(kept, rows[rows.len() - kept.len()..], "{name}");
+        assert_eq!(code, Some(0), "{name}");
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
 
 /// A fixed-length string and the fields of a TYPE variable are zero after
@@ -547,7 +649,7 @@ fn a_host_ending_gets_through_a_catch_all() {
 #[test]
 fn clear_then_a_closed_channel_lands_in_the_handler_on_wasm32() {
     let path = root().join("tests/differential/conformance/qb45/q45cl66.bas");
-    let dir = built_with("cl66", &std::fs::read_to_string(path).unwrap(), "--wasm-exceptions");
+    let dir = built("cl66", &std::fs::read_to_string(path).unwrap());
     let (text, code) = run(&dir, "cl66", &[]);
     assert_eq!(text.trim_end(), "PASS clear");
     assert_eq!(code, Some(0));
@@ -577,12 +679,46 @@ fn the_dac_ports_read_back_what_was_written_on_wasm32() {
 #[test]
 fn palette_using_prints_the_bc_output_on_wasm32() {
     let path = root().join("tests/run/qb/palette_using_pds71.bas");
-    let dir = built_with("paluse", &std::fs::read_to_string(&path).unwrap(), "--wasm-exceptions");
+    let dir = built_with("paluse", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
     let (text, code) = run(&dir, "paluse", &[]);
     let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
     let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
     let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
     assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// PDS 7.1 prints a DOUBLE with 15 digits, rounded half up; the runtime had
+/// QB 4.5's 16 for every dialect, so 999999999999999.5 printed as itself where
+/// PDS 7.1 BC prints `1D+15`, and 922337203685477.625 as `.6` where it prints
+/// `922337203685478`. The rows are from a probe of 64 doubles under PDS 7.1 BC
+/// (~/scratch/fout-probe/BC_pds71.TXT); a rule of exact half-up at 15 digits
+/// fits all 64.
+#[test]
+fn pds_prints_a_double_with_15_digits_on_wasm32() {
+    let path = root().join("tests/run/qb/fout_pds15_pds71.bas");
+    let dir = built_with("foutpds", &std::fs::read_to_string(&path).unwrap(), "--dialect pds71");
+    let (text, code) = run(&dir, "foutpds", &[]);
+    let expected = std::fs::read_to_string(path.with_extension("out")).unwrap();
+    let kept: Vec<&str> = text.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    let rows: Vec<&str> = expected.lines().map(str::trim_end).filter(|line| !line.is_empty()).collect();
+    assert_eq!(kept, rows[rows.len() - kept.len()..]);
+    assert_eq!(code, Some(0));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The other dialects keep QB 4.5's 16 digits (pow_unrolled.out has
+/// 999999999999999.5).
+#[test]
+fn qb45_prints_a_double_with_16_digits_on_wasm32() {
+    let dir = built_with(
+        "foutqb",
+        "DIM x AS DOUBLE\nx = 999999999999999#\nPRINT x + .5#\nPRINT x + .125#\nEND\n",
+        "--dialect qb45",
+    );
+    let (text, code) = run(&dir, "foutqb", &[]);
+    assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["999999999999999.5", "999999999999999.1"]);
     assert_eq!(code, Some(0));
     std::fs::remove_dir_all(dir).ok();
 }

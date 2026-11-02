@@ -625,3 +625,25 @@ def test_assemble_prints_one_progress_line_per_candidate(tmp_path, capsys):
     lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith("assemble:")]
     assert [line.split(" (")[0] for line in lines] == ["assemble: #1 kept", "assemble: #2 waits", "assemble: #3 kept"], lines
     assert "(2/16 kept," in lines[-1], lines
+
+
+def test_a_pr_that_adds_only_a_bench_dir_without_a_manifest_waits_and_the_batch_still_forms(tmp_path):
+    """#6317 added only crates/target/llrm-z80/bench/*: the workspace glob crates/*/* failed "failed to load manifest for workspace member" for every batch holding it (LAND_FAST has no precheck
+    and skips `alone`, so only assembly can drop it). It waits with its own REFUSED line; the others join."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "crates/target/llrm-z80").mkdir(parents=True)
+    (repo / "crates/target/llrm-z80/Cargo.toml").write_text("[package]\nname = \"z\"\n")
+    (repo / "other.txt").write_text("x\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    sh(repo, "checkout", "-q", "-b", "orphan", "main")
+    (repo / "crates/target/llrm-z80x/bench").mkdir(parents=True)
+    (repo / "crates/target/llrm-z80x/bench/a.bas").write_text("x\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "orphan")
+    heads = {"1": sh(repo, "rev-parse", "HEAD"), "2": branch(repo, "ok", "other.txt", "y\n")}
+    sh(repo, "checkout", "-q", "main")
+    kept, waits = ps.assemble(["1", "2"], heads, base="main", cwd=repo)
+    assert kept == ["2"]
+    assert "REFUSED: crate-manifest" in waits["1"] and "llrm-z80x" in waits["1"]

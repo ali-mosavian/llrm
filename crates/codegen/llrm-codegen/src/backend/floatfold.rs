@@ -572,7 +572,8 @@ fn _home_of(
     }
     let cell = cell_of(load);
     if insns[home + 1..at].iter().any(|between| {
-        between.volatile
+        between.defines.iter().any(|defined| load.uses.contains(defined))
+            || between.volatile
             || between.call.is_some()
             || may_write(between, cell, false)
             || between
@@ -918,5 +919,63 @@ mod tests {
         };
         assert_eq!(_memory_operation_bytes(&pointer, 16), 4);
         assert_eq!(_memory_operation_bytes(&pointer, 32), 7);
+    }
+
+    /// A load through a pointer that is written before a reader was read from
+    /// the cell at the reader, where the pointer then names another cell: the
+    /// reader took the value of `[p + 8]` for that of `[p]`.
+    #[test]
+    fn test_a_load_is_kept_where_its_pointer_is_written_before_a_reader() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let step = Arc::new(Insn::new(
+            9,
+            None,
+            Some(Semantics {
+                name: Some("add".into()),
+                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                sources: vec![
+                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
+                ],
+                ..Semantics::new(Operation::Binary)
+            }),
+            vec![9],
+            vec![9],
+        ));
+        let got = names(&folded(&two_blocks(vec![step], &[]), cpu, REGISTERS));
+        assert!(got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// The same inside one block: `fld [p]; p := p + 8; fadd` took `[p + 8]`.
+    #[test]
+    fn test_a_load_is_kept_where_its_pointer_is_written_before_its_one_reader_in_the_block() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let mut load = (*fld(0, 1, pointer)).clone();
+        load.uses = vec![9];
+        let step = Arc::new(Insn::new(
+            1,
+            None,
+            Some(Semantics {
+                name: Some("add".into()),
+                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                sources: vec![
+                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
+                ],
+                ..Semantics::new(Operation::Binary)
+            }),
+            vec![9],
+            vec![9],
+        ));
+        let body = one_block(vec![
+            Arc::new(load),
+            insn(0, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            step,
+            arith(2, "fmul", 3, 2, 1),
+            fstp(3, 3, frame(-4)),
+        ]);
+        let got = names(&folded(&body, cpu, REGISTERS));
+        assert!(got.contains(&"fld".to_owned()), "{got:?}");
     }
 }

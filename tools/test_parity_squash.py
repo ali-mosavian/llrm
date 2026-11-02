@@ -477,6 +477,22 @@ def test_precheck_refuses_a_pr_with_a_dense_id_hash_map_without_any_dist_build(t
     assert run_precheck(tmp_path, monkeypatch, Tree(set(), set()), number="2837") == "2837: PASS"
 
 
+def test_precheck_refuses_a_pr_whose_crate_dir_has_no_manifest_so_one_pr_cannot_sink_a_batch(tmp_path, monkeypatch):
+    """#6317 added only crates/target/llrm-z80/bench/*: the workspace glob crates/*/* failed "failed to load manifest for workspace member" for every batch holding it, and cost #6259's batch a round. Its own REFUSED line names the dir."""
+    def fake_git(*args, cwd=None):
+        if args[0] == "diff":
+            return "crates/target/llrm-z80/bench/a.bas\ncrates/target/llrm-x86-m16/src/lib.rs\ndocs/x.md\n"
+        if args[0] == "ls-tree":
+            return "" if "llrm-z80" in args[-1] else args[-1] + "\n"
+        return ""
+    dev = tmp_path / "wt"
+    dev.mkdir()
+    monkeypatch.setattr(ps, "git", fake_git)
+    info = {"headRefOid": "head6317", "body": "", "baseRefName": ps.BRANCH}
+    line = ps.precheck("6317", dev=dev, checks=Tree(set(), set()).checks(), merge=Tree(set(), set()).merge, deletions=lambda *a: [], info=info, cache=tmp_path / "c.json", base_sha="base")
+    assert line.startswith("6317: REFUSED: crate-manifest") and "crates/target/llrm-z80" in line and "llrm-x86-m16" not in line, line
+
+
 def test_a_red_head_file_no_longer_excuses_an_unformatted_pr_file_but_the_fix_passes(tmp_path, monkeypatch):
     """The user's order: tools/fmt.sh applies to every PR. precheck had excused any fmt failure the head already had (92 files of parity were unformatted that way): a PR that leaves a head-red file unformatted is refused,
     the PR that formats it passes, and a new red file is named as before. Ratchets keep the old excuse."""
