@@ -200,13 +200,15 @@ impl Hooks for Z80Lowering {
                 arg_vt: vt,
                 split,
                 variadic: false,
+                sret: false,
             }));
         }
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
-        let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32 };
-            if ret == EVT::I32 { 2 } else { 1 }
-        ];
+        let ins =
+            vec![
+                In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
+                if ret == EVT::I32 { 2 } else { 1 }
+            ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();
         let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;

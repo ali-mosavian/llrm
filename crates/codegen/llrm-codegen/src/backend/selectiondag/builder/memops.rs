@@ -147,6 +147,9 @@ impl Builder<'_> {
         // The SysV `va_list` is a four-field record over a register save area
         // (`LowerVASTART`), not the stack pointer the 32-bit one is; the entry
         // block's lowering of the arguments made the area.
+        if let Some(area) = self.info.variadic_area.clone() {
+            return self.visit_va_in_area(instruction, intrinsic, &area);
+        }
         if self.target.dag.pointer == EVT::I64
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
@@ -176,6 +179,70 @@ impl Builder<'_> {
         };
         let node = self.dag.get_node(code, EVT::OTHER, &ops);
         self.dag.set_root(node);
+        Ok(())
+    }
+
+    /// `LowerVASTART` of a target whose `va_list` is words over the frame: each
+    /// word stored to the list. `VAEND` is its chain, `VACOPY` a copy of the
+    /// list's 8-byte words.
+    fn visit_va_in_area(
+        &mut self,
+        instruction: &Instruction,
+        intrinsic: &Intrinsic,
+        area: &super::super::target_calling::VariadicArea,
+    ) -> Result<(), Refused> {
+        use super::super::target_calling::VaWord;
+        let pointer = self.target.dag.pointer;
+        let memory = |mem_vt: EVT| MemInfo {
+            mem_vt,
+            align: mem_vt.size_in_bits() / 8,
+            volatile: false,
+            base: MemBase::Unknown,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        match intrinsic {
+            Intrinsic::VaStart => {
+                let list = self.get_value(instruction.operands[0])?;
+                for &(offset, bytes, word) in &area.words {
+                    let vt = if bytes == 8 { EVT::I64 } else { EVT::I32 };
+                    let value = match word {
+                        VaWord::Frame { index, offset } => {
+                            let base = self.dag.get_frame_index(pointer, index);
+                            if offset == 0 {
+                                base
+                            } else {
+                                let step = self.dag.get_constant(offset as u64 as u128, pointer);
+                                self.dag.get_node(ISD::Add, pointer, &[base, step])
+                            }
+                        }
+                        VaWord::Constant(value) => {
+                            self.dag.get_constant(value as u64 as u128 & ((1u128 << (bytes * 8)) - 1), vt)
+                        }
+                    };
+                    let step = self.dag.get_constant(u128::from(offset), pointer);
+                    let address = self.dag.get_node(ISD::Add, pointer, &[list, step]);
+                    let root = self.root();
+                    let store = self.dag.get_store(root, value, address, memory(vt));
+                    self.dag.set_root(store);
+                }
+            }
+            Intrinsic::VaCopy => {
+                let destination = self.get_value(instruction.operands[0])?;
+                let source = self.get_value(instruction.operands[1])?;
+                for offset in (0..area.size).step_by(8) {
+                    let step = self.dag.get_constant(u128::from(offset), pointer);
+                    let from = self.dag.get_node(ISD::Add, pointer, &[source, step]);
+                    let to = self.dag.get_node(ISD::Add, pointer, &[destination, step]);
+                    let root = self.root();
+                    let load = self.dag.get_load(EVT::I64, root, from, memory(EVT::I64));
+                    let store = self.dag.get_store(SDValue { node: load.node, res: 1 }, load, to, memory(EVT::I64));
+                    self.dag.set_root(store);
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -997,7 +1064,14 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     None => None,
                 };
-                match inline.or_else(|| calling.emit_memcpy(&mut self.dag, root, dst, other, size)) {
+                let hooked = |dag: &mut _| {
+                    if copy {
+                        calling.emit_memcpy(dag, root, dst, other, size)
+                    } else {
+                        calling.emit_memmove(dag, root, dst, other, size)
+                    }
+                };
+                match inline.or_else(|| hooked(&mut self.dag)) {
                     Some(chain) => chain,
                     None => {
                         self.hooked_mem_libcall(if copy { "memcpy" } else { "memmove" }, root, [dst, other, size])?
