@@ -403,6 +403,16 @@ pub fn split_data(
     Ok(pieces)
 }
 
+/// A second name for a symbol this module defines (`GlobalAlias`): it is the
+/// target's address under another name, not a copy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Alias {
+    pub name: String,
+    pub target: String,
+    /// `Local` for an `internal` or `private` alias.
+    pub binding: llrm_object::Binding,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     /// The register file of the target the module is for.
@@ -413,6 +423,11 @@ pub struct Module {
     /// (name, "far" | "near" | "byte")
     pub externs: Vec<(String, String)>,
     pub publics: Vec<String>,
+    /// The visibility of each exported name that is not the default, by its
+    /// name in the object.
+    pub visibility: std::collections::BTreeMap<String, llrm_object::Visibility>,
+    /// Second names for symbols above, exported as `publics` are.
+    pub aliases: Vec<Alias>,
     /// (segment, items)
     pub data: Vec<(String, Vec<Datum>)>,
     pub procedures: Vec<Procedure>,
@@ -4084,6 +4099,8 @@ mod tests {
             names: no_names(),
             externs: Vec::new(),
             publics: Vec::new(),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: Vec::new(),
             procedures: Vec::new(),
             private: BTreeSet::new(),

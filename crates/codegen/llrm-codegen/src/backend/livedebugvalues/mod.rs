@@ -190,10 +190,7 @@ mod tests {
         let mask = |register: RegId| register != reg(3);
         tracker.register_def(20, &Clobber { written: &[], mask: Some(&mask) }, reg(9));
         tracker.terminator(40);
-        assert_eq!(
-            ranges(&tracker.finish()),
-            [(1, 10, 20, at(1)), (2, 10, 40, at(9)), (3, 10, 40, at(3))]
-        );
+        assert_eq!(ranges(&tracker.finish()), [(1, 10, 20, at(1)), (2, 10, 40, at(9)), (3, 10, 40, at(3))]);
     }
 
     /// A note of a piece ends the open ranges of the pieces it overlaps and of

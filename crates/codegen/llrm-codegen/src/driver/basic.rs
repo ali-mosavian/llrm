@@ -1118,6 +1118,8 @@ pub fn assembled(
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
+        visibility: Default::default(),
+        aliases: Vec::new(),
         data,
         procedures,
         private: object.private.clone(),
