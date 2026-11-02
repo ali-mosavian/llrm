@@ -105,6 +105,19 @@ pub trait CoalescerEnv {
             && insn.call.is_none()
             && crate::greedy::remat::is_trivially_re_materializable(insn, false)
     }
+
+    /// Whether making `def` again beats the copy `source -> destination` it
+    /// would replace: the target's own price (`isAsCheapAsAMove` against a
+    /// move of that register pair). The pin's `reMaterializeDef` asks none, so
+    /// a target without one remats whenever it can.
+    fn remat_wins(
+        &self,
+        _def: &Insn,
+        _source: u32,
+        _destination: u32,
+    ) -> bool {
+        true
+    }
 }
 
 /// The (destination, source) of a plain move between values of one width

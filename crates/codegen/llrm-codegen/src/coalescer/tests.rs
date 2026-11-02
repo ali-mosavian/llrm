@@ -586,12 +586,44 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
+        remat_wins: None,
     };
     let mut lis = LiveIntervals::new(&was);
     let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
     assert_eq!(result, JoinResult::Joined);
     let kept = names(&lis);
     assert!(!kept.contains(&(vec![2], vec![1])), "the copy is left: {kept:?}");
+}
+
+/// The same loop on a target that prices the remat: the constant costs more
+/// than the register copy it would replace (6502: `lda #0`, 2 bytes, for
+/// `txa`, 1), so the copy stays, where without a price the copy of every
+/// constant was made again (lz4 +1 byte on three rows).
+#[test]
+fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let (a, c) = (constant_named(1, "CONST_I32"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: Box::new(|_| true),
+        freq: Vec::new(),
+        remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
+        remat_wins: Some(Box::new(|_, _, _, _| false)),
+    };
+    let mut lis = LiveIntervals::new(&was);
+    join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    let kept = names(&lis);
+    assert!(kept.contains(&(vec![2], vec![1])), "the copy was made a constant again: {kept:?}");
 }
 
 /// A copy of a loaded value is not cheap to make again: it stays.
@@ -662,6 +694,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         remat: None,
+        remat_wins: None,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving

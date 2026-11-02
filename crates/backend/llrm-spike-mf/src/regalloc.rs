@@ -138,6 +138,19 @@ pub trait Target {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
     }
 
+    /// `isAsCheapAsAMove` against the copy it replaces: whether making the
+    /// literal move `literal` again for a copy from a value that may take
+    /// `source` to one that may take `destination` costs no more than the
+    /// copy. The pin asks no price, so the default always remats.
+    fn literal_move_wins(
+        _literal: &llrm_codegen::model::lir::Insn,
+        _source: &[RegId],
+        _destination: &[RegId],
+        _size: bool,
+    ) -> bool {
+        true
+    }
+
     /// What one register-to-register copy costs, in the unit of
     /// [`Target::operand_cost`].
     fn copy_cost() -> u32 {

@@ -58,7 +58,14 @@ pub struct TargetEnv {
     /// target's own test of a definition worth making again. None: a move of
     /// an immediate or an address as x86 names them.
     pub remat: Option<Box<dyn Fn(&Insn) -> bool>>,
+    /// The target's price of that remat against the copy it replaces: the
+    /// definition, the registers the copy's source and destination may take,
+    /// and whether the build is for size. None: always worth it.
+    pub remat_wins: Option<RematWins>,
 }
+
+/// See [`TargetEnv::remat_wins`].
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool) -> bool>;
 
 /// One side of a copy about to be joined.
 pub struct JoinSide {
@@ -98,6 +105,20 @@ impl CoalescerEnv for TargetEnv {
                     && crate::greedy::remat::is_trivially_re_materializable(insn, false)
             }
         }
+    }
+
+    fn remat_wins(
+        &self,
+        def: &Insn,
+        source: u32,
+        destination: u32,
+    ) -> bool {
+        let palettes = self.palettes.borrow();
+        let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
+        else {
+            return true;
+        };
+        wins(def, from, to, self.size)
     }
 
     fn keeps(
@@ -210,6 +231,7 @@ pub fn coalesce(
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
+    remat_wins: Option<RematWins>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>) {
     let aliases = pins
         .iter()
@@ -228,7 +250,17 @@ pub fn coalesce(
         .collect();
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq, remat };
+    let env = TargetEnv {
+        palettes: palettes.into(),
+        pins,
+        size,
+        keep_pinned: true,
+        aliases,
+        should_join,
+        freq,
+        remat,
+        remat_wins,
+    };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);

@@ -176,6 +176,7 @@ impl Coalescer {
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
                 remat: None,
+                remat_wins: None,
             },
             depth,
         ))

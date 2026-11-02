@@ -365,6 +365,9 @@ fn re_materialize_def(
     if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
         return false;
     }
+    if !env.remat_wins(&def_insn, src.value, dst.value) {
+        return false;
+    }
     let block = lis.indexes.get_mbb_from_index(&at);
     // The copy's value is defined at the copy's index; the new instruction
     // takes that index over.
