@@ -40,6 +40,18 @@ pub struct Encoded {
     pub fixups: Vec<Fixup>,
 }
 
+/// A jump table: one absolute 32-bit fixup per label.
+pub fn table(labels: &[String]) -> Encoded {
+    Encoded {
+        bytes: vec![0; 4 * labels.len()],
+        fixups: labels
+            .iter()
+            .enumerate()
+            .map(|(at, label)| Fixup { offset: 4 * at, symbol: label.clone(), addend: 0, size: 4, pc_rel: false })
+            .collect(),
+    }
+}
+
 /// `getEncodingValue` with the `D/A` bit `getMachineOpValue` adds.
 fn register_value(id: RegId) -> Option<u64> {
     let name = REGISTER_INFO.name(id)?;

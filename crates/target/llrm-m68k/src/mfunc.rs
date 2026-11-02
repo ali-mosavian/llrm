@@ -476,6 +476,7 @@ impl Emitter<'_> {
                     && let Some(table) = n.ops.iter().find_map(|&op| table_of(self.dag, op, 6))
                 {
                     let blocks = self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
+                    operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
                     operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
                 }
                 into.push(op_inst(name, desc, operands));
