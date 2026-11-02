@@ -473,3 +473,21 @@ fn the_walks_option_adds_pointer_loops_and_only_then() {
     assert_eq!(with(false), 0);
     assert!(with(true) >= 60, "{} of 300 programs walk a pointer", with(true));
 }
+
+/// A corpus with `copies` on has constant-size array copies, in place and
+/// through a helper's pointers, and with it off none: a differential test of a
+/// backend's `(An)+` copies that never saw one would agree with anything.
+#[test]
+fn the_copies_option_adds_array_copies_and_only_then() {
+    let model = Options { walks: true, ..Options::new(DataModel::INT32) };
+    let count = |copies, needle: &str| {
+        (0..300).filter(|seed| program(*seed, &Options { copies, ..model }).contains(needle)).count()
+    };
+    assert_eq!(count(false, "__builtin_memcpy"), 0);
+    assert!(
+        count(true, "__builtin_memcpy(a") >= 20,
+        "{} of 300 programs copy an array",
+        count(true, "__builtin_memcpy(a")
+    );
+    assert!(count(true, ")cpl(") >= 20, "{} of 300 programs call the helper", count(true, ")cpl("));
+}

@@ -298,7 +298,7 @@ fn check(
     // `llrm-cgen/reduce.py` cuts one down
     let source = match std::env::var("DIFF_FILE") {
         Ok(path) => std::fs::read_to_string(path).unwrap(),
-        Err(_) => program(seed, &Gen { opaque: true, walks: true, ..Gen::new(DataModel::INT32) }),
+        Err(_) => program(seed, &Gen { opaque: true, walks: true, copies: true, ..Gen::new(DataModel::INT32) }),
     };
     check_text(&seed.to_string(), &source, work)
 }
@@ -409,7 +409,9 @@ fn check_text(
         if text.contains("%sp") {
             continue;
         }
-        let direction = if text.contains(")+") {
+        let direction = if text.matches(")+").count() == 2 {
+            "(An)+,(An)+"
+        } else if text.contains(")+") {
             "(An)+"
         } else if text.contains("-(%a") {
             "-(An)"
@@ -443,7 +445,9 @@ fn check_text(
     };
     let exe = dir.join("ours");
     write_executable(&exe, &bytes).unwrap();
-    match qemu(&exe, "10", qemu_cpu(), 0) {
+    // `DIFF_TIMEOUT` seconds: a reduction of a hang need not wait ten
+    let limit = std::env::var("DIFF_TIMEOUT").unwrap_or_else(|_| "10".to_owned());
+    match qemu(&exe, &limit, qemu_cpu(), 0) {
         // the same program on a stack that starts elsewhere: an answer that
         // moves read garbage
         Ok(code) if code == reference => match qemu(&exe, "10", qemu_cpu(), 4001) {
@@ -615,10 +619,15 @@ fn main() {
     let folds = INDEXED_FORMS.lock().unwrap().keys().any(|key| !key.starts_with("move") && key.ends_with("(An)+"));
     let looks = !matches!(std::env::var("DIFF_OPTIONS").as_deref(), Ok("raw" | "pinned"))
         && std::env::var_os("DIFF_FILE").is_none();
+    let copies = INDEXED_FORMS.lock().unwrap().keys().any(|key| key.ends_with("(An)+,(An)+"));
     if count >= 100 && looks && !folds {
         println!(
             "BLIND: no program has an arithmetic instruction with an (An)+ source; the generator's walks are not reaching it"
         );
+        std::process::exit(1);
+    }
+    if count >= 100 && looks && !copies {
+        println!("BLIND: no program copies memory to memory through (An)+; the generator's copies are not reaching it");
         std::process::exit(1);
     }
 }
