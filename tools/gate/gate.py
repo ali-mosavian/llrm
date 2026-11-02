@@ -39,6 +39,9 @@ import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
+# Steps that run `tools/measure.py dist`: they share its build lock, and a waiter has no CPU of its own, so the stall check killed pytest-perf
+# and objsweep (gate 9a0cd57af1) while the measure step's dist build ran. The gate builds it once, before them.
+DIST_USERS = frozenset({"pytest-perf", "objsweep", "measure"})
 SERIAL_STEPS = frozenset({"rfmt-post", "qcport", "oracle-qcport"})  # the last two count frames in real time: starved by a step beside them, their runs differ from Borland's
 
 
@@ -813,6 +816,11 @@ class LogTail:
             print(f"[{self.name}] " + line.decode(errors="replace"), flush=True)
 
 
+def shared_builds(steps: list[str]) -> list[tuple[str, str]]:
+    """(name, command) of the builds several steps wait on, to run once before them."""
+    return [("measure-dist", "python3 tools/measure.py dist")] * bool(DIST_USERS & set(steps))
+
+
 def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
     """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
     A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
@@ -964,6 +972,11 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
                 return 2, ["build"]
         else:
             env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
+    for name, command in shared_builds(p.steps):
+        report(*run_step(name, command, logs, env, unset=unset))
+        if results[name][0]:
+            print(verdict_line(p.tier, [name], [], time.time() - start, [], head_state()[0]))
+            return 1, [name]
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = default_jobs(os.environ)
