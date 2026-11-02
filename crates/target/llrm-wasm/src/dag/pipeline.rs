@@ -14,7 +14,7 @@
 //! DEVIATE W4: no target combines
 //! (`WebAssemblyTargetLowering::PerformDAGCombine`) and no `PreprocessISelDAG`.
 //! Reason: they serve SIMD, atomics and `BUILD_VECTOR`, which QB does not
-//! produce. Exit: with those rows.
+//! produce. Exit: with those rows, no later than 2026-11-20.
 //!
 //! # See also
 //! `SelectionDAGISel::CodeGenAndEmitDAG` and `WebAssemblyISelDAGToDAG.cpp`

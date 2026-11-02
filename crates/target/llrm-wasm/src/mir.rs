@@ -3,7 +3,8 @@
 //! DEVIATE W15: a spike-local model inside llrm-wasm, keyed to the generated
 //! opcode ids and the pin's operand order (defs first). Reason: the repo has no
 //! target-neutral machine function (`llrm-lir` is x86-register-shaped).
-//! Exit: the neutral machine function, one post-main task for every target.
+//! Exit: the neutral machine function, one post-main task for every target, no
+//! later than 2026-11-20.
 //!
 //! # See also
 //! `MachineRegisterInfo`, `WebAssemblyFunctionInfo`
@@ -91,7 +92,7 @@ pub fn is_copy(opcode: u16) -> bool {
     [post::COPY_I32, post::COPY_I64, post::COPY_F32, post::COPY_F64].contains(&opcode)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Operand {
     Def(VReg),
     Use(VReg),

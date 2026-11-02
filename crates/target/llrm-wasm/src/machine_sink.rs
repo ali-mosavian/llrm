@@ -98,7 +98,7 @@ pub fn machine_sink(f: &mut Function) -> bool {
 }
 
 /// `MachineInstr::isSafeToMove`; `saw_store` is the pin's `SawStore`.
-fn is_safe_to_move(
+pub(crate) fn is_safe_to_move(
     inst: &Inst,
     saw_store: &mut bool,
 ) -> bool {

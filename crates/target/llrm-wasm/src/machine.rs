@@ -9,7 +9,7 @@
 //! DEVIATE W22: `vector_register_bits` is 0, where the pin's
 //! `getRegisterBitWidth(FixedWidthVector)` is 64 without `simd128`; the
 //! backend selects no vector yet, so the SLP vectorizer stays off. Exit: the
-//! first vector the type legalizer takes.
+//! first vector the type legalizer takes (undated: after 32-bit parity).
 //!
 //! # See also
 //! `llvm/lib/Target/WebAssembly/WebAssemblyTargetTransformInfo.cpp` and

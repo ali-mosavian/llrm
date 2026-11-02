@@ -10,7 +10,7 @@
 //! DEVIATE W12: no `name` or debug sections; the feature list is LLVM 20's
 //! generic CPU, not the pin's. Reason: QB carries no debug info and the pin
 //! build has no WebAssembly target to state its list. Exit: DWARF for wasm, and
-//! the pin build with the target.
+//! the pin build with the target (undated, none planned).
 //!
 //! # See also
 //! `WasmObjectWriter.cpp` (`writeObject`, `writeTypeSection`,

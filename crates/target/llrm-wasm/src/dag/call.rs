@@ -14,7 +14,7 @@
 //! DEVIATE W3: integers and floats only, one returned part, no tail call, swift
 //! or funcref call, and no variadic function body (`va_start`);
 //! `accepts` refuses what it can see. Reason: the callers the runtime needs.
-//! Exit: the varargs definition step.
+//! Exit: the varargs definition step, no later than 2026-11-20.
 //!
 //! # See also
 //! `WebAssemblyISelLowering.cpp` at the pin d1106deb71cc: `LowerCall` (L1281),

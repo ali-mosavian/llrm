@@ -72,7 +72,8 @@ pub fn builder_target(
             global_addresses_constant: true,
             // DEVIATE: clang marks every symbol `dso_local` under `-fno-pic`,
             // which the IR parser drops, so every symbol is. The golden
-            // inputs carry the keyword. Exit: `GlobalValue` carries it.
+            // inputs carry the keyword. Exit: `GlobalValue` carries it, no
+            // later than 2026-11-20.
             dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             // The pin keeps `i32.div_s` for `sdiv x, 4` at every

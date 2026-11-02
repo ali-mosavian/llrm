@@ -13,6 +13,9 @@
 //! the block moves after a predecessor, before a successor, or to the end, so
 //! that a fall-through happens.
 //!
+//! `HoistCommonCode` moves the instructions two single-predecessor successors
+//! start with into the block that branches to them.
+//!
 //! DEVIATE 1: no tail merging, no `OptimizeBranches` outside these cases, and
 //! not in a function with a personality (try scopes name their blocks). Exit:
 //! the shared branch folder over the neutral machine function (S4), no later
@@ -23,7 +26,7 @@
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
-use crate::mir::{Function, Inst, Operand};
+use crate::mir::{Function, Inst, Operand, VReg};
 
 /// The target of `block` if it is only an unconditional branch.
 fn branch_only(
@@ -378,6 +381,80 @@ impl Folder<'_> {
         }
     }
 
+    /// `BranchFolder::HoistCommonCodeInSuccs`: the instructions both
+    /// successors of a conditional branch start with move up into the block.
+    fn hoist_common_code(
+        &mut self,
+        block: usize,
+    ) -> bool {
+        let Some(end) = ending(self.f, block) else { return false };
+        let (Some(taken), Some(cond)) = (end.taken, end.cond.as_ref()) else { return false };
+        let _ = cond;
+        let other = match end.other {
+            Some(other) => other,
+            None => match self.f.succs[block].iter().copied().find(|&s| s != taken) {
+                Some(other) => other,
+                None => return false,
+            },
+        };
+        if taken == other || self.preds[taken].len() > 1 || self.preds[other].len() > 1 {
+            return false;
+        }
+        if self.f.is_eh_pad(taken) || self.f.is_eh_pad(other) {
+            return false;
+        }
+        // The first terminator is the conditional branch; what it reads must
+        // not be defined by what moves.
+        let terminators = if end.other.is_some() { 2 } else { 1 };
+        let mut loc = self.f.blocks[block].len() - terminators;
+        let mut uses: Vec<VReg> = self.f.blocks[block][loc]
+            .operands
+            .iter()
+            .filter_map(|o| if let Operand::Use(r) = o { Some(*r) } else { None })
+            .collect();
+        if !uses.is_empty() && loc > 0 {
+            let prev = &self.f.blocks[block][loc - 1];
+            if prev.defs().any(|d| uses.contains(&d)) {
+                let mut store = true;
+                if !crate::machine_sink::is_safe_to_move(prev, &mut store) {
+                    return false;
+                }
+                for o in prev.operands.clone() {
+                    match o {
+                        Operand::Use(r) => uses.push(r),
+                        Operand::Def(r) => uses.retain(|u| *u != r),
+                        _ => {}
+                    }
+                }
+                loc -= 1;
+            }
+        }
+        let mut count = 0;
+        while count < self.f.blocks[taken].len() && count < self.f.blocks[other].len() {
+            let (a, b) = (&self.f.blocks[taken][count], &self.f.blocks[other][count]);
+            if a.opcode != b.opcode || a.operands != b.operands || a.is_terminator() {
+                break;
+            }
+            let mut store = true;
+            if !crate::machine_sink::is_safe_to_move(a, &mut store) {
+                break;
+            }
+            if a.defs().any(|d| uses.contains(&d)) {
+                break;
+            }
+            count += 1;
+        }
+        if count == 0 {
+            return false;
+        }
+        let moved: Vec<Inst> = self.f.blocks[taken].drain(..count).collect();
+        self.f.blocks[other].drain(..count);
+        for (at, inst) in moved.into_iter().enumerate() {
+            self.f.blocks[block].insert(loc + at, inst);
+        }
+        true
+    }
+
     /// `IsBetterFallthrough(first, second)`.
     fn better_fall_through(
         &self,
@@ -485,6 +562,11 @@ pub fn fold_branches(f: &mut Function) -> bool {
                 round |= folder.optimize_block(block);
             }
         }
+        for block in folder.layout.order() {
+            if !folder.dead[block] {
+                round |= folder.hoist_common_code(block);
+            }
+        }
         changed |= round;
         if !round {
             break;
@@ -550,5 +632,30 @@ mod tests {
         assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(3)])));
         remove_unreachable_blocks(&mut f);
         assert_eq!(f.blocks.len(), 2);
+    }
+
+    /// Both arms of a branch began with the same constant, which the register
+    /// coalescer had given one register: each arm computed it, the pin runs it
+    /// once above the branch (fpbench O2 1417 B against the pin's 1334 B).
+    #[test]
+    fn what_both_arms_start_with_moves_above_the_branch() {
+        let mut f = Function::default();
+        let (c, d) = (f.new_vreg(ValType::I32), f.new_vreg(ValType::I32));
+        let seven = || Inst::new(op::CONST_I32, &[Operand::Def(d), Operand::Imm(7)]);
+        f.blocks = vec![
+            vec![
+                Inst::new(op::CONST_I32, &[Operand::Def(c), Operand::Imm(0)]),
+                Inst::new(op::BR_IF, &[Operand::Block(1), Operand::Use(c)]),
+                Inst::new(op::BR, &[Operand::Block(2)]),
+            ],
+            vec![seven(), Inst::new(op::RETURN, &[Operand::Use(d)])],
+            vec![seven(), Inst::new(op::RETURN, &[Operand::Use(d)])],
+        ];
+        f.succs = vec![vec![1, 2], vec![], vec![]];
+        assert!(fold_branches(&mut f));
+        let sevens =
+            |b: &[Inst]| b.iter().filter(|i| i.opcode == op::CONST_I32 && i.operands[1] == Operand::Imm(7)).count();
+        assert_eq!(sevens(&f.blocks[0]), 1);
+        assert_eq!(f.blocks.iter().map(|b| sevens(b)).sum::<usize>(), 1);
     }
 }

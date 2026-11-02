@@ -10,7 +10,7 @@
 //! DEVIATE: the converted function's instruction names are the pin's opcode
 //! names and no more: operand classes, flags and costs are the defaults.
 //! Exit: the neutral machine function, which takes the generated
-//! instruction description.
+//! instruction description, no later than 2026-11-20.
 
 use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::mfunc::Block;

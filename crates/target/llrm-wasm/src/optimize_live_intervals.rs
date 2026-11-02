@@ -15,7 +15,8 @@
 //!
 //! DEVIATE 1: no `LiveIntervals`; a use's reaching definitions replace the
 //! value numbers (the same classes). The frame base register needs no special
-//! case: nothing here records it. Exit: the shared live intervals (S4).
+//! case: nothing here records it. Exit: the shared live intervals (S4), no
+//! later than 2026-11-20.
 //!
 //! # See also
 //! `LiveIntervals.cpp`, pin d1106deb71cc: `splitSeparateComponents`;

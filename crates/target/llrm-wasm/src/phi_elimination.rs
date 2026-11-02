@@ -7,7 +7,7 @@
 //! register across the PHIs of a switch's duplicate edges (`LoweredPHIs`,
 //! `AllEdgesCritical`). Reason: both are guarded by `LiveVariables` or
 //! `LiveIntervals`, which the `-O0` pipeline does not compute. Exit: with a
-//! register allocator.
+//! register allocator (undated: wasm colours registers after the stackifier).
 //!
 //! # See also
 //! `PHIElimination.cpp`, pin d1106deb71cc: `LowerPHINode`,
