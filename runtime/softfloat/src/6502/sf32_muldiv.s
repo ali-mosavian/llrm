@@ -16,7 +16,6 @@
 e16lo = rc2             ; result exponent, signed 16 bit
 e16hi = rc3
 opf   = rc24            ; 0 multiply, 1 divide; special-value path only
-cnt   = rc6
 
 .segment "CODE"
 
@@ -50,15 +49,13 @@ mulbody:
     lda rc19
     clc
     adc rc23
-    sta e16lo
-    lda #0
-    rol a
-    sta e16hi
-    sec
-    lda e16lo
+    ldx #0
+    bcc :+
+    inx
+:   sec
     sbc rc4
     sta e16lo
-    lda e16hi
+    txa
     sbc #0
     sta e16hi
     lda #0
@@ -88,21 +85,14 @@ mloop:
 mnext:
     dex
     bne mloop
-    ror rc19                ; the adds came one place early: one more shift gives the exact product
+    bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
+    ror rc19                ; product >= 2: shift once more, exponent up
     ror rc23
     ror rc24
     ror rc22
     ror rc21
     ror rc20
-    lda rc19
-    bmi mtop
-    asl rc22
-    rol rc24
-    rol rc23
-    rol rc19
-    bmi mfin
-mtop:
-    inc e16lo               ; product >= 2: one exponent up
+    inc e16lo
     bne mfin
     inc e16hi
 mfin:
@@ -129,15 +119,13 @@ divbody:
     lda rc19
     clc
     adc rc4
-    sta e16lo
-    lda #0
-    rol a
-    sta e16hi
-    sec
-    lda e16lo
+    ldx #0
+    bcc :+
+    inx
+:   sec
     sbc rc23
     sta e16lo
-    lda e16hi
+    txa
     sbc #0
     sta e16hi
     lda rc16
@@ -147,12 +135,11 @@ divbody:
     lda rc18
     sta rc25
     lda #0
-    sta rc16
     sta rc17
     sta rc18
     sta rc19
-    lda #26
-    sta cnt
+    lda #$40                ; sentinel: it reaches bit 32 and falls out of rc19 after exactly 26 quotient bits
+    sta rc16
 dloop:
     sec
     lda rc23
@@ -172,11 +159,10 @@ dno:
     rol rc17
     rol rc18
     rol rc19
+    bcs ddone
     asl rc23
     rol rc24
     rol rc25
-    dec cnt
-    beq ddone
     bcc dloop
     sec                     ; R overflowed 24 bits: the next bit is 1 and R - D is exact modulo 2^24
     lda rc23
@@ -191,13 +177,12 @@ dno:
     sec
     bcs dno
 ddone:
-    ldy #0                  ; sticky: any remainder (carry = bit shifted out of R)
-    bcs :+
+    ldy #0                  ; sticky: any remainder
     lda rc23
     ora rc24
     ora rc25
-    beq :++
-:   ldy #1
+    beq :+
+    ldy #1
 :   ldx #0                  ; align the 26-bit quotient to bit 31: 6 shifts, or 7 when the ratio was < 1
 dnorm:
     lda rc19

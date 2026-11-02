@@ -30,4 +30,4 @@ Hand-written `__addsf3`/`__subsf3`: IEEE binary32, RNE, denormals, inf, NaN. Arg
 `tests/asm6502/run.sh [n]` checks it bit-exact against the host FPU on sim65 (4000 vectors: 0 fails; a broken tie rule gives 60 fails).
 `src/6502/sf32_muldiv.s` adds `__mulsf3`/`__divsf3` (shift-add and restoring loops; links with `sf32.s` for rounding, packing and shifts; shared cells in `sf32.inc`).
 `tests/asm6502/run.sh [n] [ops]` runs all four ops; `bench.sh` prints bytes and cycles per call on the Woz comparison operands; `first.sh op n` shows the first failing record.
-Measured: add+sub 672 B, mul+div 637 B; cycles per call add 426, sub 435, mul 1642, div 2533. The int conversions are next.
+Measured: add+sub 672 B, mul+div 609 B; cycles per call add 426, sub 435, mul 1615, div 2377. The int conversions are next.
