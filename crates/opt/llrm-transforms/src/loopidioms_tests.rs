@@ -1115,3 +1115,51 @@ b2:
     assert!(after.contains("llvm.memset"), "{after}");
     assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
 }
+
+const TWO_BYTE_ARRAYS: &str = "@a = global [8 x i8] zeroinitializer
+@b = global [8 x i8] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr [8 x i8], ptr @a, i32 0, i32 %i
+  store i8 0, ptr %p
+  %q = getelementptr [8 x i8], ptr @b, i32 0, i32 %i
+  store i8 7, ptr %q
+  %next = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %next, 8
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// The pin forms the memset of every constant-store loop. Weighing the loop
+/// against its fills is only for a target whose fill saves and restores a
+/// segment register; at m32 (`fill_segment` 0) the fills of lru's init loop at
+/// -Os were left a loop by the same test, +21 instructions and +45 clocks.
+#[test]
+fn a_target_with_no_segment_setup_forms_the_memsets_the_pin_forms() {
+    let sized = |segment: i64| {
+        let costs = crate::profit::OperationCosts {
+            fill: 12,
+            fill_segment: segment,
+            store: 6,
+            add: 4,
+            branch: 2,
+            ..Default::default()
+        };
+        let machine = crate::testing::Tuned { sizes: costs, ..Default::default() };
+        let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{TWO_BYTE_ARRAYS}"));
+        let mut pass = crate::loopidiom::pass::LoopIdiom::new();
+        pass.for_size = true;
+        crate::testing::managed_on(&mut module, pass, machine)
+    };
+    let (flat, setup) = (sized(0), sized(4));
+    assert!(flat.contains("call void @llvm.memset"), "no segment setup: the pin's memsets\n{flat}");
+    assert!(!setup.contains("call void @llvm.memset"), "ES around each fill: the loop is smaller\n{setup}");
+}

@@ -383,6 +383,9 @@ pub struct OperationCosts {
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// What of `fill` is the save and restore of a segment register around the
+    /// string instruction; 0 where the fill needs none.
+    pub fill_segment: i64,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -513,6 +516,7 @@ impl Default for OperationCosts {
             set: 1,
             fill: 1,
             fill_cell: 1,
+            fill_segment: 0,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,

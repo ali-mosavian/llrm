@@ -39,6 +39,7 @@ extend = movzx
 set = setcc
 fill = rep_stos + 2*mov_ri
 fill_cell = rep_stos_cell
+fill_segment = 0
 copy = rep_movs + 3*mov_ri
 copy_cell = rep_movs_cell
 copy_variable = 0

@@ -811,7 +811,9 @@ pub(crate) fn variable_copy_pays(
 /// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
 /// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
 /// store is always filled; of several, each fill is a `rep stos` with ES set
-/// around it, and the stores of one object with one value merge into one.
+/// around it, and the stores of one object with one value merge into one. Only
+/// where the target's fill has that segment setup (`fill_segment`); elsewhere
+/// the pin's rule stands and every such loop is filled.
 pub(crate) fn fills_pay(
     context: &Context,
     layout: &DataLayout,
@@ -831,6 +833,12 @@ pub(crate) fn fills_pay(
     // store, less than itself.
     if kept > 0 {
         return false;
+    }
+    // The pin forms the memset whenever the stores allow. Only a fill that
+    // saves and restores a segment register (m16's ES) is costly enough to
+    // weigh against its loop.
+    if costs.fill_segment == 0 {
+        return true;
     }
     // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
