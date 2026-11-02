@@ -164,7 +164,6 @@ impl FunctionPass for LoopIdiom {
         let clock_costs = Some((outer.target().costs(), if self.for_size { 0 } else { rate }))
             .map(|(costs, rate)| (OperationCosts { memset_stores: tuning.max_stores_per_memset as i64, ..costs }, rate))
         .filter(|(_, rate)| *rate > 0 || priced);
-        let speed_costs = (!self.for_size && rate == 0 && !priced).then(|| outer.target().costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -179,7 +178,6 @@ impl FunctionPass for LoopIdiom {
                 cur_loop,
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
-                speed: speed_costs.as_ref(),
                 memset_stores: outer.target().tuning().max_stores_per_memset as i64,
                 tti: tti.as_deref(),
             };

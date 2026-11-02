@@ -66,8 +66,6 @@ pub struct Run<'a> {
     /// The target's clock prices and what a byte of code is worth in them
     /// (thousandths of a clock), at `-Os`; none, bytes alone decide.
     pub clocks: Option<(&'a OperationCosts, i64)>,
-    /// The target's clock prices, at speed; none at `-Os`.
-    pub speed: Option<&'a OperationCosts>,
     /// `Tuning::max_stores_per_memset`: the stores a constant fill may be
     /// inline.
     pub memset_stores: i64,
@@ -285,24 +283,6 @@ impl LoopIdiomRecognize {
                 let group = (object, instruction.operands[0]);
                 if !groups.contains(&group) {
                     groups.push(group);
-                }
-            }
-        }
-        // DEVIATE: at speed a loop that stays for a computed store gains from a
-        // fill only the trips of the stores it removes (nbody: two zero stores
-        // beside two computed ones, a 6-cell `rep stos` for 6 stores). Owner
-        // w2. Exit 2026-11-07: only where the target prices its fills
-        // (`price_fills`); the pin forms the memset and DSE removes it.
-        if kept > 0 && run.bytes.is_none() && !self.fills_a_set_object(run, &cx, &blocks) {
-            let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
-            if let (Some(speed), Some(be), Some(size)) = (run.speed, be, size)
-                && be.active_bits() <= 32
-                && size.active_bits() <= 32
-            {
-                let (trips, width) = (be.zext_value() as i64 + 1, size.zext_value() as i64);
-                let fill = speed.fill + (trips * width + 3) / 4 * speed.fill_cell;
-                if trips * speed.store <= fill {
-                    return false;
                 }
             }
         }
