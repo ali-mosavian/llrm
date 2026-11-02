@@ -185,6 +185,17 @@ impl TargetLowering {
         }
     }
 
+    /// `RTLIB::SDIV_I64` and the others: libgcc's and compiler-rt's names, the
+    /// pin's defaults, for a target that divides a double-word integer by a
+    /// call (`ExpandIntRes_SDIV`).
+    pub fn set_integer_libcalls(&mut self) {
+        for (op, name) in
+            [(ISD::SDiv, "__divdi3"), (ISD::UDiv, "__udivdi3"), (ISD::SRem, "__moddi3"), (ISD::URem, "__umoddi3")]
+        {
+            self.set_libcall_name(op, MVT::I64, name);
+        }
+    }
+
     /// `setLibcallName` for a conversion `op` from `from` to `to`.
     pub fn set_conv_libcall_name(
         &mut self,

@@ -151,6 +151,16 @@ impl SchedInfo for M68kSched {
         Some(pin::CCR)
     }
 
+    /// `M68kRegisterInfo::getCrossCopyRegClass`: the codes are copied only
+    /// through a data register, so a second reader of a flag definition gets
+    /// a clone of it (`CopyAndMoveSuccessors`).
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        reg == pin::CCR
+    }
+
     /// M68k does not enable the machine scheduler: `createDefaultScheduler`
     /// gives it the ILP list scheduler.
     fn preference(&self) -> Preference {
