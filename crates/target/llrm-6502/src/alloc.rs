@@ -161,6 +161,12 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// A copy is priced as the load of a cell into a register, `ldx rc2`: the
+    /// join of a value with its argument cell removes that copy.
+    fn copy_cost() -> u32 {
+        crate::timing::estimate(Cpu::Mos6502, "ldx rc2").map_or(1, |priced| priced.bytes + priced.cycles as u32)
+    }
+
     /// A byte class the compare class narrowed has `any` as its larger class.
     fn larger_order(order: &[RegId]) -> Option<Vec<RegId>> {
         if !order.iter().all(|register| matches!(*register, reg::A | reg::X | reg::Y) || is_cell(*register))
