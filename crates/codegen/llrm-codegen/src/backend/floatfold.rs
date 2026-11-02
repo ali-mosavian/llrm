@@ -147,6 +147,8 @@ pub fn folded(
             }
         }
     }
+    let sunk = _sunk(body, &uses, &defs);
+    let body = sunk.as_ref().unwrap_or(body);
     let mut blocks = Vec::new();
     let mut changed = false;
     for block in &body.blocks {
@@ -206,6 +208,81 @@ pub fn folded(
     }
     let folded = if changed { body.with_blocks(blocks) } else { body.clone() };
     _refolded(&folded, &uses, &defs, &floating, cpu, registers).unwrap_or(folded)
+}
+
+/// `body` with each float load that one later instruction of its block reads
+/// moved to just before that reader: a value pushed late is on the stack for
+/// less of the block, and the reader finds it on top. DEVIATE (beyond LLVM):
+/// the pin's source-order queue pushes both operands of `x*x + y*y` before
+/// either square, and the stackifier pays an `fxch` per iteration; gcc's
+/// `reg-stack` sees each load at its use. The load passes only what leaves
+/// its cell and address as they were (`_home_of`'s test). None where nothing
+/// moves.
+fn _sunk(
+    body: &LirBody,
+    uses: &HashMap<u32, usize>,
+    defs: &HashMap<u32, usize>,
+) -> Option<LirBody> {
+    let mut blocks = Vec::new();
+    let mut changed = false;
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
+        let mut at = 0;
+        while at < insns.len() {
+            let load = Arc::clone(&insns[at]);
+            let value = load.defines.first().copied().unwrap_or(0);
+            let movable = load.defines.len() == 1
+                && _loads_memory(load.what.as_ref())
+                && uses.get(&value).is_some_and(|reads| *reads >= 1)
+                && defs.get(&value) == Some(&1)
+                && !load.volatile
+                && load.clobbers.is_empty()
+                && load.group.is_none()
+                && load.delivers.is_empty()
+                && load.requires.is_empty();
+            let reader = movable
+                .then(|| {
+                    (at + 1..insns.len()).find(|&later| {
+                        insns[later].what.as_ref().is_some_and(
+                            |made| made.sources.iter().any(|arg| matches!(arg, Loc::Held(held) if held.value == value)),
+                        )
+                    })
+                })
+                .flatten();
+            // One instruction reads it, once or twice (`x * x`).
+            let reads_there = |reader: usize| {
+                insns[reader]
+                    .what
+                    .as_ref()
+                    .map_or(0, |made| made.sources.iter().filter(|arg| matches!(arg, Loc::Held(h) if h.value == value)).count())
+            };
+            let Some(reader) =
+                reader.filter(|&reader| reader > at + 1 && uses.get(&value) == Some(&reads_there(reader)))
+            else {
+                at += 1;
+                continue;
+            };
+            let cell = cell_of(&load);
+            if insns[at + 1..reader].iter().any(|between| {
+                between.defines.iter().any(|defined| load.uses.contains(defined))
+                    || between.volatile
+                    || between.call.is_some()
+                    || may_write(between, cell, false)
+                    || between
+                        .what
+                        .as_ref()
+                        .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape))
+            }) {
+                at += 1;
+                continue;
+            }
+            let load = insns.remove(at);
+            insns.insert(reader - 1, load);
+            changed = true;
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    changed.then(|| body.with_blocks(blocks))
 }
 
 /// Bytes of an x87 register form (`fmul st, st(i)`, `fld st(i)`).
@@ -767,6 +844,40 @@ mod tests {
                 format!("{}{}", what.name.as_deref().unwrap_or(""), if cells > 0 { "+m" } else { "" })
             })
             .collect()
+    }
+
+    /// The energy loop of x_nbody_f: `vx*vx + vy*vy` pushed both loads before
+    /// either square, so the second square needed an `fxch` each iteration
+    /// (+5 instructions and 20 clocks over the old selector, which pushed each
+    /// load at its square). A load read by a later instruction moves to it.
+    #[test]
+    fn test_a_load_moves_to_the_instruction_that_reads_it() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 2, global(0, 8)),
+            arith(2, "fmul", 3, 1, 1),
+            arith(3, "fmul", 4, 2, 2),
+            arith(4, "fadd", 5, 3, 4),
+            fstp(5, 5, frame(-4)),
+        ]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fmul", "fld", "fmul", "fadd", "fstp"]);
+    }
+
+    /// A store to the load's cell between the load and its reader keeps the
+    /// order: the value read there is the one before the store.
+    #[test]
+    fn test_a_load_does_not_move_past_a_write_to_its_cell() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = one_block(vec![
+            fld(0, 1, global(0, 0)),
+            fld(1, 2, global(0, 8)),
+            arith(2, "fmul", 3, 2, 2),
+            fstp(3, 3, global(0, 0)),
+            arith(4, "fmul", 4, 1, 1),
+            fstp(5, 4, frame(-4)),
+        ]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fld", "fmul", "fstp", "fmul", "fstp"]);
     }
 
     /// qmove -Os: GVN forwarded two loads of a float to every reader, so the
