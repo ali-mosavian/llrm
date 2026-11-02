@@ -329,3 +329,12 @@ fn main_and_mismatched_calls_get_wrappers() {
 fn an_i1_select_is_an_and() {
     check("i1_select");
 }
+
+/// A static alloca that is a phi's input was never copied into the phi's
+/// register (the `CopyToReg` of a frame index was dropped): the loop read
+/// memory at an unset local, so quicksort, matmul and shellsort at -O1 and up
+/// returned 0 where clang's return their checksums.
+#[test]
+fn a_frame_index_is_copied_into_a_phi_register() {
+    check("phi_alloca");
+}

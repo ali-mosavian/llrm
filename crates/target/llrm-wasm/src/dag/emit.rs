@@ -158,13 +158,21 @@ impl Emitter<'_> {
                 ISD::CopyToReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
                     let value = data.ops[2];
-                    if let (Some(ty), Some(Operand::Use(src))) =
-                        (class(dag.value_type(value)), self.operand(dag, value))
-                    {
-                        let dst = self.builder_reg(number, ty);
-                        if dst != src {
-                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                    match (class(dag.value_type(value)), self.operand(dag, value)) {
+                        (Some(ty), Some(Operand::Use(src))) => {
+                            let dst = self.builder_reg(number, ty);
+                            if dst != src {
+                                out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                            }
                         }
+                        // A static alloca that is a phi's input: the frame
+                        // lowering turns the index into the stack pointer
+                        // plus its offset.
+                        (Some(ty), Some(frame @ Operand::Frame(_))) => {
+                            let dst = self.builder_reg(number, ty);
+                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), frame]));
+                        }
+                        _ => {}
                     }
                 }
                 ISD::Machine(code) => {
