@@ -249,3 +249,24 @@ fn a_value_the_later_compares_use_is_computed_after_the_first_branch() {
     let sub = f.find("i32.sub").expect("the sub");
     assert!(branch < sub, "{text}");
 }
+
+const GLOBAL_PLUS_INDEX_PLUS_OFFSET: &str = "@px = dso_local global [101 x i16] zeroinitializer
+define void @f(i32 %i, i16 %v) {
+  %a = getelementptr i8, ptr @px, i32 %i
+  %b = getelementptr i8, ptr %a, i32 202
+  store i16 %v, ptr %b
+  ret void
+}
+";
+
+/// `px + i + 202` was `i32.const px; i32.add; i32.const 202; i32.add`, the
+/// addressing-mode guard having refused to regroup: particle ran 556,732
+/// instructions against the pin's 433,714. The pin folds the constant into the
+/// symbol, `i32.const px+202`.
+#[test]
+fn a_constant_added_to_a_global_and_an_index_joins_the_global() {
+    let text = asm(GLOBAL_PLUS_INDEX_PLUS_OFFSET, Level::O2);
+    let f = body(&text, "f");
+    assert!(f.contains("px+202"), "{text}");
+    assert_eq!(f.matches("i32.add").count(), 1, "{text}");
+}

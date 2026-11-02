@@ -59,12 +59,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// whether reassociating `(add n0, n1)` would undo a split of an address
     /// into a base with an offset that a load or store folds.
     ///
-    /// DEVIATE SD210: the vscale half, the global-address offset test and
-    /// `hasUniqueMemOperand` are not translated (x86 has no scalable
-    /// addressing here, and every access counts as unique); an offset is legal
-    /// when it fits a signed 32-bit displacement
-    /// (`X86::isOffsetSuitableForCodeModel`, small model). Exit: those. Owner
-    /// sdag-b. Review 2026-12-10.
+    /// DEVIATE SD210: the vscale half, the global-address offset test (done
+    /// where `global_addresses_constant` is set) and `hasUniqueMemOperand`
+    /// are not translated (x86 has no scalable addressing here, and every
+    /// access counts as unique); an offset is legal when it fits a signed
+    /// 32-bit displacement (`X86::isOffsetSuitableForCodeModel`, small
+    /// model). Exit: those. Owner sdag-b. Review 2026-12-10.
     pub(super) fn reassociation_can_break_addressing_mode_pattern(
         &self,
         node: SDValue,
@@ -97,6 +97,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     return true;
                 }
             }
+            return false;
+        }
+        // `(add (add x, Sym), c2)` regroups to `Sym+c2` when the offset folds.
+        // DEVIATE SD210: only where `global_addresses_constant` is set, until
+        // x86 is judged.
+        let sym = self.dag.operand(n0, 1);
+        if self.dag.config().global_addresses_constant
+            && self.dag.opcode(sym) == ISD::GlobalAddress
+            && self.dag.is_constant_int(sym)
+        {
             return false;
         }
         // `(add (add x, y), c2)` only used by accesses with `x[c2]` legal.
