@@ -75,3 +75,15 @@ def test_one_binary_measured_twice_reads_the_same_count_to_the_rounding(tmp_path
     exe = tmp_path / "w" / "f.gcc64.O1"
     counts = {round((native.instructions_of(exe, "101", directory) - native.instructions_of(exe, "1", directory)) / 100) for _ in range(5)}
     assert max(counts) - min(counts) <= 1  # the count is a mean over 100 runs, rounded: one instruction is its resolution
+
+
+def test_a_program_gcc_and_clang_cannot_build_either_is_skipped_not_an_error_of_ours(tmp_path, monkeypatch):
+    """parity/scalar and parity/parity call helpers only the DOS harness defines: every column failed to link and the judge read ours as an error."""
+    directory = program(tmp_path)
+    monkeypatch.setattr(native, "perf_missing", lambda: None)
+    monkeypatch.setattr(native, "measure_one", lambda column, *rest: {"error": "link: undefined reference to `keep'"})
+    rows = native.measure([("f", directory)], tmp_path, ["O2"], tmp_path / "w", tmp_path)
+    assert {key[1] for key in rows} == {native.OURS, *native.REPORTED}
+    assert all("skip" in row and "error" not in row for row in rows.values())
+    monkeypatch.setattr(native, "measure_one", lambda column, *rest: {"error": "compile: x"} if column == native.OURS else {"instructions": 1})
+    assert "error" in native.measure([("f", directory)], tmp_path, ["O2"], tmp_path / "w", tmp_path)[("f", native.OURS, "O2")]

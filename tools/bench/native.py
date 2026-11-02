@@ -92,6 +92,12 @@ def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], wor
         if source is None:
             continue
         for opt in opts:
-            for column in (OURS, *REPORTED):
-                out[(name, column, opt)] = {"skip": why} if why else measure_one(column, binary, directory, source, opt, work, bench)
+            if why:
+                rows = {column: {"skip": why} for column in (OURS, *REPORTED)}
+            else:
+                rows = {column: measure_one(column, binary, directory, source, opt, work, bench) for column in ("gcc64", "clang64", OURS, NOPIC)}
+                broken = rows["gcc64"].get("error", "")
+                if broken.startswith(("compile:", "link:")) and rows["clang64"].get("error", "").startswith(("compile:", "link:")):
+                    rows = {column: {"skip": f"not buildable natively (gcc and clang fail too): {broken}"} for column in rows}  # parity/scalar calls `keep`, which only the DOS harness defines
+            out |= {(name, column, opt): row for column, row in rows.items()}
     return out
