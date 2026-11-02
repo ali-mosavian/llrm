@@ -931,12 +931,18 @@ pub fn order_copies(function: &mut MFunc) {
     }
 }
 
-/// Phi copies on a critical edge go to the end of the block they leave when
-/// nothing past the branch needs the registers they touch, not to a block of
-/// their own (`PHIElimination::SplitPHIEdges` splits only when the source is
-/// live into the other successor; a loop's back edge never): `recfloat`'s
-/// loop ran `fmov; b` in an edge block each trip, the pin one `fmov` before
-/// the branch.
+/// A back edge's phi copies go to the end of the latch, not into a block of
+/// their own: `PHIElimination::SplitPHIEdges` never splits one
+/// ([PHIElimination.cpp#L827-L832](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L827-L832)).
+/// `recfloat`'s loop ran `fmov; b` in an edge block each trip, the pin one
+/// `fmov` before the branch.
+///
+/// DEVIATE PE1: the DAG path splits every critical edge as it emits, before
+/// any liveness exists, and the pin decides after it. This pass is that
+/// decision for back edges, with the check the pin's per-phi temporary gives
+/// it (the copy's destinations are dead on the other successor). Exit: phi
+/// elimination onto the shared machine function with liveness (dated 11-20),
+/// then this pass goes.
 fn unsplit_edges(function: &mut MFunc) {
     let is_edge = |label: &str| {
         label.rsplit_once(".e").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
