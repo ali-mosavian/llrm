@@ -158,6 +158,9 @@ pub struct Function {
     /// The frontend described every call the function makes
     /// (`DIFlagAllCallsDescribed`).
     pub all_calls: bool,
+    /// The line the body's code starts at (`!DISubprogram`'s `scopeLine`): the
+    /// row of the function's first byte.
+    pub scope_line: Option<u32>,
 }
 
 /// A function the unit calls and does not define: MIR's `function`, its
@@ -385,9 +388,18 @@ pub fn add_function(
     let parameters = list(module, parameters);
     let flag = int(module, i64::from(one.module));
     let all_calls = int(module, i64::from(one.all_calls));
+    let scope_line = one.scope_line.map_or(MetadataOperand::Null, |line| int(module, i64::from(line)));
     let id = node(
         module,
-        vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag, all_calls],
+        vec![
+            text(&one.function),
+            text(&one.name),
+            MetadataOperand::Node(one.r#type),
+            parameters,
+            flag,
+            all_calls,
+            scope_line,
+        ],
     );
     named(module, FUNCTIONS, id);
 }
@@ -459,6 +471,7 @@ pub fn functions(module: &Module) -> Vec<Function> {
             parameters: one.list(3, |parameter| Some((parameter.int(0)?, parameter.text(1)?, parameter.node(2)?)))?,
             module: one.int(4)? != 0,
             all_calls: one.int(5).is_some_and(|flag| flag != 0),
+            scope_line: one.int(6).and_then(|line| u32::try_from(line).ok()),
         })
     };
     listed(module, FUNCTIONS).filter_map(read).collect()

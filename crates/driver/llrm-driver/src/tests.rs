@@ -2389,3 +2389,32 @@ fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
         assert!(line.ends_with(tail), "{mode}: the jump names no index: {line}\n{listing}");
     }
 }
+
+/// A function whose `{` is on the line after its name: the pin's first row is
+/// `scopeLine` (2), then the first statement (3) where the body starts. Ours
+/// began at the first statement, so the line table had no row for the `{`.
+#[test]
+fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let (built, _) = compiled(
+            &flags(&["-m32", "-O0", "-g", "-fobject-format=elf", isel]),
+            include_str!("../tests/data/debug_scope_line_m32.ll"),
+            "f",
+        )
+        .unwrap();
+        let info = llrm_codegen::backend::objbuild::built_for(
+            &built,
+            "phi.c",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            llrm_target::object::Format::Elf,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
+        )
+        .unwrap()
+        .debug
+        .expect("debug information");
+        let rows: Vec<(usize, u32)> = info.lines.iter().map(|row| (row.offset, row.line)).collect();
+        let body = info.functions[0].body.expect("a body").0;
+        assert_eq!(rows[0], (0, 2), "{isel}: {rows:?}");
+        assert_eq!(rows[1], (body, 3), "{isel}: {rows:?}");
+    }
+}
