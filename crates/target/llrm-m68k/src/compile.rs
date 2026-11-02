@@ -95,6 +95,8 @@ pub fn items_with(
     let mut function = emit(name, &blocks)?;
     if options.short {
         crate::cmpelim::eliminate_tests(&mut function);
+        crate::negadd::negative_adds_to_subq(&mut function);
+        crate::addrarith::address_adds(&mut function, cpu, wants_size);
     }
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
