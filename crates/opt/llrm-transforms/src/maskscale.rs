@@ -41,6 +41,8 @@
 //! beside the wide trip counter that tests the exit is merged the same way:
 //! one counter `p' = 2^7 * p` of the wide type, read through `and (2^6-1) * 2^7`,
 //! tests the exit at the scaled trip count. The trip counter is dropped.
+//! Cost: for each narrow counter, one scan of its header's phis for the trip
+//! counter and of the counters' users (O(phis + uses) per loop, no re-solve).
 //!
 //! # Runs
 //! After `lsr` and `differences`, in the strength slot

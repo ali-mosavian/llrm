@@ -205,3 +205,78 @@ fn a_trip_count_past_the_scaled_period_keeps_both() {
     let (before, text) = m16(&tile("", 600));
     assert_eq!(before, text);
 }
+
+/// A narrow counter of `bits` bits read as `cast; shl shift` beside a trip
+/// counter that runs `trips` times; the narrow counter steps by `step` from
+/// `start`. `extra` is added in the loop.
+fn narrow(
+    bits: u32,
+    cast: &str,
+    shift: u32,
+    start: i64,
+    step: i64,
+    trips: i64,
+    extra: &str,
+) -> String {
+    format!(
+        "define i32 @f() {{
+entry:
+  %buf = alloca [{size} x i8], align 2
+  br label %loop
+loop:
+  %p = phi i{bits} [ {start}, %entry ], [ %pn, %loop ]
+  %q = phi i16 [ 0, %entry ], [ %qn, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %s2, %loop ]
+  %z = {cast} i{bits} %p to i16
+  %o = shl nuw nsw i16 %z, {shift}
+  %g = getelementptr i8, ptr %buf, i16 %o
+  %v = load i16, ptr %g, align 2
+  %w = sext i16 %v to i32
+  %s2 = add nsw i32 %s, %w
+{extra}  %qn = add nuw nsw i16 %q, 1
+  %c = icmp eq i16 %qn, {trips}
+  %pn = add i{bits} %p, {step}
+  br i1 %c, label %done, label %loop
+done:
+  ret i32 %s2
+}}
+",
+        size = 1u32 << (bits + shift)
+    )
+}
+
+/// The class, not the tile: counters of 3, 5 and 8 bits, scales 2 to 128,
+/// steps 1 and 3, an odd start. One scaled counter, the same sum.
+#[test]
+fn narrow_counters_of_any_width_scale_and_step_merge() {
+    for (bits, shift, start, step, trips) in [(3, 4, 5, 1, 20), (5, 3, 9, 3, 33), (8, 7, 200, 1, 90), (6, 1, 1, 5, 40)] {
+        let (before, text) = m16(&narrow(bits, "zext", shift, start, step, trips, ""));
+        agree(&before, &text);
+        assert!(!text.contains(&format!("phi i{bits} ")), "{bits} {shift}: {text}");
+        assert_eq!(text.matches("phi i16").count(), 1, "{bits} {shift}: {text}");
+        let mask = ((1u32 << bits) - 1) << shift;
+        assert!(text.contains(&format!("and i16 %p, {mask}")), "{bits} {shift}: {text}");
+    }
+}
+
+/// A sign extension reads the narrow counter's sign: not a mask.
+#[test]
+fn a_sign_extended_narrow_counter_keeps_both() {
+    let (before, text) = m16(&narrow(6, "sext", 7, 2, 1, 25, ""));
+    assert_eq!(before, text);
+}
+
+/// A second reader of the narrow counter sees its narrow value.
+#[test]
+fn a_second_use_of_the_narrow_counter_keeps_both() {
+    let (before, text) = m16(&narrow(6, "zext", 7, 2, 1, 25, "  %x = zext i6 %p to i32\n  %y = add i32 %x, %s2\n"));
+    assert_eq!(before, text);
+}
+
+/// A trip counter that would not reach the scaled exit on the same trip
+/// (here the narrow counter's period is shorter than the trip count) keeps both.
+#[test]
+fn a_trip_count_past_the_narrow_period_keeps_both() {
+    let (before, text) = m16(&narrow(3, "zext", 13, 1, 1, 600, ""));
+    assert_eq!(before, text);
+}
