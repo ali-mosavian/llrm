@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 
 use llrm_lir::registers::RegId;
 
-use crate::model::lir::NoteValue;
+use crate::liveness::liveintervals::LiveIntervals;
+use crate::model::lir::{LirBody, NoteValue};
+use crate::support::hash::{HashMap, IndexMap};
 
 /// Where a value is held.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -124,6 +126,57 @@ pub fn locate(
     out
 }
 
+/// The stretches each value is held in a register, by the number its register
+/// had in SSA (what a note names): the live range of every placed virtual
+/// register, and of the clones a split made, which `parents` leads back to the
+/// register they were cloned from. A spilled value has no register stretch
+/// here; its cell is not known yet, so it reads `Undef` (DEVIATE: the pin's
+/// `rewriteLocations` takes the stack slot from `VirtRegMap`).
+/// O(segments).
+pub fn segments_of(
+    lis: &mut LiveIntervals,
+    placed: &IndexMap<u32, RegId>,
+    parents: &HashMap<u32, u32>,
+) -> BTreeMap<u32, Vec<Segment>> {
+    let mut out: BTreeMap<u32, Vec<Segment>> = BTreeMap::new();
+    for value in lis.virt_regs() {
+        let Some(&register) = placed.get(&value) else { continue };
+        let root = parents.get(&value).copied().unwrap_or(value);
+        let list = out.entry(root).or_default();
+        for segment in &lis.interval(value).segments {
+            list.push(Segment {
+                start: i64::from(segment.start.get_index()),
+                end: i64::from(segment.end.get_index()),
+                place: Place::Register(register),
+            });
+        }
+    }
+    for list in out.values_mut() {
+        list.sort_by_key(|segment| (segment.start, segment.end));
+    }
+    out
+}
+
+/// The notes of `body` at the slot index of the instruction each stands
+/// before.
+pub fn positioned(
+    body: &LirBody,
+    lis: &LiveIntervals,
+) -> Vec<Positioned> {
+    let mut out = Vec::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        if one.debug.before.is_empty() {
+            continue;
+        }
+        let at = i64::from(lis.indexes.get_instruction_index(one.id()).get_index());
+        for &note in &one.debug.before {
+            let note = &body.notes[note as usize];
+            out.push(Positioned { at, variable: note.variable, piece: note.piece, value: note.value.clone() });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +262,39 @@ mod tests {
         let table = BTreeMap::from([(7, vec![seg(0, 5, reg(1)), seg(5, 9, Place::Cell(-8))])]);
         let found = locate(&[note(0, 1, NoteValue::Offset(7, 12))], &table, 9);
         assert_eq!(ranges(&found), [(0, 5, Where::Offset(reg(1), 12)), (5, 9, Where::Offset(Place::Cell(-8), 12))]);
+    }
+
+    /// A note ahead of the use of a value the allocator put in a register is
+    /// that register from the note to the value's last use, and `Undef` after
+    /// it; a clone a split made counts for the register it was cloned from.
+    #[test]
+    fn a_noted_value_is_where_the_allocator_put_it_over_its_live_range() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Block, DebugNote, Insn, LirBlock};
+
+        let define = Arc::new(Insn::new(0, None, None, vec![1], vec![]));
+        let mut noted = Insn::new(0, None, None, vec![2], vec![1]);
+        noted.debug.before = vec![0];
+        let last = Arc::new(Insn::new(0, None, None, vec![], vec![2]));
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![define, Arc::new(noted), last]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.notes = Arc::new(vec![DebugNote { variable: 9, piece: None, value: NoteValue::Value(1) }]);
+        let mut lis = LiveIntervals::new(&body);
+        let placed: IndexMap<u32, RegId> = [(1, RegId::from_raw(3)), (2, RegId::from_raw(5))].into_iter().collect();
+        // v2 is a clone of v1: the note about v1 follows its value there.
+        let parents: HashMap<u32, u32> = [(2, 1)].into_iter().collect();
+        let table = segments_of(&mut lis, &placed, &parents);
+        let notes = positioned(&body, &lis);
+        assert_eq!(notes.len(), 1);
+        let end = notes[0].at + 100;
+        let found = locate(&notes, &table, end);
+        assert_eq!(found.first().map(|one| one.at), Some(Where::Place(reg(3))), "{found:?} from {table:?}");
+        assert_eq!(found.last().map(|one| (one.at, one.end)), Some((Where::Undef, end)), "{found:?}");
     }
 }
