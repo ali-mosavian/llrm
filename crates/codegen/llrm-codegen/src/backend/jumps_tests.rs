@@ -2527,3 +2527,24 @@ fn test_a_decided_branch_leaves_no_stale_frequency_downstream() {
 
     assert_eq!(Frequency::violations(&result), Vec::<String>::new());
 }
+
+/// The tail merge sorts its candidates by `hash_of`, so a digest that moved
+/// with any field of `Semantics` reordered the merges: a field added for
+/// something else (`table_id`) swapped two landing labels of level.nib m16 -O2
+/// (objects fd6a6eb8 and ce3fe036). The pin's `HashMachineInstr` hashes the
+/// operation and the operands only.
+#[test]
+fn the_tail_merge_digest_ignores_what_is_no_operand_and_sees_what_is() {
+    let one = _insn(1, Operation::Move, "mov", vec![ax()], vec![imm(3)], None);
+    let with = |change: &dyn Fn(&mut Semantics)| {
+        let mut what = one.what.clone().expect("semantics");
+        change(&mut what);
+        tailmerge::hash_of(&Insn::new(1, Some((1, 1)), Some(what), Vec::new(), Vec::new()))
+    };
+    let base = tailmerge::hash_of(&one);
+    assert_eq!(base, with(&|what| what.repeat = true), "repeat is no operand");
+    assert_eq!(base, with(&|what| what.pops = Some(4)), "pops is no operand");
+    assert_ne!(base, with(&|what| what.sources = vec![imm(4)]), "an immediate is an operand");
+    assert_ne!(base, with(&|what| what.dests = vec![bx()]), "a register is an operand");
+    assert_ne!(base, with(&|what| what.name = Some("add".into())), "the opcode is hashed");
+}
