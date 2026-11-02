@@ -8,12 +8,19 @@ const HEADER: &str = "target triple = \"arm64-apple-macosx\"\n\
 target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
 fn dag(body: &str) -> Result<String, String> {
+    dag_at("--no-opt", body)
+}
+
+fn dag_at(
+    level: &str,
+    body: &str,
+) -> Result<String, String> {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("t.ll");
     std::fs::write(&input, format!("{HEADER}{body}")).unwrap();
     let output = dir.path().join("t.s");
     let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-S", "--no-opt", "--isel=dag", "-o"])
+        .args(["-S", level, "--isel=dag", "-o"])
         .arg(&output)
         .arg(&input)
         .output()
@@ -203,4 +210,14 @@ fn a_zero_base_of_an_extended_subtract_is_a_register_not_sp() {
         .unwrap_or_else(|why| panic!("{why}"));
     assert!(!asm.contains("sub x0, sp,") && !asm.contains("xzr, w0, uxtw"), "{asm}");
     assert!(asm.contains("sub x0, x9, w0, uxtw"), "{asm}");
+}
+
+/// A copy that ends the function is a tail call to the library routine: the
+/// DAG path refused it (`TCRETURNdi: a callee that is neither a symbol nor a
+/// register`) where the hand path branches to `_memmove`.
+#[test]
+fn a_tail_called_library_routine_is_a_branch_to_its_symbol() {
+    let asm = dag_at("-O2", "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\ndefine void @f(ptr %d, ptr %s, i64 %n) {\n  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)\n  ret void\n}\n")
+        .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("b _memmove"), "{asm}");
 }

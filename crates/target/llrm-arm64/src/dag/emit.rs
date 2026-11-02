@@ -793,6 +793,9 @@ impl Emitter<'_> {
                 Target::Symbol { name, .. } => Callee::Symbol(name),
                 _ => return Err("a callee that is no symbol".into()),
             },
+            ("TCRETURNdi", Operand::External(symbol)) => {
+                Callee::Symbol(self.globals.external(&self.dag.symbol_names[symbol as usize]))
+            }
             (_, Operand::Reg(register)) => {
                 let target = Gpr(9);
                 self.ops.push(Op::Copy { dst: Reg::Gpr(target), src: Reg::Gpr(register) });
