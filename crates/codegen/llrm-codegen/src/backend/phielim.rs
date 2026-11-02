@@ -807,6 +807,7 @@ pub fn _split_edges(
         );
     }
 
+    let order: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
     let mut blocks: Vec<Block> = Vec::new();
     let entered: BTreeSet<i64> = landing.keys().map(|&(_, into)| into).collect();
     let left: BTreeSet<i64> = landing.keys().map(|&(where_, _)| where_).collect();
@@ -842,9 +843,6 @@ pub fn _split_edges(
             }
         }
         let here = block.at;
-        let fall = insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| {
-            one.what.as_ref().filter(|what| what.op == Operation::Jump && !what.indirect).and_then(|what| what.target)
-        });
         blocks.push(
             LirBlock {
                 at: block.at,
@@ -874,11 +872,12 @@ pub fn _split_edges(
             }
             .into(),
         );
-        // The edge the block falls through to comes first: it is next.
-        let mut beside: Vec<(&(i64, i64), i64)> =
-            landing.iter().filter(|((where_, _), _)| *where_ == here).map(|(key, &at)| (key, at)).collect();
-        beside.sort_by_key(|&(_, at)| Some(at) != fall);
-        blocks.extend(beside.into_iter().filter_map(|(key, _)| made.swap_remove(key)).map(Block::from));
+        // Each split goes right after the predecessor, so the one made last is
+        // next: the edge into the block laid out later (`SplitPHIEdges` goes
+        // through the phi blocks in order).
+        let mut beside: Vec<&(i64, i64)> = landing.keys().filter(|(where_, _)| *where_ == here).collect();
+        beside.sort_by_key(|(_, into)| std::cmp::Reverse(order[into]));
+        blocks.extend(beside.into_iter().filter_map(|key| made.swap_remove(key)).map(Block::from));
     }
     let mut out = body.clone();
     let touched: BTreeSet<i64> = left.iter().copied().chain(landing.values().copied()).collect();
@@ -1181,6 +1180,42 @@ mod tests {
         assert_eq!((flipped.name.as_deref(), flipped.target), (Some("jnz"), Some(10)));
         assert_eq!(done.blocks[2].at, 10);
         assert_eq!(done.blocks[0].succ.to_vec(), vec![10, edge], "the first successor is the branch's target");
+    }
+
+    #[test]
+    fn test_two_split_edges_of_one_source_put_the_later_target_next() {
+        // `SplitCriticalEdge` inserts after the predecessor, and
+        // `SplitPHIEdges` goes through the phi blocks in layout order:
+        // the edge into the later block is next. The edge into the
+        // earlier one was next, which put the exit's copies on the
+        // loop's path in jpeg_fixed (m16 -Os, +1063 clocks).
+        let jz = branch(0, Some((0, 2)), "jz", 20);
+        let edge_body = body(
+            "two",
+            vec![
+                block(0, vec![jz], vec![10, 20], vec![]).into(),
+                block(10, vec![], vec![], vec![]).into(),
+                block(20, vec![], vec![], vec![]).into(),
+            ],
+        );
+        let done = _split_edges(
+            &edge_body,
+            &IndexMap::from_iter([((0, 10), Split::Pairs(vec![(2, 1)])), ((0, 20), Split::Pairs(vec![(2, 3)]))]),
+            &IndexMap::default(),
+            &IndexMap::default(),
+            &IndexMap::from_iter([(0, vec![]), (10, vec![]), (20, vec![])]),
+            &IndexMap::from_iter([(2, 2)]),
+            false,
+            &|_, _| false,
+        )
+        .unwrap();
+        let into_of = |index: usize| done.blocks[index].succ[0];
+        assert_eq!(
+            (into_of(1), into_of(2)),
+            (20, 10),
+            "{:?}",
+            done.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+        );
     }
 
     #[test]
