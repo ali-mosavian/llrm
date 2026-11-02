@@ -407,7 +407,16 @@ impl FunctionPass for SimplifyLibCalls {
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
         let size_bits = unit.layout.pointer(0).index_bits;
-        let info = TargetLibraryInfo::new(&Generic { int_bits: 32, size_t_bits: size_bits });
+        // One table per module: the target's library, else the pin's defaults
+        // for the pointer's width.
+        let info = outer.memo::<TargetLibraryInfo>(0, || {
+            let library = outer
+                .program()
+                .target
+                .library()
+                .unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
+            TargetLibraryInfo::new(&*library)
+        });
         let env = Env { globals: &outer.globals, layout: unit.layout };
         let mut changed = false;
         let calls: Vec<InstId> = unit
@@ -471,3 +480,7 @@ impl FunctionPass for SimplifyLibCalls {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "simplifylibcalls_tests.rs"]
+mod tests;
