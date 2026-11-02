@@ -20,7 +20,7 @@ body = {'fadd': 'x.f + y.f', 'fsub': 'x.f - y.f', 'fmul': 'x.f * y.f', 'fdiv': '
 print("typedef union { float f; unsigned long u; long s; } U;")
 for n, k in (('A', 0), ('B', 1), ('E', 2)):
     print("static const unsigned long %s[] = {%s};" % (n, ','.join('0x%xUL' % t[k] for t in v)))
-print("#ifdef BASE\n#define OP(x, y, r) r.u = x.u\n#else")
+print("#ifdef BASE\n#define OP(x, y, r) r.u = E[i]\n#else")
 if sys.argv[2] == 'cftoi': print("#define OP(x, y, r) r.s = (long)x.f")
 elif sys.argv[2] == 'cftou': print("#define OP(x, y, r) r.u = (unsigned long)x.f")
 elif sys.argv[2] == 'citof': print("#define OP(x, y, r) r.f = (float)x.s")
@@ -37,6 +37,8 @@ P
     eval "c_$k=\$(echo \"\$o_$k\" | sed -n 's/.*(\\([0-9]*\\) clks).*/\\1/p' | head -1)"
     eval "s_$k=\$(csize $T/$k.map)"
   done
+  fb=$(echo "$o_base" | sed -n 's/^0x8f00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
+  [ "${fb:-ffff}" = 0000 ] || { echo "$op: the base run must pass its records, got $fb"; exit 1; }
   f=$(echo "$o_full" | sed -n 's/^0x8f00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
   nv=$(sed -n 's/^NV = //p' $T/vec.inc)
   echo "$op sdcc: +bytes=$(( s_full - s_base )) fails=$((0x${f:-ffff})) cycles=$(( (c_full-c_base)/nv ))"

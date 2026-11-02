@@ -16,12 +16,16 @@ for op in $OPS; do
   sed "s/OP/$f/g" drv16.s > $T/drv_s.s
   awk -v post="$(printf "$post")" '{print} /^\tcall\t/ && $2 == "'$f'" {print post}' $T/drv_s.s > $T/drv_r.s
   printf '\t.module stub\n\t.area _CODE\n\t.globl %s\n%s:\n\tret\n' $f $f > $T/stub.s
+  mkdir -p $T/b; python3 basevec.py 2 < $T/vec.inc > $T/b/vec.inc; cp $T/drv_s.s $T/b/drv_s.s
+  (cd $T/b; sdasz80 -o d1.rel drv_s.s)
   (cd $T; sed 's/\.module drv/.module drv_s/' drv_s.s > d1.s; sed 's/\.module drv/.module drv_r/' drv_r.s > d2.s
-   sdasz80 -o d1.rel d1.s; sdasz80 -o d2.rel d2.s; sdasz80 -o stub.rel stub.s
-   sdldz80 -i -b _CODE=0x100 s.ihx crt0.rel d1.rel stub.rel >/dev/null
+   sdasz80 -o d2.rel d2.s; sdasz80 -o stub.rel stub.s
+   sdldz80 -i -b _CODE=0x100 s.ihx crt0.rel b/d1.rel stub.rel >/dev/null
    sdldz80 -i -b _CODE=0x100 r.ihx crt0.rel d2.rel sf32_cmp.rel >/dev/null)
   run() { printf 'run\nstate\ndump rom 0x8f00 0x8f01\nquit\n' | ucsim_z80 -t Z80 -q -w $T/$1.ihx -c - 2>&1; }
-  b=$(run s | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
+  os=$(run s); b=$(echo "$os" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
+  fb=$(echo "$os" | sed -n 's/^0x8f00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
+  [ "${fb:-ffff}" = 0000 ] || { echo "$op: the stub run must pass its records (basevec.py), got $fb"; exit 1; }
   o=$(run r); c=$(echo "$o" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
   f2=$(echo "$o" | sed -n 's/^0x8f00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
   nv=$(sed -n 's/^NV = //p' $T/vec.inc)
