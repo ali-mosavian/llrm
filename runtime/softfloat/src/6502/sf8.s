@@ -1,15 +1,16 @@
 ; 8-bit float (OCP FP8 E5M2: sign, 5 exponent bits bias 15, 2 mantissa bits; denormals, inf, NaN; round to nearest even)
 ; add, sub, mul, div for the 6502, hand written. Args rc2 and rc3, result A, scratch rc2..rc7 and rc16..rc25.
 ;
-; The tricks: the low seven bits are a monotonic code, so |a| < |b| is an integer compare and rounding up is "code + 1",
-; which carries from the mantissa into the exponent and from the largest finite value into infinity by itself;
-; every operation ends in one packer that works on a left-aligned 8-bit significand with a sticky byte.
+; The tricks: the low seven bits are a monotonic code, so |a| < |b| and "is inf or NaN" are integer compares and
+; rounding up is "code + 1", which carries from the mantissa into the exponent and from the largest finite value into
+; infinity by itself; denormal operands are normalized on unpack (exponents go below 1) so no operation has a denormal
+; case; lost bits are jammed into bit 0 of the significand, four places under the guard bit, instead of a sticky flag;
+; every operation ends in one packer that works on a left-aligned 8-bit significand.
 
 .setcpu "6502"
 rc2 = $82
 rc3 = $83
 rc4 = $84
-rc5 = $85
 rc6 = $86
 rc7 = $87
 rc16 = $90
@@ -24,7 +25,7 @@ rc24 = $98
 rc25 = $99
 .export __fp8_add, __fp8_sub, __fp8_mul, __fp8_div
 
-sa  = rc16              ; operand a: sign ($80/0), biased exponent (denormal: 1), significand (implicit one in bit 2)
+sa  = rc16              ; operand a: sign ($80/0), exponent (signed, below 1 for denormals), significand 4..7 (0 for zero)
 ea  = rc17
 ma  = rc18
 sb  = rc19
@@ -32,11 +33,10 @@ eb  = rc20
 mb  = rc21
 bm  = rc22              ; b aligned
 cd  = rc23              ; code under construction
-rsg = rc4               ; packer inputs: sign, sticky, exponent of the leading one (signed), significand left aligned
-st  = rc5
+rsg = rc4               ; packer inputs: sign, exponent of the leading one (signed), significand with its one in bit 7
 pe  = rc6
 pm  = rc7
-t1  = rc24
+t1  = rc24              ; |a| and |b| as codes
 t2  = rc25
 
 .segment "CODE"
@@ -46,11 +46,11 @@ __fp8_sub:
     eor #$80
     sta rc3
 __fp8_add:
-    lda rc2                 ; order by magnitude: the code order is the value order
-    and #$7f
-    sta t1
-    lda rc3
-    and #$7f
+    jsr mags
+    bcc :+
+    ldx #0
+    jmp special
+:   lda t2                  ; order by magnitude: the code order is the value order
     cmp t1
     bcc :+
     beq :+
@@ -59,14 +59,6 @@ __fp8_add:
     sta rc2
     stx rc3
 :   jsr unpab
-    lda ea
-    cmp #31
-    bne *+5
-    jmp addsp
-    lda eb
-    cmp #31
-    bne *+5
-    jmp addsp
     lda sa
     sta rsg
     lda ea
@@ -88,21 +80,11 @@ __fp8_add:
     asl a
     asl a
     sta bm
-    lda #0
-    sta st
     tya
-    beq aligned
-    cpy #9
-    bcc :+
-    ldy #8
-:   lsr bm
-    bcc :+
-    lda #1
-    sta st
-:   dey
-    bne :--
-aligned:
-    lda sa
+    beq :+
+    ldx #bm-pm
+    jsr shr
+:   lda sa
     eor sb
     bmi dosub
     lda pm
@@ -110,10 +92,11 @@ aligned:
     adc bm
     sta pm
     bcc pk
-    ror pm                  ; carry out: shift down, the lost bit is sticky
+    ror pm                  ; carry out: shift down, the lost bit is jammed
     bcc :+
-    lda #1
-    sta st
+    lda pm
+    ora #1
+    sta pm
 :   inc pe
     jmp pk
 dosub:
@@ -121,24 +104,20 @@ dosub:
     sec
     sbc bm
     sta pm
-    lda st                  ; bits below bm make the subtrahend a little larger: borrow one, keep them sticky
-    beq :+
-    dec pm
-:   lda pm
     bne nloop
     lda #0                  ; exact cancellation gives +0
     rts
 nloop:
-    lda pm
     bmi pk
     lda pe
     cmp #2
     bcc pk
     dec pe
     asl pm
-    bne nloop               ; pm is nonzero, the loop ends at the top bit or at exponent 1
+    lda pm
+    jmp nloop
 
-; ---- pack: sign rsg, sticky st, leading-one exponent pe (signed, may be <= 0), significand pm with its leading one in bit 7
+; ---- pack: sign rsg, exponent of the leading one pe (signed, may be <= 0), significand pm with its leading one in bit 7
 pk:
     lda pe
     bmi pden
@@ -165,53 +144,50 @@ pnorm:
     beq pdone
     lda pm
     and #$0f
-    ora st
     bne pup
     lda cd
-    and #1
-    beq pdone
+    lsr a
+    bcc pdone
 pup:
     inc cd
 pdone:
     lda cd
     cmp #$7c
     bcc :+
-    lda #$7c
-:   ora rsg
-    rts
 pinf:
     lda #$7c
-    ora rsg
+:   ora rsg
     rts
 pden:                       ; below the normal range: shift into the denormal position, 1 - pe places
     lda #1
     sec
     sbc pe
     tay
+    ldx #0
+    jsr shr
+    lda #1
+    jmp pnorm
+
+shr:                        ; cell rc7+X shifted right Y (1..) places, lost bits jammed into bit 0
     cpy #9
     bcc :+
     ldy #8
-:   lsr pm
+:   lda rc7,x
+:   lsr a
     bcc :+
-    lda #1
-    sta st
+    ora #1
 :   dey
     bne :--
-    lda #1
-    sta pe
-    jmp pnorm
+    sta rc7,x
+    rts
 
 ; ---- multiply
 __fp8_mul:
-    jsr unpab
-    lda ea
-    cmp #31
-    bne *+5
-    jmp mulsp
-    lda eb
-    cmp #31
-    bne *+5
-    jmp mulsp
+    jsr mags
+    bcc :+
+    ldx #1
+    jmp special
+:   jsr unpab
     lda sa
     eor sb
     sta rsg
@@ -219,8 +195,6 @@ __fp8_mul:
     beq zret
     lda mb
     beq zret
-    jsr nrma
-    jsr nrmb
     lda #0                  ; P = ma * mb, 16..49
     ldx #3
 :   lsr mb
@@ -237,8 +211,6 @@ __fp8_mul:
     sec
     sbc #15
     sta pe
-    lda #0
-    sta st
     lda pm
     cmp #32
     bcs :+
@@ -254,17 +226,81 @@ zret:
     lda rsg
     rts
 
+; ---- |a| and |b| as codes into t1 and t2; carry set when either is an infinity or a NaN
+mags:
+    lda rc2
+    and #$7f
+    sta t1
+    lda rc3
+    and #$7f
+    sta t2
+    cmp #$7c
+    bcs :+
+    lda t1
+    cmp #$7c
+:   rts
+
+; ---- infinities and NaNs: X = 0 add, 1 multiply, 2 divide
+special:
+    lda t1
+    cmp #$7d
+    bcs retnan
+    lda t2
+    cmp #$7d
+    bcs retnan
+    cpx #0
+    bne notadd
+    lda t1                  ; the infinity wins; two of opposite sign are invalid
+    cmp #$7c
+    bne retb
+    lda t2
+    cmp #$7c
+    bne reta
+    lda rc2
+    eor rc3
+    bmi retnan
+reta:
+    lda rc2
+    rts
+retb:
+    lda rc3
+    rts
+notadd:
+    lda rc2
+    eor rc3
+    and #$80
+    sta rsg
+    cpx #1
+    bne divsp
+    lda t1                  ; inf * 0 is invalid
+    beq retnan
+    lda t2
+    beq retnan
+spinf:
+    lda rsg
+    ora #$7c
+    rts
+divsp:
+    lda t1
+    cmp #$7c
+    bne divz
+    lda t2
+    cmp #$7c
+    bne spinf
+retnan:
+    lda #$7e                ; inf / inf
+    rts
+divz:                       ; finite / inf = 0
+    lda rsg
+    rts
+
 ; ---- divide
 __fp8_div:
-    jsr unpab
-    lda ea
-    cmp #31
-    bne *+5
-    jmp divsp
-    lda eb
-    cmp #31
-    bne *+5
-    jmp divsp
+    jsr mags
+    bcc :+
+    ldx #2
+    jmp special
+:   jsr unpab
     lda sa
     eor sb
     sta rsg
@@ -276,11 +312,10 @@ __fp8_div:
     ora rsg
     rts
 :   lda ma
-    beq zret
-    jsr nrma
-    jsr nrmb
-    lda ma                  ; q = floor(16 ma / mb), five restoring steps
-    ldy #5
+    bne :+
+    lda rsg
+    rts
+:   ldy #5                  ; q = floor(16 ma / mb), five restoring steps
     ldx #0
     stx t1
 :   cmp mb
@@ -290,11 +325,7 @@ __fp8_div:
     asl a
     dey
     bne :--
-    ldx #0
-    cmp #0
-    beq :+
-    inx
-:   stx st                  ; sticky: a nonzero remainder
+    tax                     ; remainder, nonzero means sticky
     lda ea
     sec
     sbc eb
@@ -308,100 +339,19 @@ __fp8_div:
     asl a
     asl a
     asl a
-    sta pm
-    jmp pk
+    jmp dpm
 :   asl a                   ; ratio at least one: leading one at bit 4, three places up, exponent one higher
     asl a
     asl a
-    sta pm
     inc pe
+dpm:
+    cpx #0
+    beq :+
+    ora #1
+:   sta pm
     jmp pk
 
-; ---- infinities and NaNs
-cls:                        ; class of the operand at X (0 a, 3 b): 0 finite, 1 inf, 2 NaN
-    lda rc17,x
-    cmp #31
-    bne cfin
-    lda rc18,x
-    cmp #4
-    beq cinf
-    lda #2
-    rts
-cinf:
-    lda #1
-    rts
-cfin:
-    lda #0
-    rts
-retnan:
-    lda #$7e
-    rts
-spnan:                      ; NaN operand: drop spcls's return address, answer for its caller
-    pla
-    pla
-    lda #$7e
-    rts
-spcls:
-    ldx #0
-    jsr cls
-    sta t1
-    ldx #3
-    jsr cls
-    sta t2
-    cmp #2
-    beq spnan
-    lda t1
-    cmp #2
-    beq spnan
-    lda sa
-    eor sb
-    sta rsg
-    rts
-addsp:
-    jsr spcls
-    lda t1
-    beq addb
-    lda t2
-    beq adda
-    lda sa
-    cmp sb
-    bne retnan
-adda:
-    lda sa
-    ora #$7c
-    rts
-addb:
-    lda sb
-    ora #$7c
-    rts
-mulsp:
-    jsr spcls
-    lda t1
-    beq mulbi
-    lda t2                  ; a is infinite: times a zero is NaN
-    bne mulinf
-    lda mb
-    beq retnan
-mulinf:
-    lda rsg
-    ora #$7c
-    rts
-mulbi:                      ; b is infinite, a finite
-    lda ma
-    beq retnan
-    bne mulinf
-divsp:
-    jsr spcls
-    lda t1
-    beq divbi
-    lda t2
-    bne retnan              ; inf / inf
-    beq mulinf
-divbi:                      ; finite / inf = 0
-    lda rsg
-    rts
-
-; ---- operand unpack: rc2, rc3 into sa/ea/ma and sb/eb/mb
+; ---- operand unpack: rc2, rc3 into sa/ea/ma and sb/eb/mb; denormals are normalized (exponent goes below 1)
 unpab:
     ldy #0
     ldx #0
@@ -417,30 +367,19 @@ unp:                        ; byte rc2+Y into the three cells at rc16+X
     lsr a
     lsr a
     and #$1f
-    bne :+
-    lda #1                  ; denormal: exponent 1, no implicit one
     sta rc17,x
     lda t1
     and #3
-    sta rc18,x
-    rts
-:   sta rc17,x
-    lda t1
-    and #3
-    ora #4
-    sta rc18,x
-    rts
-nrma:                       ; normalize a nonzero denormal significand, lowering the exponent
-    ldx #0
-    beq nrm
-nrmb:
-    ldx #3
-nrm:
-    lda rc18,x
+    ldy rc17,x
+    bne :++
+    inc rc17,x              ; denormal: exponent 1, no implicit one
+    cmp #0
+    beq :+++
 :   cmp #4
-    bcs :+
+    bcs :++
     asl a
     dec rc17,x
     jmp :-
+:   ora #4
 :   sta rc18,x
     rts

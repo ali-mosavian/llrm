@@ -36,4 +36,4 @@ Measured: add+sub 672 B, mul+div 609 B; cycles per call add 426, sub 435, mul 16
 ## FP8 E5M2 (`src/6502/sf8.s`)
 
 `__fp8_add/sub/mul/div` (OCP E5M2: denormals, inf, NaN, round to nearest even), args rc2 and rc3, result A. `tests/asm6502/run8.sh` checks all 65536 pairs of each op against exact rational arithmetic on sim65: 0 mismatches.
-First version: 680 B for the four ops; cycles per call (mean over all pairs) add 395, sub 399, mul 370, div 413. Not yet tightened.
+`tests/asm6502/bench8.sh` prints bytes and mean cycles over 4096 pairs. 566 B for the four ops (first version 680 B); cycles per call add 399, sub 403, mul 337, div 380.
