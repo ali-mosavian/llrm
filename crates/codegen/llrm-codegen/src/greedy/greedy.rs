@@ -423,7 +423,9 @@ pub trait GreedyEnv: SpillWeightEnv {
     /// DEVIATE CSR5: where code is sized in bytes, whether spilling `virt`
     /// (`reads` instructions read it, `writes` write it) is shorter than the
     /// first use of the callee-saved `phys`, counted in static bytes, not
-    /// frequency. None: the pin's rule. Exit: none, a target knob.
+    /// frequency. None: the pin's rule. Exit: kept while the corpus A/B shows
+    /// no cell worse; re-evaluated against the pin at 11-20 with the other
+    /// numbered DEVIATEs. The knob is the sheet-derived price, no per-cell term.
     fn csr_spill_costs_less(
         &self,
         _virt: u32,
