@@ -304,6 +304,7 @@ impl Declared {
                 Pending::Function(name, ty) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::External,
+                    visibility: crate::module::Visibility::Default,
                     unnamed_addr: Default::default(),
                     address_space: 0,
                     kind: GlobalKind::Function(Box::new(
@@ -317,6 +318,7 @@ impl Declared {
                     GlobalValue {
                         name: name.clone().into(),
                         linkage: crate::module::Linkage::External,
+                        visibility: crate::module::Visibility::Default,
                         unnamed_addr: Default::default(),
                         address_space: 0,
                         kind: GlobalKind::Function(Box::new(function)),
@@ -325,6 +327,7 @@ impl Declared {
                 Pending::Table(name, variable) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::Private,
+                    visibility: crate::module::Visibility::Default,
                     unnamed_addr: Default::default(),
                     address_space: 0,
                     kind: GlobalKind::Variable(variable.clone()),

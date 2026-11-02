@@ -556,4 +556,11 @@ pub trait PatternContext {
     fn has_frame_pointer(&self) -> bool;
     /// `Subtarget->isLegalToCallImmediateAddr()`.
     fn is_legal_to_call_immediate_addr(&self) -> bool;
+    /// `Subtarget->hasX()` for a target whose features differ per function.
+    fn has_feature(
+        &self,
+        name: &str,
+    ) -> bool {
+        unreachable!("this target decides no feature at selection time: {name}")
+    }
 }
