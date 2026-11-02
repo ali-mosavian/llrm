@@ -63,6 +63,10 @@ pub struct Inst {
     pub early_clobber: bool,
     /// Its two register sources may swap places (`isCommutable`).
     pub commutable: bool,
+    /// The caller's number for the operation it was made from (the `DebugLoc`
+    /// a `MachineInstr` carries); 0 for none. A clone keeps it, code the
+    /// allocator adds has none.
+    pub origin: u32,
 }
 
 impl Inst {
@@ -86,6 +90,7 @@ impl Inst {
             rematerializable: false,
             early_clobber: false,
             commutable: false,
+            origin: 0,
         }
     }
 
