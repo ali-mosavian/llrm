@@ -100,3 +100,35 @@ fn adjacent_stores_merge_when_optimizing() {
     assert!(body(&o0, "s").matches("i32.store16").count() == 2, "{o0}");
     assert!(!body(&o2, "s").contains("i32.store16"), "{o2}");
 }
+
+const SEQUENTIAL: &str = "declare void @h(i32)
+define void @k(i32 %x) {
+entry:
+  %a = add i32 %x, 1
+  call void @h(i32 %a)
+  call void @h(i32 %a)
+  %b = add i32 %x, 2
+  call void @h(i32 %b)
+  call void @h(i32 %b)
+  ret void
+}
+";
+
+/// The locals of the function: the count after `.local`.
+fn locals(
+    text: &str,
+    name: &str,
+) -> usize {
+    body(text, name).lines().find(|l| l.contains(".local")).map_or(0, |l| l.matches("i32").count())
+}
+
+/// Two values that are never live together each had a local of their own:
+/// `RegColoring` only ran in the pin. fib's loop carried 5 locals where the
+/// pin's has 3.
+#[test]
+fn values_that_are_not_live_together_share_a_local_when_optimizing() {
+    let o0 = asm(SEQUENTIAL, Level::O0);
+    let o2 = asm(SEQUENTIAL, Level::O2);
+    assert_eq!(locals(&o0, "k"), 2, "{o0}");
+    assert_eq!(locals(&o2, "k"), 1, "{o2}");
+}

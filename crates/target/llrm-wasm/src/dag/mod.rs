@@ -151,9 +151,13 @@ pub fn compile_function(
     }
     if options.level != crate::driver::Level::O0 {
         crate::optimize_live_intervals::optimize_live_intervals(&mut f);
+        crate::mem_intrinsic_results::mem_intrinsic_results(&mut f);
     }
     if options.stackify {
         reg_stackify(&mut f, options.level != crate::driver::Level::O0);
+    }
+    if options.stackify && options.level != crate::driver::Level::O0 {
+        crate::reg_coloring::reg_coloring(&mut f);
     }
     cfg_sort(&mut f);
     cfg_stackify(&mut f)?;
