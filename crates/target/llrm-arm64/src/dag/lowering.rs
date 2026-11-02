@@ -877,14 +877,21 @@ pub fn lower_fp_round(
 }
 
 /// `isFPImmLegal`: a constant an `fmov` immediate holds, positive zero, or one
-/// that at most two `mov`s make, one when optimizing for size ([pin][pin]).
+/// that at most two `mov`s make ([pin][pin]).
+///
+/// DEVIATE FP1: the pin's limit is one `mov` when optimizing for size, which
+/// sends a two-`mov` constant to the pool: `adrp; ldr` and 8 bytes of data
+/// for the 12 bytes of `mov; movk; fmov`. Measured on the QB float kernels at
+/// `-Os` that is `floats` +20 B, `recfloat` +8 B, `x_nbody_f` +4 B and
+/// `fpbench` -8 B, so the limit stays 2 until a cost counts the pool's bytes
+/// and its sharing. Exit: that cost model, dated 2026-11-20.
 ///
 /// [pin]:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L14019-L14058
 pub fn fp_imm_legal(
     vt: llrm_codegen::backend::selectiondag::mvt::MVT,
     bits: u128,
-    opt_for_size: bool,
+    _opt_for_size: bool,
 ) -> bool {
     use llrm_codegen::backend::selectiondag::mvt::MVT;
     let (value, width) = match vt {
@@ -892,9 +899,7 @@ pub fn fp_imm_legal(
         MVT::F32 => (f64::from(f32::from_bits(bits as u32)), 32),
         _ => return false,
     };
-    bits == 0
-        || crate::mc::immediate::fp_immediate(value).is_some()
-        || mov_imm(bits as u64, width, Gpr(0)).len() <= if opt_for_size { 1 } else { 2 }
+    bits == 0 || crate::mc::immediate::fp_immediate(value).is_some() || mov_imm(bits as u64, width, Gpr(0)).len() <= 2
 }
 
 /// `LowerATOMIC_LOAD_AND`: LSE has an atomic load-clear but no load-and, so the
