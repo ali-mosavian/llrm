@@ -256,6 +256,7 @@ fn plan_loop(
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
     lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
     lsr.size = size;
+    llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
     lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);
     lsr.collect_fixups_and_initial_formulae(se, &users);
