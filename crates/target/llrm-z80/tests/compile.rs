@@ -386,3 +386,37 @@ fn a_freeze_is_a_copy() {
               define i16 @f(i16 %x, i8 %b) {\n  %c = icmp eq i8 %b, 0\n  %n = sub nsw i16 0, %x\n  %s = select i1 %c, i16 %x, i16 %n\n  %f = freeze i16 %s\n  %d = sdiv i16 %f, 3\n  %m = mul i16 %d, 3\n  %r = sub i16 %f, %m\n  ret i16 %r\n}\n";
     text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
 }
+
+/// A load of an `i1` was refused (`CannotSelect`): the bit is a byte in
+/// memory, 0 or 1.
+#[test]
+fn a_bit_is_loaded_as_a_byte() {
+    let text = compiled(
+        "@flag = global i1 false\ndefine i8 @f() {\n  %v = load i1, ptr @flag\n  %w = zext i1 %v to i8\n  ret i8 %w\n}",
+        "f",
+    );
+    assert!(text.contains("ld a, (_flag)"), "{text}");
+}
+
+/// The store of an `i1` writes the byte 0 or 1.
+#[test]
+fn a_bit_is_stored_as_a_byte_of_zero_or_one() {
+    let text = compiled(
+        "@flag = global i1 false\ndefine void @f(i8 %x) {\n  %c = icmp ne i8 %x, 0\n  store i1 %c, ptr @flag\n  ret void\n}",
+        "f",
+    );
+    assert!(text.contains("(_flag)"), "{text}");
+}
+
+/// `huffman_decode`'s `static int bad` is an `i1` global that a branch, a
+/// `select` and a `zext` all read. Selected as it was, the `select` became a
+/// conditional move on a compare of its own result: a cycle in the DAG that
+/// `calc_sethi_ullman` walked until the memory ran out (no end in 5 minutes).
+#[test]
+fn a_loaded_bit_read_by_a_branch_a_select_and_a_zext_compiles() {
+    let text = compiled(
+        "@bad = global i1 false\ndefine i8 @f(i8 %x) {\n  %v = load i1, ptr @bad\n  br i1 %v, label %t, label %e\nt:\n  ret i8 7\ne:\n  %s = select i1 %v, i8 %x, i8 1\n  %z = zext i1 %v to i8\n  %r = add i8 %s, %z\n  ret i8 %r\n}",
+        "f",
+    );
+    assert!(text.contains("#_bad"), "{text}");
+}

@@ -21,7 +21,7 @@ fn a_refused_function_fails_the_exit_status() {
     let dir = env!("CARGO_MANIFEST_DIR");
     let source = std::env::temp_dir().join("llrm-z80-llc-refused.ll");
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
-              define i1 @g(ptr %p) {\n  %v = load i1, ptr %p\n  ret i1 %v\n}\n";
+              define i8 @g(ptr %p) {\n  %v = load double, ptr %p\n  %r = fptosi double %v to i8\n  ret i8 %r\n}\n";
     std::fs::write(&source, ir).unwrap();
     let out = std::env::temp_dir().join("llrm-z80-llc-refused.s");
     let done = llc(&["-S", "-o", out.to_str().unwrap(), source.to_str().unwrap()]);
