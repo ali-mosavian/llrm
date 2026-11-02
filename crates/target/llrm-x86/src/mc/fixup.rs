@@ -14,6 +14,13 @@ pub const GOT_PCREL_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 3);
 /// beside a base or an index (`R_X86_64_32S`).
 pub const ABS_SIGNED_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 6);
 
+/// x86-32 position-independent code: the target's offset from the global offset
+/// table (`R_386_GOTOFF`).
+pub const GOT_OFF_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 7);
+/// x86-32 position-independent code: the global offset table's address
+/// relative to the place (`R_386_GOTPC`).
+pub const GOT_PC_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 8);
+
 /// OMF: the selector of the target's segment (OMF's BASE).
 pub const SEGMENT_BASE: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 4);
 /// OMF: a 16:16 pointer, whose offset is the field's first two
@@ -65,6 +72,17 @@ pub const fn got_pc_rel(from: usize) -> Fix {
     Fix::relative(GOT_PCREL_4, from)
 }
 
+/// The target's offset from the global offset table, as a 4-byte field.
+pub const fn got_off_4() -> Fix {
+    Fix::plain(GOT_OFF_4)
+}
+
+/// The global offset table's address relative to the place `from` bytes past
+/// the field's start.
+pub const fn got_pc_4(from: usize) -> Fix {
+    Fix::relative(GOT_PC_4, from)
+}
+
 /// What `kind` says of its field; the generic kinds are the object's.
 pub fn kind_info(kind: FixupKind) -> FixupKindInfo {
     let (name, bits) = match kind {
@@ -72,6 +90,8 @@ pub fn kind_info(kind: FixupKind) -> FixupKindInfo {
         BRANCH_4 => ("branch_4byte_pcrel", 32),
         GOT_PCREL_4 => ("reloc_riprel_4byte_gotpcrelx", 32),
         ABS_SIGNED_4 => ("reloc_signed_4byte", 32),
+        GOT_OFF_4 => ("reloc_4byte_gotoff", 32),
+        GOT_PC_4 => ("reloc_4byte_gotpc", 32),
         SEGMENT_BASE => ("segment_base", 16),
         FAR_POINTER => ("far_pointer", 32),
         generic => return generic.info(),

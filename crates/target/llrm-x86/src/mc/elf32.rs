@@ -10,6 +10,8 @@ use super::fixup;
 const R_386_32: u32 = 1;
 const R_386_PC32: u32 = 2;
 const R_386_PLT32: u32 = 4;
+const R_386_GOTOFF: u32 = 9;
+const R_386_GOTPC: u32 = 10;
 const R_386_16: u32 = 20;
 const R_386_PC16: u32 = 21;
 const R_386_8: u32 = 22;
@@ -34,6 +36,8 @@ impl Machine for I386 {
             (FixupKind::DATA_1, false) => (R_386_8, 1),
             (FixupKind::DATA_4, true) => (R_386_PC32, 4),
             (fixup::BRANCH_4, true) => (R_386_PLT32, 4),
+            (fixup::GOT_OFF_4, false) => (R_386_GOTOFF, 4),
+            (fixup::GOT_PC_4, true) => (R_386_GOTPC, 4),
             (fixup::BRANCH_2, true) => (R_386_PC16, 2),
             (FixupKind::DATA_2, true) => (R_386_PC16, 2),
             (FixupKind::DATA_1, true) => (R_386_PC8, 1),
@@ -162,6 +166,29 @@ mod tests {
         let rel = named(&found, ".rel.text");
         assert_eq!((rel.1, rel.5), (9, 1));
         assert_eq!((word(&bytes, rel.2), word(&bytes, rel.2 + 4)), (1, 3 << 8 | R_386_PC32));
+    }
+
+    /// PIC code reached a table or a global through the GOT base, which had no
+    /// ELF relocation: the object failed with "no relocation for GOT_OFF_4".
+    #[test]
+    fn got_relative_fields_are_r_386_gotoff_and_gotpc() {
+        let relocs = vec![
+            Reloc::new(2, fixup::got_pc_4(2), Target::Symbol(0), 2),
+            Reloc::new(8, fixup::got_off_4(), Target::Symbol(1), 0),
+        ];
+        let made = object(
+            vec![text(vec![0x90; 16], relocs)],
+            vec![
+                symbol("_GLOBAL_OFFSET_TABLE_", Binding::Public, Definition::Undefined),
+                symbol("g", Binding::Public, Definition::Undefined),
+            ],
+        );
+        let bytes = write(&made).unwrap();
+        let found = sections(&bytes);
+        let rel = named(&found, ".rel.text");
+        assert_eq!(word(&bytes, rel.2 + 4) & 0xFF, R_386_GOTPC);
+        assert_eq!(word(&bytes, rel.2 + 12) & 0xFF, R_386_GOTOFF);
+        assert_eq!((R_386_GOTOFF, R_386_GOTPC), (9, 10));
     }
 
     /// A local symbol has no ELF symbol: a reference to it is its section's
