@@ -254,6 +254,36 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// `getOptimalMemOpType` gives 16 bytes (`v4i32`) with SSE2: a 16-byte clear
+/// is `xorps` and one 16-byte store (5 B), not two `mov qword [..], 0` (18 B);
+/// nbody O2 was +31 B over the pin on four of them.
+#[test]
+fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = global [16 x i8] zeroinitializer, align 16\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                define void @f() {\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let has = |start: &str| listing.lines().any(|line| line.trim().starts_with(start));
+    assert!(has("xorps") && has("movaps"), "{listing}");
+    assert!(!listing.contains("qword"), "{listing}");
+}
+
+/// A 16-byte copy of unaligned memory is `movups` load and store.
+#[test]
+fn an_unaligned_16_byte_copy_is_movups_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let count = listing.lines().filter(|line| line.trim().starts_with("movups")).count();
+    assert_eq!(count, 2, "{listing}");
+}
+
 /// A `{ i64, i48 }` (a packed struct of 14 bytes) crossed the DAG selector as
 /// an `i48`, which nothing legalized: torture 20131127-1 was refused at -m64,
 /// "Unsupported CopyToReg Int(48) promote operand".
@@ -2018,10 +2048,12 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
     assert!(!listing.contains("-2147483648"), "{listing}");
 }
 
-/// A 72-byte zero fill and copy at m64 -Os (`pattern_fill.c`,
+/// A 72-byte fill and copy at m64 -Os (`pattern_fill.c`,
 /// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
 /// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
-/// operand (RAX) not set by a glued CopyToReg" refused the function.
+/// operand (RAX) not set by a glued CopyToReg" refused the function. The fill
+/// byte is not zero: a zero fill is `xorps` and 16-byte stores (the pin's
+/// `getOptimalMemOpType`) and no longer reaches `rep stosq`.
 #[test]
 fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -2030,7 +2062,7 @@ fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
                 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
                 define void @f(ptr %s) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
-                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 0, i64 72, i1 false)\n\
+                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 7, i64 72, i1 false)\n\
                 \x20 call void @llvm.memcpy.p0.p0.i64(ptr align 16 %b, ptr align 16 %s, i64 72, i1 false)\n\
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
