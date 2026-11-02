@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:83070e548a9199c88b0f970fe69ab8a9a58ba948f0bc3b0c06911aa0063e305f -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:cf36ea25ceccbd49d7e61883558c26f52e30ddeab0b1016ccb34029eac63dac4 -->
 
 # pipeline
 
@@ -107,7 +107,7 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `typepromotion`, `cgpaddr` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |

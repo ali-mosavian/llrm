@@ -258,6 +258,7 @@ fn dead_code(function: &mut MFunc) {
 
 pub fn run(function: &mut MFunc) {
     dead_code(function);
+    unsplit_edges(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
@@ -268,6 +269,7 @@ pub fn run(function: &mut MFunc) {
     sink(function);
     dead_definitions(function);
     non_flag_setting(function);
+    redundant_zero_extends(function);
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -927,5 +929,182 @@ pub fn order_copies(function: &mut MFunc) {
                 );
             at = end.max(at + 1);
         }
+    }
+}
+
+/// A back edge's phi copies go to the end of the latch, not into a block of
+/// their own: `PHIElimination::SplitPHIEdges` never splits one
+/// ([PHIElimination.cpp#L827-L832](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L827-L832)).
+/// `recfloat`'s loop ran `fmov; b` in an edge block each trip, the pin one
+/// `fmov` before the branch.
+///
+/// DEVIATE PE1: the DAG path splits every critical edge as it emits, before
+/// any liveness exists, and the pin decides after it. This pass is that
+/// decision for back edges, with the check the pin's per-phi temporary gives
+/// it (the copy's destinations are dead on the other successor). Exit: phi
+/// elimination onto the shared machine function with liveness (dated 11-20),
+/// then this pass goes.
+fn unsplit_edges(function: &mut MFunc) {
+    let is_edge = |label: &str| {
+        label.rsplit_once(".e").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let is_branch = |op: &Op| {
+        matches!(
+            op,
+            Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
+        )
+    };
+    loop {
+        let graph = cfg(function);
+        let live = live_in(function, &graph);
+        let found = (0..function.blocks.len()).find_map(|edge| {
+            let block = &function.blocks[edge];
+            if !is_edge(&block.label) || graph.predecessors[edge].len() != 1 {
+                return None;
+            }
+            let from = graph.predecessors[edge][0];
+            let [Op::I(Inst::Branch { link: false, target: Target::Label(head) }), ..] =
+                &block.ops.iter().rev().take(1).cloned().collect::<Vec<_>>()[..]
+            else {
+                return None;
+            };
+            let copies = &block.ops[..block.ops.len() - 1];
+            if copies.is_empty() || !copies.iter().all(|op| matches!(op, Op::Copy { .. })) {
+                return None;
+            }
+            // The other successors must not need what the copies read or write,
+            // and the branches must not read what they write.
+            let others: Vec<usize> = graph.successors[from].iter().copied().filter(|&one| one != edge).collect();
+            if others.len() + 1 != graph.successors[from].len() || from == edge {
+                return None;
+            }
+            let defined: Vec<Reg> = copies.iter().flat_map(|op| op.defs_and_uses().0).collect();
+            // Only a back edge: `SplitPHIEdges` never splits one, and
+            // `MachineSink` never breaks it for a sink. Any other edge may
+            // still be one the sink lands a value on.
+            let back = function
+                .blocks
+                .iter()
+                .position(|one| one.label == *head)
+                .is_some_and(|header| dominates(&graph, header, from));
+            if !back {
+                return None;
+            }
+            let touched = defined.clone();
+            if others.iter().any(|&one| touched.iter().any(|reg| live[one].contains(reg))) {
+                return None;
+            }
+            let reads_defined = function.blocks[from]
+                .ops
+                .iter()
+                .filter(|op| is_branch(op))
+                .any(|op| op.defs_and_uses().1.iter().any(|reg| defined.contains(reg)));
+            if reads_defined {
+                return None;
+            }
+            Some((edge, from, head.clone()))
+        });
+        let Some((edge, from, head)) = found else { return };
+        let label = function.blocks[edge].label.clone();
+        let mut copies = std::mem::take(&mut function.blocks[edge].ops).into_iter().collect::<Vec<_>>();
+        copies.pop();
+        let ops = &mut function.blocks[from].ops;
+        for index in 0..ops.len() {
+            if let Op::I(
+                Inst::Branch { target, .. }
+                | Inst::BranchCond { target, .. }
+                | Inst::CompareBranch { target, .. }
+                | Inst::TestBranch { target, .. },
+            ) = ops.op_mut(index)
+            {
+                if *target == Target::Label(label.clone()) {
+                    *target = Target::Label(head.clone());
+                }
+            }
+        }
+        let at = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
+        for (offset, copy) in copies.into_iter().enumerate() {
+            ops.insert(at + offset, copy.0);
+        }
+        function.blocks.remove(edge);
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitORR`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp#L290>):
+/// `orr w, wzr, w` is how `zext i32 to i64` is made, and a 32-bit instruction
+/// already clears the upper half of its result, so the copy goes where the
+/// register it copies is the single result of such an instruction. Not
+/// translated: a source that is a copy of a float register (made an `fmov`).
+fn redundant_zero_extends(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let narrow_defs: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| clears_upper_half(op))
+        .filter_map(defined)
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::new();
+    for block in &mut function.blocks {
+        block.ops.retain(|op| {
+            let Op::I(Inst::LogicShifted {
+                op: Logic::Orr,
+                invert: false,
+                width: Width::W,
+                rd,
+                rn: Gpr::R31,
+                rm,
+                shift: Shift::Lsl,
+                amount: 0,
+            }) = op
+            else {
+                return true;
+            };
+            let (from, to) = (Reg::Gpr(*rd), Reg::Gpr(*rm));
+            if rd.is_virtual() && rm.is_virtual() && definitions.get(&from) == Some(&1) && narrow_defs.contains(&to) {
+                rename.insert(from, to);
+                return false;
+            }
+            true
+        });
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// Whether `op` is a 32-bit instruction (or a 32-bit constant) whose result
+/// register has its upper 32 bits cleared by the architecture.
+fn clears_upper_half(op: &Op) -> bool {
+    match op {
+        Op::Imm { bits: 32, .. } => true,
+        Op::I(
+            Inst::AddSubImm { width: Width::W, .. }
+            | Inst::AddSubShifted { width: Width::W, .. }
+            | Inst::AddSubExtended { width: Width::W, .. }
+            | Inst::LogicImm { width: Width::W, .. }
+            | Inst::LogicShifted { width: Width::W, .. }
+            | Inst::MoveWide { width: Width::W, .. }
+            | Inst::BitfieldMove { width: Width::W, .. }
+            | Inst::Extract { width: Width::W, .. }
+            | Inst::Divide { width: Width::W, .. }
+            | Inst::OneSource { width: Width::W, .. }
+            | Inst::ThreeSource { width: Width::W, .. }
+            | Inst::CondSelect { width: Width::W, .. },
+        ) => true,
+        _ => false,
     }
 }

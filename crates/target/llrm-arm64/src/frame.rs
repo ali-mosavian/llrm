@@ -282,6 +282,9 @@ pub fn lower(
                         Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
                     });
                 }
+                Op::JumpTable { dst, scratch, table, index, id, .. } => {
+                    emitter.insts.extend(crate::jumptable::dest32(&function.name, *id, *dst, *scratch, *table, *index));
+                }
                 Op::FrameAddress { dst, slot, offset } => {
                     let (base, total) = frame.place(*slot, *offset);
                     emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));

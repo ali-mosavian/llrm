@@ -237,6 +237,7 @@ impl Hooks for M68kLowering {
             arg_vt: dag.value_type(value),
             split: false,
             variadic: false,
+            sret: false,
         };
         // `getCopyToParts`: a 64-bit argument is two words, the high one
         // first on a big-endian target.
@@ -252,9 +253,13 @@ impl Hooks for M68kLowering {
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false };
+        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any };
         let wide = ret == EVT::I64;
-        let ins = if wide { vec![word, word] } else { vec![In { vt: ret, pointer: false, arg_vt: ret, split: false }] };
+        let ins = if wide {
+            vec![word, word]
+        } else {
+            vec![In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }]
+        };
         let (_chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &ins);
         if wide {
             // the high word in `d0`, the low in `d1`

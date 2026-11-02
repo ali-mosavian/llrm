@@ -206,6 +206,11 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
+    /// offset folds as a constant: it goes to the right of a commutative node
+    /// and reassociation moves it outermost. DEVIATE: off by default so x86's
+    /// rows stay as they are until the judge has seen them. Exit: x86 judged.
+    pub global_addresses_constant: bool,
     /// Every symbol is `dso_local`, as clang marks them under `-fno-pic`: an
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
@@ -235,6 +240,8 @@ pub struct DagConfig {
     /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
     /// other end.
     pub big_endian: bool,
+    /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
+    pub fma_faster: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -248,6 +255,7 @@ impl Default for DagConfig {
         DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
+            global_addresses_constant: false,
             dso_local_symbols: false,
             absolute_symbols: false,
             pointer: EVT::I32,
@@ -257,6 +265,7 @@ impl Default for DagConfig {
             fp_extended: false,
             known_bits_for_target_node: None,
             big_endian: false,
+            fma_faster: false,
         }
     }
 }
@@ -465,6 +474,17 @@ impl SelectionDAG {
         &self.config
     }
 
+    /// The jump table is position independent (`EK_LabelDifference32`, its
+    /// address a symbol operand folded into the jump's address): 64-bit code.
+    /// DEVIATE: the pin folds the table into the address at any width
+    /// ([`matchWrapper`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2022),
+    /// `jmpl *.LJTI0_0(,%eax,4)` at 32 bits). Reason: that changes the m16
+    /// and m32 output, which this change keeps as it was. Exit: the switch
+    /// lowering at m32 (x86-m32), 2026-11-20, with its own rows.
+    pub fn relative_jump_tables(&self) -> bool {
+        self.config.pointer == EVT::I64
+    }
+
     /// How many results of other nodes read `value`'s node (`use_size`).
     pub fn use_count(
         &self,
@@ -533,12 +553,16 @@ impl SelectionDAG {
         work.push(node);
         while let Some(n) = work.pop() {
             // Chain and glue nodes stay: the builder keeps handles on some
-            // (the pin protects them with `HandleSDNode`).
+            // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
+            // token factor goes like any node (`RemoveDeadNodes`): kept, it
+            // stays a user of its operands, `visitTokenFactor` cannot merge
+            // them and the chains nest past `GatherAllAliases` depth 18.
             if n == self.root.node
                 || n == self.entry.node
                 || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
-                || self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE)
+                || (self.nodes[n as usize].opcode != ISD::TokenFactor
+                    && self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE))
             {
                 continue;
             }

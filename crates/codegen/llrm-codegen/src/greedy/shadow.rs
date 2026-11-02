@@ -259,6 +259,15 @@ impl GreedyEnv for BodyEnv<'_> {
         self.tri.csr_spill_first()
     }
 
+    fn encoding_bytes(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+        phys: RegId,
+    ) -> i64 {
+        self.tii.encoding_bytes(insn, virt, phys)
+    }
+
     fn reg_cost(
         &self,
         phys: RegId,
