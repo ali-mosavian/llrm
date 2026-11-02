@@ -286,6 +286,45 @@ impl TargetCalling for M68kCalling {
     ) -> SDValue {
         M68kCalling::lower_return(self, dag, chain, outs)
     }
+
+    /// `LowerCall`'s sibcall: `TC_RETURN chain, callee, fpdiff`, for a direct
+    /// callee whose every argument is the caller's own, in the slot the callee
+    /// reads it from (`MatchingStackOffset`).
+    ///
+    /// DEVIATE: the pin also stores other arguments into the caller's
+    /// incoming slots (`IsEligibleForTailCallOptimization`, L1255); here such
+    /// a call stays a call. Exit: with those stores.
+    fn lower_tail_call(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+    ) -> Option<SDValue> {
+        let (offsets, _) = self.place(outs.len());
+        let forwarded = outs
+            .iter()
+            .zip(offsets)
+            .all(
+                |(out, offset)| {
+                    let NodeData::Mem(info) = dag.node(out.value).data else { return false };
+                    let MemBase::Stack(index) = info.base else { return false };
+                    dag.opcode(out.value) == ISD::Load
+                        && dag.value_type(out.value) == EVT::I32
+                        && dag.fixed_offsets.get(&index) == Some(&offset)
+                },
+            );
+        if !forwarded {
+            return None;
+        }
+        // a direct callee, already the target form (`callee` above)
+        let target = match dag.opcode(callee) {
+            ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode => callee,
+            _ => return None,
+        };
+        let fpdiff = dag.get_constant(0, EVT::I32);
+        Some(dag.get_node(m68kisd::TC_RETURN, EVT::OTHER, &[chain, target, fpdiff]))
+    }
 }
 
 /// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, the offset folded
