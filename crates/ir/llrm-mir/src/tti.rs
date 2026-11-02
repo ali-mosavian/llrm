@@ -348,6 +348,14 @@ pub trait Tti {
         false
     }
 
+    /// The fewest calls a callee has in the module for the bound above to hold
+    /// its sites (a callee called once is the pin's: the copy
+    /// meets constants the cost model follows, and folds with the sites around
+    /// it).
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        1
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a

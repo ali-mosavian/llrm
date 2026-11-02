@@ -583,7 +583,11 @@ impl Tti for X86 {
     /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
+    }
+
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) { 1 } else { 2 }
     }
 
     fn constant_offset_phi_is_cheap(&self) -> bool {

@@ -57,6 +57,12 @@ pub struct Tuning {
     /// also holds a caller optimized for speed; false: the pin's threshold
     /// alone decides there.
     pub inline_size_guard_at_speed: bool,
+    /// The inliner's D11 bound holds a caller optimized for size on this target
+    /// (the real-mode description's `inline_size_guard` is the same bound
+    /// at m16): a callee that stays is copied only if it does not grow the
+    /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
+    /// alone decides, which allows the growth.
+    pub inline_size_guard_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -83,6 +89,7 @@ impl Tuning {
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_speed: false,
+        inline_size_guard_at_size: false,
         keep_constant_displacements: false,
     };
 }

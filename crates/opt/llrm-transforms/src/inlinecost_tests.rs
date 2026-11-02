@@ -61,6 +61,7 @@ fn priced_with(
         callee,
         callee_id,
         sole_call_to_local: sole,
+        callee_calls: if sole { 1 } else { 2 },
         caller_recursive: false,
         caller_size: size,
         relative_frequency: None,
@@ -190,6 +191,64 @@ b0:
 "
     );
     assert_eq!(priced(&text, 0, false, CallerSize::OptSize).1, 75);
+}
+
+const COMPARE_LOOP: &str = "@dst = internal global [1200 x i8] zeroinitializer
+@ref = internal global [1200 x i8] zeroinitializer
+@bad = internal global i32 0
+declare void @report(i64)
+define internal void @callee(i32 %n) nounwind optsize {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %pa = getelementptr inbounds nuw i8, ptr @dst, i64 %i
+  %va = load i8, ptr %pa, align 1
+  %pb = getelementptr inbounds nuw i8, ptr @ref, i64 %i
+  %vb = load i8, ptr %pb, align 1
+  %differs = icmp ne i8 %va, %vb
+  %next = add nuw nsw i64 %i, 1
+  %end = icmp eq i64 %next, 1200
+  %stop = select i1 %differs, i1 true, i1 %end
+  br i1 %stop, label %exit, label %loop
+
+exit:
+  br i1 %differs, label %report, label %done
+
+report:
+  %wide = sext i32 %n to i64
+  tail call void @report(i64 noundef %wide) optsize
+  store i32 1, ptr @bad, align 4
+  br label %done
+
+done:
+  ret void
+}
+
+define void @f() {
+b0:
+  call void @callee(i32 noundef 1) optsize
+  call void @callee(i32 noundef 2) optsize
+  ret void
+}
+";
+
+/// D11 at the 64-bit target: an `optsize` caller does not copy a callee that
+/// stays when the copy grows the code, whatever the pin's threshold says (cost
+/// 45 against 50: the compare loop of memory_expansion's `check`, 186 sites,
+/// -Os m64 46045 -> 57303 B). Off: the pin's.
+#[test]
+fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_guards_size() {
+    let tti = |guard: bool| {
+        llrm_x86::tti::X86::of_cpu("x86-64")
+            .unwrap()
+            .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_size: guard, ..llrm_mir::target::Tuning::PIN })
+    };
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(false)));
+    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(true)));
+    assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
 /// An external callee that stays after the inline is not copied into an
@@ -368,6 +427,7 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             callee,
             callee_id,
             sole_call_to_local: false,
+            callee_calls: 2,
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
@@ -409,6 +469,7 @@ fn an_interposable_callee_is_not_inlined() {
             callee,
             callee_id,
             sole_call_to_local: false,
+            callee_calls: 2,
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
@@ -644,6 +705,7 @@ b0:
         callee,
         callee_id,
         sole_call_to_local: true,
+        callee_calls: 1,
         caller_recursive: false,
         caller_size: CallerSize::Speed,
         relative_frequency: None,
@@ -703,6 +765,7 @@ b0:
             callee,
             callee_id,
             sole_call_to_local: true,
+            callee_calls: 1,
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
