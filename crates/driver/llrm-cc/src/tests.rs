@@ -141,20 +141,42 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
     assert_eq!(args[last], "-mabi=regparm3");
 }
 
-#[test]
-fn the_opt_level_reaches_the_arm64_backend() {
-    // With `llc_level = false` on an arm64 row -O0..-Os never reached
-    // llrm-arm64-llc: a size or speed measured through llrm-cc at any level
-    // was the backend's default (arm64-linux and arm64-glibc ran every -O level
-    // through the -O2 mid-end: 116 qemu counts that were four copies of one).
-    let table = targets(TARGETS).unwrap();
-    for row in ["arm64-macos", "arm64-linux", "arm64-glibc"] {
-        for (flag, level) in [("-O0", "-O0"), ("-O1", "-O1"), ("-Os", "-Os")] {
-            let one = built(&format!("{flag} -c x.c"));
-            let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.o"));
-            assert_eq!(args.first().map(String::as_str), Some(level), "{row}: {args:?}");
+/// With `llc_level = false` on an arm64 row -O0..-Os never reached
+/// llrm-arm64-llc: arm64-linux and arm64-glibc ran every -O level through the
+/// -O2 mid-end (116 qemu counts that were four copies of one). A row that takes
+/// no level must say why.
+fn rows_dropping_the_level(table: &str) -> Vec<String> {
+    let table = targets(table).unwrap();
+    let mut bad = vec![];
+    for (name, row) in &table {
+        for level in ["-O0", "-O1", "-O2", "-Os"] {
+            let one = built(&format!("{level} -c x.c"));
+            let args = llc_args(row, &one, Path::new("x.ll"), Path::new("x.o"));
+            let reaches = args.first().map(String::as_str) == Some(level);
+            let reasoned = row.llc_level_reason.as_deref().is_some_and(|why| !why.is_empty());
+            if !reaches && !reasoned {
+                bad.push(format!("{name} at {level}: {args:?}"));
+            }
         }
     }
+    bad
+}
+
+#[test]
+fn the_opt_level_reaches_every_backend_or_the_row_says_why() {
+    let bad = rows_dropping_the_level(TARGETS);
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn a_row_without_a_level_and_without_a_reason_is_found() {
+    let at = TARGETS.find("[arm64-linux]").unwrap();
+    let (head, rest) = TARGETS.split_at(at);
+    let row = format!("{head}{}", rest.replacen("llc_level = true", "llc_level = false", 1));
+    let bad = rows_dropping_the_level(&row);
+    assert!(bad.iter().any(|line| line.starts_with("arm64-linux")), "{bad:#?}");
+    let said = row.replacen("llc_level = false", "llc_level = false\nllc_level_reason = \"takes no level\"", 1);
+    assert!(rows_dropping_the_level(&said).is_empty());
 }
 
 /// The Watcom front end's tests pass the backend's switches (`-march`,

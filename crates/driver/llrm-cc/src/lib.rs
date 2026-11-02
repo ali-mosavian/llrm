@@ -106,6 +106,8 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
