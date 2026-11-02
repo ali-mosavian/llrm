@@ -1305,3 +1305,28 @@ entry:
     assert!(names(true, false).iter().all(|n| n != "imul"), "-Os: a chain: {:?}", names(true, false));
     assert!(names(true, true).iter().any(|n| n == "imul"), "-Oz: one imul: {:?}", names(true, true));
 }
+
+/// `x % 5` at `minsize` (-Oz) on m64 was refused with
+/// `Emit(Unmapped("MOV64ImmSExti8"))`: the divisor of an `idiv` is a small
+/// constant, which `minsize` selects as `MOV64ImmSExti8`, and only the dword
+/// form was mapped. Every `-Oz` program with a quadword divide by a constant
+/// failed to compile.
+#[test]
+fn an_m64_divide_by_a_small_constant_is_selected_at_minsize() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i64 %x) minsize {
+entry:
+  %r = srem i64 %x, 5
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let mut cpu =
+        crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu").clone();
+    cpu.size = true;
+    cpu.min_size = true;
+    let done = selected(&module, "f", &llrm_x86_m64::M64, &cpu, &[]).unwrap_or_else(|e| panic!("{e:?}"));
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "idiv"), "the divide stays an idiv at minsize: {names:?}");
+}
