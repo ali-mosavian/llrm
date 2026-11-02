@@ -102,3 +102,40 @@ pub fn expand_mulo(
     };
     vec![bottom, dag.get_zext_or_trunc(overflow, result_type)]
 }
+
+/// `TargetLowering::expandSADDSUBO`: a signed add or subtract with overflow as
+/// the wrapped operation, whose result is compared with the saturating one
+/// where that is legal, else with a sign test of the operands and the result.
+pub fn expand_saddsubo(
+    dag: &mut SelectionDAG,
+    tli: &TargetLowering,
+    node: SDValue,
+) -> Vec<SDValue> {
+    let is_add = dag.opcode(node) == ISD::SAddO;
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let result_type = dag.value_type(SDValue { node: node.node, res: 1 });
+    let result = dag.get_node(if is_add { ISD::Add } else { ISD::Sub }, vt, &[lhs, rhs]);
+    let bool_vt = tli.types.set_cc_result_type(vt);
+
+    // If SADDSAT/SSUBSAT is legal, compare results to detect overflow.
+    let saturating = if is_add { ISD::SAddSat } else { ISD::SSubSat };
+    if tli.is_operation_legal(saturating, vt) {
+        let saturated = dag.get_node(saturating, vt, &[lhs, rhs]);
+        let differs = dag.get_setcc(bool_vt, result, saturated, CondCode::SetNe);
+        return vec![result, dag.get_zext_or_trunc(differs, result_type)];
+    }
+
+    let zero = dag.get_constant(0, vt);
+    let (first, second) = if is_add {
+        // The sum is below one operand if and only if the other is negative,
+        // else there was overflow.
+        (dag.get_setcc(bool_vt, rhs, zero, CondCode::SetLt), dag.get_setcc(bool_vt, result, lhs, CondCode::SetLt))
+    } else {
+        // For a difference, overflow is when the comparison of the operands
+        // does not match the sign of the result.
+        (dag.get_setcc(bool_vt, lhs, rhs, CondCode::SetLt), dag.get_setcc(bool_vt, result, zero, CondCode::SetLt))
+    };
+    let overflow = dag.get_node(ISD::Xor, bool_vt, &[first, second]);
+    vec![result, dag.get_zext_or_trunc(overflow, result_type)]
+}

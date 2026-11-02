@@ -227,6 +227,47 @@ fn an_unsigned_multiply_with_overflow_the_target_expands_is_a_shift_or_a_high_ha
     assert_eq!((cc, zero), (CondCode::SetNe, true));
 }
 
+/// A `SAddO` or `SSubO` the target expands was refused next ("convert node to
+/// libcall", Z80 `overflow_builtins`). `expandSADDSUBO`: the wrapped operation
+/// and two signed compares, of `rhs` with 0 and the sum with `lhs`, or of
+/// `lhs` with `rhs` and the difference with 0.
+#[test]
+fn a_signed_overflow_op_the_target_expands_is_the_wrapped_op_and_two_sign_compares() {
+    let i16 = EVT::Simple(MVT::I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::SAddO, ISD::SSubO] {
+        tli.set_operation_action(op, MVT::I16, Action::Expand);
+    }
+    // the opcodes reachable from the overflow bit, and the codes of its
+    // compares
+    let reached = |tli: &TargetLowering, op: ISD| {
+        let mut dag = dag();
+        let (a, b) = (dag.get_register(i16, 1), dag.get_register(i16, 2));
+        let both = dag.get_node_multi(op, &[i16, EVT::I8], &[a, b]);
+        dag.set_root(SDValue { node: both.node, res: 1 });
+        DagLegalizer::new(&mut dag, tli, &mut NoHooks).run().unwrap();
+        let (mut ops, mut codes, mut work) = (Vec::new(), Vec::new(), vec![dag.get_root()]);
+        while let Some(node) = work.pop() {
+            ops.push(dag.opcode(node));
+            if let NodeData::CondCode(cc) = dag.node(node).data {
+                codes.push(cc);
+            }
+            work.extend((0..dag.node(node).ops.len()).map(|at| dag.operand(node, at)));
+        }
+        (ops, codes)
+    };
+    // the saturating operation is legal: the sum differs from it
+    let (_, codes) = reached(&tli, ISD::SAddO);
+    assert_eq!(codes, [CondCode::SetNe]);
+    tli.set_operation_action(ISD::SAddSat, MVT::I16, Action::Expand);
+    tli.set_operation_action(ISD::SSubSat, MVT::I16, Action::Expand);
+    for (op, wrapped) in [(ISD::SAddO, ISD::Add), (ISD::SSubO, ISD::Sub)] {
+        let (ops, codes) = reached(&tli, op);
+        assert!(ops.contains(&wrapped) && !ops.contains(&op), "{ops:?}");
+        assert_eq!(codes.iter().filter(|cc| **cc == CondCode::SetLt).count(), 2, "{codes:?}");
+    }
+}
+
 /// `frem`, `fsin` and `lrint` marked `LibCall` were refused ("convert node to
 /// libcall"): only the two-operand integer routines were translated. The call
 /// takes every operand of the node, and `lrint` of a double returns an integer.
