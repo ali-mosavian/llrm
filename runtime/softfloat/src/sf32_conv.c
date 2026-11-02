@@ -4,7 +4,7 @@
 
 #define SIGN 0x80000000u
 
-/* m has three guard bits and its implicit one at bit 26 (same rounding as sf32.c). */
+/* Round to nearest even and pack (see softfloat.h). */
 sf32 sf32_pack(uint32_t sign, int e, uint32_t m)
 {
     if (e >= 255) return sign | 0x7F800000u;
@@ -23,8 +23,8 @@ static sf32 from_mag(uint32_t sign, uint32_t x)
     return sf32_pack(sign, n + 127, m);
 }
 
-sf32 sf32_from_u32(uint32_t x) { return from_mag(0, x); }
-sf32 sf32_from_i32(int32_t x) { return x < 0 ? from_mag(SIGN, 0u - (uint32_t)x) : from_mag(0, (uint32_t)x); }
+static sf32 from_u32_bits(uint32_t x) { return from_mag(0, x); }
+static sf32 from_i32_bits(int32_t x) { return x < 0 ? from_mag(SIGN, 0u - (uint32_t)x) : from_mag(0, (uint32_t)x); }
 
 /* |a| truncated; *big is set from 2^32 up, where the result saturates. */
 static uint32_t magnitude(sf32 a, int *big)
@@ -37,7 +37,7 @@ static uint32_t magnitude(sf32 a, int *big)
     return e >= 23 ? m << (e - 23) : m >> (23 - e);
 }
 
-int32_t sf32_to_i32(sf32 a)
+static int32_t to_i32_bits(sf32 a)
 {
     int big;
     uint32_t m = magnitude(a, &big);
@@ -46,10 +46,15 @@ int32_t sf32_to_i32(sf32 a)
     return (big || m > 0x7FFFFFFFu) ? INT32_MAX : (int32_t)m;
 }
 
-uint32_t sf32_to_u32(sf32 a)
+static uint32_t to_u32_bits(sf32 a)
 {
     int big;
     uint32_t m = magnitude(a, &big);
     if (((a << 1) > 0xFF000000u) || (a & SIGN)) return 0;
     return big ? UINT32_MAX : m;
 }
+
+float SF_NAME(floatsisf)(int32_t x) { return b2f(from_i32_bits(x)); }
+float SF_NAME(floatunsisf)(uint32_t x) { return b2f(from_u32_bits(x)); }
+int32_t SF_NAME(fixsfsi)(float a) { return to_i32_bits(f2b(a)); }
+uint32_t SF_NAME(fixunssfsi)(float a) { return to_u32_bits(f2b(a)); }

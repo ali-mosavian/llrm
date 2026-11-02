@@ -8,20 +8,6 @@
 
 static inline int is_nan(sf32 a) { return (a << 1) > (INF << 1); }
 
-/* e is a biased exponent that may be <= 0 (denormal) or >= 255 (overflow). */
-static sf32 round_pack(uint32_t sign, int e, uint32_t m)
-{
-    if (e >= 255) return sign | INF;
-    if (e <= 0) {
-        m = sf_shr_sticky32(m, 1 - e);
-        e = 1;
-    }
-    uint32_t r = m & 7;
-    m >>= 3;
-    if (r > 4 || (r == 4 && (m & 1))) m++;
-    return sign + ((uint32_t)(e - 1) << 23) + m;
-}
-
 /* Mantissa with three guard bits and exponent; denormals get e = 1, no implicit bit. */
 static inline uint32_t unpack(sf32 a, int *e)
 {
@@ -32,7 +18,7 @@ static inline uint32_t unpack(sf32 a, int *e)
     return m;
 }
 
-sf32 sf32_add(sf32 a, sf32 b)
+static sf32 add_bits(sf32 a, sf32 b)
 {
     if (((a << 1) >= (INF << 1)) | ((b << 1) >= (INF << 1))) {
         if (is_nan(a)) return a | 0x400000u;
@@ -60,12 +46,12 @@ sf32 sf32_add(sf32 a, sf32 b)
         m = ma + mb;
         if (m & (UINT32_C(1) << 27)) { m = sf_shr_sticky32(m, 1); ea++; }
     }
-    return round_pack(sign, ea, m);
+    return sf32_pack(sign, ea, m);
 }
 
-sf32 sf32_sub(sf32 a, sf32 b) { return sf32_add(a, b ^ SIGN); }
+static sf32 sub_bits(sf32 a, sf32 b) { return add_bits(a, b ^ SIGN); }
 
-sf32 sf32_mul(sf32 a, sf32 b)
+static sf32 mul_bits(sf32 a, sf32 b)
 {
     uint32_t sign = (a ^ b) & SIGN;
     if (((a << 1) >= (INF << 1)) | ((b << 1) >= (INF << 1))) {
@@ -85,10 +71,10 @@ sf32 sf32_mul(sf32 a, sf32 b)
     int e = ea + eb - 127, sh = 20;
     if (hi >> 15) { sh = 21; e++; }
     uint32_t m = (hi << (32 - sh)) | (lo >> sh) | ((lo << (32 - sh)) != 0);
-    return round_pack(sign, e, m);
+    return sf32_pack(sign, e, m);
 }
 
-sf32 sf32_div(sf32 a, sf32 b)
+static sf32 div_bits(sf32 a, sf32 b)
 {
     uint32_t sign = (a ^ b) & SIGN;
     if (((a << 1) >= (INF << 1)) | ((b << 1) >= (INF << 1))) {
@@ -112,10 +98,10 @@ sf32 sf32_div(sf32 a, sf32 b)
     }
     int e = ea - eb + 126;
     if (q >> 27) { q = (q >> 1) | (q & 1); e++; }
-    return round_pack(sign, e, q | (r != 0));
+    return sf32_pack(sign, e, q | (r != 0));
 }
 
-int sf32_cmp(sf32 a, sf32 b)
+static int cmp_bits(sf32 a, sf32 b)
 {
     if (is_nan(a) || is_nan(b)) return 2;
     if (!((a | b) << 1)) return 0;
@@ -124,3 +110,19 @@ int sf32_cmp(sf32 a, sf32 b)
     if (y < 0) y = (int32_t)SIGN - y;
     return x < y ? -1 : x > y;
 }
+
+float SF_NAME(addsf3)(float a, float b) { return b2f(add_bits(f2b(a), f2b(b))); }
+float SF_NAME(subsf3)(float a, float b) { return b2f(sub_bits(f2b(a), f2b(b))); }
+float SF_NAME(mulsf3)(float a, float b) { return b2f(mul_bits(f2b(a), f2b(b))); }
+float SF_NAME(divsf3)(float a, float b) { return b2f(div_bits(f2b(a), f2b(b))); }
+float SF_NAME(negsf2)(float a) { return b2f(f2b(a) ^ SIGN); }
+
+/* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt. */
+int SF_NAME(cmpsf2)(float a, float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? 1 : c; }
+int SF_NAME(eqsf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(nesf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(ltsf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(lesf2)(float a, float b) { return SF_NAME(cmpsf2)(a, b); }
+int SF_NAME(gesf2)(float a, float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? -1 : c; }
+int SF_NAME(gtsf2)(float a, float b) { return SF_NAME(gesf2)(a, b); }
+int SF_NAME(unordsf2)(float a, float b) { return cmp_bits(f2b(a), f2b(b)) == 2; }

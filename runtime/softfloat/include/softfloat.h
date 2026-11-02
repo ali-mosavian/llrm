@@ -1,33 +1,26 @@
-/* Soft-float runtime: bit-level entry points and the RTLIB names built on them. */
+/* Soft-float runtime. Every entry point carries its canonical compiler-rt/libgcc name
+ * (`__addsf3`, ...); SF_NAME(n) is `__n` in the runtime and `sfb_n` in the host test. */
 #ifndef SOFTFLOAT_H
 #define SOFTFLOAT_H
 
 #include <stdint.h>
 
+#ifndef SF_NAME
+#define SF_CAT(a, b) a##b
+#define SF_NAME(n) SF_CAT(__, n)
+#endif
+
 typedef uint32_t sf32;
 typedef uint64_t sf64;
 
 #define SF32_QNAN 0x7FC00000u
-#define SF64_QNAN 0x7FF8000000000000ull
 
-sf32 sf32_add(sf32 a, sf32 b);
-sf32 sf32_sub(sf32 a, sf32 b);
-sf32 sf32_mul(sf32 a, sf32 b);
-sf32 sf32_div(sf32 a, sf32 b);
-/* -1, 0, 1 ordered; 2 unordered. */
-int sf32_cmp(sf32 a, sf32 b);
+static inline sf32 f2b(float f) { union { float f; sf32 b; } u; u.f = f; return u.b; }
+static inline float b2f(sf32 b) { union { float f; sf32 b; } u; u.b = b; return u.f; }
+static inline sf64 d2b(double f) { union { double f; sf64 b; } u; u.f = f; return u.b; }
+static inline double b2d(sf64 b) { union { double f; sf64 b; } u; u.b = b; return u.f; }
 
-sf32 sf32_from_i32(int32_t x);
-sf32 sf32_from_u32(uint32_t x);
-sf32 sf32_from_i64(int64_t x);
-sf32 sf32_from_u64(uint64_t x);
-/* Toward zero; out of range saturates, NaN gives 0. */
-int32_t sf32_to_i32(sf32 a);
-uint32_t sf32_to_u32(sf32 a);
-int64_t sf32_to_i64(sf32 a);
-uint64_t sf32_to_u64(sf32 a);
-
-sf64 sf32_to_sf64(sf32 a);
-sf32 sf64_to_sf32(sf64 a);
+/* Round and pack: m has three guard bits and its implicit one at bit 26; e may be <= 0 or >= 255. */
+sf32 sf32_pack(uint32_t sign, int e, uint32_t m);
 
 #endif

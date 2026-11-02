@@ -1,6 +1,28 @@
 /* Bit-exact oracle: soft f32 vs the host FPU on edge classes and random sweeps.
- * cc -O2 -fno-fast-math -Iinclude tests/host_f32.c src/sf32.c src/sf32_conv.c */
+ * cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c src/sf32.c src/sf32_conv.c src/sf32_conv64.c */
+#define SF_NAME(n) sfb_##n
 #include "softfloat.h"
+float sfb_addsf3(float, float), sfb_subsf3(float, float), sfb_mulsf3(float, float), sfb_divsf3(float, float);
+int sfb_cmpsf2(float, float), sfb_unordsf2(float, float);
+float sfb_floatsisf(int32_t), sfb_floatunsisf(uint32_t), sfb_floatdisf(int64_t), sfb_floatundisf(uint64_t);
+int32_t sfb_fixsfsi(float); uint32_t sfb_fixunssfsi(float); int64_t sfb_fixsfdi(float); uint64_t sfb_fixunssfdi(float);
+double sfb_extendsfdf2(float); float sfb_truncdfsf2(double);
+#define sf32_add(a, b) f2b(sfb_addsf3(b2f(a), b2f(b)))
+#define sf32_sub(a, b) f2b(sfb_subsf3(b2f(a), b2f(b)))
+#define sf32_mul(a, b) f2b(sfb_mulsf3(b2f(a), b2f(b)))
+#define sf32_div(a, b) f2b(sfb_divsf3(b2f(a), b2f(b)))
+#define sf32_from_i32(x) f2b(sfb_floatsisf(x))
+#define sf32_from_u32(x) f2b(sfb_floatunsisf(x))
+#define sf32_from_i64(x) f2b(sfb_floatdisf(x))
+#define sf32_from_u64(x) f2b(sfb_floatundisf(x))
+#define sf32_to_i32(a) sfb_fixsfsi(b2f(a))
+#define sf32_to_u32(a) sfb_fixunssfsi(b2f(a))
+#define sf32_to_i64(a) sfb_fixsfdi(b2f(a))
+#define sf32_to_u64(a) sfb_fixunssfdi(b2f(a))
+#define sf32_to_sf64(a) d2b(sfb_extendsfdf2(b2f(a)))
+#define sf64_to_sf32(a) f2b(sfb_truncdfsf2(b2d(a)))
+/* compare: ordered result from __cmpsf2, unordered from __unordsf2 */
+static int sf32_cmp(uint32_t a, uint32_t b) { return sfb_unordsf2(b2f(a), b2f(b)) ? 2 : sfb_cmpsf2(b2f(a), b2f(b)); }
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,10 +34,6 @@ static uint32_t rnd(void)
     return (uint32_t)(rng >> 16);
 }
 
-static float b2f(uint32_t b) { float f; memcpy(&f, &b, 4); return f; }
-static uint32_t f2b(float f) { uint32_t b; memcpy(&b, &f, 4); return b; }
-static double b2d(uint64_t b) { double f; memcpy(&f, &b, 8); return f; }
-static uint64_t d2b(double f) { uint64_t b; memcpy(&b, &f, 8); return b; }
 static int nan32(uint32_t b) { return (b << 1) > 0xFF000000u; }
 static int nan64(uint64_t b) { return (b << 1) > 0xFFE0000000000000ull; }
 

@@ -4,7 +4,6 @@
 
 #define SIGN 0x80000000u
 
-sf32 sf32_pack(uint32_t sign, int e, uint32_t m);
 
 static sf32 from_mag(uint32_t sign, uint64_t u)
 {
@@ -14,8 +13,8 @@ static sf32 from_mag(uint32_t sign, uint64_t u)
     return sf32_pack(sign, n + 127, m);
 }
 
-sf32 sf32_from_u64(uint64_t x) { return from_mag(0, x); }
-sf32 sf32_from_i64(int64_t x) { return x < 0 ? from_mag(SIGN, 0ull - (uint64_t)x) : from_mag(0, (uint64_t)x); }
+static sf32 from_u64_bits(uint64_t x) { return from_mag(0, x); }
+static sf32 from_i64_bits(int64_t x) { return x < 0 ? from_mag(SIGN, 0ull - (uint64_t)x) : from_mag(0, (uint64_t)x); }
 
 /* |a| truncated; *big is set from 2^64 up. */
 static uint64_t magnitude(sf32 a, int *big)
@@ -28,7 +27,7 @@ static uint64_t magnitude(sf32 a, int *big)
     return e >= 23 ? m << (e - 23) : m >> (23 - e);
 }
 
-int64_t sf32_to_i64(sf32 a)
+static int64_t to_i64_bits(sf32 a)
 {
     int big;
     uint64_t m = magnitude(a, &big);
@@ -37,7 +36,7 @@ int64_t sf32_to_i64(sf32 a)
     return (big || m > 0x7FFFFFFFFFFFFFFFull) ? INT64_MAX : (int64_t)m;
 }
 
-uint64_t sf32_to_u64(sf32 a)
+static uint64_t to_u64_bits(sf32 a)
 {
     int big;
     uint64_t m = magnitude(a, &big);
@@ -45,7 +44,7 @@ uint64_t sf32_to_u64(sf32 a)
     return big ? UINT64_MAX : m;
 }
 
-sf64 sf32_to_sf64(sf32 a)
+static sf64 ext_bits(sf32 a)
 {
     uint64_t sign = (uint64_t)(a & SIGN) << 32;
     int e = (a >> 23) & 0xFF;
@@ -60,7 +59,7 @@ sf64 sf32_to_sf64(sf32 a)
     return sign | ((uint64_t)(e + 896) << 52) | (m << 29);
 }
 
-sf32 sf64_to_sf32(sf64 a)
+static sf32 trunc_bits(sf64 a)
 {
     uint32_t sign = (uint32_t)(a >> 32) & SIGN;
     int e = (int)((a >> 52) & 0x7FF);
@@ -70,3 +69,10 @@ sf32 sf64_to_sf32(sf64 a)
     m |= 1ull << 52;
     return sf32_pack(sign, e - 896, (uint32_t)sf_shr_sticky64(m, 26));
 }
+
+float SF_NAME(floatdisf)(int64_t x) { return b2f(from_i64_bits(x)); }
+float SF_NAME(floatundisf)(uint64_t x) { return b2f(from_u64_bits(x)); }
+int64_t SF_NAME(fixsfdi)(float a) { return to_i64_bits(f2b(a)); }
+uint64_t SF_NAME(fixunssfdi)(float a) { return to_u64_bits(f2b(a)); }
+double SF_NAME(extendsfdf2)(float a) { return b2d(ext_bits(f2b(a))); }
+float SF_NAME(truncdfsf2)(double a) { return b2f(trunc_bits(d2b(a))); }
