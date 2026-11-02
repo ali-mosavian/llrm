@@ -305,7 +305,7 @@ fn coalesce(function: &mut MFunc) {
 /// so does every register a copy ties to one. Such a register is spilled and
 /// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
 /// never takes one.
-fn wide_registers(function: &MFunc) -> HashSet<Reg> {
+pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
     let mut wide: HashSet<Reg> = HashSet::new();
     let mut copies: Vec<(Reg, Reg)> = Vec::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
@@ -806,7 +806,7 @@ fn spilled_copy(
     }
 }
 
-fn spill_access(
+pub(crate) fn spill_access(
     register: Reg,
     slot: u32,
     load: bool,

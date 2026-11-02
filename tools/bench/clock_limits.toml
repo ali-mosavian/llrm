@@ -4,29 +4,29 @@
 # nib and c rows rest on the bas check that the harness reproduces main's clocks (36 of 36).
 [clocks]
 
-# class 0: not yet attributed: DEBT bench-clocks-unattributed
+# class 0: not yet attributed: DEBT bench-clocks-unattributed; owner: llrm-target-x86-m16; due 2026-11-06
 "parity/algebra bas -Os" = 274  # main 265
 "parity/sum_three nib -Os" = 129  # main 123
 "particle c -Os" = 169089  # main 168983
 "recsum c -Os" = 82039  # main 82036
 
-# class 1: LSR default (7ee16741c1 class), ablation candidate, first-bad TBD: DEBT bench-clocks-lsr-default
+# class 1: LSR default (7ee16741c1 class), ablation candidate, first-bad TBD: DEBT bench-clocks-lsr-default; owner: w12; due 2026-11-06
 "sieve bas -Os" = 46421  # main 33601
 "sieve c -Os" = 28706  # main 24556
 "sieve nib -Os" = 29274  # main 24538
 
-# class 2: loop-header copy (tree-ch), ablation candidate, first-bad TBD: DEBT bench-clocks-loop-header-copy
+# class 2: loop-header copy (tree-ch), ablation candidate, first-bad TBD: DEBT bench-clocks-loop-header-copy; owner: w12; due 2026-11-06
 "lru c -Os" = 289  # main 279
 "lru nib -Os" = 659  # main 571
 "ring bas -Os" = 76022  # main 74990
 "shellsort c -Os" = 16576  # main 14989
 
-# class 3: PRE / loop-header copy, ablation candidate, first-bad TBD: DEBT bench-clocks-pre
+# class 3: PRE / loop-header copy, ablation candidate, first-bad TBD: DEBT bench-clocks-pre; owner: w12; due 2026-11-06
 "quicksort c -Os" = 325239  # main 309284
 "quicksort nib -Os" = 350344  # main 316122; owner w12: slice-by-value moves a live value (card in the fix queue)
 "recfloat c -Os" = 50104  # main 47103
 
-# class 4: float rows: QB standard-precision default is deliberate (BC); compare like with like (bas rows: main under the same flag; nib rows: fast, as main): DEBT bench-clocks-float
+# class 4: float rows: QB standard-precision default is deliberate (BC); compare like with like (bas rows: main under the same flag; nib rows: fast, as main): DEBT bench-clocks-float; owner: llrm-target-x87; due 2026-11-06
 "fpbench c -Os" = 156214  # main 156169
 "mandel bas -Os" = 1140119  # main 1108365
 "mandel nib -Os" = 842924  # main 833809
@@ -34,7 +34,7 @@
 "nbody c -Os" = 371703  # main 358692
 "nbody nib -Os" = 371478  # main 357111
 
-# class 5: DAG selection, rows that fall below main under --isel=old: DEBT bench-clocks-dag-isel
+# class 5: DAG selection, rows that fall below main under --isel=old: DEBT bench-clocks-dag-isel; owner: w2 (llrm-w2-memops); due 2026-11-06
 "fib bas -Os" = 1313485  # main 1116464
 "hanoi bas -Os" = 1130452  # main 1040343
 "matmul c -Os" = 21851  # main 20480
@@ -49,7 +49,7 @@
 "parity/qmove bas -Os" = 506  # main 477 (standard)
 "parity/sum_three bas -Os" = 169  # main 165
 
-# class 6: masked scaled IV (pin SCEV does not move shl through the mask) and the LSR formula sharing it: DEBT bench-clocks-masked-iv
+# class 6: masked scaled IV (pin SCEV does not move shl through the mask) and the LSR formula sharing it: DEBT bench-clocks-masked-iv; owner: w12; due 2026-11-06
 "textfill c -Os" = 60021  # main 58025
 "textfill bas -Os" = 60161  # main 58189; the alias loads are hoisted since #6212, the rest is the c row's masked IV (same +1.97k); owner w12 LSR4
 "tile bas -Os" = 10277  # main 10196
@@ -60,16 +60,16 @@
 "particle bas -Os" = 309246  # main 280330
 "particle nib -Os" = 238202  # main 228221
 
-# class 7 fill idiom: pin makes memset only for byte patterns, a 16-bit fill stays a counted loop: DEBT bench-clocks-fill-idiom-stosw
+# class 7 fill idiom: pin makes memset only for byte patterns, a 16-bit fill stays a counted loop: DEBT bench-clocks-fill-idiom-stosw; owner: w2; due open
 "scroll c -Os" = 687174  # main 668279
 
-# class 8 call-result add order: the 4th call result goes to a second stack slot instead of the first: DEBT bench-clocks-call-result-add-order
+# class 8 call-result add order: the 4th call result goes to a second stack slot instead of the first: DEBT bench-clocks-call-result-add-order; owner: w10 (llrm-w10-instcombine); due 2026-11-06
 "parity/qlight bas -Os" = 622  # main 605
 "parity/qlight c -Os" = 534  # main 516
 
-# class 9 imul-const / les: 3 imul and 2 les where main has 2 imul + lea and 2 movs, fewer insns, more clocks: DEBT bench-clocks-imul-const-les
+# class 9 imul-const / les: 3 imul and 2 les where main has 2 imul + lea and 2 movs, fewer insns, more clocks: DEBT bench-clocks-imul-const-les; owner: w2; due 2026-11-06
 "bintree bas -Os" = 419162  # main 407346
 
-# class 10 gcse (-fno-gcse recovers the qmove rows): DEBT bench-clocks-gcse
+# class 10 gcse (-fno-gcse recovers the qmove rows): DEBT bench-clocks-gcse; owner: w10; due 2026-11-06
 "parity/qmove c -Os" = 485  # main 465
 "parity/qmove nib -Os" = 520  # main 503
