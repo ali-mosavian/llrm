@@ -25,6 +25,7 @@ fn x86_real() -> llrm_x86::tti::X86 {
                 registers: 6,
                 scaled_index_insns: 0,
                 huge_space: None,
+                address_registers: None,
                 inline_size_guard: true,
                 float_code_size_percent: 100,
                 unroll_size_few_trips: (0, 0),

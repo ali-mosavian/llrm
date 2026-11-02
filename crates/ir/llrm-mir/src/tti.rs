@@ -768,6 +768,13 @@ pub trait Tti {
         false
     }
 
+    /// The registers an address can be formed from by the target's cheapest
+    /// address form (m16: bx, si, di); the general registers where any
+    /// register serves.
+    fn address_registers(&self) -> u32 {
+        self.number_of_gpr_registers()
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {

@@ -75,6 +75,10 @@ pub struct RealMode {
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
+    /// Registers the target's cheapest address form can name (a base and an
+    /// index of its classes, the frame's excluded); none: any general
+    /// register.
+    pub address_registers: Option<u32>,
     /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
     /// stays is inlined into an `optsize` caller only if its code does not
     /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
@@ -1009,6 +1013,13 @@ impl Tti for X86 {
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    fn address_registers(&self) -> u32 {
+        self.real_mode
+            .as_ref()
+            .and_then(|real| real.address_registers)
+            .unwrap_or_else(|| self.number_of_gpr_registers())
     }
 
     fn scaled_index_insns(&self) -> u32 {

@@ -341,6 +341,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
             registers: 6,
             scaled_index_insns: 2,
             huge_space: None,
+            address_registers: None,
             inline_size_guard: false,
             float_code_size_percent: 100,
             unroll_size_few_trips: (0, 0),
