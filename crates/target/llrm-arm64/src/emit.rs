@@ -87,6 +87,7 @@ impl Symbols {
             definition: Definition::Defined { section, offset },
             size,
             group: None,
+            visibility: Default::default(),
         });
     }
 
@@ -105,6 +106,7 @@ impl Symbols {
             definition: Definition::Undefined,
             size: 0,
             group: None,
+            visibility: Default::default(),
         });
         self.list.len() - 1
     }

@@ -629,6 +629,7 @@ fn written_basic_inner(
                     definition: llrm_object::Definition::Defined { section: code, offset: 0 },
                     size: header_size,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
         return objbuild::serialized(objects, &object, format).map_err(|error| error.to_string());

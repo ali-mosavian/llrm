@@ -87,11 +87,19 @@ fn defined(
         definition: Definition::Defined { section, offset },
         size: 0,
         group: None,
+        visibility: Default::default(),
     }
 }
 
 fn external(name: &str) -> Symbol {
-    Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, size: 0, group: None }
+    Symbol {
+        name: name.into(),
+        binding: Binding::Public,
+        definition: Definition::Undefined,
+        size: 0,
+        group: None,
+        visibility: Default::default(),
+    }
 }
 
 fn reloc(
@@ -392,6 +400,7 @@ fn ld64_links_it_with_a_clang_object() {
                 definition: Definition::Defined { section: 1, offset: 0 },
                 size: 0,
                 group: None,
+                visibility: Default::default(),
             },
         ],
         omf_groups: Vec::new(),

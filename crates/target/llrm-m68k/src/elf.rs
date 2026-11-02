@@ -202,6 +202,7 @@ fn place(
             definition: Definition::Defined { section: 0, offset: *offset },
             size,
             group: None,
+            visibility: Default::default(),
         });
     }
     let mut relocs = Vec::new();
@@ -223,6 +224,7 @@ fn place(
                             definition: Definition::Undefined,
                             size: 0,
                             group: None,
+                            visibility: Default::default(),
                         });
                         symbols.len() - 1
                     },

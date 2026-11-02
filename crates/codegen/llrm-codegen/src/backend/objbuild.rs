@@ -1303,6 +1303,7 @@ pub fn object_of(
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
+            visibility: Default::default(),
         })
         .collect();
     // Data an object does not define is addressed in the group as its own data
@@ -1313,6 +1314,7 @@ pub fn object_of(
         definition: Definition::Undefined,
         size: 0,
         group: (externs[*name] == "byte").then_some(0),
+        visibility: Default::default(),
     }));
     let index: IndexMap<String, usize> =
         table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
