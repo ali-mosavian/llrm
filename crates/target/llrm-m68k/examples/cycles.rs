@@ -189,7 +189,9 @@ fn assembled(
     std::fs::write(&input, ir).unwrap();
     let asm = dir.join("llc.s");
     let status = Command::new(llc)
-        .args(["-S", "-mcpu=68000", if size { "-Os" } else { "-O2" }, "-o"])
+        .args(["-S", "-mcpu=68000"])
+        .arg(std::env::var("CYCLES_LLC_LEVEL").unwrap_or_else(|_| (if size { "-Os" } else { "-O2" }).to_owned()))
+        .arg("-o")
         .arg(&asm)
         .arg(&input)
         .status()
