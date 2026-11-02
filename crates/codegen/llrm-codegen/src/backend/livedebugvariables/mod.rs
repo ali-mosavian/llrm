@@ -68,9 +68,6 @@ pub struct Located {
     pub start: i64,
     pub end: i64,
     pub at: Where,
-    /// The value was in `at` before `start` (a note placed before an
-    /// instruction, not a value that instruction defines).
-    pub held: bool,
 }
 
 /// The ranges of every variable. `segments` gives each value's stretches
@@ -103,13 +100,13 @@ pub fn locate(
             if start >= stop {
                 continue;
             }
-            let mut push = |from: i64, end: i64, at: Where, held: bool| {
-                if from < end {
-                    out.push(Located { variable, piece, start: from, end, at, held });
+            let mut push = |start: i64, end: i64, at: Where| {
+                if start < end {
+                    out.push(Located { variable, piece, start, end, at });
                 }
             };
             match &note.value {
-                NoteValue::Constant(value) => push(start, stop, Where::Constant(*value), false),
+                NoteValue::Constant(value) => push(start, stop, Where::Constant(*value)),
                 NoteValue::Value(_) | NoteValue::Offset(..) | NoteValue::Arrived(..) | NoteValue::Expr(_) => {
                     let (value, add, gap, lead) = match &note.value {
                         NoteValue::Value(value) => (*value, None, Where::Undef, Where::Undef),
@@ -123,7 +120,7 @@ pub fn locate(
                         NoteValue::Expr(expr) => match (expr.args.as_slice(), expr.ops.is_empty()) {
                             ([NoteArg::Value(value)], true) if expr.value => (*value, None, Where::Undef, Where::Undef),
                             _ => {
-                                push(start, stop, Where::Undef, false);
+                                push(start, stop, Where::Undef);
                                 continue;
                             }
                         },
@@ -135,18 +132,17 @@ pub fn locate(
                         if low >= high {
                             continue;
                         }
-                        push(from, low, if from == start { lead } else { gap }, from == start && matches!(lead, Where::Place(_)));
+                        push(from, low, if from == start { lead } else { gap });
                         push(
                             low,
                             high,
                             add.map_or(Where::Place(segment.place), |add| Where::Offset(segment.place, add)),
-                            low == start && segment.start < start,
                         );
                         from = high;
                     }
-                    push(from, stop, if from == start { lead } else { gap }, from == start && matches!(lead, Where::Place(_)));
+                    push(from, stop, if from == start { lead } else { gap });
                 }
-                _ => push(start, stop, Where::Undef, false),
+                _ => push(start, stop, Where::Undef),
             }
         }
     }
