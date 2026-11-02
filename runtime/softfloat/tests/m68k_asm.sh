@@ -1,5 +1,5 @@
 #!/bin/sh
-# Hand-written m68k f32 routines (src/m68k/sf32.s) with gcc-built conversions (sf32_conv.c, int32.c).
+# Hand-written m68k f32 routines (src/m68k/sf32.s), gcc-built int32.c.
 #   tests/m68k_asm.sh run CPU [n] [main.c]   check against host-FPU vectors under qemu-m68k (default main: m68k_main.c)
 #     GEN=tests/gen_vectors_edge.c: operands aimed at the rare paths
 #   tests/m68k_asm.sh clocks CPU OUT [vectors.h]   one exe per op (m68k_clocks.c -DOP=0..4) in OUT, priced with `cycles --exe`
@@ -15,8 +15,8 @@ DEF=; [ "$CPU" = 68000 ] || DEF="--defsym M68020=1"
 $B-as -m$CPU $DEF -o $T/sf32.o src/m68k/sf32.s
 [ "$MODE" = obj ] && { cp $T/sf32.o "$3"; exit 0; }
 CF="-m$CPU -msoft-float -O2 -nostdlib -static -ffreestanding -Iinclude -I$T"
-for f in sf32_conv int32; do $B-gcc $CF -c src/$f.c -o $T/$f.o; done
-LIB="$T/sf32.o $T/sf32_conv.o $T/int32.o"
+for f in int32; do $B-gcc $CF -c src/$f.c -o $T/$f.o; done
+LIB="$T/sf32.o $T/int32.o"
 if [ "$MODE" = clocks ]; then
   O=$3; mkdir -p $O
   if [ -n "$4" ]; then cp "$4" $T/vectors.h; else cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen 3000 > $T/vectors.h; fi

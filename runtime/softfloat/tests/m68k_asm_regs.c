@@ -4,7 +4,9 @@
 
 float __addsf3(float, float), __subsf3(float, float), __mulsf3(float, float), __divsf3(float, float), __negsf2(float);
 int __cmpsf2(float, float), __eqsf2(float, float), __nesf2(float, float), __ltsf2(float, float), __lesf2(float, float),
-    __gesf2(float, float), __gtsf2(float, float), __unordsf2(float, float);
+    __gesf2(float, float), __gtsf2(float, float), __unordsf2(float, float), __fixsfsi(float);
+float __floatsisf(int32_t), __floatunsisf(uint32_t);
+uint32_t __fixunssfsi(float);
 
 /* h_canary(fn, a, b): calls fn(a, b) with d2-d7/a2-a6 set to known words; returns 0 if all came back. */
 long h_canary(void *fn, uint32_t a, uint32_t b);
@@ -35,7 +37,8 @@ int main(void)
     static const uint32_t v[] = {0, 0x80000000, 1, 0x807FFFFF, 0x00400001, 0x3F800000, 0xBF800001, 0x3F800003, 0x4B000001,
                                  0x7F7FFFFF, 0xFF000000, 0x00800000, 0x0C000000, 0x33800000, 0x7F800000, 0xFF800000, 0x7FC00000, 0x7F800001};
     static void *const fn[] = {__addsf3, __subsf3, __mulsf3, __divsf3, __negsf2, __cmpsf2, __eqsf2, __nesf2,
-                               __ltsf2, __lesf2, __gesf2, __gtsf2, __unordsf2};
+                               __ltsf2, __lesf2, __gesf2, __gtsf2, __unordsf2,
+                               __floatsisf, __floatunsisf, __fixsfsi, __fixunssfsi};
     const int nv = sizeof v / sizeof *v, nf = sizeof fn / sizeof *fn;
     int bad = 0;
     for (int f = 0; f < nf; f++)

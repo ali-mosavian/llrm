@@ -395,15 +395,20 @@ __mulsf3:
 .Lslow:					| e - 1 outside 0..253
 	cmp.w	#254,%d2
 	bge.s	.Linf
-	neg.w	%d2			| 1 - e: denormal shift
+	neg.w	%d2			| k = 1 - e: denormal shift of d0:d1, sticky
 	cmp.w	#25,%d2
 	bge.s	.Lzero
-	subq.w	#1,%d2
-1:	lsr.l	#1,%d0
-	roxr.l	#1,%d1
-	bcc.s	2f
-	bset	#0,%d1
-2:	dbra	%d2,1b
+	move.l	%d1,%d3
+	lsr.l	%d2,%d1
+	ror.l	%d2,%d3
+	eor.l	%d1,%d3			| guard bits shifted out
+	sne	%d3
+	or.b	%d3,%d1
+	move.l	%d0,%d3
+	lsr.l	%d2,%d0
+	ror.l	%d2,%d3
+	eor.l	%d0,%d3			| m's low k bits, top aligned (k <= 24: above the low byte)
+	or.l	%d3,%d1
 	moveq	#0,%d2
 	bra.s	.Lpack
 .Linf:
@@ -579,3 +584,130 @@ __divsf3:
 
 	denorm	.Ldspec, .Lda1, .Ldb1
 	.size	__divsf3,.-__divsf3
+
+| ---- conversions: int to float rounds to nearest even; float to int truncates, saturates, NaN gives 0 ----
+
+	.globl	__floatunsisf
+	.type	__floatunsisf,@function
+__floatunsisf:
+	move.l	4(%sp),%d0
+	beq.s	.Lirt
+	sub.l	%a0,%a0			| sign
+	bra.s	.Lint
+	.size	__floatunsisf,.-__floatunsisf
+
+	.globl	__floatsisf
+	.type	__floatsisf,@function
+__floatsisf:
+	move.l	4(%sp),%d0
+	beq.s	.Lirt
+	move.l	%d0,%a0			| sign
+	bpl.s	.Lint
+	neg.l	%d0
+.Lint:					| d0 = |x| != 0: top-align it, field - 1 = 157 - shift
+.ifdef M68020
+	bfffo	%d0{#0:#0},%d1
+	lsl.l	%d1,%d0
+	neg.w	%d1
+	add.w	#157,%d1
+	ext.l	%d1
+	lsl.w	#7,%d1
+.else
+	move.l	#157<<7,%d1
+	cmp.l	#0x10000,%d0
+	bcc.s	1f
+	swap	%d0
+	sub.w	#16<<7,%d1
+1:	cmp.l	#0x1000000,%d0
+	bcc.s	2f
+	lsl.l	#8,%d0
+	sub.w	#8<<7,%d1
+2:	tst.l	%d0
+	bmi.s	4f
+3:	sub.w	#1<<7,%d1
+	add.l	%d0,%d0
+	bpl.s	3b
+4:
+.endif
+	swap	%d1			| (field - 1) << 23
+	move.l	%d0,%a1
+	lsr.l	#8,%d0
+	add.l	%d1,%d0
+	move.l	%a1,%d1
+	add.b	%d1,%d1			| C: round bit, Z: no sticky
+	bcc.s	6f
+	bne.s	5f
+	btst	#0,%d0
+	beq.s	6f
+5:	addq.l	#1,%d0
+6:	move.l	%a0,%d1
+	bpl.s	.Lirt
+	bset	#31,%d0
+.Lirt:
+	rts
+	.size	__floatsisf,.-__floatsisf
+
+	.globl	__fixunssfsi
+	.type	__fixunssfsi,@function
+__fixunssfsi:
+	move.l	4(%sp),%d0
+	bmi	.Lfz			| negative (and -NaN): 0
+	move.l	%d0,%d1
+	swap	%d1
+	lsr.w	#7,%d1
+	sub.w	#127,%d1		| e
+	blt.s	.Lfz
+	cmp.w	#32,%d1
+	bge.s	1f
+	and.l	#0x7FFFFF,%d0
+	bset	#23,%d0
+	sub.w	#23,%d1
+	bge.s	.Lfl
+	neg.w	%d1
+	lsr.l	%d1,%d0
+	rts
+1:	cmp.l	#0x7F800000,%d0
+	bhi.s	.Lfz			| NaN
+	moveq	#-1,%d0
+	rts
+	.size	__fixunssfsi,.-__fixunssfsi
+
+	.globl	__fixsfsi
+	.type	__fixsfsi,@function
+__fixsfsi:
+	move.l	4(%sp),%d0
+	move.l	%d0,%a0			| sign
+	move.l	%d0,%d1
+	add.l	%d1,%d1
+	cmp.l	#0xFF000000,%d1
+	bhi.s	.Lfz			| NaN
+	swap	%d1
+	lsr.w	#8,%d1
+	sub.w	#127,%d1		| e
+	blt.s	.Lfz
+	cmp.w	#31,%d1
+	bge.s	1f
+	and.l	#0x7FFFFF,%d0
+	bset	#23,%d0
+	sub.w	#23,%d1
+	bge.s	2f
+	neg.w	%d1
+	lsr.l	%d1,%d0
+	bra.s	3f
+2:	lsl.l	%d1,%d0
+3:	move.l	%a0,%d1
+	bpl.s	4f
+	neg.l	%d0
+4:	rts
+1:	move.l	#0x7FFFFFFF,%d0		| saturate: 2^31 and up
+	move.l	%a0,%d1
+	bpl.s	4b
+	addq.l	#1,%d0
+	rts
+.Lfl:
+	lsl.l	%d1,%d0
+	rts
+.Lfz:
+	moveq	#0,%d0
+	rts
+	.size	__fixsfsi,.-__fixsfsi

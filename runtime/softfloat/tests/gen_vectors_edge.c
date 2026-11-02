@@ -1,6 +1,6 @@
 /* Like gen_vectors.c, but the operands target the hand-written m68k paths that random bits rarely reach:
  * divide digits whose top halves match (qhat = 0xFFFF), add carries into inf, exact ties, x - x, exponent gaps 24..27,
- * denormal results from mul/div (ties included), and overflow at the largest finite value.
+ * denormal results from mul/div (ties included), overflow at the largest finite value, and int to float ties.
  * cc -O2 -ffp-contract=off tests/gen_vectors_edge.c -o gen && ./gen [n] > vectors.h */
 #include <stdint.h>
 #include <stdio.h>
@@ -26,7 +26,7 @@ static int div_digit_overflow(uint32_t ma, uint32_t mb, int k)
 static void pair(uint32_t *a, uint32_t *b)
 {
     uint32_t s1 = rnd() & 1, s2 = rnd() & 1, e = 1 + rnd() % 253, m = rnd(), m2 = rnd();
-    switch (rnd() % 10) {
+    switch (rnd() % 11) {
     case 0: /* divide digit 1 or 2 with equal top halves */
         for (int k = 1 + (rnd() & 1);;) {
             uint32_t ma = 0x800000 | (rnd() & 0x7FFFFF), mb = 0x800000 | (rnd() & 0x7FFFFF);
@@ -49,6 +49,8 @@ static void pair(uint32_t *a, uint32_t *b)
         *a = mk(s1, 0, 1u << (rnd() % 23) | (rnd() & 1)), *b = mk(s2, rnd() & 255, m2); if (rnd() & 1) { uint32_t t = *a; *a = *b; *b = t; } return;
     case 8: /* cancellation: equal or adjacent exponents, close mantissas */
         *a = mk(s1, e, m), *b = mk(s2, e - (rnd() & 1), m + (rnd() % 7) - 3); return;
+    case 9: /* int to float ties and their neighbours: 25 significant bits shifted up to the top */
+        { uint32_t t = (0x1000000 | (rnd() & 0xFFFFFF)) | 1; int sh = rnd() % 8; *a = (t << sh) + (rnd() % 3 == 0 ? (rnd() & 1 ? 1u : -1u) : 0); *b = mk(s2, e, m2); return; }
     default: /* inf, NaN, zero against anything */
         { static const uint32_t sp[] = {0x7F800000, 0xFF800000, 0x7FC00000, 0x7F800001, 0xFFFFFFFF, 0, 0x80000000, 1};
           *a = sp[rnd() % 8], *b = rnd() % 3 ? sp[rnd() % 8] : mk(s2, e, m2); if (rnd() & 1) { uint32_t t = *a; *a = *b; *b = t; } }
