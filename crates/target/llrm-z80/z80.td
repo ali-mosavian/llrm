@@ -34,6 +34,7 @@ def ACC : RegisterClass<"Z80", [i8], 8, (add A)>;
 def GR16 : RegisterClass<"Z80", [i16], 8, (add BC, DE, HL)>;
 def HLR : RegisterClass<"Z80", [i16], 8, (add HL)>;
 def IDX : RegisterClass<"Z80", [i16], 8, (add IX, IY)>;
+def IYR : RegisterClass<"Z80", [i16], 8, (add IY)>;
 def SPR : RegisterClass<"Z80", [i16], 8, (add SP)>;
 // The flags as an i8 value, as the 6502's P and m68k's CCR are. The condition code is a constant:
 // NZ 0, Z 1, NC 2 (unsigned >=), C 3 (unsigned <).
@@ -222,6 +223,9 @@ let isCall = 1 in
   def CALL : Z80Inst<(outs), (ins calltarget:$t), "call $t", [(Z80call tglobaladdr:$t)]>;
 // a routine the selector names itself (the libcall of a fill or copy of unknown size)
 def : Pat<(Z80call texternalsym:$t), (CALL texternalsym:$t)>;
+// A call through a pointer: the address in iy, as SDCC's `call ___sdcc_call_iy`; the routine is `jp (iy)`.
+let isCall = 1 in
+  def CALLiy : Z80Inst<(outs), (ins IYR:$t), "call __call_iy", [(Z80call i16:$t)]>;
 
 // The call sequence's stack adjustment, resolved by the frame code once the frame is laid out.
 let Defs = [SP, F], Uses = [SP] in {

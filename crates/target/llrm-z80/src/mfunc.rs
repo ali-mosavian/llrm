@@ -69,6 +69,7 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     match u16::try_from(id).ok()? {
         pin::ACCRegClassID => Some(crate::reg::A),
         pin::HLRRegClassID => Some(crate::reg::HL),
+        pin::IYRRegClassID => Some(crate::reg::IY),
         _ => None,
     }
 }

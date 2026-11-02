@@ -170,6 +170,15 @@ impl Printer<'_> {
         rest: &[Inst],
     ) -> Result<(), String> {
         match (is_pair(to), is_pair(from)) {
+            // iy has no halves the Z80 can move: through the stack
+            _ if to == reg::IY && is_pair(from) => {
+                self.push(format!("push {}", name(from)));
+                self.push("pop iy");
+            }
+            _ if from == reg::IY && is_pair(to) => {
+                self.push("push iy");
+                self.push(format!("pop {}", name(to)));
+            }
             (false, false) => self.byte_move(to, from),
             (true, true) if to == from => {}
             // `de` and `hl` trade places in one byte; the source is dead, so
@@ -517,6 +526,7 @@ impl Printer<'_> {
                 };
                 self.push(format!("call {symbol}"));
             }
+            "CALLiy" => self.push("call __call_iy"),
             "TAILCALL" => {
                 let Some(Operand::Symbol(symbol, _)) = inst.operands.first() else {
                     return Err("a tail call that names no symbol".to_owned());

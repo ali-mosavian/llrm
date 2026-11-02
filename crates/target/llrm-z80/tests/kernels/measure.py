@@ -34,6 +34,8 @@ EXTRA = [
     ("stackargs", "i8", [("i8", "5")], 30),
     # a 300-byte local: the frame objects below it are out of IX's byte displacement
     ("bigframe", "i8", [("i8", "5")], 5),
+    # a call through a function pointer
+    ("indirect", "i16", [("i16", "21")], 42),
     ("carry32", "i16", [("i32", "65535"), ("i8", "1")], 1),
 ]
 HEADER = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"\n'
@@ -195,6 +197,7 @@ def main():
             print(f"| {name} | WRONG: got {got & mask:#x}, hand-derived {expect & mask:#x} | | | | | | | | |")
             continue
         size = code_size(f"{w}/k.rel") + runtime_bytes(w, graph, open(f"{w}/k.s").read())
+        assert size < 4096, f"{name}: {size} B of code: a runtime routine was sized up to a symbol far away (end the runtime with __rt_end)"
         b, t, n = sdcc.get(name, (None, None, None))
         verdict = lambda ours, theirs: "" if theirs is None else ("win" if ours < theirs else "tie" if ours == theirs else "LOSE")
         print(f"| {name} | {size} | {t1 - t0} | {i1 - i0} | {b} | {t} | {n} | {verdict(size, b)} | {verdict(t1 - t0, t)} | {verdict(i1 - i0, n)} |")

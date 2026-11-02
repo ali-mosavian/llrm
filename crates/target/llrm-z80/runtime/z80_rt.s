@@ -461,3 +461,12 @@ _strlen:
 	cpl
 	ld	d,a
 	ret
+
+; A call through a pointer: the address is in iy.
+	.globl __call_iy
+__call_iy:
+	jp (iy)
+
+; Ends the last routine: measure.py sizes a routine up to the next symbol.
+	.globl __rt_end
+__rt_end:

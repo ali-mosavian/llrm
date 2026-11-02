@@ -349,3 +349,14 @@ fn a_frame_object_out_of_ixs_reach_is_addressed_through_iy() {
     let out = text(ir, "bigframe", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("(iy)") && out.contains("add iy, sp"), "{out}");
 }
+
+/// A call through a pointer was refused: `CannotSelect(Target(CALL))`, nothing
+/// selects a call whose callee is a register. 4 functions of the C corpus beyond
+/// the 23 rows hit it. The address goes in iy and the call is the runtime's
+/// `jp (iy)`, as SDCC's `___sdcc_call_iy`.
+#[test]
+fn a_call_through_a_pointer_puts_the_address_in_iy() {
+    let ir = include_str!("kernels/ir/indirect.ll");
+    let out = text(ir, "indirect", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("pop iy") && out.contains("call __call_iy"), "{out}");
+}
