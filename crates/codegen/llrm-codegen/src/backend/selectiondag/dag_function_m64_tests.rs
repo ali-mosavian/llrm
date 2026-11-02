@@ -1089,6 +1089,43 @@ entry:
     assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
 }
 
+/// `store i1` stopped at `Legalize(Unsupported {op: Store, ty: I1, what:
+/// "promote operand"})`: the promoted value is stored as one byte.
+#[test]
+fn a_store_of_an_i1_value_is_promoted_to_a_byte_store() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, i1 %b) {
+entry:
+  store i1 %b, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("mov") && matches!(w.dests.first(), Some(crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .count();
+    assert_eq!(stores, 1, "one byte store");
+    let m32 = "target datalayout = \"e-p:32:32-n8:16:32\"
+define void @f(ptr %p, i1 %b) {
+entry:
+  store i1 %b, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(m32).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).expect("selected at m32");
+}
+
 /// A store of an `i48` (a packed struct's member) stopped at
 /// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
 /// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.

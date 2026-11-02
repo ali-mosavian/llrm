@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::frame::Lowered;
+use crate::jumptable::Table;
 use crate::mc::inst::{Inst, Target};
 
 pub(crate) fn label_of(inst: &Inst) -> Option<&str> {
@@ -64,7 +65,10 @@ fn forwards(blocks: &[Lowered]) -> HashMap<String, String> {
     out
 }
 
-pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
+pub fn fold(
+    mut blocks: Vec<Lowered>,
+    tables: &mut [Table],
+) -> Vec<Lowered> {
     if blocks.is_empty() {
         return blocks;
     }
@@ -77,20 +81,28 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
         .collect();
     for at in 0..blocks.len() {
         let ret = match blocks[at].insts.last() {
-            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => {
-                blocks.iter().find(|block| &block.label == label).and_then(|block| block.insts.first().cloned())
-            }
+            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => blocks
+                .iter()
+                .find(|block| &block.label == label)
+                .and_then(|block| Some((block.insts.first().cloned()?, block.locs.first().copied().flatten()))),
             _ => None,
         };
-        if let Some(ret) = ret {
+        // The copy keeps the return's own source place, not the branch's.
+        if let Some((ret, place)) = ret {
             *blocks[at].insts.last_mut().expect("a branch") = ret;
+            *blocks[at].locs.last_mut().expect("a place per instruction") = place;
         }
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
         let ends = matches!(
             blocks[at].insts.last(),
-            Some(Inst::Branch { link: false, .. } | Inst::Ret { .. } | Inst::Brk { .. })
+            Some(
+                Inst::Branch { link: false, .. }
+                    | Inst::BranchReg { link: false, .. }
+                    | Inst::Ret { .. }
+                    | Inst::Brk { .. }
+            )
         );
         if !ends {
             let next = blocks[at + 1].label.clone();
@@ -107,12 +119,28 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
             retarget(inst, &forward);
         }
     }
+    for entry in tables.iter_mut().flat_map(|table| table.entries.iter_mut()) {
+        if let Some(found) = forward.get(entry.as_str()) {
+            *entry = found.clone();
+        }
+    }
+    let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, placed by following fall-through chains.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let successors = |at: usize| -> Vec<usize> {
         let block = &blocks[at];
-        let out: Vec<usize> =
-            block.insts.iter().filter_map(label_of).filter_map(|label| index.get(label).copied()).collect();
+        let mut out: Vec<usize> = Vec::new();
+        for inst in &block.insts {
+            match inst {
+                // The jump through a table goes to every entry.
+                Inst::Label(base) => {
+                    if let Some(table) = table_of.get(base.as_str()) {
+                        out.extend(table.entries.iter().filter_map(|label| index.get(label.as_str()).copied()));
+                    }
+                }
+                _ => out.extend(label_of(inst).and_then(|label| index.get(label).copied())),
+            }
+        }
         let _ = at;
         out
     };

@@ -307,7 +307,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(folded) = self.or_of_ands(node) {
             return Some(folded);
         }
-        if let Some(reassociated) = self.reassociate_ops(ISD::Or, n0, n1) {
+        if let Some(reassociated) = self.reassociate_ops(ISD::Or, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
         if let Some(rotated) = self.match_rotate(n0, n1) {

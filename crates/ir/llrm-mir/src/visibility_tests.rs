@@ -67,3 +67,20 @@ entry:
     let error = parse::module(text).unwrap_err();
     assert!(error.to_string().contains("@a is an alias a linker may replace"), "{error}");
 }
+
+/// A pass that deleted a dead global renumbered the rest and left each alias
+/// on the old number: the mid-end at -O2 made `__main_void` alias a
+/// declaration, and the backend refused the module.
+#[test]
+fn an_alias_follows_its_aliasee_when_a_global_before_it_is_deleted() {
+    let text = "@dead = internal global i32 1
+@a = alias i32, ptr @v
+@v = global i32 3
+";
+    let mut module = parse::module(text).unwrap();
+    let dead = module.named("dead").unwrap();
+    module.retain_globals(&|id| id != dead);
+    let aliasee = module.aliases[0].aliasee;
+    assert_eq!(module.global(aliasee).name.as_deref(), Some("v"));
+    assert_eq!(print::module(&module), "@v = global i32 3\n\n@a = alias i32, ptr @v\n");
+}
