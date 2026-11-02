@@ -1100,7 +1100,7 @@ def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds
     assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
     assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
     assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: code_bytes 113 > 100 (worse)"]
-    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]
+    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)", "a c -O2: static_bytes 1 > 0 (worse)"]
 
 
 def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(tmp_path, monkeypatch):
@@ -1172,3 +1172,14 @@ def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
     assert bench.against("a c -Os", {**base, "memory_operands": 5}, base) == ["a c -Os: memory_operands 5 > 4 (worse)"]
     untimed = {k: v for k, v in base.items() if k != "clocks"}
     assert bench.against("a c -Os", {**untimed, "memory_operands": 5, "code_bytes": 92}, untimed) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+
+
+def test_bss_is_judged_through_the_footprint_not_alone():
+    """Moving a zero table from data to bss (Nib's statics) lowered data_bytes and raised bss_bytes by the same amount: bss alone failed it.
+    data is strict, data+bss (static_bytes) is strict, bss alone is not judged."""
+    base = {"instructions": 10, "code_bytes": 100, "data_bytes": 30, "bss_bytes": 4}
+    move = {**base, "data_bytes": 10, "bss_bytes": 24}
+    assert bench.against("n nib -O2", move, base) == []  # pure DATA -> BSS: data down, footprint equal
+    assert bench.against("n nib -O2", {**base, "bss_bytes": 5}, base) == ["n nib -O2: static_bytes 35 > 34 (worse)"]  # bss growth grows the footprint
+    assert bench.against("n nib -O2", {**base, "data_bytes": 31, "bss_bytes": 3}, base) == ["n nib -O2: data_bytes 31 > 30 (worse)"]  # data growth, footprint equal
+    assert bench.against("n nib -O2", {**base, "data_bytes": 20, "bss_bytes": 24}, base) == ["n nib -O2: static_bytes 44 > 34 (worse)"]  # data down 10, bss up 20
