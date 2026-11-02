@@ -759,13 +759,13 @@ def m16_rate() -> int:
 
 
 def rate_for(language: str, opt: str) -> int:
-    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`, from the target's own rows: m16 at -O2 its
+    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`, from the target's own rows: m16 at -O2/-O3 its
     `speed_milliclocks_per_byte`; the flat x86-32 target at -O2/-O3 the 486's line fill (clocks to fill a line, per byte of line). 0 where the target has
     none and at -Os."""
     if language == FLAT and opt in ("O2", "O3"):
         tune = tomllib.loads(TUNE_486.read_text())
         return 1000 * tune["line_fill_clocks"] // tune["cache_line"] if "line_fill_clocks" in tune else 0
-    return m16_rate() if language in ("bas", "bq16", "c", "nib") and opt == "O2" else 0
+    return m16_rate() if language in ("bas", "bq16", "c", "nib") and opt in ("O2", "O3") else 0
 
 
 def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), rate: int = 0) -> list[str]:
