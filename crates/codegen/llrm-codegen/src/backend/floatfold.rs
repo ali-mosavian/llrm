@@ -111,6 +111,9 @@ pub struct FloatFold<'a> {
     /// How many registers an integer value may take: the pressure a refold
     /// may not take a block over.
     pub registers: usize,
+    /// The module's readonly constants: where `fld1` and `fldz` read by
+    /// arithmetic may become memory operands.
+    pub pool: Option<std::rc::Rc<std::cell::RefCell<crate::backend::constpool::Pool>>>,
 }
 
 impl LIRTransform for FloatFold<'_> {
@@ -126,7 +129,8 @@ impl LIRTransform for FloatFold<'_> {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(folded(&body, self.cpu, self.registers))
+        let mut pool = self.pool.as_ref().map(|pool| pool.borrow_mut());
+        Ok(folded_with(&body, self.cpu, self.registers, pool.as_deref_mut()))
     }
 }
 
@@ -135,6 +139,16 @@ pub fn folded(
     body: &LirBody,
     cpu: &crate::backend::cpu::Profile,
     registers: usize,
+) -> LirBody {
+    folded_with(body, cpu, registers, None)
+}
+
+/// `folded`, and where a pool is given the pool constants of `_pooled`.
+pub fn folded_with(
+    body: &LirBody,
+    cpu: &crate::backend::cpu::Profile,
+    registers: usize,
+    pool: Option<&mut crate::backend::constpool::Pool>,
 ) -> LirBody {
     let mut uses: HashMap<u32, usize> = HashMap::default();
     let mut defs: HashMap<u32, usize> = HashMap::default();
@@ -212,7 +226,11 @@ pub fn folded(
         blocks.push(block.with_insns(insns));
     }
     let folded = if changed { body.with_blocks(blocks) } else { body.clone() };
-    _refolded(&folded, &uses, &defs, &floating, cpu, registers).unwrap_or(folded)
+    let folded = _refolded(&folded, &uses, &defs, &floating, cpu, registers).unwrap_or(folded);
+    match pool {
+        Some(pool) => _pooled(&folded, &uses, &defs, &floating, cpu, pool).unwrap_or(folded),
+        None => folded,
+    }
 }
 
 /// `body` with each float load that one later instruction of its block reads
@@ -515,6 +533,169 @@ fn _refolded(
         })
         .collect();
     Some(body.with_blocks(blocks))
+}
+
+/// An `fld1` or `fldz` that arithmetic reads, each reader taking the constant
+/// as its memory operand from the pool: gcc's `fadd DWORD PTR .LC` where the
+/// pin keeps the x87 constant in a register (`fld1; faddp`), as the pin has the
+/// constant legal (X86ISelLowering.cpp L777-780).
+///
+/// The register form costs the constant's load and a register operation; the
+/// memory form costs the operation's encoding and, for a constant the pool
+/// does not hold yet, its datum. It is taken when the clocks it saves, each
+/// reader's by its block frequency (`memory_form`, per CPU), and the bytes at
+/// the target's rate are positive (`cpu.target().tuning()`); code built for
+/// size must not grow, and where the target has no rate neither counter may be
+/// worse. The `fld1` is priced as `x87_load`, which a 486 has at 3 against the
+/// 4 of `fld1`: the saving is not overstated. DEVIATE (beyond LLVM): the pin
+/// never folds a constant it can load without memory.
+fn _pooled(
+    body: &LirBody,
+    uses: &HashMap<u32, usize>,
+    defs: &HashMap<u32, usize>,
+    floating: &HashSet<u32>,
+    cpu: &crate::backend::cpu::Profile,
+    pool: &mut crate::backend::constpool::Pool,
+) -> Option<LirBody> {
+    let frequency = crate::analysis::frequency::Frequency::of(body);
+    let mut insns: Vec<Vec<Arc<Insn>>> = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
+    let mut deleted: HashSet<(usize, usize)> = HashSet::default();
+    let mut taken: HashSet<(usize, usize)> = HashSet::default();
+    for (block, made) in body.blocks.iter().enumerate() {
+        for (at, load) in made.insns.iter().enumerate() {
+            let Some(what) = load.what.as_ref().filter(|what| {
+                what.op == Operation::FloatLoad
+                    && what.sources.is_empty()
+                    && matches!(what.name.as_deref(), Some("fld1" | "fldz"))
+            }) else {
+                continue;
+            };
+            let value = load.defines.first().copied().unwrap_or(0);
+            let constant = if what.name.as_deref() == Some("fld1") { 1.0 } else { 0.0 };
+            if load.defines.len() != 1
+                || defs.get(&value) != Some(&1)
+                || !uses.get(&value).is_some_and(|reads| *reads >= 1)
+                || load.volatile
+                || !load.clobbers.is_empty()
+                || load.group.is_some()
+            {
+                continue;
+            }
+            let mut places: Vec<(usize, usize)> = Vec::new();
+            for (b, other) in body.blocks.iter().enumerate() {
+                for (a, one) in other.insns.iter().enumerate() {
+                    for arg in one.what.iter().flat_map(|what| &what.sources) {
+                        if matches!(arg, Loc::Held(held) if held.value == value) {
+                            places.push((b, a));
+                        }
+                    }
+                }
+            }
+            if places.len() != uses[&value] || places.iter().any(|place| taken.contains(place)) {
+                continue;
+            }
+            let mark = pool.mark();
+            let cell = pool.cell(crate::backend::constpool::narrowest(constant));
+            let is_new = pool.mark() != mark;
+            let probe = _reload(load, load, value, floating, &cell);
+            let (mut saved, mut held, mut folded_bytes) = (0.0, REGISTER_FORM, 0);
+            let mut plan = Vec::new();
+            for place in &places {
+                let one = &body.blocks[place.0].insns[place.1];
+                let found = one
+                    .what
+                    .as_ref()
+                    .filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)
+                    .and_then(|what| _two_values(Some(what)))
+                    .filter(|(_, left, right)| left.value != right.value)
+                    .and_then(|(name, left, right)| {
+                        let (cell_is_left, other) = if right.value == value { (false, left) } else { (true, right) };
+                        memory_form(&name, cell_is_left, &probe, cpu).map(|(operation, gain)| (operation, gain, other))
+                    });
+                let Some((operation, gain, other)) = found else {
+                    plan.clear();
+                    break;
+                };
+                let what = one.what.as_ref().expect("an arithmetic instruction");
+                held += REGISTER_FORM;
+                folded_bytes += _memory_operation_bytes(&cell, body.bits);
+                saved += gain as f64 * frequency.block(body.blocks[place.0].at);
+                plan.push((
+                    *place,
+                    semantics(
+                        Operation::FloatArith,
+                        &operation,
+                        what.dests.clone(),
+                        vec![Loc::Held(other), Loc::Mem(cell.clone())],
+                    ),
+                ));
+            }
+            let datum = if is_new { i64::from(cell.width) } else { 0 };
+            let bytes = held - folded_bytes - datum;
+            let rate = if cpu.size || cpu.min_size {
+                cpu.size_milliclocks_per_byte()
+            } else {
+                cpu.target().tuning().speed_milliclocks_per_byte
+            };
+            let pays = if plan.is_empty() {
+                false
+            } else if rate == 0 {
+                saved > 0.0 && bytes >= 0
+            } else if cpu.size || cpu.min_size {
+                bytes > 0
+            } else {
+                saved * 1000.0 + (bytes * rate) as f64 > 0.0
+            };
+            if !pays {
+                if is_new {
+                    pool.rewind(mark);
+                }
+                continue;
+            }
+            for (place, what) in plan {
+                let one = Arc::clone(&body.blocks[place.0].insns[place.1]);
+                insns[place.0][place.1] = _fused(&one, &probe, value, what, floating);
+                taken.insert(place);
+            }
+            deleted.insert((block, at));
+        }
+    }
+    if deleted.is_empty() {
+        return None;
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .zip(insns)
+        .enumerate()
+        .map(|(number, (block, insns))| {
+            let kept = insns.into_iter().enumerate().filter(|(at, _)| !deleted.contains(&(number, *at)));
+            block.with_insns(kept.map(|(_, one)| one).collect())
+        })
+        .collect();
+    Some(body.with_blocks(blocks))
+}
+
+/// `load` as a load of `cell` into `value`.
+fn _reload(
+    reader: &Arc<Insn>,
+    load: &Arc<Insn>,
+    value: u32,
+    floating: &HashSet<u32>,
+    cell: &Mem,
+) -> Arc<Insn> {
+    let mut made = (**reader).clone();
+    made.what = Some(semantics(
+        Operation::FloatLoad,
+        "fld",
+        vec![Loc::Held(crate::model::ir::Held { value, width: 10 })],
+        vec![Loc::Mem(cell.clone())],
+    ));
+    made.defines = vec![value];
+    made.uses = load.uses.iter().copied().filter(|one| !floating.contains(one)).collect();
+    made.widths = load.widths.iter().copied().filter(|(one, _)| !floating.contains(one)).collect();
+    made.requires = load.requires.clone();
+    Arc::new(made)
 }
 
 /// The operation with its operands the other way round.
@@ -1158,6 +1339,54 @@ mod tests {
         assert_eq!(load.sources, [Loc::Mem(global(1, 0))]);
         let arithmetic = got.blocks[1].insns[1].what.clone().expect("the arithmetic");
         assert_eq!(arithmetic.sources[1], Loc::Mem(global(0, 0)));
+    }
+
+    /// A loop that adds `fld1` to a loaded cell (`recfloat`'s `x * 0.5 + 1.0`):
+    /// the constant is loaded and added in the loop, a trip at a time.
+    fn loop_adding_one() -> LirBody {
+        let block = |at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>| {
+            crate::model::lir::Block::from(crate::model::lir::LirBlock {
+                succ: succ.into(),
+                ..crate::model::lir::LirBlock::new(at, insns)
+            })
+        };
+        let in_loop = vec![
+            fld(16, 1, global(0, 0)),
+            insn(17, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
+            arith(18, "fadd", 3, 1, 2),
+            fstp(19, 3, frame(-8)),
+            fstp(20, 1, frame(-12)),
+        ];
+        let blocks = vec![
+            block(0, vec![Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new()))], vec![16]),
+            block(16, in_loop, vec![16, 32]),
+            block(32, vec![Arc::new(Insn::new(32, None, None, Vec::new(), Vec::new()))], Vec::new()),
+        ];
+        LirBody::new("fold", 0, blocks, Default::default(), Default::default())
+    }
+
+    /// recfloat on gcc: the loop's `fld1; faddp st(1)` is `fadd DWORD PTR .LC`
+    /// (8 clocks against 12, one instruction fewer) for 2 B of code and 4 of
+    /// data. On a target that trades a byte for a half clock (m16: 1 clock is
+    /// 2 B) a loop pays for it.
+    #[test]
+    fn test_an_x87_constant_a_loop_adds_is_a_memory_operand_where_the_rate_pays() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let mut pool = crate::backend::constpool::Pool::new(100);
+        let got = folded_with(&loop_adding_one(), cpu, REGISTERS, Some(&mut pool));
+        assert_eq!(names(&got), ["fld", "fadd+m", "fstp", "fstp"], "{:#?}", names(&got));
+        assert_eq!(pool.entries().count(), 1, "the constant 1.0 is in the pool");
+    }
+
+    /// Built for size the constant stays: the memory form is 6 B and a datum
+    /// against the register form's 4.
+    #[test]
+    fn test_an_x87_constant_stays_in_a_register_in_code_built_for_size() {
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile");
+        let mut pool = crate::backend::constpool::Pool::new(100);
+        let got = folded_with(&loop_adding_one(), cpu, REGISTERS, Some(&mut pool));
+        assert_eq!(names(&got), ["fld", "fld1", "fadd", "fstp", "fstp"], "{:#?}", names(&got));
+        assert_eq!(pool.entries().count(), 0, "a constant nothing reads is not in the pool");
     }
 
     /// The loop writes the cell that was loaded before it: the load stays.
