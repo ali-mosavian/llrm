@@ -3186,6 +3186,35 @@ fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
 }
 
 #[test]
+fn test_byte_extension_is_the_word_form_when_the_upper_word_is_dead() {
+    // floats bq16 -Os: `neg al; movsx eax, al; mov [bp-4], ax` took 4 bytes
+    // for the extension where `movsx ax, al` (`cbw`) takes 1.
+    for name in ["movsx", "movzx"] {
+        let source = insn(
+            1,
+            Some((1, 1)),
+            Some(sem(Operation::Extend, name, vec![rl(RegId::EAX, 4)], vec![rl(RegId::AL, 1)])),
+            vec![1],
+            vec![],
+        );
+        let finish = Insn {
+            requires: vec![(Held { value: 1, width: 2 }, RegId::AX)],
+            reads_complete: true,
+            ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![1])
+        };
+        let input = body("extend-low", 1, vec![block(1, vec![Arc::new(source), Arc::new(finish)], vec![]).into()]);
+
+        let result = narrowed_moves(rules(), &input);
+
+        assert_eq!(
+            result.insns()[0].what,
+            Some(sem(Operation::Extend, name, vec![rl(RegId::AX, 2)], vec![rl(RegId::AL, 1)])),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn test_dword_constant_stays_wide_when_any_upper_lane_is_live() {
     let wide = rl(RegId::EAX, 4);
     let source = insn(

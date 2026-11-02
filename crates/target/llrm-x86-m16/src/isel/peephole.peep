@@ -62,6 +62,15 @@ rule narrowed_immediate
     when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), unread(@0, upper(d)), encodable($0)
     rewrite @0: =@0 low_word(d), low_word(s)
 
+// The byte extension of a register whose upper word nothing reads: `movsx ax,
+// al` is `cbw` and `movzx ax, al` is `mov ah, 0`, where the dword form takes
+// 0x66 and a byte more.
+rule narrowed_extension
+    match   x=(movsx|movzx) d:reg32, s:reg
+    when    free(@0, narrowable), width_in(s, [8]), !empty(upper(d)), dead(@0, upper(d)), unread(@0, upper(d)),
+            encodable($0)
+    rewrite @0: x low_word(d), s
+
 
 // Two word pushes of one dword's halves, the high first, as one dword
 // push: both leave the same four bytes, the low at the lower address. A
