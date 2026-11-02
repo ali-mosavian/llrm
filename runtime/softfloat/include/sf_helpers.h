@@ -41,8 +41,16 @@ static inline uint64_t sf_shr_sticky64(uint64_t x, int n)
     return (x >> n) | ((x << (64 - n)) != 0);
 }
 
+/* 32x32 -> 64 as hi:lo, from 16x16 partial products: no 64-bit type needed. */
 #ifndef SF_MUL32X32
-static inline uint64_t sf_mul32x32(uint32_t a, uint32_t b) { return (uint64_t)a * b; }
+static inline void sf_mul32x32(uint32_t a, uint32_t b, uint32_t *hi, uint32_t *lo)
+{
+    uint32_t al = a & 0xFFFFu, ah = a >> 16, bl = b & 0xFFFFu, bh = b >> 16;
+    uint32_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    uint32_t mid = (ll >> 16) + (lh & 0xFFFFu) + (hl & 0xFFFFu);
+    *lo = (ll & 0xFFFFu) | (mid << 16);
+    *hi = hh + (lh >> 16) + (hl >> 16) + (mid >> 16);
+}
 #else
 #define sf_mul32x32 SF_MUL32X32
 #endif

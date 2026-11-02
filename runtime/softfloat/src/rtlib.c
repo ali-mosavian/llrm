@@ -1,11 +1,11 @@
 /* RTLIB names over the bit-level entry points. */
 #include "softfloat.h"
-#include <string.h>
 
-static inline sf32 f2b(float f) { sf32 b; memcpy(&b, &f, 4); return b; }
-static inline float b2f(sf32 b) { float f; memcpy(&f, &b, 4); return f; }
-static inline sf64 d2b(double f) { sf64 b; memcpy(&b, &f, 8); return b; }
-static inline double b2d(sf64 b) { double f; memcpy(&f, &b, 8); return f; }
+
+static inline sf32 f2b(float f) { sf32 b; __builtin_memcpy(&b, &f, 4); return b; }
+static inline float b2f(sf32 b) { float f; __builtin_memcpy(&f, &b, 4); return f; }
+static inline sf64 d2b(double f) { sf64 b; __builtin_memcpy(&b, &f, 8); return b; }
+static inline double b2d(sf64 b) { double f; __builtin_memcpy(&f, &b, 8); return f; }
 
 float __addsf3(float a, float b) { return b2f(sf32_add(f2b(a), f2b(b))); }
 float __subsf3(float a, float b) { return b2f(sf32_sub(f2b(a), f2b(b))); }

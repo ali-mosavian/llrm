@@ -58,7 +58,7 @@ sf32 sf32_add(sf32 a, sf32 b)
         ea -= s;
     } else {
         m = ma + mb;
-        if (m & (1u << 27)) { m = sf_shr_sticky32(m, 1); ea++; }
+        if (m & (UINT32_C(1) << 27)) { m = sf_shr_sticky32(m, 1); ea++; }
     }
     return round_pack(sign, ea, m);
 }
@@ -79,10 +79,12 @@ sf32 sf32_mul(sf32 a, sf32 b)
     uint32_t ma = unpack(a, &ea), mb = unpack(b, &eb);
     if (!(ma & 0x800000u)) { int s = sf_clz32(ma) - 8; ma <<= s; ea -= s; }
     if (!(mb & 0x800000u)) { int s = sf_clz32(mb) - 8; mb <<= s; eb -= s; }
-    uint64_t p = sf_mul32x32(ma, mb);
+    uint32_t hi, lo;
+    sf_mul32x32(ma, mb, &hi, &lo);
+    /* The product has its top bit at 47 or 46; keep 27 bits and fold the rest. */
     int e = ea + eb - 127, sh = 20;
-    if (p >> 47) { sh = 21; e++; }
-    uint32_t m = (uint32_t)(p >> sh) | ((p & ((1ull << sh) - 1)) != 0);
+    if (hi >> 15) { sh = 21; e++; }
+    uint32_t m = (hi << (32 - sh)) | (lo >> sh) | ((lo << (32 - sh)) != 0);
     return round_pack(sign, e, m);
 }
 
