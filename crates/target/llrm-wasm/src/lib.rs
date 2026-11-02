@@ -19,6 +19,7 @@ pub mod fix_irreducible;
 pub mod frame;
 pub mod late_eh_prepare;
 pub mod lower_br_unless;
+pub mod machine;
 pub mod mir;
 pub mod object;
 pub mod phi_elimination;

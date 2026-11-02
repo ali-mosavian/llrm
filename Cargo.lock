@@ -727,6 +727,7 @@ dependencies = [
  "llrm-lir",
  "llrm-mir",
  "llrm-target",
+ "llrm-transforms",
 ]
 
 [[package]]

@@ -86,11 +86,13 @@ pub struct Options {
     /// `RegStackify`: the pin runs it at `-O0`, LLVM 20's `llc -O0` does not.
     pub stackify: bool,
     pub exception_model: ExceptionModel,
+    /// How far the shared mid-end goes before the backend.
+    pub level: crate::driver::Level,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { stackify: true, exception_model: ExceptionModel::None }
+        Options { stackify: true, exception_model: ExceptionModel::None, level: crate::driver::Level::O0 }
     }
 }
 

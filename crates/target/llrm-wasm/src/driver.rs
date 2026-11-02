@@ -22,7 +22,72 @@ pub fn datalayout(width: Width) -> String {
 
 /// `text`, LLVM IR, as a module: the lines and words MIR's reader leaves out of
 /// LLVM dropped.
+/// How far the mid-end goes: gcc's and clang's `-O` levels, as `llc` takes
+/// them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Level {
+    O0,
+    O1,
+    O2,
+    O3,
+    Os,
+    Oz,
+}
+
+impl Level {
+    /// The level `-O<text>` names.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        Ok(match text {
+            "0" => Self::O0,
+            "" | "1" => Self::O1,
+            "2" => Self::O2,
+            "3" => Self::O3,
+            "s" => Self::Os,
+            "z" => Self::Oz,
+            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os or -Oz")),
+        })
+    }
+
+    fn mid_end(self) -> llrm_transforms::pipeline::Options {
+        use llrm_transforms::pipeline::Options as MidEnd;
+        match self {
+            Self::O0 => MidEnd::none(),
+            Self::O1 => MidEnd::basic(),
+            Self::O2 => MidEnd::default(),
+            Self::O3 => MidEnd::speed(),
+            Self::Os => MidEnd::size(),
+            Self::Oz => MidEnd::min_size(),
+        }
+    }
+}
+
+/// `module` through the shared mid-end at `level`.
+fn optimized(
+    module: llrm_mir::module::Module,
+    level: Level,
+) -> Result<llrm_mir::module::Module, String> {
+    use llrm_transforms::pipeline::{Applied, Options as MidEnd};
+    let machine: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(crate::machine::WasmMachine);
+    let mut program = llrm_mir::program::Program::new(vec![module], machine)?;
+    let options = MidEnd { library: Vec::new(), ..level.mid_end() };
+    llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    Ok(program.modules.remove(0))
+}
+
 pub fn module(
+    text: &str,
+    width: Width,
+) -> Result<llrm_mir::module::Module, String> {
+    let mut module = parsed(text, width)?;
+    // No `atomics` feature: the pin's `LowerAtomicPass` makes the accesses
+    // plain.
+    llrm_mir::atomic::lowered_single_thread(&mut module)?;
+    Ok(module)
+}
+
+/// `text` as MIR, its layout checked against wasm's.
+fn parsed(
     text: &str,
     width: Width,
 ) -> Result<llrm_mir::module::Module, String> {
@@ -36,9 +101,6 @@ pub fn module(
     }
     let mut module = llrm_mir::parse::module(&kept).map_err(|error| error.to_string())?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
-    // No `atomics` feature: the pin's `LowerAtomicPass` makes the accesses
-    // plain.
-    llrm_mir::atomic::lowered_single_thread(&mut module)?;
     // `llc` takes the target's layout when the module states none.
     match module.datalayout.as_deref() {
         Some(stated) if *stated != datalayout(width) => {
@@ -57,7 +119,11 @@ fn prepared(
     width: Width,
     options: Options,
 ) -> Result<llrm_mir::module::Module, String> {
-    let mut module = module(text, width)?;
+    let mut module = parsed(text, width)?;
+    if options.level != Level::O0 {
+        module = optimized(module, options.level)?;
+    }
+    llrm_mir::atomic::lowered_single_thread(&mut module)?;
     crate::fix_function_bitcasts::fix(&mut module)?;
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
         crate::eh_reentry::reentry(&mut module)?;

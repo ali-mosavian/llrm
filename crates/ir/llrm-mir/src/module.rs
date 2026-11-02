@@ -1569,6 +1569,14 @@ impl Module {
             }));
         }
         self.context.renumber_globals(&|global| renumbered[global.0 as usize]);
+        // An alias follows its aliasee, and goes with it.
+        self.aliases.retain_mut(|alias| match renumbered[alias.aliasee.0 as usize] {
+            Some(now) => {
+                alias.aliasee = now;
+                true
+            }
+            None => false,
+        });
         let mut at = 0;
         self.globals.retain(|_| {
             at += 1;
