@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 231 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 232 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -232,6 +232,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | trunc_inst_combine | An expression graph that ends in a `trunc` is evaluated at the narrow width, as LLVM's `TruncInstCombine` (a part of `AggressiveInstCombine`). | As `aggressive-instcombine@678`, after `instcombine` and before `tailrec` | [trunc_inst_combine](trunc_inst_combine.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. | Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`. | [twoentryphi](twoentryphi.md) |
 | typepromotion | CodeGenPrepare's `TypePromotionTransaction`: a run of edits to a function that can be taken back to any point it passed, or kept. | Under `cgpaddr`'s `optimizeExt`, which makes a transaction for each | [typepromotion](typepromotion.md) |
+| typepromotion_pass | Opcode-based type promotion of small integers the legalizer would promote anyway, where promoting them in the IR spares the masks the DAG puts around a value in a cycle. | Before `cgpaddr`, as the pin's `addCodeGenPrepare` runs it, on a target | [typepromotion_pass](typepromotion_pass.md) |
 | uncondicmp | A block that holds an equality compare of a switch's value with a constant (and perhaps a `select` on it), and jumps on, folded into the switch: LLVM's [`tryToSimplifyUncondBranchWithICmpSelectInIt`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5328) and its `ICmpInIt` form (a compare alone), the parts of `simplifyUncondBranch` ([L8800](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800)) after the empty block's removal. | Named by `simplifycfg`. | [uncondicmp](uncondicmp.md) |
 | undefpred | A predecessor that gives a block a value that is undefined behavior to use there stops reaching it: SimplifyCFG's `removeUndefIntroducingPredecessor`. | Named by `simplifycfg`. | [undefpred](undefpred.md) |
 | uremloop | CodeGenPrepare's `foldURemOfLoopIncrement`: the remainder of a loop's counter by a loop-invariant amount is a second counter that wraps ([CodeGenPrepare.cpp#L2227](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2227)). | In `cgpaddr`'s run, before the store split. | [uremloop](uremloop.md) |

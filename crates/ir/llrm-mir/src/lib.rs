@@ -87,9 +87,9 @@ pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, Glo
 pub use edit::Position;
 pub use lexer::ParseError;
 pub use module::{
-    Block, BlockId, Change, DebugRecord, DebugWhat, DwOp, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
-    Instruction, Linkage, Metadata, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use,
-    ValueData, ValueDef, ValueId,
+    Alias, Block, BlockId, Change, DebugRecord, DebugWhat, DwOp, Function, GlobalKind, GlobalValue, GlobalVariable,
+    InstId, Instruction, Linkage, Metadata, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr,
+    Use, ValueData, ValueDef, ValueId, Visibility,
 };
 pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
@@ -132,3 +132,5 @@ mod tests;
 mod touched_tests;
 #[cfg(test)]
 mod valuetracking_tests;
+#[cfg(test)]
+mod visibility_tests;

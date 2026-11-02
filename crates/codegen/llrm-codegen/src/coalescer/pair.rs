@@ -42,6 +42,14 @@ pub trait CoalescerEnv {
         true
     }
 
+    /// `JoinGlobalCopies` (`STI.enableJoinGlobalCopies()`, which is
+    /// `enableMachineScheduler()`: x86 and AArch64 true, WebAssembly and M68k
+    /// false): local copies wait for their loop depth's pass and terminal
+    /// copies go last. False: one top-down list per block, terminals last.
+    fn joins_global_copies(&self) -> bool {
+        true
+    }
+
     /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
     /// `dst`, which may now take only the registers both could.
     fn narrow(

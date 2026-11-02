@@ -4,6 +4,7 @@ pub mod abi;
 pub mod analysis;
 pub mod backend;
 pub mod coalescer;
+pub mod combine;
 pub mod driver;
 pub mod flow;
 pub mod greedy;
