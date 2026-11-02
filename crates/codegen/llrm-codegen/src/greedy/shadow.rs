@@ -1491,7 +1491,12 @@ pub fn decide_with_split(
                             // that instruction, or another such write, without
                             // conflict.
                             let both_dead = end == start.get_dead_slot() && last.1 == start.get_dead_slot();
-                            conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead;
+                            // The same instruction writes a byte that lives on
+                            // and a register it only clobbers (a call returning
+                            // `bd0` that clobbers `wd0`): the clobber holds
+                            // nothing.
+                            let clobber = last.0 == start && last.1 == start.get_dead_slot();
+                            conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead && !clobber;
                             last.1 = std::cmp::max(last.1.clone(), end)
                         }
                         _ => merged.push((start, end)),
