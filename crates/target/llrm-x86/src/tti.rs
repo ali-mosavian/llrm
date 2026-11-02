@@ -541,7 +541,13 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
-    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+    fn unroll_threshold_overrides(
+        &self,
+        opt_level: u32,
+    ) -> (Option<u32>, Option<u32>) {
+        if self.tuning.unroll_override_max_level.is_some_and(|highest| opt_level > highest) {
+            return (None, None);
+        }
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 

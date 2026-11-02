@@ -36,6 +36,9 @@ pub struct Tuning {
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
     pub unroll_max_percent_threshold_boost: Option<u32>,
+    /// The highest optimization level the two entries above hold at; above it
+    /// the pass's own. None: every level.
+    pub unroll_override_max_level: Option<u32>,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
@@ -73,6 +76,7 @@ impl Tuning {
         multiply_by_clocks: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
+        unroll_override_max_level: None,
         unroll_partial_threshold: None,
         unswitch_threshold: None,
         inline_threshold: None,
