@@ -113,6 +113,16 @@ def tools_missing(variant: "Variant") -> str | None:
     return f"{variant.dialect}: no Microsoft BASIC install at {tools.mount} (set {variant.dialect.upper()}_DIR); `{variant.language}` needs BC and LINK, `bq16` and `bq32` do not"
 
 
+# The levels measured by default, the base leg included. -O1 has a base like the rest: its rule is "no metric worse than the base", the strictness of -Os.
+LEVELS = ("O1", "O2", "Os")
+REFERENCE_LEVELS = ("O2", "Os")  # the levels the reference compilers are blessed at (expected.toml)
+
+
+def reference_opts(opts: list[str]) -> list[str]:
+    """`opts` the reference compilers are measured at: their switches and stored counts exist for -O2 and -Os only."""
+    return [one for one in opts if one in REFERENCE_LEVELS]
+
+
 def reference_level(reference: str, opt: str) -> str:
     return "O2" if reference in BASIC_REFERENCES else opt
 
@@ -882,6 +892,12 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     return lines
 
 
+def cell_lines(measured: dict, base: dict, opts: list[str]) -> list[str]:
+    """How many of our cells each side has per level: a level the base lacks (-O1 had none) judges nothing, and that must show."""
+    ours = lambda rows, opt: sum(1 for key, row in rows.items() if key[1] in basecounts.OURS and key[2] == opt and not any(one in row for one in ("error", "skip")))  # noqa: E731
+    return [f"CELLS -{opt}: head {ours(measured, opt)}, base {ours(base, opt)}" for opt in opts]
+
+
 def geomean(values: list[float]) -> float:
     return math.exp(sum(map(math.log, values)) / len(values))
 
@@ -1047,7 +1063,7 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
+    parser.add_argument("--opt", nargs="+", default=list(LEVELS))
     parser.add_argument("--lang", nargs="+", choices=list(LANGUAGES), help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
@@ -1086,7 +1102,7 @@ def main() -> int:
             (args.json / f"shard-{index}.json").write_text(json.dumps({"measured": {"/".join(key): value for key, value in measured.items()}, "programs": args.select}))
         return 0
     if args.references:
-        measured |= measure_references(args.select, args.opt, args.work, args.time)
+        measured |= measure_references(args.select, reference_opts(args.opt), args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
     if args.record:
@@ -1121,6 +1137,7 @@ def main() -> int:
         judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
         problems += uncovered
         print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
+        print(*cell_lines(measured, base, args.opt), sep="\n")
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")

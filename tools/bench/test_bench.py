@@ -1101,3 +1101,16 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
     fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
     if "files" in fed:  # else the corpus is not cached here
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
+
+
+def test_o1_is_measured_by_default_and_the_references_are_not_asked_for_it():
+    """-O1 was 'strict, every metric' in the gate rules and had no base: the bench measured O2 and Os only, so an -O1 A/B compared against the previous tip."""
+    assert bench.LEVELS == ("O1", "O2", "Os")
+    assert bench.reference_opts(list(bench.LEVELS)) == ["O2", "Os"]
+
+
+def test_the_gate_counts_our_cells_per_level_on_each_side():
+    """A level the base lacks judges nothing: -O1 had no base cell and no line said so."""
+    head = {("a", "c", "O1"): {"instructions": 1}, ("a", "c", "O2"): {"instructions": 1}, ("a", "ow", "O2"): {"instructions": 1}, ("b", "c", "O2"): {"error": "x"}}
+    base = {("a", "c", "O2"): {"instructions": 1}}
+    assert bench.cell_lines(head, base, ["O1", "O2"]) == ["CELLS -O1: head 1, base 0", "CELLS -O2: head 1, base 1"]
