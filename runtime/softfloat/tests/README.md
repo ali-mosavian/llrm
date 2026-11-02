@@ -9,6 +9,7 @@ Host oracle (run from `runtime/softfloat`, each prints `fails=0` or its totals):
 - `sh tests/int16_lint.sh` (16-bit int compile of every source)
 
 Targets:
+- m68k assembly (qemu): `tests/m68k_asm.sh run CPU [n] [main.c]`, `GEN=tests/gen_vectors_edge.c`, `tests/m68k_asm_regs.c`, `tests/m68k_asm_conv.c`, `tests/m68k_asm_rows.c`, `tests/m68k_asm_size.sh`; `tests/m68k_clock_terms.py EXE` (68000 clocks the tables leave out)
 - m68k (qemu): `LLRM_CC_DIR=dir tests/run_m68k.sh CPU OPT [n]`, `tests/m68k_cmp_unordered.c`, `tests/m68k_wrapper_size.sh`, `tests/m68k_no_self_call.sh`, `tests/size_m68k.sh [CPU] [OPT]`
 - z80 (ucsim): `tests/z80/run.sh [ops]`
 - 6502 (sim65): `tests/asm6502/run.sh [n] [ops]`, `tests/asm6502/bench_wide.py`, `LLRM_CC=llrm-cc tests/run_sim65.sh [n]`

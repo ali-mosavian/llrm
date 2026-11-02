@@ -70,6 +70,11 @@ Cycles per call with the shim on the Woz operands: add 506, sub 515, mul 1730, d
 
 Both compiled by llrm-cc (keep/llrm-cc_soft + llc_soft_merged, 2026-11-02), text bytes per object. 68000 -O2: `sf32.c` (add, sub, mul, div, cmp, neg) 3148 B, `sf32_conv.c` 1274 B. At -Os that build panics on `sf32.c` (liverange "Cannot overlap d"); `sf32_conv.c` is 836 B. compiler-rt's addsf3, mulsf3, divsf3 and floatsisf do not compile with the same build (`CtLzZeroPoison` has no libcall, `BitCast` in the older one), so there is no compiler-rt column on m68k yet; compiler-rt's fixsfsi is 162 B.
 
+## m68k assembly (`src/m68k/sf32.s`)
+
+Hand-written `__addsf3 __subsf3 __mulsf3 __divsf3 __negsf2`, the compares, `__unordsf2` and `__floatsisf __floatunsisf __fixsfsi __fixunssfsi`, libgcc's ABI, exact like `sf32.c`. Base body 68000/68010; `as --defsym M68020=1` (68020/030/040) uses `mulu.l`, `divu.l`, `bfffo`; adding `--defsym M68060=1` keeps the 16-bit multiply and divide, since the 68060 traps on the 64-bit forms.
+`tests/m68k_asm.sh run CPU [n] [main.c]` checks it under qemu-m68k (`GEN=tests/gen_vectors_edge.c` aims at the rare paths; `tests/m68k_asm_regs.c` the callee-saved registers, `tests/m68k_asm_conv.c` float to int saturation, `tests/m68k_asm_rows.c` one row per fixed bug); `tests/m68k_asm.sh clocks CPU OUT [vectors.h]` builds the pricing executables.
+
 ## binary64 (C)
 
 `src/sf64.c`: `__adddf3 __subdf3 __muldf3 __divdf3 __negdf2`, the compares (`__cmpdf2 __eqdf2 __nedf2 __ltdf2 __ledf2 __gedf2 __gtdf2 __unorddf2`), `__floatsidf __floatunsidf __floatdidf __floatundidf` and `__fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi`; `__extendsfdf2` and `__truncdfsf2` are in `sf32_conv64.c`. The binary32 core at 56-bit working width.
