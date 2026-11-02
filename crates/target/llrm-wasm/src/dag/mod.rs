@@ -130,6 +130,7 @@ pub fn compile_function(
     fix_br_table_defaults(&mut f);
     if options.level != crate::driver::Level::O0 {
         crate::machine_sink::machine_sink(&mut f);
+        f.edge_probs.clear();
     }
     if matches!(
         options.level,
@@ -151,6 +152,11 @@ pub fn compile_function(
     }
     if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
         remove_unreachable_blocks(&mut f);
+    }
+    if options.level != crate::driver::Level::O0 {
+        if crate::branch_fold::fold_branches(&mut f) {
+            remove_unreachable_blocks(&mut f);
+        }
     }
     if options.level != crate::driver::Level::O0 {
         let for_size = matches!(

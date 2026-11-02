@@ -8,11 +8,15 @@
 //! `SplitPHIEdges` makes for a PHI copy is such a block once the coalescer has
 //! removed the copy.
 //!
-//! DEVIATE 1: only this case of `OptimizeBlock` (no tail merging, no branch
-//! reversal, no moving of blocks), and not in a function with a personality
-//! (try scopes name their blocks). Exit: the shared branch folder over the
-//! neutral machine function (S4), no later than 2026-11-20; deleting this
-//! file is part of that PR.
+//! `fold_branches` is the rest of `OptimizeBlock` but tail merging: the
+//! block before it merges, loses a branch to the block or reverses one, and
+//! the block moves after a predecessor, before a successor, or to the end, so
+//! that a fall-through happens.
+//!
+//! DEVIATE 1: no tail merging, no `OptimizeBranches` outside these cases, and
+//! not in a function with a personality (try scopes name their blocks). Exit:
+//! the shared branch folder over the neutral machine function (S4), no later
+//! than 2026-11-20; deleting this file is part of that PR.
 //!
 //! # See also
 //! `BranchFolding.cpp`, pin d1106deb71cc: `OptimizeBlock`, `IsBranchOnlyBlock`.
@@ -94,6 +98,402 @@ pub fn forward_branch_only_blocks(f: &mut Function) -> bool {
             }
             changed |= moved;
         }
+    }
+    changed
+}
+
+/// The explicit branches ending a block, as `TargetInstrInfo::analyzeBranch`
+/// reports them.
+#[derive(Clone)]
+struct Ending {
+    /// `TBB`: the target of the conditional branch, or of the only branch.
+    taken: Option<usize>,
+    /// `FBB`: the target of the unconditional branch after a conditional one.
+    other: Option<usize>,
+    /// The condition, a `BR_IF` or `BR_UNLESS` with its target left out.
+    cond: Option<Inst>,
+}
+
+/// `None` when the block ends in a branch table: `analyzeBranch` fails.
+fn ending(
+    f: &Function,
+    block: usize,
+) -> Option<Ending> {
+    let target = |inst: &Inst| match inst.operands[..] {
+        [Operand::Block(to), ..] => Some(to as usize),
+        _ => None,
+    };
+    let is_cond = |inst: &Inst| matches!(inst.opcode, op::BR_IF | op::BR_UNLESS);
+    match f.blocks[block].as_slice() {
+        [.., cond, jump] if jump.opcode == op::BR && is_cond(cond) => {
+            Some(Ending { taken: target(cond), other: target(jump), cond: Some(cond.clone()) })
+        }
+        [.., jump] if jump.opcode == op::BR => Some(Ending { taken: target(jump), other: None, cond: None }),
+        [.., cond] if is_cond(cond) => Some(Ending { taken: target(cond), other: None, cond: Some(cond.clone()) }),
+        [.., last] if last.opcode == op::BR_TABLE_I32 => None,
+        _ => Some(Ending { taken: None, other: None, cond: None }),
+    }
+}
+
+/// `removeBranch` then `insertBranch`.
+fn set_branches(
+    f: &mut Function,
+    block: usize,
+    taken: Option<usize>,
+    other: Option<usize>,
+    cond: Option<&Inst>,
+) {
+    let insts = &mut f.blocks[block];
+    if insts.last().is_some_and(|i| i.opcode == op::BR) {
+        insts.pop();
+    }
+    if insts.last().is_some_and(|i| matches!(i.opcode, op::BR_IF | op::BR_UNLESS)) {
+        insts.pop();
+    }
+    let Some(taken) = taken else { return };
+    match cond {
+        Some(cond) => {
+            let mut cond = cond.clone();
+            cond.operands[0] = Operand::Block(taken as u32);
+            insts.push(cond);
+            if let Some(other) = other {
+                insts.push(Inst::new(op::BR, &[Operand::Block(other as u32)]));
+            }
+        }
+        None => insts.push(Inst::new(op::BR, &[Operand::Block(taken as u32)])),
+    }
+}
+
+/// `reverseBranchCondition`.
+fn reversed(cond: &Inst) -> Inst {
+    let mut cond = cond.clone();
+    cond.opcode = if cond.opcode == op::BR_IF { op::BR_UNLESS } else { op::BR_IF };
+    cond
+}
+
+/// The layout as a list of blocks that can be moved in constant time.
+struct Layout {
+    prev: Vec<usize>,
+    next: Vec<usize>,
+    tail: usize,
+}
+
+impl Layout {
+    const NONE: usize = usize::MAX;
+
+    fn new(n: usize) -> Layout {
+        Layout {
+            prev: (0..n).map(|b| b.checked_sub(1).unwrap_or(Self::NONE)).collect(),
+            next: (0..n).map(|b| if b + 1 < n { b + 1 } else { Self::NONE }).collect(),
+            tail: n - 1,
+        }
+    }
+
+    fn unlink(
+        &mut self,
+        b: usize,
+    ) {
+        let (p, n) = (self.prev[b], self.next[b]);
+        if p != Self::NONE {
+            self.next[p] = n;
+        }
+        if n != Self::NONE {
+            self.prev[n] = p;
+        } else {
+            self.tail = p;
+        }
+    }
+
+    fn insert_after(
+        &mut self,
+        b: usize,
+        at: usize,
+    ) {
+        let n = self.next[at];
+        self.prev[b] = at;
+        self.next[b] = n;
+        self.next[at] = b;
+        if n != Self::NONE {
+            self.prev[n] = b;
+        } else {
+            self.tail = b;
+        }
+    }
+
+    /// `MachineBasicBlock::moveAfter`.
+    fn move_after(
+        &mut self,
+        b: usize,
+        at: usize,
+    ) {
+        self.unlink(b);
+        self.insert_after(b, at);
+    }
+
+    /// `MachineBasicBlock::moveBefore`; the entry block stays first.
+    fn move_before(
+        &mut self,
+        b: usize,
+        at: usize,
+    ) {
+        let before = self.prev[at];
+        self.unlink(b);
+        self.insert_after(b, before);
+    }
+
+    fn order(&self) -> Vec<usize> {
+        std::iter::successors(Some(0), |&b| Some(self.next[b]).filter(|&x| x != Self::NONE)).collect()
+    }
+}
+
+struct Folder<'a> {
+    f: &'a mut Function,
+    layout: Layout,
+    preds: Vec<Vec<usize>>,
+    /// Merged into the block before: left with no code and no edges.
+    dead: Vec<bool>,
+}
+
+impl Folder<'_> {
+    /// `MachineBasicBlock::canFallThrough`: a branch to the next block counts.
+    fn can_fall_through(
+        &self,
+        block: usize,
+    ) -> bool {
+        let next = self.layout.next[block];
+        let Some(end) = ending(self.f, block) else { return false };
+        match (end.taken, end.other, end.cond.is_some()) {
+            (None, ..) => falls_through(self.f, block),
+            (Some(t), None, false) => t == next,
+            (Some(t), Some(o), _) => t == next || o == next,
+            (Some(_), None, true) => true,
+        }
+    }
+
+    fn dedupe_succs(
+        &mut self,
+        block: usize,
+    ) {
+        let mut seen = Vec::new();
+        self.f
+            .succs[block]
+            .retain(
+                |s| {
+                    let new = !seen.contains(s);
+                    seen.push(*s);
+                    new
+                },
+            );
+    }
+
+    /// `BranchFolder::OptimizeBlock`, without tail merging.
+    fn optimize_block(
+        &mut self,
+        block: usize,
+    ) -> bool {
+        let mut changed = false;
+        loop {
+            let prev = self.layout.prev[block];
+            if prev == Layout::NONE || self.f.is_eh_pad(block) {
+                return changed;
+            }
+            let cur = ending(self.f, block);
+            if let Some(p) = ending(self.f, prev) {
+                // Both edges of the block before go to one block.
+                if p.taken.is_some() && p.taken == p.other {
+                    set_branches(self.f, prev, p.taken.filter(|&t| t != block), None, None);
+                    self.dedupe_succs(prev);
+                    changed = true;
+                    continue;
+                }
+                // The block before falls into this one only: they are one.
+                if p.taken.is_none()
+                    && self.preds[block] == [prev]
+                    && self.f.succs[prev] == [block]
+                    && falls_through(self.f, prev)
+                {
+                    let code = std::mem::take(&mut self.f.blocks[block]);
+                    self.f.blocks[prev].extend(code);
+                    self.f.succs[prev] = std::mem::take(&mut self.f.succs[block]);
+                    for &s in &self.f.succs[prev] {
+                        for pred in &mut self.preds[s] {
+                            if *pred == block {
+                                *pred = prev;
+                            }
+                        }
+                    }
+                    self.preds[block].clear();
+                    self.layout.unlink(block);
+                    self.dead[block] = true;
+                    return true;
+                }
+                // A branch to the next block is the fall-through.
+                if p.taken == Some(block) && p.other.is_none() {
+                    set_branches(self.f, prev, None, None, None);
+                    changed = true;
+                    continue;
+                }
+                if p.other == Some(block) {
+                    set_branches(self.f, prev, p.taken, None, p.cond.as_ref());
+                    changed = true;
+                    continue;
+                }
+                // `br_if block; br other` falls through to the block instead.
+                if p.taken == Some(block)
+                    && let (Some(other), Some(cond)) = (p.other, &p.cond)
+                {
+                    set_branches(self.f, prev, Some(other), None, Some(&reversed(cond)));
+                    changed = true;
+                    continue;
+                }
+                // A block that returns moves to the end when the block before
+                // would then fall through to what it branches to.
+                let after = self.layout.next[block];
+                if self.f.succs[block].is_empty()
+                    && p.cond.is_some()
+                    && p.other.is_none()
+                    && after != Layout::NONE
+                    && p.taken == Some(after)
+                    && !self.can_fall_through(block)
+                    && (after != self.layout.tail || self.better_fall_through(p.taken.unwrap(), block))
+                    && let Some(cond) = &p.cond
+                {
+                    set_branches(self.f, prev, Some(block), None, Some(&reversed(cond)));
+                    let tail = self.layout.tail;
+                    self.layout.move_after(block, tail);
+                    return true;
+                }
+            }
+            // A loop of one block branches back on the true edge.
+            if let Some(c) = &cur
+                && let (Some(taken), Some(other), Some(cond)) = (c.taken, c.other, &c.cond)
+                && other == block
+                && taken != block
+            {
+                set_branches(self.f, block, Some(other), Some(taken), Some(&reversed(cond)));
+                changed = true;
+                continue;
+            }
+            return self.move_block(block, prev, cur.as_ref()) || changed;
+        }
+    }
+
+    /// `IsBetterFallthrough(first, second)`.
+    fn better_fall_through(
+        &self,
+        first: usize,
+        second: usize,
+    ) -> bool {
+        let is_call =
+            |b: usize| self.f.blocks[b].last().is_some_and(|i| desc(i.opcode).is_some_and(|d| d.has(flag::CALL)));
+        if self.f.blocks[first].is_empty() || self.f.blocks[second].is_empty() {
+            return false;
+        }
+        if self.f.succs[first].contains(&second) {
+            return true;
+        }
+        if self.f.succs[second].contains(&first) {
+            return false;
+        }
+        is_call(second) && !is_call(first)
+    }
+
+    /// The part of `OptimizeBlock` that moves a block to where a
+    /// fall-through happens.
+    fn move_block(
+        &mut self,
+        block: usize,
+        prev: usize,
+        cur: Option<&Ending>,
+    ) -> bool {
+        if self.can_fall_through(prev) {
+            return false;
+        }
+        let falls = self.can_fall_through(block);
+        // After a predecessor that does not fall through.
+        let cur_ok = cur.is_some_and(|c| !falls || c.taken.is_none() || c.other.is_none());
+        if cur_ok {
+            for i in 0..self.preds[block].len() {
+                let pred = self.preds[block][i];
+                let Some(p) = ending(self.f, pred) else { continue };
+                if pred != block
+                    && !self.can_fall_through(pred)
+                    && (p.taken == Some(block) || p.other == Some(block))
+                    && (!falls || block >= pred)
+                {
+                    if falls {
+                        let next = self.layout.next[block];
+                        if self.f.blocks[block].last().is_none_or(|l| l.opcode != op::BR) {
+                            self.f.blocks[block].push(Inst::new(op::BR, &[Operand::Block(next as u32)]));
+                        }
+                    }
+                    self.layout.move_after(block, pred);
+                    return true;
+                }
+            }
+        }
+        if falls {
+            return false;
+        }
+        // Before a successor that nothing falls into.
+        if let Some(c) = cur {
+            for succ in [c.other, c.taken].into_iter().flatten() {
+                let before = self.layout.prev[succ];
+                if succ != block && before != block && before != Layout::NONE && !self.can_fall_through(before) {
+                    self.layout.move_before(block, succ);
+                    return true;
+                }
+            }
+        }
+        // To the end, when the block before would fall through to the next.
+        let next = self.layout.next[block];
+        if next != Layout::NONE
+            && !self.f.is_eh_pad(next)
+            && ending(self.f, prev).is_some()
+            && self.f.succs[prev].contains(&next)
+        {
+            let tail = self.layout.tail;
+            self.layout.move_after(block, tail);
+            return true;
+        }
+        false
+    }
+}
+
+/// `BranchFolder::OptimizeBranches` (DEVIATE 1): the layout and the branches
+/// change. Whether anything did.
+pub fn fold_branches(f: &mut Function) -> bool {
+    let n = f.blocks.len();
+    if f.personality || n < 3 {
+        return false;
+    }
+    let mut preds = vec![Vec::new(); n];
+    for (from, succs) in f.succs.iter().enumerate() {
+        for &to in succs {
+            if !preds[to].contains(&from) {
+                preds[to].push(from);
+            }
+        }
+    }
+    let mut folder = Folder { f, layout: Layout::new(n), preds, dead: vec![false; n] };
+    let mut changed = false;
+    // The pin repeats until nothing changes; each move lands a fall-through.
+    for _ in 0..n {
+        let mut round = false;
+        for block in folder.layout.order().into_iter().skip(1) {
+            if !folder.dead[block] {
+                round |= folder.optimize_block(block);
+            }
+        }
+        changed |= round;
+        if !round {
+            break;
+        }
+    }
+    if changed {
+        let mut order = folder.layout.order();
+        order.extend((0..n).filter(|&b| folder.dead[b]));
+        folder.f.apply_order(&order);
     }
     changed
 }

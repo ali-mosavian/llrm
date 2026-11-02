@@ -355,3 +355,80 @@ fn a_constant_for_a_loop_exit_phi_is_set_on_the_exit_edge() {
     let end_loop = f.find("end_loop").expect("the loop");
     assert!(constant > end_loop, "{text}");
 }
+
+const TWO_LOOP_EXITS: &str = "declare void @sort(ptr, i32, i32)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
+define i32 @f(i16 %0) {
+  %2 = alloca [1024 x i32], align 16
+  call void @llvm.lifetime.start.p0(i64 -1, ptr nonnull %2)
+  br label %3
+
+3:
+  %4 = phi i32 [ %12, %3 ], [ -4096, %1 ]
+  %5 = phi i16 [ %0, %1 ], [ %7, %3 ]
+  %6 = mul i16 %5, 25173
+  %7 = add i16 %6, 13849
+  %8 = and i16 %7, 32767
+  %9 = zext nneg i16 %8 to i32
+  %10 = getelementptr i8, ptr %2, i32 %4
+  %11 = getelementptr i8, ptr %10, i32 4096
+  store i32 %9, ptr %11, align 4
+  %12 = add nsw i32 %4, 4
+  %exitcond2 = icmp eq i32 %12, 0
+  br i1 %exitcond2, label %13, label %3
+
+13:
+  call void @sort(ptr %2, i32 0, i32 1023)
+  br label %17
+
+14:
+  %15 = add nsw i32 %18, 4
+  %exitcond1 = icmp eq i32 %15, 0
+  br i1 %exitcond1, label %16, label %17
+
+16:
+  br label %25
+
+17:
+  %18 = phi i32 [ %15, %14 ], [ -4092, %13 ]
+  %19 = getelementptr i8, ptr %2, i32 %18
+  %20 = getelementptr i8, ptr %19, i32 4096
+  %21 = getelementptr i8, ptr %19, i32 4092
+  %22 = load i32, ptr %21, align 4
+  %23 = load i32, ptr %20, align 4
+  %24 = icmp sgt i32 %22, %23
+  br i1 %24, label %36, label %14
+
+25:
+  %26 = phi ptr [ %2, %16 ], [ %35, %25 ]
+  %27 = phi i32 [ %33, %25 ], [ 0, %16 ]
+  %28 = phi i32 [ %34, %25 ], [ 0, %16 ]
+  %29 = load i32, ptr %26, align 4
+  %30 = and i32 %28, 15
+  %31 = add nuw nsw i32 %30, 1
+  %32 = mul nsw i32 %29, %31
+  %33 = add nsw i32 %32, %27
+  %34 = add nuw nsw i32 %28, 1
+  %35 = getelementptr i8, ptr %26, i32 4
+  %exitcond = icmp eq i32 1024, %34
+  br i1 %exitcond, label %36, label %25
+
+36:
+  %37 = phi i32 [ %33, %25 ], [ -1, %17 ]
+  call void @llvm.lifetime.end.p0(i64 -1, ptr nonnull %2)
+  ret i32 %37
+}
+";
+
+/// The split block of a loop exit stayed next to the loop, so the code jumped
+/// over it and again out of it: two `br` against the pin's one (bench
+/// quicksort, 634 bytes against 624). The pin's branch folder moves a block
+/// to where a fall-through happens, or to the end.
+#[test]
+fn a_block_nothing_falls_into_moves_to_where_a_fall_through_happens() {
+    let text = asm(TWO_LOOP_EXITS, Level::O2);
+    let f = body(&text, "f");
+    let jumps = f.lines().filter(|line| line.split_whitespace().next() == Some("br")).count();
+    assert_eq!(jumps, 1, "{text}");
+}

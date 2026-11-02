@@ -14,8 +14,8 @@
 //! pin looks for a store between the two blocks, `hasStoreBetween`); the
 //! register-pressure case of `isProfitableToSinkTo` is "not profitable"; the
 //! successors are ordered by loop depth where the pin uses block frequency;
-//! an edge is "unlikely" (`SplitEdgeProbabilityThreshold`) when it leaves a
-//! loop, where the pin reads `MachineBranchProbabilityInfo`; the
+//! an edge with no IR probability (a block a switch made) is "unlikely"
+//! (`SplitEdgeProbabilityThreshold`) when it leaves a loop; the
 //! `CEMergeCandidates` merge of equal copies is left out; a function with an
 //! irreducible loop is left alone (`FixIrreducible` runs later here). Exit:
 //! the shared live intervals, block frequencies and branch probabilities
@@ -35,6 +35,9 @@ use llrm_mir::module::BlockId;
 use crate::cfg::Cfg;
 use crate::dagisel::generated::instrinfo::{desc, flag};
 use crate::mir::{EH_LABEL, Function, IMPLICIT_DEF, Inst, Operand, PHI, VReg, is_copy};
+
+/// `BranchProbability(40, 100)` as a numerator over 2^31.
+const SPLIT_EDGE_PROBABILITY_THRESHOLD: u32 = 858_993_459;
 
 /// A read of a register: the block of the instruction and, for a `PHI`, the
 /// predecessor the value comes from (where the read happens).
@@ -391,9 +394,18 @@ impl Sink {
         if !cheap {
             return true;
         }
-        // An edge out of a loop is unlikely (`SplitEdgeProbabilityThreshold`).
-        if self.loops.get_loop_for(BlockId(from as u32)).is_some_and(|l| !l.contains(BlockId(to as u32))) {
-            return true;
+        // An unlikely edge (`SplitEdgeProbabilityThreshold`, 40%).
+        match Self::edge_probability(f, from, to) {
+            Some(prob) => {
+                if prob <= SPLIT_EDGE_PROBABILITY_THRESHOLD {
+                    return true;
+                }
+            }
+            None => {
+                if self.loops.get_loop_for(BlockId(from as u32)).is_some_and(|l| !l.contains(BlockId(to as u32))) {
+                    return true;
+                }
+            }
         }
         // Cheap, but its only-use source is defined here, so both may sink.
         inst.operands.iter().any(|operand| match *operand {
@@ -402,6 +414,20 @@ impl Sink {
             }
             _ => false,
         })
+    }
+
+    /// `getEdgeProbability(from, to)`, a numerator over 2^31; none when an
+    /// edge of `from` has none.
+    fn edge_probability(
+        f: &Function,
+        from: usize,
+        to: usize,
+    ) -> Option<u32> {
+        let probs = f.edge_probs.get(from)?;
+        if probs.len() != f.succs[from].len() || probs.contains(&0) {
+            return None;
+        }
+        Some(f.succs[from].iter().zip(probs).filter(|(s, _)| **s == to).map(|(_, p)| p).sum())
     }
 
     /// `isLegalToBreakCriticalEdge`.
@@ -415,7 +441,8 @@ impl Sink {
             return false;
         }
         // The back edge of a loop stays whole.
-        let (from_loop, to_loop) = (self.loops.get_loop_for(BlockId(from as u32)), self.loops.get_loop_for(BlockId(to as u32)));
+        let (from_loop, to_loop) =
+            (self.loops.get_loop_for(BlockId(from as u32)), self.loops.get_loop_for(BlockId(to as u32)));
         if from_loop.is_some() && from_loop == to_loop && from_loop.is_some_and(|l| l.get_header().0 as usize == to) {
             return false;
         }

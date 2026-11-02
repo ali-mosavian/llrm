@@ -367,5 +367,16 @@ pub fn emit(
         phis.append(&mut f.blocks[at]);
         f.blocks[at] = phis;
     }
+    // The probability of each edge where the IR block's own edges are the
+    // machine block's; the rest are unknown (zero).
+    f.edge_probs = f.succs.clone().iter().map(|to| vec![0; to.len()]).collect();
+    for selected in blocks {
+        let at = emitter.position[&selected.id];
+        for (slot, &to) in f.succs[at].iter().enumerate() {
+            if let Some(&(_, numerator)) = selected.probs.iter().find(|(id, _)| emitter.position.get(id) == Some(&to)) {
+                f.edge_probs[at][slot] = numerator;
+            }
+        }
+    }
     f
 }

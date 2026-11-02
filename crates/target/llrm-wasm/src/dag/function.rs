@@ -166,6 +166,9 @@ pub struct Selected {
     /// What the phis of the successors take from this block's edges (an IR
     /// block's; the extra ones have none).
     pub phis: Vec<PhiCopy>,
+    /// The probability of each edge to a successor block, as a numerator over
+    /// 2^31 (`BranchProbabilityInfo`); the extra blocks have none.
+    pub probs: Vec<(u32, u32)>,
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
@@ -213,6 +216,15 @@ pub fn select_function(
     let target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout: &layout,
+        },
+        function,
+    );
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
@@ -232,9 +244,13 @@ pub fn select_function(
                 Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let probs = llrm_mir::loopinfo::children(function, block)
+            .enumerate()
+            .map(|(at, to)| (to.0, bpi.get_edge_probability(function, block, at).get_numerator()))
+            .collect::<Vec<_>>();
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
-        for (id, origin, mut one, phis) in group {
+        for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
@@ -244,6 +260,7 @@ pub fn select_function(
                 unwind: if unwinding { unwind_of(function, origin) } else { None },
                 landing: unwinding && id == origin && starts_with_landing_pad(function, origin),
                 phis,
+                probs: if n == 0 { probs.clone() } else { Vec::new() },
                 dag: one.dag,
                 units,
                 mem_refs,

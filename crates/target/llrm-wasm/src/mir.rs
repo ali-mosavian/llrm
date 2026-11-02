@@ -224,6 +224,9 @@ pub struct Function {
     pub blocks: Vec<Vec<Inst>>,
     /// The successors of each block, by position, in the terminator's order.
     pub succs: Vec<Vec<usize>>,
+    /// The probability of each edge of `succs` as a numerator over 2^31,
+    /// zero when unknown; only until `machine_sink` has read it.
+    pub edge_probs: Vec<Vec<u32>>,
     /// The symbol and addend of each [`Operand::Sym`].
     pub symbols: Vec<(String, i64)>,
     /// The (name, parameters, results) of each function the code names: the

@@ -190,6 +190,9 @@ pub(crate) fn split_edge(
     }
     f.blocks.insert(new, vec![Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(target)])]);
     f.succs.insert(new, vec![block]);
+    if !f.edge_probs.is_empty() {
+        f.edge_probs.insert(new, vec![1 << 31]);
+    }
 }
 
 #[cfg(test)]
