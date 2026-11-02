@@ -479,8 +479,7 @@ pub trait Tti {
     }
 
     /// How many values the x87 stack holds where this subtarget keeps floats
-    /// there (no SSE2 floating point); none: floats are in registers a
-    /// pressure rule need not count.
+    /// there (no SSE2 floating point); none: floats are not on a stack.
     fn x87_stack_slots(&self) -> Option<u32> {
         None
     }
