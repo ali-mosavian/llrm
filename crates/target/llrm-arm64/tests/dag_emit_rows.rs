@@ -316,3 +316,16 @@ fn an_i16_overflow_check_is_promoted() {
         dag_at("-O2", &body).unwrap_or_else(|why| panic!("{name}: {why}"));
     }
 }
+
+/// `llvm.abs` was refused ("custom lowering of Abs"; `builtins_table` fell to
+/// the hand selector): the pin's `LowerABS` is `cmp x, #0; cneg`.
+#[test]
+fn abs_is_a_compare_and_a_conditional_negate() {
+    for (ty, reg) in [("i32", "w"), ("i64", "x")] {
+        let body = format!(
+            "declare {ty} @llvm.abs.{ty}({ty}, i1)\ndefine {ty} @f({ty} %a) {{\n  %r = call {ty} @llvm.abs.{ty}({ty} %a, i1 false)\n  ret {ty} %r\n}}\n"
+        );
+        let asm = dag_at("-O2", &body).unwrap_or_else(|why| panic!("{why}"));
+        assert!(asm.contains(&format!("subs {reg}zr, {reg}0, #0")) && asm.contains("csneg"), "{asm}");
+    }
+}

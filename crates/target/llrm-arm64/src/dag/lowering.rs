@@ -908,6 +908,23 @@ pub fn lower_atomic_load_and(
     Some(dag.get_atomic_rmw(ISD::AtomicLoadClr, chain, ptr, complement, info))
 }
 
+/// `LowerABS`: `x` or `0 - x` selected by the sign of `SUBS x, 0`.
+pub fn lower_abs(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 && vt != EVT::I64 {
+        return None;
+    }
+    let x = dag.operand(node, 0);
+    let zero = dag.get_constant(0, vt);
+    let negated = dag.get_node(ISD::Sub, vt, &[zero, x]);
+    let compare = dag.get_node_multi(ISD::Target(a64::SUBS), &[vt, EVT::I32], &[x, zero]);
+    let plus = cond_const(dag, cc::PL);
+    Some(dag.get_node(ISD::Target(a64::CSEL), vt, &[x, negated, plus, SDValue { node: compare.node, res: 1 }]))
+}
+
 /// `getAArch64XALUOOp` for the add and subtract forms: the value and flags of
 /// `ADDS`/`SUBS`, and the condition that says overflow. `None` for any other
 /// node, or a type that is not a register type.

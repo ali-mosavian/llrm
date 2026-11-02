@@ -281,6 +281,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => {
                 super::lowering::lower_xalu(dag, node)
             }
+            ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
