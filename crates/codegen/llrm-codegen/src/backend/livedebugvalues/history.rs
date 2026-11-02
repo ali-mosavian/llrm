@@ -81,6 +81,41 @@ pub fn locations(
     out
 }
 
+/// The ranges of every variable as byte offsets into the function, the way
+/// the writer reads them: entries (`history`), then ranges
+/// (`locations`), a clobbered range ending after the clobbering instruction.
+/// `insns` is each instruction's slot and id in code order, `offset` the
+/// byte offset an id's code starts at, `code_len` the function's size.
+pub fn in_code(
+    ranges: &[Located],
+    insns: &[(i64, u64)],
+    offset: &dyn Fn(u64) -> Option<usize>,
+    code_len: usize,
+) -> BTreeMap<Var, Vec<(usize, usize, Where)>> {
+    let end = insns.last().map_or(0, |&(slot, _)| slot + 1);
+    let byte = |slot: i64| -> Option<usize> {
+        if slot >= end {
+            return Some(code_len);
+        }
+        let at = insns.partition_point(|&(one, _)| one < slot);
+        insns.get(at).and_then(|&(_, id)| offset(id))
+    };
+    // The instruction after the one at `slot`: where it stops being read.
+    let after = |slot: i64| insns.iter().map(|&(one, _)| one).find(|&one| one > slot).unwrap_or(end);
+    let mut out = BTreeMap::new();
+    for (var, entries) in history(ranges, end) {
+        let found: Vec<_> = locations(&entries, end, &after)
+            .into_iter()
+            .filter_map(|(from, to, place)| Some((byte(from)?, byte(to)?, place)))
+            .filter(|(from, to, _)| from < to)
+            .collect();
+        if !found.is_empty() {
+            out.insert(var, found);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +199,20 @@ mod tests {
     fn a_range_of_no_length_is_dropped() {
         let place = Where::Place(Place::Register(RegId::from_raw(5)));
         assert_eq!(locations(&[Entry::Value { at: 7, place }, Entry::Clobber { at: 7 }], 40, &|at| at), []);
+    }
+    /// The writer joins on bytes, the allocator on slots: a parameter in one
+    /// register until the second instruction writes it reads as the bytes
+    /// of the first two instructions (a clobbered range ends after the
+    /// clobbering instruction), and a variable's range to the end of the
+    /// code stops at the function's size.
+    #[test]
+    fn slot_ranges_become_byte_ranges_of_the_function() {
+        let insns = [(0, 100), (4, 101), (8, 102)];
+        let offsets = |id: u64| Some([0usize, 3, 7][(id - 100) as usize]);
+        let place = Where::Place(Place::Register(RegId::from_raw(5)));
+        let clobbered = in_code(&[range(1, 0, 4, 5)], &insns, &offsets, 10);
+        assert_eq!(clobbered[&var(1)], [(0, 7, place)]);
+        let open = in_code(&[range(2, 4, 100, 5)], &insns, &offsets, 10);
+        assert_eq!(open[&var(2)], [(3, 10, place)]);
     }
 }
