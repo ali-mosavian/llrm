@@ -114,6 +114,9 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// `RTLIB::getSINTTOFP` and the like: the routine for `op` from a type to
+    /// another.
+    conv_libcall_names: HashMap<(ISD, MVT, MVT), &'static str>,
 }
 
 impl TargetLowering {
@@ -131,6 +134,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            conv_libcall_names: HashMap::default(),
         }
     }
 
@@ -142,6 +146,76 @@ impl TargetLowering {
         name: &'static str,
     ) {
         self.libcall_names.insert((op, vt), name);
+    }
+
+    /// `RTLIB::ADD_F32` and the others: libgcc's and compiler-rt's names, the
+    /// pin's defaults (`RuntimeLibcalls.def`), for a target without an FPU.
+    pub fn set_soft_float_libcalls(&mut self) {
+        for (op, f32_name, f64_name) in [
+            (ISD::FAdd, "__addsf3", "__adddf3"),
+            (ISD::FSub, "__subsf3", "__subdf3"),
+            (ISD::FMul, "__mulsf3", "__muldf3"),
+            (ISD::FDiv, "__divsf3", "__divdf3"),
+        ] {
+            self.set_libcall_name(op, MVT::F32, f32_name);
+            self.set_libcall_name(op, MVT::F64, f64_name);
+        }
+        use MVT::{F32, F64, I32, I64};
+        for (op, from, to, name) in [
+            (ISD::FpExtend, F32, F64, "__extendsfdf2"),
+            (ISD::FpRound, F64, F32, "__truncdfsf2"),
+            (ISD::SIntToFp, I32, F32, "__floatsisf"),
+            (ISD::SIntToFp, I32, F64, "__floatsidf"),
+            (ISD::SIntToFp, I64, F32, "__floatdisf"),
+            (ISD::SIntToFp, I64, F64, "__floatdidf"),
+            (ISD::UIntToFp, I32, F32, "__floatunsisf"),
+            (ISD::UIntToFp, I32, F64, "__floatunsidf"),
+            (ISD::UIntToFp, I64, F32, "__floatundisf"),
+            (ISD::UIntToFp, I64, F64, "__floatundidf"),
+            (ISD::FpToSInt, F32, I32, "__fixsfsi"),
+            (ISD::FpToSInt, F32, I64, "__fixsfdi"),
+            (ISD::FpToSInt, F64, I32, "__fixdfsi"),
+            (ISD::FpToSInt, F64, I64, "__fixdfdi"),
+            (ISD::FpToUInt, F32, I32, "__fixunssfsi"),
+            (ISD::FpToUInt, F32, I64, "__fixunssfdi"),
+            (ISD::FpToUInt, F64, I32, "__fixunsdfsi"),
+            (ISD::FpToUInt, F64, I64, "__fixunsdfdi"),
+        ] {
+            self.set_conv_libcall_name(op, from, to, name);
+        }
+    }
+
+    /// `RTLIB::SDIV_I64` and the others: libgcc's and compiler-rt's names, the
+    /// pin's defaults, for a target that divides a double-word integer by a
+    /// call (`ExpandIntRes_SDIV`).
+    pub fn set_integer_libcalls(&mut self) {
+        for (op, name) in
+            [(ISD::SDiv, "__divdi3"), (ISD::UDiv, "__udivdi3"), (ISD::SRem, "__moddi3"), (ISD::URem, "__umoddi3")]
+        {
+            self.set_libcall_name(op, MVT::I64, name);
+        }
+    }
+
+    /// `setLibcallName` for a conversion `op` from `from` to `to`.
+    pub fn set_conv_libcall_name(
+        &mut self,
+        op: ISD,
+        from: MVT,
+        to: MVT,
+        name: &'static str,
+    ) {
+        self.conv_libcall_names.insert((op, from, to), name);
+    }
+
+    /// `getLibcallName` of the conversion `op` from `from` to `to`.
+    pub fn conv_libcall_name(
+        &self,
+        op: ISD,
+        from: EVT,
+        to: EVT,
+    ) -> Option<&'static str> {
+        let (EVT::Simple(from), EVT::Simple(to)) = (from, to) else { return None };
+        self.conv_libcall_names.get(&(op, from, to)).copied()
     }
 
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has

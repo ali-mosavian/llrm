@@ -90,6 +90,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// No FPU: a float crosses a call, a return and a block as the integer of
+    /// its width (`TypeSoftenFloat`), and its operations are library calls.
+    pub soft_float: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
@@ -321,6 +324,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -360,6 +364,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -809,6 +814,9 @@ impl Builder<'_> {
     ) -> Result<(EVT, usize), Refused> {
         if vt == MVT::Far.into() {
             return Ok((EVT::I16, 2));
+        }
+        if self.target.soft_float && vt.is_floating_point() {
+            return self.parts(EVT::integer(vt.size_in_bits()));
         }
         self.parts(vt)
     }
@@ -1739,9 +1747,14 @@ impl Builder<'_> {
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
         // A float is one part, in a register of its own class: the target's
-        // `accepts` says which.
+        // `accepts` says which. Without an FPU it is the parts of the integer
+        // of its width.
         if vt.is_floating_point() {
-            return Ok(vec![vt]);
+            return if self.target.soft_float {
+                self.calling_parts(EVT::integer(vt.size_in_bits()))
+            } else {
+                Ok(vec![vt])
+            };
         }
         if !vt.is_integer() {
             return Err(Refused("a value that is no integer, with a target's calling hook"));
@@ -1757,6 +1770,15 @@ impl Builder<'_> {
         Ok([half.clone(), half].concat())
     }
 
+    /// The target is big-endian and hands the parts of a wide value to its
+    /// calls high first.
+    fn big_endian_parts(&self) -> bool {
+        matches!(
+            self.target.target_nodes,
+            Some(TargetNodes { big_endian: true, calling: Some(_), .. })
+        )
+    }
+
     /// `getCopyToParts`: `value` as legal parts, a narrow one extended to its
     /// register type by `ext`.
     fn split_for_calling(
@@ -1765,14 +1787,21 @@ impl Builder<'_> {
         ext: Ext,
     ) -> Result<Vec<SDValue>, Refused> {
         let vt = self.dag.value_type(value);
+        if self.target.soft_float && vt.is_floating_point() {
+            let bits = self.dag.get_node(ISD::BitCast, EVT::integer(vt.size_in_bits()), &[value]);
+            return self.split_for_calling(bits, ext);
+        }
         let parts = self.calling_parts(vt)?;
         if parts.len() == 1 {
             let narrow = vt.size_in_bits() < parts[0].size_in_bits();
             return Ok(vec![if narrow { self.dag.get_node(ext.node(), parts[0], &[value]) } else { value }]);
         }
         let [low, high] = self.split_value(value, EVT::integer(vt.size_in_bits() / 2));
-        let mut all = self.split_for_calling(low, ext)?;
-        all.extend(self.split_for_calling(high, ext)?);
+        // `getCopyToParts` reverses the parts on a big-endian target: the
+        // high one is first.
+        let (first, second) = if self.big_endian_parts() { (high, low) } else { (low, high) };
+        let mut all = self.split_for_calling(first, ext)?;
+        all.extend(self.split_for_calling(second, ext)?);
         Ok(all)
     }
 
@@ -1784,6 +1813,10 @@ impl Builder<'_> {
         assert: Option<ISD>,
         pointer: bool,
     ) -> SDValue {
+        if self.target.soft_float && vt.is_floating_point() {
+            let bits = self.join_from_calling(parts, EVT::integer(vt.size_in_bits()), None, pointer);
+            return self.dag.get_node(ISD::BitCast, vt, &[bits]);
+        }
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
                 return *one;
@@ -1800,7 +1833,9 @@ impl Builder<'_> {
             return self.dag.get_node(ISD::Truncate, vt, &[one]);
         }
         let half = EVT::integer(vt.size_in_bits() / 2);
-        let (low, high) = parts.split_at(parts.len() / 2);
+        let (first, second) = parts.split_at(parts.len() / 2);
+        // `getCopyFromParts`: the high part is first on a big-endian target
+        let (low, high) = if self.big_endian_parts() { (second, first) } else { (first, second) };
         let pair = [self.join_from_calling(low, half, None, false), self.join_from_calling(high, half, None, false)];
         self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
     }
@@ -2564,6 +2599,11 @@ impl Builder<'_> {
         vt: EVT,
         pointer: bool,
     ) -> Result<SDValue, Refused> {
+        // A softened float lives in the registers of the integer of its width.
+        if self.target.soft_float && vt.is_floating_point() {
+            let bits = self.copy_from_reg(reg, EVT::integer(vt.size_in_bits()), false)?;
+            return Ok(self.dag.get_node(ISD::BitCast, vt, &[bits]));
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {
@@ -2599,6 +2639,10 @@ impl Builder<'_> {
         extend: ISD,
     ) -> Result<(), Refused> {
         let vt = self.dag.value_type(value);
+        if self.target.soft_float && vt.is_floating_point() {
+            let bits = self.dag.get_node(ISD::BitCast, EVT::integer(vt.size_in_bits()), &[value]);
+            return self.copy_leaf_to_register(bits, reg, extend);
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {

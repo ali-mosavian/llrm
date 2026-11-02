@@ -20,10 +20,12 @@
 //! 256..258 are segment overrides on an `i32`. Exit: none. Owner sdag-b.
 //! Review 2026-11-13.
 //!
-//! DEVIATE SD14: the floating types are always legal (x87 register classes);
-//! the pin's `SoftenFloat` and `ExpandFloat` arms are not translated. Reason:
-//! no target of ours lacks the x87. Exit: none. Owner sdag-b. Review
-//! 2026-11-13.
+//! DEVIATE SD14: the floating types are legal on a target with a float
+//! register class (x87); `with_soft_float` softens `f32` and `f64` to `i32`
+//! and `i64` (m68k without an FPU). `SoftenFloat` is translated for scalar
+//! arithmetic, conversions, compares, loads, stores, select and bitcast;
+//! `ExpandFloat` is not (no `f128`, no double-double). Exit: none. Owner
+//! sdag-b. Review 2026-11-13.
 //!
 //! # See also
 //! LLVM's `computeRegisterProperties`
@@ -39,6 +41,8 @@ pub enum TypeAction {
     Legal,
     PromoteInteger,
     ExpandInteger,
+    /// `TypeSoftenFloat`: the float is carried as an integer of its width.
+    SoftenFloat,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -50,6 +54,9 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
+    /// No FPU: `f32` and `f64` are carried as `i32` and `i64`
+    /// (`TypeSoftenFloat`).
+    soft_float: bool,
     /// `getScalarShiftAmountTy`.
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
@@ -89,7 +96,19 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+        TargetLoweringInfo { integers, far, soft_float: false, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+    }
+
+    /// The target has no FPU: `f32` and `f64` are softened to integers and
+    /// their operations are library calls.
+    pub fn with_soft_float(mut self) -> TargetLoweringInfo {
+        self.soft_float = true;
+        self
+    }
+
+    /// Floats are softened.
+    pub fn is_soft_float(&self) -> bool {
+        self.soft_float
     }
 
     /// A shift's amount has the type of the value shifted
@@ -155,6 +174,8 @@ impl TargetLoweringInfo {
                 assert!(self.far, "this target has no far pointer");
                 (TypeAction::ExpandInteger, EVT::I16)
             }
+            EVT::Simple(MVT::F32) if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
+            EVT::Simple(MVT::F64) if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
             EVT::Simple(mvt) => match INTEGERS.iter().position(|&int| int == mvt) {
                 Some(at) => {
                     let (action, to) = self.integers[at];

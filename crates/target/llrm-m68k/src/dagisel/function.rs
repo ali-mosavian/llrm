@@ -38,6 +38,7 @@ pub fn builder_target() -> BuilderTarget {
             ..BuilderTarget::m32().dag
         },
         shift_amount: EVT::I32,
+        soft_float: true,
         jump_tables: true,
         string_instructions: false,
         // past the inline limit a copy or a fill is a call (the
@@ -72,6 +73,9 @@ pub struct PhiUpdate {
 /// One block, selected and scheduled.
 pub struct Selected {
     pub block: BlockId,
+    /// The block whose lowering made this one (a `switch`'s or a split
+    /// condition's), which exports the phi inputs its successors read.
+    pub parent: Option<BlockId>,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     pub phis: Vec<PhiUpdate>,
@@ -131,6 +135,7 @@ pub fn select_function_with(
         updates.push(built.phi_updates);
         selected.push(Selected {
             block,
+            parent: None,
             dag: built.dag,
             units,
             phis: Vec::new(),
@@ -143,6 +148,7 @@ pub fn select_function_with(
             updates.push(extra.phi_updates);
             selected.push(Selected {
                 block: id,
+                parent: Some(block),
                 dag: extra.dag,
                 units,
                 phis: Vec::new(),
@@ -186,12 +192,16 @@ pub fn select_function_with(
         one.tables.clone_from(&info.jump_tables);
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
-        for (phi, incoming) in pending {
+        for (at, &(phi, incoming)) in pending.iter().enumerate() {
             let ValueDef::Instruction(def) = function.value(phi).def else {
                 return Err("a phi that is not an instruction".to_owned());
             };
             let phi_block = function.parent(def).ok_or("a phi outside a block")?;
-            let result = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            let first = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            // A value of two registers has an entry for each part, in order:
+            // the k-th is the phi's k-th register.
+            let part = pending[..at].iter().filter(|(one, _)| *one == phi).count();
+            let result = if part == 0 { first } else { info.part_regs(first, part + 1)[part] };
             let bits = module.context.types.int_bits(function.value(phi).ty).unwrap_or(32);
             one.phis.push(PhiUpdate { phi_block, result, incoming, bits });
         }

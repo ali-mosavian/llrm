@@ -926,7 +926,10 @@ impl<'a> Graph<'a> {
         // Nothing to backtrack to: the live register's definition is cloned
         // where the target cannot copy the register (`CopyAndMoveSuccessors`).
         let (try_su, lregs) = self.interferences[0].clone();
+        // A unit held only because its copy might clobber the register is not
+        // an interference of the pin's: nothing to duplicate for it.
         if let [reg] = lregs[..]
+            && !self.live_regs_held_by(try_su, false).is_empty()
             && self.info.has_cross_copy_class(reg)
             && let Some(&lr_def) = self.live_reg_defs.get(&reg)
             && let Some(new_def) = self.copy_and_move_successors(lr_def, queue)
@@ -1118,6 +1121,16 @@ impl<'a> Graph<'a> {
         &self,
         su: usize,
     ) -> Vec<u16> {
+        self.live_regs_held_by(su, true)
+    }
+
+    /// `copies` counts the virtual-register copies the target says clobber
+    /// (`copy_clobbers`); without it only the pin's own interferences remain.
+    fn live_regs_held_by(
+        &self,
+        su: usize,
+        copies: bool,
+    ) -> Vec<u16> {
         if self.live_reg_defs.is_empty() {
             return Vec::new();
         }
@@ -1132,7 +1145,7 @@ impl<'a> Graph<'a> {
             }
         }
         for &node in &self.sus[su].nodes {
-            if let Some(reg) = self.info.copy_clobbers()
+            if let Some(reg) = self.info.copy_clobbers().filter(|_| copies)
                 && self.is_virtual_copy(node)
             {
                 self.check_for_live_reg_def(su, reg, &mut live);

@@ -48,6 +48,8 @@ use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 use super::x86_lowering::{ES, x86isd};
 
+mod soften;
+
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NodeId {
@@ -74,6 +76,8 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// The integer a softened float is carried as (`SoftenedFloats`).
+    softened: HashMap<SDValue, SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -116,6 +120,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            softened: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -236,6 +241,12 @@ impl<'a> TypeLegalizer<'a> {
                     }
                     return Ok(true);
                 }
+                TypeAction::SoftenFloat => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.soften_float_result(value)?;
+                    }
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -258,6 +269,7 @@ impl<'a> TypeLegalizer<'a> {
                 _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
+                TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);
@@ -1189,6 +1201,12 @@ impl<'a> TypeLegalizer<'a> {
                 let ((tl, th), (fl, fh)) = (self.expanded_integer(then), self.expanded_integer(other));
                 (self.dag.get_select(half, cond, tl, fl), self.dag.get_select(half, cond, th, fh))
             }
+            ISD::BitCast if self.action(self.dag.value_type(self.dag.operand(value, 0))) == TypeAction::SoftenFloat => {
+                // `ExpandRes_BITCAST` of a softened float: the halves of its
+                // integer.
+                let soft = self.softened_float(self.dag.operand(value, 0));
+                self.split_integer(soft, half)
+            }
             ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
                 // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
                 // halves loaded from it.
@@ -1325,6 +1343,7 @@ impl<'a> TypeLegalizer<'a> {
                     self.dag.get_node(ISD::ExtractElement, half, &[part, one]),
                 )
             }
+            op @ (ISD::FpToSInt | ISD::FpToUInt) => self.expand_fp_to_int(value, op, half)?,
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);
@@ -2122,6 +2141,35 @@ impl<'a> TypeLegalizer<'a> {
         let name = self.tli.libcall_name(op, vt)?;
         let result = self.hooks.as_mut()?.make_lib_call(self.dag, name, &args, vt, signed)?;
         Some(self.split_integer(result, half))
+    }
+
+    /// `ExpandIntRes_FP_TO_XINT`: the routine that converts the float to the
+    /// wide integer, called on the operand (its softened integer when the
+    /// target has no FPU), the result split.
+    fn expand_fp_to_int(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let vt = self.dag.value_type(value);
+        let operand = self.dag.operand(value, 0);
+        let operand_vt = self.dag.value_type(operand);
+        let refused = LegalizeError::Unsupported { op, ty: vt, what: "a conversion routine the target does not name" };
+        let name = self.tli.conv_libcall_name(op, operand_vt, vt).ok_or(refused)?;
+        let argument = if self.tli.types.type_conversion(operand_vt).0 == TypeAction::SoftenFloat {
+            self.softened_float(operand)
+        } else {
+            operand
+        };
+        let signed = op == ISD::FpToSInt;
+        let refused = LegalizeError::Unsupported { op, ty: vt, what: "a target hook for the conversion call" };
+        let result = self
+            .hooks
+            .as_mut()
+            .and_then(|hooks| hooks.make_lib_call(self.dag, name, &[argument], vt, signed))
+            .ok_or(refused)?;
+        Ok(self.split_integer(result, half))
     }
 
     /// `ExpandIntRes_SDIV` and the others, as the library call the pin makes
