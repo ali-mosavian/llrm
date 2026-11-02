@@ -12,18 +12,22 @@
 //! build has no WebAssembly target to state its list. Exit: DWARF for wasm, and
 //! the pin build with the target (undated, none planned).
 //!
-//! DEVIATE W23: a call naming an alias is a call of its aliasee (the text IR
-//! parser resolves the operand, llrm-mir `parse.rs`), so `user` calls `impl`
-//! and its `R_WASM_FUNCTION_INDEX_LEB` is against `impl`'s symbol; the pin
-//! keeps `call other` with the relocation against the alias symbol
+//! DEVIATE W23: at `-O0`, and for IR given straight to the backend, a call
+//! naming an alias is a call of its aliasee (the text IR parser resolves the
+//! operand, llrm-mir `parse.rs`), so its `R_WASM_FUNCTION_INDEX_LEB` is against
+//! `impl`'s symbol; the pin keeps `call other` with the relocation against the
+//! alias symbol
 //! ([`GetGlobalAddressSymbol`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/WebAssembly/WebAssemblyMCInstLower.cpp#L71)
-//! prints the symbol of the global it is given). The alias symbol itself is the
-//! pin's: the aliasee's function index. Same linked behaviour for a non-weak
-//! alias; a weak alias, which a linker may replace, is refused by the parser.
-//! Exit: the parser keeps the alias operand and the call relocates against the
-//! alias, once the GlobalAlias emitters (object-refactor) are in, no later than
-//! 2026-11-20; `a_call_naming_an_alias_relocates_against_its_aliasee` pins the
-//! form until then and flips with it.
+//! prints the symbol of the global it is given). At `-O1` and up the pin's own
+//! pipeline makes the same call:
+//! [`OptimizeGlobalAliases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L2260)
+//! replaces the uses of a non-interposable alias with its aliasee (pin clang
+//! `-O1/-O2/-Os` call `@impl`, `-O0` calls `@other`). The alias symbol itself
+//! is the pin's. A weak alias, which a linker may replace, is refused by the
+//! parser. Exit: the shared model gets alias globals (object-refactor's
+//! GlobalAlias work), no later than 2026-11-30, else re-ruled that day;
+//! `a_call_naming_an_alias_relocates_against_its_aliasee` pins the form until
+//! then and flips with it.
 //!
 //! # See also
 //! `WasmObjectWriter.cpp` (`writeObject`, `writeTypeSection`,
