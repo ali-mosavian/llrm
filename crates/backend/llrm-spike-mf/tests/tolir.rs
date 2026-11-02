@@ -1085,6 +1085,73 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
     assert_eq!(literals, vec![7, 9, 7], "{literals:?}");
 }
 
+/// A symbol and the literal 0 are two literals. The converter wrote both as
+/// `Imm 0`, so a zero made again came back as the symbol's address: a loop
+/// variable that starts at 0 started at `_s` (llrm-z80 on tests/run/c
+/// `copy_runs`: 481909 for 929463).
+#[test]
+fn test_a_zero_made_again_is_not_taken_for_a_symbol() {
+    use llrm_codegen::model::ir::Held;
+    let mut f = MFunction::<()>::new("symbol_and_zero");
+    f.classes = vec![(); 2];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut address = op("ldi", vec![Operand::Def(v(0)), Operand::Symbol("s".into(), 0)]);
+    address.rematerializable = true;
+    let mut zero = op("ldi", vec![Operand::Def(v(1)), Operand::Imm(0)]);
+    zero.rematerializable = true;
+    entry.insts.extend([address, zero]);
+    entry.insts.push(op("store", vec![Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(1))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let mut decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let edited = decided.edited.as_mut().expect("an edited body");
+    edited
+        .blocks[0]
+        .insns
+        .edit(
+            |insns| {
+                let address = insns.iter().position(|one| one.defines == [1]).expect("the symbol");
+                let zero = insns.iter().position(|one| one.defines == [2]).expect("the zero");
+                let mut again = (*insns[zero]).clone();
+                again.at = insns[address].at;
+                again.covers = Some((again.at, again.at));
+                again.defines = vec![3];
+                again.spill_reload = true;
+                again.rematerialized = true;
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                let store = insns.iter().position(|one| one.uses == [2]).expect("the read");
+                insns[store] = insns[store].renamed(&|name| if name == 2 { 3 } else { name });
+                insns.insert(address + 1, std::sync::Arc::new(again));
+            },
+        );
+    let back = from_lir::<Flat>(&f, &converted, &decided, regs()).expect("writes back");
+    let literals: Vec<String> = back
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.kind == Kind::Op("ldi"))
+        .filter_map(|i| {
+            i.operands
+                .iter()
+                .find_map(
+                    |o| match o {
+                        Operand::Imm(n) => Some(n.to_string()),
+                        Operand::Symbol(name, _) => Some(name.clone()),
+                        _ => None,
+                    },
+                )
+        })
+        .collect();
+    assert_eq!(literals, ["s", "0", "0"], "{literals:?}");
+}
+
 /// A function states no branch odds, so greedy's block frequencies took every
 /// edge as 1 in 2 and a loop body ran 1.0 times per entry: spill weights
 /// treated loop code as cold (6502 `lz4` grew cycles by 545 over the spike

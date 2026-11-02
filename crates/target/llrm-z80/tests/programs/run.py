@@ -14,7 +14,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
-CLANG_FLAGS = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
+CLANG_FLAGS = ["-target", "msp430", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
 LOG = 0xE000  # the log pointer, then the entries
 CRT0 = f"""\t.module crt0
 \t.globl _main
