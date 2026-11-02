@@ -644,6 +644,17 @@ fn stack_probed(
     module
 }
 
+/// [`built`] for the writer of `format`: what that format's object holds.
+pub fn built_for(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, format, objects)
+}
+
 fn built_inner(
     module: &masm::Module,
     source: &str,
@@ -675,7 +686,11 @@ fn built_inner(
         .collect();
     let mut named: IndexMap<String, Segment> =
         IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", Role::Data, true))]);
-    for (name, _items) in &module.data {
+    // The pin keeps a Mach-O x86-64 jump table in `__text`, after the code: the
+    // labels it differences are then in its own section and need no relocation.
+    let in_text =
+        |name: &str| format == Format::MachO && module.object.code_model() == CodeModel::Flat64 && name == "CONST";
+    for (name, _items) in module.data.iter().filter(|(name, _)| !in_text(name)) {
         if !named.contains_key(name) {
             named.insert(
                 name.clone(),
@@ -690,7 +705,7 @@ fn built_inner(
         segments.push(stack);
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
-    for (name, items) in &module.data {
+    for (name, items) in module.data.iter().filter(|(name, _)| !in_text(name)) {
         let index = segments
             .iter()
             .position(|one| &one.name == name)
@@ -708,6 +723,9 @@ fn built_inner(
             &mut sizes,
             asm_info(objects, format).pref_align,
         )?;
+    }
+    for (_, items) in module.data.iter().filter(|(name, _)| in_text(name)) {
+        _data(&mut segments[0], 0, items, &mut symbols, module.object.code_model());
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
@@ -779,9 +797,21 @@ pub fn _data(
             // field holds `slot - base`.
             masm::Datum::Difference(masm::Difference { name, base }) => {
                 let slot = segment.image.len();
-                segment.put(&[0; 4], &[Fixup::new(0, Fix::pc_rel(4, 0), name.clone())]);
                 let table = symbols[base].1;
-                pack_into(&mut segment.image, slot, slot as i64 - table as i64);
+                match symbols.get(name) {
+                    // Both in this segment: the assembler's answer, no
+                    // relocation (Mach-O keeps the table in `__text`).
+                    Some(&(at, offset)) if at == index => {
+                        segment.put(&[0; 4], &[]);
+                        segment.image[slot..slot + 4]
+                            .copy_from_slice(&((offset as i64 - table as i64) as i32).to_le_bytes());
+                    }
+                    _ => {
+                        segment.put(&[0; 4], &[Fixup::new(0, Fix::pc_rel(4, 0), name.clone())]);
+                        segment.image[slot..slot + 4]
+                            .copy_from_slice(&((slot as i64 - table as i64) as i32).to_le_bytes());
+                    }
+                }
             }
         }
     }

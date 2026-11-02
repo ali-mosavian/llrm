@@ -2307,8 +2307,53 @@ fn a_dense_switch_table_is_written_in_mach_o_and_coff_too() {
         )
         .unwrap()
     };
-    assert!(write(llrm_target::object::Format::MachO).windows(7).any(|window| window == b"__const"));
+    assert!(write(llrm_target::object::Format::MachO).windows(6).any(|window| window == b"__text"));
     let coff = write(llrm_target::object::Format::Coff);
     let fields: Vec<u8> = (1..=8u32).flat_map(|k| (4 * k).to_le_bytes()).collect();
     assert!(coff.windows(fields.len()).any(|window| window == fields.as_slice()), "the .rdata fields");
+}
+
+/// The pin keeps an x86-64 Mach-O jump table in `__text`, after the code, its
+/// entries `block - table` resolved by the assembler; ours was a `__const`
+/// section with a relocation per entry.
+#[test]
+fn a_dense_switch_table_at_m64_is_in_text_without_relocations_in_mach_o() {
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &dense_switch_ir(), "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built_for(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::MachO,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    assert!(object.sections.iter().all(|one| one.role != llrm_object::Role::ROData), "no read-only section");
+    let text = &object.sections[0];
+    // The code's own relocations are the calls; the table adds none.
+    assert!(text.relocs.iter().all(|one| one.at < text.image.len() - 32), "{:?}", text.relocs);
+    let table = text.image.len() - 32;
+    for k in 0..8 {
+        let entry = i32::from_le_bytes(text.image[table + 4 * k..table + 4 * k + 4].try_into().unwrap());
+        // `block - table`: the block is inside the function, before the table.
+        assert!(entry < 0 && table as i64 + i64::from(entry) >= 0, "entry {k}: {entry}");
+    }
+}
+
+/// Eight cases to eight calls: a jump table at m64.
+fn dense_switch_ir() -> String {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text + "d:\n  ret void\n}\n"
 }
