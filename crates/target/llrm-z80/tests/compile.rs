@@ -305,3 +305,16 @@ fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("ld l, e") && !out.contains("ld l, c"), "{out}");
 }
+
+/// A word returned in `de` and stored to a global went through `hl`:
+/// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
+/// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
+#[test]
+fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              @r = external global i16\n\
+              declare i16 @g()\n\
+              define void @f() {\n  %v = call i16 @g()\n  store volatile i16 %v, ptr @r\n  ret void\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ld (_r), de") && !out.contains("ex de, hl"), "{out}");
+}

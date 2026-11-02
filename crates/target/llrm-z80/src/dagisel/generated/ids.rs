@@ -52,10 +52,10 @@ pub mod opcode {
     pub const JPNZ: u16 = 365;
     pub const JPZ: u16 = 366;
     pub const LD16fr: u16 = 367;
-    pub const LD16hm: u16 = 368;
-    pub const LD16mh: u16 = 369;
-    pub const LD16mr: u16 = 370;
-    pub const LD16rf: u16 = 371;
+    pub const LD16gr: u16 = 368;
+    pub const LD16mr: u16 = 369;
+    pub const LD16rf: u16 = 370;
+    pub const LD16rg: u16 = 371;
     pub const LD16ri: u16 = 372;
     pub const LD16rm: u16 = 373;
     pub const LD8Arp: u16 = 374;

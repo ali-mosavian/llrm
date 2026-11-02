@@ -174,14 +174,14 @@ let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;
 }
-// ld a,(nn) / ld (nn),a / ld hl,(nn) / ld (nn),hl: a global.
+// ld a,(nn) / ld (nn),a / ld rr,(nn) / ld (nn),rr: a global. The pair forms are 3 B / 16 T for hl, ED-prefixed 4 B / 20 T for bc and de.
 let mayLoad = 1, AddedComplexity = 10 in {
   def LD8am : Z80Inst<(outs ACC:$d), (ins i16imm:$a), "ld a, ($a)", [(set i8:$d, (load (Z80wrapper tglobaladdr:$a)))]>;
-  def LD16hm : Z80Inst<(outs HLR:$d), (ins i16imm:$a), "ld hl, ($a)", [(set i16:$d, (load (Z80wrapper tglobaladdr:$a)))]>;
+  def LD16rg : Z80Inst<(outs GR16:$d), (ins i16imm:$a), "ld $d, ($a)", [(set i16:$d, (load (Z80wrapper tglobaladdr:$a)))]>;
 }
 let mayStore = 1, AddedComplexity = 10 in {
   def LD8ma : Z80Inst<(outs), (ins ACC:$s, i16imm:$a), "ld ($a), a", [(store i8:$s, (Z80wrapper tglobaladdr:$a))]>;
-  def LD16mh : Z80Inst<(outs), (ins HLR:$s, i16imm:$a), "ld ($a), hl", [(store i16:$s, (Z80wrapper tglobaladdr:$a))]>;
+  def LD16gr : Z80Inst<(outs), (ins GR16:$s, i16imm:$a), "ld ($a), $s", [(store i16:$s, (Z80wrapper tglobaladdr:$a))]>;
 }
 
 // Copies the selector does not match from a pattern.

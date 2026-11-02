@@ -416,11 +416,11 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), {}", name(hi)));
                 self.push("dec hl");
             }
-            "LD8am" | "LD16hm" => {
+            "LD8am" | "LD16rg" => {
                 let (to, at) = (name_of(self, 0)?, self.address(inst, 1)?);
                 self.push(format!("ld {to}, ({at})"));
             }
-            "LD8ma" | "LD16mh" => {
+            "LD8ma" | "LD16gr" => {
                 let (from, at) = (name_of(self, 0)?, self.address(inst, 1)?);
                 self.push(format!("ld ({at}), {from}"));
             }
