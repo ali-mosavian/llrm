@@ -112,6 +112,22 @@ int main(int argc, char **argv)
         trunc64(d);
         trunc64((d & 0xFFFFFFFFE0000000ull) | 0x10000000ull);
     }
+    /* f32 -> f64 -> f32 must return the input (NaN as a class). */
+    for (long i = 0; i < n; i++) {
+        uint32_t a = gen();
+        check(14, a, 0, sf64_to_sf32(sf32_to_sf64(a)), a, 0);
+    }
+    /* 64-bit ties: values with the 40 bits below the f32 mantissa at exactly half, half+-1. */
+    for (int s = 24; s < 64; s++)
+        for (long i = 0; i < 2000; i++) {
+            uint64_t v = (1ull << s) | (((uint64_t)rnd() << 32 | rnd()) & ((1ull << s) - 1));
+            uint64_t half = 1ull << (s - 24), mask = (half << 1) - 1;
+            for (int d = -1; d <= 1; d++) {
+                uint64_t t = (v & ~mask) | (half + d);
+                fromint(t);
+                fromint(0ull - t);
+            }
+        }
     for (int i = 0; i < 15; i++) printf("%-7s %ld\n", opname[i], count[i]);
     printf("fails=%ld\n", fails);
     return fails != 0;
