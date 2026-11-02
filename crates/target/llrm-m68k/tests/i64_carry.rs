@@ -41,10 +41,25 @@ fn sums_and_differences() -> String {
 /// harness). The pin selects 1 or 0 when the target's booleans are not 0 or 1.
 #[test]
 fn the_carry_and_borrow_of_a_64_bit_add_and_subtract_are_one() {
+    run_everywhere(&sums_and_differences(), "the 64-bit sums and differences that differ from the host's");
+}
+
+/// `f()` must return 0 at both CPUs and both optimization goals.
+fn run_everywhere(
+    ir: &str,
+    what: &str,
+) {
+    run_on(ir, what, &[(Cpu::M68000, "m68000"), (Cpu::M68020, "m68020")]);
+}
+
+fn run_on(
+    ir: &str,
+    what: &str,
+    cpus: &[(Cpu, &str)],
+) {
     let Some(qemu) = support::qemu() else { return };
-    let ir = sums_and_differences();
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    for (cpu, flag) in [(Cpu::M68000, "m68000"), (Cpu::M68020, "m68020")] {
+    for &(cpu, flag) in cpus {
         for options in [Options::default(), Options { size: true, ..Options::default() }] {
             let mut all = start("f", &[]);
             all.extend(items_with(&module, "f", cpu, options).expect("compiles"));
@@ -52,12 +67,7 @@ fn the_carry_and_borrow_of_a_64_bit_add_and_subtract_are_one() {
             write_executable(&path, &executable(&all).unwrap()).unwrap();
             let code = support::run(&qemu, &["-cpu", flag], &path);
             std::fs::remove_file(&path).ok();
-            assert_eq!(
-                code,
-                Some(0),
-                "{cpu:?} size={}: the 64-bit sums and differences that differ from the host's",
-                options.size
-            );
+            assert_eq!(code, Some(0), "{cpu:?} size={}: {what}", options.size);
         }
     }
 }
