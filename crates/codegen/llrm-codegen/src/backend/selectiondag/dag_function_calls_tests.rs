@@ -1414,3 +1414,135 @@ fn an_i16_multiply_by_seven_is_a_chain_at_m16_not_an_imul() {
         .collect();
     assert!(!names.iter().any(|n| n.starts_with("imul") || n == "mul"), "an imul is left: {names:?}");
 }
+
+const I16_MULTIPLY_WITH_FULL_REGISTERS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d, i16 %e, i16 %x) {
+entry:
+  %m = mul i16 %x, 7
+  %s1 = add i16 %m, %a
+  %s2 = add i16 %s1, %b
+  %s3 = add i16 %s2, %c
+  %s4 = add i16 %s3, %d
+  %s5 = add i16 %s4, %e
+  ret i16 %s5
+}
+";
+
+/// The same, with every parameter, the multiplied one too, read twelve more
+/// times after the multiply: whichever the chain's register evicts costs a
+/// store and twelve loads.
+const I16_MULTIPLY_WITH_BUSY_VALUES: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d, i16 %e, i16 %x) {
+entry:
+  %m = mul i16 %x, 7
+  %s1 = add i16 %m, %a
+  %s2 = add i16 %s1, %b
+  %s3 = add i16 %s2, %c
+  %s4 = add i16 %s3, %d
+  %s5 = add i16 %s4, %e
+  %t1 = add i16 %s5, %a
+  %t2 = add i16 %t1, %a
+  %t3 = add i16 %t2, %a
+  %t4 = add i16 %t3, %a
+  %t5 = add i16 %t4, %a
+  %t6 = add i16 %t5, %a
+  %t7 = add i16 %t6, %a
+  %t8 = add i16 %t7, %a
+  %t9 = add i16 %t8, %a
+  %t10 = add i16 %t9, %a
+  %t11 = add i16 %t10, %a
+  %t12 = add i16 %t11, %a
+  %t13 = add i16 %t12, %b
+  %t14 = add i16 %t13, %b
+  %t15 = add i16 %t14, %b
+  %t16 = add i16 %t15, %b
+  %t17 = add i16 %t16, %b
+  %t18 = add i16 %t17, %b
+  %t19 = add i16 %t18, %b
+  %t20 = add i16 %t19, %b
+  %t21 = add i16 %t20, %b
+  %t22 = add i16 %t21, %b
+  %t23 = add i16 %t22, %b
+  %t24 = add i16 %t23, %b
+  %t25 = add i16 %t24, %c
+  %t26 = add i16 %t25, %c
+  %t27 = add i16 %t26, %c
+  %t28 = add i16 %t27, %c
+  %t29 = add i16 %t28, %c
+  %t30 = add i16 %t29, %c
+  %t31 = add i16 %t30, %c
+  %t32 = add i16 %t31, %c
+  %t33 = add i16 %t32, %c
+  %t34 = add i16 %t33, %c
+  %t35 = add i16 %t34, %c
+  %t36 = add i16 %t35, %c
+  %t37 = add i16 %t36, %d
+  %t38 = add i16 %t37, %d
+  %t39 = add i16 %t38, %d
+  %t40 = add i16 %t39, %d
+  %t41 = add i16 %t40, %d
+  %t42 = add i16 %t41, %d
+  %t43 = add i16 %t42, %d
+  %t44 = add i16 %t43, %d
+  %t45 = add i16 %t44, %d
+  %t46 = add i16 %t45, %d
+  %t47 = add i16 %t46, %d
+  %t48 = add i16 %t47, %d
+  %t49 = add i16 %t48, %e
+  %t50 = add i16 %t49, %e
+  %t51 = add i16 %t50, %e
+  %t52 = add i16 %t51, %e
+  %t53 = add i16 %t52, %e
+  %t54 = add i16 %t53, %e
+  %t55 = add i16 %t54, %e
+  %t56 = add i16 %t55, %e
+  %t57 = add i16 %t56, %e
+  %t58 = add i16 %t57, %e
+  %t59 = add i16 %t58, %e
+  %t60 = add i16 %t59, %e
+  %t61 = add i16 %t60, %x
+  %t62 = add i16 %t61, %x
+  %t63 = add i16 %t62, %x
+  %t64 = add i16 %t63, %x
+  %t65 = add i16 %t64, %x
+  %t66 = add i16 %t65, %x
+  %t67 = add i16 %t66, %x
+  %t68 = add i16 %t67, %x
+  %t69 = add i16 %t68, %x
+  %t70 = add i16 %t69, %x
+  %t71 = add i16 %t70, %x
+  %t72 = add i16 %t71, %x
+  ret i16 %t72
+}
+";
+
+fn names_of(text: &str) -> Vec<String> {
+    let module = crate::testing::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect()
+}
+
+/// recgcd -O2 (`i*7 + 3`, `i*5 + 2` beside an `i32` total) was 301 memory
+/// operands with `imul` and 901 with the chain: the chain's `mov bx,si; shl
+/// bx,2` temporary was a register the loop did not have. At the rate levels the
+/// spill is priced, in the store and loads the sheet gives it, against the
+/// clocks the chain saves: a spill of one read value does not outweigh them.
+#[test]
+fn an_i16_chain_that_spills_one_cheap_value_is_still_taken() {
+    let names = names_of(I16_MULTIPLY_WITH_FULL_REGISTERS);
+    assert!(!names.iter().any(|n| n.starts_with("imul")), "the chain's spill outweighed its clocks: {names:?}");
+}
+
+/// Negative: when the register the chain needs would evict a value read
+/// twelve more times, the loads cost more clocks than the chain saves and the
+/// `imul` stays.
+#[test]
+fn an_i16_multiply_keeps_its_imul_where_the_chains_spill_costs_more_than_it_saves() {
+    let names = names_of(I16_MULTIPLY_WITH_BUSY_VALUES);
+    assert!(names.iter().any(|n| n.starts_with("imul")), "the chain was taken for a costly spill: {names:?}");
+}

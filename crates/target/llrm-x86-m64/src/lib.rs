@@ -334,6 +334,15 @@ impl llrm_target::Target for M64 {
         llrm_target::registers::allocatable(&REGISTERS) as i64
     }
 
+    fn fixed_registers(&self) -> llrm_mir::target::FixedRegisters {
+        let pinned = |name: &str, dests: usize, sources: usize| {
+            rows(name, dests, sources).iter().map(llrm_lir::registers::Row::pinned).max().unwrap_or(0)
+        };
+        // The word-or-wider divide (the byte one pins `ax` alone) and the shift
+        // by `cl`.
+        llrm_mir::target::FixedRegisters { divide: pinned("idiv", 2, 3), shift: pinned("shl", 1, 2) }
+    }
+
     fn address_forms(
         &self,
         _: &OperationCosts,

@@ -139,6 +139,8 @@ pub struct CpuPrices {
     pub call_registers: i64,
     /// The floating values it holds in registers at once.
     pub float_registers: i64,
+    /// What its instruction table pins.
+    pub fixed: llrm_mir::target::FixedRegisters,
     /// The indexed addresses the target states, native form first.
     pub address_forms: Vec<AddressForm>,
     /// What each operation costs: the target's mapping applied to `costs`.
@@ -186,6 +188,7 @@ pub fn described_with(
         registers: prices.registers,
         call_registers: prices.call_registers,
         float_registers: prices.float_registers,
+        fixed: prices.fixed,
         address_forms: prices.address_forms.clone(),
         operations: prices.operations.clone(),
         // The by-pieces ratios are the CPU's, whichever table prices the rest.
@@ -210,6 +213,7 @@ struct Described {
     registers: i64,
     call_registers: i64,
     float_registers: i64,
+    fixed: llrm_mir::target::FixedRegisters,
     address_forms: Vec<AddressForm>,
     operations: OperationCosts,
     sizes: Option<OperationCosts>,
@@ -310,6 +314,10 @@ impl llrm_mir::target::Machine for Described {
 
     fn two_address(&self) -> bool {
         true
+    }
+
+    fn fixed_registers(&self) -> llrm_mir::target::FixedRegisters {
+        self.fixed
     }
 
     fn address_forms(&self) -> Vec<AddressForm> {
@@ -689,6 +697,11 @@ pub trait Target {
 
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
+
+    /// What its instruction table pins: none where it pins nothing.
+    fn fixed_registers(&self) -> llrm_mir::target::FixedRegisters {
+        llrm_mir::target::FixedRegisters::default()
+    }
 
     /// How deep the floating register stack is: the roots of class `x87` its
     /// register file states.

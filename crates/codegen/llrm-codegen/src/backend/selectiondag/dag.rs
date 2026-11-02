@@ -38,6 +38,10 @@ impl SDNodeFlags {
     /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
     /// convention returns or passes in two registers (`dx:ax`).
     pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
+    /// DEVIATE SD441: a constant `i16` multiply that stays an `imul` because
+    /// the chain that replaces it would spill (`mul_scratch`). Exit: none;
+    /// the pin promotes `i16` and has no chain there.
+    pub const NO_MUL_CHAIN: SDNodeFlags = SDNodeFlags(32768);
 
     pub fn union(
         self,
@@ -1778,6 +1782,16 @@ impl SelectionDAG {
     /// `getNode`: the folds of the pin's one-, two- and three-operand forms,
     /// then the CSE lookup. Four or more operands and no folds are the
     /// pin's `ArrayRef` form, which only checks `TokenFactor`-like cases.
+    /// `flags` set on `value`'s node as well.
+    pub fn add_flags(
+        &mut self,
+        value: SDValue,
+        flags: SDNodeFlags,
+    ) {
+        let node = &mut self.nodes[value.node as usize];
+        node.flags = node.flags.union(flags);
+    }
+
     pub fn get_node_flags(
         &mut self,
         opcode: ISD,

@@ -147,6 +147,9 @@ pub struct Room {
     pub addresses: i64,
     /// Whether a result is made in its first operand's register.
     pub two_address: bool,
+    /// The registers a divide or a variable shift fixes: a value live across
+    /// one is held in none of them.
+    pub fixed: llrm_mir::target::FixedRegisters,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
     /// The scales (bit `k` for `2^k`) an address takes beside any registers:
@@ -156,15 +159,21 @@ pub struct Room {
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
+        Self::of_machine(outer.target())
+    }
+
+    /// What `target` holds.
+    pub fn of_machine(target: &dyn llrm_mir::target::Machine) -> Room {
         Room {
-            registers: outer.target().registers(),
-            across_call: outer.target().call_registers(),
-            far_access: outer.target().far_access_registers(),
-            segments: outer.target().segment_registers(),
-            addresses: outer.target().address_registers(),
-            two_address: outer.target().two_address(),
-            spaces: outer.target().spaces(),
-            index_scales: index_scales(&outer.target().address_forms()),
+            registers: target.registers(),
+            across_call: target.call_registers(),
+            far_access: target.far_access_registers(),
+            segments: target.segment_registers(),
+            addresses: target.address_registers(),
+            two_address: target.two_address(),
+            fixed: target.fixed_registers(),
+            spaces: target.spaces(),
+            index_scales: index_scales(&target.address_forms()),
         }
     }
 
@@ -390,6 +399,26 @@ pub fn transient(
     transient_by(context, layout, function, inst, room, live, &mut |value| {
         folded_in(context, function, value, room.index_scales)
     })
+}
+
+/// The registers `inst` fixes besides its operands' and result's, which a value
+/// live across it cannot be held in: a divide or remainder (`Room::fixed`), a
+/// shift or rotate by an amount not known at compile time.
+pub fn fixed_by(
+    function: &Function,
+    inst: InstId,
+    room: Room,
+) -> i64 {
+    let op = function.instruction(inst);
+    match op.opcode {
+        Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => room.fixed.divide,
+        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr)
+            if !matches!(op.operands.get(1), Some(Operand::Constant(_))) =>
+        {
+            room.fixed.shift
+        }
+        _ => 0,
+    }
 }
 
 /// `transient`, asking `is_folded` whether a pointer is folded, which a caller
@@ -1175,7 +1204,10 @@ pub fn sites(
             },
             segments: Point { registers: room.segments, residents: held(before) },
             before: Point {
-                registers: room.registers - transient(inst, before) - copied(function, inst, past, room, counted),
+                registers: room.registers
+                    - fixed_by(function, inst, room)
+                    - transient(inst, before)
+                    - copied(function, inst, past, room, counted),
                 residents: residents(before),
             },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
@@ -1849,6 +1881,9 @@ pub struct View<'a> {
     room: Room,
     across: &'a dyn Fn(InstId) -> i64,
     pressure: std::borrow::Cow<'a, Pressure>,
+    /// Registers an instruction needs besides its operands and result: the
+    /// temporaries of the sequence the target expands it to.
+    scratch: Option<(InstId, i64)>,
 }
 
 impl<'a> View<'a> {
@@ -1861,7 +1896,19 @@ impl<'a> View<'a> {
         room: Room,
         across: &'a dyn Fn(InstId) -> i64,
     ) -> Self {
-        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Borrowed(pressure) }
+        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Borrowed(pressure), scratch: None }
+    }
+
+    /// This view, `inst` needing `registers` more besides its operands and
+    /// result: what a chain of shifts and adds takes where an `imul` is in
+    /// place.
+    pub fn with_scratch(
+        mut self,
+        inst: InstId,
+        registers: i64,
+    ) -> Self {
+        self.scratch = Some((inst, registers));
+        self
     }
 
     /// Over a function made to be asked about once, a candidate's.
@@ -1879,6 +1926,7 @@ impl<'a> View<'a> {
             room,
             across,
             pressure: std::borrow::Cow::Owned(Pressure::of(context, function, room.index_scales)),
+            scratch: None,
         }
     }
 
@@ -2038,7 +2086,11 @@ impl<'a> View<'a> {
             }
             for step in &steps {
                 let inst = step.inst;
-                let wanted = room.registers - transient_by(context, layout, function, inst, room, &live, &mut folded);
+                let scratch = self.scratch.filter(|(at, _)| *at == inst).map_or(0, |(_, registers)| registers);
+                let wanted = room.registers
+                    - scratch
+                    - fixed_by(function, inst, room)
+                    - transient_by(context, layout, function, inst, room, &live, &mut folded);
                 // Live across the instruction: what it reads and nothing else
                 // holds is not.
                 for value in &step.read {

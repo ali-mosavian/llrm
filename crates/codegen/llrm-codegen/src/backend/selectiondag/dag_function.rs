@@ -1083,7 +1083,19 @@ fn selected_in(
         );
         llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, &bpi)
     });
+    // A constant `i16` multiply whose chain would spill stays an `imul`.
+    let keep_imul = match (&frequencies, m16 && !super::x86_lowering::promotes_i16(&tli)) {
+        (Some(frequencies), true) => {
+            super::mul_scratch::keep_imul(&module.context, &layout, function, cpu, arch, frequencies, mul_rate)
+        }
+        _ => Default::default(),
+    };
     for (block, parent, mut built) in work {
+        for &(value, made) in &built.values {
+            if keep_imul.contains(&value) && built.dag.opcode(made) == super::isd::ISD::Mul {
+                built.dag.add_flags(made, super::dag::SDNodeFlags::NO_MUL_CHAIN);
+            }
+        }
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
         }

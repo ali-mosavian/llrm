@@ -1196,3 +1196,80 @@ b0:
     crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&same)));
     assert!(same.get(), "the updated counted set differs from a fresh pass");
 }
+
+/// A multiply the target expands to a chain needs a register an `imul` does
+/// not: at a point where the registers are full that is a spill the model
+/// must count. Three registers hold `%a`, `%b` and the product's operand
+/// with nothing to spare, so one scratch register spills one of them and none
+/// spills nothing; without `with_scratch` the model priced the chain as free
+/// and recgcd's i32 accumulator was spilled in every iteration.
+#[test]
+fn test_a_scratch_register_at_a_full_point_is_a_spill() {
+    let module = module(
+        "define i16 @f(i16 %a, i16 %b, i16 %x) {
+entry:
+  %p = mul i16 %x, 7
+  %s = add i16 %a, %p
+  %t = add i16 %s, %b
+  ret i16 %t
+}
+",
+    );
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let room = Room { registers: 3, across_call: 3, ..Room::default() };
+    let frequency = looped(function);
+    let inst = function
+        .layout()
+        .iter()
+        .flat_map(|&block| function.iter_block(block).collect::<Vec<_>>())
+        .find(|&inst| function.instruction(inst).result.is_some_and(|value| value == named(function, "p")))
+        .unwrap();
+    let cost = |scratch: i64| {
+        View::of(&module.context, &layout, function, room, &|_| 3)
+            .with_scratch(inst, scratch)
+            .forecast(&costs(), &frequency)
+            .cost
+    };
+    assert_eq!(cost(0), 0, "an in-place imul fits");
+    assert!(cost(1) > 0, "a chain's temporary spills at a full point");
+}
+
+/// recgcd's i32 total was live across two loops of `cwd; idiv`, which take `ax`
+/// and `dx`: the model counted six registers for it and forecast no spill
+/// while the allocator spilled it in every iteration (901 memory operands
+/// against 301). A value live across a divide holds none of the registers the
+/// divide fixes; one not live across it does.
+#[test]
+fn test_a_value_live_across_a_divide_cannot_use_the_registers_it_fixes() {
+    let module = module(
+        "define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {
+entry:
+  %q = sdiv i16 %a, %b
+  %s1 = add i16 %q, %c
+  %s2 = add i16 %s1, %d
+  ret i16 %s2
+}
+define i16 @g(i16 %a, i16 %b, i16 %c, i16 %d) {
+entry:
+  %q = sdiv i16 %a, %b
+  %s1 = add i16 %q, %a
+  ret i16 %s1
+}
+",
+    );
+    let layout = llrm_analysis::testing::layout(&module);
+    let fixed = llrm_mir::target::FixedRegisters { divide: 2, shift: 1 };
+    let cost = |name: &str, fixed: llrm_mir::target::FixedRegisters| {
+        let function = module.functions().find(|(_, g, _)| g.name.as_deref() == Some(name)).unwrap().2;
+        let room = Room { registers: 4, across_call: 4, fixed, ..Room::default() };
+        let frequency = function.layout().iter().map(|&b| (cfg::id(b), 1)).collect();
+        View::of(&module.context, &layout, function, room, &|_| 4).forecast(&costs(), &frequency).cost
+    };
+    // @f: %c and %d live across the divide with four registers, two fixed.
+    assert_eq!(cost("f", Default::default()), 0, "four registers hold c, d and the divide's operands");
+    assert!(cost("f", fixed) > 0, "c and d cannot sit in ax and dx across the divide");
+    // @g: only %a, read again after the divide, lives across it; it fits the
+    // two that are left.
+    assert_eq!(cost("g", fixed), 0, "one value across the divide fits");
+}

@@ -1955,6 +1955,16 @@ fn combine_mul(
         EVT::I64 => i128::from(bits as u64 as i64),
         _ => i128::from(bits as u32 as i32),
     };
+    // DEVIATE SD441: the pin promotes an `i16` multiply to `i32`, where its
+    // cases are `lea`s of a scaled index; real mode has none, so the chain is
+    // the target's priced one (`priced_chain`, SD446), not the pin's cases,
+    // and not where it would spill (`mul_scratch`).
+    if vt == EVT::I16 {
+        if dag.node(node).flags.0 & SDNodeFlags::NO_MUL_CHAIN.0 != 0 {
+            return None;
+        }
+        return profile.and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
+    }
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
@@ -2020,12 +2030,12 @@ fn combine_mul(
         let scale_folds = dag.users(node).count() == 1
             && dag.users(node).next().map(|user| dag.opcode(SDValue { node: user, res: 0 })) == Some(ISD::Add);
         let (bytes, _) = chain_encoding(dag, chain, x, arch, width_bytes, scale_folds);
-        let imul = arch.multiply_immediate_bytes(signed as i64, width_bytes);
-        let chain_is_faster = crate::backend::arithmetic::chain_by_clocks(signed as i64, width_bytes.min(4), cpu)
+        let goal = crate::backend::arithmetic::MulGoal::Bytes { pin_chain_bytes: bytes };
+        let stands = crate::backend::arithmetic::multiply_chain(signed as i64, width_bytes.min(4), cpu, arch, goal)
             .ok()
             .flatten()
             .is_some();
-        if imul < bytes && !chain_is_faster {
+        if !stands {
             return None;
         }
     }
@@ -2077,7 +2087,7 @@ fn chain_encoding(
     (bytes, steps)
 }
 
-/// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it
+/// `x * c` as the chain `arithmetic::multiply_chain` accepts (the clocks it
 /// saves pay for its bytes at the block's frequency; the search is cached per
 /// constant, O(1) here), built from shifts, adds, subtracts and
 /// the `lea` forms. An `i16` has no `lea`: the narrow chain.
@@ -2101,12 +2111,12 @@ fn priced_chain(
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
     let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
-    let chain = if by_clocks {
-        arithmetic::chain_by_clocks(c, width, cpu)
+    let goal = if by_clocks {
+        arithmetic::MulGoal::Clocks
     } else {
-        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
-    }
-    .ok()??;
+        arithmetic::MulGoal::Priced { freq, milliclocks_per_byte, spill_clocks: 0.0 }
+    };
+    let chain = arithmetic::multiply_chain(c, width, cpu, arch, goal).ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])

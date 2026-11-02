@@ -117,6 +117,8 @@ pub struct Profile {
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
+    /// What the target's instruction table pins.
+    pub fixed_registers: llrm_mir::target::FixedRegisters,
     // Preferred forms only; the complete legal set is `address_forms`.
     pub address_scales: BTreeSet<i64>,
     pub _costs: Vec<(String, i64)>,
@@ -253,6 +255,7 @@ impl Profile {
             registers: self.register_capacity,
             call_registers: self.call_register_capacity,
             float_registers: self.float_register_capacity,
+            fixed: self.fixed_registers,
             address_forms: self.address_forms.clone(),
             operations: self.operations.clone(),
             spaces: self.spaces,
@@ -314,6 +317,7 @@ impl Profile {
             loop_alignment: arch.pref_loop_alignment(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
+            fixed_registers: arch.fixed_registers(),
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
