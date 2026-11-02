@@ -38,7 +38,8 @@ fn a_chain_of_few_floats_is_still_copied_out() {
 /// main. Twelve in-place updates are more than the stack holds: a loop.
 #[test]
 fn updating_more_floats_than_the_stack_holds_stays_a_loop() {
-    let source = "double v[12];\nvoid f(double k)\n{\n    int i;\n    for (i = 0; i < 12; i++) v[i] = v[i] * k + 1.0;\n}\n";
+    let source =
+        "double v[12];\nvoid f(double k)\n{\n    int i;\n    for (i = 0; i < 12; i++) v[i] = v[i] * k + 1.0;\n}\n";
     let count = adds(source);
     assert!(count < 12, "{count} fadd: the 12 updates were copied out");
 }
@@ -46,7 +47,8 @@ fn updating_more_floats_than_the_stack_holds_stays_a_loop() {
 /// Eight fit the stack: the unroll the pin does.
 #[test]
 fn updating_as_many_floats_as_the_stack_holds_is_copied_out() {
-    let source = "double v[8];\nvoid f(double k)\n{\n    int i;\n    for (i = 0; i < 8; i++) v[i] = v[i] * k + 1.0;\n}\n";
+    let source =
+        "double v[8];\nvoid f(double k)\n{\n    int i;\n    for (i = 0; i < 8; i++) v[i] = v[i] * k + 1.0;\n}\n";
     let count = adds(source);
     assert!(count >= 8, "{count} fadd: the 8 updates stayed a loop");
 }

@@ -366,6 +366,7 @@ fn main() -> ExitCode {
                     min_size: false,
                     only_when_forced: false,
                     prepare_for_lto: false,
+                    target_partial: false,
                 };
                 let names: Vec<String> = module
                     .functions()
@@ -847,7 +848,7 @@ fn unrolled_loop(
             Ok(llrm_transforms::loopunroll::Exit { block: named(function, label)?, trip_count: *trip_count })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let options = llrm_transforms::loopunroll::Options { count, max_trip_count: count, max_or_zero: false, exits };
+    let options = llrm_transforms::loopunroll::Options { count, max_trip_count: count, max_or_zero: false, trip_multiple: 1, exits };
     llrm_transforms::loopunroll::unroll_loop(function, loop_, &options)?;
     Ok(())
 }
