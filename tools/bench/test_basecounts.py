@@ -414,3 +414,17 @@ def test_the_harness_digest_follows_the_icount_file():
     one = bc.judge_digest(lambda name: b"old" if name.endswith("icount.py") else b"x")
     other = bc.judge_digest(lambda name: b"new" if name.endswith("icount.py") else b"x")
     assert one != other
+
+
+def test_a_program_hash_changes_with_the_icount_file(tmp_path):
+    """A recorded base counted under another icount.py keeps no `same` entry: every program of it hashes differently, so the gate measures the base again under the head's harness instead of comparing the old counters (fpbench nib Os 156229 vs 156261)."""
+    for harness in ("crates/target/llrm-x86-m16/bench/icount.py",):
+        (tmp_path / harness).parent.mkdir(parents=True)
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("x = 1\n")
+    (tmp_path / "bench/fib/fib.c").write_text("int f(void){return 1;}\n")
+    icount = tmp_path / "crates/target/llrm-x86-m16/bench/icount.py"
+    icount.write_text("old\n")
+    before = bc.programs(tmp_path)["fib"]
+    icount.write_text("new\n")
+    assert bc.programs(tmp_path)["fib"] != before
