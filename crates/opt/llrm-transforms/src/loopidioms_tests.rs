@@ -1292,3 +1292,62 @@ fn a_nest_whose_inner_loop_is_live_stays_a_nest() {
     assert!(!after.contains("i8 0, i16 128"), "{after}");
     assert!(after.contains("phi"), "{after}");
 }
+
+/// lru at m32 -O1: a fill of fewer bytes and more clocks than its loop (-32 B
+/// for +21 clocks) was taken. A target that prices its fills and has no rate
+/// keeps the loop unless neither bytes nor clocks grow.
+#[test]
+fn a_priced_fill_with_no_rate_is_taken_only_if_neither_metric_grows() {
+    let after = |fill_clocks: i64, sized: bool| {
+        let clocks = crate::profit::OperationCosts {
+            fill: fill_clocks,
+            fill_cell: 0,
+            store: 1,
+            add: 1,
+            branch: 3,
+            ..Default::default()
+        };
+        let bytes =
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 6, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+        let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{TWO_BYTE_ARRAYS}"));
+        let mut pass = crate::loopidiom::pass::LoopIdiom::new();
+        pass.for_size = sized;
+        crate::testing::managed_on(&mut module, pass, machine).matches("call void @llvm.memset").count()
+    };
+    assert_eq!(after(30, true), 0, "the fills take more clocks than the loop: the loop stays");
+    assert_eq!(after(2, true), 2, "fewer bytes and fewer clocks: both are fills");
+}
+
+/// A loop that holds only the memset its inner loop became was priced as a
+/// fill of nothing (no stores, no fills counted), so it always paid: matmul nib
+/// -O2 took 145 clocks of `rep stosd` over 136 of the loop it replaced. The
+/// memset is the one fill the loop makes.
+#[test]
+fn the_memset_a_loop_promotes_is_priced_as_one_fill() {
+    let after = |fill_clocks: i64| {
+        let clocks = crate::profit::OperationCosts {
+            fill: fill_clocks,
+            fill_cell: 0,
+            store: 1,
+            add: 1,
+            branch: 3,
+            ..Default::default()
+        };
+        let bytes =
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+        let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::loopidiom::pass::LoopIdiom::new());
+        manager.add(crate::loopidiom::pass::AfterDeletion {
+            deletion: crate::loopdeletion::LoopDeletion,
+            idiom: crate::loopidiom::pass::LoopIdiom::new(),
+        });
+        manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+        printed(&module)
+    };
+    assert!(after(1).contains("i8 0, i16 128"), "a cheap fill merges the nest");
+    let dear = after(100);
+    assert!(!dear.contains("i8 0, i16 128"), "a fill dearer than its loop stays out\n{dear}");
+}

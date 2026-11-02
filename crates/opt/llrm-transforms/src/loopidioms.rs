@@ -836,9 +836,9 @@ pub(crate) fn fills_pay(
         return false;
     }
     // The pin forms the memset whenever the stores allow. Only a fill that
-    // saves and restores a segment register (m16's ES) is costly enough to
-    // weigh against its loop.
-    if costs.fill_segment == 0 {
+    // saves and restores a segment register (m16's ES), or that the target
+    // prices (clocks given), is weighed against its loop.
+    if costs.fill_segment == 0 && clocks.is_none() {
         return true;
     }
     // `costs.fill` is the fill as encoded: its loads are the instructions.
@@ -861,6 +861,10 @@ pub(crate) fn fills_pay(
                 None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
             };
             let saved = loop_bytes - fill_bytes;
+            if rate == 0 {
+                // No rate: neither metric may grow.
+                return fill <= trips * each && saved >= 0;
+            }
             clocks_pay(saved, rate, fill, trips * each)
         })
 }
@@ -876,13 +880,13 @@ pub(crate) struct InlineFills {
 
 impl InlineFills {
     /// Its stores: dwords, then a word and a byte for the tail.
-    fn stores(self) -> i64 {
+    pub(crate) fn stores(self) -> i64 {
         self.bytes / 4 + i64::from(self.bytes % 4 >= 2) + self.bytes % 2
     }
 
     /// What those stores cost in `prices`: a dword store carries the
     /// operand-size prefix where the target has one (`fill_is_smaller`).
-    fn price(
+    pub(crate) fn price(
         self,
         prices: &OperationCosts,
     ) -> i64 {

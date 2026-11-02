@@ -280,6 +280,7 @@ impl Machine for Dos {
             size_milliclocks_per_byte: 10_000,
             // The user's rate for m16 at speed: one clock is two bytes.
             speed_milliclocks_per_byte: 500,
+            price_fills: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,

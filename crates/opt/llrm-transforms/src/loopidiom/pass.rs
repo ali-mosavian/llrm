@@ -28,6 +28,7 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use llrm_mir::target::OperationCosts;
 use llrm_mir::valuetracking::AssumptionCache;
 
 use super::process::{AaProvider, Run};
@@ -150,13 +151,23 @@ impl FunctionPass for LoopIdiom {
         // 1 clock = 2 B) prices a fill by the bytes it adds as `-Os` does, and
         // its clocks at that rate. Exit: none.
         let rate = tti.as_deref().map_or(0, |tti| tti.speed_milliclocks_per_byte());
-        let size_costs = (self.for_size || rate > 0).then(|| outer.target().size_costs());
+        // A target that prices its fills weighs them at every level: by the
+        // rate where it has one, strictly (neither metric may grow) where not.
+        let tuning = outer.target().tuning();
+        let priced = tuning.price_fills;
+        let size_costs = (self.for_size || rate > 0 || priced).then(|| {
+            let inline =
+                if self.for_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset };
+            OperationCosts { memset_stores: inline as i64, ..outer.target().size_costs() }
+        });
         let clock_costs = if self.for_size {
-            Some((outer.target().costs(), outer.target().size_milliclocks_per_byte())).filter(|(_, rate)| *rate > 0)
+            Some((outer.target().costs(), outer.target().size_milliclocks_per_byte()))
         } else {
-            Some((outer.target().costs(), rate)).filter(|(_, rate)| *rate > 0)
-        };
-        let speed_costs = (!self.for_size && rate == 0).then(|| outer.target().costs());
+            Some((outer.target().costs(), rate))
+        }
+        .map(|(costs, rate)| (OperationCosts { memset_stores: tuning.max_stores_per_memset as i64, ..costs }, rate))
+        .filter(|(_, rate)| *rate > 0 || priced);
+        let speed_costs = (!self.for_size && rate == 0 && !priced).then(|| outer.target().costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");

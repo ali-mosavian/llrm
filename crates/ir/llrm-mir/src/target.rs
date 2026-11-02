@@ -27,6 +27,11 @@ pub struct Tuning {
     /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
     /// clocks are not traded.
     pub speed_milliclocks_per_byte: i64,
+    /// A fill is weighed against its loop on the target's prices at every
+    /// level (`loopidioms::fills_pay`): strictly where the rate is 0 (neither
+    /// clocks nor bytes may grow), by the rate where it is not. false: the
+    /// pin's, which forms the memset whenever the stores allow.
+    pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
     /// CPU's table gives, with no byte term (gcc's `synth_mult` at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
@@ -74,6 +79,7 @@ impl Tuning {
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
+        price_fills: false,
         multiply_by_clocks: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
@@ -386,6 +392,10 @@ pub struct OperationCosts {
     /// What of `fill` is the save and restore of a segment register around the
     /// string instruction; 0 where the fill needs none.
     pub fill_segment: i64,
+    /// `Tuning::max_stores_per_memset` for these prices: a constant memset of
+    /// at most that many stores is stores, not a fill; 0: the table does not
+    /// say.
+    pub memset_stores: i64,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -517,6 +527,7 @@ impl Default for OperationCosts {
             fill: 1,
             fill_cell: 1,
             fill_segment: 0,
+            memset_stores: 0,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,

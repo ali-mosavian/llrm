@@ -74,7 +74,12 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
 fn tuning() -> llrm_mir::target::Tuning {
-    llrm_mir::target::Tuning { multiply_by_clocks: true, x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN }
+    llrm_mir::target::Tuning {
+        multiply_by_clocks: true,
+        x87_stack_slots: Some(8),
+        price_fills: true,
+        ..llrm_mir::target::Tuning::PIN
+    }
 }
 
 impl M32 {

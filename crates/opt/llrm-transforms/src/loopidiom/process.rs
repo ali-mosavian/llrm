@@ -248,6 +248,21 @@ impl LoopIdiomRecognize {
         for &block in blocks {
             for inst in run.function.iter_block(block) {
                 let instruction = run.function.instruction(inst);
+                // The memset a loop promotes (`processLoopMemSet`) is the one
+                // fill the loop makes: priced, it is a store of its length.
+                if args.is_loop_memset && inst == args.the_store {
+                    stores += 1;
+                    let object = llrm_mir::valuetracking::underlying::get_underlying_object(
+                        &cx.query(Some(inst)),
+                        instruction.operands[0],
+                        0,
+                    );
+                    let group = (object, instruction.operands[1]);
+                    if !groups.contains(&group) {
+                        groups.push(group);
+                    }
+                    continue;
+                }
                 if !matches!(instruction.opcode, Opcode::Store { .. }) {
                     continue;
                 }
