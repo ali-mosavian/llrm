@@ -72,7 +72,8 @@ fn a_volatile_load_keeps_its_count_and_width_when_the_extend_folds() {
         for cpu in [Cpu::M68000, Cpu::M68020] {
             for level in [Level::O2, Level::Os] {
                 let text = assembly(&ir, cpu, level).expect("compiles");
-                let reads = text.lines().filter(|line| line.contains("vol") && line.trim_start().starts_with("move")).count();
+                let reads =
+                    text.lines().filter(|line| line.contains("vol") && line.trim_start().starts_with("move")).count();
                 assert_eq!(reads, loads, "{name} {cpu:?} {level:?}: the volatile is read {reads} times:\n{text}");
                 let words = text.lines().filter(|line| line.contains("vol") && !line.contains("move.b")).count();
                 assert_eq!(words, 0, "{name} {cpu:?} {level:?}: a volatile byte is read wider than a byte:\n{text}");

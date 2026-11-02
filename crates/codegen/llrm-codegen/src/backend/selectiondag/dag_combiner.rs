@@ -1377,7 +1377,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data else { return None };
-        let op = self.dag.opcode(node);
+        let mut op = self.dag.opcode(node);
+        // `NonNegZExt`
+        // ([L15727](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15727)):
+        // a `zext nneg` of a load that a signed compare reads is the sign
+        // extension, which that compare can then share.
+        if op == ISD::ZeroExtend
+            && self.dag.node(node).flags.0 & SDNodeFlags::NON_NEG.0 != 0
+            && self.dag.users(load).any(|user| {
+                let user = SDValue { node: user, res: 0 };
+                self.dag.opcode(user) == ISD::SetCC
+                    && matches!(
+                        self.dag.node(self.dag.operand(user, 2)).data,
+                        NodeData::CondCode(CondCode::SetGt | CondCode::SetGe | CondCode::SetLt | CondCode::SetLe)
+                    )
+            })
+        {
+            op = ISD::SignExtend;
+        }
         let wanted = match op {
             ISD::ZeroExtend => LoadExt::ZExtLoad,
             ISD::SignExtend => LoadExt::SExtLoad,
