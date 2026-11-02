@@ -997,7 +997,14 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     None => None,
                 };
-                match inline.or_else(|| calling.emit_memcpy(&mut self.dag, root, dst, other, size)) {
+                let hooked = |dag: &mut _| {
+                    if copy {
+                        calling.emit_memcpy(dag, root, dst, other, size)
+                    } else {
+                        calling.emit_memmove(dag, root, dst, other, size)
+                    }
+                };
+                match inline.or_else(|| hooked(&mut self.dag)) {
                     Some(chain) => chain,
                     None => {
                         self.hooked_mem_libcall(if copy { "memcpy" } else { "memmove" }, root, [dst, other, size])?

@@ -140,10 +140,89 @@ fn is_register(location: &Location) -> bool {
     matches!(location, Location::Register(_))
 }
 
+/// Private machine opcodes for a constant-size copy, move or fill: the
+/// builder's inline expansion has no vector type (DEVIATE SD13), so the
+/// pin's `q`-register pieces (`findOptimalMemOpLowering`) are made at
+/// emission. Exit: a `v16i8` value type in the DAG.
+pub const MEMCPY_Q: u32 = 0xF001;
+pub const MEMMOVE_Q: u32 = 0xF002;
+pub const MEMSET_Q: u32 = 0xF003;
+
 #[derive(Debug, Default)]
 pub struct Aarch64Calling;
 
+impl Aarch64Calling {
+    fn block_copy(
+        dag: &mut SelectionDAG,
+        code: u32,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        let total = u64::try_from(dag.constant(size)?).ok()?;
+        if total == 0 || crate::isel::memops::pieces(total).len() > crate::isel::memops::COPY_OPS {
+            return None;
+        }
+        // A target constant stays a constant through selection.
+        let size = dag.get_constant_with(total.into(), EVT::I64, true, false);
+        Some(dag.get_node(ISD::Machine(code), EVT::OTHER, &[chain, dst, src, size]))
+    }
+}
+
 impl TargetCalling for Aarch64Calling {
+    fn emit_memcpy(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        Self::block_copy(dag, MEMCPY_Q, chain, dst, src, size)
+    }
+
+    fn emit_memmove(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        Self::block_copy(dag, MEMMOVE_Q, chain, dst, src, size)
+    }
+
+    fn emit_memset(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        let total = u64::try_from(dag.constant(size)?).ok()?;
+        let constant = dag.constant(value);
+        // A byte that is not constant fills `q` registers whole.
+        let ops = if constant.is_none() {
+            if total < 16 {
+                return None;
+            }
+            crate::isel::memops::wide_pieces(total)
+        } else {
+            crate::isel::memops::pieces(total)
+        };
+        if total == 0 || ops.len() > crate::isel::memops::FILL_OPS {
+            return None;
+        }
+        let value = match constant {
+            Some(byte) => dag.get_constant_with(byte & 0xff, EVT::I32, true, false),
+            None => dag.get_any_ext_or_trunc(value, EVT::I32),
+        };
+        let size = dag.get_constant_with(total.into(), EVT::I64, true, false);
+        Some(dag.get_node(ISD::Machine(MEMSET_Q), EVT::OTHER, &[chain, dst, value, size]))
+    }
+
     fn accepts(
         &self,
         dag: &SelectionDAG,

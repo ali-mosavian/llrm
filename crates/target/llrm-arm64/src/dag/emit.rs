@@ -30,6 +30,7 @@ use super::function::Selected;
 use super::globals::Globals;
 use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
+use crate::mc::inst::Fill;
 use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
@@ -47,6 +48,12 @@ fn opcode_name(code: u32) -> Option<&'static str> {
         .find(|(v, _)| u32::from(*v) == code)
         .map(|(_, name)| *name)
         .or((code == COPY).then_some("COPY"))
+        .or(match code {
+            super::call::MEMCPY_Q => Some("LLRM_MEMCPY_Q"),
+            super::call::MEMMOVE_Q => Some("LLRM_MEMMOVE_Q"),
+            super::call::MEMSET_Q => Some("LLRM_MEMSET_Q"),
+            _ => None,
+        })
 }
 
 /// The machine register number of an arm64 register id: `x5` and `w5` are 5.
@@ -1032,6 +1039,107 @@ impl Emitter<'_> {
     }
 
     /// A load or store: operands are `[value,] base, offset...` without chains.
+    /// The address `offset` bytes past the pointer `value`.
+    fn pointer_at(
+        &self,
+        value: SDValue,
+        offset: u64,
+    ) -> Result<Addr, String> {
+        let imm = offset as i64;
+        match self.operand(value)? {
+            Operand::Reg(base) => Ok(Addr::Offset { base, imm }),
+            Operand::Slot(slot) => Ok(Addr::Slot { slot, offset: imm }),
+            Operand::Fixed(at) => Ok(Addr::Slot { slot: INCOMING_ARGUMENTS, offset: at + imm }),
+            _ => Err("a block of memory at something that is no pointer register or frame object".into()),
+        }
+    }
+
+    /// A fresh register to carry `bytes` of a block.
+    fn piece(
+        &mut self,
+        bytes: u8,
+    ) -> Memory {
+        if bytes == 16 {
+            Memory::Fp { bytes, reg: self.mf.fpr() }
+        } else {
+            Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg: self.mf.gpr() }
+        }
+    }
+
+    /// A constant-size `memcpy`, `memmove` or `memset` as `q` and smaller
+    /// accesses (`findOptimalMemOpLowering`); a copy loads a batch before it
+    /// stores, a move all of it.
+    fn block_memory(
+        &mut self,
+        id: u32,
+        name: &str,
+    ) -> Result<(), String> {
+        use crate::isel::memops::{BATCH, pieces, wide_pieces};
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let operand = |at: usize| node.ops[at];
+        let mmo = MemOperand { volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() };
+        if name == "LLRM_MEMSET_Q" {
+            let total = self.dag.constant(operand(3)).ok_or("a fill of no size")? as u64;
+            let byte = self.dag.constant(operand(2)).map(|value| value as u8);
+            let ops = if byte.is_none() { wide_pieces(total) } else { pieces(total) };
+            let vector = if ops.iter().any(|&(bytes, _)| bytes == 16) {
+                let rd = self.mf.fpr();
+                let fill = match byte {
+                    Some(0) => Fill::Zero,
+                    Some(byte) => Fill::Byte(byte),
+                    None => {
+                        let Operand::Reg(reg) = self.operand(operand(2))? else { return Err("a fill byte".into()) };
+                        Fill::Gpr(reg)
+                    }
+                };
+                self.ops.push(Op::I(Inst::VectorFill { rd, fill }));
+                Some(rd)
+            } else {
+                None
+            };
+            let scalar = match byte {
+                Some(0) => Gpr::R31,
+                Some(byte) if ops.iter().any(|&(bytes, _)| bytes != 16) => {
+                    let reg = self.mf.gpr();
+                    self.ops.push(Op::Imm { dst: reg, bits: 64, value: u64::from(byte) * 0x0101_0101_0101_0101 });
+                    reg
+                }
+                _ => Gpr::R31,
+            };
+            for (bytes, offset) in ops {
+                let mem = match (bytes, vector) {
+                    (16, Some(reg)) => Memory::Fp { bytes, reg },
+                    _ => Memory::Int {
+                        width: if bytes == 8 { Width::X } else { Width::W },
+                        bytes,
+                        sign: false,
+                        reg: scalar,
+                    },
+                };
+                let addr = self.pointer_at(operand(1), offset)?;
+                self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
+            }
+            return Ok(());
+        }
+        let total = self.dag.constant(operand(3)).ok_or("a copy of no size")? as u64;
+        let ops = pieces(total);
+        let batch = if name == "LLRM_MEMMOVE_Q" { ops.len() } else { BATCH };
+        for chunk in ops.chunks(batch) {
+            let mut loaded = Vec::new();
+            for &(bytes, offset) in chunk {
+                let mem = self.piece(bytes);
+                let addr = self.pointer_at(operand(2), offset)?;
+                self.ops.push(Op::I(Inst::Load { mem, addr, mmo: mmo.clone() }));
+                loaded.push(mem);
+            }
+            for (&(_, offset), mem) in chunk.iter().zip(loaded) {
+                let addr = self.pointer_at(operand(1), offset)?;
+                self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
+            }
+        }
+        Ok(())
+    }
+
     fn memory(
         &mut self,
         id: u32,
@@ -1206,6 +1314,7 @@ impl Emitter<'_> {
                         return Ok(());
                     }
                     "ADJCALLSTACKUP" => return Ok(()),
+                    "LLRM_MEMCPY_Q" | "LLRM_MEMMOVE_Q" | "LLRM_MEMSET_Q" => return self.block_memory(id, name),
                     "BL" | "BLR" => return self.call(id, name),
                     "TCRETURNdi" | "TCRETURNri" | "TCRETURNriBTI" => return self.tail_call(id, name),
                     _ => {}

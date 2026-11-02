@@ -285,3 +285,20 @@ b2:\n  ret i64 %w\n}\n";
     assert!(!asm.contains("uxth"), "{asm}");
     assert!(asm.contains("subs"), "{asm}");
 }
+
+/// A constant `memcpy` of 224 bytes was a call (`b _memcpy`) on the DAG path:
+/// the pin copies it in `q` pairs, 14 accesses within its limit of 16.
+#[test]
+fn a_constant_copy_within_the_limit_is_q_pairs_not_a_call() {
+    let asm = dag_at("-O2", "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\ndefine void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 224, i1 false)\n  ret void\n}\n").unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("ldp q") && asm.contains("stp q"), "{asm}");
+    assert!(!asm.contains("_memcpy"), "{asm}");
+}
+
+/// The same for a fill: `movi` and `stp q`, not `_memset`.
+#[test]
+fn a_constant_fill_within_the_limit_is_q_stores_not_a_call() {
+    let asm = dag_at("-O2", "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\ndefine void @f(ptr %d) {\n  call void @llvm.memset.p0.i64(ptr %d, i8 0, i64 300, i1 false)\n  ret void\n}\n").unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("stp q"), "{asm}");
+    assert!(!asm.contains("_memset"), "{asm}");
+}

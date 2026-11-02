@@ -41,6 +41,17 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         stack_align: Some(16),
+        // The inline expansion has no `q` type (SD13): the calling hook makes
+        // every constant copy and fill within the pin's limits.
+        tuning: llrm_mir::target::Tuning {
+            max_stores_per_memset: 0,
+            max_stores_per_memset_opt_size: 0,
+            max_stores_per_memcpy: 0,
+            max_stores_per_memcpy_opt_size: 0,
+            max_stores_per_memmove: 0,
+            max_stores_per_memmove_opt_size: 0,
+            ..llrm_mir::target::Tuning::PIN
+        },
         native_atomics: true,
         jump_tables: true,
         // AArch64Subtarget.cpp#L345: 10 (4 at minsize, not modelled).

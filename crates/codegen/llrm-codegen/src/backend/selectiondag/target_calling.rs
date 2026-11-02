@@ -210,6 +210,19 @@ pub trait TargetCalling: Debug + Sync {
         None
     }
 
+    /// `SelectionDAGTargetInfo::EmitTargetCodeForMemmove`; a target that has
+    /// no separate one routes it to [`Self::emit_memcpy`].
+    fn emit_memmove(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        self.emit_memcpy(dag, chain, dst, src, size)
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemset`.
     fn emit_memset(
         &self,
