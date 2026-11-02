@@ -280,6 +280,23 @@ def coverage_lines(judged: int, programs: int, left_out: list[str]) -> list[str]
     return [f"JUDGED {judged} rows of {programs} programs" + (f"; left out, edited since the base: {' '.join(left_out)}" if left_out else "")]
 
 
+def coverage_detail(measured: dict, base: dict, same: set[str]) -> list[str]:
+    """Per language and level, the cells judged over the programs they cover, and the cells that were not: NOBASE (measured, the base has no row)
+    and NOHEAD (the base has the row, this run measured none). `JUDGED rows of programs` alone let 21 of 46 programs stand for the corpus."""
+    ours = {key for key in measured if key[1] in OURS}
+    levels = {(key[1], key[2]) for key in ours}
+    judged: dict[tuple[str, str], set[str]] = {}
+    for key in sorted(ours):
+        was = base.get(key)
+        if key[0] in same and was is not None and not any(one in row for row in (measured[key], was) for one in ("error", "skip", "known", "xpass")):
+            judged.setdefault((key[1], key[2]), set()).add(key[0])
+    lines = [f"CELLS {language} -{opt}: {len(programs)} programs" for (language, opt), programs in sorted(judged.items())]
+    lines.append(f"CELLS total: {sum(map(len, judged.values()))} cells over {len(set().union(*judged.values()))} programs" if judged else "CELLS total: 0 cells over 0 programs")
+    nobase = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key not in base]
+    nohead = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(base) if key[1] in OURS and key[0] in same and (key[1], key[2]) in levels and key not in measured]
+    return lines + ([f"NOBASE {len(nobase)} cells: {', '.join(nobase)}"] if nobase else []) + ([f"NOHEAD {len(nohead)} cells: {', '.join(nohead)}"] if nohead else [])
+
+
 def stale_summary(stale: list[str]) -> list[str]:
     """The stale waivers (judge's third value) as one line naming their files: 29 rows of them buried the failures under them."""
     files = sorted({one.split(":", 1)[0] for one in stale})

@@ -389,3 +389,14 @@ def test_a_change_to_the_judge_makes_every_program_edited_so_the_base_is_measure
 def test_programs_read_from_git_hash_as_the_working_tree_does_judge_files_included():
     """A base is hashed from git (programs_at), the head from the tree (programs): the two must agree on an unedited checkout."""
     assert bc.programs_at("HEAD") == bc.programs() or bc.subprocess.run(["git", "status", "--porcelain", "--", "bench", *bc.JUDGE_FILES], cwd=bc.ROOT, capture_output=True, text=True).stdout.strip()
+
+
+def test_coverage_names_the_cells_without_a_base_or_a_head_row():
+    """`JUDGED 424 rows of 21 programs` stood for a corpus of 46: cells with no base row (NOBASE) or no head row (NOHEAD) were counted as nothing and named nowhere."""
+    row = {"instructions": 1, "code_bytes": 2}
+    measured = {("a", "bq16", "O2"): row, ("b", "bq16", "O2"): row}
+    base = {("a", "bq16", "O2"): row, ("c", "bq16", "O2"): row}
+    lines = bc.coverage_detail(measured, base, {"a", "b", "c"})
+    assert "CELLS total: 1 cells over 1 programs" in lines
+    assert any(line.startswith("NOBASE 1 cells: b bq16 -O2") for line in lines)
+    assert any(line.startswith("NOHEAD 1 cells: c bq16 -O2") for line in lines)
