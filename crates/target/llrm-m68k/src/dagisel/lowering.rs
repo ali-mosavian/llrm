@@ -118,6 +118,7 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
     set(&[AddC, AddE, SubC, SubE, SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[BrCond], &[MVT::Other], Action::Custom);
+    set(&[BrJT], &[MVT::Other], Action::Expand);
     set(&[Select, SetCC, SetCCCarry], &int, Action::Custom);
     set(&[BSwap], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[BSwap], &[MVT::I32], Action::Legal);
@@ -193,6 +194,7 @@ impl Hooks for M68kLowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::JumpTable => Some(super::call::lower_jump_table(dag, node)),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }

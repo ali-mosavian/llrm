@@ -95,7 +95,7 @@ pub fn assembly(
     level: Level,
 ) -> Result<String, String> {
     let mut program = program(text)?;
-    let options = MidEnd { library: Vec::new(), ..level.mid_end() };
+    let options = MidEnd { library: Vec::new(), lower_switches: false, ..level.mid_end() };
     llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = &program.modules[0];

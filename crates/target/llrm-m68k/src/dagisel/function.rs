@@ -38,7 +38,7 @@ pub fn builder_target() -> BuilderTarget {
             ..BuilderTarget::m32().dag
         },
         shift_amount: EVT::I32,
-        jump_tables: false,
+        jump_tables: true,
         string_instructions: false,
         // past the inline limit a copy or a fill is a call (the
         // pin: `memcpy`, `memmove`, `memset`)
@@ -78,6 +78,9 @@ pub struct Selected {
     /// On the entry block: the function's static allocas, `(frame index, size,
     /// alignment)`.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The ids of the blocks each of the function's jump tables goes to, by
+    /// table number (the same on every block).
+    pub tables: Vec<Vec<u32>>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -126,12 +129,26 @@ pub fn select_function_with(
         let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
             .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        selected.push(Selected {
+            block,
+            dag: built.dag,
+            units,
+            phis: Vec::new(),
+            locals: Vec::new(),
+            tables: Vec::new(),
+        });
         for (id, mut extra) in extras {
             let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
-            selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
+            selected.push(Selected {
+                block: id,
+                dag: extra.dag,
+                units,
+                phis: Vec::new(),
+                locals: Vec::new(),
+                tables: Vec::new(),
+            });
         }
     }
     // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
@@ -164,6 +181,9 @@ pub fn select_function_with(
     locals.sort();
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;
+    }
+    for one in &mut selected {
+        one.tables.clone_from(&info.jump_tables);
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
         for (phi, incoming) in pending {

@@ -172,6 +172,8 @@ struct Emitter<'a> {
     save: std::collections::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
+    /// The blocks each jump table goes to.
+    tables: &'a [Vec<u32>],
 }
 
 impl Emitter<'_> {
@@ -256,6 +258,9 @@ impl Emitter<'_> {
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
                 Operand::Symbol(name.clone(), 0)
+            }
+            (ISD::TargetJumpTable | ISD::JumpTable, NodeData::JumpTable(index)) => {
+                Operand::Symbol(table_symbol(&self.function.name, index), 0)
             }
             (ISD::BasicBlock, NodeData::Block(id)) => Operand::Block(id),
             _ => match self.values.get(&(value.node, value.res)) {
@@ -465,6 +470,14 @@ impl Emitter<'_> {
                 if sets_flags || desc.has(flag::CALL) {
                     self.flags_from = (sets_flags && !desc.has(flag::CALL)).then_some(node);
                 }
+                // The jump through a table goes to each of its blocks: they
+                // are operands, so the passes see the successors.
+                if name == "JMP32j"
+                    && let Some(table) = n.ops.iter().find_map(|&op| table_of(self.dag, op, 6))
+                {
+                    let blocks = self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
+                    operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                }
                 into.push(op_inst(name, desc, operands));
                 if self.save.contains(&node) {
                     let kept = self.new_reg(Class::Dr16);
@@ -486,6 +499,31 @@ impl Emitter<'_> {
     }
 }
 
+/// The data symbol of jump table `index` of function `function`.
+pub fn table_symbol(
+    function: &str,
+    index: u32,
+) -> String {
+    format!(".LJTI_{function}_{index}")
+}
+
+/// The jump table `value` is computed from, if any: the table the address of
+/// an indirect jump is loaded from.
+fn table_of(
+    dag: &SelectionDAG,
+    value: SDValue,
+    depth: usize,
+) -> Option<u32> {
+    let node = dag.node(value);
+    if let NodeData::JumpTable(index) = node.data {
+        return Some(index);
+    }
+    if depth == 0 {
+        return None;
+    }
+    node.ops.iter().find_map(|&op| table_of(dag, op, depth - 1))
+}
+
 /// `InstrEmitter` for one function's blocks.
 pub fn emit(
     name: &str,
@@ -500,6 +538,7 @@ pub fn emit(
         flags_from: None,
         save: Default::default(),
         saved: HashMap::new(),
+        tables: &first.tables,
     };
     emitter.function.locals.extend(first.locals.iter().copied());
     for one in blocks {

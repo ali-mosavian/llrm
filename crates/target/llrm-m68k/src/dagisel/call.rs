@@ -264,6 +264,17 @@ impl TargetCalling for M68kCalling {
     }
 }
 
+/// `LowerJumpTable`: `WrapperPC (TargetJumpTable)` (the small code model
+/// without PIC, as [`lower_global_address`]).
+pub fn lower_jump_table(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let NodeData::JumpTable(index) = dag.node(node).data else { unreachable!("JumpTable has a table payload") };
+    let table = dag.get_target_jump_table(EVT::I32, index);
+    dag.get_node(m68kisd::WRAPPER_PC, EVT::I32, &[table])
+}
+
 /// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, the offset folded
 /// into the symbol. A global the PIC model reaches through the GOT is not
 /// translated (see the DEVIATE above): `lower_operation` assumes the small

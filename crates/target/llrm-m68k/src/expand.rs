@@ -270,6 +270,9 @@ pub fn finish(
                         mc::Operand::Imm(*value)
                     }
                     Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
+                    // The blocks a table jump may reach are for the passes; the
+                    // instruction is `jmp (An)`.
+                    Operand::Block(_) if inst.kind == Kind::Op("JMP32j") => continue,
                     Operand::Block(id) => {
                         let at =
                             function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
