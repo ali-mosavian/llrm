@@ -563,18 +563,28 @@ impl Printer<'_> {
                 let Some(Operand::Imm(offset)) = inst.operands.get(1) else {
                     return Err("a stack store without an offset".to_owned());
                 };
-                let from_ix = |extra: i64| -> Result<i64, String> {
-                    let at = offset + extra - self.frame.below_ix() - self.call_bytes;
-                    if (-128..=127).contains(&at) { Ok(at) } else { Err(format!("a stack argument {at} from ix")) }
+                // The area is addressed from IX when its bytes are within the
+                // displacement; a frame past that sets IY to the area's
+                // first byte (`ld iy, #n; add iy, sp`), when nothing holds IY.
+                let width = if op == "STSP8" { 1 } else { 2 };
+                let from_ix: Vec<i64> =
+                    (0..width).map(|extra| offset + extra - self.frame.below_ix() - self.call_bytes).collect();
+                let places: Vec<String> = if from_ix.iter().all(|at| (-128..=127).contains(at)) {
+                    from_ix.iter().map(|at| format!("{at}(ix)")).collect()
+                } else if self.iy_is_live() {
+                    return Err(format!("a stack argument {} from ix and iy is live", from_ix[0]));
+                } else {
+                    self.push(format!("ld iy, #{offset}"));
+                    self.push("add iy, sp");
+                    (0..width).map(|byte| format!("{byte}(iy)")).collect()
                 };
                 if op == "STSP8" {
-                    let (value, at) = (name_of(self, 0)?, from_ix(0)?);
-                    self.push(format!("ld {at}(ix), {value}"));
+                    let value = name_of(self, 0)?;
+                    self.push(format!("ld {}, {value}", places[0]));
                 } else {
                     let (lo, hi) = lanes(self.register(inst, 0)?)?;
-                    let (low_at, high_at) = (from_ix(0)?, from_ix(1)?);
-                    self.push(format!("ld {low_at}(ix), {}", name(lo)));
-                    self.push(format!("ld {high_at}(ix), {}", name(hi)));
+                    self.push(format!("ld {}, {}", places[0], name(lo)));
+                    self.push(format!("ld {}, {}", places[1], name(hi)));
                 }
             }
             "LEAFI" => {
@@ -932,15 +942,19 @@ impl Printer<'_> {
         if (-128..=127).contains(&at) && (-128..=127).contains(&(at + count - 1)) {
             return Ok((0..count).map(|byte| format!("{}(ix)", at + byte)).collect());
         }
-        let live = self
-            .liveness
-            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1);
-        if live.is_live(&REGISTER_INFO, reg::IY) {
+        if self.iy_is_live() {
             return Err(format!("frame object {index} is {at} from ix and iy is live"));
         }
         self.push(format!("ld iy, #{}", at + self.frame.below_ix() + self.call_bytes));
         self.push("add iy, sp");
         Ok((0..count).map(|byte| format!("{byte}(iy)")).collect())
+    }
+
+    /// Whether something holds IY at this instruction.
+    fn iy_is_live(&self) -> bool {
+        self.liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1)
+            .is_live(&REGISTER_INFO, reg::IY)
     }
 
     fn frame_index(

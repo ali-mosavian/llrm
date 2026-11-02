@@ -448,3 +448,15 @@ fn an_unsigned_add_with_overflow_compiles() {
 fn the_z80_convention_is_parsed_once() {
     assert!(std::ptr::eq(llrm_z80::abi::z80(), llrm_z80::abi::z80()));
 }
+
+/// A call with a stack argument from a frame of 200 bytes was refused ("a
+/// stack argument -142 from ix"; `div_constants_long`): the argument area
+/// is 142 bytes below IX, past the byte displacement. It is addressed from IY.
+#[test]
+fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
+    let text = compiled(
+        "declare void @use(ptr)\ndeclare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %buf = alloca [200 x i8]\n  call void @use(ptr %buf)\n  %r = call i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}",
+        "f",
+    );
+    assert!(text.contains("add iy, sp") && text.contains("(iy)"), "{text}");
+}
