@@ -71,6 +71,10 @@
 //!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
 //!   of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
+//! - D13: at speed, the D11 bound is lifted where the call's clocks (the
+//!   target's call, return and argument words, by the site's frequency over
+//!   the caller's entry) are worth the copy's added bytes at the target's
+//!   rate (`InlineParams::priced_call`), the price REC-1 uses for its copies.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot or a global the caller stored a constant to and
 //!   whose callee loads through that parameter, is inlined if the caller,
@@ -188,6 +192,21 @@ pub struct InlineParams {
     pub last_call_to_static: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
+    /// D13: the sheet's price of a call, for the target that holds a speed
+    /// caller's growth to the code (`Tti::speed_inline_by_code_size`): growth
+    /// is allowed where the call's clocks pay for the bytes.
+    pub priced_call: Option<PricedCall>,
+}
+
+/// What a call costs in clocks beyond its own instruction, and what a byte of
+/// code is worth (`CallPrice`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PricedCall {
+    /// The call and the return.
+    pub clocks: i64,
+    /// Each argument word pushed and read back.
+    pub per_argument: i64,
+    pub milliclocks_per_byte: i64,
 }
 
 /// The cost model of the target (D2): the generic one is what `opt` has
@@ -218,6 +237,7 @@ impl InlineParams {
             recursive_callee_limit: i64::MAX,
             last_call_to_static: true,
             tti: Tti::Generic,
+            priced_call: None,
         }
     }
 
@@ -1999,6 +2019,19 @@ impl<'a> Analyzer<'a> {
         (size * tti.call_code_size_percent() + 50) / 100
     }
 
+    /// D13: at speed, the clocks the call costs (the sheet's call, return and
+    /// argument words, by the site's frequency over the caller's entry) are
+    /// worth the bytes the copy adds, at the target's rate.
+    fn growth_is_paid_for(&self) -> bool {
+        let Some(price) = self.params.priced_call.filter(|_| self.site.caller_size == CallerSize::Speed) else {
+            return false;
+        };
+        let arguments = self.site.caller.instruction(self.site.call).operands.len().saturating_sub(1) as i64;
+        let clocks = (price.clocks + arguments * price.per_argument) as f64 * self.site.relative_frequency.unwrap_or(1.0);
+        let growth = (self.size_units - self.call_size()) as f64;
+        price.milliclocks_per_byte > 0 && growth * price.milliclocks_per_byte as f64 <= clocks * 1000.0
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -2021,7 +2054,8 @@ impl<'a> Analyzer<'a> {
                         && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
                 }
             })
-            && self.size_units > self.call_size();
+            && self.size_units > self.call_size()
+            && !self.growth_is_paid_for();
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
             // The verdict is `cost < threshold`: the call stays.
