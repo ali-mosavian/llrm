@@ -18,16 +18,17 @@ POSIX = ROOT / "runtime" / "shared" / "posix"
 OURS = "c64"
 NOPIC = "c64nopic"  # ours with -fno-pic: the column that compares to gcc and clang, which are -fno-pic; never gated, no base leg
 REPORTED = {NOPIC: "ours", "gcc64": "gcc", "clang64": "clang"}  # columns beside ours, never gated
-FAR = re.compile(r"\bfar\b")  # a DOS far pointer: the program has no x86_64 reading
+FAR = re.compile(r"\b(far|huge|__huge|__far)\b")  # a DOS far or huge pointer: the program has no x86_64 reading
+DATA = re.compile(r"^//\s*data:", re.M)  # it reads a file by a DOS path the driver does not supply: not run natively
 
 
 def candidates(directory: Path) -> Path | None:
-    """The program's C source if it can run here: it has main, an expected output and no far pointers."""
+    """The program's C source if it can run here: it has main, an expected output, no far pointers and reads no data file."""
     source = directory / f"{directory.name}.c"
     if not source.is_file() or not source.with_suffix(".out").is_file():
         return None
     text = source.read_text(errors="replace")
-    return None if FAR.search(text) or not re.search(r"\bmain\s*\(", text) else source
+    return None if FAR.search(text) or DATA.search(text) or not re.search(r"\bmain\s*\(", text) else source
 
 
 def perf_missing() -> str | None:

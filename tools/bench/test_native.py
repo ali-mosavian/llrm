@@ -27,6 +27,8 @@ def test_a_program_runs_natively_only_with_main_an_expected_output_and_no_far_po
     assert native.candidates(program(tmp_path, "g", out=None)) is None
     assert native.candidates(program(tmp_path, "h", "char far *p; int main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "i", "int f(void) { return 0; }\n")) is None
+    assert native.candidates(program(tmp_path, "j", "char __huge *p; int main(void) { return 0; }\n")) is None
+    assert native.candidates(program(tmp_path, "k", "// data: photo.jpg\n" + PROGRAM)) is None  # jpeg and stft printed the file name where a number was expected
 
 
 def test_a_row_counts_one_run_of_the_program_not_the_start_up_or_the_driver(tmp_path):
