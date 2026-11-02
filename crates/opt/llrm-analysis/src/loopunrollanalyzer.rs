@@ -18,6 +18,8 @@
 //! - U1 `fcmp` is not simplified: no `simplifyFCmpInst` exists in
 //!   `llrm_mir::simplify`; it is asked of ScalarEvolution alone.
 //! - U2 No `FPMathOperator` fast-math flags beyond those on the instruction.
+//! - U3 A call that constant-folds with the iteration's operands is free (the
+//!   pin charges it). Owner llrm-target-x86-m32, exit 2026-11-20.
 //!
 //! # Example
 //! At iteration 2 of a loop with `%i = phi i16 [ 0, %pre ], [ %n, %latch ]`,
@@ -35,7 +37,7 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Linkage, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
-use llrm_mir::simplify::{simplify_binop_operands, simplify_cast_operand, simplify_icmp_operands};
+use llrm_mir::simplify::{simplify_binop_operands, simplify_call_operands, simplify_cast_operand, simplify_icmp_operands};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::AssumptionCache;
 
@@ -174,6 +176,7 @@ impl UnrolledInstAnalyzer {
             Opcode::Binary(_) => self.visit_binary_operator(env, simplified, inst),
             Opcode::Load { .. } => self.visit_load(env, simplified, inst),
             Opcode::Cast(_) => self.visit_cast_inst(env, simplified, inst),
+            Opcode::Call(_) => self.visit_call(env, simplified, inst),
             Opcode::ICmp(_) => self.visit_cmp_inst(env, simplified, inst),
             Opcode::Phi => self.visit_phi_node(env, simplified, inst),
             _ => self.visit_instruction(env, simplified, inst),
@@ -257,6 +260,26 @@ impl UnrolledInstAnalyzer {
         if let Some(simple) = simplify_binop_operands(env.context, env.layout, env.function, op, flags, lhs, rhs) {
             if let Some(result) = result {
                 simplified.insert(result, simple);
+            }
+            return true;
+        }
+        self.visit_instruction(env, simplified, inst)
+    }
+
+    /// DEVIATE U3: a call that folds with the operands this iteration holds
+    /// (`llvm.fmuladd` of constants) is free; the pin's analyzer only asks
+    /// ScalarEvolution, so a folded body is charged its calls.
+    fn visit_call(
+        &mut self,
+        env: &mut Env,
+        simplified: &mut IdMap<ValueId, Operand>,
+        inst: InstId,
+    ) -> bool {
+        let operation = env.function.instruction(inst);
+        let operands: Vec<Operand> = operation.operands.iter().map(|&op| Self::lookup(simplified, op)).collect();
+        if let Some(value) = simplify_call_operands(env.context, env.globals, env.layout, env.function, inst, &operands) {
+            if let Some(result) = operation.result {
+                simplified.insert(result, value);
             }
             return true;
         }
