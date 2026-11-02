@@ -391,6 +391,17 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> u8 {
         0
     }
+    /// DEVIATE C5: the bytes `insn` takes with `virt` in `phys` against the
+    /// cheapest register (a REX prefix, a longer form), where the target says;
+    /// 0 for all registers is the pin's order.
+    fn encoding_bytes(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+        _phys: RegId,
+    ) -> i64 {
+        0
+    }
     /// `TRI->getCSRFirstUseCost(MF)`: what the first use of a callee-saved
     /// register costs in entry-block executions (X86: `push` and `pop`).
     fn csr_first_use_cost(&self) -> u32 {
@@ -994,7 +1005,7 @@ impl<'a> RAGreedy<'a> {
                 break;
             }
         }
-        let phys = phys?;
+        let phys = self.cheapest_equal_register(virt, order, phys?);
         // PhysReg is available, but there may be a better choice.
         // If we missed a simple hint, try to cheaply evict interference from
         // the preferred register.
@@ -1022,6 +1033,51 @@ impl<'a> RAGreedy<'a> {
         // `phys` is available at a cost: evict interference from a cheaper
         // alternative, if a lighter range holds one.
         Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
+    }
+
+    /// DEVIATE C5 (no number yet; exit: re-evaluated against the pin at
+    /// 2026-11-20 with the other numbered DEVIATEs). Pin: `tryAssign` takes the
+    /// first free register of the allocation order
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L532>),
+    /// whatever its encoding costs. Evidence: m64 O2 frames 243 B against
+    /// main's 241 (`xor r8d,r8d` for `xor edi,edi`), scroll 319/317, histo,
+    /// shellsort; on those the pin makes the same pick, so main was luckier
+    /// than the pin. Of the registers after `first`
+    /// that are free for `virt` and equal to it on what costs bytes (cost per
+    /// use, a push and pop still to pay), the one whose
+    /// instructions encode shortest; the first in the pin's order on a tie.
+    fn cheapest_equal_register(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        first: RegId,
+    ) -> RegId {
+        let lis = &self.lis;
+        let mut keys: Vec<_> = lis.operands(virt.reg()).iter().map(|operand| operand.instr).collect();
+        keys.dedup();
+        let bytes = |env: &dyn GreedyEnv, phys: RegId| -> i64 {
+            keys.iter().map(|key| env.encoding_bytes(lis.instr(*key), virt.reg(), phys)).sum()
+        };
+        // Equal on what the pin ranks that costs bytes: the cost per use, and
+        // a push and a pop that a callee-saved register not yet used brings.
+        let class =
+            |this: &Self, reg: RegId| (this.env.reg_cost(reg), is_unused_callee_saved_reg(this.env, &this.matrix, reg));
+        let (mut best, mut best_bytes, kind) = (first, bytes(self.env, first), class(self, first));
+        let mut after = false;
+        for (reg, is_hint) in order.iter() {
+            if reg == first {
+                after = true;
+                continue;
+            }
+            if !after || is_hint || class(self, reg) != kind {
+                continue;
+            }
+            let one = bytes(self.env, reg);
+            if one < best_bytes && self.matrix.check_interference(virt, reg) == InterferenceKind::Free {
+                (best, best_bytes) = (reg, one);
+            }
+        }
+        best
     }
 
     /// `trySplitAroundHintReg` (RegAllocGreedy.cpp#L1376): `virt` has a
