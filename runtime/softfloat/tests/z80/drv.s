@@ -33,7 +33,18 @@ next:
 	ld	a,h
 	cp	a,11(ix)
 	jr	z,good
-bad:	ld	hl,(0x8f00)
+bad:	ld	(0x8f1c),de
+	ld	(0x8f1e),hl
+	ld	hl,(0x8f00)
+	ld	a,h
+	or	a,l
+	jr	nz,more
+	push	ix
+	pop	hl
+	ld	de,#0x8f10
+	ld	bc,#12
+	ldir
+more:	ld	hl,(0x8f00)
 	inc	hl
 	ld	(0x8f00),hl
 good:	ld	de,#12
