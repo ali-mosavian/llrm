@@ -8874,10 +8874,14 @@ impl Compiler {
         // the runtime reports it as error 11, an INTEGER divide is the 16-bit
         // `idiv` BC emits and `-32768 \ -1` needs no check of ours. Not where
         // an ON ERROR handler is active (the trap names no statement to
-        // RESUME), nor by the constant -1, which the optimizer turns into a
+        // RESUME: the runtime takes the first statement row after the fault's
+        // address, and our block layout does not keep the rows in address
+        // order; differential overflow-ops ran the divide again to the 120 s
+        // limit), nor by the constant -1, which the optimizer turns into a
         // negation.
         let hardware_idiv = narrow_divmod
             && self.options.idiv_overflow_traps
+            && !(self.handles_errors || self.module_handled)
             && !matches!(&right_operand, Operand::Constant(_, Number::Integer(-1)));
         let narrow_divmod = narrow_divmod && !hardware_idiv;
         let integral = matches!(
