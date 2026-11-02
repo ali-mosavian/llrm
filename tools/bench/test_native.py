@@ -87,3 +87,10 @@ def test_a_program_gcc_and_clang_cannot_build_either_is_skipped_not_an_error_of_
     assert all("skip" in row and "error" not in row for row in rows.values())
     monkeypatch.setattr(native, "measure_one", lambda column, *rest: {"error": "compile: x"} if column == native.OURS else {"instructions": 1})
     assert "error" in native.measure([("f", directory)], tmp_path, ["O2"], tmp_path / "w", tmp_path)[("f", native.OURS, "O2")]
+
+
+def test_the_pin_column_compiles_with_the_pinned_clang(tmp_path, monkeypatch):
+    """The scoreboard compares ours to gcc and clang; the pinned LLVM clang is the compiler llrm tracks, and its column is named by LLRM_PIN_CLANG."""
+    monkeypatch.setenv("LLRM_PIN_CLANG", "/pin/bin/clang")
+    command, _ = native.compile_command("pin64", tmp_path, tmp_path / "a.c", "O2", tmp_path / "a.o", tmp_path)
+    assert command[0] == "/pin/bin/clang" and "-fno-pic" in command

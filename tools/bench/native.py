@@ -17,7 +17,7 @@ DRIVER = Path(__file__).with_name("native_driver.c")
 POSIX = ROOT / "runtime" / "shared" / "posix"
 OURS = "c64"
 NOPIC = "c64nopic"  # ours with -fno-pic: the column that compares to gcc and clang, which are -fno-pic; never gated, no base leg
-REPORTED = {NOPIC: "ours", "gcc64": "gcc", "clang64": "clang"}  # columns beside ours, never gated
+REPORTED = {NOPIC: "ours", "gcc64": "gcc", "clang64": "clang", "pin64": "pin"}  # pin: the pinned LLVM clang (LLRM_PIN_CLANG), the compiler llrm tracks  # columns beside ours, never gated
 FAR = re.compile(r"\b(far|huge|__huge|__far)\b")  # a DOS far or huge pointer: the program has no x86_64 reading
 DATA = re.compile(r"^//\s*data:", re.M)  # it reads a file by a DOS path the driver does not supply: not run natively
 
@@ -57,7 +57,8 @@ def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Pa
     flags = [f"-{opt}", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
     if compiler in (OURS, NOPIC):
         return [str(binary / "llrm-cc"), "-m64", *(["-fno-pic"] if compiler == NOPIC else []), *flags], {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
-    return [shutil.which(REPORTED[compiler]) or REPORTED[compiler], "-fno-pic", *flags], dict(os.environ)
+    program = os.environ.get("LLRM_PIN_CLANG", "") if compiler == "pin64" else shutil.which(REPORTED[compiler]) or REPORTED[compiler]
+    return [program, "-fno-pic", *flags], dict(os.environ)
 
 
 def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt: str, work: Path, bench: Path) -> dict:
@@ -95,7 +96,7 @@ def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], wor
             if why:
                 rows = {column: {"skip": why} for column in (OURS, *REPORTED)}
             else:
-                rows = {column: measure_one(column, binary, directory, source, opt, work, bench) for column in ("gcc64", "clang64", OURS, NOPIC)}
+                rows = {column: measure_one(column, binary, directory, source, opt, work, bench) if column != "pin64" or os.environ.get("LLRM_PIN_CLANG") else {"skip": "no LLRM_PIN_CLANG"} for column in ("gcc64", "clang64", "pin64", OURS, NOPIC)}
                 broken = rows["gcc64"].get("error", "")
                 if broken.startswith(("compile:", "link:")) and rows["clang64"].get("error", "").startswith(("compile:", "link:")):
                     rows = {column: {"skip": f"not buildable natively (gcc and clang fail too): {broken}"} for column in rows}  # parity/scalar calls `keep`, which only the DOS harness defines
