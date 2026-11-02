@@ -220,3 +220,16 @@ llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
 object = "asm"
 link = []
+
+# Z80, as far as sdasz80 text: clang's msp430 is only the C front end (16-bit int and pointers, as SDCC; unsigned char), its
+# datalayout replaced by the Z80's. A row stops at -S, which the tests assemble and link with sdasz80 and sdldz80.
+[z80-sdcc]
+description = "z80"
+triple = "msp430"
+datalayout = "{datalayout:z80}"
+clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
+clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+llc = []
+llc_program = "llrm-z80-llc"
+object = "sdasz80"
+link = ["sh", "-c", "echo 'llrm-cc: the z80 row stops at -S' >&2; exit 1"]

@@ -270,3 +270,15 @@ fn contraction_is_off_only_where_the_machine_fuses() {
         assert!(!off(name), "{name} has no fused multiply-add: clang's default contraction keeps results");
     }
 }
+
+/// The z80 row names its own backend program and the C sizes of its
+/// description. A row with the default `llrm-llc` handed the msp430 IR to the
+/// x86 backend.
+#[test]
+fn the_z80_row_selects_its_own_backend() {
+    let table = targets(TARGETS).unwrap();
+    assert_eq!(table["z80-sdcc"].llc_program, "llrm-z80-llc");
+    let args = llc_args(&table["z80-sdcc"], &built("-O2 -S x.c"), Path::new("x.ll"), Path::new("x.s"));
+    assert!(args.contains(&"-S".to_owned()) && args.contains(&"-O2".to_owned()), "{args:?}");
+    assert_eq!(table["z80-sdcc"].c_abi.as_ref().map(|c| (c.int, c.long, c.pointer)), Some((2, 4, 2)));
+}
