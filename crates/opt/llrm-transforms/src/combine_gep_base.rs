@@ -5,8 +5,9 @@
 //! [`CommonPointerBase`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L2244)
 //! and
 //! [`InstCombinerImpl::EmitGEPOffsets`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L238)
-//! at d1106deb71cc. `foldGEPICmp` asks them today; `OptimizePointerDifference`
-//! will.
+//! at d1106deb71cc, and `OptimizePointerDifference`
+//! ([:2327](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L2327)).
+//! `foldGEPICmp` and `visitSub` ask them.
 //!
 //! MIRROR: the chains are walked from each side to the first pointer they
 //! share, their flags are folded with `intersectForOffsetAdd`, a chain is
@@ -16,8 +17,9 @@
 //!
 //! DEVIATE 1: no vector GEPs: MIR has none.
 //!
-//! DEVIATE 2: `RewriteGEPs` is always true, the only way `foldGEPICmp` calls
-//! it. Exit: `OptimizePointerDifference`, which passes false.
+//! DEVIATE 2: `OptimizePointerDifference` does not set `nuw` on the one GEP's
+//! multiply or shift (:2336-2343). Exit: the `nuw` it would set is read by
+//! no fold translated yet.
 //!
 //! # Used by
 //! `foldGEPICmp` (`combine_compares.rs`).
@@ -137,6 +139,7 @@ impl Combiner<'_> {
         geps: &[InstId],
         flags: GepFlags,
         index_ty: TypeId,
+        rewrite: bool,
     ) -> Operand {
         let add = |this: &mut Self, sum: Option<Operand>, offset: Operand| match sum {
             Some(sum) => {
@@ -157,7 +160,7 @@ impl Combiner<'_> {
         let mut one_use_flags = GepFlags::ALL;
         for &gep in geps.iter().rev() {
             // At the GEP, so it can be rewritten; the sums go at `at`.
-            let mut offset = self.emit_gep_offset(gep, false);
+            let mut offset = if rewrite { self.emit_gep_offset(gep, false) } else { self.emit_gep_offset_at(at, gep, false) };
             let found = self.gep_of(gep).expect("a getelementptr");
             let gep_flags = GepFlags::of(found.flags);
             if self.has_one_use(self.value_of(gep)) {
@@ -172,7 +175,7 @@ impl Combiner<'_> {
             }
             let byte_gep_of_it =
                 self.context.types.int_bits(found.source) == Some(8) && found.indices.first() == Some(&offset);
-            if !byte_gep_of_it {
+            if rewrite && !byte_gep_of_it {
                 let rewritten_flags = one_use_flags.intersect_for_offset_add(gep_flags);
                 let ptr = one_use_base.unwrap_or(found.ptr);
                 let new = self.create_ptr_add(gep, ptr, offset, rewritten_flags.flags());
@@ -188,5 +191,40 @@ impl Combiner<'_> {
             sum = Some(add(self, sum, merged));
         }
         sum.unwrap_or_else(|| self.int(index_ty, 0))
+    }
+
+    /// `OptimizePointerDifference`: `lhs - rhs` of two pointers into one
+    /// object as the difference of their offsets, cast to `ty`.
+    pub(crate) fn optimize_pointer_difference(
+        &mut self,
+        at: InstId,
+        lhs: Operand,
+        rhs: Operand,
+        ty: TypeId,
+        is_nuw: bool,
+    ) -> Option<Operand> {
+        let base = self.common_pointer_base(lhs, rhs);
+        base.ptr?;
+        if self.is_expensive(&base) {
+            return None;
+        }
+        // To avoid duplicating the offset arithmetic, rewrite the GEP to use
+        // the computed offset.
+        let rewrite = !base.lhs_geps.is_empty() && !base.rhs_geps.is_empty();
+        let index_ty = self.index_type(self.type_of(lhs));
+        let mut result = self.emit_gep_offsets(at, &base.lhs_geps, base.lhs_flags, index_ty, rewrite);
+        let offset2 = self.emit_gep_offsets(at, &base.rhs_geps, base.rhs_flags, index_ty, rewrite);
+        // If we have a 2nd GEP of the same base pointer, subtract the offsets.
+        if !self.is_zero_constant(offset2) {
+            let mut wrap = Flags::default();
+            if is_nuw && base.lhs_flags.nuw && base.rhs_flags.nuw {
+                wrap.insert(Flags::NUW);
+            }
+            if base.lhs_flags.in_bounds && base.rhs_flags.in_bounds {
+                wrap.insert(Flags::NSW);
+            }
+            result = self.create_binop(at, BinaryOp::Sub, result, offset2, wrap);
+        }
+        Some(self.int_cast(at, result, ty))
     }
 }
