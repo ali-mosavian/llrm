@@ -63,6 +63,8 @@ pub struct Converted<T: Target> {
     pub origin: Vec<(usize, usize)>,
     /// Whether a path from the entry reaches each block.
     pub reachable: Vec<bool>,
+    /// Where each value [`Converted::coalesce`] absorbed went.
+    joined: llrm_codegen::coalescer::env::JoinMap,
     pub tii: SpikeInstrInfo<T>,
     pub tri: SpikeRegisterInfo,
 }
@@ -83,7 +85,7 @@ impl<T: Target> Converted<T> {
             .iter()
             .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
             .collect();
-        let (body, palettes) = llrm_codegen::coalescer::env::coalesce(
+        let (body, palettes, joined) = llrm_codegen::coalescer::env::coalesce(
             &self.body,
             palettes,
             self.body.pins.clone(),
@@ -128,6 +130,13 @@ impl<T: Target> Converted<T> {
             }
         }
         self.body = body;
+        self.joined = joined;
+    }
+
+    /// Where each value the coalescer absorbed went: `survivor(value)` is the
+    /// value that stands for it in [`Converted::body`].
+    pub fn joined(&self) -> &llrm_codegen::coalescer::env::JoinMap {
+        &self.joined
     }
 
     /// The registers `value` may take.
@@ -286,6 +295,7 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
+        joined: Default::default(),
         tii: SpikeInstrInfo {
             classes: function.classes.clone(),
             registers,

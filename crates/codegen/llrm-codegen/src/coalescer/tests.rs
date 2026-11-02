@@ -267,6 +267,25 @@ fn test_a_chain_of_copies_is_joined_to_one_value() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// A target that reads the joins back (wasm's local numbering) got them by
+/// matching the kept instructions' operands, which breaks when a pass reshapes
+/// an instruction. The coalescer states them: every value of a copy chain
+/// stands for the one that survives, and a value no join took stands for
+/// itself.
+#[test]
+fn test_the_join_map_names_the_survivor_of_each_absorbed_value() {
+    let (a, c1, c2, r) = (def(1), copy(2, 1), copy(3, 2), read(3));
+    let was = body(&[(&[a, c1, c2, r], &[])]);
+    let (_, map) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    let survivor = map.survivor(1);
+    assert_eq!((map.survivor(2), map.survivor(3)), (survivor, survivor), "{map:?}");
+    assert!([1, 2, 3].contains(&survivor), "{survivor}");
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), load(1), read(1), read(2));
+    let was = body(&[(&[a, c, b, r1, r2], &[])]);
+    let (_, map) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_eq!((map.survivor(1), map.survivor(2)), (1, 2), "a copy left stays two values: {map:?}");
+}
+
 /// A copy that cannot join stays, and the run ends: no round loops forever on
 /// it.
 #[test]

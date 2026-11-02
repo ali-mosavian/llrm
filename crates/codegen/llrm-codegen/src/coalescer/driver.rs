@@ -131,11 +131,13 @@ fn apply_terminal_rule(
     false
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Stats {
     pub joined: usize,
     /// Copies still in the list when no round made progress.
     pub left: usize,
+    /// `(absorbed, survivor)` of each join, in order.
+    pub renames: Vec<(u32, u32)>,
 }
 
 struct Coalescer<'a> {
@@ -282,5 +284,5 @@ pub fn run(
     // join until we make no progress.
     while coalescer.copy_coalesce_work_list(List::Work, 0) {}
     let left = coalescer.work.iter().flatten().count();
-    Stats { joined: coalescer.joined, left }
+    Stats { joined: coalescer.joined, left, renames: coalescer.state.renames }
 }
