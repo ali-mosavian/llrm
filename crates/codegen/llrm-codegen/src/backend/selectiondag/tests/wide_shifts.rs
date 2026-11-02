@@ -327,3 +327,60 @@ fn a_64_bit_product_without_a_widening_multiply_is_the_pins_default_libcall() {
     TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
     assert_eq!(calls.0, vec![("__muldi3", 2)]);
 }
+
+/// A hook that cannot make the call (`make_lib_call` is `None`, as the m68k
+/// hook is for a result wider than a long) leaves the type legalizer on the
+/// forced expansion: the product still legalizes, with no call in it. The m68k
+/// hook panicked instead and `x_fixmul` stopped compiling.
+#[test]
+fn a_hook_that_declines_the_product_call_leaves_the_inline_expansion() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Declines(usize);
+    impl Hooks for Declines {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _name: &'static str,
+            _args: &[SDValue],
+            _ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0 += 1;
+            None
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UMulLoHi, ISD::SMulLoHi, ISD::MulHU, ISD::MulHS] {
+        tli.set_operation_action(op, MVT::I32, Action::Expand);
+    }
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let load = |dag: &mut SelectionDAG, slot| {
+        let info = MemInfo {
+            mem_vt: EVT::I64,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        dag.get_load(EVT::I64, chain, ptr, info)
+    };
+    let (a, b) = (load(&mut dag, 1), load(&mut dag, 2));
+    let product = dag.get_node(ISD::Mul, EVT::I64, &[a, b]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+    dag.set_root(low);
+    let mut hook = Declines::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hook).run().unwrap();
+    assert_eq!(hook.0, 1, "the library call was asked for once");
+}
