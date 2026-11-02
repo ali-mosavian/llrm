@@ -21,7 +21,9 @@ fn check(
     let before = results(&module, inputs);
     let outer = Outer::of(&module, None);
     let layout = DataLayout::parse("e-p:32:32-i64:32-n8:16:32").expect("a layout");
-    let tti = X86::of_cpu("i486").expect("a cpu");
+    // These bodies are checked against the pin's select forms, so the cpu has a
+    // cmov.
+    let tti = X86::of_cpu("pentiumpro").expect("a cpu");
     let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");

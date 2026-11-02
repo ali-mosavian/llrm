@@ -25,10 +25,13 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
 
 /// The pin's `asm` row of `name`, or the local instruction's.
 pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static [AsmOperand])> {
-    asm(name).or_else(|| short::short_asm(name))
+    asm(name).or_else(|| short::short_asm(name)).or_else(|| indexed::source_asm(name))
 }
 
 /// The pin's encoding of `name`, or the local instruction's.
 pub fn bits(name: &str) -> Option<(u16, &'static [Piece])> {
-    encoding(name).map(|&(_, width, pieces)| (width, pieces)).or_else(|| short::short_encoding(name))
+    encoding(name)
+        .map(|&(_, width, pieces)| (width, pieces))
+        .or_else(|| short::short_encoding(name))
+        .or_else(|| indexed::source_encoding(name))
 }
