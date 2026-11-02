@@ -34,10 +34,11 @@ fn a_protected_variable_keeps_its_visibility() {
     assert_eq!(print::module(&module), text);
 }
 
-/// MIR takes no alias as an operand; the refusal names the alias instead of
-/// calling it "never defined".
+/// `int other(int) __attribute__((alias("real")))` called from `main`: the
+/// call named the alias, which the parser refused ("@other is an alias, which
+/// MIR takes as no operand"), so the C failed on every target.
 #[test]
-fn an_alias_used_as_an_operand_is_refused_by_name() {
+fn an_operand_naming_an_alias_names_its_aliasee() {
     let text = "@a = alias i32, ptr @v
 @v = global i32 3
 
@@ -47,6 +48,22 @@ entry:
   ret i32 %x
 }
 ";
+    let module = parse::module(text).unwrap();
+    assert_eq!(module.aliases.len(), 1);
+    assert!(print::module(&module).contains("load i32, ptr @v"), "{}", print::module(&module));
+}
+
+#[test]
+fn an_operand_naming_a_weak_alias_is_refused() {
+    let text = "@a = weak alias i32, ptr @v
+@v = global i32 3
+
+define i32 @f() {
+entry:
+  %x = load i32, ptr @a
+  ret i32 %x
+}
+";
     let error = parse::module(text).unwrap_err();
-    assert!(error.to_string().contains("@a is an alias"), "{error}");
+    assert!(error.to_string().contains("@a is an alias a linker may replace"), "{error}");
 }

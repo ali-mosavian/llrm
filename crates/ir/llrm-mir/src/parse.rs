@@ -41,7 +41,9 @@ struct Parser {
     globals: HashMap<Name, GlobalId>,
     /// The names the pre-scan found defined as aliases: no instruction may use
     /// one.
-    alias_names: HashSet<Name>,
+    /// Each alias the pre-scan found, with what an operand naming it is: its
+    /// aliasee, or none where the alias may be interposed.
+    alias_names: HashMap<Name, Option<Name>>,
     /// Global values referred to, with the pointer type each use gave them.
     global_uses: Vec<(GlobalId, TypeId, usize)>,
     defined_globals: HashSet<GlobalId>,
@@ -71,7 +73,7 @@ impl Parser {
             at: 0,
             module: Module::default(),
             globals: HashMap::default(),
-            alias_names: HashSet::default(),
+            alias_names: HashMap::default(),
             global_uses: Vec::new(),
             defined_globals: HashSet::default(),
             groups: HashMap::default(),
@@ -258,8 +260,9 @@ impl Parser {
                 Token::Global(name) => {
                     let defines = awaiting_function
                         || self.tokens.get(at + 1).is_some_and(|(next, _)| *next == Token::Punct('='));
-                    if defines && !awaiting_function && self.defines_alias(at + 2) {
-                        if !self.alias_names.insert(name.clone()) {
+                    if let Some(operand) = (defines && !awaiting_function).then(|| self.alias_operand(at + 2)).flatten()
+                    {
+                        if self.alias_names.insert(name.clone(), operand).is_some() {
                             let line = self.tokens[at].1;
                             return Err(ParseError { line, message: format!("@{} is defined twice", display(name)) });
                         }
@@ -328,7 +331,7 @@ impl Parser {
                     self.string()?;
                 }
                 Token::Local(Name::Named(name)) => self.named_type(name)?,
-                Token::Global(name) if self.alias_names.contains(&name) => self.alias(name)?,
+                Token::Global(name) if self.alias_names.contains_key(&name) => self.alias(name)?,
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 Token::MetadataName(name) => self.named_metadata(name)?,
@@ -500,22 +503,30 @@ impl Parser {
         Ok(space)
     }
 
-    /// Whether the definition whose `=` stands before `at` is an alias: its
-    /// `alias` comes before any `global` or `constant`.
-    fn defines_alias(
+    /// For the definition whose `=` stands before `at`: none when it is no
+    /// alias (`alias` comes before any `global` or `constant`), else what an
+    /// operand naming it is, the first global after `alias`, none for a weak
+    /// alias, which a linker may replace.
+    fn alias_operand(
         &self,
         at: usize,
-    ) -> bool {
+    ) -> Option<Option<Name>> {
+        let mut interposable = false;
+        let mut seen = false;
         for (token, _) in &self.tokens[at..] {
             match token {
-                Token::Word(word) if word == "alias" => return true,
-                Token::Word(word) if word == "global" || word == "constant" => return false,
-                Token::Word(word) if word == "define" || word == "declare" => return false,
-                Token::Eof => return false,
+                Token::Word(word) if word == "alias" => seen = true,
+                Token::Word(word) if !seen && (word == "global" || word == "constant") => return None,
+                Token::Word(word) if word == "define" || word == "declare" => return None,
+                Token::Word(word) if !seen => {
+                    interposable |= spelled(&LINKAGE, word).is_some_and(|linkage| linkage.is_interposable());
+                }
+                Token::Global(target) if seen => return Some((!interposable).then(|| target.clone())),
+                Token::Eof => return None,
                 _ => {}
             }
         }
-        false
+        None
     }
 
     /// `@a = linkage visibility alias T, ptr @target`. Only a plain global is
@@ -986,10 +997,21 @@ impl Parser {
         ty: TypeId,
         line: usize,
     ) -> Parsed<ConstantId> {
-        let Some(&id) = self.globals.get(name) else {
-            if self.alias_names.contains(name) {
-                return self.fail_on(line, format!("@{} is an alias, which MIR takes as no operand", display(name)));
+        // An alias is its aliasee's address: an operand naming one names that.
+        let mut name = name.clone();
+        let mut hops = 0;
+        while let Some(entry) = self.alias_names.get(&name) {
+            let Some(target) = entry.clone() else {
+                return self.fail_on(line, format!("@{} is an alias a linker may replace", display(&name)));
+            };
+            name = target;
+            hops += 1;
+            if hops > 64 {
+                return self.fail_on(line, format!("@{} is an alias of itself", display(&name)));
             }
+        }
+        let name = &name;
+        let Some(&id) = self.globals.get(name) else {
             return self.fail_on(line, format!("@{} is never defined", display(name)));
         };
         if !matches!(self.module.context.types.get(ty), Type::Pointer(_)) {
