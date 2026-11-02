@@ -28,9 +28,29 @@ pub struct CpuTable {
     /// Thousandths of a clock one byte of code is worth at speed, where the
     /// target states a policy rate (m16); `None` where the rate is derived.
     pub speed_milliclocks_per_byte: Option<i64>,
+    /// Clocks to fill one such line from memory, burst, zero wait states.
+    pub line_fill_clocks: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
+}
+
+/// A code byte's price in thousandths of a clock at speed: the instruction
+/// cache's fill of one line over the line's bytes. 0 where either is unstated.
+pub fn derived_byte_rate(
+    cache_line: i64,
+    line_fill_clocks: i64,
+) -> i64 {
+    if cache_line > 0 { line_fill_clocks * 1000 / cache_line } else { 0 }
+}
+
+impl CpuTable {
+    /// What a byte of code is worth at speed, from the one row a target states:
+    /// its policy rate, else the fill of a line over the line's bytes. The
+    /// compiler's `Tti` and the judge both read this.
+    pub fn byte_rate(&self) -> Option<i64> {
+        self.speed_milliclocks_per_byte.or_else(|| Some(derived_byte_rate(self.cache_line?, self.line_fill_clocks?)))
+    }
 }
 
 /// The price a tune file gives a row of `section`: a scalar at the top, a form
@@ -146,6 +166,7 @@ impl Timings {
                     ("scalars", "jump_table") => table.jump_table = Some(number()?),
                     ("scalars", "cache_line") => table.cache_line = Some(number()?),
                     ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
+                    ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
@@ -242,6 +263,18 @@ mod tests {
             ),
             (Some(500), None)
         );
+    }
+
+    /// One reader: a stated rate wins, else a line's fill over its bytes (486:
+    /// 5 / 16 = 312).
+    #[test]
+    fn the_byte_rate_is_the_policy_row_or_the_line_fill() {
+        let timings = Timings::parse(
+            "cpus a b c\nspeed_milliclocks_per_byte 500 - -\ncache_line 16 16 -\nline_fill_clocks 5 5 -\n",
+        )
+        .unwrap();
+        let rate = |name| timings.cpu(name).unwrap().byte_rate();
+        assert_eq!((rate("a"), rate("b"), rate("c")), (Some(500), Some(312), None));
     }
 
     #[test]

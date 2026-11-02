@@ -56,6 +56,7 @@ pub fn speed_milliclocks_per_byte() -> i64 {
 }
 
 pub static CACHE_LINE: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.cache_line));
+pub static LINE_FILL_CLOCKS: LazyLock<[i64; 7]> = LazyLock::new(|| ratios(|table| table.line_fill_clocks));
 
 /// Instructions retired per cycle.
 pub static ISSUE: LazyLock<[i64; 7]> = LazyLock::new(|| scalars(|table| table.issue));
