@@ -274,7 +274,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let sixteen = self.dag.get_constant(16, EVT::I8);
         let lo_wide = self.dag.get_node(ISD::AnyExtend, vt, &[lo]);
         let lo_high = self.dag.get_node(ISD::Shl, vt, &[lo_wide, sixteen]);
-        Some(self.dag.get_node(ISD::FShr, vt, &[shifted, lo_high, sixteen]))
+        let kept = self.dag.node(node).flags;
+        Some(self.dag.get_node_flags(ISD::FShr, vt, &[shifted, lo_high, sixteen], kept))
     }
 
     pub(super) fn visit_or(

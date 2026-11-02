@@ -1590,3 +1590,93 @@ fn test_a_copy_a_split_makes_at_a_block_top_does_not_copy_the_argument_register(
         .count();
     assert_eq!(reads_argument, 1, "{f:#?}");
 }
+
+/// Two classes with the same registers in a different order; a value of the
+/// second costs twice as much to spill (a pair of bytes next to a byte).
+struct Scaled;
+
+impl Target for Scaled {
+    type Class = u8;
+
+    fn meet(
+        one: u8,
+        other: u8,
+    ) -> Option<u8> {
+        (one == other).then_some(one)
+    }
+
+    fn any() -> u8 {
+        0
+    }
+
+    fn candidates(class: u8) -> Vec<RegId> {
+        if class == 0 { vec![RegId::EBX, RegId::ECX] } else { vec![RegId::ECX, RegId::EBX] }
+    }
+
+    fn view(
+        root: RegId,
+        _: u8,
+    ) -> RegId {
+        root
+    }
+
+    fn root(register: RegId) -> RegId {
+        register
+    }
+
+    fn reserved(root: RegId) -> bool {
+        root == RegId::ESP
+    }
+
+    fn caller_saved() -> Vec<RegId> {
+        vec![RegId::EBX, RegId::ECX]
+    }
+
+    fn spill_weight_scale(order: &[RegId]) -> f32 {
+        if order[0] == RegId::ECX { 2.0 } else { 1.0 }
+    }
+
+    fn spill_store(
+        _: u8,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("st"), vec![Operand::Frame(slot), Operand::Use(register)]))
+    }
+
+    fn spill_load(
+        _: u8,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        Some(Inst::new(Kind::Op("ld"), vec![Operand::Def(register), Operand::Frame(slot)]))
+    }
+}
+
+/// Three values read alike in a loop over two registers: one is spilled. The
+/// value that costs more to spill (`v{dear}`, class 1) was spilled in two of
+/// the three shapes as the weights ignored the class (z80: a pair spill is 12 B
+/// against 6 for a byte).
+#[test]
+fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
+    for dear in 0..3u32 {
+        let mut f = MFunction::<u8>::new("scaled");
+        f.classes = (0..3).map(|n| u8::from(n == dear)).collect();
+        let mut entry = Block { id: 0, ..Block::default() };
+        for n in 0..3 {
+            entry.insts.push(op("load", vec![Operand::Def(v(n))]));
+        }
+        let mut body = Block { id: 1, ..Block::default() };
+        for n in 0..3 {
+            body.insts.push(op("store", vec![Operand::Use(v(n))]));
+        }
+        body.insts.push(branch(1));
+        f.blocks = vec![entry, body];
+        let assignment = llrm_spike_mf::tolir::allocate_greedy::<Scaled>(&mut f, regs(), false).expect("allocates");
+        // a spilled value is rewritten into pieces; the kept one is still its
+        // own register
+        let kept = f.blocks[0].insts.iter().any(|i| i.operands.first() == Some(&Operand::Def(v(dear))));
+        drop(assignment);
+        assert!(kept, "v{dear} costs twice to spill and was spilled");
+    }
+}

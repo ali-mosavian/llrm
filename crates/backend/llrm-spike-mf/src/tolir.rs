@@ -741,6 +741,9 @@ impl<T: Target> SpikeInstrInfo<T> {
                 // what the form clobbers is put back by the way back
                 // ([`from_lir`]), which asks the target for the form again
                 Operand::Def(Reg::Phys(_)) => {}
+                // an offset the form carries (m68k's `MOVEM` pseudo): the way
+                // back writes it again
+                Operand::Imm(_) => {}
                 _ => return None,
             }
         }
@@ -849,6 +852,13 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         one: &Insn,
     ) -> Vec<(u32, Vec<RegId>)> {
         self.operands_of(one).into_iter().map(|(value, info)| (value, info.order.clone())).collect()
+    }
+
+    fn spill_weight_scale(
+        &self,
+        order: &[RegId],
+    ) -> f32 {
+        T::spill_weight_scale(order)
     }
 
     fn larger_order(
