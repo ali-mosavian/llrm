@@ -370,6 +370,21 @@ fn an_abs_is_a_negate_and_a_cmov_at_m64() {
     }
 }
 
+/// `m == (int)m` on a quadword (the overflow check of a widening multiply) is
+/// `movsxd` and a compare with the value; it was an add of 2^31 and an
+/// unsigned compare with 2^32, a quadword immediate in a register (x86 has no
+/// `shouldTransformSignedTruncationCheck`: widening_multiply +37 B over the pin).
+#[test]
+fn a_quadword_that_fits_a_dword_is_a_sign_extend_compare_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(i64 %m) {\n  %t = trunc i64 %m to i32\n  %s = sext i32 %t to i64\n  %r = icmp eq i64 %s, %m\n  ret i1 %r\n}\n\
+                define i1 @g(i64 %m) {\n  %a = add i64 %m, 2147483648\n  %r = icmp ult i64 %a, 4294967296\n  ret i1 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "g").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movsx") && !listing.contains("4294967296"), "{listing}");
+}
+
 /// The pin's TwoAddress commutes a `cmov` (swapping its sources and taking the
 /// opposite condition) so the result reuses the source that dies: `abs` is
 /// `mov eax, edi; neg eax; cmovs eax, edi`. Only add/and/or/xor/imul commuted,

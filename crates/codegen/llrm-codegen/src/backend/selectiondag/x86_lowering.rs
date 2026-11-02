@@ -168,6 +168,19 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::shouldTransformSignedTruncationCheck`: an integer
+    /// compare `(add x, 1<<(k-1)) u< 1<<k` is `sext_inreg x, k == x` when both
+    /// the type and the kept width are a byte, word, dword or qword (the
+    /// compare with a wide immediate would otherwise need a register for it).
+    fn should_transform_signed_truncation_check(
+        &self,
+        vt: EVT,
+        kept_bits: u32,
+    ) -> bool {
+        let ok = |bits: u32| matches!(bits, 8 | 16 | 32 | 64);
+        vt.is_integer() && ok(vt.size_in_bits()) && ok(kept_bits)
+    }
+
     fn is_compare_with_flags(
         &self,
         user: ISD,
