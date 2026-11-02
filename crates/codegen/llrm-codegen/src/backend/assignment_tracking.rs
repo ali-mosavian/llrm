@@ -38,7 +38,7 @@ mod redundant;
 mod rewrite;
 mod track;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use llrm_mir::dense::{IdMap, IdSet};
@@ -51,6 +51,8 @@ use llrm_mir::{
 };
 pub use rewrite::rewrite;
 pub use track::tracked;
+
+use crate::support::hash::{HashMap, HashSet};
 
 /// Where a location starts: just before record `slot` of `inst`, or before
 /// `inst` itself when `slot` is the number of records standing before it
@@ -710,7 +712,7 @@ pub struct AssignmentMarkers {
 
 impl AssignmentMarkers {
     pub fn new(function: &Function) -> AssignmentMarkers {
-        let mut by_id: HashMap<MetadataId, Vec<usize>> = HashMap::new();
+        let mut by_id: HashMap<MetadataId, Vec<usize>> = HashMap::default();
         for (at, record) in function.debug_records().iter().enumerate() {
             if let DebugWhat::Assign { id, .. } = record.what {
                 by_id.entry(id).or_default().push(at);
@@ -816,7 +818,7 @@ fn escaping_call(
     let has_flag = |attrs: Option<&Vec<llrm_mir::Attribute>>, flag: &str| {
         attrs.is_some_and(|attrs| llrm_mir::memory::has(attrs, flag))
     };
-    let mut seen: HashSet<VariableId> = HashSet::new();
+    let mut seen: HashSet<VariableId> = HashSet::default();
     for (arg, &operand) in instruction.operands[..instruction.operands.len() - 1].iter().enumerate() {
         if !q.is_pointer(operand) {
             continue;
@@ -886,7 +888,7 @@ pub fn build_overlap_map(
         before.get_or_insert_with(record.before, Default::default).push(at);
     }
     let mut prepared = Prepared::default();
-    let mut seen: HashSet<DebugVariable> = HashSet::new();
+    let mut seen: HashSet<DebugVariable> = HashSet::default();
     let mut fragments: BTreeMap<MetadataId, Vec<DebugVariable>> = BTreeMap::new();
     let mut declares = Vec::new();
     let mut note = |variable: DebugVariable| {
@@ -1026,7 +1028,7 @@ impl<'a> Lowering<'a> {
             records,
             insert_before: BTreeMap::new(),
             touched: Vec::new(),
-            not_always_stack_homed: HashSet::new(),
+            not_always_stack_homed: HashSet::default(),
         }
     }
 
@@ -1412,7 +1414,7 @@ impl<'a> Lowering<'a> {
     /// The table from what the dataflow made.
     fn finish(mut self) -> (FunctionVarLocsBuilder, bool) {
         let mut inserted = false;
-        let mut always: HashSet<MetadataId> = HashSet::new();
+        let mut always: HashSet<MetadataId> = HashSet::default();
         for locs in self.insert_before.values() {
             for loc in locs {
                 let aggregate = self.builder.variable(loc.variable).variable;

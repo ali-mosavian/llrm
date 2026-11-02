@@ -271,6 +271,11 @@ needs = [
   { run = 'cd "$(git rev-parse --show-toplevel)" && test -x "$(sh toolchain/clangbuild.sh --print m16)/bin/clang"' },
 ]
 
+# 32-bit libc development files: tests/qb_x86_32_host.rs links the runtime with `cc -m32`.
+[capability.libc32]
+require = ["LLRM_REQUIRE_LIBC32"]
+needs = [{ run = "printf '#include <errno.h>\\nint main(void){return 0;}\\n' | cc -m32 -x c - -o /dev/null" }]
+
 [capability.qcport]
 private = true
 require = []
@@ -305,6 +310,7 @@ measure = ["perf", "qcport"]  # callgrind counts (capability `counter`) but take
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
 "bin:differential" = ["qb45"]
+"bin:qb_x86_32_host" = ["libc32"]
 
 # Microsoft QuickBASIC 4.5's LINK and BC: the qb programs link with them, and the BC differential and the bench's BASIC rows run them.
 [capability.qb45]
