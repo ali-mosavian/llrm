@@ -732,6 +732,8 @@ define i16 @f() {
   %5 = load volatile i8, ptr @zero, align 1
   %6 = load volatile i8, ptr @zero, align 1
   %7 = load volatile i8, ptr @zero, align 1
+  store volatile i8 %3, ptr @zero, align 1
+  store volatile i8 %6, ptr @zero, align 1
   %8 = zext i8 %3 to i32
   %9 = add i32 %8, -1
   %10 = add i8 %5, -95
