@@ -8,8 +8,8 @@ sdasz80 -o $T/crt0.rel $T/crt0.s
 for f in $S/*.s; do b=$(basename $f .s); cp $f $T/$b.s; sdasz80 -g -o $T/$b.rel $T/$b.s; done
 for op in $OPS; do
   case $op in mul) f=__mulsi3;; udiv) f=__udivsi3;; umod) f=__umodsi3;; div) f=__divsi3;; mod) f=__modsi3;; fadd) f=__addsf3;; fsub) f=__subsf3;; fmul) f=__mulsf3;; fdiv) f=__divsf3;; citof) f=__floatsisf;; cutof) f=__floatunsisf;; cftoi) f=__fixsfsi;; cftou) f=__fixunssfsi;; esac
-  case $op in f*|c*) G=gen_f32.py;; *) G=gen.py;; esac
-  python3 $G ${op#?} > $T/vec.inc
+  case $op in f*|c*) G=gen_f32.py; A=${op#?};; *) G=gen.py; A=$op;; esac
+  python3 $G $A > $T/vec.inc
   sed "s/OP/$f/g" drv.s > $T/drv.s
   printf '\t.module stub\n\t.area _CODE\n\t.globl %s\n%s:\n\tret\n' $f $f > $T/stub.s
   (cd $T; sdasz80 -o drv.rel drv.s; sdasz80 -o stub.rel stub.s
