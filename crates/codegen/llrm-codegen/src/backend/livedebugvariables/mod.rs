@@ -217,6 +217,26 @@ pub fn positioned(
     out
 }
 
+/// Re-keys `table` (by the allocator's registers) by the number a note names
+/// a value with: the register the instruction defining the value writes first
+/// (what `masm` marks as the value's place), or the register a split cloned it
+/// from. O(instructions + segments).
+pub fn by_note_value(
+    body: &LirBody,
+    table: &BTreeMap<u32, Vec<Segment>>,
+    parents: &HashMap<u32, u32>,
+) -> BTreeMap<u32, Vec<Segment>> {
+    let mut out: BTreeMap<u32, Vec<Segment>> = BTreeMap::new();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let Some(&defined) = one.defines.first() else { continue };
+        let Some(segments) = table.get(&parents.get(&defined).copied().unwrap_or(defined)) else { continue };
+        for &tag in one.debug.defines.iter().filter(|&&tag| tag != u32::MAX) {
+            out.entry(tag).or_insert_with(|| segments.clone());
+        }
+    }
+    out
+}
+
 /// Prints, for `LLRM_LDV_DUMP`, the notes' slot positions (`LDVNOTE`) and the
 /// ranges of every variable (`LDV`) over the body the allocator wrote, to be
 /// joined by note index with the same function's `valuetrack` rows. Reads
@@ -230,7 +250,11 @@ pub fn dump(
 ) {
     use crate::backend::frame::FrameInfo;
     let mut lis = LiveIntervals::new(edited);
-    let placed: IndexMap<u32, RegId> = placed.iter().copied().collect();
+    let mut placed: IndexMap<u32, RegId> = placed.iter().copied().collect();
+    // A pinned value (an argument, a call's result) is where its pin says.
+    for (&value, &register) in &edited.pins {
+        placed.entry(value).or_insert(register);
+    }
     let mut table = segments_of(&mut lis, &placed, parents);
     let root = |value: u32| parents.get(&value).copied().unwrap_or(value);
     add_cells(&mut table, spilled.iter().map(|&value| root(value)), |value| frame.home(value), &frame.stacks);
@@ -241,6 +265,13 @@ pub fn dump(
         }
     }
     let end = lis.indexes.get_last_index().get_index();
+    if llrm_support::env_flag!("LLRM_LDV_DEBUG") {
+        eprintln!("LDVTABLE\t{}\t{:?}\tpins={:?}\tparents={:?}", edited.name, table, edited.pins, parents);
+        for one in positioned(edited, &lis) {
+            eprintln!("LDVPOS\t{:?}", one);
+        }
+    }
+    let table = by_note_value(edited, &table, parents);
     for one in locate(&positioned(edited, &lis), &table, i64::from(end), true) {
         eprintln!("LDV\t{}\t{}\t{:?}\t{}\t{}\t{:?}", edited.name, one.variable, one.piece, one.start, one.end, one.at);
     }
