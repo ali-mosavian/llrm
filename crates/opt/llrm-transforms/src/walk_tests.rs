@@ -1411,15 +1411,31 @@ b0:
 ";
 
 /// qlight c at m16 -O2 inlined a 30-instruction `ls_scale_byte` four times,
-/// 211 -> 376 bytes. The pin's bar (50) allows it; the m16 description holds
-/// a speed caller to the callee's code size too (`inline_size_guard_at_speed`).
+/// 211 -> 376 bytes. The m16 description holds a speed caller to the callee's
+/// code size (`inline_size_guard_at_speed`) unless the call's clocks pay for
+/// the bytes (D13): a callee too big for that stays a call.
 #[test]
-fn test_an_o2_call_of_a_callee_that_stays_and_grows_the_code_stays_a_call_at_m16() {
-    let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+fn test_an_o2_call_of_a_callee_that_stays_and_grows_past_what_its_clocks_pay_stays_a_call_at_m16() {
+    let mut big = String::from("@g = global i32 0\n\ndefine i32 @callee(i32 %x) {\nb0:\n");
+    for step in 0..20 {
+        let before = if step == 0 { "%x".to_owned() } else { format!("%w{}", step - 1) };
+        big.push_str(&format!("  %v{step} = load volatile i32, ptr @g\n  %w{step} = add i32 {before}, %v{step}\n"));
+    }
+    big.push_str("  ret i32 %w19\n}\n");
+    let text = format!("{big}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
     let pin = at_o2_on(llrm_x86_m16::Dos::pin_tuned(), &text, "@top(");
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
     assert!(!pin.contains("call i32 @callee"), "premise: the pin inlines it:\n{pin}");
     assert!(m16.contains("call i32 @callee"), "m16 copied it:\n{m16}");
+}
+
+/// D13: a callee that grows the code a little is copied into a speed caller at
+/// m16 where the call's clocks pay for it (the 13-operation `GROWS`).
+#[test]
+fn test_an_o2_call_of_a_callee_whose_clocks_pay_for_its_growth_is_inlined_at_m16() {
+    let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
+    assert!(!m16.contains("call i32 @callee"), "the call stayed:\n{m16}");
 }
 
 /// The same callee with a constant argument folds in the caller once inlined
@@ -1524,12 +1540,10 @@ b0:
 }
 
 /// qlight c at m16 -O2: `ls_scale_byte` (a clamped multiply and a divide by
-/// 255, the multiply-high sequence in the code) inlined four times is 191
-/// bytes more for 91 clocks less: the `CodeSize` units said +8 a site where the
-/// code grows by ~50 bytes, and priced in clocks that took the copy. The byte
-/// prices of the opcode table see the sequence, and the call stays.
+/// 255) four times. Kept as calls it ran 472 clocks, above main's 463 (main
+/// inlines it); D13 inlines it where the sheet's call clocks pay (388 clocks).
 #[test]
-fn test_an_o2_call_of_a_clamped_divide_by_a_constant_stays_a_call_at_m16() {
+fn test_an_o2_call_of_a_clamped_divide_by_a_constant_is_inlined_at_m16_where_main_inlines_it() {
     let text = "@raw = global i16 200
 @low = global i16 -20
 @s1 = global i16 120
@@ -1577,7 +1591,7 @@ b0:
 }
 ";
     let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
-    assert_eq!(m16.matches("call i16 @scale").count(), 4, "a copy was made:\n{m16}");
+    assert_eq!(m16.matches("call i16 @scale").count(), 0, "the calls stayed:\n{m16}");
 }
 
 /// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
@@ -2346,4 +2360,60 @@ fn test_the_priced_depth_copies_a_call_bound_tree_and_not_a_loop_bodied_one() {
     let (bound, looped) = (priced_depth(CALL_BOUND, "fib"), priced_depth(LOOP_BODIED, "walk"));
     assert!(bound >= 1, "a call-bound tree got {bound} levels");
     assert_eq!(looped, 0, "a loop-bodied tree got {looped} levels");
+}
+
+/// parity/branch and parity/loop c at m16 -O2 kept a static scratch variable
+/// (`demo_value`, 2 and 4 bytes of .bss against 0 in main) because the call
+/// that took its address stayed a call; inlined, the variable is promoted and
+/// the global is gone.
+#[test]
+fn test_an_o2_inline_at_m16_leaves_no_global_for_a_scratch_variable_whose_address_was_passed() {
+    let text = "@demo = internal global i16 0
+@low = internal global i16 -13
+@high = internal global i16 21
+
+define i32 @kernel(ptr %p) {
+b0:
+  %v = load i16, ptr %p
+  %neg = icmp slt i16 %v, 0
+  %w = sext i16 %v to i32
+  br i1 %neg, label %n, label %q
+n:
+  %a = mul i32 %w, 7
+  %r1 = add i32 %a, 3
+  ret i32 %r1
+q:
+  %b = mul i32 %w, 5
+  %r2 = sub i32 %b, 9
+  ret i32 %r2
+}
+
+define i32 @top() {
+b0:
+  %x = load volatile i16, ptr @low
+  store i16 %x, ptr @demo
+  %first = call i32 @kernel(ptr @demo)
+  %y = load volatile i16, ptr @high
+  store i16 %y, ptr @demo
+  %second = call i32 @kernel(ptr @demo)
+  %m = mul i32 %first, 1000
+  %s = add i32 %m, %second
+  ret i32 %s
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i32 @kernel"), "the calls stayed:\n{m16}");
+    let mut module = parsed(text);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = false;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    assert!(!llrm_mir::print::module(&module).contains("@demo"), "demo is still a global");
 }
