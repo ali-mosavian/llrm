@@ -462,6 +462,77 @@ _strlen:
 	ld	d,a
 	ret
 
+; memcpy (dst hl, src de, n bc) -> dst in de; the areas do not overlap.
+	.globl _memcpy
+_memcpy:
+	push	hl
+	ex	de,hl
+	ld	a,b
+	or	a,c
+	jr	z,1$
+	ldir
+1$:
+	pop	de
+	ret
+
+; memmove (dst hl, src de, n bc) -> dst in de: forward when dst is below src, else from the ends.
+	.globl _memmove
+_memmove:
+	push	hl
+	ld	a,b
+	or	a,c
+	jr	z,2$
+	ld	a,l
+	sub	a,e
+	ld	a,h
+	sbc	a,d
+	jr	c,3$
+	ex	de,hl
+	add	hl,bc
+	dec	hl
+	ex	de,hl
+	add	hl,bc
+	dec	hl
+	ex	de,hl
+	lddr
+	jr	2$
+3$:
+	ex	de,hl
+	ldir
+2$:
+	pop	de
+	ret
+
+; memset (dst hl, value e, n bc) -> dst in de: the first byte, then ldir copies it forward.
+	.globl _memset
+_memset:
+	push	hl
+	ld	a,b
+	or	a,c
+	jr	z,4$
+	ld	a,e
+	ld	(hl),a
+	dec	bc
+	ld	a,b
+	or	a,c
+	jr	z,4$
+	ld	e,l
+	ld	d,h
+	inc	de
+	ldir
+4$:
+	pop	de
+	ret
+
+; The compiler's memset (dst hl, value a, n de): the registers C's memset (value in de, n in bc) takes.
+	.globl __memseta
+__memseta:
+	ld	b,d
+	ld	c,e
+	ld	e,a
+	ld	d,#0
+	jp	_memset
+
 ; A call through a pointer: the address is in iy.
 	.globl __call_iy
 __call_iy:

@@ -67,3 +67,26 @@ fn the_divide_routines_beat_sdcc_on_bytes_and_cycles() {
         assert!(line.ends_with("bytes WIN, T WIN"), "{line}\n{text}");
     }
 }
+
+/// The runtime had no `memcpy`, `memmove` or `memset`: 7 programs of
+/// tests/run/c linked to nothing. Counts of 0, 1 and 300, overlap both ways and
+/// the result register against C's meaning.
+#[test]
+fn the_memory_routines_move_what_c_moves() {
+    let missing: Vec<_> = ["sdasz80", "sdldz80", "ucsim_z80"].into_iter().filter(|tool| !have(tool)).collect();
+    if !missing.is_empty() {
+        let optional = std::env::var("Z80_ORACLE_OPTIONAL").is_ok_and(|flag| flag == "1");
+        assert!(
+            optional,
+            "{missing:?} not found: the memory routines cannot be checked (Z80_ORACLE_OPTIONAL=1 skips it)"
+        );
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/runtime/memops.py"), &format!("{dir}/runtime/z80_rt.s")])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
+}

@@ -41,9 +41,14 @@ pub fn builder_target() -> BuilderTarget {
         legal_ints: vec![8, 16],
         jump_tables: false,
         string_instructions: false,
-        // the runtime's own routines (runtime/mos_rt.s), called by the name the
-        // C library gives them
-        libcalls: Some(["memcpy", "memmove", "memset"].map(|name| (name.to_owned(), 0, name.to_owned())).to_vec()),
+        // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
+        // take the C library's registers. The compiler's `memset` has the byte
+        // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
+        libcalls: Some(
+            [("memcpy", "_memcpy"), ("memmove", "_memmove"), ("memset", "__memseta")]
+                .map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned()))
+                .to_vec(),
+        ),
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
