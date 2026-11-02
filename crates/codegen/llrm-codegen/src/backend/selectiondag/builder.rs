@@ -1110,7 +1110,15 @@ impl Builder<'_> {
                 vec![ty]
             };
             let at = parameters.iter().position(|one| *one == arg).unwrap_or(0);
-            let sret = self.function.parameter_attrs.get(at).is_some_and(|attrs| has_sret(attrs));
+            let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
+            let sret = has_sret(attrs);
+            let ext = if llrm_mir::memory::has(attrs, "signext") {
+                Ext::Sign
+            } else if llrm_mir::memory::has(attrs, "zeroext") {
+                Ext::Zero
+            } else {
+                Ext::Any
+            };
             let mut leaves = Vec::new();
             for leaf in leaf_types {
                 let vt = self.type_of(leaf)?;
@@ -1118,7 +1126,7 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 leaves.push((vt, parts.len(), pointer));
                 let split = parts.len() > 1;
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret }));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret, ext }));
             }
             shapes.push(leaves);
         }
@@ -1922,7 +1930,14 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 let split = parts.len() > 1;
                 layout.push((vt, parts.len(), pointer));
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret: false }));
+                ins.extend(parts.into_iter().map(|part| In {
+                    vt: part,
+                    pointer,
+                    arg_vt: vt,
+                    split,
+                    sret: false,
+                    ext: Ext::Any,
+                }));
             }
         }
         let vt = layout.first().map_or(EVT::OTHER, |(vt, _, _)| *vt);

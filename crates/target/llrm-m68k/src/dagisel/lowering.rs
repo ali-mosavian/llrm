@@ -230,7 +230,7 @@ impl Hooks for M68kLowering {
             root,
             callee,
             &outs,
-            &[In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false }],
+            &[In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }],
         );
         values.first().copied()
     }

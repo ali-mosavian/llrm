@@ -399,18 +399,19 @@ define i32 @f(ptr %s, i32 %x, float %y, i8 %z) {\n  %r = call i32 (ptr, ...) @pr
     );
 }
 
-/// An `sret` parameter is in `x8`, not `x0`; a `byval` one is in memory. The
-/// hook placed both as plain pointers, so `scale(sret %0, ptr %1, i64)` read
-/// its source from `x0` while the caller passed the result slot in `x8`. They
-/// are refused.
+/// An `sret` parameter is in `x8`, not `x0`, and a `byval` one is in memory.
+/// The hook once placed both as plain pointers, so `scale(sret %0, ptr %1,
+/// i64)` read its source from `x0` while the caller passed the result slot in
+/// `x8`. The `sret` pointer now takes `x8` and no argument register (the
+/// emitted-ops test in `dag_emit_rows`); `byval` is refused.
 #[test]
-fn sret_and_byval_arguments_are_refused_not_placed_as_pointers() {
-    let sret = "%t = type { i64, i64, i64 }\n\
-define void @f(ptr sret(%t) %r, ptr %s) {\n  store i64 1, ptr %r\n  ret void\n}";
-    assert!(selected(sret).expect_err("refused").contains("moves it"));
-    let call = "%t = type { i64, i64, i64 }\ndeclare void @g(ptr sret(%t), ptr)\n\
-define void @f(ptr %r, ptr %s) {\n  call void @g(ptr sret(%t) %r, ptr %s)\n  ret void\n}";
-    assert!(selected(call).expect_err("refused").contains("moves it"));
+fn byval_arguments_are_refused_not_placed_as_pointers() {
+    let byval = "%t = type { i64, i64, i64 }\n\
+define void @f(ptr byval(%t) %r, ptr %s) {\n  store i64 1, ptr %s\n  ret void\n}";
+    assert!(selected(byval).expect_err("refused").contains("moves it"));
+    let call = "%t = type { i64, i64, i64 }\ndeclare void @g(ptr byval(%t), ptr)\n\
+define void @f(ptr %r, ptr %s) {\n  call void @g(ptr byval(%t) %r, ptr %s)\n  ret void\n}";
+    assert!(selected(call).expect_err("refused").contains("byval"));
 }
 
 /// Scalar floats: arithmetic, compares, conversions, loads and stores select

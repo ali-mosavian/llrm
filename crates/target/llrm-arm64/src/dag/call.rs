@@ -28,7 +28,7 @@
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::target_calling::{FixedObject, In, LiveIn, Out, Site, TargetCalling};
+use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, LiveIn, Out, Site, TargetCalling};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_lir::registers::RegId;
 use llrm_sdag::actions::LoadExt;
@@ -81,11 +81,19 @@ enum Location {
 type Part = (EVT, EVT, bool, bool, bool);
 
 /// The location of each part, and the bytes of stack they take.
-fn place(parts: &[Part]) -> (Vec<Location>, u64) {
+///
+/// `linux` is `CC_AArch64_AAPCS`, whose stack argument takes an 8-byte slot
+/// whatever its size and whose variadic arguments are placed like the others;
+/// Darwin's packs them by size and puts the variadic ones on the stack.
+fn place(
+    parts: &[Part],
+    linux: bool,
+) -> (Vec<Location>, u64) {
     let (mut next, mut next_float, mut stack) = (0, 0, 0u64);
     let locations = parts
         .iter()
         .map(|&(vt, arg_vt, split, variadic, sret)| {
+            let variadic = variadic && !linux;
             // `CCIfSRet<CCAssignToReg<[X8]>>`: no argument register is taken.
             if sret {
                 return Location::Register(reg::X8);
@@ -102,6 +110,11 @@ fn place(parts: &[Part]) -> (Vec<Location>, u64) {
                     return Location::Register(register(next_float - 1, vt));
                 }
                 let bytes = vt.size_in_bits() / 8;
+                if linux {
+                    let offset = stack.next_multiple_of(8);
+                    stack = offset + 8;
+                    return Location::Stack { offset: offset as i64, bytes };
+                }
                 let offset = stack.next_multiple_of(u64::from(bytes));
                 stack = offset + u64::from(bytes);
                 return Location::Stack { offset: offset as i64, bytes };
@@ -112,6 +125,17 @@ fn place(parts: &[Part]) -> (Vec<Location>, u64) {
             if next < registers {
                 next += 1;
                 return Location::Register(register(next - 1, vt));
+            }
+            if linux && !split {
+                let offset = stack.next_multiple_of(8);
+                stack = offset + 8;
+                let bytes = match arg_vt.size_in_bits() {
+                    1..=8 => 1,
+                    16 => 2,
+                    32 => 4,
+                    _ => 8,
+                };
+                return Location::Stack { offset: offset as i64, bytes };
             }
             let (bytes, align): (u32, u64) = match (split, arg_vt.size_in_bits()) {
                 (true, _) => (8, 16),
@@ -154,7 +178,10 @@ pub const MEMMOVE_Q: u32 = 0xF002;
 pub const MEMSET_Q: u32 = 0xF003;
 
 #[derive(Debug, Default)]
-pub struct Aarch64Calling;
+pub struct Aarch64Calling {
+    /// AAPCS64 of Linux rather than Darwin's.
+    pub linux: bool,
+}
 
 impl Aarch64Calling {
     fn block_copy(
@@ -260,7 +287,7 @@ impl TargetCalling for Aarch64Calling {
         }
         // A result is in registers.
         let (outs_in_registers, ins_in_registers) =
-            (place(&outs).0.iter().all(is_register), place(&ins).0.iter().all(is_register));
+            (place(&outs, self.linux).0.iter().all(is_register), place(&ins, self.linux).0.iter().all(is_register));
         match site {
             Site::Arguments => Ok(()),
             Site::Call if ins_in_registers => Ok(()),
@@ -285,7 +312,7 @@ impl TargetCalling for Aarch64Calling {
             .zip(&values)
             .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret))
             .collect();
-        let (locations, _) = place(&parts);
+        let (locations, _) = place(&parts, self.linux);
         let mut chain = chain;
         let mut glue = None;
         let mut registers = Vec::new();
@@ -341,7 +368,7 @@ impl TargetCalling for Aarch64Calling {
             .zip(&values)
             .map(|(o, v)| (dag.value_type(*v), o.arg_vt, o.split, o.variadic, o.sret))
             .collect();
-        let (locations, stack) = place(&parts);
+        let (locations, stack) = place(&parts, self.linux);
         let bytes = stack.next_multiple_of(16);
         let mut chain = dag.get_callseq_start(chain, bytes);
         let (mut stores, mut registers, mut stack_pointer) = (Vec::new(), Vec::new(), None);
@@ -429,7 +456,7 @@ impl TargetCalling for Aarch64Calling {
         live_in: LiveIn,
     ) -> Vec<SDValue> {
         let parts: Vec<Part> = ins.iter().map(|i| (i.vt, i.arg_vt, i.split, false, i.sret)).collect();
-        let (locations, _) = place(&parts);
+        let (locations, _) = place(&parts, self.linux);
         ins.iter()
             .zip(locations)
             .map(|(part, location)| match location {
@@ -448,7 +475,11 @@ impl TargetCalling for Aarch64Calling {
                         align: bytes,
                         volatile: false,
                         base: MemBase::Stack(index),
-                        ext: (mem_vt != part.vt).then_some(LoadExt::ExtLoad),
+                        ext: (mem_vt != part.vt).then_some(match part.ext {
+                            Ext::Sign => LoadExt::SExtLoad,
+                            Ext::Zero => LoadExt::ZExtLoad,
+                            Ext::Any => LoadExt::ExtLoad,
+                        }),
                         space: 0,
 
                         ordering: None,

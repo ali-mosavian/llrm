@@ -71,6 +71,9 @@ pub struct In {
     pub split: bool,
     /// `ArgFlags.isSRet()`.
     pub sret: bool,
+    /// `ArgFlags.isSExt()` / `isZExt()`: how a part narrower than its register
+    /// is extended.
+    pub ext: Ext,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first

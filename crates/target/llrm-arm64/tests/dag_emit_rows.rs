@@ -376,3 +376,51 @@ define void @f(i64 %n) {\n  %s = call ptr @llvm.stacksave.p0()\n  %a = alloca i8
     assert!(asm.matches("add sp, x").count() >= 2, "{asm}");
     assert!(asm.contains("sub sp, x29"), "{asm}");
 }
+
+const LINUX_HEADER: &str = "target triple = \"aarch64-unknown-linux-gnu\"\n\
+target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
+
+fn linux_dag(body: &str) -> Result<String, String> {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("t.ll");
+    std::fs::write(&input, format!("{LINUX_HEADER}{body}")).unwrap();
+    let output = dir.path().join("t.s");
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "-O2", "--isel=dag", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    if said.status.success() {
+        Ok(std::fs::read_to_string(&output).unwrap())
+    } else {
+        Err(String::from_utf8_lossy(&said.stderr).into_owned())
+    }
+}
+
+/// On Linux a variadic argument went on the stack as on Darwin (`printf(fmt,
+/// a)` stored `a` and a callee reading `x1` got garbage); AAPCS64 places it
+/// like any other argument.
+#[test]
+fn a_linux_variadic_argument_is_in_a_register() {
+    let asm = linux_dag(
+        "declare i32 @printf(ptr, ...)\ndefine i32 @f(ptr %fmt, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %fmt, i32 %a)\n  ret i32 %r\n}\n",
+    )
+    .unwrap_or_else(|why| panic!("{why}"));
+    assert!(!asm.contains("str "), "{asm}");
+    assert!(asm.contains("b printf"), "{asm}");
+}
+
+/// A Linux stack argument takes an 8-byte slot whatever its size and a narrow
+/// one is read as its own width and extended by its attribute: the ninth `i32`
+/// at `[sp]`, the `signext i8` at `[sp, #8]` with `ldrsb`.
+#[test]
+fn linux_stack_arguments_are_eight_byte_slots_extended_by_attribute() {
+    let asm = linux_dag(
+        "define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %g, i32 %h, i32 %i, i32 %j, i8 signext %k, i64 %l) {\n  %kk = sext i8 %k to i32\n  %t = add i32 %j, %kk\n  %u = trunc i64 %l to i32\n  %w = add i32 %t, %u\n  ret i32 %w\n}\n",
+    )
+    .unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("ldr w9, [sp]") || asm.contains("ldr w10, [sp]"), "{asm}");
+    assert!(asm.contains("ldrsb w") && asm.contains("[sp, #8]"), "{asm}");
+    assert!(asm.contains("[sp, #16]"), "{asm}");
+}

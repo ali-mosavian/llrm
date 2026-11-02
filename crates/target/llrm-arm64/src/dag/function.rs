@@ -24,9 +24,10 @@ use super::pipeline::select_block;
 use crate::REGISTER_INFO;
 use crate::machine::Platform;
 
-static CALLING: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
+static DARWIN: LazyLock<Aarch64Calling> = LazyLock::new(Aarch64Calling::default);
+static LINUX: LazyLock<Aarch64Calling> = LazyLock::new(|| Aarch64Calling { linux: true });
 
-pub fn builder_target() -> BuilderTarget {
+pub fn builder_target(platform: Platform) -> BuilderTarget {
     BuilderTarget {
         dag: DagConfig {
             pointer: EVT::I64,
@@ -61,7 +62,7 @@ pub fn builder_target() -> BuilderTarget {
             ret: ISD::Target(RET_GLUE),
             stack_pointer: "sp",
             big_endian: false,
-            calling: Some(&*CALLING),
+            calling: Some(if platform == Platform::Linux { &*LINUX } else { &*DARWIN }),
         }),
         ..BuilderTarget::m64()
     }
@@ -167,7 +168,7 @@ pub fn select_function_in(
     };
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
-    let target = builder_target()
+    let target = builder_target(platform)
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);

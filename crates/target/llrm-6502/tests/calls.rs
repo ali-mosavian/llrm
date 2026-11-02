@@ -54,7 +54,7 @@ fn a_call_passes_a_byte_in_rc2_and_a_word_in_rs2() {
                 sret: false,
             },
         ],
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false }],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any }],
     )
     .unwrap();
 
@@ -121,7 +121,7 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     let args = lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false }; 4],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any }; 4],
         &mut fixed,
         &mut |_| 4096,
     )
@@ -145,8 +145,8 @@ fn formal_arguments_are_live_in_at_rc2_and_rs2() {
     };
 
     let ins = [
-        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false },
-        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false },
+        In { vt: EVT::I8, pointer: false, arg_vt: EVT::I8, split: false, sret: false, ext: Ext::Any },
+        In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any },
     ];
     let args = lower_formal_arguments(&mut dag, entry, &ins, &mut |_, _, _| 0, &mut live_in).unwrap();
 
