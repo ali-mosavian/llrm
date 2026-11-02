@@ -34,9 +34,9 @@
 //! where a target sets `Tuning::csr_priced` (m16), a range live across a call
 //! takes a callee-saved register only if its push and pop cost less than the
 //! spill pair (fib, hanoi at -O2: clocks back at main). Not under -Os, not in a
-//! frameless function. Known cost: jpeg_fixed/jpeg_single c -O2 +20 B (a
-//! function already spilling heavily). Exit: the pin's rule if the user rules
-//! the jpeg rows out, else when the spill cost counts the pressure it adds.
+//! frameless function. No cost is recorded: an earlier "+20 B on jpeg c -O2"
+//! has no build pair behind it and is withdrawn. Exit: the pin's rule, or when
+//! the spill cost counts the pressure it adds.
 //!
 //! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
 //! allocator's size (QCport, 65 modules, 2026-10-19: 78518 against 77618
