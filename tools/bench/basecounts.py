@@ -59,27 +59,47 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     return path
 
 
-HASH_VERSION = 2  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT
+HASH_VERSION = 3  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT; 3: and the judge's files
+# What turns a run into counts and clocks. A program's hash includes them, so a change to the judge makes every program "edited": the base's rows are
+# measured again with the head's judge over the base compiler (with_edited), and a clock is never compared across two judges (the m16 multiplier fix
+# moved 67 of 342 cells' clocks, jpeg_fixed +4..5%, against a base that was measured by the old icount.py).
+JUDGE_FILES = (
+    "crates/target/llrm-x86-m16/bench/icount.py",
+    "crates/target/llrm-x86-m16/src/timings.times",
+    "crates/target/llrm-x86-m32/src/timings.times",
+    "crates/target/llrm-x86-m32/vsgcc/harness.py",
+    "crates/target/llrm-x86-m32/vsgcc/clocks.py",
+    "tools/bench/flatcount.py",
+)
 
 
 def _is_input(name: str) -> bool:
     return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
 
 
-def _hash(files: list[tuple[str, bytes]]) -> str:
-    digest = hashlib.sha256()
+def _hash(files: list[tuple[str, bytes]], judge: bytes = b"") -> str:
+    digest = hashlib.sha256(judge)
     for name, data in sorted(files):
         digest.update(name.encode() + b"\0" + data)
     return digest.hexdigest()[:12]
 
 
+def judge_digest(read) -> bytes:
+    """The judge's files (`read(path)` returns their bytes, or None where the tree has none) as one digest."""
+    digest = hashlib.sha256()
+    for name in JUDGE_FILES:
+        digest.update(name.encode() + b"\0" + (read(name) or b"") + b"\0")
+    return digest.digest()
+
+
 def programs(root: Path = ROOT) -> dict[str, str]:
     """Each benchmark's hash: its sources and settings (not its baseline, the waivers or what a run is checked against). A row of a program
     that differs between the base and the head compares two programs, not two compilers, and is not judged."""
+    judge = judge_digest(lambda name: (root / name).read_bytes() if (root / name).is_file() else None)
     out = {}
     for settings in sorted((root / "bench").glob("**/bench.toml")):
         files = [(path.name, path.read_bytes()) for path in settings.parent.iterdir() if path.is_file() and _is_input(path.name)]
-        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files)
+        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files, judge)
     return out
 
 
@@ -89,12 +109,17 @@ def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
     by_dir: dict[str, list[str]] = {}
     for path in listing:
         by_dir.setdefault(str(Path(path).parent), []).append(path)
+    def blob(name):
+        done = subprocess.run(["git", "cat-file", "blob", f"{sha}:{name}"], cwd=root, capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    judge = judge_digest(blob)
     out = {}
     for directory, paths in sorted(by_dir.items()):
         if f"{directory}/bench.toml" not in paths:
             continue
         files = [(Path(path).name, subprocess.run(["git", "cat-file", "blob", f"{sha}:{path}"], cwd=root, capture_output=True, check=True).stdout) for path in paths if _is_input(Path(path).name)]
-        out[str(Path(directory).relative_to("bench"))] = _hash(files)
+        out[str(Path(directory).relative_to("bench"))] = _hash(files, judge)
     return out
 
 
