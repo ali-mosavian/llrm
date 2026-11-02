@@ -23,6 +23,14 @@ use crate::ccr;
 use crate::dagisel::{indexed, local};
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 
+/// Whether a `...r` row (the source is any register) is the commutative `...d`
+/// row when both operands are data registers: `ADD32dr` is `ADD32dd`, which
+/// the pin marks `isCommutable`, and the fold narrows the swapped operand to a
+/// data register or refuses.
+fn commutes_as_data(name: &str) -> bool {
+    name.strip_suffix('r').is_some_and(|stem| crate::mfunc::pin_commutable(&format!("{stem}d")))
+}
+
 /// How many instructions read each virtual register.
 fn use_counts(function: &MFunction) -> Vec<u32> {
     let mut counts = vec![0; function.classes.len()];
@@ -110,7 +118,7 @@ fn fold_one(
         if operands[first] != loaded {
             let other = operands.iter().position(|one| *one == loaded).unwrap_or(first);
             let both_registers = matches!(operands[first], Operand::Use(Reg::Virt(_)));
-            if insts[user].commutable && both_registers {
+            if (insts[user].commutable || commutes_as_data(name)) && both_registers {
                 operands.swap(first, other);
             } else if operands.len() == 2
                 && both_registers

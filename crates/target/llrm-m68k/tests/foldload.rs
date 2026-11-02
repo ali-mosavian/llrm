@@ -8,6 +8,7 @@ use std::process::Command;
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::dagisel::indexed;
+use llrm_m68k::driver::{self, Level};
 use llrm_m68k::encode::encode;
 use llrm_m68k::mc::{Inst, Operand, print};
 use llrm_m68k::object::{executable, start, write_executable};
@@ -379,5 +380,38 @@ fn the_memory_move_copies_what_the_two_instructions_did() {
         let code = support::run(&qemu, &["-cpu", "m68000"], &path);
         std::fs::remove_file(&path).ok();
         assert_eq!(code, Some(want(i64::from(at))), "n {n} byte {at}");
+    }
+}
+
+/// `sum += p[i]` through the whole `-O2` pipeline: the load is the tied
+/// operand of `ADD32dr` (the pin marks only `ADD32dd` commutative), so it was
+/// `move.l (%a0)+, %d1; add.l %d0, %d1; move.l %d1, %d0`, 3 instructions a
+/// trip where `sub` folded to one and gcc has `add.l (%a0)+, %d0`.
+#[test]
+fn a_sum_over_an_array_folds_the_load_into_the_add() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define i32 @f(ptr %p, i32 %n) {{
+entry:
+  %e = icmp sgt i32 %n, 0
+  br i1 %e, label %loop, label %done
+loop:
+  %i = phi i32 [0, %entry], [%i1, %loop]
+  %s = phi i32 [0, %entry], [%s1, %loop]
+  %q = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %s1 = add i32 %s, %v
+  %i1 = add i32 %i, 1
+  %c = icmp eq i32 %i1, %n
+  br i1 %c, label %done, label %loop
+done:
+  %r = phi i32 [0, %entry], [%s1, %loop]
+  ret i32 %r
+}}"
+    );
+    for cpu in ["68000", "68020"] {
+        let out = driver::assembly(&ir, driver::cpu_of(cpu).expect("a cpu"), Level::O2).expect("compiles");
+        assert!(out.contains("add.l\t(%a0)+, %d0"), "{cpu}:\n{out}");
+        assert!(!out.contains("move.l\t(%a0)+"), "{cpu}:\n{out}");
     }
 }
