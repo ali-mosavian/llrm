@@ -1129,6 +1129,19 @@ impl Emitter<'_> {
                 self.ops.push(Op::Copy { dst: Reg::Fpr(dst), src: Reg::Fpr(src) });
                 Ok(())
             }
+            // `EmitCopyToRegNode`: the copy of an undefined value is an
+            // `IMPLICIT_DEF` of the register. It is defined as zero here (an
+            // undefined value is any value) until the MIR has an undef.
+            ISD::CopyToReg
+                if matches!(
+                    self.dag.opcode(node.ops[2]),
+                    ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF")
+                ) =>
+            {
+                let (dst, _) = self.register_operand(node.ops[1])?;
+                self.ops.push(Op::Imm { dst, bits: 32, value: 0 });
+                Ok(())
+            }
             ISD::CopyToReg => {
                 let (dst, _) = self.register_operand(node.ops[1])?;
                 let Operand::Reg(src) = self.operand(node.ops[2])? else { return Err("a copy of a constant".into()) };

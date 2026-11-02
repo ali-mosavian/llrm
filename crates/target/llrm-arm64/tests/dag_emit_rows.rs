@@ -204,3 +204,20 @@ fn a_zero_base_of_an_extended_subtract_is_a_register_not_sp() {
     assert!(!asm.contains("sub x0, sp,") && !asm.contains("xzr, w0, uxtw"), "{asm}");
     assert!(asm.contains("sub x0, x9, w0, uxtw"), "{asm}");
 }
+
+/// A phi whose entry value is `poison` exported a copy of a register nothing
+/// defined, and the allocator died on it ("a unique value", `@text_write` of
+/// the text driver). The pin gives the register an `IMPLICIT_DEF`.
+#[test]
+fn a_phi_input_that_is_poison_defines_its_register() {
+    let asm = full_greedy(&format!(
+        "{HEADER}define i8 @f(i32 %n) {{\n\
+         entry:\n  br label %loop\n\
+         loop:\n  %p = phi i8 [ poison, %entry ], [ %q, %loop ]\n\
+         %i = phi i32 [ 0, %entry ], [ %j, %loop ]\n  %q = trunc i32 %i to i8\n\
+         %j = add i32 %i, 1\n  %c = icmp ult i32 %j, %n\n  br i1 %c, label %loop, label %out\n\
+         out:\n  ret i8 %p\n}}\n"
+    ))
+    .expect("compiles");
+    assert!(asm.contains("ret"), "{asm}");
+}
