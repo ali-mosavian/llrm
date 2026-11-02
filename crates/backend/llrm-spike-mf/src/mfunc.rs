@@ -55,6 +55,9 @@ pub struct Inst {
     pub may_store: bool,
     pub side_effects: bool,
     pub cheap_as_move: bool,
+    /// A load of memory nothing writes (`isDereferenceableInvariantLoad`):
+    /// loop-invariant when its address is.
+    pub invariant_load: bool,
     /// The spiller may run it again at each use instead of keeping its result
     /// (`isTriviallyReMaterializable`).
     pub rematerializable: bool,
@@ -63,6 +66,10 @@ pub struct Inst {
     pub early_clobber: bool,
     /// Its two register sources may swap places (`isCommutable`).
     pub commutable: bool,
+    /// The caller's number for the operation it was made from (the `DebugLoc`
+    /// a `MachineInstr` carries); 0 for none. A clone keeps it, code the
+    /// allocator adds has none.
+    pub origin: u32,
 }
 
 impl Inst {
@@ -83,9 +90,11 @@ impl Inst {
             may_store: false,
             side_effects: false,
             cheap_as_move: false,
+            invariant_load: false,
             rematerializable: false,
             early_clobber: false,
             commutable: false,
+            origin: 0,
         }
     }
 

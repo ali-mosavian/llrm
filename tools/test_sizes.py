@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest  # noqa: E402
 import sizes  # noqa: E402
-from sizes import code_bytes, data_bytes, selected  # noqa: E402
+from sizes import code_bytes, code_size, data_bytes, selected  # noqa: E402
 
 
 def record(kind: int, body: bytes) -> bytes:
@@ -205,3 +205,49 @@ def test_a_c_program_is_built_by_llrm_cc_to_an_object_on_a_watcom_row(tmp_path):
     command = sizes.c_command(str(tmp_path / "llrm-cc"), str(sizes.ROOT / "bench/bintree/bintree.c"))
     assert Path(command[0]).name == "llrm-cc" and "--target=x86_16-wat" in command
     assert sizes.stop(command) == ["-c"] and sizes.stop(["llrm-qb", "x.bas"]) == []
+
+
+def code_object(tmp_path, content: bytes, use32: bool = False) -> Path:
+    path = tmp_path / "pad.obj"
+    attributes = 0x49 if use32 else 0x48
+    path.write_bytes(
+        record(0x80, name("x")) + lnames("_TEXT", "CODE") + record(0x98, bytes([attributes]) + len(content).to_bytes(2, "little") + bytes([1, 2, 1]))
+        + record(0xA0, bytes([1, 0, 0]) + content) + record(0x8A, b"\0")
+    )
+    return path
+
+
+RET, NOP = b"\xc3", b"\x90"
+
+
+def test_a_layout_shift_before_an_aligned_loop_leaves_code_bytes_unchanged(tmp_path):
+    """x86-m32 quicksort bq32 -O2: the nops before the first align-16 loop went 2 -> 14 B because a 4-byte mov moved, and code_bytes (SEGDEF sizes) read +12 B of growth."""
+    near = code_size(code_object(tmp_path, RET + NOP * 3 + RET))  # pad to 4
+    far = code_size(code_object(tmp_path, RET + NOP * 15 + RET))  # pad to 16
+    assert (near.code, far.code) == (2, 2)
+    assert (near.align, far.align) == (3, 15)
+
+
+def test_multibyte_nops_and_register_self_moves_are_padding_in_32_bit_code(tmp_path):
+    pad = b"\x0f\x1f\x44\x00\x00" + b"\x89\xf6" + b"\x8d\x76\x00"  # nop dword [eax+eax], mov esi,esi, lea esi,[esi+0]: 10 B, ends at 11
+    got = code_size(code_object(tmp_path, RET + pad + b"\x90\x90\x90\x90\x90" + RET, use32=True))  # 1 + 10 + 5 = 16
+    assert (got.code, got.align) == (2, 15)
+
+
+def test_a_nop_run_that_does_not_end_on_a_boundary_or_fills_one_stays_counted(tmp_path):
+    """An instruction run that looks like padding is code unless it ends where an alignment would end it and is shorter than that alignment."""
+    assert code_size(code_object(tmp_path, RET + NOP * 4 + RET)) == sizes.CodeSize(6, 0, 0)  # ends at 5
+    assert code_size(code_object(tmp_path, NOP * 4 + RET)) == sizes.CodeSize(5, 0, 0)  # as long as the alignment it ends on
+
+
+def test_bytes_that_start_no_instruction_are_skipped_counted_and_the_padding_after_them_is_still_found(tmp_path):
+    """BASIC objects carry a 48-byte module header ahead of the code in the same segment, and an instruction can straddle two LEDATA records: decoding
+    the segment to its end stopped at the header, and 22 of 41 flat cells read no padding at all."""
+    header, code = b"\xc4", RET + NOP * 2 + RET
+    path = tmp_path / "two.obj"
+    path.write_bytes(
+        record(0x80, name("x")) + lnames("_TEXT", "CODE")
+        + record(0x98, bytes([0x48]) + (len(header) + len(code)).to_bytes(2, "little") + bytes([1, 2, 1]))
+        + record(0xA0, bytes([1, 0, 0]) + header) + record(0xA0, bytes([1, len(header), 0]) + code) + record(0x8A, b"\0")
+    )
+    assert code_size(path) == sizes.CodeSize(len(header) + 2, 2, 1)

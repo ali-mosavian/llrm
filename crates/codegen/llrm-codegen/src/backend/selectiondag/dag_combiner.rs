@@ -79,6 +79,13 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitAND`'s `(and (extload x), c)` is `(zextload x)` for every user of
+    /// the load when `c` keeps none of the bits above the memory type.
+    /// DEVIATE: off by default, as above. Exit: x86 judged.
+    fn fold_and_of_extload(&self) -> bool {
+        false
+    }
+
     /// `visitFREEZE`'s `freeze(op(x, ...))` is `op(freeze(x), ...)`, so a
     /// frozen compare tree is a compare tree of frozen leaves. DEVIATE: off by
     /// default, as above; and only for an integer `setcc` or bitwise/add
@@ -566,7 +573,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::And => self
                 .visit_and(node)
                 .or_else(|| self.reduce_load_width_of(node))
-                .or_else(|| self.simplify_demanded(node)),
+                .or_else(|| self.simplify_demanded(node))
+                .or_else(|| self.and_of_extload(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
@@ -1162,7 +1170,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
         }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
-            return self.reassociate_ops(ISD::Xor, n0, n1);
+            return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
@@ -1346,13 +1354,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (ISD::ZeroExtend, ISD::Truncate) => {
                 // `zext nneg (trunc x)` of an `x` with sign bits to spare is
                 // `x` ([L16459][pin]): the sext of a load a `zext nneg` shares
-                // leaves no `movzx`. DEVIATE SD448: the pin's `sext x` where `x` is
-                // narrower than the result is not taken: at m64 it left a
-                // `movslq` where the pin has `mov r32, r32` (ring, tile +1 B).
+                // leaves no `movzx`. DEVIATE SD448: the pin's `sext x` where
+                // `x` is narrower than the result is not taken:
+                // at m64 it left a `movslq` where the pin has
+                // `mov r32, r32` (ring, tile +1 B).
                 // Exit 2026-11-04: `visitSIGN_EXTEND`'s `sext` to `zext nneg`
                 // fold of a value with a zero sign bit
                 // ([L16279](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16279)).
-                let (op_bits, mid_bits) = (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
+                let (op_bits, mid_bits) =
+                    (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
                 if self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
                     && super::known_bits::num_sign_bits(self.dag, x) > op_bits - mid_bits
                 {
@@ -1574,7 +1584,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
             return Some(folded);
         }
-        if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1) {
+        if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
@@ -1718,7 +1728,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
             {
                 let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
-                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
+                // Both adds `nuw` keep the regrouped one so (`reassociateOps`'s
+                // `NewFlags`); DEVIATE: only where `global_addresses_constant`
+                // is set, until x86 is judged.
+                let nuw = |dag: &SelectionDAG, v: SDValue| dag.node(v).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
+                let keep = self.dag.config().global_addresses_constant && nuw(self.dag, n0) && nuw(self.dag, node);
+                let flags = if keep { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::default() };
+                return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
         }
         let is_neg =
@@ -1749,7 +1765,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
-            return self.reassociate_ops(ISD::Add, n0, n1);
+            return self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags);
         }
         None
     }
@@ -2481,7 +2497,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
-        self.reassociate_ops(ISD::Mul, n0, n1)
+        self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
     }
 
     /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or
@@ -2582,6 +2598,48 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(simplified);
         }
         self.sext_in_reg_of_load(node, n0, vt, ext)
+    }
+
+    /// `visitAND`: `(zext_inreg (extload x))` is `(zextload x)`, for every
+    /// user of the load, and `(zext_inreg (sextload x))` when the `and` is its
+    /// one user. Before legalization, or where the zero-extending load is
+    /// legal.
+    fn and_of_extload(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (load, mask) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if !self.hooks.fold_and_of_extload() || self.dag.opcode(load) != ISD::Load || load.res != 0 {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(load).data else { return None };
+        let single_use = self.dag.has_one_use(load.node);
+        if self.dag.node(load).values.len() > 2
+            || !matches!(info.ext, Some(LoadExt::ExtLoad) | Some(LoadExt::SExtLoad))
+            || info.ext == Some(LoadExt::SExtLoad) && !single_use
+        {
+            return None;
+        }
+        let (wide, mem) = (self.dag.value_type(node), info.mem_vt);
+        let high = super::fold::mask(wide.size_in_bits()) & !super::fold::mask(mem.size_in_bits());
+        if super::known_bits::known_bits(self.dag, mask).zero & high != high {
+            return None;
+        }
+        let legal = match (wide, mem) {
+            (EVT::Simple(wide), EVT::Simple(mem)) => {
+                self.tli.is_some_and(|tli| tli.load_ext_action(LoadExt::ZExtLoad, wide, mem) == Action::Legal)
+            }
+            _ => false,
+        };
+        if !(self.legal_operations() && legal || !self.legal_operations() && !info.volatile) {
+            return None;
+        }
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let extended = self.dag.get_ext_load(LoadExt::ZExtLoad, wide, chain, ptr, MemInfo { ext: None, ..info });
+        self.add_to_worklist(node.node);
+        self.replace_value(load, extended);
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        Some(node)
     }
 
     /// `visitSIGN_EXTEND_INREG`: `(sext_inreg (extload x))` and

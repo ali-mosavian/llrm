@@ -118,6 +118,14 @@ pub trait Target {
         30
     }
 
+    /// `STI.enableJoinGlobalCopies()`: the coalescer's `JoinGlobalCopies`. The
+    /// pin's is `enableMachineScheduler()`: x86 and AArch64 true; M68k and
+    /// WebAssembly false (the default of a target that sets nothing). Here
+    /// true, as before, until a target's owner states otherwise.
+    fn joins_global_copies() -> bool {
+        true
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {

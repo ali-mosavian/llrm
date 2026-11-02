@@ -13,7 +13,7 @@
 //! DEVIATE W18: no `hoistCatches`, `catchret` and `cleanupret`
 //! replacement, `THROW_REF`, or `try_table` (the new proposal): none of them
 //! is built. Reason: the legacy proposal and landing pads only. Exit: a
-//! frontend with typed catches or funclet pads.
+//! frontend with typed catches or funclet pads (undated, none planned).
 //!
 //! # See also
 //! `WebAssemblyLateEHPrepare.cpp` (`removeUnreachableEHPads` L140,
