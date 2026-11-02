@@ -8,12 +8,13 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{Action, DagConfig, NodeData, SDValue, SelectionDAG, TypeAction};
 use llrm_wasm::dagisel::hooks::Cpu;
 use llrm_wasm::dagisel::lowering::{WasmLowering, target_lowering, wasmisd};
+use llrm_wasm::features::Features;
 
 fn legalize(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> SDValue {
-    let tli = target_lowering(cpu);
+    let tli = target_lowering(cpu, Features::default());
     DagLegalizer::new(dag, &tli, &mut WasmLowering { tables: &[] }).run().expect("legalizes");
     dag.get_root()
 }
@@ -53,7 +54,7 @@ fn a_frame_index_is_its_target_form() {
 /// and the wide-multiply family expands for both.
 #[test]
 fn only_i32_and_i64_are_legal_integers() {
-    let tl = target_lowering(Cpu::Wasm32);
+    let tl = target_lowering(Cpu::Wasm32, Features::default());
     assert_eq!(tl.types.type_conversion(EVT::I8), (TypeAction::PromoteInteger, EVT::I32));
     assert_eq!(tl.types.type_conversion(EVT::I64).0, TypeAction::Legal);
     for vt in [EVT::I32, EVT::I64] {

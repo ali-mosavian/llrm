@@ -8,6 +8,7 @@ use llrm_dagisel::interp::{Outcome, Selector};
 use llrm_dagisel::testing::{Node, TestDag};
 use llrm_wasm::dagisel::generated::wasm_wasm32 as table;
 use llrm_wasm::dagisel::hooks::{Cpu, WasmHooks};
+use llrm_wasm::features::Features;
 
 fn machine_name(opcode: u16) -> &'static str {
     table::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
@@ -18,7 +19,10 @@ fn select(
     node: u32,
 ) -> &'static str {
     let selector = Selector::new(table::TABLE);
-    assert_eq!(selector.select(dag, &mut WasmHooks::new(Cpu::Wasm32, false), node), Outcome::Selected);
+    assert_eq!(
+        selector.select(dag, &mut WasmHooks::new(Cpu::Wasm32, Features::default(), false), node),
+        Outcome::Selected
+    );
     machine_name(dag.nodes[node as usize].machine.expect("not selected"))
 }
 

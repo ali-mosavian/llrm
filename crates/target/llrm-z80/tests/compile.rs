@@ -244,3 +244,10 @@ fn a_spill_slot_that_is_a_stack_is_push_and_pop() {
         "{out}"
     );
 }
+
+/// `abi::z80()` parsed calling.toml on every call lowering: 12% of a debug
+/// compile of tests/run/c/memory_expansion.c. The convention is parsed once.
+#[test]
+fn the_z80_convention_is_parsed_once() {
+    assert!(std::ptr::eq(llrm_z80::abi::z80(), llrm_z80::abi::z80()));
+}
