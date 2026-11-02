@@ -14,6 +14,7 @@ pub mod eh_reentry;
 pub mod exception_info;
 pub mod explicit_locals;
 pub mod fix_br_table_defaults;
+pub mod fix_function_bitcasts;
 pub mod fix_irreducible;
 pub mod frame;
 pub mod late_eh_prepare;

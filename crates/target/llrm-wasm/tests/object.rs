@@ -149,3 +149,13 @@ fn a_constructor_entry_without_a_function_is_dropped() {
     let bytes = bytes.unwrap_or_else(|why| panic!("{why}"));
     assert!(bytes.windows(4).any(|w| w == b"init"), "the init function is in the object");
 }
+
+/// `tests/obj/main_alias.wasm` is the pin's object less its `producers`
+/// section (the pin's version string). A C `main(void)` is `__original_main`
+/// behind a `main(i32, i32)` wrapper, with a hidden `__main_void` alias of the
+/// body: the parser stopped at "expected a type, found `hidden`", so no C
+/// program reached the wasm backend.
+#[test]
+fn a_hidden_main_and_its_alias_are_the_pins_object() {
+    check("main_alias");
+}

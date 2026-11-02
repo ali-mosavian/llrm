@@ -39,7 +39,8 @@ struct Parser {
     at: usize,
     module: Module,
     globals: HashMap<Name, GlobalId>,
-    /// The names the pre-scan found defined as aliases: no instruction may use one.
+    /// The names the pre-scan found defined as aliases: no instruction may use
+    /// one.
     alias_names: HashSet<Name>,
     /// Global values referred to, with the pointer type each use gave them.
     global_uses: Vec<(GlobalId, TypeId, usize)>,

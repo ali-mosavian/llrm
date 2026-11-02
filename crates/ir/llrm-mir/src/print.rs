@@ -498,14 +498,11 @@ impl Printer<'_> {
         &self,
         alias: &Alias,
     ) -> String {
-        let words: Vec<&str> = [
-            Self::linkage(alias.linkage),
-            Self::visibility(alias.visibility),
-            Self::unnamed_addr(alias.unnamed_addr),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let words: Vec<&str> =
+            [Self::linkage(alias.linkage), Self::visibility(alias.visibility), Self::unnamed_addr(alias.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .collect();
         let space = Self::address_space(alias.address_space).map(|one| format!(" {one}")).unwrap_or_default();
         format!(
             "@{} = {}alias {}, ptr{space} {}\n",
@@ -528,11 +525,12 @@ impl Printer<'_> {
             (Linkage::External, None) => Some("external"),
             (linkage, _) => Self::linkage(linkage),
         };
-        let mut words: Vec<String> = [linkage, Self::visibility(global.visibility), Self::unnamed_addr(global.unnamed_addr)]
-            .into_iter()
-            .flatten()
-            .map(str::to_owned)
-            .collect();
+        let mut words: Vec<String> =
+            [linkage, Self::visibility(global.visibility), Self::unnamed_addr(global.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .map(str::to_owned)
+                .collect();
         words.extend(Self::address_space(global.address_space));
         if variable.externally_initialized {
             words.push("externally_initialized".to_owned());

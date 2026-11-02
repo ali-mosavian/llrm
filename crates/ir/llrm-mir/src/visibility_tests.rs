@@ -18,7 +18,10 @@ fn a_hidden_function_and_its_alias_round_trip() {
     assert_eq!(module.globals[0].visibility, Visibility::Hidden);
     assert_eq!(module.aliases.len(), 1);
     let alias = &module.aliases[0];
-    assert_eq!((alias.name.as_str(), alias.visibility, alias.linkage), ("__main_void", Visibility::Hidden, Linkage::External));
+    assert_eq!(
+        (alias.name.as_str(), alias.visibility, alias.linkage),
+        ("__main_void", Visibility::Hidden, Linkage::External)
+    );
     assert_eq!(module.globals[alias.aliasee.0 as usize].name.as_deref(), Some("main"));
     assert_eq!(print::module(&module), WASM_MAIN);
 }

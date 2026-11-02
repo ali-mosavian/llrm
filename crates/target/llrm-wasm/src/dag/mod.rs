@@ -112,8 +112,12 @@ pub fn compile_function(
         && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
-    f.binding =
-        module.named(name).map_or_else(Default::default, |id| crate::mir::Binding::of(module.global(id).linkage));
+    let global = module.named(name).map(|id| module.global(id));
+    f.binding = global.map_or_else(Default::default, |global| crate::mir::Binding::of(global.linkage));
+    f.hidden = global.is_some_and(|global| global.visibility == llrm_mir::Visibility::Hidden);
+    if let Some(global) = global {
+        f.name = crate::driver::symbol_name(global);
+    }
     lower_memory_pseudos(&mut f);
     // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no
     // module: its signature is what the call passes and returns.

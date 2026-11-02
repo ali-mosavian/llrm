@@ -58,6 +58,7 @@ fn prepared(
     options: Options,
 ) -> Result<llrm_mir::module::Module, String> {
     let mut module = module(text, width)?;
+    crate::fix_function_bitcasts::fix(&mut module)?;
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
         crate::eh_reentry::reentry(&mut module)?;
     }
@@ -136,6 +137,18 @@ fn data(
         names.insert((globals::space(module, id), i64::from(id.0)), symbol_name(global));
     }
     let mut out = Data::default();
+    for alias in &module.aliases {
+        let target = module.global(alias.aliasee);
+        if target.function().is_none_or(|one| one.is_declaration()) {
+            return Err(format!("@{} aliases something that is no defined function", alias.name));
+        }
+        out.aliases.push(crate::object::Alias {
+            name: alias.name.clone(),
+            target: symbol_name(target),
+            binding: crate::mir::Binding::of(alias.linkage),
+            hidden: alias.visibility == llrm_mir::Visibility::Hidden,
+        });
+    }
     for (index, global) in module.globals.iter().enumerate() {
         let GlobalKind::Variable(variable) = &global.kind else { continue };
         let id = llrm_mir::GlobalId(index as u32);
@@ -210,6 +223,7 @@ fn data(
             align: align.trailing_zeros(),
             bytes,
             binding: crate::mir::Binding::of(global.linkage),
+            hidden: global.visibility == llrm_mir::Visibility::Hidden,
             strings: variable.constant && global.unnamed_addr == UnnamedAddr::Global && is_string,
             relocs,
         });

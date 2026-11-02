@@ -60,6 +60,7 @@ const EXTERNAL_GLOBAL: u8 = 3;
 const SYMBOL_KIND_GLOBAL: u8 = 2;
 const WASM_SYMBOL_BINDING_WEAK: u8 = 1;
 const WASM_SYMBOL_BINDING_LOCAL: u8 = 2;
+const WASM_SYMBOL_VISIBILITY_HIDDEN: u8 = 4;
 const R_WASM_MEMORY_ADDR_I32: u8 = 5;
 const R_WASM_TABLE_INDEX_I32: u8 = 2;
 const PAGE: u32 = 65536;
@@ -252,12 +253,16 @@ pub fn encode_instruction(
     }
 }
 
-fn binding_flag(binding: Binding) -> u8 {
-    match binding {
+fn symbol_flags(
+    binding: Binding,
+    hidden: bool,
+) -> u8 {
+    let binding = match binding {
         Binding::Global => 0,
         Binding::Weak => WASM_SYMBOL_BINDING_WEAK,
         Binding::Local => WASM_SYMBOL_BINDING_LOCAL,
-    }
+    };
+    binding | if hidden { WASM_SYMBOL_VISIBILITY_HIDDEN } else { 0 }
 }
 
 /// A function after the passes, encoded: the body is the locals and the code.
@@ -272,6 +277,7 @@ pub struct Encoded {
     /// The wasm globals the body names.
     pub globals: Vec<(String, ValType)>,
     pub binding: Binding,
+    pub hidden: bool,
     /// The function has a personality: the pin keeps the indirect function
     /// table alive for it.
     pub personality: bool,
@@ -348,6 +354,7 @@ pub fn encode_function(f: &Function) -> Encoded {
         callees: f.callees.clone(),
         globals: f.globals.clone(),
         binding: f.binding,
+        hidden: f.hidden,
         personality: f.personality,
     }
 }
@@ -372,6 +379,7 @@ pub struct DataObject {
     pub bytes: Vec<u8>,
     /// `WASM_SYMBOL_BINDING_*`.
     pub binding: Binding,
+    pub hidden: bool,
     /// A mergeable C string: `WASM_SEGMENT_FLAG_STRINGS`.
     pub strings: bool,
     /// The pointers in `bytes`: `R_WASM_MEMORY_ADDR_I32` at each.
@@ -396,6 +404,16 @@ pub struct Data {
     /// `llvm.global_ctors`: the priority and function of each entry, by
     /// ascending priority.
     pub init_funcs: Vec<(u16, String)>,
+    /// `@a = alias ..., ptr @f`, the assembler's `a = f`.
+    pub aliases: Vec<Alias>,
+}
+
+/// A second name for a defined function: a symbol of the same index.
+pub struct Alias {
+    pub name: String,
+    pub target: String,
+    pub binding: Binding,
+    pub hidden: bool,
 }
 
 impl DataObject {
@@ -418,6 +436,7 @@ enum Symbol<'a> {
         /// The position in `functions` of its definition, `None` for an import.
         defined: Option<usize>,
         binding: Binding,
+        hidden: bool,
         params: &'a [ValType],
         results: &'a [ValType],
     },
@@ -486,9 +505,23 @@ fn introduce<'a>(
     } else if let Some((_, ty)) = f.and_then(|f| f.globals.iter().find(|(one, _)| one == name)) {
         symbols.push(Symbol::Global { name, ty: *ty });
     } else if let Some((_, params, results)) = f.and_then(|f| f.callees.iter().find(|(one, ..)| one == name)) {
-        symbols.push(Symbol::Function { name, defined: None, binding: Binding::Global, params, results });
+        symbols.push(Symbol::Function {
+            name,
+            defined: None,
+            binding: Binding::Global,
+            hidden: false,
+            params,
+            results,
+        });
     } else if let Some((_, params, results)) = data.functions.iter().find(|(one, ..)| one == name) {
-        symbols.push(Symbol::Function { name, defined: None, binding: Binding::Global, params, results });
+        symbols.push(Symbol::Function {
+            name,
+            defined: None,
+            binding: Binding::Global,
+            hidden: false,
+            params,
+            results,
+        });
     } else {
         panic!("symbol {name} is no variable, global or called function");
     }
@@ -510,6 +543,7 @@ pub fn write(
             name: &f.name,
             defined: Some(at),
             binding: f.binding,
+            hidden: f.hidden,
             params: &f.params,
             results: &f.results,
         };
@@ -533,6 +567,26 @@ pub fn write(
     }
     for (_, name) in &data.init_funcs {
         introduce(&mut symbols, data, None, name);
+    }
+    // `emitGlobalAlias` follows every function and variable.
+    for alias in &data.aliases {
+        let target = symbols
+            .iter()
+            .find_map(|s| match s {
+                Symbol::Function { name, defined: Some(at), params, results, .. } if *name == alias.target => {
+                    Some((*at, *params, *results))
+                }
+                _ => None,
+            })
+            .expect("an alias of a defined function");
+        symbols.push(Symbol::Function {
+            name: &alias.name,
+            defined: Some(target.0),
+            binding: alias.binding,
+            hidden: alias.hidden,
+            params: target.1,
+            results: target.2,
+        });
     }
     let symbol_named = |symbols: &[Symbol], name: &str| {
         symbols
@@ -563,8 +617,12 @@ pub fn write(
         }
     }
     // `emitEndOfAsmFile`: a function whose address is taken, a constructor
-    // included, keeps the table alive.
-    let address_taken = !slots.is_empty() || !data.init_funcs.is_empty() || functions.iter().any(|f| f.personality);
+    // included, keeps the table alive. An alias names its function, which
+    // `Function::hasAddressTaken` counts.
+    let address_taken = !slots.is_empty()
+        || !data.init_funcs.is_empty()
+        || !data.aliases.is_empty()
+        || functions.iter().any(|f| f.personality);
     if address_taken {
         introduce(&mut symbols, data, None, crate::INDIRECT_FUNCTION_TABLE);
     }
@@ -781,12 +839,12 @@ pub fn write(
     uleb(&mut table, symbols.len() as u64);
     for (s, symbol) in symbols.iter().enumerate() {
         match symbol {
-            Symbol::Function { name: function, defined, binding, .. } => {
+            Symbol::Function { name: function, defined, binding, hidden, .. } => {
                 table.push(SYMBOL_KIND_FUNCTION);
                 if defined.is_some() {
                     // Flags (binding, default visibility, defined), index,
                     // name.
-                    table.push(binding_flag(*binding));
+                    table.push(symbol_flags(*binding, *hidden));
                     uleb(&mut table, u64::from(index_of[s]));
                     name(&mut table, function);
                 } else {
@@ -801,7 +859,7 @@ pub fn write(
             Symbol::Data { object } => {
                 // Flags, name, segment, offset in it, size.
                 let one = &objects[*object];
-                table.extend([SYMBOL_KIND_DATA, binding_flag(one.binding)]);
+                table.extend([SYMBOL_KIND_DATA, symbol_flags(one.binding, one.hidden)]);
                 name(&mut table, &one.name);
                 uleb(&mut table, *object as u64);
                 uleb(&mut table, 0);

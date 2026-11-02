@@ -222,6 +222,8 @@ pub struct Function {
     /// signature the object file gives an undefined function.
     /// `.globl`, `.weak` or neither, and the binding in the object.
     pub binding: Binding,
+    /// `.hidden`: `WASM_SYMBOL_VISIBILITY_HIDDEN` in the object.
+    pub hidden: bool,
     pub callees: Vec<(String, Vec<ValType>, Vec<ValType>)>,
     /// The (name, type) of each wasm global the code names: an import of the
     /// object file.

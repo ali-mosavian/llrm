@@ -311,3 +311,12 @@ fn weak_functions_print_weak() {
 fn undef_values() {
     check("undef_values");
 }
+
+/// `int main(void)` has no wrapper for startup to call, and a call whose type
+/// is not its callee's (`int g();` called with an argument) was an invalid
+/// module: the pin's `FixFunctionBitcasts` makes `main(i32, i32)` and private
+/// `_bitcast` wrappers.
+#[test]
+fn main_and_mismatched_calls_get_wrappers() {
+    check("main_wrapper");
+}

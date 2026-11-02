@@ -30,7 +30,7 @@ fn with_comment(
     text: &str,
     comment: &str,
 ) -> String {
-    format!("{text:<COMMENT_COLUMN$}{comment}")
+    if comment.is_empty() { text.to_owned() } else { format!("{text:<COMMENT_COLUMN$}{comment}") }
 }
 
 /// One instruction after the passes: its stack-form string with the operands
@@ -129,11 +129,15 @@ pub fn function_in(
     let mut out = vec![format!("\t.section\t.text.{name},\"\",@")];
     // The begin-function comment rides on the first directive: `.globl` or
     // `.weak` where there is one.
+    // `.hidden` comes first and takes the comment.
+    let hidden = f.hidden.then(|| with_comment(&format!("\t.hidden\t{name}"), &begin));
+    let comment = if hidden.is_some() { String::new() } else { begin.clone() };
+    out.extend(hidden);
     match f.binding {
-        Binding::Local => out.push(with_comment(&format!("\t.type\t{name},@function"), &begin)),
+        Binding::Local => out.push(with_comment(&format!("\t.type\t{name},@function"), &comment)),
         Binding::Global | Binding::Weak => {
             let directive = if f.binding == Binding::Weak { "weak" } else { "globl" };
-            out.push(with_comment(&format!("\t.{directive}\t{name}"), &begin));
+            out.push(with_comment(&format!("\t.{directive}\t{name}"), &comment));
             out.push(format!("\t.type\t{name},@function"));
         }
     }
