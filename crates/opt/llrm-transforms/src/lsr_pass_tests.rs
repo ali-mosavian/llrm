@@ -1070,3 +1070,100 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
     let after = printed(&module);
     assert!(after.contains("[ 5, %b1 ]"), "{after}");
 }
+
+/// A byte index stepping by 2 against a doubled limit kept a second counter
+/// (`{n,+,-1}`, `dec cx`) beside the index, and a spill: examples/dot m16.
+#[test]
+fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
+    let mut module = parsed(&format!("{DOS}{DOT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
+}
+
+const DOT: &str = "
+define i32 @dot(ptr %0, ptr %1, i16 %2) {
+  %4 = icmp sgt i16 %2, 0
+  br i1 %4, label %5, label %19
+5:
+  br label %6
+6:
+  %7 = phi i16 [ %17, %6 ], [ 0, %5 ]
+  %8 = phi i32 [ %16, %6 ], [ 0, %5 ]
+  %9 = getelementptr inbounds nuw [2 x i8], ptr %0, i16 %7
+  %10 = load i16, ptr %9, align 2
+  %11 = sext i16 %10 to i32
+  %12 = getelementptr inbounds nuw [2 x i8], ptr %1, i16 %7
+  %13 = load i16, ptr %12, align 2
+  %14 = sext i16 %13 to i32
+  %15 = mul nsw i32 %14, %11
+  %16 = add nsw i32 %15, %8
+  %17 = add nuw nsw i16 %7, 1
+  %exitcond = icmp eq i16 %17, %2
+  br i1 %exitcond, label %18, label %6
+18:
+  br label %19
+19:
+  %20 = phi i32 [ 0, %3 ], [ %16, %18 ]
+  ret i32 %20
+}
+";
+
+/// The even-factor rule must agree with the wrapped product at every width
+/// it is allowed to claim: a nonzero `x` within reach never multiplies to 0.
+#[test]
+fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
+    for bits in [8u32, 16] {
+        let modulus = 1i128 << bits;
+        let span = modulus.min(512) / 2;
+        for factor in (-span..span).chain([1024, 16384]).filter(|&f| f != 0) {
+            let reach = (0..modulus / 2)
+                .take_while(|&r| crate::lsr_generate::zero_test_survives(bits, factor as i64, r as u128))
+                .count() as i128;
+            for x in -reach.max(1) + 1..reach.max(1) {
+                let zero = (x * factor).rem_euclid(modulus) == 0;
+                let claimed = reach > 0 && x.abs() < reach;
+                assert!(!claimed || zero == (x == 0), "bits {bits} factor {factor} x {x}");
+            }
+        }
+    }
+}
+
+/// A counter that is both an address index and a value ended on a compare
+/// against 257 next to a pointer that stepped by 2 (bench/histo's sum loop,
+/// +256 instructions at m16): the first use's formulae hid the counter from
+/// the rest. The byte index ending at zero is one fewer instruction.
+#[test]
+fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero() {
+    let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains(", 0\n") && !after.contains("257"), "{after}");
+}
+
+const SUM_OF_COUNTS: &str = "
+@counts = internal global [256 x i16] zeroinitializer
+define i32 @f() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sum = phi i32 [ 0, %entry ], [ %s1, %loop ]
+  %p = getelementptr i16, ptr @counts, i16 %i
+  %v = load i16, ptr %p
+  %w = sext i16 %v to i32
+  %k = add i16 %i, 1
+  %kw = sext i16 %k to i32
+  %m = mul i32 %w, %kw
+  %s1 = add i32 %sum, %m
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp eq i16 %i1, 256
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %s1
+}
+";

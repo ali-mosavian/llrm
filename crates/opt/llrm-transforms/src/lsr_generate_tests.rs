@@ -302,7 +302,7 @@ fn the_whole_search_is_linear_in_the_uses() {
         text
     };
     let mut work = Vec::new();
-    for n in [8usize, 16, 32] {
+    for n in [8usize, 16, 32, 64] {
         generated_for("i486", &looped(n), |_, se, lsr, _| {
             lsr.filter_out_undesirable_dedicated_registers(se);
             lsr.narrow_search_space_using_heuristics(se);

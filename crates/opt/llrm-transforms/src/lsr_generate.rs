@@ -37,6 +37,12 @@
 //! (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 //! as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
 //! the line.
+//!
+//! DEVIATE LG2: for an even factor `getExactSDiv` fails where the compared
+//! value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although
+//! only 0 then has a product of 0. Without it a byte-stepped loop kept a second
+//! counter beside the byte index (examples/dot m16: `dec cx` and a spill).
+//! Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.
 
 use std::collections::BTreeMap;
 
@@ -590,7 +596,8 @@ impl Collection<'_, '_> {
             // multiply in the preheader and an add in the loop, which the cost
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
-            let odd = factor & 1 == 1 && base.scaled_reg.is_none() && base.base_regs.len() == 1;
+            let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
+            let odd = (factor & 1 == 1 && counter_alone) || self.factor_keeps_zero(se, cx, &base, factor, bits);
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -625,6 +632,39 @@ impl Collection<'_, '_> {
             // Legal: add it.
             let _ = self.insert_formula(se, lu_idx, &f);
         }
+    }
+
+    /// `x * c == 0` iff `x` is a multiple of 2^(bits - ctz(c)), so for an even
+    /// `c` the compared value `x` of `base` keeps its zero test when its range
+    /// under the loop's guards stays below that: only 0 is such a multiple.
+    fn factor_keeps_zero(
+        &self,
+        se: &mut ScalarEvolution,
+        cx: &llrm_analysis::scev::Cx,
+        base: &Formula,
+        factor: i64,
+        bits: u32,
+    ) -> bool {
+        if factor & 1 == 1 {
+            return false;
+        }
+        let mut parts: Vec<ScevUse> = base.base_regs.iter().map(|&r| ScevUse::of(r)).collect();
+        if let Some(scaled) = base.scaled_reg {
+            let scale = se.get_constant_of_type(cx, se.type_of(scaled), i128::from(base.scale));
+            parts.push(se.get_mul_expr(cx, vec![ScevUse::of(scaled), ScevUse::of(scale)], Flags::default(), 0));
+        }
+        let x = se.get_add_expr(cx, parts, Flags::default(), 0).scev;
+        let ops = se.operands(x).to_vec();
+        // `applyLoopGuards` leaves a recurrence's start alone, so guard that.
+        let guarded = if ops.len() == 2 && se.is_affine(x) {
+            let start = se.apply_loop_guards(cx, ops[0].scev, self.l);
+            se.get_add_rec_expr(cx, vec![ScevUse::of(start), ops[1]], self.l, Flags::default()).scev
+        } else {
+            se.apply_loop_guards(cx, x, self.l)
+        };
+        let lo = se.get_signed_range_min(cx, guarded).sext_value();
+        let hi = se.get_signed_range_max(cx, guarded).sext_value();
+        zero_test_survives(bits, factor, lo.unsigned_abs().max(hi.unsigned_abs()))
     }
 
     /// `GenerateScales`: formulae using a factor of the strides as the scale of
@@ -1104,4 +1144,16 @@ impl Collection<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// Whether `x * factor == 0` (mod 2^bits) iff `x == 0` for every `x` with
+/// `|x| <= reach`: the product is zero iff `x` is a multiple of
+/// 2^(bits - ctz(factor)).
+pub(crate) fn zero_test_survives(
+    bits: u32,
+    factor: i64,
+    reach: u128,
+) -> bool {
+    let kept = bits.saturating_sub(factor.trailing_zeros());
+    kept > 0 && kept < 128 && reach < 1u128 << kept
 }
