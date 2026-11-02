@@ -46,6 +46,8 @@ pub struct TargetEnv {
     /// caller whose pins are values of their own, not constraints on an
     /// instruction.
     pub keep_pinned: bool,
+    /// `JoinGlobalCopies` (`CoalescerEnv::joins_global_copies`).
+    pub joins_global_copies: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
@@ -78,6 +80,10 @@ pub struct Join {
 }
 
 impl CoalescerEnv for TargetEnv {
+    fn joins_global_copies(&self) -> bool {
+        self.joins_global_copies
+    }
+
     fn tuned_for_size(&self) -> bool {
         self.size
     }
@@ -222,6 +228,7 @@ pub fn coalesce(
     palettes: IndexMap<u32, BTreeSet<RegId>>,
     pins: IndexMap<u32, RegId>,
     size: bool,
+    joins_global_copies: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
@@ -242,7 +249,16 @@ pub fn coalesce(
         .collect();
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
+    let env = TargetEnv {
+        palettes: palettes.into(),
+        pins,
+        size,
+        keep_pinned: true,
+        joins_global_copies,
+        aliases,
+        should_join,
+        freq,
+    };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let (after, map) = joined_with_map(body, &env, &depth);

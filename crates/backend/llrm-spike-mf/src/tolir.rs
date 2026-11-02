@@ -90,6 +90,7 @@ impl<T: Target> Converted<T> {
             palettes,
             self.body.pins.clone(),
             size,
+            T::joins_global_copies(),
             registers,
             Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
