@@ -9,7 +9,8 @@ const TEXT: &str = "declare float @llvm.fmuladd.f32(float, float, float)\n\
 
 /// `llvm.fmuladd` reached the old selector as a call it could not select
 /// ("llvm-llc: @f: @llvm.fmuladd.f32", tests/check/c/remat_x87_argument.c at
-/// `--isel=old`). It is now an `fmul` and an `fadd`, with the intrinsic's answer.
+/// `--isel=old`). It is now an `fmul` and an `fadd`, with the intrinsic's
+/// answer.
 #[test]
 fn an_expanded_fmuladd_is_a_multiply_and_an_add() {
     let before = llrm_mir::parse::module(TEXT).expect("parses");
