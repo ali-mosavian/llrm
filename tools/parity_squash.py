@@ -442,6 +442,12 @@ def precheck(number: str, dev: Path = PRECHECK_DIR / "wt", target: Path = PRECHE
     return line
 
 
+def manifestless_crate_dirs(paths: list[str], sha: str, dev: Path) -> set[str]:
+    """`crates/<group>/<name>` directories the change touches whose tree has no Cargo.toml: the workspace glob crates/*/* cannot load them and fails every batch holding the PR (#6317's bench-only llrm-z80 dir cost #6259's batch a round)."""
+    dirs = {"/".join(path.split("/")[:3]) for path in paths if re.match(r"crates/[^/]+/[^/]+/", path)}
+    return {d for d in dirs if not git("ls-tree", "--name-only", sha, f"{d}/Cargo.toml", cwd=dev).strip()}
+
+
 def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, cache, base_sha) -> str:
     if not dev.exists():
         dev.parent.mkdir(parents=True, exist_ok=True)
@@ -456,7 +462,10 @@ def _precheck(number, info, dev, target, checks, merge, deletions, head_failed, 
     seconds["merge"] = round(time.monotonic() - started, 1)
     if sha is None:
         return f"{number}: REFUSED: {why}"
-    after = precheck_items(dev, checks, seconds=seconds, only=git("diff", "--name-only", base_sha, sha, cwd=dev).split())
+    changed = git("diff", "--name-only", base_sha, sha, cwd=dev).split()
+    after = precheck_items(dev, checks, seconds=seconds, only=changed)
+    if orphans := manifestless_crate_dirs(changed, sha, dev):
+        after["crate-manifest"] = orphans
     with (cache.parent / "precheck-times.log").open("a") as log:  # where a precheck's minutes go, per PR
         log.write(json.dumps({"pr": number, "at": datetime.datetime.now().strftime("%H:%M:%S"), "load": round(os.getloadavg()[0], 1), **seconds}) + "\n")
     if problems := (deletions or refusals)(sha, info["body"] or "", BASE, dev):
@@ -2041,6 +2050,11 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                     continue
                 before = git("rev-parse", "HEAD", cwd=work).strip()
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
+                if not merge.returncode and (orphans := manifestless_crate_dirs(git("diff", "--name-only", before, "HEAD", cwd=work).split(), "HEAD", work)):
+                    git("reset", "-q", "--hard", before, cwd=work)
+                    waits[number] = f"REFUSED: crate-manifest: {', '.join(sorted(orphans))} has no Cargo.toml, which fails the workspace glob for every batch holding it"
+                    progress(number, "waits (crate without a manifest)")
+                    continue
                 if not merge.returncode and (driven := needs_the_merge_driver(before, heads[number], work)):
                     git("reset", "-q", "--hard", before, cwd=work)
                     waits[number] = "needs owner parity merge: it conflicts without the tests-append driver in " + ", ".join(driven[:4])
