@@ -69,3 +69,18 @@ fn a_spilled_global_address_is_not_folded_into_a_store() {
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
+
+/// tests/run/c/loop_interchange at -m64 -O2 made each array's address twice
+/// (`mov rbx, offset b` held and `mov rcx, offset b` for the walking pointer)
+/// where the pin copies the held one: the coalescer made the copy of an address
+/// again as a 7-byte `lea`, which the pin's coalescer does not (`LEA64r` is not
+/// as cheap as a move). 521 B against main's 515 and the pin's 534; one
+/// `offset` per array gives 509.
+#[test]
+fn the_copy_of_a_held_global_address_is_not_made_again() {
+    let text = listing_at(include_str!("run/c/loop_interchange.c"), "-O2");
+    for array in ["a", "b", "c"] {
+        let made = text.lines().filter(|line| line.trim_end().ends_with(&format!("offset {array}"))).count();
+        assert_eq!(made, 1, "offset {array}: {text}");
+    }
+}

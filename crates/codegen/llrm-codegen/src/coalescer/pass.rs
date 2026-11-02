@@ -175,6 +175,7 @@ impl Coalescer {
                 aliases: Default::default(),
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
+                cheap_addresses: body.bits != 64,
             },
             depth,
         ))

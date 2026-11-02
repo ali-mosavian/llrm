@@ -54,6 +54,10 @@ pub struct TargetEnv {
     /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
     /// runs once.
     pub freq: Vec<f32>,
+    /// A symbol's address is a move of a constant (`MOV32ri`), not the
+    /// `LEA64r` of a long-mode `rip` address: `isAsCheapAsAMove` is false for
+    /// that, so the coalescer keeps the copy of it.
+    pub cheap_addresses: bool,
 }
 
 /// One side of a copy about to be joined.
@@ -87,6 +91,25 @@ impl CoalescerEnv for TargetEnv {
         value: u32,
     ) -> bool {
         self.keep_pinned && self.pins.contains_key(&value)
+    }
+
+    fn rematerializable(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        let address = insn
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| matches!(
+                    what.sources.as_slice(),
+                    [crate::model::ir::Loc::Imm(imm)] if imm.address.is_some()
+                ),
+            );
+        (self.cheap_addresses || !address)
+            && insn.spread.is_empty()
+            && insn.call.is_none()
+            && crate::greedy::remat::is_trivially_re_materializable(insn, false)
     }
 
     fn aliases(
@@ -209,7 +232,16 @@ pub fn coalesce(
         .collect();
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq = (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    let env = TargetEnv { palettes: palettes.into(), pins, size, keep_pinned: true, aliases, should_join, freq };
+    let env = TargetEnv {
+        palettes: palettes.into(),
+        pins,
+        size,
+        keep_pinned: true,
+        aliases,
+        should_join,
+        freq,
+        cheap_addresses: body.bits != 64,
+    };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
     let after = joined(body, &env, &depth);
