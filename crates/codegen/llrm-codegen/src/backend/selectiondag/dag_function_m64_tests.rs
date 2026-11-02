@@ -796,7 +796,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<String> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
 }
 
@@ -815,7 +816,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<String> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "cvtsi2sd"), "{names:?}");
 }
 
@@ -907,7 +909,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<String> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
@@ -1290,7 +1293,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    let names: Vec<String> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
     assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
 }
