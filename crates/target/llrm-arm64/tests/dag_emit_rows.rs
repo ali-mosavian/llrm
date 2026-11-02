@@ -329,3 +329,17 @@ fn abs_is_a_compare_and_a_conditional_negate() {
         assert!(asm.contains(&format!("subs {reg}zr, {reg}0, #0")) && asm.contains("csneg"), "{asm}");
     }
 }
+
+/// Atomics and fences were refused on the DAG path ("machine opcode LDARW has
+/// no arm64 instruction yet"; also `DMB`): the pin's `ldar`, `ldapr`, `stlr`,
+/// the LSE read-modify-writes, `cas` and `dmb`.
+#[test]
+fn atomics_and_fences_are_selected() {
+    let text = include_str!("data/atomics.ll");
+    let asm = full_greedy(text).unwrap_or_else(|why| panic!("{why}"));
+    for wanted in
+        ["ldar w", "ldapr w", "stlr w", "ldaddal w", "swpab w", "ldclrl w", "casal w", "dmb ish\n", "dmb ishld"]
+    {
+        assert!(asm.contains(wanted), "{wanted} missing:\n{asm}");
+    }
+}

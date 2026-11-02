@@ -30,11 +30,11 @@ use super::function::Selected;
 use super::globals::Globals;
 use crate::REGISTER_INFO;
 use crate::mc::immediate::decode_logical;
-use crate::mc::inst::Fill;
 use crate::mc::inst::{
     AddSub, Addr, Bitfield, CcOperand, Cond, Div, Extend, FpBinary, FpConvert, FpFused, FpSize, FpUnary, Gpr, Inst,
     Logic, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
+use crate::mc::inst::{Atomic, Barrier, Fill};
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, PoolEntry, block_label};
 
@@ -200,6 +200,51 @@ enum AddressForm {
 
 /// `LDRWui`, `STURXi`, `LDRSBWroX` and the rest of the integer load/store
 /// family.
+/// The pin's load-acquire, store-release, LSE read-modify-write and `cas`
+/// machine opcodes (`LDARW`, `STLRX`, `LDADDALW`, `CASALX`, ...): what they
+/// do, log2 of the access size, and the ordering bits.
+fn atomic_form(name: &str) -> Option<(Atomic, u8, bool, bool)> {
+    let size = match name.chars().last()? {
+        'B' => 0,
+        'H' => 1,
+        'W' => 2,
+        'X' => 3,
+        _ => return None,
+    };
+    let stem = &name[..name.len() - 1];
+    for (prefix, op) in [("LDAPR", Atomic::Ldapr), ("LDAR", Atomic::Ldar)] {
+        if stem == prefix {
+            return Some((op, size, true, false));
+        }
+    }
+    if stem == "STLR" {
+        return Some((Atomic::Stlr, size, false, true));
+    }
+    let table = [
+        ("SWP", Atomic::Swp),
+        ("LDADD", Atomic::Ldadd),
+        ("LDCLR", Atomic::Ldclr),
+        ("LDEOR", Atomic::Ldeor),
+        ("LDSET", Atomic::Ldset),
+        ("LDSMAX", Atomic::Ldsmax),
+        ("LDSMIN", Atomic::Ldsmin),
+        ("LDUMAX", Atomic::Ldumax),
+        ("LDUMIN", Atomic::Ldumin),
+        ("CAS", Atomic::Cas),
+    ];
+    for (prefix, op) in table {
+        let Some(order) = stem.strip_prefix(prefix) else { continue };
+        return match order {
+            "" => Some((op, size, false, false)),
+            "A" => Some((op, size, true, false)),
+            "L" => Some((op, size, false, true)),
+            "AL" => Some((op, size, true, true)),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn memory_form(name: &str) -> Option<MemoryForm> {
     let (store, rest) = if let Some(rest) = name.strip_prefix("LDUR") {
         (false, ("UR", rest))
@@ -1361,6 +1406,42 @@ impl Emitter<'_> {
                         self.fvalues.insert((id, 0), rd);
                     } else {
                         self.values.insert((id, 0), gd);
+                    }
+                    return Ok(());
+                }
+                if name == "DMB" {
+                    let barrier = match operands.as_slice() {
+                        [Operand::Imm(11)] => Barrier::Ish,
+                        [Operand::Imm(9)] => Barrier::IshLd,
+                        [Operand::Imm(10)] => Barrier::IshSt,
+                        _ => return Err("a barrier that is not ish, ishld or ishst".into()),
+                    };
+                    self.ops.push(Op::I(Inst::Dmb { barrier }));
+                    return Ok(());
+                }
+                if let Some((op, size, acquire, release)) = atomic_form(name) {
+                    let reg = |operand: &Operand| match operand {
+                        Operand::Reg(reg) => Ok(*reg),
+                        _ => Err(format!("{name}: an atomic operand that is not a register")),
+                    };
+                    // `LDAR p`, `STLR v, p`, `SWP/LDOP v, p`, `CAS expected,
+                    // new, p`.
+                    let (rs, rt, rn, result) = match (op, operands.as_slice()) {
+                        (Atomic::Ldar | Atomic::Ldapr, [pointer]) => (Gpr::R31, self.mf.gpr(), reg(pointer)?, true),
+                        (Atomic::Stlr, [value, pointer]) => (Gpr::R31, reg(value)?, reg(pointer)?, false),
+                        (Atomic::Cas, [expected, new, pointer]) => {
+                            // `cas` overwrites the expected value with the old
+                            // one.
+                            let old = self.mf.gpr();
+                            self.ops.push(Op::Copy { dst: Reg::Gpr(old), src: Reg::Gpr(reg(expected)?) });
+                            (old, reg(new)?, reg(pointer)?, true)
+                        }
+                        (_, [value, pointer]) => (reg(value)?, self.mf.gpr(), reg(pointer)?, true),
+                        _ => return Err(format!("{name}: operands are not those of its form")),
+                    };
+                    self.ops.push(Op::I(Inst::Atomic { op, size, acquire, release, rs, rt, rn }));
+                    if result {
+                        self.values.insert((id, 0), if op == Atomic::Cas { rs } else { rt });
                     }
                     return Ok(());
                 }
