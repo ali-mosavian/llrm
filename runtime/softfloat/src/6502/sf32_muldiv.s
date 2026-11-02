@@ -2,8 +2,8 @@
 ; Same ABI and scratch budget as sf32.s: a in rc2..rc5, b in rc6..rc9, result A:X:rc2:rc3.
 ;
 ; The tricks: mantissas are normalized once (denormals too) so both loops see 24-bit values with bit 23 set;
-; multiply is Woz's shift-add on a 6-byte right-shifting product, one ror chain per bit, the add carry re-enters
-; through the chain's carry; divide is a restoring loop whose quotient shifts into the same cells that become the
+; multiply is Woz's shift-add on a 4-byte window (product top byte in A, one multiplier byte below it, which fills
+; with product bits), the add carry re-enters through the chain's carry; divide is a restoring loop whose quotient shifts into the same cells that become the
 ; rounding block, the trial subtraction lives in A/X/Y and is committed only on success; the exponent is a signed
 ; 16-bit sum that is range-checked once, in the shared tail.
 
@@ -79,48 +79,50 @@ mulbody:
     txa
     sbc #0
     sta e16hi
-    lda #0
-    sta rc19
+    lda rc16                ; C - 1: each add enters with the multiplier bit (1) as its carry
+    bne :++
+    lda rc17
+    bne :+
+    dec rc18
+:   dec rc17
+:   dec rc16
+    lda #0                  ; P2 lives in A
     sta rc23
     sta rc24
-    ldx #3                  ; three multiplier bytes, eight steps each, unrolled
+    ldx #$fd                ; rc23,x walks the multiplier bytes rc20..rc22 (zero-page wrap)
     clc
 mloop:
 .repeat 8
-    ror rc19
+    ror a
     ror rc23
     ror rc24
-    ror rc22
-    ror rc21
-    ror rc20                ; carry = multiplier bit
+    ror rc23,x              ; carry = multiplier bit; product bits fill the byte from the top
     bcc :+
-    clc
+    tay
     lda rc24
     adc rc16
     sta rc24
     lda rc23
     adc rc17
     sta rc23
-    lda rc19
+    tya
     adc rc18
-    sta rc19
 :
 .endrepeat
-    dex
-    beq mdone
+    inx
+    beq :+
     jmp mloop
-mdone:
-    bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
-    ror rc19                ; product >= 2: shift once more, exponent up
+:   bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
+    ror a                   ; product >= 2: shift once more, exponent up
     ror rc23
     ror rc24
     ror rc22
     ror rc21
-    ror rc20
     inc e16lo
     bne mfin
     inc e16hi
 mfin:
+    sta rc19
     lda rc23
     sta rc18
     lda rc24
