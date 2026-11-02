@@ -1083,7 +1083,7 @@ def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds
     more = {**base, "instructions": 11, "code_bytes": 113}
     assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
     assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
-    assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: instructions 11 > 10 (worse)", "a c -Os: code_bytes 113 > 100 (worse)"]
+    assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: code_bytes 113 > 100 (worse)"]
     assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]
 
 
@@ -1108,3 +1108,13 @@ def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_only(tmp_path, mon
     assert bench.rate_for("c", "O2") == 0
     sheet.write_text("cache_line - =\n")
     assert bench.rate_for("c", "O2") == 0
+
+
+def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
+    """qmove Os memops +1 failed a cell that was 8 B smaller and 13 clocks faster. Now: (1) -8 B, -13 clocks, memops +1 passes; (2) +1 B fails; (3) bytes and clocks equal, memops +1 fails; (4) a cell without clocks is strict on every metric."""
+    base = {"instructions": 10, "memory_operands": 4, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0, "clocks": 50}
+    assert bench.against("a c -Os", {**base, "memory_operands": 5, "code_bytes": 92, "clocks": 37}, base) == []
+    assert bench.against("a c -Os", {**base, "code_bytes": 101, "clocks": 37}, base) == ["a c -Os: code_bytes 101 > 100 (worse)"]
+    assert bench.against("a c -Os", {**base, "memory_operands": 5}, base) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+    untimed = {k: v for k, v in base.items() if k != "clocks"}
+    assert bench.against("a c -Os", {**untimed, "memory_operands": 5, "code_bytes": 92}, untimed) == ["a c -Os: memory_operands 5 > 4 (worse)"]

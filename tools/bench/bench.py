@@ -773,7 +773,9 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
     counter and this count. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
     (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged. Clocks (the 486 kernel clocks) are judged like the counts.
     Where the target prices a byte (`rate`, milliclocks per byte; -O2/-O3), the cell passes when 1000 * delta clocks + rate * delta code bytes <= 0 and
-    clocks, code bytes, instructions and memory operands are not gated alone: they are in the row."""
+    clocks, code bytes, instructions and memory operands are not gated alone: they are in the row.
+    Elsewhere (-Os, -O1 aside, and targets without a rate) code bytes and clocks are strict; instructions and memory operands are reported and gate
+    only when bytes and clocks both equal the base's. A cell without clocks on either side is strict on every metric."""
     if want is None:
         return []
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
@@ -784,12 +786,16 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         clocks, size = got["clocks"] - want["clocks"], got["code_bytes"] - want["code_bytes"]
         if 1000 * clocks + rate * size > 0:
             problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
+    timed = not priced and all(one in side for one in ("clocks", "code_bytes") for side in (got, want))
+    tied = timed and got["clocks"] == want["clocks"] and got["code_bytes"] == want["code_bytes"]
     for counter in (*COUNTERS, "clocks", *SIZES):
         if counter not in got:
             continue
         if counter not in want:
             continue
         if priced and counter in ("instructions", "memory_operands", "clocks", "code_bytes"):
+            continue
+        if timed and not tied and counter in COUNTERS:
             continue
         if got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
             continue
