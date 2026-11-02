@@ -224,23 +224,12 @@ impl ProgramPass for Walk {
             self.inline.limit != 0,
             program.target.tti().as_deref(),
         );
-        let byte_costs = program.target.size_costs();
         let mut params = crate::inlinecost::InlineParams {
             allow_recursive_call: recursion.is_some(),
             recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        if let Some((tti, costs)) = program.target.tti().as_deref().zip(Some(program.target.costs())) {
-            if tti.speed_inline_by_code_size() {
-                params.priced_call = Some(crate::inlinecost::PricedCall {
-                    clocks: costs.call + costs.return_,
-                    per_argument: costs.argument,
-                    milliclocks_per_byte: tti.speed_milliclocks_per_byte(),
-                });
-                params.byte_costs = Some(&byte_costs);
-            }
-        }
         // The target's tuning table.
         if let Some(threshold) = program.target.tti().and_then(|tti| tti.inline_threshold_override()) {
             params.default_threshold = threshold;
@@ -301,9 +290,7 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.as_deref().is_some_and(|tti| {
-                                    size != crate::inlinecost::CallerSize::Speed || tti.speed_inline_by_code_size()
-                                }))
+                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed)
                                 .then_some(&mut trials),
                             )
                         };
