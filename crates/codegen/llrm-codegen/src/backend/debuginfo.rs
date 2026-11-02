@@ -800,6 +800,7 @@ pub fn laid_out(
     source: &str,
     segments: &[Segment],
     symbols: &IndexMap<String, (usize, usize)>,
+    sizes: &IndexMap<String, usize>,
     ids: &IndexMap<String, usize>,
 ) -> Result<Info, String> {
     let defined = |name: &str| symbols.contains_key(name);
@@ -866,8 +867,11 @@ pub fn laid_out(
             continue;
         };
         let code = &segments[section];
-        let end =
+        // The code alone: the padding up to the next function is not in the
+        // function (`.size`).
+        let next =
             starts.iter().find(|&&(at, one)| at == section && one > start).map_or(code.image.len(), |&(_, one)| one);
+        let end = sizes.get(&procedure.name).map_or(next, |size| (start + size).min(next));
         // Its own statics, then each variable of its body.
         let mut variables: Vec<Variable> = debug
             .globals

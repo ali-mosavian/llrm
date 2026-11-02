@@ -1382,7 +1382,7 @@ pub fn object_of(
     let debug = module
         .debug
         .as_ref()
-        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
+        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, sizes, &index))
         .transpose()
         .map_err(Unencodable)?;
     let frames = if model == CodeModel::Segmented16 {
