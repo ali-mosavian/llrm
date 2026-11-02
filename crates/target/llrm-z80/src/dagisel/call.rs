@@ -269,6 +269,12 @@ impl TargetCalling for Z80Calling {
         outs: &[Out],
         ins: &[In],
     ) -> Result<(), &'static str> {
+        // the builder splits integers into bytes and words; a float part has
+        // no registers
+        let parts = outs.iter().map(|out| dag.value_type(out.value)).chain(ins.iter().map(|part| part.vt));
+        if parts.into_iter().any(|vt| kind(vt).is_err()) {
+            return Err("a part that is not a byte or a word");
+        }
         let bytes: u32 = match site {
             Site::Arguments => return Ok(()),
             Site::Return => outs.iter().map(|out| dag.value_type(out.value).size_in_bits() / 8).sum(),

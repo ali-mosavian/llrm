@@ -460,3 +460,12 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
     );
     assert!(text.contains("add iy, sp") && text.contains("(iy)"), "{text}");
 }
+
+/// A float argument or result killed the compiler ("legal parts: Type(F32)",
+/// 8 programs of tests/run/c): it is refused by name.
+#[test]
+fn a_float_argument_is_refused_not_a_panic() {
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine float @f(float %x) {{\n  ret float %x\n}}");
+    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses a float");
+    assert!(why.contains("not a byte or a word"), "{why}");
+}
