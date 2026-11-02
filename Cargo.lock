@@ -260,6 +260,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-analysis",
  "llrm-codegen",
+ "llrm-dagisel",
  "llrm-debug",
  "llrm-dwarf",
  "llrm-elf",
@@ -269,6 +270,8 @@ dependencies = [
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
+ "llrm-sdag",
+ "llrm-spike-mf",
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
