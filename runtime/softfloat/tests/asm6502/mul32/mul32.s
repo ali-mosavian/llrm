@@ -470,3 +470,88 @@ nt:
 .endrepeat
 .endrepeat
 .endif
+.if VAR = 7
+; quarter-square with the accumulate fused into the product: the borrow of the low difference comes from a cmp, so the
+; high byte is formed first and the low byte is subtracted straight into the add
+.macro BODY off, k, low
+.if low
+    lda sqlo+off,x
+    sec
+    sbc sqlo,y
+    clc
+    adc r3
+    sta r3
+.else
+    lda sqlo+off,x
+    cmp sqlo,y
+    lda sqhi+off,x
+    sbc sqhi,y
+    sta ph
+    lda sqlo+off,x
+    sec
+    sbc sqlo,y
+    clc
+    adc r0+k
+    sta r0+k
+    lda ph
+    adc r1+k
+    sta r1+k
+.if k < 2
+    bcc :+
+    inc r2+k
+.if k = 0
+    bne :+
+    inc r3
+.endif
+:
+.endif
+.endif
+.endmacro
+.macro FUSE xa, yb, k, low
+.local big, done, nd
+    lda xa
+    sec
+    sbc yb
+    bcs nd
+    eor #$ff
+    adc #1
+nd: tay
+    lda xa
+    clc
+    adc yb
+    bcs big
+    tax
+    BODY 0, k, low
+    jmp done
+big:
+    tax
+    BODY 256, k, low
+done:
+.endmacro
+mul32:
+    lda #0
+    sta r0
+    sta r1
+    sta r2
+    sta r3
+    FUSE a0, b0, 0, 0
+    FUSE a0, b1, 1, 0
+    FUSE a1, b0, 1, 0
+    FUSE a0, b2, 2, 0
+    FUSE a1, b1, 2, 0
+    FUSE a2, b0, 2, 0
+    FUSE a0, b3, 3, 1
+    FUSE a1, b2, 3, 1
+    FUSE a2, b1, 3, 1
+    FUSE a3, b0, 3, 1
+    rts
+.segment "RODATA"
+sqlo:
+.repeat 512, n
+    .byte <((n * n) / 4)
+.endrepeat
+sqhi:
+.repeat 512, n
+    .byte >((n * n) / 4)
+.endrepeat
+.endif
