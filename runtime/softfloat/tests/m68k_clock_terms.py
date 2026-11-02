@@ -63,9 +63,13 @@ for line in open(log):
     if m and int(m.group(1), 16) in sites:
         op, s, t = sites[int(m.group(1), 16)]
         if op == "muluw":
-            total += 38 + 2 * bin(d[s] & 0xFFFF).count("1") - 70
+            c = 38 + 2 * bin(d[s] & 0xFFFF).count("1")
+            assert 38 <= c <= 70, c
+            total += c - 70
         elif op == "divuw":
-            total += divu(d[t], d[s] & 0xFFFF) - 140
+            c = divu(d[t], d[s] & 0xFFFF)
+            assert c == 10 or 76 <= c <= 136, c
+            total += c - 140
         else:
             total += 2 * (d[s] % 64)
         count[op] = count.get(op, 0) + 1
