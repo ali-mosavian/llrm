@@ -59,17 +59,30 @@ def writer_results(directory: Path) -> dict[str, str]:
     return {file.name: hashlib.md5(file.read_bytes()).hexdigest()[:12] for pattern in ("*.bin", "*.err") for file in sorted(directory.glob(pattern))}
 
 
+TIMEOUT = "TIMEOUT"  # the first word of the error of a compile that was killed: a non-result, neither a failure nor a pass
+
+
+def compile_timeout() -> float:
+    """Seconds a compile may take: 300 on a quiet host, longer by the factor the host is oversubscribed (load per core). A debug build of llrm-cc took 197 s
+    at load 80 where 120 s killed the base side of a sweep and the cell read as a difference in status."""
+    return 300 * max(1.0, os.getloadavg()[0] / (os.cpu_count() or 1))
+
+
 def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None, environment: dict[str, str] | None = None) -> tuple[bytes | None, str]:
     """(object bytes, '') or (None, first line of stderr); fills `writers` with the other formats' md5s when given."""
     side = out.with_suffix(".writers")
     side.mkdir(exist_ok=True)
     env = {**(environment or os.environ), "LLRM_OBJECT_ALL_WRITERS": str(side)} if writers is not None else environment
-    done = subprocess.run(command, capture_output=True, text=True, timeout=600, env=env)
-    if writers is not None:
-        writers.update(writer_results(side))
-    for file in side.glob("*"):
-        file.unlink()
-    side.rmdir()
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=compile_timeout(), env=env)
+    except subprocess.TimeoutExpired as late:
+        return None, f"{TIMEOUT} after {late.timeout:.0f} s"
+    finally:
+        if writers is not None:
+            writers.update(writer_results(side))
+        for file in side.glob("*"):
+            file.unlink()
+        side.rmdir()
     if done.returncode != 0 or not out.exists():
         return None, (done.stderr.strip().splitlines() or [f"exit {done.returncode}"])[-1][:120]
     data = out.read_bytes()
@@ -127,11 +140,15 @@ def sweep(args, sources: list[Path], isel: str) -> int:
         new = compile_one(args.new, source, target, level, scratch / f"{tag}.new.o", isel, new_writers, list(leg))
         return cell, old, new, old_writers, new_writers
 
-    changed, one_side, both, same = [], [], [], 0
+    changed, one_side, both, same, late, built = [], [], [], 0, [], [0, 0]
     with ThreadPoolExecutor(args.jobs) as pool:
         for (source, target, level, leg), (a, ea), (b, eb), wa, wb in pool.map(run, cells):
             name = f"{source.stem} {target} -{level}" + "".join(f" {flag}" for flag in leg)
-            if a is None and b is None:
+            built[0] += a is not None
+            built[1] += b is not None
+            if ea.startswith(TIMEOUT) or eb.startswith(TIMEOUT):
+                late.append((name, f"old: {ea or 'ok'}; new: {eb or 'ok'}"))
+            elif a is None and b is None:
                 both.append((name, ea))
             elif a is None or b is None:
                 one_side.append((name, f"old: {ea or 'ok'}; new: {eb or 'ok'}"))
@@ -150,7 +167,10 @@ def sweep(args, sources: list[Path], isel: str) -> int:
         print(f"  ONE-SIDED FAIL {name}: {why}")
     for name, why in both[:10]:
         print(f"  failed on both {name}: {why}")
-    return 1 if changed or one_side else 0
+    print(f"compiled: old {built[0]}, new {built[1]} of {len(cells)} cells")
+    if late:
+        print(f"TIMEOUT {len(late)} cells, NOT COMPARED (no status, no verdict): " + ", ".join(name for name, _ in late[:10]))
+    return 1 if changed or one_side or late else 0
 
 def sweep_arm64(args, sources: list[Path]) -> int:
     """The `.ll` files of --arm64 through `llrm-arm64-llc` beside OLD and beside NEW: the Mach-O and ELF objects of each must match."""

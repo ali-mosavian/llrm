@@ -50,3 +50,9 @@ def test_the_m16_clang_of_the_pin_reaches_llrm_cc(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("LLRM_CLANG_M16", raising=False)
     assert llrmbin.cc_environment()["LLRM_CLANG_M16"] == str(clang)
+
+
+def test_a_leg_with_timed_out_cells_fails():
+    """Timed out cells are neither identical nor changed: a leg that lost some compared less than it says."""
+    out = line(identical=141) + "\nTIMEOUT 1 cells, NOT COMPARED (no status, no verdict): a m32 -O2"
+    assert "timed out" in gate.verdict("m32", out, {})

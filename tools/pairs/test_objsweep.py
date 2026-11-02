@@ -121,3 +121,23 @@ def test_an_llrm_cc_is_asked_for_an_object_and_given_its_target(tmp_path, monkey
     seen = {target: objsweep.compile_one(str(stub), tmp_path / "x.c", target, "O2", tmp_path / "x.o")[0].decode() for target in ("m64", "m32", "m16")}
     assert all(" -c " in text.split("|")[0] + " " for text in seen.values()), seen
     assert [text.split("|")[1:] for text in seen.values()] == [["", ""], ["x86_32-wat", ""], ["x86_16-wat", "m16clang"]], seen
+
+
+def test_a_compile_killed_by_the_timeout_is_a_non_result_not_a_status_difference(tmp_path, monkeypatch, capsys):
+    """A debug llrm-cc took 197 s at load 80: the sweep's 120 s timeout killed the base side and the cell printed as a status difference (6502 -Os
+    div_constants_ulong), where both sides compile."""
+    import argparse
+
+    monkeypatch.setattr(objsweep, "compile_timeout", lambda: 0.2)
+    slow = tmp_path / "slow.sh"
+    slow.write_text("#!/bin/sh\nsleep 5\n")
+    slow.chmod(0o755)
+    fast = tmp_path / "fast.sh"
+    fast.write_text('#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho obj > "$2"\n')
+    fast.chmod(0o755)
+    source = tmp_path / "a.c"
+    source.write_text("int a;\n")
+    args = argparse.Namespace(old=str(slow), new=str(fast), jobs=1, targets="m32", levels="O2", debug=False)
+    assert objsweep.sweep(args, [source], "old") == 1
+    out = capsys.readouterr().out
+    assert "ONE-SIDED" not in out and "TIMEOUT 1 cells, NOT COMPARED" in out and "compiled: old 0, new 1 of 1 cells" in out

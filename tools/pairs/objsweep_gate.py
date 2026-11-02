@@ -33,6 +33,8 @@ def verdict(leg: str, output: str, expected: dict) -> str | None:
     found = LINE.search(output)
     if not found:
         return f"{leg}: objsweep printed no result line"
+    if late := re.search(r"^TIMEOUT (\d+) cells", output, re.M):
+        return f"{leg}: {late[1]} cells timed out and were not compared"
     changed, _, identical, _, one_side, cells = (int(x) if x.isdigit() else x for x in found.groups())
     allowed = expected.get(leg, {}).get("changed", 0)
     if one_side:
