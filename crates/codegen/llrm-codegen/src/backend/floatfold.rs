@@ -28,6 +28,11 @@
 //!   `ficom [m]` under the same rule, key `x87_cmp_i`; `floatalloc` emits the
 //!   popping `ficomp` where the left dies.
 //!
+//! A loop-invariant load the loop reads with `fsubr st, [m]` (a cell already
+//! folded) is swapped: the loop loads `[m]` and the arithmetic reads the
+//! invariant cell (`fld [m]; fsub [c]`, gcc's form). Each trip otherwise
+//! copies the held value (`fld st(i)`) and keeps its stack slot.
+//!
 //! Where the loaded cell is the left operand the operation is reversed (`fsub`
 //! becomes `fsubr`, `fdiv` becomes `fdivr`). The arithmetic then reads the
 //! other value and the cell, and the load is deleted.
@@ -294,6 +299,11 @@ fn _refolded(
     // An instruction has one memory operand: the first load to take it keeps
     // it.
     let mut taken: HashSet<(usize, usize)> = HashSet::default();
+    // The instruction that follows the one at a place, where the place now
+    // loads a cell and the arithmetic that read the value comes after it.
+    let mut after: HashMap<(usize, usize), Arc<Insn>> = HashMap::default();
+    let depths = std::cell::OnceCell::new();
+    let mut fresh = body.next_value();
     for (value, home) in &loads {
         let value = *value;
         let load = Arc::clone(&body.blocks[home.0].insns[home.1]);
@@ -309,34 +319,55 @@ fn _refolded(
         let (mut folded_bytes, mut foldable) = (0, true);
         for place in places {
             let one = &body.blocks[place.0].insns[place.1];
-            let Some((name, left, right)) = one
-                .what
-                .as_ref()
-                .filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)
-                .and_then(|what| _two_values(Some(what)))
-                .filter(|(_, left, right)| left.value != right.value)
+            let what = one.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1);
+            if let Some((name, left, right)) =
+                what.and_then(|what| _two_values(Some(what))).filter(|(_, left, right)| left.value != right.value)
+            {
+                let (cell_is_left, other) = if right.value == value { (false, left) } else { (true, right) };
+                let Some((operation, gain)) = memory_form(&name, cell_is_left, &load, cpu) else {
+                    foldable = false;
+                    break;
+                };
+                let what = one.what.as_ref().expect("an arithmetic instruction");
+                held += REGISTER_FORM;
+                folded_bytes += _memory_operation_bytes(cell_of(&load), body.bits);
+                saved += gain;
+                plan.push((
+                    *place,
+                    Planned::Fold(semantics(
+                        Operation::FloatArith,
+                        &operation,
+                        what.dests.clone(),
+                        vec![Loc::Held(other), Loc::Mem(cell_of(&load).clone())],
+                    )),
+                ));
+                continue;
+            }
+            // The value is the register operand of an arithmetic instruction
+            // that already takes another cell, in a loop the load is outside
+            // of: each trip copies the value (`fld st(i)`). Read the cell here
+            // and load the other: the copy becomes a load, and the stack slot
+            // the value held across the loop is free.
+            let depths = depths.get_or_init(|| crate::analysis::intervals::depths_shared(body));
+            let deeper = depths.get(&body.blocks[place.0].at) > depths.get(&body.blocks[home.0].at);
+            let Some(((name, other), true)) = what.and_then(|what| _register_and_cell(what, value)).zip(Some(deeper))
             else {
                 foldable = false;
                 break;
             };
-            let (cell_is_left, other) = if right.value == value { (false, left) } else { (true, right) };
-            let Some((operation, gain)) = memory_form(&name, cell_is_left, &load, cpu) else {
+            // The model prices the copy as a load (`fld st(i)` and `fld m64`
+            // are both `x87_load`; the 486 has 4 and 3), so a swap saves the
+            // copy's two bytes and the slot, not clocks.
+            let load_is_float = load.what.as_ref().is_some_and(|what| name_is(what, "fld"));
+            let Some((operation, _)) = memory_form(_flipped(&name), false, &load, cpu).filter(|_| load_is_float) else {
                 foldable = false;
                 break;
             };
             let what = one.what.as_ref().expect("an arithmetic instruction");
-            held += REGISTER_FORM;
-            folded_bytes += _memory_operation_bytes(cell_of(&load), body.bits);
-            saved += gain;
-            plan.push((
-                *place,
-                semantics(
-                    Operation::FloatArith,
-                    &operation,
-                    what.dests.clone(),
-                    vec![Loc::Held(other), Loc::Mem(cell_of(&load).clone())],
-                ),
-            ));
+            held += REGISTER_FORM + _memory_operation_bytes(&other, body.bits);
+            folded_bytes +=
+                _memory_operation_bytes(cell_of(&load), body.bits) + _memory_operation_bytes(&other, body.bits);
+            plan.push((*place, Planned::Swap { other, operation, dests: what.dests.clone() }));
         }
         if !foldable {
             continue;
@@ -370,9 +401,17 @@ fn _refolded(
         if !proof {
             continue;
         }
-        for (place, what) in plan {
+        for (place, planned) in plan {
             let one = Arc::clone(&body.blocks[place.0].insns[place.1]);
-            insns[place.0][place.1] = _fused(&one, &load, value, what, floating);
+            match planned {
+                Planned::Fold(what) => insns[place.0][place.1] = _fused(&one, &load, value, what, floating),
+                Planned::Swap { other, operation, dests } => {
+                    let made = fresh;
+                    fresh += 1;
+                    insns[place.0][place.1] = _read_cell(&one, made, &other, floating);
+                    after.insert(place, _fused_in_place(&one, &load, made, &operation, dests, floating));
+                }
+            }
             taken.insert(place);
         }
         deleted.push(*home);
@@ -380,12 +419,106 @@ fn _refolded(
     if deleted.is_empty() {
         return None;
     }
-    deleted.sort_unstable_by(|a, b| b.cmp(a));
-    for (block, at) in deleted {
-        insns[block].remove(at);
-    }
-    let blocks = body.blocks.iter().zip(insns).map(|(block, insns)| block.with_insns(insns)).collect();
+    let deleted: HashSet<(usize, usize)> = deleted.into_iter().collect();
+    let blocks = body
+        .blocks
+        .iter()
+        .zip(insns)
+        .enumerate()
+        .map(|(number, (block, insns))| {
+            let kept = insns
+                .into_iter()
+                .enumerate()
+                .flat_map(
+                    |(at, one)| {
+                        let next = after.get(&(number, at)).cloned();
+                        (!deleted.contains(&(number, at))).then_some(one).into_iter().chain(next)
+                    },
+                );
+            block.with_insns(kept.collect())
+        })
+        .collect();
     Some(body.with_blocks(blocks))
+}
+
+/// The operation with its operands the other way round.
+fn _flipped(name: &str) -> &str {
+    match name {
+        "fsub" => "fsubr",
+        "fsubr" => "fsub",
+        "fdiv" => "fdivr",
+        "fdivr" => "fdiv",
+        other => other,
+    }
+}
+
+/// What a refold does at one reader.
+enum Planned {
+    /// The cell replaces the value as the reader's second operand.
+    Fold(crate::model::ir::Semantics),
+    /// The reader loads the cell it took, and takes the value's cell instead:
+    /// `operation` over the new load and the cell.
+    Swap { other: Mem, operation: String, dests: Vec<Loc> },
+}
+
+/// The register operand and the cell of an arithmetic instruction that
+/// takes the float `value` and a cell, with the operation's name; the cell is
+/// a float, not an integer, one.
+fn _register_and_cell(
+    what: &crate::model::ir::Semantics,
+    value: u32,
+) -> Option<(String, Mem)> {
+    let name = what.name.as_deref().filter(|name| !name.starts_with("fi"))?;
+    match what.sources.as_slice() {
+        [Loc::Held(held), Loc::Mem(cell)] if held.value == value && held.width == 10 => {
+            Some((name.to_owned(), cell.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// `reader`'s cell, loaded into `value`: the instruction in its place.
+fn _read_cell(
+    reader: &Arc<Insn>,
+    value: u32,
+    cell: &Mem,
+    floating: &HashSet<u32>,
+) -> Arc<Insn> {
+    let mut made = (**reader).clone();
+    made.what = Some(semantics(
+        Operation::FloatLoad,
+        "fld",
+        vec![Loc::Held(crate::model::ir::Held { value, width: 10 })],
+        vec![Loc::Mem(cell.clone())],
+    ));
+    made.defines = vec![value];
+    made.uses = reader.uses.iter().copied().filter(|one| !floating.contains(one)).collect();
+    made.widths = reader.widths.iter().copied().filter(|(one, _)| !floating.contains(one)).collect();
+    Arc::new(made)
+}
+
+/// `reader` over the float just loaded and the cell `load` read, with
+/// `operation`.
+fn _fused_in_place(
+    reader: &Arc<Insn>,
+    load: &Arc<Insn>,
+    value: u32,
+    operation: &str,
+    dests: Vec<Loc>,
+    floating: &HashSet<u32>,
+) -> Arc<Insn> {
+    let mut made = (**reader).clone();
+    made.what = Some(semantics(
+        Operation::FloatArith,
+        operation,
+        dests,
+        vec![Loc::Held(crate::model::ir::Held { value, width: 10 }), Loc::Mem(cell_of(load).clone())],
+    ));
+    let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
+    made.uses = std::iter::once(value).chain(foreign(&load.uses)).collect::<IndexSet<u32>>().into_iter().collect();
+    made.widths = load.widths.iter().copied().filter(|(one, _)| !floating.contains(one)).collect();
+    made.requires = load.requires.clone();
+    Arc::new(made)
 }
 
 /// Where the integer values live, by block, and how the blocks follow each
@@ -865,6 +998,71 @@ mod tests {
             )),
         ];
         LirBody::new("fold", 0, blocks, Default::default(), Default::default())
+    }
+
+    /// A loop that reads a loop-invariant cell (`held`) and another cell
+    /// (`read`): `fsubr held, [read]` with `held` loaded before the loop, and
+    /// `writes` stored in the loop.
+    fn loop_reading(
+        held: Mem,
+        read: Mem,
+        writes: Option<Mem>,
+        in_loop: bool,
+    ) -> LirBody {
+        let reader = insn(16, Operation::FloatArith, "fsubr", vec![self::held(4)], vec![self::held(1), Loc::Mem(read)]);
+        let mut loop_body = vec![reader, fstp(17, 4, writes.unwrap_or_else(|| frame(-4)))];
+        let mut start = vec![fld(0, 1, held)];
+        if !in_loop {
+            start.append(&mut loop_body);
+            loop_body = Vec::new();
+        }
+        let block = |at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>| {
+            crate::model::lir::Block::from(crate::model::lir::LirBlock {
+                succ: succ.into(),
+                ..crate::model::lir::LirBlock::new(at, insns)
+            })
+        };
+        let blocks = vec![
+            block(0, start, vec![16]),
+            block(16, loop_body, vec![16, 32]),
+            block(32, vec![Arc::new(Insn::new(32, None, None, Vec::new(), Vec::new()))], Vec::new()),
+        ];
+        LirBody::new("fold", 0, blocks, Default::default(), Default::default())
+    }
+
+    /// nbody -Os (`-fllrm-spares`): the inner loop read `x[i]`, loaded before
+    /// it, with `fsubr st, [x[j]]`, so each trip copied the held value
+    /// (`fld st(i)`, 7201 in a run). The cell the loop does not write is read
+    /// by the arithmetic and the other is loaded in the loop (gcc's `fld
+    /// [x[j]]; fsub [x[i]]`): the copy and the stack slot are gone.
+    #[test]
+    fn test_a_loop_invariant_load_is_read_from_its_cell_and_the_loop_loads_the_cell_it_read() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = loop_reading(global(0, 0), global(1, 0), None, true);
+        let got = folded(&body, cpu, REGISTERS);
+        assert_eq!(names(&got), ["fld", "fsub+m", "fstp"], "{:#?}", names(&got));
+        let reads = |at: i64| got.blocks[1].insns.iter().find(|one| one.at == at).and_then(|one| one.what.clone());
+        let load = reads(16).expect("the load");
+        assert_eq!(load.sources, [Loc::Mem(global(1, 0))]);
+        let arithmetic = got.blocks[1].insns[1].what.clone().expect("the arithmetic");
+        assert_eq!(arithmetic.sources[1], Loc::Mem(global(0, 0)));
+    }
+
+    /// The loop writes the cell that was loaded before it: the load stays.
+    #[test]
+    fn test_a_loop_invariant_load_is_kept_where_the_loop_writes_its_cell() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = loop_reading(global(0, 0), global(1, 0), Some(global(0, 0)), true);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fsubr+m", "fstp"]);
+    }
+
+    /// Without a loop the value is read once and dies: no copy, nothing to
+    /// swap.
+    #[test]
+    fn test_a_load_read_once_outside_a_loop_is_left_alone_by_the_swap() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let body = loop_reading(global(0, 0), global(1, 0), None, false);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fsubr+m", "fstp"]);
     }
 
     /// qmove -Os: the readers of a forwarded load sat in two blocks, so the

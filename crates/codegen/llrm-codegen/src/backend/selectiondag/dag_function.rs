@@ -1045,6 +1045,7 @@ fn selected_in(
     let mut noted_values: llrm_mir::dense::IdMap<ValueId, u32> = Default::default();
     let mut noted_wides: llrm_mir::dense::IdMap<ValueId, (Held, Held)> = Default::default();
     let mut noted_ats: llrm_mir::dense::IdMap<llrm_mir::module::InstId, i64> = Default::default();
+    let mut memory_ats: crate::support::hash::IndexMap<llrm_mir::module::InstId, Vec<i64>> = Default::default();
     let mut calls = IndexMap::default();
     let mut pops = IndexMap::default();
     let mut call_pops = IndexMap::default();
@@ -1193,6 +1194,9 @@ fn selected_in(
         inline_places.extend(done.inline_places.iter().cloned());
         let mut next_at = None;
         for &(inst, order) in built.dag.inst_order.iter().rev() {
+            if let Some(ats) = done.mem_ats.get(&order) {
+                memory_ats.insert(inst, ats.clone());
+            }
             next_at = done.first_at.get(&order).copied().or(next_at);
             if let Some(at) = next_at {
                 noted_ats.insert(inst, at);
@@ -1429,6 +1433,7 @@ fn selected_in(
     }
     let mut body =
         crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
+    body.spares = std::sync::Arc::new(crate::backend::isel::spared(module, function, &memory_ats));
     set_odds(&mut body, &info.edge_probs, &block_at);
     // The loops whose trips `induction` proves, as the old route states them:
     // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads

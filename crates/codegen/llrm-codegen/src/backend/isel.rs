@@ -1247,7 +1247,8 @@ pub fn selected_with<'c>(
     if !selector.homes.is_empty() {
         body = entry_stores_unlined(body, &selector.homes);
     }
-    body.spares = Arc::new(spared(module, function, &selector.ats));
+    body.spares =
+        Arc::new(spared(module, function, &selector.ats.iter().map(|(&inst, &at)| (inst, vec![at])).collect()));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     if cpu.rounds_float_spills || cpu.spills_extended {
         body.float_bytes = Arc::new(float_bytes(module, function, &selector.values, cpu.spills_extended));
@@ -1364,23 +1365,23 @@ pub(crate) fn parameters(
         .collect()
 }
 
-/// Each (load, write) the optimizer proved apart (`!llrm.spares`), by the `at`
+/// Each (load, write) the optimizer proved apart (`!llrm.spares`), by the `at`s
 /// each became.
-fn spared(
+pub(crate) fn spared(
     module: &Module,
     function: &Function,
-    ats: &IndexMap<InstId, i64>,
+    ats: &IndexMap<InstId, Vec<i64>>,
 ) -> BTreeSet<(i64, i64)> {
     let mut pairs = BTreeSet::new();
-    for (&inst, &load) in ats {
+    for (&inst, loads) in ats {
         for (_, node) in
             function.instruction(inst).metadata.iter().filter(|(kind, _)| kind == llrm_transforms::spares::KIND)
         {
             for operand in &module.metadata[node.0 as usize].operands {
                 let llrm_mir::MetadataOperand::Constant(value) = operand else { continue };
                 let ConstantKind::Int(write) = module.context.get(*value).kind else { continue };
-                if let Some(&write) = u32::try_from(write).ok().and_then(|write| ats.get(&InstId(write))) {
-                    pairs.insert((load, write));
+                if let Some(writes) = u32::try_from(write).ok().and_then(|write| ats.get(&InstId(write))) {
+                    pairs.extend(loads.iter().flat_map(|&load| writes.iter().map(move |&write| (load, write))));
                 }
             }
         }
