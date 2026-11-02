@@ -157,6 +157,26 @@ pub fn segments_of(
     out
 }
 
+/// Adds the stretches each of `values` is in its spill cell: the segments the
+/// spiller wrote for the value's slot (`LiveStacks`), at the cell `home` names
+/// (`rewriteLocations` takes it from `VirtRegMap::getStackSlot`). A value with
+/// no slot, or whose slot has no stretch, gains none; its table stays sorted.
+/// O(values + segments).
+pub fn add_cells(
+    table: &mut BTreeMap<u32, Vec<Segment>>,
+    values: impl IntoIterator<Item = u32>,
+    home: impl Fn(u32) -> Option<i64>,
+    stacks: &IndexMap<i64, Vec<(i64, i64)>>,
+) {
+    for value in values {
+        let Some(slot) = home(value) else { continue };
+        let Some(stretches) = stacks.get(&slot) else { continue };
+        let list = table.entry(value).or_default();
+        list.extend(stretches.iter().map(|&(start, end)| Segment { start, end, place: Place::Cell(slot) }));
+        list.sort_by_key(|segment| (segment.start, segment.end));
+    }
+}
+
 /// The notes of `body` at the slot index of the instruction each stands
 /// before.
 pub fn positioned(
@@ -296,5 +316,21 @@ mod tests {
         let found = locate(&notes, &table, end);
         assert_eq!(found.first().map(|one| one.at), Some(Where::Place(reg(3))), "{found:?} from {table:?}");
         assert_eq!(found.last().map(|one| (one.at, one.end)), Some((Where::Undef, end)), "{found:?}");
+    }
+
+    /// A value spilled to a cell is in the cell over the stretches the spiller
+    /// wrote, in the register over the rest: its variable has both places, in
+    /// order, where it had only the register's before.
+    #[test]
+    fn a_spilled_value_is_in_its_cell_over_the_spillers_stretches() {
+        let mut table = BTreeMap::from([(7, vec![seg(10, 20, reg(1))])]);
+        let stacks: IndexMap<i64, Vec<(i64, i64)>> = [(-8, vec![(20, 40)])].into_iter().collect();
+        add_cells(&mut table, [7, 8], |value| (value == 7).then_some(-8), &stacks);
+        let found = locate(&[note(10, 1, NoteValue::Value(7))], &table, 50);
+        assert_eq!(
+            ranges(&found),
+            [(10, 20, Where::Place(reg(1))), (20, 40, Where::Place(Place::Cell(-8))), (40, 50, Where::Undef)]
+        );
+        assert!(!table.contains_key(&8), "a value with no slot gains no entry");
     }
 }
