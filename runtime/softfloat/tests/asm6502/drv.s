@@ -2,7 +2,10 @@
 .export _main, vec
 .include "vec.inc"
 .include "op.inc"
+rc0 = $80
 rc2 = $82
+rc8 = $88
+rc9 = $89
 ptr = $a0
 cnt = $a2
 fail = $a4
@@ -18,11 +21,22 @@ _main:
     lda #0
     sta fail
 loop:
-    ldy #7
+    ldy #5                  ; a and b's low half in rc2..rc7, b's high half at (rc0:rc1) = record + 6
 :   lda (ptr),y
     sta rc2,y
     dey
     bpl :-
+    clc
+    lda ptr
+    adc #6
+    sta rc0
+    lda ptr+1
+    adc #0
+    sta rc0+1
+    lda #$5a                ; rc8 and rc9 are the caller's: they must come back unchanged
+    sta rc8
+    lda #$a5
+    sta rc9
     jsr OP
     sta $d0
     stx $d1
@@ -43,6 +57,12 @@ loop:
     sta $d2
     lda rc2+1
     sta $d3
+    lda rc8
+    cmp #$5a
+    bne bad
+    lda rc9
+    cmp #$a5
+    bne bad
     ; NaN expectation: any NaN passes
 .ifdef EXACT
     jmp exact

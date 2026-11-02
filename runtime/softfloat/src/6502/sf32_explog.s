@@ -1,5 +1,5 @@
 ; expf and logf for the 6502, hand written, bit-exact with src/mathf.c. They run a small interpreter: the arithmetic is a
-; byte-coded program over eight work cells and a constant table, each step calling __addsf3/__subsf3/__mulsf3/__divsf3 or
+; byte-coded program over eight work cells and a constant table, each step calling sf_add_c/sf_sub_c/sf_mul_c/sf_div_c or
 ; the int conversions, so a polynomial costs four bytes per operation instead of a call sequence. Special values, the
 ; exponent split and the final power-of-two scaling are plain 6502 code in front of and behind the program.
 ; ABI as sf32.s: x in rc2..rc5, result A:X:rc2:rc3. State lives in BSS (not reentrant), so nothing depends on the
@@ -7,7 +7,7 @@
 
 .setcpu "6502"
 .include "sf32.inc"
-.import __addsf3, __subsf3, __mulsf3, __divsf3, __floatsisf, __fixsfsi
+.import sf_add_c, sf_sub_c, sf_mul_c, sf_div_c, __floatsisf, __fixsfsi
 .export expf, logf
 
 ; program steps: op, dst, a, b; operand 0..7 is a work cell, 8.. a constant copied behind them; $ff ends
@@ -39,6 +39,8 @@ rb:     .res 1
 xb:     .res 4
 kl:     .res 1
 kh:     .res 1
+sv8:    .res 1
+sv9:    .res 1
 
 .segment "CODE"
 
@@ -116,9 +118,9 @@ callop:
     pha
     rts
 optab_lo:
-    .lobytes __addsf3-1, __subsf3-1, __mulsf3-1, __divsf3-1, __floatsisf-1, __fixsfsi-1
+    .lobytes sf_add_c-1, sf_sub_c-1, sf_mul_c-1, sf_div_c-1, __floatsisf-1, __fixsfsi-1
 optab_hi:
-    .hibytes __addsf3-1, __subsf3-1, __mulsf3-1, __divsf3-1, __floatsisf-1, __fixsfsi-1
+    .hibytes sf_add_c-1, sf_sub_c-1, sf_mul_c-1, sf_div_c-1, __floatsisf-1, __fixsfsi-1
 
 ; ---- helpers
 isnan:                      ; carry set when rc2..rc5 is a NaN
@@ -166,7 +168,7 @@ mulc:                       ; rc2..rc5 *= the constant whose bytes 3 and 2 are A
     lda #0
     sta rc6
     sta rc7
-    jsr __mulsf3
+    jsr sf_mul_c
     ldy rc2
     sty rc4
     ldy rc3
@@ -175,8 +177,32 @@ mulc:                       ; rc2..rc5 *= the constant whose bytes 3 and 2 are A
     stx rc3
     rts
 
-; ---- logf: x = 2^k (1 + f), f in [sqrt(1/2) - 1, sqrt(2) - 1]
+; rc8 and rc9 belong to the caller: the wrappers give them back
 logf:
+    jsr save89
+    jsr logf_c
+    jmp rest89
+expf:
+    jsr save89
+    jsr expf_c
+    jmp rest89
+save89:
+    lda rc8
+    sta sv8
+    lda rc9
+    sta sv9
+    rts
+rest89:
+    sta rc4
+    lda sv8
+    sta rc8
+    lda sv9
+    sta rc9
+    lda rc4
+    rts
+
+; ---- logf: x = 2^k (1 + f), f in [sqrt(1/2) - 1, sqrt(2) - 1]
+logf_c:
     jsr isnan
     bcc :+
     jmp nanret
@@ -217,7 +243,7 @@ logf:
     sta rc8
     lda #$4c
     sta rc9
-    jsr __mulsf3
+    jsr sf_mul_c
     sta xb
     stx xb+1
     lda rc2
@@ -286,7 +312,7 @@ lf: ldx #3                  ; f = m - 1
     sta rc8
     lda #$3f
     sta rc9
-    jsr __subsf3
+    jsr sf_sub_c
     ldy #0
     jsr putreg
     lda kl                  ; k as a 32-bit int in cell 6
@@ -312,7 +338,7 @@ lf: ldx #3                  ; f = m - 1
     rts
 
 ; ---- expf: x = k ln2 + r, exp(x) = 2^k (1 + r + r r P(r))
-expf:
+expf_c:
     jsr isnan
     bcc :+
     jmp nanret
@@ -370,7 +396,7 @@ etiny:
     sta rc4
     lda #$3f
     sta rc5
-    jmp __addsf3
+    jmp sf_add_c
 enorm:
     ldx #3
 :   lda rc2,x

@@ -9,16 +9,16 @@
 ; a negative difference is negated afterwards instead of comparing magnitudes; normalization counts bytes first.
 
 .setcpu "6502"
-.export __addsf3, __subsf3, sf_round, sf_align, sf_retinf, sf_quiet
+.export sf_add_c, sf_sub_c, sf_round, sf_align, sf_retinf, sf_quiet
 
 .include "sf32.inc"
 
 .segment "CODE"
 
-__subsf3:
+sf_sub_c:
     ldx #$80
     bne addcore
-__addsf3:
+sf_add_c:
     ldx #0
 addcore:
     txa

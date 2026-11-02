@@ -57,3 +57,8 @@ Not measured yet: m68k, m16/m32 and z80 against libgcc/compiler-rt/SDCC (needs t
 
 `__fp8_mul_t`: one 16 KB lookup of the exact magnitude code (inf and NaN included, `tools/gen_fp8_mul_table.py` makes `fp8_mul_tab.inc`), sign by xor. 39 B of code, 46 cycles per call against 337 for the loop version (`sf8.s`), 0 mismatches on all 65536 pairs. The size is the table: it is only worth it where ROM is cheap. Add and sub cannot use the same trick (sign-aware, 64 KB).
 `src/sf8.c` is the portable C version of the same algorithm (`tests/host_fp8.c`: exhaustive against double arithmetic on the host). `tests/asm6502/bench8c.sh` runs it compiled for the 6502.
+
+## 6502 ABI (llrm-6502 release/next, rc2 first)
+
+`src/6502/sf32_abi.s` holds the public `__addsf3/__subsf3/__mulsf3/__divsf3`: a in rc2..rc5, b's low half in rc6:rc7, its high half in the caller's stack words at (rc0:rc1)+0/+1, result A:X:rc2:rc3. The cores (`sf_add_c` ...) read b whole from rc6..rc9, so the shim copies the stack bytes into rc8/rc9 and restores the caller's values (they are callee-saved); `expf`/`logf` do the same. The driver checks that rc8/rc9 come back unchanged (leaving the restore out gives 105 fails of 300).
+Cycles per call with the shim on the Woz operands: add 506, sub 515, mul 1730, div 2456 (shim about 80). 8-bit FP8 (rc2, rc3), `di3.s` and the conversions already match the layout. When the convention changes to A:X first (feat/6502-abi-ax), only `sf32_abi.s` and the 8-bit and `di3.s` entries change.

@@ -10,7 +10,7 @@
 .setcpu "6502"
 .include "sf32.inc"
 .import sf_round, sf_align, sf_retinf, sf_quiet
-.export __mulsf3, __divsf3
+.export sf_mul_c, sf_div_c
 
 ; cells (rc16.. are free scratch in both routines)
 e16lo = rc2             ; result exponent, signed 16 bit
@@ -19,10 +19,10 @@ opf   = rc24            ; 0 multiply, 1 divide; special-value path only
 
 .segment "CODE"
 
-__mulsf3:
+sf_mul_c:
     lda #0
     beq mdentry
-__divsf3:
+sf_div_c:
     lda #1
 mdentry:
     sta opf
