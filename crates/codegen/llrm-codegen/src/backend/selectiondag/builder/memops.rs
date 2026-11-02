@@ -515,19 +515,20 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&stores)))
     }
 
-    /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
-    /// stores take more bytes than a `rep stosb` fill is the fill, unless the
-    /// fill's extra clocks outweigh the bytes it saves (`SizeTrade`). The pin
-    /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
-    /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
-    /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
-    /// hook on the target description.
+    /// DEVIATE SD223 (real mode): a constant memset whose stores take more
+    /// bytes than a `rep stosb` fill is the fill. The pin counts stores
+    /// (`MaxStoresPerMemset`); in real mode each dword store carries a `66`
+    /// prefix and the fill costs `FILL_BYTES`. Tuned for size the bytes
+    /// decide (clocks never do); at speed the fill is taken where the bytes
+    /// it saves, at the target's `milliclocks_per_byte`, pay for the clocks it
+    /// adds. Mirrors the old selector's `stored_bytes` rule. Owner w12. Exit:
+    /// a store-cost hook on the target description.
     fn fill_is_smaller(
         &self,
         length: u64,
         opt_size: bool,
     ) -> bool {
-        if !opt_size || self.target.dag.pointer.size_in_bits() != 16 {
+        if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }
         let dwords = length / 4;
@@ -538,12 +539,14 @@ impl Builder<'_> {
         if stored <= FILL_BYTES {
             return false;
         }
-        let Some(trade) = self.target.size_trade else {
+        if opt_size {
             return true;
+        }
+        let Some(trade) = self.target.size_trade else {
+            return false;
         };
         let stores = (dwords * (trade.store + trade.prefix) as u64 + (words + bytes) * trade.store as u64) as i64;
         let fill = trade.fill + length as i64 * trade.fill_cell;
-        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
