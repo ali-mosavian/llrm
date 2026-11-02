@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")"; OPS=${1:-add sub mul div}; T=$(mktemp -d); I=../../src/6502
 export FP8_M=${FP8_M:-2} FP8_SPECIAL=${FP8_SPECIAL:-1} FP8_DENORM=${FP8_DENORM:-1}
-D="-DFP8_M=$FP8_M -DFP8_SPECIAL=$FP8_SPECIAL -DFP8_DENORM=$FP8_DENORM"
+D="-DFP8_M=$FP8_M -DFP8_SPECIAL=$FP8_SPECIAL -DFP8_DENORM=$FP8_DENORM -DFP8_MULTAB=${FP8_MULTAB:-0}"
 ca65 -t sim6502 -I $I $D $I/sf8.s -o $T/sf8.o
 for op in $OPS; do
   printf '.import __fp8_%s\nOP = __fp8_%s\n' $op $op > $T/op.inc; tot=0

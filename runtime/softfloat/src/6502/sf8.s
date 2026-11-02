@@ -7,6 +7,7 @@
 ;   FP8_SPECIAL  1 (default): inf and NaN operands and results. 0: not handled, inputs must be finite and a divisor of
 ;                zero gives infinity, 0/0 too; an overflowing result still comes out as the inf code
 ;   FP8_DENORM   1 (default): denormal operands and results. 0: flushed to zero (the sign is kept)
+;   FP8_MULTAB  1: the significand product comes from a table of 2^(M+1) squared bytes (256 B for E4M3), M <= 3
 ;   FP8_ADD, FP8_SUB, FP8_MUL, FP8_DIV  1 (default) to build the routine, 0 to leave it out (SUB needs ADD)
 ;
 ; The tricks: the low seven bits are a monotonic code, so |a| < |b| and "is inf or NaN" are integer compares and
@@ -37,8 +38,14 @@ FP8_MUL = 1
 .ifndef FP8_DIV
 FP8_DIV = 1
 .endif
+.ifndef FP8_MULTAB
+FP8_MULTAB = 0
+.endif
 .if (FP8_M < 1) .or (FP8_M > 4)
 .fatal "FP8_M must be 1..4: the 8-bit working significand needs three bits below the guard bit"
+.endif
+.if FP8_MULTAB .and (FP8_M > 3)
+.fatal "FP8_MULTAB needs FP8_M <= 3: the significand product must fit a byte"
 .endif
 .if FP8_SUB .and (.not FP8_ADD)
 .fatal "FP8_SUB needs FP8_ADD"
@@ -277,7 +284,15 @@ __fp8_mul:
     sec
     sbc #BIAS
     sta pe
-.if M < 4
+.if FP8_MULTAB
+    lda ma                  ; P = mtab[ma * 2^(M+1) + mb]
+.repeat M + 1
+    asl a
+.endrepeat
+    ora mb
+    tax
+    lda mtab,x
+.elseif M < 4
     lda #0                  ; P = ma * mb
     ldx #M + 1
 :   lsr mb
@@ -287,6 +302,8 @@ __fp8_mul:
 :   asl ma
     dex
     bne :--
+.endif
+.if M < 4
     sta pm
     cmp #(1 << (2 * M + 1))
     bcs :+
@@ -533,3 +550,13 @@ unnorm:
 unstore:
     sta rc18,x
     rts
+
+.if FP8_MULTAB
+.segment "RODATA"
+mtab:
+.repeat 2 << M, i
+.repeat 2 << M, j
+    .byte i * j
+.endrepeat
+.endrepeat
+.endif
