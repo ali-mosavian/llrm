@@ -467,11 +467,8 @@ fn _refolded(
             continue;
         }
         let bytes = loaded + held - folded_bytes;
-        let rate = if cpu.size || cpu.min_size {
-            cpu.size_milliclocks_per_byte()
-        } else {
-            cpu.target().tuning().speed_milliclocks_per_byte
-        };
+        let rate =
+            if cpu.size || cpu.min_size { cpu.size_milliclocks_per_byte() } else { cpu.speed_milliclocks_per_byte() };
         // A target with an exchange rate takes clocks for bytes at it, and
         // never grows code built for size; one without takes neither worse.
         let pays = if rate == 0 {

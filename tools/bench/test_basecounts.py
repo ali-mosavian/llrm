@@ -367,3 +367,25 @@ def test_a_base_measured_on_other_sources_than_the_heads_is_refused_and_rebased_
         bc.rebased(base, {}, was, now)
     assert bc.rebased(base, {"q/c/O2": {"clocks": 460}}, was, now) == {"s/c/O2": {"clocks": 7}, "q/c/O2": {"clocks": 460}}
     assert bc.rebased(base, {}, was, was) == base, "unchanged sources: the base stands, no overlay needed"
+
+
+def test_a_change_to_the_judge_makes_every_program_edited_so_the_base_is_measured_again_by_the_heads_judge(tmp_path):
+    """The m16 multiplier fix moved 67 of 342 cells' clocks (jpeg_fixed +4..5%) while main's rows stayed the old judge's: head and base differed
+    by two judges, not two compilers."""
+    for root, judge in ((tmp_path / "base", b"old judge"), (tmp_path / "head", b"new judge")):
+        (root / "bench/fib").mkdir(parents=True)
+        (root / "bench/fib/bench.toml").write_text("x = 1\n")
+        (root / "bench/fib/fib.c").write_text("int fib;\n")
+        (root / bc.JUDGE_FILES[0]).parent.mkdir(parents=True)
+        (root / bc.JUDGE_FILES[0]).write_bytes(judge)
+    was, now = bc.programs(tmp_path / "base"), bc.programs(tmp_path / "head")
+    assert was["fib"] != now["fib"]
+    asked = []
+    bc.with_edited({FIB: row(100)}, was, now, ["O2"], lambda names: asked.append(names) or {FIB: row(100)}, tmp_path / "cache", "t")
+    assert asked == [["fib"]]
+    assert bc.programs(tmp_path / "head") == now, "the same judge and sources hash alike: nothing is measured again"
+
+
+def test_programs_read_from_git_hash_as_the_working_tree_does_judge_files_included():
+    """A base is hashed from git (programs_at), the head from the tree (programs): the two must agree on an unedited checkout."""
+    assert bc.programs_at("HEAD") == bc.programs() or bc.subprocess.run(["git", "status", "--porcelain", "--", "bench", *bc.JUDGE_FILES], cwd=bc.ROOT, capture_output=True, text=True).stdout.strip()

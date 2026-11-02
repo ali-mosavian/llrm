@@ -25,6 +25,8 @@ pub struct CpuTable {
     pub jump_table: Option<i64>,
     /// Bytes of a line of the first-level data cache.
     pub cache_line: Option<i64>,
+    /// Clocks to fill one such line from memory, burst, zero wait states.
+    pub line_fill_clocks: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -142,6 +144,7 @@ impl Timings {
                     ("scalars", "clear_ratio_size") => table.clear_ratio_size = Some(number()?),
                     ("scalars", "jump_table") => table.jump_table = Some(number()?),
                     ("scalars", "cache_line") => table.cache_line = Some(number()?),
+                    ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
