@@ -46,6 +46,7 @@ pub mod m68kisd {
     pub const XOR: ISD = ISD::Target(ids::XOR);
     pub const CALL: ISD = ISD::Target(ids::CALL);
     pub const RET: ISD = ISD::Target(ids::RET);
+    pub const TC_RETURN: ISD = ISD::Target(ids::TC_RETURN);
     pub const WRAPPER: ISD = ISD::Target(ids::Wrapper);
     pub const WRAPPER_PC: ISD = ISD::Target(ids::WrapperPC);
 }
