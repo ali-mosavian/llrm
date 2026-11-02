@@ -86,11 +86,13 @@ pub struct Options {
     /// `RegStackify`: the pin runs it at `-O0`, LLVM 20's `llc -O0` does not.
     pub stackify: bool,
     pub exception_model: ExceptionModel,
+    /// How far the shared mid-end goes before the backend.
+    pub level: crate::driver::Level,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { stackify: true, exception_model: ExceptionModel::None }
+        Options { stackify: true, exception_model: ExceptionModel::None, level: crate::driver::Level::O0 }
     }
 }
 
@@ -103,17 +105,22 @@ pub fn compile_function(
     options: Options,
 ) -> Result<Function, String> {
     let unwinding = options.exception_model == ExceptionModel::Wasm;
-    let blocks = function::select_function(module, name, width, unwinding)?;
+    let blocks = function::select_function(module, name, width, unwinding, options.level != crate::driver::Level::O0)?;
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
     f.nothrow = non_throwing(module);
+    f.callee_memory = callee_memory(module);
     f.personality = unwinding
         && module.named(name).and_then(|id| module.global(id).function()).is_some_and(|one| one.personality.is_some());
     // The pin's order after instruction selection: `-print-after-all` of `llc
     // -O0`.
-    f.binding =
-        module.named(name).map_or_else(Default::default, |id| crate::mir::Binding::of(module.global(id).linkage));
+    let global = module.named(name).map(|id| module.global(id));
+    f.binding = global.map_or_else(Default::default, |global| crate::mir::Binding::of(global.linkage));
+    f.hidden = global.is_some_and(|global| global.visibility == llrm_mir::Visibility::Hidden);
+    if let Some(global) = global {
+        f.name = crate::driver::symbol_name(global);
+    }
     lower_memory_pseudos(&mut f);
     // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no
     // module: its signature is what the call passes and returns.
@@ -121,18 +128,63 @@ pub fn compile_function(
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
+    if options.level != crate::driver::Level::O0 {
+        crate::machine_licm::machine_licm(&mut f);
+        crate::machine_cse::machine_cse(&mut f);
+        crate::machine_sink::machine_sink(&mut f);
+        f.edge_probs.clear();
+    }
+    if options.level != crate::driver::Level::O0 {
+        crate::phi_elimination::split_phi_edges(&mut f);
+    }
     phi_elimination(&mut f);
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
     fix_irreducible_control_flow(&mut f);
     late_eh_prepare(&mut f);
+    // The pin turns off `RegisterCoalescer` at -O1.
+    if matches!(
+        options.level,
+        crate::driver::Level::O2 | crate::driver::Level::O3 | crate::driver::Level::Os | crate::driver::Level::Oz
+    ) {
+        crate::spike_coalesce::coalesce(&mut f);
+    }
+    if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
+        remove_unreachable_blocks(&mut f);
+    }
+    if options.level != crate::driver::Level::O0 {
+        if crate::branch_fold::fold_branches(&mut f) {
+            remove_unreachable_blocks(&mut f);
+        }
+    }
+    if options.level != crate::driver::Level::O0 {
+        let for_size = matches!(
+            options.level,
+            crate::driver::Level::Os | crate::driver::Level::Oz
+        );
+        if crate::tail_duplicate::tail_duplicate(&mut f, for_size) {
+            remove_unreachable_blocks(&mut f);
+            // The pin runs `FixIrreducibleControlFlow` after it.
+            fix_irreducible_control_flow(&mut f);
+        }
+    }
+    if options.level != crate::driver::Level::O0 {
+        crate::optimize_live_intervals::optimize_live_intervals(&mut f);
+        crate::mem_intrinsic_results::mem_intrinsic_results(&mut f);
+    }
     if options.stackify {
-        reg_stackify(&mut f);
+        reg_stackify(&mut f, options.level != crate::driver::Level::O0);
+    }
+    if options.stackify && options.level != crate::driver::Level::O0 {
+        crate::reg_coloring::reg_coloring(&mut f);
     }
     cfg_sort(&mut f);
     cfg_stackify(&mut f)?;
     explicit_locals(&mut f);
     lower_br_unless(&mut f);
+    if options.level != crate::driver::Level::O0 {
+        crate::peephole::peephole(&mut f);
+    }
     for (symbol, _) in f.symbols.clone() {
         if module.named(&symbol).is_some_and(|id| module.global(id).function().is_some()) {
             let (params, results) = signature(module, &symbol, width)?;
@@ -142,6 +194,19 @@ pub fn compile_function(
         }
     }
     Ok(f)
+}
+
+/// What each function of `module` reads and writes (`doesNotAccessMemory`,
+/// `onlyReadsMemory`); a callee that is no function of it is assumed to do
+/// both.
+fn callee_memory(module: &Module) -> std::collections::HashMap<String, (bool, bool)> {
+    module
+        .functions()
+        .filter_map(|(_, global, function)| {
+            let effects = llrm_mir::memory::stated(&function.attrs);
+            Some((global.name.owned()?, (effects.reads, effects.writes)))
+        })
+        .collect()
 }
 
 /// The callees `WebAssembly::mayThrow` takes as not throwing: functions marked

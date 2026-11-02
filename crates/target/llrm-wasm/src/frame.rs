@@ -16,7 +16,8 @@
 //! objects, taken frame address), the base pointer for over-aligned objects,
 //! `WasmLocal` stack objects, stack maps and the libcall thread context.
 //! Reason: each needs IR the slice does not reach. A function that needs one is
-//! refused by name. Exit: with the alloca forms that use them.
+//! refused by name. Exit: with the alloca forms that use them (undated, none
+//! planned).
 //!
 //! # See also
 //! `WebAssemblyFrameLowering.cpp` (`emitPrologue` L254, `emitEpilogue` L330),

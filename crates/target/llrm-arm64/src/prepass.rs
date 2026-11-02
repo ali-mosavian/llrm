@@ -269,6 +269,7 @@ pub fn run(function: &mut MFunc) {
     sink(function);
     dead_definitions(function);
     non_flag_setting(function);
+    redundant_zero_extends(function);
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -630,11 +631,48 @@ fn live_in(
     live
 }
 
+/// The most virtual registers (general, floating point) live at once at a
+/// point of `blocks`, leaving out `skip` (`MachineLICM`'s `RegPressure` over
+/// the loop: its temporaries count, not only what it holds across trips).
+fn peak_pressure(
+    function: &MFunc,
+    blocks: &[usize],
+    cfg: &Cfg,
+    live: &[HashSet<Reg>],
+    skip: &HashMap<Reg, &Op>,
+) -> (usize, usize) {
+    let count = |set: &HashSet<Reg>| {
+        let gprs = set.iter().filter(|register| matches!(register, Reg::Gpr(_))).count();
+        (gprs, set.len() - gprs)
+    };
+    let (mut gprs, mut fprs) = (0, 0);
+    for &block in blocks {
+        let mut now: HashSet<Reg> = cfg.successors[block]
+            .iter()
+            .flat_map(|&next| live[next].iter().copied())
+            .filter(|register| register.is_virtual() && !skip.contains_key(register))
+            .collect();
+        let (g, f) = count(&now);
+        (gprs, fprs) = (gprs.max(g), fprs.max(f));
+        for op in function.blocks[block].ops.iter().rev() {
+            let (defs, uses) = op.defs_and_uses();
+            for register in defs {
+                now.remove(&register);
+            }
+            now.extend(uses.into_iter().filter(|register| register.is_virtual() && !skip.contains_key(register)));
+            let (g, f) = count(&now);
+            (gprs, fprs) = (gprs.max(g), fprs.max(f));
+        }
+    }
+    (gprs, fprs)
+}
+
 fn within_pressure(
     probe: &MFunc,
     blocks: &[usize],
     candidates: &[Op],
-    held: &HashSet<Reg>,
+    cfg: &Cfg,
+    live: &[HashSet<Reg>],
 ) -> HashSet<Reg> {
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
@@ -648,9 +686,7 @@ fn within_pressure(
             }
         }
     }
-    // Held throughout the loop: what is live into its header (read from
-    // outside, or carried round it), which is not one of the values hoisted.
-    let outside: HashSet<Reg> = held.iter().copied().filter(|register| !made.contains_key(register)).collect();
+    let (held_gprs, held_fprs) = peak_pressure(probe, blocks, cfg, live, &made);
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
@@ -658,8 +694,7 @@ fn within_pressure(
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
-        (if calls { kept } else { kept + rest })
-            .saturating_sub(outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count())
+        (if calls { kept } else { rest }).saturating_sub(if gpr { held_gprs } else { held_fprs })
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
@@ -741,7 +776,7 @@ fn hoist(function: &mut MFunc) {
         // What the loop would hoist, on a copy, and how much of it fits.
         let mut probe = function.clone();
         let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
-        let chosen = within_pressure(&probe, &order, &candidates, &live[header]);
+        let chosen = within_pressure(&probe, &order, &candidates, &cfg, &live);
         let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;
@@ -1026,5 +1061,84 @@ fn unsplit_edges(function: &mut MFunc) {
             ops.insert(at + offset, copy.0);
         }
         function.blocks.remove(edge);
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitORR`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp#L290>):
+/// `orr w, wzr, w` is how `zext i32 to i64` is made, and a 32-bit instruction
+/// already clears the upper half of its result, so the copy goes where the
+/// register it copies is the single result of such an instruction. Not
+/// translated: a source that is a copy of a float register (made an `fmov`).
+fn redundant_zero_extends(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let narrow_defs: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| clears_upper_half(op))
+        .filter_map(defined)
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::new();
+    for block in &mut function.blocks {
+        block.ops.retain(|op| {
+            let Op::I(Inst::LogicShifted {
+                op: Logic::Orr,
+                invert: false,
+                width: Width::W,
+                rd,
+                rn: Gpr::R31,
+                rm,
+                shift: Shift::Lsl,
+                amount: 0,
+            }) = op
+            else {
+                return true;
+            };
+            let (from, to) = (Reg::Gpr(*rd), Reg::Gpr(*rm));
+            if rd.is_virtual() && rm.is_virtual() && definitions.get(&from) == Some(&1) && narrow_defs.contains(&to) {
+                rename.insert(from, to);
+                return false;
+            }
+            true
+        });
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// Whether `op` is a 32-bit instruction (or a 32-bit constant) whose result
+/// register has its upper 32 bits cleared by the architecture.
+fn clears_upper_half(op: &Op) -> bool {
+    match op {
+        Op::Imm { bits: 32, .. } => true,
+        Op::I(
+            Inst::AddSubImm { width: Width::W, .. }
+            | Inst::AddSubShifted { width: Width::W, .. }
+            | Inst::AddSubExtended { width: Width::W, .. }
+            | Inst::LogicImm { width: Width::W, .. }
+            | Inst::LogicShifted { width: Width::W, .. }
+            | Inst::MoveWide { width: Width::W, .. }
+            | Inst::BitfieldMove { width: Width::W, .. }
+            | Inst::Extract { width: Width::W, .. }
+            | Inst::Divide { width: Width::W, .. }
+            | Inst::OneSource { width: Width::W, .. }
+            | Inst::ThreeSource { width: Width::W, .. }
+            | Inst::CondSelect { width: Width::W, .. },
+        ) => true,
+        _ => false,
     }
 }

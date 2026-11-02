@@ -158,13 +158,21 @@ impl Emitter<'_> {
                 ISD::CopyToReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
                     let value = data.ops[2];
-                    if let (Some(ty), Some(Operand::Use(src))) =
-                        (class(dag.value_type(value)), self.operand(dag, value))
-                    {
-                        let dst = self.builder_reg(number, ty);
-                        if dst != src {
-                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                    match (class(dag.value_type(value)), self.operand(dag, value)) {
+                        (Some(ty), Some(Operand::Use(src))) => {
+                            let dst = self.builder_reg(number, ty);
+                            if dst != src {
+                                out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                            }
                         }
+                        // A static alloca that is a phi's input: the frame
+                        // lowering turns the index into the stack pointer
+                        // plus its offset.
+                        (Some(ty), Some(frame @ Operand::Frame(_))) => {
+                            let dst = self.builder_reg(number, ty);
+                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), frame]));
+                        }
+                        _ => {}
                     }
                 }
                 ISD::Machine(code) => {
@@ -239,11 +247,31 @@ impl Emitter<'_> {
                         continue;
                     }
                     operands.extend(uses);
+                    // `Select_FREEZE`: a `FREEZE` of a value that is not undef
+                    // is selected as a generic `COPY`, which the wasm passes
+                    // know by its class.
+                    let code = match (code, operands.first()) {
+                        (llrm_dagisel::generated::ids::target_opcode::COPY, Some(&Operand::Def(def))) => {
+                            copy(self.f.vreg_type(def))
+                        }
+                        (code, _) => code,
+                    };
                     let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];
-                        inst.mem =
-                            Some(Mem { size: u64::from(info.mem_vt.size_in_bits() / 8), align: u64::from(info.align) });
+                        let ordered = info.volatile
+                            || info.ordering.is_some_and(|o| {
+                                !matches!(
+                                    o,
+                                    llrm_mir::opcode::AtomicOrdering::Unordered
+                                        | llrm_mir::opcode::AtomicOrdering::Monotonic
+                                )
+                            });
+                        inst.mem = Some(Mem {
+                            size: u64::from(info.mem_vt.size_in_bits() / 8),
+                            align: u64::from(info.align),
+                            ordered,
+                        });
                     }
                     out.push(inst);
                 }
@@ -338,6 +366,17 @@ pub fn emit(
     for (at, mut phis) in starts {
         phis.append(&mut f.blocks[at]);
         f.blocks[at] = phis;
+    }
+    // The probability of each edge where the IR block's own edges are the
+    // machine block's; the rest are unknown (zero).
+    f.edge_probs = f.succs.clone().iter().map(|to| vec![0; to.len()]).collect();
+    for selected in blocks {
+        let at = emitter.position[&selected.id];
+        for (slot, &to) in f.succs[at].iter().enumerate() {
+            if let Some(&(_, numerator)) = selected.probs.iter().find(|(id, _)| emitter.position.get(id) == Some(&to)) {
+                f.edge_probs[at][slot] = numerator;
+            }
+        }
     }
     f
 }

@@ -1834,6 +1834,7 @@ impl Run {
         globals.push(GlobalValue {
             name: "pipeline.body".to_owned().into(),
             linkage: Linkage::Internal,
+            visibility: llrm_mir::Visibility::Default,
             unnamed_addr: UnnamedAddr::default(),
             address_space: 0,
             kind: GlobalKind::Function(Box::new(unit.function.clone())),
@@ -1842,6 +1843,7 @@ impl Run {
             context: unit.context.clone(),
             datalayout: None,
             globals,
+            aliases: Vec::new(),
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),

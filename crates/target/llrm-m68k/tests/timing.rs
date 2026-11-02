@@ -194,6 +194,18 @@ fn a_gnu_operand_is_the_pins_addressing_syntax() {
     assert_eq!(clocks(Cpu::M68000, &gnu("bras 80000074 <k+0x8>")), 10);
 }
 
+/// objdump prints an absolute address bare, as it prints a branch target; the
+/// bare hex of a non-branch was read as a target and the instruction was
+/// "unpriced": libgcc's `lea 80023c20,%a0` (4146 of 173773 executed
+/// instructions of its add routine) was left out of a total.
+#[test]
+fn a_bare_hex_operand_of_a_non_branch_is_an_absolute_address() {
+    assert_eq!(gnu("lea 80023c20,%a0"), "lea 0x80023c20:l, %a0");
+    assert_eq!(clocks(Cpu::M68000, &gnu("lea 80023c20,%a0")), 12);
+    assert_eq!(gnu("jsr 80000200 <foo>"), "jsr 0x80000200:l");
+    assert_eq!(gnu("bsrs 80000200"), "bsr 80000200");
+}
+
 /// Cost through the conversion, the way the cycles tool prices code.
 #[test]
 fn a_gnu_line_is_priced_after_conversion() {
