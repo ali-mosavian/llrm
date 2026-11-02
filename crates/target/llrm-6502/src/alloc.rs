@@ -16,7 +16,6 @@ use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::{successors, two_address};
-use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
@@ -81,7 +80,6 @@ thread_local! {
     static SHARED_SAVES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
-    static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -3023,36 +3021,14 @@ fn finish(mut code: Asm) -> String {
     code.text()
 }
 
-/// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
-/// measure against.
-fn spike_asked() -> bool {
-    SPIKE.with(|one| one.get()) || std::env::var_os("LLRM_6502_SPIKE").is_some()
-}
-
-/// `f` with the spike allocator doing the allocation: the tests of its spill
-/// policy (a slot, not a callee-saved cell) run on it until it is deleted.
-pub fn with_spike_allocator<R>(f: impl FnOnce() -> R) -> R {
-    let before = SPIKE.with(|one| one.replace(true));
-    let result = f();
-    SPIKE.with(|one| one.set(before));
-    result
-}
-
-/// The function allocated: by the shared greedy allocator, which this target
-/// moves onto (`Target::register_allocator`), else by the spike allocator.
+/// The function allocated by the shared greedy allocator
+/// (`Target::register_allocator`).
 ///
-/// A function greedy cannot take is an error, not a quiet fall back to the
-/// spike allocator: that hid 600 failures in 300 differential programs.
+/// A function greedy cannot take is an error, not a quiet fall back to another
+/// allocator: that hid 600 failures in 300 differential programs.
 fn allocate<const STACK: bool>(
     function: &mut MFunction<Class>
 ) -> Result<(llrm_spike_mf::regalloc::Assignment, Vec<(i32, Class)>), String> {
-    // local bisection of a miscompile: `LLRM_6502_GREEDY_ONLY=f,g` gives greedy
-    // only those functions; `LLRM_6502_GREEDY_ONLY=?` prints the names
-    let only = std::env::var("LLRM_6502_GREEDY_ONLY").ok();
-    if only.as_deref() == Some("?") {
-        eprintln!("FUNCTION {}", function.name);
-    }
-    let wanted = only.as_deref().is_none_or(|names| names == "?" || names.split(',').any(|n| n == function.name));
     if std::env::var("LLRM_6502_DUMP").is_ok_and(|name| name == function.name) {
         for (at, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
@@ -3065,9 +3041,6 @@ fn allocate<const STACK: bool>(
                 );
             }
         }
-    }
-    if spike_asked() || !wanted {
-        return allocate_spilling::<Mos<STACK>>(function, 0);
     }
     allocate_greedy::<Mos<STACK>>(function)
 }
