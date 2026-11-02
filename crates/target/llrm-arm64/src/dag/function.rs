@@ -210,15 +210,21 @@ pub fn select_function_in(
         } else {
             function.successors(llrm_mir::module::BlockId(id)).into_iter().map(|b| b.0).collect()
         };
-        let phis = built
-            .phi_updates
+        let updates = &built.phi_updates;
+        let phis = updates
             .iter()
-            .map(|&(phi, src)| {
+            .enumerate()
+            .map(|(at, &(phi, src))| {
                 let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
                     return Err("a phi that is no instruction".to_owned());
                 };
                 let to = function.parent(def).ok_or("a phi outside a block")?.0;
-                let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+                let reg = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+                // A value of several registers (an aggregate, an `i128`) has
+                // one update for each part, in order: the k-th is the phi's
+                // k-th register.
+                let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
+                let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
                 let float = matches!(
                     module.context.types.get(function.value(phi).ty),
                     llrm_mir::types::Type::Float(_)

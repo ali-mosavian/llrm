@@ -498,6 +498,20 @@ mod emitted {
         emit("f", &select_function(&module, "f").expect("selects")).expect("emits")
     }
 
+    /// Both members of an aggregate phi were copied into one register, so the
+    /// `i1` read a register nothing wrote (a retry loop on a `{ i64, i1 }`
+    /// panicked the greedy allocator, and miscompiled under the linear scan).
+    #[test]
+    fn the_members_of_an_aggregate_phi_have_registers_of_their_own() {
+        let mut ir = String::from("declare { i64, i1 } @step(i64)\n");
+        ir += "define i64 @f(i64 %start) {\nentry:\n  %first = call { i64, i1 } @step(i64 %start)\n  br label %loop\n";
+        ir += "loop:\n  %acc = phi { i64, i1 } [ %first, %entry ], [ %next, %loop ]\n";
+        ir += "  %v = extractvalue { i64, i1 } %acc, 0\n  %ok = extractvalue { i64, i1 } %acc, 1\n";
+        ir += "  %next = call { i64, i1 } @step(i64 %v)\n  br i1 %ok, label %done, label %loop\ndone:\n  ret i64 %v\n}";
+        let mf = machine(&ir);
+        assert_eq!(llrm_arm64::mfunc::undefined_reads(&mf), vec![]);
+    }
+
     /// `f(a, b) = a + b`: both arguments copied out of `w0`/`w1`, one `add`,
     /// the result copied into `w0`, a return reading `w0`. The hand selector
     /// makes the same ops (`isel/call.rs` `copy_in`, `ret`).
