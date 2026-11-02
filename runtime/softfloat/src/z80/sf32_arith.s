@@ -317,6 +317,97 @@ noup:	ld	a,c		; add (e - 1) << 23 and the sign
 	or	a,10(iy)
 	ld	d,a
 	jp	done
+; round and pack: bc = exponent (signed) of bit 31 of the block d:e:h:l (l the guard byte, sticky in its bit 0), 10(iy) the sign
+pack32:	bit	7,b
+	jr	nz,low32
+	ld	a,b
+	or	a,a
+	jp	nz,inf
+	ld	a,c
+	inc	a
+	jp	z,inf
+	dec	a
+	jr	nz,rnd32
+low32:	ld	a,b		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
+	or	a,a
+	jr	z,11$
+	inc	a
+	jr	nz,1$		; far below: everything is sticky
+	ld	a,c
+	cp	a,#2
+	jr	c,1$
+11$:	ld	a,#1
+	sub	a,c
+	cp	a,#32
+	jr	c,2$
+1$:	ld	a,d
+	or	a,e
+	or	a,h
+	or	a,l
+	ld	de,#0
+	ld	h,d
+	ld	l,d
+	jr	z,5$
+	inc	l
+	jr	5$
+2$:	ld	b,a
+	ld	c,#0		; c: lost bits
+3$:	ld	a,b
+	cp	a,#8
+	jr	c,4$
+	ld	a,c
+	or	a,l
+	ld	c,a
+	ld	l,h
+	ld	h,e
+	ld	e,d
+	ld	d,#0
+	ld	a,b
+	sub	a,#8
+	ld	b,a
+	jr	3$
+4$:	or	a,a
+	jr	z,6$
+7$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,8$
+	set	0,c
+8$:	djnz	7$
+6$:	ld	a,c
+	or	a,a
+	jr	z,5$
+	set	0,l
+5$:	ld	c,#1
+rnd32:	ld	a,l
+	cp	a,#0x80
+	jr	c,nou32
+	jr	nz,9$
+	bit	0,h
+	jr	z,nou32
+9$:	inc	h
+	jr	nz,nou32
+	inc	e
+	jr	nz,nou32
+	inc	d
+	jr	nz,nou32
+	ld	d,#0x80		; the mantissa wrapped: 1.0 at the next exponent
+	inc	c
+	jr	z,inf
+nou32:	ld	l,h
+	ld	h,e
+	ld	a,d
+	add	a,a		; carry: the leading one (normal)
+	ld	e,a
+	ld	a,c
+	jr	c,10$
+	xor	a,a		; denormal: exponent field 0
+10$:	srl	a
+	rr	e
+	or	a,10(iy)
+	ld	d,a
+	jp	done
 inf:	ld	a,10(iy)
 	or	a,#0x7f
 	ld	d,a
@@ -571,29 +662,17 @@ mulgo:	call	unp
 	inc	bc
 	jr	nc,1$
 	set	0,14(iy)
-1$:	ld	e,#0		; 27-bit block: e:a:h:l:d << 3, then d holds the rest of the sticky bits
-	sla	d
-	adc	hl,hl
-	rla
-	rl	e
-	sla	d
-	adc	hl,hl
-	rla
-	rl	e
-	sla	d
-	adc	hl,hl
-	rla
-	rl	e
-	ld	3(iy),e
-	ld	2(iy),a
-	ld	1(iy),h
-	ld	a,d
-	or	a,14(iy)
+1$:	ld	e,a		; block a:h:l:d -> d:e:h:l, the low bytes into the sticky bit
+	ld	a,14(iy)
 	or	a,15(iy)
-	jr	z,2$
+	ld	a,d
+	ld	d,e
+	ld	e,h
+	ld	h,l
+	ld	l,a
+	jp	z,pack32
 	set	0,l
-2$:	ld	0(iy),l
-	jp	packbc
+	jp	pack32
 m8:	.rept	8		; eight multiplier bits from d; the add carry enters the next rr chain
 	rra
 	rr	h
@@ -629,8 +708,20 @@ divgo:	call	unp
 	ld	c,4(iy)
 	ld	b,5(iy)
 	ld	e,6(iy)
-	ld	13(iy),#4	; 28 quotient bits, complemented: a group of 4, then three of 8, each collected in d behind a sentinel
-	ld	d,#0x10
+	ld	d,#1		; 24 quotient bits, complemented, in three groups collected in d behind a sentinel
+	ld	13(iy),#3
+	or	a,a		; ratio < 1: one step down, so the first quotient bit is always 1
+	sbc	hl,bc
+	sbc	a,e
+	jr	nc,16$
+	add	hl,bc
+	adc	a,e
+	jr	14$
+16$:	inc	22(iy)
+	jr	nz,12$
+	inc	23(iy)
+	or	a,a
+	jr	12$
 11$:	or	a,a
 	sbc	hl,bc
 	sbc	a,e
@@ -651,42 +742,41 @@ divgo:	call	unp
 	ld	d,#1
 	dec	13(iy)
 	jr	nz,14$
-	or	a,h		; a remainder left over sets the sticky bit
+	ld	d,a		; guard byte from 2R against the divisor: 0, 1 (below half), 0x80 (half), 0x81 (above)
+	or	a,h
 	or	a,l
-	ld	13(iy),a
+	jr	z,17$
+	ld	a,d
+	add	hl,hl
+	adc	a,a
+	jr	c,18$
+	sbc	hl,bc
+	sbc	a,e
+	ld	l,#1
+	jr	c,19$
+	or	a,h
+	or	a,l
+	ld	l,#0x80
+	jr	z,19$
+18$:	ld	l,#0x81
+	jr	19$
+17$:	ld	l,a
+19$:	pop	de
+	ld	a,d
+	cpl
+	ld	h,a
 	pop	de
 	ld	a,d
 	cpl
-	ld	0(iy),a
+	ld	c,a
 	pop	de
 	ld	a,d
 	cpl
-	ld	1(iy),a
-	pop	de
-	ld	a,d
-	cpl
-	ld	2(iy),a
-	pop	de
-	ld	a,d
-	cpl
-	and	a,#0x0f
-	ld	3(iy),a
-	ld	a,13(iy)
-	or	a,a
-	jr	z,3$
-	set	0,0(iy)
-3$:	ld	c,22(iy)
+	ld	d,a
+	ld	e,c
+	ld	c,22(iy)
 	ld	b,23(iy)
-	bit	3,3(iy)
-	jp	z,packbc
-	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,4$
-	set	0,0(iy)
-4$:	inc	bc
-	jp	packbc
+	jp	pack32
 
 ; ---- conversions with 32-bit integers: the integer is in HL (low) and DE (high), the float likewise -------------------
 
