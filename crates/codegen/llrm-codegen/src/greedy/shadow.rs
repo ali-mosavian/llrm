@@ -1940,7 +1940,7 @@ mod tests {
                     basic_semantics: false,
                 },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
-            size: false,
+                size: false,
                 lane_pins: false,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
@@ -2209,13 +2209,18 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
-            tii: &crate::greedy::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false },
+            tii: &crate::greedy::tii::X86InstrInfo {
+                bits: 16,
+                classes: &RegisterClasses::m16(),
+                basic_semantics: false,
+            },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
             lane_pins: false,
         };
         let in_ecx = |decided: &Decided| decided.placed.iter().filter(|(v, reg)| *reg == RegId::ECX && *v > 4).count();
-        // At -Os the pin skips the split: the premise, v1 whole in another register.
+        // At -Os the pin skips the split: the premise, v1 whole in another
+        // register.
         let whole = decide_with_split(&ShadowInputs { size: true, ..inputs }, Mode::Simple, true).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
         assert_eq!(in_ecx(&whole), 0, "premise: v1 lost ecx whole: {:?}", whole.placed);

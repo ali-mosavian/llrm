@@ -28,9 +28,9 @@
 //! DEVIATE D-RS2: no `IMPLICIT_DEF`: `addSplitConstraints`' test of the last
 //! instruction for an implicit def is dropped, LIR has none.
 //!
-//! DEVIATE D-RS3: `shouldRegionSplitForVirtReg` is true (it only declines a huge
-//! rematerializable value, and rematerialization is recognised per definition,
-//! `greedy/remat.rs`).
+//! DEVIATE D-RS3: `shouldRegionSplitForVirtReg` is true (it only declines a
+//! huge rematerializable value, and rematerialization is recognised per
+//! definition, `greedy/remat.rs`).
 //!
 //! DEVIATE D-RS4: `DebugVars->splitRegister` and the verifier calls are not
 //! here: LIR has neither.
