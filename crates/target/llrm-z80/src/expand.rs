@@ -73,6 +73,8 @@ struct Printer<'a> {
     folded: Option<(RegId, String)>,
     /// Instructions after the current one that were printed with it.
     skip: usize,
+    /// Bytes of stack arguments reserved below the frame, while a call is being set up.
+    call_bytes: i64,
     /// The live lanes of the allocated function, and the block and
     /// instruction being printed.
     liveness: llrm_spike_mf::livephys::PhysLiveness,
@@ -525,12 +527,39 @@ impl Printer<'_> {
                 }
                 self.push(format!("jp {symbol}"));
             }
+            // The area is `push bc`s (bc is only saved and restored: no register is lost, and no
+            // result lives in it); a store into it is addressed from IX, so the frame is set up.
             "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" => {
-                if matches!(
-                    inst.operands.first(),
-                    Some(Operand::Imm(bytes)) if *bytes != 0
-                ) {
-                    return Err("stack arguments are not expanded yet".to_owned());
+                let Some(Operand::Imm(bytes)) = inst.operands.first() else { return Ok(()) };
+                if *bytes == 0 {
+                    return Ok(());
+                }
+                let pushes = (*bytes + 1) / 2;
+                if pushes > 8 {
+                    return Err(format!("{bytes} bytes of stack arguments"));
+                }
+                let down = op == "ADJCALLSTACKDOWN";
+                for _ in 0..pushes {
+                    self.push(if down { "push bc" } else { "pop bc" });
+                }
+                self.call_bytes = if down { 2 * pushes } else { 0 };
+            }
+            "STSP8" | "STSP16" => {
+                let Some(Operand::Imm(offset)) = inst.operands.get(1) else {
+                    return Err("a stack store without an offset".to_owned());
+                };
+                let from_ix = |extra: i64| -> Result<i64, String> {
+                    let at = offset + extra - self.frame.below_ix() - self.call_bytes;
+                    if (-128..=127).contains(&at) { Ok(at) } else { Err(format!("a stack argument {at} from ix")) }
+                };
+                if op == "STSP8" {
+                    let (value, at) = (name_of(self, 0)?, from_ix(0)?);
+                    self.push(format!("ld {at}(ix), {value}"));
+                } else {
+                    let (lo, hi) = lanes(self.register(inst, 0)?)?;
+                    let (low_at, high_at) = (from_ix(0)?, from_ix(1)?);
+                    self.push(format!("ld {low_at}(ix), {}", name(lo)));
+                    self.push(format!("ld {high_at}(ix), {}", name(hi)));
                 }
             }
             "LEAFI" => {
@@ -576,6 +605,9 @@ impl Printer<'_> {
                 }
             }
             "PUSHP" | "POPP" => {
+                if self.call_bytes != 0 {
+                    return Err("a pushed spill inside the stack arguments of a call".to_owned());
+                }
                 let register = self.register(inst, 0)?;
                 let pair = [reg::BC, reg::DE, reg::HL]
                     .into_iter()
@@ -925,7 +957,10 @@ fn layout(
     for (&index, &offset) in &function.fixed {
         frame.offsets.insert(index, FIRST_ARGUMENT + offset);
     }
-    frame.active = frame.size > 0 || !function.fixed.is_empty();
+    let stack_arguments = function.blocks.iter().flat_map(|block| &block.insts).any(|inst| {
+        inst.kind == Kind::Op("ADJCALLSTACKDOWN") && matches!(inst.operands.first(), Some(Operand::Imm(bytes)) if *bytes != 0)
+    });
+    frame.active = frame.size > 0 || !function.fixed.is_empty() || stack_arguments;
     frame
 }
 
@@ -989,6 +1024,7 @@ pub fn finish(
         reads,
         folded: None,
         skip: 0,
+        call_bytes: 0,
         liveness,
         function,
         at: (0, 0),

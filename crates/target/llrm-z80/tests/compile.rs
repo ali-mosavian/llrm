@@ -329,3 +329,13 @@ fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("sbc a, ") && out.contains("dec "), "{out}");
 }
+
+/// A call with more arguments than registers was refused: "stack arguments are
+/// not expanded yet". 8 functions of the C corpus beyond the 23 rows hit it. The
+/// caller reserves the area, stores through IX and pops it after the call.
+#[test]
+fn a_call_with_stack_arguments_reserves_and_frees_the_area() {
+    let ir = include_str!("kernels/ir/stackargs.ll");
+    let out = text(ir, "stackargs", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("push bc") && out.contains("pop bc") && out.contains("(ix), "), "{out}");
+}
