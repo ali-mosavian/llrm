@@ -1487,6 +1487,21 @@ impl SelectionDAG {
         }
     }
 
+    /// A boolean as the integer 1 or 0: `getZExtOrTrunc` where the target's
+    /// booleans are 0 or 1, else `getSelect(value, 1, 0)` (a 0 or -1 boolean
+    /// zero-extended is 255, not 1).
+    pub fn get_bool_as_bit(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        if self.config.boolean_contents == BooleanContents::ZeroOrOne {
+            return self.get_zext_or_trunc(value, vt);
+        }
+        let (one, zero) = (self.get_constant(1, vt), self.get_constant(0, vt));
+        self.get_select(vt, value, one, zero)
+    }
+
     pub fn get_any_ext_or_trunc(
         &mut self,
         value: SDValue,

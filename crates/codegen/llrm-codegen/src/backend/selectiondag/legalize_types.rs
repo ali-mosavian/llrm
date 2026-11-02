@@ -1656,7 +1656,7 @@ impl<'a> TypeLegalizer<'a> {
             let (compared, with, cc) =
                 if op == ISD::Add { (lo, ll, CondCode::SetULt) } else { (ll, rl, CondCode::SetULt) };
             let cmp = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), compared, with, cc);
-            let carry = self.dag.get_zext_or_trunc(cmp, half);
+            let carry = self.dag.get_bool_as_bit(cmp, half);
             let hi = self.dag.get_node(plain, half, &[lh, rh]);
             return Ok((lo, self.dag.get_node(plain, half, &[hi, carry])));
         }
