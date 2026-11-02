@@ -775,16 +775,17 @@ fn machined_once(
     // `PrologEpilogInserter` orders the frame objects by use density
     // (`X86FrameLowering::orderFrameObjects`); taken over the layouts below
     // where it brings fewer operands past a one-byte displacement than they do.
-    let far = far_frame(&first.body);
+    let sp = first_stage.registers.free;
+    let far = far_frame(&first, sp);
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
     let ordered = if far > 0 && first.body.over_aligned.is_empty() {
-        crate::backend::relayout::ordered(&first, &frame, first_stage.registers.free).map(|(ordered, _)| ordered)
+        crate::backend::relayout::ordered(&first, &frame, sp).map(|(ordered, _)| ordered)
     } else {
         None
     };
     let best = |chosen: Machined| match ordered {
-        Some(ordered) if far_frame(&ordered.body) < far_frame(&chosen.body) => ordered,
+        Some(ordered) if far_frame(&ordered, sp) < far_frame(&chosen, sp) => ordered,
         _ => chosen,
     };
     let spilled = frame.floor + first.reserve;
@@ -817,7 +818,7 @@ fn machined_once(
         }
     }
     Ok(best(match laid {
-        Some((second, _)) if far_frame(&second.body) < far => second,
+        Some((second, _)) if far_frame(&second, sp) < far => second,
         _ => first,
     }))
 }
@@ -946,14 +947,22 @@ fn cost(
     }
 }
 
-/// The frame operands a one-byte displacement does not reach.
-fn far_frame(body: &LirBody) -> usize {
-    body.insns()
+/// The frame operands a one-byte displacement does not reach. Through the
+/// frame register that is the cell's displacement; through the stack pointer
+/// (`sp`) the cell lies `reserve` bytes above it, so a cell near the top of the
+/// frame is far and one near the bottom is not.
+pub(crate) fn far_frame(
+    made: &Machined,
+    sp: bool,
+) -> usize {
+    let above = if sp { made.reserve } else { 0 };
+    made.body
+        .insns()
         .iter()
         .filter_map(|one| one.what.as_ref())
         .flat_map(|what| what.dests.iter().chain(&what.sources))
         .filter_map(|place| place.address().and_then(|one| one.addr))
-        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&addr.disp))
+        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&(addr.disp + above)))
         .count()
 }
 

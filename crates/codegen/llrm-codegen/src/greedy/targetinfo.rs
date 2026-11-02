@@ -3,6 +3,8 @@
 //! llvm/lib/CodeGen/TargetRegisterInfo.h and llvm/lib/Target/X86/
 //! X86RegisterInfo.cpp at d1106deb71cc.
 
+use llrm_lir::registers::RegId;
+
 /// What greedy asks of the target's registers beyond the description's file.
 pub trait TargetRegisterInfo {
     /// `RC->getCopyCost()`: the cost of one copy in a class.
@@ -15,6 +17,31 @@ pub trait TargetRegisterInfo {
         &self,
         any_saved: bool,
     ) -> u32;
+
+    /// `getCSRCostScale`: the percentage of that cost the allocator charges
+    /// (the default is LLVM's, X86 takes it).
+    fn csr_cost_scale(&self) -> u32 {
+        30
+    }
+
+    /// `GreedyEnv::csr_spill_first`.
+    fn csr_spill_first(&self) -> bool {
+        false
+    }
+
+    /// Whether each lane of a callee-saved register is saved on its own, so
+    /// using one costs its own first use (X86 saves the whole register).
+    fn lanes_saved_apart(&self) -> bool {
+        false
+    }
+
+    /// `RegCosts[phys]`, the register's `CostPerUse`.
+    fn reg_cost(
+        &self,
+        _phys: RegId,
+    ) -> u8 {
+        0
+    }
 }
 
 /// `X86RegisterInfo`.

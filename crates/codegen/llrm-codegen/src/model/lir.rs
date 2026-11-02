@@ -104,6 +104,13 @@ impl PartialEq for DebugTags {
 
 impl Eq for DebugTags {}
 
+/// What a word-pair join (`Insn::pair`) joins.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairKind {
+    Far,
+    Long,
+}
+
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// `call` is a shared owned reference
@@ -147,6 +154,10 @@ pub struct Insn {
     pub invariant: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
+    /// It joins two words into one dword (DEVIATE PAIR1: the `or`/`shrd` of a
+    /// far pointer's offset and selector, or of a long's halves), as the DAG's
+    /// `PAIR_FAR`/`PAIR_LONG` marked it at selection.
+    pub pair: Option<PairKind>,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
@@ -594,6 +605,7 @@ impl Insn {
             volatile: false,
             invariant: false,
             reads_complete: false,
+            pair: None,
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),

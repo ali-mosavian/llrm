@@ -22,7 +22,6 @@ import benchlist
 import programs
 
 O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
-SKIP = {"readme.md", "parity", "huge", "textfill", "grep"}
 LEVELS = ["O0", "O1", "O2", "O3", "Os"]
 FLAGS = ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-Dfar="]
 

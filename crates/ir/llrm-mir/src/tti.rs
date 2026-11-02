@@ -348,6 +348,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether a constant address offset may become a phi: false where the
+    /// access folds it as a displacement and the target says to keep it. A
+    /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
+    /// register offset costs an add and a register at m16 (6 GPRs, base+index
+    /// already taken), nothing at m32.
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
+    }
+
     /// The same bound for a caller optimized for speed (its tuning table).
     fn speed_inline_by_code_size(&self) -> bool {
         false
@@ -408,6 +417,16 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::multiply_by_clocks`.
+    fn multiply_by_clocks(&self) -> bool {
+        false
+    }
+
+    /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
+    fn has_cmov(&self) -> bool {
+        true
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -428,6 +447,15 @@ pub trait Tti {
     /// pin's inliner, which copies no recursive callee (`-finline-recursive`
     /// asks for gcc's).
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
+    /// which a tree-recursive function's copies of itself are chosen by
+    /// price: each level of copies is made while the clocks it saves, at
+    /// `speed_milliclocks_per_byte`, are worth the bytes it adds. None: the
+    /// bounds of `recursive_inlining` are the rule.
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         None
     }
 

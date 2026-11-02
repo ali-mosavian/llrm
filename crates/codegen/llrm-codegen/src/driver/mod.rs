@@ -626,6 +626,10 @@ pub fn optimized(
                 },
             )
     })?;
+    // the DAG lowers `llvm.fmuladd` itself (`FMAD`)
+    if options.isel != crate::backend::shadow::Selector::Dag {
+        timed("mir fmuladd", || program.modules.iter_mut().try_for_each(crate::backend::fmuladd::expanded))?;
+    }
     timed("mir compares", || {
         program
             .modules

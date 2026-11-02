@@ -139,8 +139,9 @@ pub fn classes(
 /// instructions that name it, which a value made from another by the spiller or
 /// a split does not inherit. None where its instructions confine it to nothing.
 ///
-/// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
-/// {SI,DI}; the pin has no such model. A pair member keeps its side.
+/// A `[base+index]` pair member keeps its side: the bases and indexes are the
+/// target's (`RegisterClasses::word_bases`, `word_indexes`: m16's {BX} and
+/// {SI,DI}), a fact of the encoding, not a deviation.
 /// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
 /// costs a body; a caller that makes many values asks `classes` once.
 ///
@@ -1492,11 +1493,20 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// Values no general register holds: x87 values and wider ones, and every phi
-/// web they join.
+/// Values no general register holds: x87 values, those wider than the widest
+/// general register (4 bytes at least: a pair), those an instruction fills
+/// into an xmm register, and every phi web they join.
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     let regs = body.regs();
+    let widest = regs
+        .entries()
+        .filter(|(_, one)| one.classes & (llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT) != 0)
+        .map(|(_, one)| one.bits / 8)
+        .max()
+        .unwrap_or(0)
+        .max(4);
     let mut out: BTreeSet<u32> = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
     for one in body.insns() {
         if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
             out.extend(one.uses.iter().chain(&one.defines).copied());
@@ -1504,9 +1514,16 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
         // A value no general register holds: a float, whatever reads it.
         for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
             for held in crate::model::ir::values(place) {
-                if held.width > 4 {
+                if held.width > widest {
                     out.insert(held.value);
                 }
+            }
+        }
+        items.clear();
+        contribution(regs, &*one, &mut items);
+        for item in &items {
+            if let Item::Restrict { value, kind: Kind::Xmm, .. } = item {
+                out.insert(*value);
             }
         }
     }

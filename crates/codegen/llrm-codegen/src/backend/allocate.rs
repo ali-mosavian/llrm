@@ -309,6 +309,8 @@ pub fn greedy_rewritten(
         saved,
         tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
+        size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
+        lane_pins: false,
     };
     let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);
@@ -412,6 +414,8 @@ pub struct RegAlloc {
     /// one costs a `push` and a `pop` (`tryAssignCSRFirstTime`). None: it
     /// costs nothing.
     pub saved: Vec<RegId>,
+    /// A build for size (`MF->getFunction().hasOptSize()`).
+    pub size: bool,
     /// The module is BASIC's: faults are observed in statement order.
     pub basic_semantics: bool,
 }
@@ -433,8 +437,18 @@ impl RegAlloc {
             segments: segments.clone(),
             classes: Rc::clone(classes),
             saved: Vec::new(),
+            size: false,
             basic_semantics: false,
         })
+    }
+
+    /// For a build for size.
+    pub fn with_size(
+        mut self,
+        size: bool,
+    ) -> Self {
+        self.size = size;
+        self
     }
 
     /// With the registers the function's convention keeps.
@@ -561,6 +575,7 @@ impl RegAlloc {
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
+        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(self.size));
         let allocated = greedy_rewritten(
             &body,
             Some(&pins),
