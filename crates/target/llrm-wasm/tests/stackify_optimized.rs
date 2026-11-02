@@ -189,3 +189,31 @@ fn a_global_in_an_index_sum_is_the_loads_offset() {
     let text = asm(GLOBAL_PLUS_INDEXES, Level::O1);
     assert!(body(&text, "f").contains("i32.load8_u\tnxt"), "{text}");
 }
+
+const OR_BRANCH: &str = "declare void @a()
+declare void @b()
+define void @f(i32 %x, i32 %y, i32 %z) {
+  %c1 = icmp eq i32 %x, %y
+  %c2 = icmp eq i32 %x, %z
+  %o = select i1 %c1, i1 true, i1 %c2
+  br i1 %o, label %t, label %e
+t:
+  call void @a()
+  ret void
+e:
+  call void @b()
+  ret void
+}
+";
+
+/// A branch on `a || b` was one `setcc` pair, an `i32.and` of the inverses and
+/// one `br_if`, because the builder had no cost model to ask whether to keep
+/// the compares together: queens' inner loop ran 354,188 instructions against
+/// the pin's 313,595. The pin branches on each compare.
+#[test]
+fn a_branch_on_or_of_compares_is_two_branches() {
+    let text = asm(OR_BRANCH, Level::O2);
+    let f = body(&text, "f");
+    assert_eq!(f.matches("br_if").count(), 2, "{text}");
+    assert!(!f.contains("i32.and"), "{text}");
+}

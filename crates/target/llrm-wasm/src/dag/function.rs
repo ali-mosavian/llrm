@@ -208,7 +208,9 @@ pub fn select_function(
         stack_arguments: 0,
         first: 0,
     };
-    let target = builder_target(width, features);
+    // `getJumpConditionMergingParams`: the cost model splits every merged
+    // condition into branches.
+    let target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
     let mut info = FunctionLoweringInfo::new(function);
