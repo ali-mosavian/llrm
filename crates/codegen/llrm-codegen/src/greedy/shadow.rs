@@ -1486,6 +1486,8 @@ pub fn decide_with_split(
             .map(|(unit, mut list)| {
                 list.sort();
                 let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
+                // where the segment last taken in is a write nothing reads
+                let mut written_dead: Option<SlotIndex> = None;
                 for (start, end) in list {
                     match merged.last_mut() {
                         Some(last) if start <= last.1 => {
@@ -1498,13 +1500,15 @@ pub fn decide_with_split(
                             // The same instruction writes a byte that lives on
                             // and a register it only clobbers (a call returning
                             // `bd0` that clobbers `wd0`): the clobber holds
-                            // nothing.
-                            let clobber = last.0 == start && last.1 == start.get_dead_slot();
+                            // nothing, also where the register was live into
+                            // the instruction and the run it ends is longer.
+                            let clobber = written_dead.as_ref() == Some(&start) && last.1 == start.get_dead_slot();
                             conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead && !clobber;
-                            last.1 = std::cmp::max(last.1.clone(), end)
+                            last.1 = std::cmp::max(last.1.clone(), end.clone())
                         }
-                        _ => merged.push((start, end)),
+                        _ => merged.push((start.clone(), end.clone())),
                     }
+                    written_dead = (end == start.get_dead_slot()).then_some(start);
                 }
                 let range = crate::liveness::liverange::LiveRange {
                     segments: merged

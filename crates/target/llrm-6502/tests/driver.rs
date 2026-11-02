@@ -986,3 +986,21 @@ define i8 @probe() {
     assert!(!text.contains("__mulsi3"), "expanded through 32-bit multiplies:\n{text}");
     assert_eq!(exit_code_of(&text, "probe"), 4, "{text}");
 }
+
+/// A call that takes a pointer (the pair `rs1` = `rc2:rc3`) and returns a `long`
+/// (`A:X:rc2:rc3`) was refused by greedy ("pinned values meeting in one
+/// register"): the pair's own clobber at the call was merged into its live
+/// range and no longer read as a clobber. bintree's `walk` failed to compile.
+#[test]
+fn a_call_taking_a_pointer_and_returning_a_long_allocates() {
+    let ir = module(
+        r#"declare i64 @g(ptr)
+define i64 @f() {
+  %t = alloca i16
+  %r = call i64 @g(ptr %t)
+  ret i64 %r
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("jsr g"), "{text}");
+}
