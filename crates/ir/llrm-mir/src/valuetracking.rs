@@ -209,7 +209,11 @@ pub fn compute_constant_range(
         return crate::constantrange::ConstantRange::full(width);
     }
     let maximum = !known.zero & all_bits(width);
-    crate::constantrange::ConstantRange { lower: 0, upper: maximum.wrapping_add(1) & all_bits(width), width }
+    // `[0, 2^width)` wraps to `[0, 0)`, the empty set: all values is `full`.
+    if maximum == all_bits(width) {
+        return crate::constantrange::ConstantRange::full(width);
+    }
+    crate::constantrange::ConstantRange { lower: 0, upper: maximum + 1, width }
 }
 
 /// `isKnownNonNegative`.

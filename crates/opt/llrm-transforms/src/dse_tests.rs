@@ -730,3 +730,15 @@ fn test_a_load_past_a_ranged_index_does_not_observe_an_earlier_cell() {
     );
     assert!(!after.contains("store"), "{after}");
 }
+
+/// A load at `slot + phi + 8` reads the cell at `slot + 8` on the first trip.
+/// The unknown-bits range of the phi was built as `[0, 0)`, the empty set,
+/// so the ranges were "disjoint" and the store was deleted (fpbench at O3
+/// kept 17 stores where the pin keeps 34).
+#[test]
+fn test_a_load_at_an_unbounded_index_still_observes_the_cell() {
+    let after = ran(
+        "define float @f(i32 %n, float %v) {\ne:\n  %a = alloca [6 x float], align 4\n  %p = getelementptr inbounds i8, ptr %a, i32 8\n  store float %v, ptr %p, align 4\n  br label %l\nl:\n  %i = phi i32 [ 0, %e ], [ %j, %l ]\n  %q = getelementptr i8, ptr %a, i32 %i\n  %q8 = getelementptr i8, ptr %q, i32 8\n  %r = load float, ptr %q8, align 4\n  %j = add i32 %i, 4\n  %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret float %r\n}\n",
+    );
+    assert!(after.contains("store"), "{after}");
+}
