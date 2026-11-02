@@ -11,6 +11,7 @@ CC = os.environ['LLRM_CC']; N = int(sys.argv[1]) if len(sys.argv) > 1 else 64
 T = tempfile.mkdtemp(prefix='woz_', dir=os.environ.get('TMPDIR'))
 OPS = ['add', 'sub', 'mul', 'div', 'i2f', 'f2i']
 WOZ_ENTRY = {'add': 0xF46E, 'sub': 0xF468, 'mul': 0xF48C, 'div': 0xF4B2, 'i2f': 0xF451, 'f2i': 0xF640}
+FAST_FN = {'add': 'fz_add', 'sub': 'fz_sub', 'mul': 'fz_mul', 'div': 'fz_div', 'i2f': 'fz_from_i16', 'f2i': 'fz_to_i16'}
 OURS_FN = {'add': '__addsf3', 'sub': '__subsf3', 'mul': '__mulsf3', 'div': '__divsf3', 'i2f': '__floatsisf', 'f2i': '__fixsfsi'}
 
 def sh(*a, **k):
@@ -105,12 +106,33 @@ for op in OPS:
         if mode == 'call' and rc: res[op]['ours_wrong'] = rc
     res[op]['ours_cyc'] = (cyc['call'] - cyc['nocall']) / N
 
+# ---- spike fast32 (same Woz word layout), compiled by llrm-cc
+for op in OPS:
+    open(f'{T}/tables.h', 'w').write(open(f'{T}/fast_{op}.h').read())
+    w = sh('cc', '-O2', f'-DOP={OPS.index(op)}', f'-I{T}', f'{HERE}/fast_expect.c', f'{SF}/src/fast32.c', '-o', f'{T}/fe').returncode
+    wtab = sh(f'{T}/fe').stdout
+    open(f'{T}/tables.h', 'a').write(wtab)
+    sh(CC, '--target=6502-sim65', '-Os', '-S', f'-I{SF}/include', f'{SF}/src/fast32.c', '-o', f'{T}/fast32.s')
+    cyc = {}
+    for mode, d in (('call', [f'-DOP={OPS.index(op)}']), ('nocall', ['-DNOCALL'])):
+        sh(CC, '--target=6502-sim65', '-Os', '-S', *d, f'-I{T}', f'{HERE}/fast_main.c', '-o', f'{T}/m.s')
+        with open(f'{T}/p.s', 'w') as f:
+            f.write(''.join(l for l in open(f'{T}/m.s') if re.match(r'^rc\d+ = ', l)))
+            f.write('.export _main\n_main:\n  jsr main\n  rts\n')
+            for n in ('m', 'fast32'):
+                f.write(''.join(l for l in open(f'{T}/{n}.s') if not re.match(r'^rc\d+ = ', l)))
+            f.write(rtlines)
+        sh('cl65', '-t', 'sim6502', '-o', f'{T}/o.bin', f'{T}/p.s')
+        c, rc, _ = cycles(f'{T}/o.bin'); cyc[mode] = c
+        if mode == 'call' and rc: res[op]['fast_wrong'] = rc
+    res[op]['fast_cyc'] = (cyc['call'] - cyc['nocall']) / N
+
 # ---- ours: bytes reachable from the entry (call graph over jsr, sizes from the ca65 listing)
 def listing(path, hdr):
     sh('ca65', '-U', '-l', path + '.lst', path, '-o', '/dev/null')
     return open(path + '.lst').read().split('\n')
 sizes = {}; calls = {}; defined = set()
-for src in (f'{T}/sf32.s', f'{T}/sf32_conv.s', f'{T}/rtfull.s'):
+for src in (f'{T}/sf32.s', f'{T}/sf32_conv.s', f'{T}/fast32.s', f'{T}/rtfull.s'):
     if src.endswith('rtfull.s'):
         with open(src, 'w') as f:
             f.write(''.join(l for l in open(f'{T}/sf32.s') if re.match(r'^rc\d+ = ', l))); f.write(rtlines)
@@ -140,10 +162,11 @@ def closure(fn):
     return sum(sizes[f] for f in seen), sorted(seen)
 for op in OPS:
     res[op]['ours_bytes'], res[op]['ours_fns'] = closure(OURS_FN[op])
+    res[op]['fast_bytes'], _ = closure(FAST_FN[op])
     res[op]['woz_bytes'] = woz_bytes[op]
 
-print('%-4s %8s %8s %9s %9s  %s' % ('op', 'Woz B', 'ours B', 'Woz cyc', 'ours cyc', 'Woz max err (rel; abs for f2i) / ours exact'))
+print('%-4s %7s %8s %7s %9s %9s %8s  %s' % ('op', 'Woz B', 'fast B', 'ieee B', 'Woz cyc', 'fast cyc', 'ieee cyc', 'Woz max err (rel; abs for f2i)'))
 for op in OPS:
     r = res[op]
-    print('%-4s %8d %8d %9.0f %9.0f  %.2e%s' % (op, r['woz_bytes'], r['ours_bytes'], r['woz_cyc'], r['ours_cyc'], r['woz_err'], '  OURS WRONG' if 'ours_wrong' in r else ''))
+    print('%-4s %7d %8d %7d %9.0f %9.0f %8.0f  %.2e%s%s' % (op, r['woz_bytes'], r['fast_bytes'], r['ours_bytes'], r['woz_cyc'], r['fast_cyc'], r['ours_cyc'], r['woz_err'], '  IEEE WRONG' if 'ours_wrong' in r else '', '  FAST WRONG' if 'fast_wrong' in r else ''))
 print('N=%d  workdir %s' % (N, T))

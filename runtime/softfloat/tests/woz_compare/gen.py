@@ -48,5 +48,11 @@ for op, pairs in ops.items():
         f.write('static const uint32_t A[%d] = {%s};\n' % (N, ','.join('0x%08Xu' % (f32bits(a) if op != 'i2f' else a & 0xFFFFFFFF) for a, _ in pairs)))
         f.write('static const uint32_t B[%d] = {%s};\n' % (N, ','.join('0x%08Xu' % f32bits(b) for _, b in pairs)))
         f.write('static const uint32_t W[%d] = {%s};\n' % (N, ','.join('0x%08Xu' % (f32bits(float(exp[op](a, b))) if op != 'f2i' else int(a) & 0xFFFFFFFF) for a, b in pairs)))
+    with open(f'{OUT}/fast_{op}.h', 'w') as f:      # the Woz word layout: (M << 8) | E, FP1 = A, FP2 = B (sub, div: A is the minuend/dividend)
+        def word(v):
+            e, m = woz(v); return (m << 8) | e
+        def iw(v): return v & 0xFFFFFFFF
+        f.write('static const uint32_t A[%d] = {%s};\n' % (N, ','.join('0x%08Xu' % (iw(a) if op == 'i2f' else word(a)) for a, _ in pairs)))
+        f.write('static const uint32_t B[%d] = {%s};\n' % (N, ','.join('0x%08Xu' % (0 if op in ('i2f', 'f2i') else word(b)) for _, b in pairs)))
     with open(f'{OUT}/expect_{op}.txt', 'w') as f:
         for a, b in pairs: f.write(repr(float(exp[op](a, b))) + '\n')
