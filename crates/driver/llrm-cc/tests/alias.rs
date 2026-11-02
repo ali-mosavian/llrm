@@ -1,6 +1,8 @@
-//! `int other(int) __attribute__((alias("real")))` compiles for x86-64: the
-//! IR's `alias` line stopped the parser at "expected `global` or `constant`,
-//! found `alias`", so any C file with an alias failed on every target.
+//! `int other(int) __attribute__((alias("real")))` for x86-64: the IR's `alias`
+//! line stopped the parser at "expected `global` or `constant`, found `alias`".
+//! It parses now, and the x86 writer emits no alias, so the error names it
+//! rather than dropping the symbol. Exit: the shared object model emits alias
+//! symbols (llrm-object-refactor); then this asserts the output has `other`.
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -9,7 +11,7 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
-fn a_c_alias_compiles_for_x86_64() {
+fn a_c_alias_is_refused_for_x86_64_not_dropped() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
@@ -18,6 +20,6 @@ fn a_c_alias_compiles_for_x86_64() {
         .arg(root.join("tests/cc/alias/alias.c"))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("real proc"));
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot emit the alias @other"));
 }

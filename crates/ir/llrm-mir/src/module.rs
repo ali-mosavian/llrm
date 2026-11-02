@@ -1584,6 +1584,18 @@ impl Module {
         });
     }
 
+    /// An error where the module defines an alias and `target`'s writer emits
+    /// none: dropping the symbol would link as an undefined reference later.
+    pub fn refuse_aliases(
+        &self,
+        target: &str,
+    ) -> Result<(), String> {
+        match self.aliases.first() {
+            Some(alias) => Err(format!("{target} cannot emit the alias @{}", alias.name)),
+            None => Ok(()),
+        }
+    }
+
     /// Whether the code is position independent: clang's "PIC Level" module
     /// flag is set. A module that carries no flags at all (not clang's) is.
     pub fn position_independent(&self) -> bool {
