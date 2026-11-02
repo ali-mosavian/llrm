@@ -618,7 +618,6 @@ mod tuning_tests {
                 unswitch_threshold: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
-                inline_size_guard_at_speed: false,
                 inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
                 ..table
