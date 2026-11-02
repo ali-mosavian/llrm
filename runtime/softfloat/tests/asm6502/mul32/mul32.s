@@ -61,8 +61,48 @@ ns: asl a0
     bne loop
     rts
 .endif
-.if (VAR = 2) .or (VAR = 5)
+.if (VAR = 2) .or (VAR = 5) .or (VAR = 6)
+LOWSEL = (VAR = 5) .or (VAR = 6)
 ; pl:ph = x * y = sq(x+y) - sq(|x-y|), sq(n) = n*n/4 rounded down, tables of 512 entries in two pages each
+.if VAR = 6
+.macro MUL8 xa, yb, low
+.local big, done, nd
+    lda xa                  ; y = |xa - yb|
+    sec
+    sbc yb
+    bcs nd
+    eor #$ff
+    adc #1
+nd: tay
+    lda xa                  ; x = xa + yb, the table index; the carry picks the upper page
+    clc
+    adc yb
+    bcs big
+    tax
+    lda sqlo,x
+    sec
+    sbc sqlo,y
+    sta pl
+.if .not low
+    lda sqhi,x
+    sbc sqhi,y
+    sta ph
+.endif
+    jmp done
+big:
+    tax
+    lda sqlo+256,x
+    sec
+    sbc sqlo,y
+    sta pl
+.if .not low
+    lda sqhi+256,x
+    sbc sqhi,y
+    sta ph
+.endif
+done:
+.endmacro
+.else
 .macro MUL8 xa, yb, low
 .local big, dif
     lda xa
@@ -103,6 +143,7 @@ dif:
     sta ph
 .endif
 .endmacro
+.endif
 .macro ADDP k
 .if k = 3
     clc
@@ -147,13 +188,13 @@ mul32:
     ADDP 2
     MUL8 a2, b0, 0
     ADDP 2
-    MUL8 a0, b3, VAR = 5
+    MUL8 a0, b3, LOWSEL
     ADDP 3
-    MUL8 a1, b2, VAR = 5
+    MUL8 a1, b2, LOWSEL
     ADDP 3
-    MUL8 a2, b1, VAR = 5
+    MUL8 a2, b1, LOWSEL
     ADDP 3
-    MUL8 a3, b0, VAR = 5
+    MUL8 a3, b0, LOWSEL
     ADDP 3
     rts
 .segment "RODATA"

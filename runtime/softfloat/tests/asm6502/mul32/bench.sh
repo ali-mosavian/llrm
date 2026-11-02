@@ -14,7 +14,7 @@ P
 printf '.export mul32\nmul32: rts\n' > $T/s.s; ca65 -t sim6502 $T/s.s -o $T/s.o
 ca65 -t sim6502 -I $T drv.s -o $T/d.o; ld65 -t sim6502 $T/d.o $T/s.o sim6502.lib -o $T/t.bin
 set +e; b=$(sim65 -c $T/t.bin 2>&1|cut -d' ' -f1); set -e
-for v in 1 2 3 4 5; do
+for v in 1 2 3 4 5 6; do
   ca65 -t sim6502 -DVAR=$v mul32.s -o $T/m.o; ld65 -t sim6502 $T/d.o $T/m.o sim6502.lib -o $T/t.bin
   sz=$(od65 --dump-segsize $T/m.o | awk '/CODE|RODATA/{s+=$2} END{print s}')
   set +e; o=$(sim65 -c $T/t.bin 2>&1); f=$?; set -e
