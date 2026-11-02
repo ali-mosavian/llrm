@@ -1,4 +1,4 @@
-| IEEE-754 binary64 for the m68k: mul, div; round to nearest even, denormals, inf, NaN as sf64.c.
+| IEEE-754 binary64 for the m68k: add, sub, mul, div; round to nearest even, denormals, inf, NaN as sf64.c.
 | Hand written; no libgcc source is copied (libgcc is only a binary comparison column).
 | libgcc's ABI: arguments on the stack (a hi, a lo, b hi, b lo), result in d0:d1, d0-d1/a0-a1 scratch.
 | Base body 68000/68010; --defsym M68020=1 selects bfffo and the 64-bit mulu.l/divu.l (68020/030/040);
@@ -42,6 +42,229 @@ SAVED = 40				| movem.l %d2-%d7/%a2-%a5
 	and.l	#0xFFFFF,\t
 	or.l	\lo,\t
 	.endm
+
+| ---- add, sub ----
+
+	.globl	__subdf3
+	.type	__subdf3,@function
+__subdf3:
+	move.l	4(%sp),%d0
+	move.l	12(%sp),%d1
+	bchg	#31,%d1
+	bra.s	.Ladd
+	.size	__subdf3,.-__subdf3
+
+	.globl	__adddf3
+	.type	__adddf3,@function
+__adddf3:
+	move.l	4(%sp),%d0
+	move.l	12(%sp),%d1
+.Ladd:					| d0 = a hi, d1 = b hi (negated for sub); exponents 55 or more apart return the bigger
+	move.l	%d0,%a0
+	move.l	%d1,%a1
+	add.l	%d0,%d0
+	add.l	%d1,%d1
+	cmp.l	%d1,%d0
+	bcs.s	1f
+	cmp.l	#0xFFE00000,%d0
+	bcc.s	.Laslow
+	sub.l	%d1,%d0
+	cmp.l	#55<<21,%d0
+	bcs.s	.Laslow
+	move.l	%a0,%d0
+	move.l	8(%sp),%d1
+	rts
+1:	cmp.l	#0xFFE00000,%d1
+	bcc.s	.Laslow
+	sub.l	%d0,%d1
+	cmp.l	#55<<21,%d1
+	bcs.s	.Laslow
+	move.l	%a1,%d0
+	move.l	16(%sp),%d1
+	rts
+
+.Laslow:
+	movem.l	%d2-%d7,-(%sp)
+	move.l	%a0,%d0
+	move.l	32(%sp),%d1
+	move.l	%a1,%d2
+	move.l	40(%sp),%d3
+	move.l	%d0,%d4
+	add.l	%d4,%d4
+	move.l	%d2,%d5
+	add.l	%d5,%d5
+	cmp.l	%d5,%d4
+	bne.s	1f
+	cmp.l	%d3,%d1
+1:	bcc.s	2f
+	exg	%d0,%d2
+	exg	%d1,%d3
+	exg	%d4,%d5
+2:	cmp.l	#0xFFE00000,%d4		| d0:d1 = big, d2:d3 = small, d4/d5 = their hi words << 1
+	bcc	.Laspec
+	move.l	%d5,%d6
+	or.l	%d3,%d6
+	beq	.Lasz			| small is 0
+	move.l	%d0,%a0			| sign
+	move.l	%d0,%d6
+	eor.l	%d2,%d6
+	move.l	%d6,%a1			| bit 31: subtract
+	swap	%d4
+	lsr.w	#5,%d4			| ea
+	beq	.Laden
+	and.l	#0xFFFFF,%d0
+	bset	#20,%d0
+	and.l	#0xFFFFF,%d2
+	swap	%d5
+	lsr.w	#5,%d5
+	beq.s	3f
+	bset	#20,%d2
+	bra.s	4f
+3:	moveq	#1,%d5
+4:	sub.w	%d4,%d5
+	neg.w	%d5			| ea - eb, 0..54
+	moveq	#0,%d6			| guard
+	cmp.w	#32,%d5
+	bcs.s	5f
+	move.l	%d3,%d6
+	move.l	%d2,%d3
+	moveq	#0,%d2
+	sub.w	#32,%d5
+	move.l	%d6,%d7
+	lsr.l	%d5,%d6
+	ror.l	%d5,%d7
+	eor.l	%d6,%d7
+	sne	%d7
+	neg.b	%d7
+	or.b	%d7,%d6			| sticky
+5:	move.l	%d3,%d7
+	lsr.l	%d5,%d3
+	ror.l	%d5,%d7
+	eor.l	%d3,%d7
+	or.l	%d7,%d6
+	move.l	%d2,%d7
+	lsr.l	%d5,%d2
+	ror.l	%d5,%d7
+	eor.l	%d2,%d7
+	or.l	%d7,%d3
+	move.l	%a1,%d7
+	bmi.s	.Lasub
+	add.l	%d3,%d1
+	addx.l	%d2,%d0
+	btst	#21,%d0
+	beq.s	.Laround
+	lsr.l	#1,%d0
+	roxr.l	#1,%d1
+	roxr.l	#1,%d6
+	bcc.s	6f
+	or.b	#1,%d6
+6:	addq.w	#1,%d4
+	cmp.w	#2047,%d4
+	beq.s	.Lainf
+.Laround:				| d0:d1 = m (implicit bit 52, or a denormal with ea = 1), d6 = guard, d4.w = ea, a0 = sign
+	add.l	%d6,%d6
+	bcc.s	1f
+	beq.s	3f
+	addq.l	#1,%d1
+	bcc.s	1f
+	addq.l	#1,%d0
+1:	subq.w	#1,%d4
+	swap	%d4
+	clr.w	%d4
+	lsl.l	#4,%d4
+	add.l	%d4,%d0
+	move.l	%a0,%d7
+	bpl.s	.Laret
+	bset	#31,%d0
+.Laret:
+	movem.l	(%sp)+,%d2-%d7
+	rts
+3:	addq.l	#1,%d1			| tie: to even
+	bcc.s	4f
+	addq.l	#1,%d0
+4:	bclr	#0,%d1
+	bra.s	1b
+
+.Lainf:
+	move.l	%a0,%d0
+	and.l	#0x80000000,%d0
+	or.l	#0x7FF00000,%d0
+	moveq	#0,%d1
+	bra.s	.Laret
+
+.Lasub:
+	neg.l	%d6
+	subx.l	%d3,%d1
+	subx.l	%d2,%d0
+	btst	#20,%d0
+	bne.s	.Laround
+	move.l	%d0,%d7
+	or.l	%d1,%d7
+	or.l	%d6,%d7
+	beq.s	.Lazero
+1:	cmp.w	#1,%d4			| renormalize; a denormal stops at ea = 1
+	beq.s	.Laround
+	subq.w	#1,%d4
+	add.l	%d6,%d6
+	addx.l	%d1,%d1
+	addx.l	%d0,%d0
+	btst	#20,%d0
+	beq.s	1b
+	bra.s	.Laround
+.Lazero:
+	moveq	#0,%d0
+	moveq	#0,%d1
+	bra.s	.Laret
+
+.Laden:					| both exponent fields 0: the integer sum is exact
+	bclr	#31,%d2
+	move.l	%a1,%d7
+	bmi.s	1f
+	add.l	%d3,%d1
+	addx.l	%d2,%d0
+	bra.s	.Laret
+1:	sub.l	%d3,%d1
+	subx.l	%d2,%d0
+	move.l	%d0,%d7
+	add.l	%d7,%d7
+	or.l	%d1,%d7
+	bne.s	.Laret
+	moveq	#0,%d0
+	bra.s	.Laret
+
+.Lasz:					| small is 0: big, or a & b when both are 0
+	move.l	%d4,%d6
+	or.l	%d1,%d6
+	bne.s	.Laret
+	and.l	%d2,%d0
+	bra.s	.Laret
+
+.Laspec:				| big is inf or NaN
+	bhi.s	1f
+	tst.l	%d1
+	bne.s	1f
+	cmp.l	%d4,%d5			| inf: small inf of the other sign gives NaN
+	bne	.Laret
+	move.l	%d0,%d6
+	eor.l	%d2,%d6
+	bpl	.Laret
+	move.l	#0x7FF80000,%d0
+	moveq	#0,%d1
+	bra	.Laret
+1:	move.l	28(%sp),%d0		| a if a is NaN, else b, quietened
+	move.l	32(%sp),%d1
+	move.l	%d0,%d6
+	add.l	%d6,%d6
+	cmp.l	#0xFFE00000,%d6
+	bhi.s	2f
+	bcs.s	3f
+	tst.l	%d1
+	bne.s	2f
+3:	move.l	%a1,%d0
+	move.l	40(%sp),%d1
+2:	bset	#19,%d0
+	bra	.Laret
+	.size	__adddf3,.-__adddf3
 
 | ---- shared tails of mul and div ----
 

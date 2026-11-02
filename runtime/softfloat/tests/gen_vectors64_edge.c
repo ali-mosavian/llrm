@@ -58,7 +58,20 @@ static void div_digit_overflow(int w, int k, uint64_t *ma, uint64_t *mb)
 static void pair(uint64_t *a, uint64_t *b)
 {
     uint64_t s1 = rnd() & 1, s2 = rnd() & 1, e = 1 + rnd() % 2046, m = rnd(), m2 = rnd(), ma, mb;
-    switch (rnd() % 12) {
+    static const int gaps[] = {0, 1, 2, 3, 31, 32, 33, 52, 53, 54, 55, 56};
+    switch (rnd() % 17) {
+    case 12: /* add/sub at exponent gaps on the word boundaries and the far-gap return, patterns at the rounding edge */
+        { int g = gaps[rnd() % 12]; uint64_t ea = 60 + rnd() % 1980, p = rnd() % 4;
+          *a = mk(s1, ea, p == 0 ? 0 : p == 1 ? ~0ull : m), *b = mk(s2, ea - g, p == 2 ? 0 : p == 3 ? ~0ull : m2);
+          if (rnd() & 1) { uint64_t t = *a; *a = *b; *b = t; } return; }
+    case 13: /* cancellation: equal or adjacent exponents, mantissas close in the high or low word */
+        *a = mk(s1, e, m), *b = mk(s1 ^ 1, e - (rnd() & 1), rnd() & 1 ? m + (rnd() % 7) - 3 : (m & ~0xFFFFFFFFull) | (m2 & 0xFFFFFFFFull)); return;
+    case 14: /* same-sign add near the top: carries into inf */
+        *a = mk(s1, 2046 - rnd() % 2, m | (rnd() & 1 ? 0xFFFFFFFFFFFFFull : 0)), *b = mk(s1, 2040 + rnd() % 7, m2); return;
+    case 15: /* add ties: b is half an ulp of a times an odd or even pattern */
+        *a = mk(s1, e, m), *b = mk(s2, e > 53 ? e - 53 : 0, rnd() & 1 ? 0 : m2 & 1); return;
+    case 16: /* denormals and the smallest normals against each other, x - x */
+        *a = mk(s1, rnd() % 3, m), *b = rnd() % 4 ? mk(s2, rnd() % 3, m2) : *a ^ ((rnd() & 1) << 63); return;
     case 8: /* mul ties: 27-bit mantissas make 54-bit products */
         *a = mk(s1, e, m & 0xFFFFFFC000000ull), *b = mk(s2, 1 + rnd() % 2046, m2 & 0xFFFFFFC000000ull); return;
     case 9: /* mul products just under a power of two: the rounding carry moves the exponent */

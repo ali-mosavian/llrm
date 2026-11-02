@@ -77,7 +77,7 @@ Hand-written `__addsf3 __subsf3 __mulsf3 __divsf3 __negsf2`, the compares, `__un
 
 ## m68k binary64 assembly (`src/m68k/sf64.s`)
 
-Hand-written `__muldf3 __divdf3`, libgcc's ABI, exact like `sf64.c`; the same CPU switches as `sf32.s`. The divide takes four 16-bit quotient digits (`divu.w`), or two 32-bit ones (`divu.l`) on the 68020. The multiply sums four 32x32 products (`mulu.w` quarters, or `mulu.l` on the 68020).
+Hand-written `__adddf3 __subdf3 __muldf3 __divdf3`, libgcc's ABI, exact like `sf64.c`; the same CPU switches as `sf32.s`. The divide takes four 16-bit quotient digits (`divu.w`), or two 32-bit ones (`divu.l`) on the 68020. The multiply sums four 32x32 products (`mulu.w` quarters, or `mulu.l` on the 68020).
 `tests/m68k_asm64.sh run CPU [n] [main.c]` checks it under qemu-m68k against `sf64.c` for the rest (`GEN=tests/gen_vectors64_edge.c` aims at the rare paths; `tests/m68k_asm64_regs.c` the callee-saved registers); `tests/m68k_asm64.sh clocks CPU OUT [vectors64.h]` builds the pricing executables.
 
 ## binary64 (C)
