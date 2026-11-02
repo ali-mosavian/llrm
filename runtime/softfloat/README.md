@@ -78,7 +78,17 @@ Hand-written `__addsf3 __subsf3 __mulsf3 __divsf3 __negsf2`, the compares, `__un
 ## m68k binary64 assembly (`src/m68k/sf64.s`)
 
 Hand-written `__adddf3 __subdf3 __muldf3 __divdf3`, libgcc's ABI, exact like `sf64.c`; the same CPU switches as `sf32.s`. The divide takes four 16-bit quotient digits (`divu.w`), or two 32-bit ones (`divu.l`) on the 68020. The multiply sums four 32x32 products (`mulu.w` quarters, or `mulu.l` on the 68020).
-`tests/m68k_asm64.sh run CPU [n] [main.c]` checks it under qemu-m68k against `sf64.c` for the rest (`GEN=tests/gen_vectors64_edge.c` aims at the rare paths; `tests/m68k_asm64_regs.c` the callee-saved registers); `tests/m68k_asm64.sh clocks CPU OUT [vectors64.h]` builds the pricing executables.
+`tests/m68k_asm64.sh run CPU [n] [main.c]` checks it under qemu-m68k against `sf64.c` for the rest (`GEN=tests/gen_vectors64_edge.c` aims at the rare paths; `tests/m68k_asm64_regs.c` the callee-saved registers); `tests/m68k_asm64.sh clocks CPU OUT [vectors64.h]` builds the pricing executables; `tests/m68k_asm64_size.sh` the bytes.
+Clocks per call over `gen_vectors64.c`'s 3000 vectors (`cycles --exe`; 68000 `mulu`/`divu` at their bound; 68020 adds the 64-bit `mulu.l` 43 and `divu.l` 78 its tables lack), against libgcc and `sf64.c`:
+
+| op | 68000 | libgcc | sf64.c | 68020 | libgcc | sf64.c |
+|---|---|---|---|---|---|---|
+| add | 259 | 820 | 1424 | 118 | 389 | 699 |
+| sub | 289 | 850 | | 131 | 403 | |
+| mul | 2268 | 6175 | 18849 | 610 | 2323 | 3422 |
+| div | 2745 | 4550 | 37996 | 702 | 1968 | 20575 |
+
+Bytes: 2026 (68000), 1596 (68020), 1998 (68060); libgcc's add, sub, mul and div take 2088.
 
 ## binary64 (C)
 
