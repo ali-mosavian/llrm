@@ -157,3 +157,57 @@ fn a_variable_shift_without_the_parts_node_is_refused() {
     let error = TypeLegalizer::new(&mut dag, &tli).run().unwrap_err();
     assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
 }
+
+/// A target with no `shl_parts` and no libcall row of its own reached
+/// "expand shift to a library call" for an `i64` shifted by a variable: the
+/// pin's `SHL_I64` is `__ashldi3` on every target. It was refused (6502
+/// `u64.c`); it is now one call of two operands.
+#[test]
+fn a_variable_i64_shift_without_parts_is_the_pins_default_libcall() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len()));
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    tli.set_operation_action(ISD::ShlParts, MVT::I32, Action::Expand);
+    let mut dag = dag();
+    let x = dag.get_constant_with(5, EVT::I64, false, true);
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let amount = dag.get_load(EVT::I8, chain, ptr, info);
+    let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
+    dag.set_root(low);
+    let mut calls = Calls::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("__ashldi3", 2)]);
+}

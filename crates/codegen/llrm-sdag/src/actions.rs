@@ -119,7 +119,7 @@ pub struct TargetLowering {
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
-        TargetLowering {
+        let mut table = TargetLowering {
             types,
             operations: HashMap::default(),
             promoted_to: HashMap::default(),
@@ -131,6 +131,30 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+        };
+        table.set_default_integer_libcalls();
+        table
+    }
+
+    /// The pin's `RuntimeLibcalls` defaults for the wide integers: libgcc's
+    /// names for `SHL_I64`, `MUL_I128` and the others, on every target; a
+    /// target's own `set_libcall_name` replaces them.
+    fn set_default_integer_libcalls(&mut self) {
+        use ISD::*;
+        let rows: [(MVT, [&'static str; 8]); 2] = [
+            (
+                MVT::I64,
+                ["__ashldi3", "__lshrdi3", "__ashrdi3", "__muldi3", "__divdi3", "__udivdi3", "__moddi3", "__umoddi3"],
+            ),
+            (
+                MVT::I128,
+                ["__ashlti3", "__lshrti3", "__ashrti3", "__multi3", "__divti3", "__udivti3", "__modti3", "__umodti3"],
+            ),
+        ];
+        for (vt, names) in rows {
+            for (op, name) in [Shl, Srl, Sra, Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
         }
     }
 
