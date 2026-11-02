@@ -4,7 +4,10 @@
 
 mod common;
 
-fn listing(flags: &[&str], length: u32) -> String {
+fn listing(
+    flags: &[&str],
+    length: u32,
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     let source = format!("void use(char *);\nvoid f(void) {{ char b[{length}] = {{0}}; use(b); }}\n");
