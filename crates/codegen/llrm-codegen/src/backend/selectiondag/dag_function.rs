@@ -1432,6 +1432,14 @@ fn selected_in(
     }
     let mut body =
         crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
+    body.homes = std::sync::Arc::new(crate::backend::isel::homed(
+        module,
+        function,
+        &function.layout().iter().flat_map(|&block| function.iter_block(block)).collect::<Vec<_>>(),
+        &|inst| noted_ats.get(&inst).copied(),
+        &|value| noted_values.get(&value).copied(),
+        &body,
+    ));
     set_odds(&mut body, &info.edge_probs, &block_at);
     // The loops whose trips `induction` proves, as the old route states them:
     // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads

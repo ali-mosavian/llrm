@@ -1450,3 +1450,34 @@ fn on_a_486_the_magic_is_the_accumulator_and_the_dividend_the_multiplier() {
     assert_eq!(urem_mul_operands("486"), (true, false));
     assert_eq!(urem_mul_operands("P5"), (false, true));
 }
+
+/// The DAG selector dropped `!llrm.home`: only the old selector turned a phi's
+/// home cell into `LirBody::homes`, so at `-m32` (DAG) the unrolled fpbench
+/// update stored each result twice, to its array cell and to the spill slot
+/// of the phi that held it.
+#[test]
+fn test_a_phi_home_reaches_the_body_of_the_dag_selector() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@c = global double 0.0
+define double @f(i32 %n, double %d) {
+pre:
+  store double 0.0, ptr @c
+  br label %loop
+loop:
+  %s = phi double [ 0.0, %pre ], [ %t, %loop ], !llrm.home !0
+  %i = phi i32 [ %n, %pre ], [ %j, %loop ]
+  %t = fadd double %s, %d
+  store double %t, ptr @c
+  %j = sub i32 %i, 1
+  %k = icmp sgt i32 %j, 0
+  br i1 %k, label %loop, label %done
+done:
+  ret double %t
+}
+!0 = !{i32 5}
+";
+    let module = crate::testing::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert_eq!(done.body.homes.len(), 1, "{:?}", done.body.homes);
+}

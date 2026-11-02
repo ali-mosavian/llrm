@@ -1248,7 +1248,14 @@ pub fn selected_with<'c>(
         body = entry_stores_unlined(body, &selector.homes);
     }
     body.spares = Arc::new(spared(module, function, &selector.ats));
-    body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
+    body.homes = Arc::new(homed(
+        module,
+        function,
+        &selector.ats.keys().copied().collect::<Vec<_>>(),
+        &|inst| selector.ats.get(&inst).copied(),
+        &|value| selector.values.get(&value).copied(),
+        &body,
+    ));
     if cpu.rounds_float_spills || cpu.spills_extended {
         body.float_bytes = Arc::new(float_bytes(module, function, &selector.values, cpu.spills_extended));
     }
@@ -1414,25 +1421,26 @@ fn float_bytes(
 
 /// Each phi's value that the program also holds in a fixed cell (`!llrm.home`):
 /// the cell the store it names wrote.
-fn homed(
+pub(crate) fn homed(
     module: &Module,
     function: &Function,
-    ats: &IndexMap<InstId, i64>,
-    values: &IndexMap<ValueId, u32>,
+    insts: &[InstId],
+    at_of: &dyn Fn(InstId) -> Option<i64>,
+    value_of: &dyn Fn(ValueId) -> Option<u32>,
     body: &LirBody,
 ) -> std::collections::BTreeMap<u32, Mem> {
     let mut found = std::collections::BTreeMap::new();
-    for (inst, _) in ats {
+    for inst in insts {
         let instruction = function.instruction(*inst);
         let (Opcode::Phi, Some(result)) = (&instruction.opcode, instruction.result) else { continue };
-        let Some(&value) = values.get(&result) else { continue };
+        let Some(value) = value_of(result) else { continue };
         for (_, node) in instruction.metadata.iter().filter(|(kind, _)| kind == llrm_transforms::homes::KIND) {
             let Some(llrm_mir::MetadataOperand::Constant(store)) = module.metadata[node.0 as usize].operands.first()
             else {
                 continue;
             };
             let ConstantKind::Int(store) = module.context.get(*store).kind else { continue };
-            let Some(&at) = u32::try_from(store).ok().and_then(|store| ats.get(&InstId(store))) else { continue };
+            let Some(at) = u32::try_from(store).ok().and_then(|store| at_of(InstId(store))) else { continue };
             // The cell its store wrote, where selection left one fixed address.
             let cell = body
                 .blocks
