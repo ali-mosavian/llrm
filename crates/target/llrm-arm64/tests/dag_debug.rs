@@ -192,3 +192,15 @@ fn the_first_row_is_the_scope_line() {
         assert_eq!(rows[1].line, 3, "{mode:?}: {rows:?}");
     }
 }
+
+/// The copy that puts a call's argument in its register is of the call's line
+/// (the pin's `COPY` has the call's `DebugLoc`). Where it had none, every case
+/// block of a switch began with a line-0 row.
+#[test]
+fn the_argument_move_of_a_switch_case_is_of_the_calls_line() {
+    let text = include_str!("data/debug_switch_args_o2.ll");
+    let info = described(text, Level::O2, IselMode::Dag).debug.expect("debug information");
+    assert!(info.lines.len() > 8, "premise: a row per case: {:?}", info.lines);
+    let zero = info.lines.iter().filter(|row| row.line == 0).count();
+    assert!(zero <= 2, "{zero} line-0 rows: {:?}", info.lines);
+}
