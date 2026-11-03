@@ -448,9 +448,20 @@ pub fn assembled_by(
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
         // A 16-byte one is a bitwise SSE instruction's memory operand, which
-        // must be aligned.
-        if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
+        // must be aligned. Every entry is aligned to its size, as the pin's
+        // `emitConstantPool` aligns each to its type
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L3383>):
+        // a dword after a 10-byte extended constant sat at 2 mod 4, 3 clocks a
+        // read.
+        let to = match bytes.len() {
+            16.. => 16,
+            8..16 => 8,
+            4..8 => 4,
+            2..4 => 2,
+            _ => 1,
+        };
+        if to > 1 {
+            data.push(masm::Datum::Align(masm::Align { to }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
