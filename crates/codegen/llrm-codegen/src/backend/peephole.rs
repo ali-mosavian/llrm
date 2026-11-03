@@ -1349,6 +1349,9 @@ fn _register_effects_worked(
     may_write: bool,
     flags: bool,
 ) -> Option<(Lanes, Lanes)> {
+    if let Some(declared) = one.declared {
+        return Some(declared);
+    }
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
     // definition and its ABI use; clearing liveness at each one kept dead

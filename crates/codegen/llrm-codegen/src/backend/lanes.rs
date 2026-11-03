@@ -503,6 +503,27 @@ mod tests {
         }
     }
 
+    /// An instruction the decoder cannot read (a name no table has) is of unknown
+    /// effect, so a scheduler cannot move anything across it; one that declares
+    /// its effect answers with it.
+    #[test]
+    fn a_declared_effect_answers_for_an_instruction_the_decoder_cannot_read() {
+        use std::sync::Arc;
+
+        use crate::backend::liveness;
+        use crate::model::ir::{Operation, Semantics};
+        use crate::model::lir::Insn;
+
+        let regs = Regs(&llrm_x86_m32::REGISTER_INFO);
+        let what = Semantics { name: Some("NoSuchOp".into()), ..Semantics::new(Operation::Binary) };
+        let mut one = Insn::new(0, None, Some(what), vec![1], vec![2]);
+        assert!(liveness::effect(regs, 32, &Arc::new(one.clone())).is_none(), "premise: the name is unknown");
+        let (reads, writes) = (Lanes::flags(0b1), Lanes::flags(0b10));
+        one.declared = Some((reads, writes));
+        let effect = liveness::effect(regs, 32, &Arc::new(one)).expect("declared");
+        assert_eq!((effect.reads, effect.writes), (reads, writes));
+    }
+
     #[test]
     fn test_lanes_iterate_and_compare_as_a_btreeset_does() {
         assert_eq!(Lanes::flags(0b101), Lanes::from([(RegId::None, 0), (RegId::None, 2)]));

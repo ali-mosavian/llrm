@@ -172,6 +172,11 @@ pub struct Insn {
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
+    /// What the target says it reads and writes, as lanes: the decoder answers
+    /// with it before it looks at the instruction's name. A target whose
+    /// instructions the decoder cannot read (arm64's, which the spike
+    /// converter names by their variant) states each one's effect here.
+    pub declared: Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)>,
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
@@ -646,6 +651,7 @@ impl Insn {
             pair: None,
             line: None,
             debug: DebugTags::default(),
+            declared: None,
             effect: Derived::default(),
             register_effects: Default::default(),
             ident: Derived::default(),

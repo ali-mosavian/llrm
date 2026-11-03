@@ -259,9 +259,7 @@ impl<T: Target> Converted<T> {
                                 what.op = Operation::Binary;
                             }
                         }
-                        for slot in &made.register_effects {
-                            slot.get_or_init(|| (bits, Some((reads.clone(), writes.clone()))));
-                        }
+                        made.declared = Some((reads, writes));
                         Arc::new(made)
                     })
                     .collect();
