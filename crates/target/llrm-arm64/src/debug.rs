@@ -76,10 +76,14 @@ pub fn info(
     };
     let mut at = 0;
     let declared = |symbol: &str| {
-        module.functions().find_map(|(_, global, body)| {
-            let name = global.name.owned()?;
-            (crate::data::symbol_name(platform, &name) == symbol).then(|| subprogram_line(module, body)).flatten()
-        })
+        module
+            .functions()
+            .find_map(
+                |(_, global, body)| {
+                    let name = global.name.owned()?;
+                    (crate::data::symbol_name(platform, &name) == symbol).then(|| scope_line(module, body)).flatten()
+                },
+            )
     };
     for function in functions {
         let length: usize = function.blocks.iter().map(|block| words(block) * 4).sum();
@@ -123,13 +127,14 @@ pub fn info(
     Ok(Some(info))
 }
 
-/// The line a function's `!DISubprogram` says it starts at.
-fn subprogram_line(
+/// The line a function's `!DISubprogram` says its body starts at (`scopeLine`):
+/// the first row (`DwarfDebug::beginFunctionImpl`).
+fn scope_line(
     module: &llrm_mir::Module,
     function: &llrm_mir::Function,
 ) -> Option<u32> {
     let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
-    let at = module.special.get(node)?.fields.iter().position(|one| one == "line")?;
+    let at = module.special.get(node)?.fields.iter().position(|one| one == "scopeLine")?;
     match module.metadata.get(node.0 as usize)?.operands.get(at)? {
         llrm_mir::MetadataOperand::Constant(value) => match module.context.get(*value).kind {
             llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
@@ -204,10 +209,20 @@ fn lines(
             at += 4;
         }
     }
-    if let Some(line) = declared
-        && out.first().is_none_or(|first| first.offset > start)
-    {
-        out.insert(0, row(start, (line, 0)));
+    if let Some(line) = declared {
+        match (out.first().copied(), body_start) {
+            // The first instruction's row moves to where the body starts.
+            (Some(first), Some(body))
+                if first.offset == start && body > 0 && out.iter().all(|one| one.offset != start + body) =>
+            {
+                out[0] = row(start, (line, 0));
+                let at = out.iter().position(|one| one.offset > start + body).unwrap_or(out.len());
+                out.insert(at, model::Line { offset: start + body, ..first });
+            }
+            // A frameless function: the scope line's row and the first
+            // statement's share the first byte, as the pin's do.
+            _ => out.insert(0, row(start, (line, 0))),
+        }
     }
     let length = at - start;
     (out, body_start.map(|first| (first, body_end.unwrap_or(length))), not_stmt)

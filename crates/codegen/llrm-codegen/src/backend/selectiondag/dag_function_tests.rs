@@ -730,6 +730,32 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
     assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
+const M16_DIVIDES_BY_CONSTANTS: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define i16 @f(i16 %n) {
+  %m = mul i16 %n, 3
+  %q = sdiv i16 %m, 97
+  %u = udiv i16 %m, 11
+  %r = add i16 %q, %u
+  ret i16 %r
+}
+";
+
+/// A signed 16-bit divide by a constant at m16 -O2 keeps its `idiv`: priced at
+/// the sheet's shortest multiply the sequence won, and a row of `(n * 3) / 97 +
+/// (n * 3) / 11u` over n = 1..2000 went from 154025 clocks (76 B) to 172017 (89
+/// B), +11.7%. The dividend's width is not known here.
+#[test]
+fn at_m16_a_16_bit_divide_by_a_constant_keeps_its_divide() {
+    let module = crate::testing::module(M16_DIVIDES_BY_CONSTANTS).expect("parses");
+    for cpu in ["386", "486"] {
+        let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile(cpu).expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        let names: Vec<String> =
+            done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        assert!(names.iter().any(|n| n == "idiv"), "{cpu}: the signed divide stays: {names:?}");
+    }
+}
+
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
 /// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
 /// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`

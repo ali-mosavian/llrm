@@ -904,3 +904,50 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// `.export` named every function and no variable: two objects with a static
+/// `helper` collided at link time (softfloat's add_bits, cmp_bits, from_mag:
+/// ld65 "Duplicate external identifier"), and a global another object imports
+/// (`counter`) was "Unresolved external". An internal symbol is not exported,
+/// an external one is, function or variable.
+#[test]
+fn only_external_functions_and_variables_are_exported() {
+    let ir = module(
+        "@counter = global i16 0\n@hidden = internal global i16 0\n\
+define internal i8 @helper(i8 %a) #0 {\n  ret i8 %a\n}\n\
+define i8 @pub(i8 %a) {\n  %r = call i8 @helper(i8 %a)\n  ret i8 %r\n}\n\
+attributes #0 = { noinline }",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let exported: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix(".export ")).collect();
+    assert!(exported.contains(&"pub") && exported.contains(&"counter"), "exports {exported:?}:\n{text}");
+    assert!(!exported.contains(&"helper") && !exported.contains(&"hidden"), "exports {exported:?}:\n{text}");
+}
+
+/// A pair passed to a function and returned from it by value arrives member by
+/// member: `swap` returns (b, a), the caller keeps a - b = 7 - 3 of the
+/// swapped pair, 3 - 7 = 0xFC.
+#[test]
+fn an_aggregate_passed_and_returned_by_value_runs() {
+    let ir = module(
+        r#"define internal { i8, i8 } @swap({ i8, i8 } %s) #0 {
+  %a = extractvalue { i8, i8 } %s, 0
+  %b = extractvalue { i8, i8 } %s, 1
+  %x = insertvalue { i8, i8 } undef, i8 %b, 0
+  %y = insertvalue { i8, i8 } %x, i8 %a, 1
+  ret { i8, i8 } %y
+}
+define i8 @probe() {
+  %p = insertvalue { i8, i8 } undef, i8 7, 0
+  %q = insertvalue { i8, i8 } %p, i8 3, 1
+  %r = call { i8, i8 } @swap({ i8, i8 } %q)
+  %a = extractvalue { i8, i8 } %r, 0
+  %b = extractvalue { i8, i8 } %r, 1
+  %d = sub i8 %a, %b
+  ret i8 %d
+}
+attributes #0 = { noinline }"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
+}

@@ -18,25 +18,29 @@ __floatsisf:
     and #$80
 fcopy:
     sta rc6                 ; sign
-    ldx #3
-:   lda rc2,x
-    sta rc16,x
-    dex
-    bpl :-
-    lda rc6
-    beq fabs
+    bne fneg
+    lda rc2
+    sta rc16
+    lda rc3
+    sta rc17
+    lda rc4
+    sta rc18
+    lda rc5
+    sta rc19
+    jmp fabs
+fneg:
     sec                     ; negate; 0x80000000 stays and is right as a magnitude
     lda #0
-    sbc rc16
+    sbc rc2
     sta rc16
     lda #0
-    sbc rc17
+    sbc rc3
     sta rc17
     lda #0
-    sbc rc18
+    sbc rc4
     sta rc18
     lda #0
-    sbc rc19
+    sbc rc5
     sta rc19
 fabs:
     lda rc6
@@ -126,8 +130,7 @@ fixmag:
 frbits:
     tya
     beq fok
-:   lsr rc19
-    ror rc18
+:   lsr rc18                ; rc19 is 0 here
     ror rc17
     ror rc16
     dey

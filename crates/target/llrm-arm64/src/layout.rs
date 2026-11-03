@@ -65,6 +65,34 @@ fn forwards(blocks: &[Lowered]) -> HashMap<String, String> {
     out
 }
 
+/// The conditional branch `branch` that jumps over the jump to `go` into the
+/// block `next`, as the inverse branch to `go` (`reverseBranchCondition`).
+fn inverse_over(
+    branch: &Inst,
+    go: &str,
+    next: Option<&str>,
+) -> Option<Inst> {
+    let to = Target::Label(go.to_owned());
+    let over = |target: &Target| {
+        matches!(
+            (target, next),
+            (Target::Label(label), Some(next)) if label == next
+        )
+    };
+    match branch {
+        Inst::BranchCond { cond, target } if over(target) => {
+            Some(Inst::BranchCond { cond: cond.inverted(), target: to })
+        }
+        Inst::CompareBranch { nonzero, width, rt, target } if over(target) => {
+            Some(Inst::CompareBranch { nonzero: !nonzero, width: *width, rt: *rt, target: to })
+        }
+        Inst::TestBranch { nonzero, rt, bit, target } if over(target) => {
+            Some(Inst::TestBranch { nonzero: !nonzero, rt: *rt, bit: *bit, target: to })
+        }
+        _ => None,
+    }
+}
+
 pub fn fold(
     mut blocks: Vec<Lowered>,
     tables: &mut [Table],
@@ -174,7 +202,7 @@ pub fn fold(
     let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
     let mut ordered: Vec<Lowered> = placed.into_iter().map(|at| taken[at].take().expect("placed once")).collect();
     // A branch to the next block falls through; a conditional branch over an
-    // unconditional one is the inverse conditional.
+    // unconditional one is the inverse conditional (`cbz`/`tbz` too).
     for at in 0..ordered.len() {
         let next = ordered.get(at + 1).map(|block| block.label.clone());
         let Lowered { insts, locs, .. } = &mut ordered[at];
@@ -185,17 +213,13 @@ pub fn fold(
             locs.pop();
         }
         if insts.len() >= 2
-            && let (
-                Some(Inst::BranchCond { cond, target: Target::Label(over) }),
-                Some(Inst::Branch { link: false, target: Target::Label(go) }),
-            ) = (insts.get(insts.len() - 2), insts.last())
-            && Some(over) == next.as_ref()
+            && let Some(Inst::Branch { link: false, target: Target::Label(go) }) = insts.last()
+            && let Some(inverse) = inverse_over(&insts[insts.len() - 2], go, next.as_deref())
         {
-            let (cond, go) = (cond.inverted(), go.clone());
             insts.truncate(insts.len() - 2);
             let place = locs.get(locs.len() - 2).copied().flatten();
             locs.truncate(locs.len() - 2);
-            insts.push(Inst::BranchCond { cond, target: Target::Label(go) });
+            insts.push(inverse);
             locs.push(place);
         }
     }
