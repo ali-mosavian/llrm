@@ -104,7 +104,10 @@ fn block_label(
 /// or private one is not, and a same-named helper in another object must not
 /// collide with it at link time.
 pub fn exported(linkage: llrm_mir::module::Linkage) -> bool {
-    !matches!(linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private)
+    !matches!(
+        linkage,
+        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+    )
 }
 
 /// The function `name` of `module` as ca65 text: its blocks, selected, on
