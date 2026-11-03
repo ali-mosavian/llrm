@@ -72,6 +72,41 @@ fn trace(
     pcs
 }
 
+/// The qemu CPU an executable runs on: the newest of 68020, 68030, 68040 and
+/// 68060 its path names, else the 68000.
+fn qemu_cpu_for(path: &str) -> &'static str {
+    ["68060", "68040", "68030", "68020"]
+        .into_iter()
+        .find(|tag| path.contains(tag))
+        .map_or(
+            "m68000",
+            |tag| match tag {
+                "68060" => "m68060",
+                "68040" => "m68040",
+                "68030" => "m68030",
+                _ => "m68020",
+            },
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qemu_cpu_for;
+
+    /// A 68040 or 68060 program ran on `m68000`, faulted at its first 68020+
+    /// instruction and was priced for the few it had executed (339
+    /// instructions, 0.1 clock a call), with no error.
+    #[test]
+    fn a_path_naming_a_newer_cpu_runs_on_it() {
+        assert_eq!(qemu_cpu_for("/t/f.68000"), "m68000");
+        assert_eq!(qemu_cpu_for("/t/f.68020"), "m68020");
+        assert_eq!(qemu_cpu_for("/t/f.68030"), "m68030");
+        assert_eq!(qemu_cpu_for("/t/f.68040.exe"), "m68040");
+        assert_eq!(qemu_cpu_for("/t/sf32-68060"), "m68060");
+        assert_eq!(qemu_cpu_for("/t/plain"), "m68000");
+    }
+}
+
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
 /// difftest seed's `ours`) over those functions instead of the kernel `k`.
 fn functions() -> Vec<String> {
@@ -141,8 +176,7 @@ fn price(
         })
         .collect();
     let (cap, cpu) = if harness {
-        let cpu = std::env::var("CYCLES_QEMU_CPU")
-            .unwrap_or_else(|_| if exe.to_string_lossy().contains("68020") { "m68020" } else { "m68000" }.to_owned());
+        let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_for(&exe.to_string_lossy()).to_owned());
         (200_000_000, cpu)
     } else {
         (CAP, "m68000".to_owned())
