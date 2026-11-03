@@ -440,6 +440,32 @@ fn a_copy_back_into_the_register_just_copied_from_is_dropped_between_bytes_only(
     assert_eq!(function.blocks[0].insts.len(), 2, "{:?}", function.blocks[0].insts);
 }
 
+/// fletcher -Oz never finished compiling: two copies that touch neither
+/// register each other's, with nothing between them and the branch, took turns
+/// moving to the end of the block for ever. Run on a thread, so a hang fails.
+#[test]
+fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let jump = Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(0)]) };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 4];
+    function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), copy(3, 2), jump], phis: Vec::new() });
+    let assignment = Assignment(vec![reg::A, reg::B, reg::C, reg::D]);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        llrm_z80::compile::sink_copies_to_the_branch(&mut function, &assignment);
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(),
+        "sink_copies_to_the_branch did not return"
+    );
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.
@@ -762,6 +788,26 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
         let out = text(ir, "slen", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
         assert!(out.contains("_strlen"), "{level:?}\n{out}");
     }
+}
+
+/// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
+/// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
+/// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
+#[test]
+fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("mulhi3"), "{out}");
+}
+
+/// A word shifted left by a constant in `hl` was `sla l; rl h` a bit (4 B / 16
+/// T) where `add hl, hl` is 1 B / 11 T; hash16's `<< 5` paid 10 instructions.
+#[test]
+fn a_word_shifted_left_in_hl_is_doublings() {
+    let ir = include_str!("kernels/ir/hash16.ll");
+    let out = text(ir, "hash16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add hl, hl").count() >= 5 && !out.contains("rl h"), "{out}");
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:
