@@ -1619,7 +1619,6 @@ mod tests {
         use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
         let float = |value: u32| Loc::Held(Held { value, width: 10 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
-        let data = |_: i64| Loc::Mem(Mem { through: RegId::SI, ..Mem::new(None, 8) });
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
             name: Some(name.into()),
             dests,

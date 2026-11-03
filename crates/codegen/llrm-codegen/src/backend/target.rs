@@ -355,12 +355,9 @@ pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
     }
     if matches!(
         what.op,
-        Operation::Call
-            | Operation::Return
-            | Operation::Escape
-            | Operation::Barrier
-            | Operation::Data
-    ) {
+        Operation::Call | Operation::Return | Operation::Escape | Operation::Barrier | Operation::Data
+    )
+    {
         return true;
     }
     let name = what.name.as_deref().unwrap_or("");
@@ -380,16 +377,19 @@ pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
 
 /// DEVIATE X87-DS (valid while no emulator-fixup form is emitted; revisit if
 /// one is added): the pin has no segment registers to hold. An x87 operand with
-/// an address is spelled `ss:` where DS holds a selector, which is a prefix byte
-/// on the real opcodes llrm emits. The emulator's `INT 34h-3Bh` forms (FIDRQQ)
-/// read the caller's DS for a default-segment operand and `INT 3Ch` (FIERQQ,
-/// FISRQQ) takes the override from its own bits; no compiler here emits either
-/// (`test_no_emulator_fixup_form_is_emitted`).
+/// an address is spelled `ss:` where DS holds a selector, which is a prefix
+/// byte on the real opcodes llrm emits. The emulator's `INT 34h-3Bh` forms
+/// (FIDRQQ) read the caller's DS for a default-segment operand and `INT 3Ch`
+/// (FIERQQ, FISRQQ) takes the override from its own bits; no compiler here
+/// emits either (`test_no_emulator_fixup_form_is_emitted`).
 /// Whether the operand is a memory cell no one can prefix: it names no selector
 /// and has no address, so `datagroup` cannot spell `ss:` for it and it reads
 /// DS. A cell with an address takes `ss:` where DS holds something else.
 fn reads_default_segment(place: &Loc) -> bool {
-    matches!(place, Loc::Mem(cell) if cell.selector.is_none() && cell.addr.is_none())
+    matches!(
+        place,
+        Loc::Mem(cell) if cell.selector.is_none() && cell.addr.is_none()
+    )
 }
 /// Whether an instruction of this mnemonic is a string instruction, a trap or a
 /// wait. Prefixes are taken off by hand: `str::trim_start_matches`
@@ -624,7 +624,10 @@ mod tests {
     /// of the emulator's fixup forms must decide DS for them (DEVIATE X87-DS).
     #[test]
     fn test_no_emulator_fixup_form_is_emitted() {
-        fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+        fn walk(
+            dir: &std::path::Path,
+            hits: &mut Vec<String>,
+        ) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -662,7 +665,10 @@ mod tests {
         };
         let global = ir::Mem::new(Some(Addr::new(Space::Segment, 8)), 4);
         let by_register = ir::Mem { through: RegId::SI, ..ir::Mem::new(None, 4) };
-        assert!(needs(by_register), "premise: a cell with no address, `[si]`, is read through DS and cannot be prefixed");
+        assert!(
+            needs(by_register),
+            "premise: a cell with no address, `[si]`, is read through DS and cannot be prefixed"
+        );
         assert!(!needs(global.clone()), "a data cell is spelled ss: where DS holds a selector");
         let far = ir::Mem { selector: Some(llrm_lir::Held { value: 1, width: 2 }), ..global.clone() };
         assert!(!needs(far), "a cell through a far pointer's selector names its segment");
