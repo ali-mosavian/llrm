@@ -302,6 +302,16 @@ pub fn estimate(
     estimate_calling(cpu, text, &[], None)
 }
 
+thread_local! {
+    static LABEL_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The lines [`estimate_calling`] has looked at for labels on this thread, for a
+/// test that it reads the text once and not once per branch.
+pub fn label_scans() -> usize {
+    LABEL_SCANS.with(std::cell::Cell::get)
+}
+
 /// [`estimate`], a `jsr` of one of `routines` also costing the clocks given,
 /// and the lines of a block `n` (label `<function>_b<n>`) weighed by the loops
 /// `depth_of(n)` says it is in, where the text's own jumps back would say more:
@@ -314,8 +324,16 @@ pub fn estimate_calling(
 ) -> Result<Estimate, String> {
     let expanded = expand_macros(text);
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
-    let label_at =
-        |name: &str| lines.iter().position(|l| l.trim_end().strip_suffix(':').is_some_and(|label| label == name));
+    // the first line of each label, found once: a lookup per branch is a scan of
+    // the function per branch
+    let mut labels: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (at, line) in lines.iter().enumerate() {
+        LABEL_SCANS.with(|scans| scans.set(scans.get() + 1));
+        if let Some(label) = line.trim_end().strip_suffix(':') {
+            labels.entry(label).or_insert(at);
+        }
+    }
+    let label_at = |name: &str| labels.get(name).copied();
     // a backward branch makes the lines from its label to it a loop, if the
     // code at the label can run on to the branch: a branch up to a block that
     // ends in `rts` is an exit placed above the code, not a loop
