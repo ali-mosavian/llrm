@@ -155,6 +155,27 @@ impl Block {
     }
 }
 
+/// A source variable the debug info names, and where it lives for the whole
+/// function: the channel `-g` formats read, whatever the target.
+#[derive(Clone, Debug)]
+pub struct Variable {
+    pub name: String,
+    /// Its `!DIType` node, as the module the function was selected from has it.
+    pub r#type: llrm_mir::module::MetadataId,
+    /// The `!DIExpression` operations of the location, as written.
+    pub expr: Vec<llrm_mir::module::DwOp>,
+    pub parameter: bool,
+    pub place: VariablePlace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VariablePlace {
+    /// The register an argument arrives in.
+    Register(RegId),
+    /// Frame object `index`, `offset` bytes into it.
+    Frame { index: i32, offset: i64 },
+}
+
 /// `C` is the target's register class.
 #[derive(Clone, Debug)]
 pub struct MFunction<C> {
@@ -170,6 +191,8 @@ pub struct MFunction<C> {
     pub locals: Vec<(i32, i64, i64)>,
     /// The source places the instructions' [`Inst::origin`]s number, from 1.
     pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
+    /// `-g`: the source variables and where each is.
+    pub variables: Vec<Variable>,
 }
 
 impl<C> MFunction<C> {
@@ -186,6 +209,7 @@ impl<C> MFunction<C> {
             fixed: BTreeMap::new(),
             locals: Vec::new(),
             places: Vec::new(),
+            variables: Vec::new(),
         }
     }
 

@@ -4,6 +4,8 @@
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
 
+const LOCATED_LAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
+
 const LOCATED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"
 define i16 @f(i16 %a, i16 %b) !dbg !5 {
   %c = add i16 %a, %b, !dbg !7
@@ -67,6 +69,7 @@ fn adb_of(
             "!6 = !DISubroutineType(types: !{null})",
             "!6 = !DISubroutineType(types: !{!9})\n!9 = !DIBasicType(name: \"t\", size: SIZE, encoding: ENC)",
         )
+        .replace(&LOCATED_LAYOUT.replace("i16", ret), LOCATED_LAYOUT)
         .replace("SIZE", &size.to_string())
         .replace("ENC", encoding);
     llrm_z80::driver::adb(&ir, &llrm_z80::driver::Request { debug: true, ..llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2) }).expect("an adb")

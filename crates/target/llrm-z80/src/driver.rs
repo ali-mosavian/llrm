@@ -226,56 +226,49 @@ pub fn adb(
     text: &str,
     request: &Request,
 ) -> Option<String> {
-    use crate::dagisel::function::Site;
-    let selected: std::collections::HashMap<String, Selection> =
-        selections(text, request)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|(name, one)| Some((name, one.ok()?)))
-            .collect();
-    let mut module = llrm_mir::parse::module(&without_triple(text)).ok()?;
-    let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
-    llrm_mir::dbgimport::types_and_globals(&mut module);
+    use llrm_spike_mf::VariablePlace;
+    let mut program = program(text, request).ok()?;
+    program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
+    let module = &program.modules[0];
+    let (file, _) = llrm_mir::dbgimport::unit_file(module)?;
     let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
     let mut out = format!("M:{stem}\n");
-    for one in llrm_mir::debuginfo::functions(&module) {
-        let procedure = llrm_mir::debuginfo::read_type(&module, one.r#type)?;
+    for one in llrm_mir::debuginfo::functions(module) {
+        let procedure = llrm_mir::debuginfo::read_type(module, one.r#type)?;
         let result = match procedure.target {
-            Some(result) => sdcc_type(&module, result)?.1,
+            Some(result) => sdcc_type(module, result)?.1,
             None => "SV:S".to_owned(),
         };
         let size = 2;
         out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
         out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
-        let Some(selection) = selected.get(&one.function) else { continue };
+        let Ok(selection) = select_function(module, &one.function, request.cpu) else { continue };
         // Frame objects sit below IX, the locals first (`expand::layout`).
         let mut below = 0;
         let ends: Vec<i64> = selection
             .locals
             .iter()
             .map(|&bytes| {
-                below += i64::from(bytes);
+                below += bytes;
                 below
             })
             .collect();
         for (at, variable) in selection.variables.iter().enumerate() {
+            let Some((size, spelling)) = sdcc_type(module, variable.r#type) else { continue };
             let place = match variable.place {
-                Site::Register(register) => format!("R,0,0,{}", crate::expand::register_list(register)),
-                Site::Frame { index, offset } => {
+                VariablePlace::Register(register) => format!("R,0,0,{}", crate::expand::register_list(register)),
+                VariablePlace::Frame { index, offset } => {
                     format!("B,1,{}", offset - ends.get(index as usize).copied().unwrap_or(0))
                 }
             };
-            out.push_str(&format!(
-                "S:L{stem}.{}${}$1_0${at}({{{}}}{}),{place}\n",
-                one.function, variable.name, variable.size, variable.spelling
-            ));
+            out.push_str(&format!("S:L{stem}.{}${}$1_0${at}({{{size}}}{spelling}),{place}\n", one.function, variable.name));
         }
     }
     // A function the module calls but does not define: a symbol of its own.
-    for one in llrm_mir::debuginfo::declarations(&module) {
-        let procedure = llrm_mir::debuginfo::read_type(&module, one.r#type)?;
+    for one in llrm_mir::debuginfo::declarations(module) {
+        let procedure = llrm_mir::debuginfo::read_type(module, one.r#type)?;
         let result = match procedure.target {
-            Some(result) => sdcc_type(&module, result)?.1,
+            Some(result) => sdcc_type(module, result)?.1,
             None => "SV:S".to_owned(),
         };
         out.push_str(&format!("S:G${}$0_0$0({{2}}DF,{result}),C,0,0\n", one.function));

@@ -26,6 +26,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_spike_mf::{Variable, VariablePlace};
 
 use super::call::{CALL, RET_GLUE, Z80Calling};
 use super::hooks::Cpu;
@@ -92,23 +93,7 @@ pub struct Selection {
     /// loop's back edge).
     pub widths: HashMap<u32, u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
-    pub variables: Vec<VariableSite>,
-}
-
-/// A variable for the debug info: its name, SDCC's size and spelling of its
-/// type, and where it is for the whole function.
-pub struct VariableSite {
-    pub name: String,
-    pub size: i64,
-    pub spelling: String,
-    pub place: Site,
-}
-
-pub enum Site {
-    /// A parameter, in the register it arrives in.
-    Register(RegId),
-    /// A variable in frame object `index`, `offset` bytes into it.
-    Frame { index: u32, offset: i64 },
+    pub variables: Vec<Variable>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -172,15 +157,20 @@ fn variable_sites(
     name: &str,
     info: &FunctionLoweringInfo,
     live_ins: &[(RegId, u32)],
-) -> Vec<VariableSite> {
+) -> Vec<Variable> {
     let mut sites = Vec::new();
     let Some(described) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else {
         return sites;
     };
     for (index, parameter, ty) in &described.parameters {
-        let Some((size, spelling)) = crate::driver::sdcc_type(module, *ty) else { continue };
         let Some(&(register, _)) = usize::try_from(*index).ok().and_then(|at| live_ins.get(at)) else { continue };
-        sites.push(VariableSite { name: parameter.clone(), size, spelling, place: Site::Register(register) });
+        sites.push(Variable {
+            name: parameter.clone(),
+            r#type: *ty,
+            expr: Vec::new(),
+            parameter: true,
+            place: VariablePlace::Register(register),
+        });
     }
     for record in function.debug_records() {
         let (llrm_mir::DebugWhat::Declare(Operand::Value(address)), Some(variable)) =
@@ -188,16 +178,17 @@ fn variable_sites(
         else {
             continue;
         };
+        let Some(&index) = info.static_allocas.get(&address) else { continue };
         if variable.scope != name || variable.parameter {
             continue;
         }
-        let (Some(&index), Some((size, spelling))) =
-            (info.static_allocas.get(&address), crate::driver::sdcc_type(module, variable.r#type))
-        else {
-            continue;
-        };
-        let place = Site::Frame { index: index as u32, offset: variable.offset };
-        sites.push(VariableSite { name: variable.name, size, spelling, place });
+        sites.push(Variable {
+            name: variable.name,
+            r#type: variable.r#type,
+            expr: record.expression.and_then(|node| module.expression(node)).unwrap_or_default(),
+            parameter: false,
+            place: VariablePlace::Frame { index: index as i32, offset: variable.offset },
+        });
     }
     sites
 }
