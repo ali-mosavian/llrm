@@ -2771,3 +2771,40 @@ fn a_one_slot_frame_after_the_saved_registers_is_push_rax_and_pop_rcx() {
     assert!(listing.contains("push rax") && listing.contains("pop rcx"), "{listing}");
     assert!(!listing.contains("sub rsp, 8") && !listing.contains("add rsp, 8"), "{listing}");
 }
+
+/// A 64-bit function with saved registers and no locals got a slot only for
+/// alignment: a leaf with two pushed registers `push rax` (+2 B: mandel -Os), a
+/// caller with one `sub rsp, 16` (+8 B: sbb_wide_sub, memcpy_runtime -Os) where
+/// the pin has neither.
+#[test]
+fn a_frame_with_saved_registers_and_no_locals_has_no_alignment_slot() {
+    let head = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n";
+    let compiled = |text: &str, name: &str| {
+        let (built, _) = crate::llc::compiled(&flags(&["-Os", "--isel=dag"]), text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    // sbb_wide_sub's `main`: a volatile function pointer called twice, the
+    // result kept across the second call in a saved register, no locals.
+    let caller = format!(
+        "{head}@through = dso_local global ptr null, align 8\ndeclare void @report(i64)\n\
+         define dso_local i32 @main() #0 {{\n  %1 = load volatile ptr, ptr @through, align 8\n  %2 = tail call i64 %1(i64 5, i64 7)\n\
+         \x20 %3 = ashr i64 %2, 32\n  tail call void @report(i64 %3)\n  tail call void @report(i64 %2)\n  ret i32 0\n}}\n\
+         attributes #0 = {{ nounwind optsize uwtable }}\n"
+    );
+    let listing = compiled(&caller, "main");
+    assert!(listing.contains("push rbx"), "premise: one saved register\n{listing}");
+    assert!(!listing.contains("sub rsp") && !listing.contains("push rax"), "{listing}");
+    // A leaf that keeps twelve values live across a loop needs saved registers.
+    let phis: String = (0..12).map(|i| format!("  %v{i} = phi i64 [ {i}, %entry ], [ %n{i}, %loop ]\n")).collect();
+    let adds: String = (0..12).map(|i| format!("  %n{i} = add i64 %v{i}, %v{}\n", (i + 1) % 12)).collect();
+    let total: String = (1..12)
+        .map(|i| format!("  %s{i} = add i64 {}, %n{i}\n", if i == 1 { "%n0".into() } else { format!("%s{}", i - 1) }))
+        .collect();
+    let leaf = format!(
+        "{head}define i64 @h(i64 %a) #0 {{\nentry:\n  br label %loop\nloop:\n{phis}{adds}  %c = icmp ult i64 %n0, %a\n  br i1 %c, label %loop, label %done\ndone:\n{total}  ret i64 %s11\n}}\nattributes #0 = {{ nounwind optsize }}\n"
+    );
+    let listing = compiled(&leaf, "h");
+    assert!(listing.matches("push r").count() >= 2, "premise: two or more saved registers\n{listing}");
+    assert!(!listing.contains("push rax") && !listing.contains("sub rsp"), "{listing}");
+}
