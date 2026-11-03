@@ -136,6 +136,8 @@ pub struct Inst {
     /// Names a scope marker (`BLOCK`, `LOOP` and their ends) while CFGStackify
     /// works; 0 for any other.
     pub tag: u32,
+    /// The source line the instruction came from; 0 for none.
+    pub line: u32,
 }
 
 impl Inst {
@@ -143,7 +145,7 @@ impl Inst {
         opcode: u16,
         operands: &[Operand],
     ) -> Inst {
-        Inst { opcode, operands: operands.to_vec(), mem: None, tag: 0 }
+        Inst { opcode, operands: operands.to_vec(), mem: None, tag: 0, line: 0 }
     }
 
     pub fn with_mem(

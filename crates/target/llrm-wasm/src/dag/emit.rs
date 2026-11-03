@@ -256,7 +256,7 @@ impl Emitter<'_> {
                         }
                         (code, _) => code,
                     };
-                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
+                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0, line: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];
                         let ordered = info.volatile
