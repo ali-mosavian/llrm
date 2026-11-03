@@ -2459,3 +2459,16 @@ fn a_row_on_the_same_line_as_the_row_before_is_not_a_statement() {
         }
     }
 }
+
+/// The copy that puts a call's argument in its register is of the call's line
+/// (the pin's `COPY` has the call's `DebugLoc`). Ours had none, so every case
+/// block of a switch began with a line-0 row: 5 of them in 8 cases.
+#[test]
+fn the_argument_move_of_a_switch_case_is_of_the_calls_line() {
+    let info = debug_info(
+        &["-m32", "-O2", "-g", "-fobject-format=elf", "--isel=dag"],
+        include_str!("../tests/data/debug_switch_args_m32_o2.ll"),
+    );
+    let zero = info.lines.iter().filter(|row| row.line == 0).count();
+    assert!(zero <= 2, "{zero} line-0 rows: {:?}", info.lines);
+}
