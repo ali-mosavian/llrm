@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/copyback.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/copyback.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/copyback.rs sha256:a993893270b72b34583434a34c6c3cbe6ff994744a3678d7860a5c609fdd3e2e -->
+<!-- src: crates/opt/llrm-transforms/src/copyback.rs sha256:91c630f2ef2e50ed847604f28fdd84c4f44dc067101611f37765ae944b8a1979 -->
 
 # copyback
 
@@ -8,9 +8,8 @@ element to a near formal through a slot, and stores the slot back after the
 call.
 
 ## How it works
-A store to an element of a BASIC array (an address built on an
-`inttoptr` the frontend marks `!llrm.descriptor`) of the value just loaded
-from that same address, with one direct call in between, is dropped when
+A store of the value just loaded from the same address, with one direct
+call in between, is dropped when
 
 - the call hands the callee a slot the value was copied into, in a parameter
   that is `readonly nocapture`, and

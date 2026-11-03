@@ -466,6 +466,18 @@ fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() 
     );
 }
 
+/// xs8's `x << 3` was `sla a` x3 (2 B / 8 T a bit) and its `x >> 5` `srl a` x5:
+/// 35 B / 737 T against SDCC's 26 B / 546 T. A byte shifted left in `a` is
+/// `add a, a`; a logical right shift by two or more, with the flags dead, is
+/// `rlca`/`rrca` the short way round and an `and` of the surviving bits.
+#[test]
+fn a_byte_shifted_in_a_is_doublings_and_a_rotate_with_a_mask() {
+    let ir = include_str!("kernels/ir/xs8.ll");
+    let out = text(ir, "xs8", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add a, a").count() >= 4 && out.matches("rlca").count() == 3, "{out}");
+    assert!(out.contains("and a, #7") && !out.contains("sla a") && !out.contains("srl a"), "{out}");
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.
@@ -800,6 +812,26 @@ fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
     let ir = include_str!("kernels/ir/minmax.ll");
     let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
+}
+
+/// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
+/// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
+/// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
+#[test]
+fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("mulhi3"), "{out}");
+}
+
+/// A word shifted left by a constant in `hl` was `sla l; rl h` a bit (4 B / 16
+/// T) where `add hl, hl` is 1 B / 11 T; hash16's `<< 5` paid 10 instructions.
+#[test]
+fn a_word_shifted_left_in_hl_is_doublings() {
+    let ir = include_str!("kernels/ir/hash16.ll");
+    let out = text(ir, "hash16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add hl, hl").count() >= 5 && !out.contains("rl h"), "{out}");
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:
