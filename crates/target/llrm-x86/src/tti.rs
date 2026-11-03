@@ -567,7 +567,10 @@ impl Tti for X86 {
     }
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        self.real_mode.as_ref()?.recursive_inlining
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {

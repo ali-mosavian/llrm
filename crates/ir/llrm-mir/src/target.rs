@@ -63,6 +63,10 @@ pub struct Tuning {
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE REC-2: (depth, callee `gcc_insns`) of the recursion copied at
+    /// speed, gcc's `max-inline-recursive-depth` and `max-inline-insns-recursive`
+    /// (`Tti::recursive_inlining`); none: the pin's inliner.
+    pub recursive_inlining: Option<(u32, i64)>,
 }
 
 impl Tuning {
@@ -86,6 +90,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         keep_constant_displacements: false,
+        recursive_inlining: None,
     };
 }
 

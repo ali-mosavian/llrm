@@ -2431,3 +2431,27 @@ b0:
     .expect("the pipeline runs");
     assert!(!llrm_mir::print::module(&module).contains("@demo"), "demo is still a global");
 }
+
+/// Calls of `@fib` after the default pipeline on x86-m32 with `options`.
+fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
+    let mut module = parsed(&tree_recursion(0).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @fib").count()
+}
+
+/// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
+/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
+/// into itself to depth 8 (REC-2).
+#[test]
+fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+}

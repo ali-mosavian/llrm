@@ -85,6 +85,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
         inline_size_guard_at_size: true,
+        // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        recursive_inlining: Some((8, 450)),
         ..llrm_mir::target::Tuning::PIN
     }
 }
