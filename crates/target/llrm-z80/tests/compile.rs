@@ -303,11 +303,12 @@ fn a_search_loop_keeps_its_base_pointer_in_a_register() {
 /// (`ld l, e; ld h, d`, `ld l, c; ld h, b`): 41 B / 218 T against SDCC's
 /// 24 / 147. A pointer that is only ever read through `(hl)` lives in `hl`.
 #[test]
-#[ignore = "greedy has no hint to keep the pointers read through (hl) in hl"]
 fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
-    assert!(!out.contains("ld l, e") && !out.contains("ld l, c"), "{out}");
+    let start = out.find("L0_2:").expect("the loop label");
+    let end = out[start..].find("jr nz, L0_2").expect("the back edge") + start;
+    assert!(!out[start..end].contains("ld l,"), "{out}");
 }
 
 /// scmp copied `bc` into `hl` (`ld l, c; ld h, b`) on every trip only to

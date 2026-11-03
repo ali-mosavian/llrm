@@ -135,6 +135,7 @@ fn allocate(
     name: &str,
 ) -> Result<Allocated, String> {
     two_address(&mut function);
+    read_bytes_through_their_pairs(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
@@ -153,6 +154,59 @@ fn allocate(
         slots.clear();
     }
     Ok((function, assignment, slots, reads))
+}
+
+/// A byte loaded through `hl` that is wanted in `a` is loaded through
+/// the pointer's own pair (`ld a, (bc)`), so the copy into `hl` is gone and
+/// `hl` stays free for a pointer that has no other form (`cp (hl)`): scmp
+/// copied both its pointers into `hl` on every trip. The use in `a` is
+/// followed through copies, around loops.
+fn read_bytes_through_their_pairs(function: &mut MFunction) {
+    let copy_of = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
+        (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) => Some((*to, *from)),
+        _ => None,
+    };
+    // the values wanted in `a`: some use is a copy into `a` or into such a value
+    let mut in_a = std::collections::HashSet::<u32>::new();
+    loop {
+        let before = in_a.len();
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            if let Some((to, Reg::Virt(from))) = copy_of(inst) {
+                if to == Reg::Phys(reg::A) || matches!(to, Reg::Virt(w) if in_a.contains(&w)) {
+                    in_a.insert(from);
+                }
+            }
+        }
+        if in_a.len() == before {
+            break;
+        }
+    }
+    for block in &mut function.blocks {
+        for at in 0..block.insts.len().saturating_sub(1) {
+            let (copy, load) = (&block.insts[at], &block.insts[at + 1]);
+            let (
+                Some((Reg::Phys(hl), _)),
+                Kind::Op("LD8rm"),
+                [Operand::Def(Reg::Virt(byte)), Operand::Use(Reg::Phys(pointer))],
+            ) = (copy_of(copy), load.kind, &load.operands[..])
+            else {
+                continue;
+            };
+            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) {
+                continue;
+            }
+            let (Operand::Use(from), Operand::Def(to)) = (copy.operands[1].clone(), load.operands[0].clone()) else {
+                continue;
+            };
+            let mut read = load.clone();
+            read.kind = Kind::Op("LD8Arp");
+            read.operands = vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(from)];
+            let mut out = copy.clone();
+            out.operands = vec![Operand::Def(to), Operand::Use(Reg::Phys(reg::A))];
+            block.insts[at] = read;
+            block.insts[at + 1] = out;
+        }
+    }
 }
 
 /// The pair `register` is, or is half of, if `push` and `pop` can move it: not
