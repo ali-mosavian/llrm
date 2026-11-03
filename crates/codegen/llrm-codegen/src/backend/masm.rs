@@ -1480,6 +1480,7 @@ fn parts(
     }
     let framed = framed_by(reserve);
     let reserve = held(reserve);
+    let reserve = reserve - red_zone(procedure, omit);
     let (bp, sp) = (reg(FRAME), reg(STACK));
     if procedure.body.saved_first {
         return lowered(procedure, &saved, reserve, framed, omit);
@@ -1548,6 +1549,38 @@ fn parts(
         leave.extend(after);
     }
     (enter, leave)
+}
+
+/// The bytes of a leaf function's frame that live in the red zone, below the
+/// stack pointer, with no `sub` for them: `X86FrameLowering::emitPrologue`
+/// takes `has128ByteRedZone` bytes off `StackSize` where the function makes no
+/// call, keeps no frame register, realigns nothing and has no variable-sized
+/// object. `omit` is whether the frame register is left out. The registers
+/// are pushed above the locals (`saved_first`) or there are none. A push in
+/// the body would write over the zone, so a body with one has none (its pops
+/// are not asked: `exits_inserted` puts the saved registers' there, and the
+/// answer must not change once it has).
+fn red_zone(
+    procedure: &Procedure,
+    omit: bool,
+) -> i64 {
+    let slot = procedure.registers.slot;
+    let rounded = (procedure.reserve + slot - 1) / slot * slot;
+    if !omit
+        || procedure.registers.red_zone == 0
+        || rounded == 0
+        || procedure.stack_check.is_some()
+        || procedure.probe_stack.is_some()
+        || !(procedure.body.saved_first || saved_of(procedure).is_empty())
+    {
+        return 0;
+    }
+    let in_zone = |what: &Semantics| matches!(what.op, Operation::Call | Operation::Push);
+    if procedure.body.insns().iter().any(|one| one.what.as_ref().is_some_and(in_zone)) {
+        return 0;
+    }
+    let total = if procedure.body.slot_dropped { rounded } else { rounded + slot };
+    procedure.registers.red_zone.min(total)
 }
 
 /// Where the frame an interrupt handler saved starts above its own BP: the
@@ -4163,6 +4196,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
         };
@@ -4215,6 +4249,7 @@ mod tests {
                 optional: false,
                 enter,
                 wrap_split_size: false,
+                red_zone: 0,
                 slot_scratch: None,
                 free: false,
             };
@@ -4286,6 +4321,7 @@ mod tests {
             optional,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
         };
@@ -4459,6 +4495,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
         };

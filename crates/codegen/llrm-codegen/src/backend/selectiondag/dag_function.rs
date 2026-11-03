@@ -921,7 +921,8 @@ fn selected_in(
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
         // The declared alignment wins over the natural one; above what the
-        // frame keeps the stack aligned to, the frame realigns the stack pointer.
+        // frame keeps the stack aligned to, the frame realigns the stack
+        // pointer.
         let align = align.max(wanted.map_or(0, |one| one as i64));
         sizes.push((value, size, align));
     }

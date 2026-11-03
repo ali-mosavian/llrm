@@ -272,7 +272,8 @@ fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
 }
 
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
-/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would fault).
+/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
+/// fault).
 #[test]
 fn a_local_declared_align_16_is_16_aligned_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -302,6 +303,62 @@ fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
         let disp: i64 = disp.trim_start_matches('+').parse().unwrap_or(0);
         assert_eq!(disp % 16, 0, "{listing}");
     }
+}
+
+/// A leaf's 100-byte local paid `sub rsp, 104` / `add rsp, 104` (about 12 B);
+/// the pin keeps it in the 128-byte red zone below `rsp`. A call, `noredzone`
+/// and a frame past the zone keep their `sub`.
+#[test]
+fn a_leaf_frame_within_128_bytes_has_no_sub_at_m64() {
+    let ir = |size: u32, attrs: &str, call: &str| {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @n = global i64 0\n\
+             declare void @g()\n\
+             define void @f() {attrs} {{\n  %a = alloca [{size} x i8], align 1\n  %i = load volatile i64, ptr @n\n  %p = getelementptr i8, ptr %a, i64 %i\n  store volatile i8 1, ptr %a\n  store volatile i8 2, ptr %p\n{call}  ret void\n}}\nattributes #0 = {{ noredzone }}\n"
+        )
+    };
+    let listing = |size: u32, attrs: &str, call: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &ir(size, attrs, call), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let leaf = listing(100, "", "");
+    assert!(!leaf.contains("sub rsp") && !leaf.contains("add rsp") && leaf.contains("[rsp-"), "{leaf}");
+    let called = listing(100, "", "  call void @g()\n  store volatile i8 3, ptr %a\n");
+    assert!(called.contains("sub rsp"), "{called}");
+    assert!(listing(100, "#0", "").contains("sub rsp"));
+    // 200 B (208 with the frame slot): 80 B stay above the zone.
+    let big = listing(200, "", "");
+    assert!(big.contains("sub rsp, 80") && big.contains("add rsp, 80"), "{big}");
+}
+
+/// A leaf that pushes callee-saved registers and has a red-zone frame: the
+/// saved registers' pops `exits_inserted` puts in the body must not take the
+/// zone away at the entry (matmul, nbody_fixed, nbody_single: "the frame cannot
+/// be addressed through the stack pointer", the exits at depth 128).
+#[test]
+fn a_leaf_with_saved_registers_keeps_its_red_zone_at_m64() {
+    let loads: String =
+        (0..14).map(|i| format!("  %v{i} = load volatile i64, ptr getelementptr (i64, ptr @n, i64 {i})\n")).collect();
+    let sums: String = (1..14)
+        .map(|i| {
+            format!(
+                "  %s{i} = add i64 %{prev}, %v{i}\n",
+                prev = if i == 1 { "v0".to_owned() } else { format!("s{}", i - 1) }
+            )
+        })
+        .collect();
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         @n = global [16 x i64] zeroinitializer\n\
+         define i64 @f(i64 %k) {{\n  %a = alloca [64 x i8], align 8\n  %q = getelementptr i8, ptr %a, i64 %k\n{loads}  store volatile i8 1, ptr %q\n  %m = mul i64 %v1, %v2\n  %m2 = mul i64 %m, %v3\n{sums}  %t = add i64 %s13, %m2\n  %u = mul i64 %t, %v5\n  %w = add i64 %u, %v6\n  %x = mul i64 %w, %v7\n  %y = add i64 %x, %v8\n  %z = add i64 %y, %v9\n  %zz = mul i64 %z, %v10\n  %zzz = add i64 %zz, %v11\n  %r = mul i64 %zzz, %v12\n  %r2 = add i64 %r, %v13\n  %r3 = add i64 %r2, %v0\n  %r4 = mul i64 %r3, %v4\n  ret i64 %r4\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rbx") || listing.contains("push r12"), "{listing}");
+    assert!(!listing.contains("sub rsp") && listing.contains("[rsp+rdi-"), "{listing}");
 }
 
 /// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and

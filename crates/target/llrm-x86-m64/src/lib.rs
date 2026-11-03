@@ -222,6 +222,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_wrap_split_size
     }
 
+    fn frame_red_zone(&self) -> i64 {
+        CALLING.native().frame_red_zone
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,

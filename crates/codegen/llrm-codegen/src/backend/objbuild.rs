@@ -640,6 +640,10 @@ fn stack_probed(
         for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
             procedure.probe_stack = Some("__chkstk".to_owned());
         }
+        // Win64 has no red zone.
+        for procedure in module.procedures.iter_mut() {
+            procedure.registers.red_zone = 0;
+        }
     }
     module
 }

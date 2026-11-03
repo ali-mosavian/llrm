@@ -33,6 +33,8 @@ first_argument_offset = 16
 frame = "rbp"
 frame_optional = true
 frame_wrap_split_size = true
+# System V: a leaf function keeps up to 128 bytes of locals below rsp (X86FrameLowering::has128ByteRedZone).
+frame_red_zone = 128
 # A one-slot frame is `push rax` / `pop rcx` (X86FrameLowering emitSPUpdate): rcx carries no result.
 frame_slot_push = "rax"
 frame_slot_pop = "rcx"

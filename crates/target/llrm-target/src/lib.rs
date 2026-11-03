@@ -758,6 +758,7 @@ pub trait Target {
             optional: self.frame_optional(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
+            red_zone: self.frame_red_zone(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
         }
@@ -793,6 +794,12 @@ pub trait Target {
     fn frame_wrap_split_size(&self) -> bool {
         false
     }
+
+    /// The bytes below the stack pointer a leaf frame may use (`calling.toml`'s
+    /// `frame_red_zone`).
+    fn frame_red_zone(&self) -> i64 {
+        0
+    }
 }
 
 /// The registers a procedure's frame is made of. LIR names the frame register
@@ -816,6 +823,9 @@ pub struct FrameRegisters {
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
+    /// The bytes below the stack pointer a leaf function's locals may use
+    /// without a `sub`; 0 where the ABI has no red zone.
+    pub red_zone: i64,
     /// The registers a one-slot frame pushes and pops (`calling.toml`'s
     /// `frame_slot_push`/`frame_slot_pop`), where it does.
     pub slot_scratch: Option<(RegId, RegId)>,
