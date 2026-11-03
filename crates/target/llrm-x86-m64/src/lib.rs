@@ -351,6 +351,8 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            recursive_inlining: Some((8, 450)), // DEVIATE REC-2, as m32
+                            recursive_edge_growth: Some((15, 30)),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

@@ -1,0 +1,10 @@
+[package]
+name = "llrm-gpl-gcc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+description = "gcc-derived estimates (GPL-3.0-or-later), optional: llrm-transforms feature gcc-gpl"
+
+[dependencies]
+llrm-mir = { workspace = true }
