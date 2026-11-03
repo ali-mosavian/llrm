@@ -185,6 +185,7 @@ fn module(
                 | Location::Offset(..)
                 | Location::Expression { .. }
                 | Location::EntryValue(_)
+                | Location::WasmLocal(_)
                 | Location::Pieces(_)
                 | Location::Relative { .. } => {}
             }

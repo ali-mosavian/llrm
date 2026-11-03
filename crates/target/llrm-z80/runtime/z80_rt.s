@@ -444,6 +444,289 @@ loop:	ld	b,#32
 	pop	ix
 	ret
 
+; ---- 64-bit divide, remainder and shifts ----------------------------------------------------------
+; A long long travels as four words, low first. The result is written through hl (the hidden pointer, also
+; returned in de); the first operand's words are de, bc, 4(ix), 6(ix) and the second's the next four words on the
+; stack (8(ix) up) or, for a shift, a count byte at 8(ix). The caller pops its arguments.
+
+; The mode is in a: 0 quotient of unsigned, 1 remainder of unsigned, 2 quotient of signed, 3 remainder of signed.
+; Restoring division over a frame: the dividend shifts left through the remainder, 64 steps, the quotient bit
+; entering at the bottom. Frame: -16..-9 quotient/dividend, -8..-1 remainder, -17 mode (bit 2 quotient negative,
+; bit 3 remainder negative), -18 steps left, -19 carry out of the remainder, -21,-20 result pointer.
+	.globl __udivdi3
+__udivdi3:
+	xor	a
+	jr	udivmoddi
+	.globl __umoddi3
+__umoddi3:
+	ld	a,#1
+	jr	udivmoddi
+	.globl __divdi3
+__divdi3:
+	ld	a,#2
+	jr	udivmoddi
+	.globl __moddi3
+__moddi3:
+	ld	a,#3
+udivmoddi:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	ld	iy,#-21
+	add	iy,sp
+	ld	sp,iy
+	ld	-21(ix),l
+	ld	-20(ix),h
+	ld	-17(ix),a
+	ld	-16(ix),e
+	ld	-15(ix),d
+	ld	-14(ix),c
+	ld	-13(ix),b
+	ld	a,4(ix)
+	ld	-12(ix),a
+	ld	a,5(ix)
+	ld	-11(ix),a
+	ld	a,6(ix)
+	ld	-10(ix),a
+	ld	a,7(ix)
+	ld	-9(ix),a
+	xor	a
+	ld	b,#8
+	push	ix
+	pop	hl
+	ld	de,#-8
+	add	hl,de
+1$:	ld	(hl),a
+	inc	hl
+	djnz	1$
+	bit	1,-17(ix)
+	jr	z,loop64
+	bit	7,-9(ix)
+	jr	z,2$
+	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	call	neg64
+	ld	a,-17(ix)
+	xor	a,#12
+	ld	-17(ix),a
+2$:	bit	7,15(ix)
+	jr	z,loop64
+	push	ix
+	pop	hl
+	ld	de,#8
+	add	hl,de
+	call	neg64
+	ld	a,-17(ix)
+	xor	a,#4
+	ld	-17(ix),a
+loop64:
+	ld	-18(ix),#64
+3$:	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	sla	(hl)
+	ld	b,#15
+4$:	inc	hl
+	rl	(hl)
+	djnz	4$
+	sbc	a,a
+	ld	-19(ix),a
+	push	ix
+	pop	hl
+	ld	de,#8
+	add	hl,de
+	ex	de,hl
+	push	ix
+	pop	hl
+	ld	bc,#-8
+	add	hl,bc
+	or	a,a
+	ld	b,#8
+5$:	ld	a,(hl)
+	ex	de,hl
+	sbc	a,(hl)
+	ex	de,hl
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	5$
+	jr	nc,7$
+	ld	a,-19(ix)
+	or	a,a
+	jr	nz,7$
+	ld	bc,#-8
+	add	hl,bc
+	ex	de,hl
+	add	hl,bc
+	ex	de,hl
+	or	a,a
+	ld	b,#8
+6$:	ld	a,(de)
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	6$
+	jr	8$
+7$:	inc	-16(ix)
+8$:	dec	-18(ix)
+	jp	nz,3$
+	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	bit	0,-17(ix)
+	jr	z,9$
+	ld	de,#8
+	add	hl,de
+	bit	3,-17(ix)
+	jr	10$
+9$:	bit	2,-17(ix)
+10$:	jr	z,11$
+	call	neg64
+	ld	bc,#-8
+	add	hl,bc
+11$:	ld	e,-21(ix)
+	ld	d,-20(ix)
+	ld	bc,#8
+	ldir
+	ld	e,-21(ix)
+	ld	d,-20(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+
+; Negates the eight bytes at hl in place; hl is left at their end.
+neg64:
+	ld	b,#8
+	or	a,a
+1$:	ld	a,#0
+	sbc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	djnz	1$
+	ret
+
+; A shift of a long long by the count byte at 8(ix), left, logical right or arithmetic right (a = 0, 1, 2): the
+; operand is written to the result, shifted whole bytes with ldir/lddr, then the rest a bit at a time. Frame: -2,-1
+; the result pointer, -3 mode, -4 fill byte, -5 bits left, -6 bytes left.
+	.globl __ashldi3
+__ashldi3:
+	xor	a
+	jr	shiftdi
+	.globl __lshrdi3
+__lshrdi3:
+	ld	a,#1
+	jr	shiftdi
+	.globl __ashrdi3
+__ashrdi3:
+	ld	a,#2
+shiftdi:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	hl
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	inc	hl
+	ld	(hl),c
+	inc	hl
+	ld	(hl),b
+	inc	hl
+	ld	e,4(ix)
+	ld	(hl),e
+	inc	hl
+	ld	e,5(ix)
+	ld	(hl),e
+	inc	hl
+	ld	e,6(ix)
+	ld	(hl),e
+	inc	hl
+	ld	e,7(ix)
+	ld	(hl),e
+	ld	d,a
+	cp	a,#2
+	ld	a,#0
+	jr	nz,1$
+	ld	a,e
+	rla
+	sbc	a,a
+1$:	ld	e,a
+	push	de
+	ld	a,8(ix)
+	and	a,#7
+	ld	b,a
+	ld	a,8(ix)
+	rrca
+	rrca
+	rrca
+	and	a,#0x1F
+	ld	c,a
+	push	bc
+2$:	ld	a,-6(ix)
+	or	a,a
+	jr	z,5$
+	dec	-6(ix)
+	ld	l,-2(ix)
+	ld	h,-1(ix)
+	ld	a,-3(ix)
+	or	a,a
+	jr	nz,3$
+	ld	de,#7
+	add	hl,de
+	ld	e,l
+	ld	d,h
+	dec	hl
+	ld	bc,#7
+	lddr
+	xor	a
+	ld	(de),a
+	jr	2$
+3$:	ld	e,l
+	ld	d,h
+	inc	hl
+	ld	bc,#7
+	ldir
+	ld	a,-4(ix)
+	ld	(de),a
+	jr	2$
+5$:	ld	a,-5(ix)
+	or	a,a
+	jr	z,9$
+6$:	ld	l,-2(ix)
+	ld	h,-1(ix)
+	ld	a,-3(ix)
+	or	a,a
+	jr	nz,7$
+	sla	(hl)
+	ld	b,#7
+12$:	inc	hl
+	rl	(hl)
+	djnz	12$
+	jr	8$
+7$:	ld	de,#7
+	add	hl,de
+	dec	a
+	jr	nz,10$
+	srl	(hl)
+	jr	11$
+10$:	sra	(hl)
+11$:	ld	b,#7
+13$:	dec	hl
+	rr	(hl)
+	djnz	13$
+8$:	dec	-5(ix)
+	jr	nz,6$
+9$:	ld	e,-2(ix)
+	ld	d,-1(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+
 ; ---- the compiler's library calls -----------------------------------------------------------------
 ; Reserved `__` names: a program may define its own strlen, memcpy, memmove or memset and none of them clashes.
 ; tests/programs/libc/ has the C library entries over these.

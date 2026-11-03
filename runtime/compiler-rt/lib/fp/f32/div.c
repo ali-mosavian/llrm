@@ -1,5 +1,7 @@
 /* __divsf3. The kernel divides the normalised mantissas; SF_DIV_NEWTON, SF_DIV_HW32 or one quotient bit per step, see README. */
 #include "f32.h"
+/* Open compiler issue (6502 backend is branch-polarity sensitive; owner llrm-target-6502, plan 11-07): the 6502 -Os defaults build lays out __divsf3 differently when the TU has another caller of
+ * sf_clz32 (+0.7% cycles); repro ~/scratch/handoff/divsf3-6502/repro. The config/6502 build is unaffected. */
 
 #ifndef SF_EXT_MULDIV
 static inline sf32 div_core(uint32_t sign, int ea, int eb, uint32_t ma, uint32_t mb)

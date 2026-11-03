@@ -398,6 +398,7 @@ impl Builder<'_> {
             | Location::Offset(..)
             | Location::Expression { .. }
             | Location::EntryValue(_)
+            | Location::WasmLocal(_)
             | Location::Pieces(_)
             | Location::Relative { .. } => return Ok(Vec::new()),
         }

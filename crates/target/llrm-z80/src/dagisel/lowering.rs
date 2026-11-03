@@ -16,7 +16,7 @@
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemInfo, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -107,16 +107,13 @@ pub fn target_lowering() -> TargetLowering {
     }
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
-    for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip([
-        "__divsi3",
-        "__udivsi3",
-        "__modsi3",
-        "__umodsi3",
-        "__ashlsi3",
-        "__lshrsi3",
-        "__ashrsi3",
-    ]) {
-        tl.set_libcall_name(op, MVT::I32, name);
+    for (vt, names) in [
+        (MVT::I32, ["__divsi3", "__udivsi3", "__modsi3", "__umodsi3", "__ashlsi3", "__lshrsi3", "__ashrsi3"]),
+        (MVT::I64, ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__ashldi3", "__lshrdi3", "__ashrdi3"]),
+    ] {
+        for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
     }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
@@ -185,16 +182,39 @@ impl Hooks for Z80Lowering {
         use super::call::{Ext, In, Out, lower_call};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         // `LowerCallTo` splits a type the target holds in no register: a long
-        // travels as two words, low first
+        // travels as two words and a long long as four, low first
         let mut outs = Vec::new();
+        // a result of no register is the pointer to its memory, the first
+        // argument (`CanLowerReturn` false: the hidden `sret` pointer)
+        let slot = (ret == EVT::I64).then(|| dag.create_stack_temporary(8, 1));
+        if let Some(cell) = slot {
+            outs.push(Out {
+                value: dag.get_frame_index(EVT::I16, cell),
+                ext: Ext::Any,
+                pointer: true,
+                arg_vt: EVT::I16,
+                split: false,
+                variadic: false,
+                sret: true,
+            });
+        }
         for &value in args {
             let vt = dag.value_type(value);
-            let parts = if vt == EVT::I32 {
-                let sixteen = dag.get_constant(16, EVT::I8);
-                let high = dag.get_node(ISD::Srl, vt, &[value, sixteen]);
-                vec![dag.get_node(ISD::Truncate, EVT::I16, &[value]), dag.get_node(ISD::Truncate, EVT::I16, &[high])]
-            } else {
+            let words = match vt {
+                EVT::I32 => 2,
+                EVT::I64 => 4,
+                _ => 1,
+            };
+            let parts: Vec<SDValue> = if words == 1 {
                 vec![value]
+            } else {
+                (0..words)
+                    .map(|word| {
+                        let by = dag.get_constant(16 * word as u128, EVT::I8);
+                        let shifted = if word == 0 { value } else { dag.get_node(ISD::Srl, vt, &[value, by]) };
+                        dag.get_node(ISD::Truncate, EVT::I16, &[shifted])
+                    })
+                    .collect()
             };
             let split = parts.len() > 1;
             outs.extend(parts.into_iter().map(|part| Out {
@@ -208,14 +228,31 @@ impl Hooks for Z80Lowering {
             }));
         }
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
-        let ins =
-            vec![
-                In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
-                if ret == EVT::I32 { 2 } else { 1 }
-            ];
+        let ins = match ret {
+            EVT::I64 => Vec::new(),
+            _ => {
+                vec![
+                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
+                    if ret == EVT::I32 { 2 } else { 1 }
+                ]
+            }
+        };
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();
-        let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        let (chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        if let Some(cell) = slot {
+            let address = dag.get_frame_index(EVT::I16, cell);
+            let info = MemInfo {
+                mem_vt: EVT::I64,
+                align: 1,
+                volatile: false,
+                base: MemBase::Stack(cell),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            return Some(dag.get_load(EVT::I64, chain, address, info));
+        }
         match values[..] {
             [one] => Some(one),
             [lo, hi] => Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi])),
