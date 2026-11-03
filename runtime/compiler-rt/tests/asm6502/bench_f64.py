@@ -6,7 +6,7 @@ are the first N of tests/gen_vectors64.c's stream: random bits, denormals, edge 
 minus a stub that returns zero (A, X, rc2..rc7: eight stores, about 20 cycles, and a base record that must pass) for ours, minus a copy of the operand for llvm-mos. Bytes are the code reachable
 from the entry point: the library functions it calls (sim65_reach.py) plus the mos_rt.s routines they use; llvm-mos: text of the program
 with the operation minus the program without it. SDCC and cc65 have a 32-bit double: no f64 column for them."""
-import os, re, subprocess, sys, tempfile
+import glob, os, re, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__)); SF = os.path.join(here, '../..'); TESTS = os.path.join(here, '..')
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 OPS = sys.argv[2].split() if len(sys.argv) > 2 and sys.argv[2] else ['add', 'sub', 'mul', 'div']
@@ -48,7 +48,7 @@ def compile_libs(opt):
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
-    open(path, 'w').write(re.sub(r'^\.export (?!__|sf32_pack)\S+\n', '', s, flags=re.M))
+    open(path, 'w').write(re.sub(r'^\.export (?!__|sf32_pack|sf64_pack)\S+\n', '', s, flags=re.M))
 
 def code_size(obj):
     return int(re.search(r'CODE:\s+(\d+)', sh('od65', '--dump-segsize', obj).stdout).group(1))

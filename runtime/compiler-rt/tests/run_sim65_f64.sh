@@ -4,7 +4,7 @@
 # (sim65 has 64 KB: the library takes about 40 KB). The library is compiled once; each batch relinks the driver with its slice.
 # Prints, per op and class of the expected result (zerosign, denormal, special, normal): pairs and mismatches; then compares and conversions.
 # llrm-cc gaps worked around here, not in the library: the driver is always -O2 (-Os: "greedy refused" on main); static functions are
-# exported, so only __* and sf32_pack stay exported; global data is not exported, so the wrapper is appended to the driver's .s;
+# exported, so only __*, sf32_pack and sf64_pack stay exported; global data is not exported, so the wrapper is appended to the driver's .s;
 # mos_rt.s keeps its __sa/__sb cells private, so they are exported here. int32.c is not linked: the compiler calls __mulsi3 and the
 # other 32-bit helpers with operands in mos_rt.s's __sa/__sb, not the C convention.
 set -e
@@ -22,7 +22,7 @@ mkdir $T/r
 python3 tests/sim65_reach.py $T/r main $T/main.s $(for f in $LIBS; do echo $T/$f.s; done) > /dev/null
 OBJS=
 for f in $LIBS; do
-  sed -i '/^\.export \(__\|sf32_pack\)/!{/^\.export /d}' $T/r/$f.s
+  sed -i '/^\.export \(__\|sf32_pack\|sf64_pack\)/!{/^\.export /d}' $T/r/$f.s
   ca65 -t sim6502 -U $T/r/$f.s -o $T/r/$f.o; OBJS="$OBJS $T/r/$f.o"
 done
 for a in $SF_ASM; do ca65 -t sim6502 -I config/6502 $a -o $T/$(basename $a).o; OBJS="$OBJS $T/$(basename $a).o"; done
