@@ -284,6 +284,15 @@ fn a_widened_load_goes_to_the_pairs_low_half() {
     assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
+/// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
+/// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
+/// instructions at -O2; 11 B, 160 T, 18 with it).
+#[test]
+fn a_decrement_behind_a_pointer_step_is_a_djnz() {
+    let out = text(include_str!("kernels/ir/sum4.ll"), "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("djnz") && !out.contains("dec b"), "{out}");
+}
+
 /// `digits` kept its counter across the divide call in a frame slot (`ld
 /// -1(ix), b` / `ld b, -1(ix)`) with 13 bytes of frame setup and teardown: 89 B
 /// at -Oz against SDCC's 76. As `push bc` / `pop bc` it needs no frame.
