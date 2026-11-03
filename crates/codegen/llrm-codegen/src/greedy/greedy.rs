@@ -541,6 +541,25 @@ fn decision_line(
     format!("dec v{reg} stage={stage:?} size={size} w={weight:.4} -> {verdict}")
 }
 
+/// One victim of an eviction, as `eviction_line` lists it.
+fn eviction_victim(
+    reg: u32,
+    weight: f32,
+) -> String {
+    format!("v{reg} w={weight:.4}")
+}
+
+/// The line of `LLRM_GREEDY_DECISIONS` for an eviction: `reg` (weight `weight`)
+/// takes `phys` from the intervals listed, which are requeued.
+fn eviction_line(
+    reg: u32,
+    weight: f32,
+    phys: RegId,
+    victims: &[String],
+) -> String {
+    format!("dec v{reg} w={weight:.4} evicts {} from {phys:?}", victims.join(", "))
+}
+
 type RecolorStack = Vec<(Rc<LiveInterval>, RegId)>;
 
 /// `RAGreedy` (RegAllocGreedy.h#L55) over `RegAllocBase`.
@@ -569,6 +588,9 @@ pub struct RAGreedy<'a> {
     csr_cost: BlockFrequency,
     /// `SetOfBrokenHints`, in the order they were recorded.
     broken: Vec<u32>,
+    /// Keep the decision lines `LLRM_GREEDY_DECISIONS` prints (tests read them).
+    pub record_decisions: bool,
+    pub decisions: Vec<String>,
 }
 
 impl<'a> RAGreedy<'a> {
@@ -593,6 +615,26 @@ impl<'a> RAGreedy<'a> {
             split: None,
             csr_cost: BlockFrequency(0),
             broken: Vec::new(),
+            record_decisions: false,
+            decisions: Vec::new(),
+        }
+    }
+
+    /// One decision line: printed under `LLRM_GREEDY_DECISIONS`, kept when a
+    /// test asks. The pin's `-debug-only=regalloc` analogue.
+    fn tracing(&self) -> bool {
+        self.record_decisions || llrm_support::env_flag!("LLRM_GREEDY_DECISIONS")
+    }
+
+    fn note(
+        &mut self,
+        line: String,
+    ) {
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("{line}");
+        }
+        if self.record_decisions {
+            self.decisions.push(line);
         }
     }
 
@@ -766,23 +808,22 @@ impl<'a> RAGreedy<'a> {
             // new live intervals that result from splitting.
             let mut split_vregs: Vec<u32> = Vec::new();
             let decision = self.select_or_split(&virt_reg, &mut split_vregs);
-            if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            if self.tracing() {
                 let verdict = match &decision {
                     Select::Reg(phys) => format!("assign {phys:?}"),
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
-                eprintln!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
-                eprintln!(
-                    "{}",
-                    decision_line(
-                        virt_reg.reg(),
-                        self.extra.get_stage(virt_reg.reg()),
-                        virt_reg.size(),
-                        virt_reg.weight(),
-                        &verdict
-                    )
+                let hint = format!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
+                self.note(hint);
+                let line = decision_line(
+                    virt_reg.reg(),
+                    self.extra.get_stage(virt_reg.reg()),
+                    virt_reg.size(),
+                    virt_reg.weight(),
+                    &verdict,
                 );
+                self.note(line);
                 if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS_INTERVALS") {
                     eprintln!("    {}", virt_reg);
                 }
@@ -1366,6 +1407,7 @@ impl<'a> RAGreedy<'a> {
             intfs.extend(self.matrix.query_vregs(virt.reg(), &virt.range, unit, usize::MAX));
         }
         // Evict them second. This will invalidate the queries.
+        let mut victims: Vec<String> = Vec::new();
         for intf in intfs {
             // The same VirtReg may be present in multiple RegUnits. Skip
             // duplicates.
@@ -1377,6 +1419,11 @@ impl<'a> RAGreedy<'a> {
             self.extra.set_cascade(intf, cascade);
             self.stats.evicted += 1;
             new_vregs.push(intf);
+            victims.push(eviction_victim(intf, li.weight()));
+        }
+        if !victims.is_empty() && self.tracing() {
+            let line = eviction_line(virt.reg(), virt.weight(), phys, &victims);
+            self.note(line);
         }
     }
 
@@ -2079,6 +2126,27 @@ mod tests {
         assert_eq!(greedy.stats.failed, 0);
         assert!(greedy.stats.evicted > 0 || greedy.stats.spilled_ranges > 0, "{:?}", greedy.stats);
         let _ = LirBlock::new(0, Vec::new());
+    }
+
+    /// z80 lz4 -Oz kept a loop counter in the frame and a once-read offset in a
+    /// register, and `LLRM_GREEDY_DECISIONS` printed no line for the eviction
+    /// that decided it: the trace named the interval taken off the queue and its
+    /// outcome, never the intervals it displaced or their weights.
+    #[test]
+    fn test_an_eviction_names_who_took_the_register_and_who_lost_it_with_weights() {
+        let mut insns = vec![insn(vec![1], vec![]), insn(vec![2], vec![]), insn(vec![3], vec![])];
+        for _ in 0..6 {
+            insns.push(insn(vec![], vec![2, 3]));
+        }
+        insns.push(insn(vec![], vec![1]));
+        let body = body(vec![insns]);
+        let env = Env { regs: vec![RegId::EAX, RegId::EBX] };
+        let mut greedy = allocator(&body, &env);
+        greedy.record_decisions = true;
+        greedy.allocate_phys_regs();
+        assert!(greedy.stats.evicted > 0, "{:?}", greedy.stats);
+        let line = greedy.decisions.iter().find(|line| line.contains(" evicts ")).expect("an eviction line");
+        assert!(line.starts_with("dec v") && line.contains(" w=") && line.contains(" from E"), "{line}");
     }
 
     /// The same program with the definitions in another order allocates the
