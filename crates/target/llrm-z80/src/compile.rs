@@ -809,11 +809,13 @@ pub fn place_copies_where_needed(
     }
 }
 
-/// A word compared right after a copy of it reads the copy's source: digits'
-/// entry made `ld e, l` / `ld d, h` for the compare of the dividend, and the
-/// loop head wanted it back in `hl`. Only a `CP16i`, which takes any pair,
-/// is rewritten, when the copy's destination is dead after the last compare
-/// and the source is not written before it. The copy is then dropped.
+/// A word compared, or a register stored to the frame, right after a copy of
+/// it reads the copy's source: digits' entry made `ld e, l` / `ld d, h` for the
+/// compare of the dividend, and the loop head wanted it back in `hl`; crc16
+/// copied `a` to `b` to store it (`ld b, a` / `ld -1(ix), b`). Only a `CP16i`
+/// or a spill, which take any register of their size, is rewritten, when the
+/// copy's destination is dead after the last of them and the source is not
+/// written before it. The copy is then dropped.
 pub fn read_copies_at_their_source(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -824,6 +826,7 @@ pub fn read_copies_at_their_source(
         Reg::Phys(id) => id,
     };
     let pair = |r: RegId| [reg::BC, reg::DE, reg::HL].contains(&r);
+    let byte = |r: RegId| [reg::A, reg::B, reg::C, reg::D, reg::E, reg::H, reg::L].contains(&r);
     'again: loop {
         let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
         for b in 0..function.blocks.len() {
@@ -833,7 +836,7 @@ pub fn read_copies_at_their_source(
                     continue;
                 };
                 let (dst, src) = (register(*dst), register(*src));
-                if dst == src || !pair(dst) || !pair(src) {
+                if dst == src || !(pair(dst) && pair(src) || byte(dst) && byte(src)) {
                     continue;
                 }
                 let mut compares = Vec::new();
@@ -848,7 +851,14 @@ pub fn read_copies_at_their_source(
                             ),
                         );
                     if reads {
-                        let exact = inst.kind == Kind::Op("CP16i")
+                        // a compare of a pair, or a store of a register to the
+                        // frame, takes any register of its size
+                        let any = match inst.kind {
+                            Kind::Op("CP16i" | "SPILL16") => pair(dst),
+                            Kind::Op("SPILL8") => byte(dst),
+                            _ => false,
+                        };
+                        let exact = any
                             && inst.operands.iter().all(|o| match o {
                                 Operand::Use(r) if Z80Registers::overlaps(register(*r), dst) => register(*r) == dst,
                                 _ => true,

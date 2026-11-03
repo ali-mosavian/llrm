@@ -48,3 +48,17 @@ fn a_word_compared_after_its_copy_reads_the_copys_source() {
     let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("ld e, l") && out.matches("ex de, hl").count() == 1, "{out}");
 }
+
+/// With the argument copy left in place, crc16 copied `a` to `b` to store it
+/// (`ld b, a` / `ld -1(ix), b`) after the prologue's `push af`: 4 B over the
+/// hook-free code (64 B against 60). A store of a register reads the copy's
+/// source, and the prologue pushes it.
+#[test]
+fn a_spill_of_a_copy_reads_the_copys_source() {
+    unjoined();
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("(ix), b"), "{out}");
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    assert!(lines.windows(2).any(|pair| pair == ["push af", "push hl"]), "{out}");
+}
