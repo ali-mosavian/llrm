@@ -354,9 +354,11 @@ b:
 /// fields: the call was taken to write the whole record (qmove -Os, +8 clocks).
 #[test]
 fn a_field_is_kept_across_a_call_that_writes_other_fields_of_the_record() {
-    let loads = |body: &str| {
+    let loads = |body: &str, frame: bool, which: u8| {
+        let (decl, record) =
+            if frame { ("", "%r = alloca [3 x i16]") } else { ("@r = global [3 x i16] zeroinitializer\n", "%r = getelementptr i8, ptr @r, i16 0") };
         let mut module = parsed(&format!(
-            "@r = global [3 x i16] zeroinitializer
+            "{decl}
 
 define internal void @fill(ptr %p, i16 %i) {{
 b:
@@ -366,24 +368,31 @@ b:
 
 define i16 @f(i16 %c, i16 %i) {{
 b:
-  %z = getelementptr i8, ptr @r, i16 4
+  {record}
+  %z = getelementptr i8, ptr %r, i16 4
   store i16 %c, ptr %z
-  call void @fill(ptr @r, i16 %i)
+  call void @fill(ptr %r, i16 %i)
   %v = load i16, ptr %z
   ret i16 %v
 }}
 "
         ));
         crate::testing::stamped(&mut module).unwrap();
-        managed(&mut module, Promote);
+        match which {
+            0 => drop(managed(&mut module, Promote)),
+            1 => drop(managed(&mut module, crate::gvn::Gvn::default())),
+            _ => drop(managed(&mut module, crate::earlycse::EarlyCse::default())),
+        }
         let f = module.function_mut("f").unwrap().1;
         f.walk().filter(|(_, inst)| matches!(f.instruction(*inst).opcode, Opcode::Load { .. })).count()
     };
     let x_and_y = "  store i16 1, ptr %p\n  %y = getelementptr i8, ptr %p, i16 2\n  store i16 2, ptr %y";
-    assert_eq!(loads(x_and_y), 0);
+    for (frame, which) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
+    assert_eq!(loads(x_and_y, frame, which), 0, "{frame} {which}");
     let and_z = format!("{x_and_y}\n  %z = getelementptr i8, ptr %p, i16 4\n  store i16 3, ptr %z");
-    assert_eq!(loads(&and_z), 1);
-    assert_eq!(loads("  %q = getelementptr i8, ptr %p, i16 %i\n  store i16 1, ptr %q"), 1);
+    assert_eq!(loads(&and_z, frame, which), 1);
+    assert_eq!(loads("  %q = getelementptr i8, ptr %p, i16 %i\n  store i16 1, ptr %q", frame, which), 1);
+    }
 }
 
 /// The bodies of `text` its stamp states pure, by name.

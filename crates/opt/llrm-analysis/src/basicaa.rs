@@ -1220,7 +1220,26 @@ impl BasicAA<'_> {
                     verdict = self.alias_check(&place, loc, aaqi);
                 }
                 if verdict != AliasResult::NoAlias {
-                    narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
+                    let touched = arg.intersect(self.get_arg_mod_ref_info(call, at));
+                    // The bytes the callee's body touches through the parameter
+                    // (DEVIATE I3), where `loc` is among others of its object.
+                    let stated = |key| {
+                        callee
+                            .and_then(|one| one.parameter_attrs.get(at as usize))
+                            .and_then(|attrs| llrm_mir::memory::access_ranges(attrs, key))
+                    };
+                    let mut kept = ModRefInfo::NoModRef;
+                    for (key, kind) in
+                        [(llrm_mir::memory::READS, ModRefInfo::Ref), (llrm_mir::memory::WRITES, ModRefInfo::Mod)]
+                    {
+                        let apart = stated(key)
+                            .is_some_and(|ranges| self.apart_from(op.operands[at as usize], loc, &ranges, aaqi));
+                        if !apart {
+                            kept = kept.union(touched.intersect(kind));
+                        }
+                    }
+                    let touched = kept;
+                    narrowed = narrowed.union(touched);
                 }
                 if narrowed == arg {
                     break;
@@ -1245,6 +1264,29 @@ impl BasicAA<'_> {
             .and_then(|one| self.unit.globals.get(one.0 as usize)?.name.as_deref())
             .is_some_and(|name| name.starts_with("llvm.invariant.start"));
         if invariant_start { ModRefInfo::Ref } else { ModRefInfo::ModRef }
+    }
+}
+
+impl BasicAA<'_> {
+    /// Whether `loc` lies in the object `argument` points into, outside every
+    /// byte range `[low, high)` counted from `argument`: a constant offset of
+    /// both from one base, and a precise size of `loc`.
+    fn apart_from(
+        &self,
+        argument: Operand,
+        loc: &MemoryLocation,
+        ranges: &[(i64, i64)],
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        let Some(size) = loc.size.value().filter(|_| matches!(loc.size, LocationSize::Precise(_))) else {
+            return false;
+        };
+        let (one, other) = (self.decompose(argument, aaqi), self.decompose(loc.ptr, aaqi));
+        if one.base != other.base || !one.vars.is_empty() || !other.vars.is_empty() {
+            return false;
+        }
+        let (start, end) = (other.offset, other.offset + i128::from(size));
+        ranges.iter().all(|&(low, high)| end <= one.offset + i128::from(low) || one.offset + i128::from(high) <= start)
     }
 }
 
