@@ -132,6 +132,7 @@ pub fn compile_function(
         if crate::early_tail_duplicate::early_tail_duplicate(&mut f) {
             remove_unreachable_blocks(&mut f);
         }
+        crate::stack_coloring::stack_coloring(&mut f, blocks.first().map_or(&[], |block| &block.stack_colors));
         crate::dead_mi::dead_machine_instruction_elim(&mut f);
         crate::machine_licm::machine_licm(&mut f);
         crate::machine_cse::machine_cse(&mut f);

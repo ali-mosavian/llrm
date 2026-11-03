@@ -271,6 +271,7 @@ mod shadow_tests;
 pub mod shrinkwrap;
 pub mod slotcopies;
 pub mod slots;
+pub mod stackcoloring;
 pub mod stackusage;
 pub mod stepflags;
 pub mod valuetrack;
