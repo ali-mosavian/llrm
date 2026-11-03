@@ -6,6 +6,7 @@ import sys
 import json
 import subprocess
 import pytest
+import types
 import unittest
 from pathlib import Path
 
@@ -332,6 +333,13 @@ class StartupTests(unittest.TestCase):
         have = {one.language for one in bench.variants(bench.STARTUP)}
         self.assertEqual(have, {"bas", "bq16", "bq32", "c", "nib"})
 
+@pytest.fixture(autouse=True)
+def no_waivers(monkeypatch):
+    """The repo's own waivers (tools/bench/waivers) are not these tests' fixtures: every exception whose row the one-row base lacks is stale, so the
+    gate failed ("FAIL EXCEPTION ... delete it") on 10 tests the day an exception file landed."""
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
+
+
 
 def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel():
     """BASIC on our runtime (bq16: llrm runtime, real mode, jwlink) runs beside the Microsoft-runtime `bas` and needs no QB45."""
@@ -356,7 +364,7 @@ class TimedOnlyTests(unittest.TestCase):
             obj.write_bytes(test_sizes.object_with(12))
             with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
-        self.assertEqual(got, {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40})
+        self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
 
     def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
         """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
@@ -972,8 +980,10 @@ def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
 def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_time():
     """branch, loop, qlight and qmove took literal arguments: the optimiser returned the constant (0 to 2 instructions, a 0.03x "gain" at m16 -Os and
     six "region never entered" rows). Their C inputs are volatile reads and their BASIC inputs READ from DATA, so every build runs the body."""
-    for name in ("branch", "loop", "qlight", "qmove"):
-        assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
+    # Instrument config (owner w6, 2026-11-06): the parity kernels that once folded to constants, named because each had its own fold.
+    for name in ("branch", "loop", "qlight", "qmove", "control"):  # control: bas/bq16 -Os ran 0 kernel instructions on the tip
+        if name != "control":  # its C passes the inputs through pointers to statics, which the kernel reads
+            assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
         assert re.search(r"^read ", (bench.BENCH / "parity" / name / f"{name}.bas").read_text(), re.M)
 
 
@@ -986,52 +996,12 @@ def test_a_c_bench_row_builds_and_links(tmp_path):
     assert not isinstance(built, str), built
 
 
-def test_a_row_above_its_clock_limit_fails_the_gate():
+def test_a_row_whose_clocks_exceed_the_bases_fails_the_gate():
     """tile c -Os ran 10300 clocks against main's 10169 and nothing in the gate said so: only counts and sizes were judged."""
-    limits = {"tile c -Os": 10224}
-    assert bench.clock_problems("tile c -Os", {"clocks": 10225}, limits) == ["tile c -Os: clocks 10225 > limit 10224 (tools/bench/clock_limits.toml)"]
-    assert bench.clock_problems("tile c -Os", {"clocks": 10224}, limits) == []
-    assert bench.clock_problems("fib c -Os", {"clocks": 10**9}, limits) == []
-
-
-def test_lru_c_may_not_go_back_to_the_rep_stosb_fill():
-    """lru c -Os ran 377 clocks while a 28-byte `rep stosb` fill replaced its loop; with the loop kept it is 289."""
-    limits = bench.clock_limits()
-    assert limits["lru c -Os"] == 289
-    assert bench.clock_problems("lru c -Os", {"clocks": 377}, limits) == [
-        "lru c -Os: clocks 377 > limit 289 (tools/bench/clock_limits.toml)"
-    ]
-
-
-def test_a_row_above_main_with_no_clock_entry_fails_the_gate():
-    """quicksort nib ran 447484 clocks against main's 316122; had its entry been missing the gate would have gone red only on the first run."""
-    main = {"quicksort nib -Os": 316122}
-    assert bench.clock_problems("quicksort nib -Os", {"clocks": 316123}, {}, main) == [
-        "quicksort nib -Os: clocks 316123 > main's 316122 and no entry in tools/bench/clock_limits.toml"
-    ]
-    assert bench.clock_problems("quicksort nib -Os", {"clocks": 316122}, {}, main) == []
-    assert bench.clock_problems("quicksort nib -Os", {"clocks": 447484}, {"quicksort nib -Os": 447484}, main) == []
-
-
-def test_every_clock_limit_has_a_main_row_and_every_main_row_is_a_label():
-    assert set(bench.clock_limits()) <= set(bench.main_clocks())
-
-
-def test_every_clock_limit_names_a_real_row():
-    """A typo in a row label would leave its row unjudged."""
-    names = {one.name for directory in bench.benchmarks([]) for one in bench.variants(directory)}
-    for label in bench.clock_limits():
-        name, language, level = label.split()
-        assert (name in names or name.startswith("parity/")) and language in ("c", "bas", "nib") and level == "-Os", label
-
-
-def test_the_gate_judges_a_rows_clocks_against_its_limit(monkeypatch):
-    """judge() ran the count and size gate only: a row over its clock limit passed it."""
-    monkeypatch.setattr(bench, "clock_limits", lambda: {"tile c -Os": 100})
-    row = {"instructions": 1, "memory_operands": 1, "code_bytes": 1, "data_bytes": 0, "bss_bytes": 0}
-    got = {("tile", one.language, "Os"): {**row, "clocks": 101 if one.language == "c" else 1} for one in bench.variants(bench.BENCH / "tile")}
-    problems = bench.judge(got, ["tile"], ["Os"], base={})
-    assert problems == ["tile c -Os: clocks 101 > limit 100 (tools/bench/clock_limits.toml)"]
+    base = {"instructions": 1, "memory_operands": 1, "code_bytes": 1, "data_bytes": 0, "bss_bytes": 0, "clocks": 10224}
+    assert bench.against("tile c -Os", {**base, "clocks": 10225}, base) == ["tile c -Os: clocks 10225 > 10224 (worse)"]
+    assert bench.against("tile c -Os", base, base) == []
+    assert bench.against("tile c -Os", {**base, "clocks": 10223}, base) == []
 
 
 def test_the_merge_fails_when_a_shard_or_base_slice_measured_fewer_programs_than_its_share(tmp_path, capsys):
@@ -1059,3 +1029,180 @@ def test_the_first_stage_line_says_how_many_programs_and_how_many_cores(monkeypa
     monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
     bench.main()
     assert f"measuring 2 benchmarks at O2 Os, {len(os.sched_getaffinity(0))} usable of {os.cpu_count()} cores" in capsys.readouterr().err
+
+
+def test_compare_baselines_refuses_two_runs_that_differ_and_names_the_cells(tmp_path, capsys):
+    """A baseline that a second run does not reproduce (main's qlight c: 78 instructions in one run, 2 in another) must stop the comparison."""
+    one, two = tmp_path / "one.json", tmp_path / "two.json"
+    one.write_text(json.dumps({"q/c/Os": {"instructions": 78, "code_bytes": 154}, "q/nib/Os": {"instructions": 9}}))
+    two.write_text(json.dumps({"q/c/Os": {"instructions": 2, "code_bytes": 63}, "q/nib/Os": {"instructions": 9}}))
+    assert bench.compare_baselines(one, two) == 1
+    assert "UNSTABLE q c -Os: code_bytes 154 vs 63, instructions 78 vs 2" in capsys.readouterr().out
+    assert bench.compare_baselines(one, one) == 0
+
+
+def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_it():
+    """With a size-guard candidate parity/control bas and bq16 read 0 instructions (the kernel inlined into the harness) and passed the gate as
+    -100%. A kernel that executes nothing measures nothing; a base that also folded it is no base: the cell is flagged, not compared (oversight, 11-02)."""
+    import bench
+
+    out = bench.against("control bas -Os", {"instructions": 0, "code_bytes": 100}, {"instructions": 156, "code_bytes": 246})
+    assert len(out) == 1 and "INVALID" in out[0], out
+    assert any("INVALID BASE" in one for one in bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0})), "a base that ran nothing is no base, even when the head ran nothing too"
+    assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
+
+
+def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
+    """jpeg_fixed, jpeg_single, stft_fixed and stft_single were timed only: 40 m16 rows had no instructions or clocks. Counted with no
+    input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
+    for name in ("jpeg_fixed", "jpeg_single", "stft_fixed", "stft_single"):
+        for variant in bench.variants(bench.BENCH / name):
+            assert variant.emulated and variant.ci_bytes == 0, (name, variant.language)
+    exe = tmp_path / "V0.exe"
+    exe.write_bytes(b"")
+    data = tmp_path / "PHOTO.JPG"
+    data.write_bytes(b"x")
+    seen = {}
+
+    def fake_run(exe_, entry, cwd, **_):
+        seen["files"] = sorted(p.name for p in Path(cwd).iterdir())
+        return types.SimpleNamespace(output=b"1\n", error="", region=None)
+
+    monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
+    monkeypatch.setattr(bench.icount, "run", fake_run)
+    monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
+    bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
+    assert seen["files"] == ["PHOTO.JPG"], seen
+
+
+def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path):
+    """grep (8 m16 rows) had no instructions or clocks: it was timed only. Its m16 rows are 22 to 35 M instructions on the 1 MiB cut; the 10 MB corpus would be ~10x that."""
+    variants = bench.variants(bench.BENCH / "grep")
+    assert variants and all(v.emulated and v.ci_bytes == 1048576 for v in variants)
+    fed = bench.timing_input(variants[0], bench.BENCH / "grep", tmp_path / "ci")
+    if "files" in fed:  # else the corpus is not cached here
+        assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
+
+
+def test_an_x86_64_row_above_the_base_fails_and_one_that_could_not_run_says_why():
+    """Larger executable sections or more user instructions than the base fail like any count; a host without perf skips the row and an error fails."""
+    base = {"instructions": 1000, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0}
+    assert bench.native_problems("fib c64 -O2", {**base, "code_bytes": 101}, base, []) == ["fib c64 -O2: code_bytes 101 > 100 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 999}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1001}, base, []) == []  # the rounding of the mean
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1002}, base, []) == ["fib c64 -O2: instructions 1002 > 1001 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {"skip": "no perf"}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {"error": "compile: x"}, base, []) == ["fib c64 -O2: compile: x"]
+def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_padding_at_a_size_level():
+    """Counting code without alignment padding must not hide records it could not read, nor padding where none is expected (-Os)."""
+    got = {
+        ("a", "c", "O2"): {"code_bytes": 5, "align_bytes": 9},
+        ("a", "c", "Os"): {"code_bytes": 50, "align_bytes": 3, "align_unread": 4},
+        ("b", "c", "Os"): {"code_bytes": 7, "align_bytes": 0, "align_unread": 7},
+    }
+    assert bench.align_lines(got) == [
+        "ALIGN-UNREAD 2 cells count 11 bytes whole (data inside code: not decoded for padding)",
+        "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
+        "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
+    ]
+
+
+def test_native_sources_exist_when_only_the_x86_64_language_is_selected(tmp_path, monkeypatch):
+    """`--lang c64` left no C variant, so no c64 row got the call-keeping pair: crc read 21 instructions, and -fno-inline-functions crashed llc on parity/qmove -Os."""
+    monkeypatch.setattr(bench, "ONLY", ["c64"])
+    directory = next(one for one in bench.benchmarks(["crc"]))
+    assert bench.native_sources("crc", directory, tmp_path) is not None
+
+
+def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds():
+    """m16 -O2 (500 milliclocks/byte): +13 B and -12 clocks passes (6500 - 12000 <= 0), +13 B and -5 clocks fails; the same cell at a level without a rate fails on its bytes."""
+    base = {"instructions": 10, "memory_operands": 4, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0, "clocks": 50}
+    more = {**base, "instructions": 11, "code_bytes": 113}
+    assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
+    assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
+    assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: code_bytes 113 > 100 (worse)"]
+    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)", "a c -O2: static_bytes 1 > 0 (worse)"]
+
+
+def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(tmp_path, monkeypatch):
+    """Rate 5 clocks per 16 bytes = 312 milliclocks/byte, read from the tune file the compiler reads; -Os and the other targets have none."""
+    tune = tmp_path / "i486.toml"
+    tune.write_text("cache_line = 16\nline_fill_clocks = 5\n")
+    monkeypatch.setattr(bench, "TUNE_486", tune)
+    assert [bench.rate_for("bq32", opt) for opt in ("O2", "O3", "Os")] == [312, 312, 0]
+    assert bench.rate_for("bas", "O2") == bench.m16_rate()  # the m16 sheet's own row, not the flat target's
+    tune.write_text("cache_line = 16\n")
+    assert bench.rate_for("bq32", "O2") == 0
+
+
+def test_the_m16_targets_price_a_byte_by_the_sheets_row_at_o2_and_o3(tmp_path, monkeypatch):
+    """500 milliclocks/byte on every CPU column: the policy row, read where the compiler reads it; a sheet whose columns disagree prices nothing. -O3 is a speed level too: bq16 O3 read strict (0) and showed 11 FAILs the rate clears."""
+    sheet = tmp_path / "timings.times"
+    sheet.write_text("cache_line - = =\nspeed_milliclocks_per_byte 500 500 500\n")
+    monkeypatch.setattr(bench, "M16_TIMINGS", sheet)
+    assert [bench.rate_for(language, opt) for language, opt in (("c", "O2"), ("bq16", "O2"), ("c", "Os"), ("c", "O3"), ("bq16", "O3"))] == [500, 500, 0, 500, 500]
+    sheet.write_text("speed_milliclocks_per_byte 500 250\n")
+    assert bench.rate_for("c", "O2") == 0
+    sheet.write_text("cache_line - =\n")
+    assert bench.rate_for("c", "O2") == 0
+
+
+def test_a_base_without_memory_operands_is_flagged_not_passed():
+    """The base file lacked memory_operands, so the -Os strict memory check never ran and every row passed it: the gate compared one metric of two."""
+    problems = bench.against("queens c -Os", {"instructions": 100, "memory_operands": 90}, {"instructions": 100})
+    assert any("base has no memory_operands" in one for one in problems)
+
+
+def test_the_emulation_cap_can_be_raised_for_cells_the_default_cannot_reach(monkeypatch, tmp_path):
+    """grep bq32 runs 642M instructions: above the cap's half, so its clocks were missing on both sides and the cell was judged on the rest. LLRM_FLAT_LIMIT raises the cap for one run and the row says which."""
+    from types import SimpleNamespace
+
+    ran = SimpleNamespace(error=None, region=SimpleNamespace(instructions=642_000_000, clocks=1234), rep_iterations=0)
+    monkeypatch.setattr(bench.flatcount, "run", lambda image, region, cwd, limit=bench.flatcount.LIMIT: ran)
+    monkeypatch.setattr(bench.flatcount, "agrees", lambda *a: True)
+    monkeypatch.delenv("LLRM_FLAT_LIMIT", raising=False)
+    assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {}
+    monkeypatch.setenv("LLRM_FLAT_LIMIT", "2000000000")
+    assert bench.flat_clocks(("grep", "bq32", "Os"), tmp_path, "BENCH_GREP", 642_000_000, tmp_path) == {"clocks": 1234, "emu_limit": 2000000000}
+
+
+def test_a_base_that_executed_zero_instructions_is_no_base():
+    """parity/control Os read 0 instructions on main (the kernel folded away) and its 158 B was handed to the compare as the base: the head's +108 B looked like a regression of a program that never ran."""
+    problems = bench.against("parity/control bq16 -Os", {"instructions": 147, "code_bytes": 285}, {"instructions": 0, "code_bytes": 157})
+    assert any("INVALID BASE" in one for one in problems)
+
+
+def test_a_leg_with_cells_that_did_not_build_exits_nonzero_and_names_them(tmp_path, capsys):
+    """w9's dist had no jwasm: all 4 cells were 'build: jwasm: not found', the leg wrote a JSON of errors and exited 0, and the corpus driver logged rc=0."""
+    from unittest import mock
+
+    measured = {("p", "c", "O2"): {"error": "build: jwasm: sh: 1: exec: /d/jwasm: not found"}, ("p", "c", "Os"): {"code_bytes": 9, "data_bytes": 0, "bss_bytes": 0}}
+    with mock.patch.object(bench, "measure_all", return_value=measured), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "O2", "Os", "--json", str(tmp_path / "leg.json"), "p"]):
+        assert bench.main() == 1
+    out = capsys.readouterr().out
+    assert "NOHEAD 1 cells did not build:" in out and "p/c/O2: build: jwasm" in out
+    with mock.patch.object(bench, "measure_all", return_value={("p", "c", "Os"): measured[("p", "c", "Os")]}), mock.patch("sys.argv", ["bench", "--no-judge", "--lang", "c", "--opt", "Os", "--json", str(tmp_path / "ok.json"), "p"]):
+        assert bench.main() == 0
+
+
+def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
+    """qmove Os memops +1 failed a cell that was 8 B smaller and 13 clocks faster. Now: (1) -8 B, -13 clocks, memops +1 passes; (2) +1 B fails; (3) bytes and clocks equal, memops +1 fails; (4) a cell without clocks is strict on every metric."""
+    base = {"instructions": 10, "memory_operands": 4, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0, "clocks": 50}
+    assert bench.against("a c -Os", {**base, "memory_operands": 5, "code_bytes": 92, "clocks": 37}, base) == []
+    assert bench.against("a c -Os", {**base, "code_bytes": 101, "clocks": 37}, base) == ["a c -Os: code_bytes 101 > 100 (worse)"]
+    assert bench.against("a c -Os", {**base, "memory_operands": 5}, base) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+    untimed = {k: v for k, v in base.items() if k != "clocks"}
+    assert bench.against("a c -Os", {**untimed, "memory_operands": 5, "code_bytes": 92}, untimed) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+
+
+def test_bss_is_judged_through_the_footprint_not_alone():
+    """Moving a zero table from data to bss (Nib's statics) lowered data_bytes and raised bss_bytes by the same amount: bss alone failed it.
+    data is strict, data+bss (static_bytes) is strict, bss alone is not judged."""
+    base = {"instructions": 10, "code_bytes": 100, "data_bytes": 30, "bss_bytes": 4}
+    move = {**base, "data_bytes": 10, "bss_bytes": 24}
+    assert bench.against("n nib -O2", move, base) == []  # pure DATA -> BSS: data down, footprint equal
+    assert bench.against("n nib -O2", {**base, "bss_bytes": 5}, base) == ["n nib -O2: static_bytes 35 > 34 (worse)"]  # bss growth grows the footprint
+    assert bench.against("n nib -O2", {**base, "data_bytes": 31, "bss_bytes": 3}, base) == ["n nib -O2: data_bytes 31 > 30 (worse)"]  # data growth, footprint equal
+    assert bench.against("n nib -O2", {**base, "data_bytes": 20, "bss_bytes": 24}, base) == ["n nib -O2: static_bytes 44 > 34 (worse)"]  # data down 10, bss up 20

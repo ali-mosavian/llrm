@@ -177,6 +177,8 @@ pub(super) fn emitted<'h>(
                 name: procedure.name.clone(),
                 r#type,
                 parameters,
+                all_calls: false,
+                scope_line: None,
             },
         );
     }

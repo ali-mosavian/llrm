@@ -67,6 +67,23 @@ impl CostKind {
     }
 }
 
+/// `TTI::AddressingModeKind`: the indexed addressing modes loop strength
+/// reduction favors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddressingMode {
+    None,
+    PreIndexed,
+    PostIndexed,
+    All,
+}
+
+impl AddressingMode {
+    /// `AMK & AMK_PostIndexed`.
+    pub fn has_post_indexed(self) -> bool {
+        matches!(self, AddressingMode::PostIndexed | AddressingMode::All)
+    }
+}
+
 /// A scalar type as the cost model sees it (T1: vectors are not modelled).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ty {
@@ -306,6 +323,12 @@ pub trait Tti {
         false
     }
 
+    /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
+    /// where the target does not say.
+    fn scalar_register_bits(&self) -> u32 {
+        0
+    }
+
     /// `getRegisterBitWidth(FixedWidthVector)`: the bits of the widest vector
     /// register, 0 where the target has none (and the SLP vectorizer is off).
     fn vector_register_bits(&self) -> u32 {
@@ -329,6 +352,23 @@ pub trait Tti {
     /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
     fn opt_size_inline_by_code_size(&self) -> bool {
         false
+    }
+
+    /// The fewest calls a callee has in the module for the bound above to hold
+    /// its sites (a callee called once is the pin's: the copy
+    /// meets constants the cost model follows, and folds with the sites around
+    /// it).
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        1
+    }
+
+    /// Whether a constant address offset may become a phi: false where the
+    /// access folds it as a displacement and the target says to keep it. A
+    /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
+    /// register offset costs an add and a register at m16 (6 GPRs, base+index
+    /// already taken), nothing at m32.
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        true
     }
 
     /// How many percent of its `CodeSize` units a call and the pushes of its
@@ -380,6 +420,22 @@ pub trait Tti {
         0
     }
 
+    /// What a byte of code is worth in thousandths of a clock at speed, where
+    /// the target trades bytes for clocks; 0: it does not.
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// `Tuning::multiply_by_clocks`.
+    fn multiply_by_clocks(&self) -> bool {
+        false
+    }
+
+    /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
+    fn has_cmov(&self) -> bool {
+        true
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -394,10 +450,47 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-1: the bounds of the recursion the target takes by default
+    /// when optimizing for speed: (depth of a function's copies of itself,
+    /// the largest recursive body in `gcc_insns` that is copied); none: the
+    /// pin's inliner, which copies no recursive callee (`-finline-recursive`
+    /// asks for gcc's).
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
+    /// which a tree-recursive function's copies of itself are chosen by
+    /// price: each level of copies is made while the clocks it saves, at
+    /// `speed_milliclocks_per_byte`, are worth the bytes it adds. None: the
+    /// bounds of `recursive_inlining` are the rule.
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
     /// unroll (its tuning table); none: the pass's own.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
+    }
+
+    /// How many values the x87 stack holds where this subtarget keeps floats
+    /// there (no SSE2 floating point); none: floats are in registers a
+    /// pressure rule need not count.
+    fn x87_stack_slots(&self) -> Option<u32> {
+        None
+    }
+
+    /// The target's `PartialThreshold` (its tuning table); none: the pass's
+    /// own.
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
+    /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
+    /// 50.
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        None
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read
@@ -497,6 +590,17 @@ pub trait Tti {
         to: Ty,
     ) -> bool;
 
+    /// `hasDivRemOp(iN, IsSigned)`: whether the target has one divide that
+    /// makes the quotient and the remainder. The base class has none.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        signed: bool,
+    ) -> bool {
+        let _ = (bits, signed);
+        false
+    }
+
     /// `isLegalAddressingMode`: `base_gv + base_offset + base_reg + scale *
     /// index`.
     fn is_legal_addressing_mode(
@@ -523,6 +627,21 @@ pub trait Tti {
         self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// `isLegalAddressingMode` in `addr_space` for an access of `access_bytes`
+    /// (0: unknown): the two together, as LSR asks it of a use.
+    fn is_legal_addressing_mode_at(
+        &self,
+        addr_space: u32,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        let _ = access_bytes;
+        self.is_legal_addressing_mode_in(addr_space, base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
     /// `AccessTy`): an immediate offset's legality depends on the access
     /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
@@ -537,6 +656,20 @@ pub trait Tti {
     ) -> bool {
         let _ = access_bytes;
         self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
+    /// `getScalingFactorCost` for an access of `access_bytes` (0: unknown), as
+    /// LSR asks it of a use; by default the size is not asked.
+    fn scaling_factor_cost_at(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        let _ = access_bytes;
+        self.scaling_factor_cost(base_gv, base_offset, has_base_reg, scale)
     }
 
     /// `getScalingFactorCost` for an access of `access_bytes`.
@@ -602,6 +735,38 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// `getPreferredAddressingMode`: which indexed addressing LSR favors.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::None
+    }
+
+    /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
+    /// the access size after it (`(An)+`).
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// `isIndexedStoreLegal(MIM_PostInc, ty)`.
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// Beyond the pin: whether a strict exit compare of a unit-stride counter
+    /// that never passes its bound should become `!=` (`exitne`). Counting to
+    /// zero and testing `!=` is cheap where a decrement sets the flags and one
+    /// branch follows (m68k `subq; bne`, `dbra`), not where the compare is
+    /// free anyway (x86: the rewrite moved `bq32` rows the wrong way). Off by
+    /// default; a target opts in where it measured a win.
+    fn prefers_exit_ne(&self) -> bool {
+        false
+    }
+
     /// `isNumRegsMajorCostOfLSR`.
     fn is_num_regs_major_cost_of_lsr(&self) -> bool {
         true
@@ -624,6 +789,14 @@ pub trait Tti {
     /// first), not one register. The pin charges one and survives on 7
     /// registers; with 6 they spill every outer iteration.
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin (which treats a counter only some trips step as no
+    /// induction variable, `createSimpleAffineAddRec`): such a counter gets a
+    /// pointer that steps with it, where the address takes no scale. False
+    /// keeps the pin's loops. Exit: none, a pass of its own.
+    fn mirrors_conditional_counters(&self) -> bool {
         false
     }
 
@@ -849,10 +1022,12 @@ pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
 }
 
 pub fn is_free_intrinsic(name: &str) -> bool {
-    const FREE: [&str; 6] = [
+    const FREE: [&str; 8] = [
         "llvm.assume",
         "llvm.lifetime.start",
         "llvm.lifetime.end",
+        "llvm.invariant.start",
+        "llvm.invariant.end",
         "llvm.noalias.scope.decl",
         "llvm.experimental.noalias.scope.decl",
         "llrm.noalias.scope.decl",
@@ -1053,6 +1228,29 @@ mod access_tests {
                 scale: i64,
             ) -> bool {
                 self.0.is_legal_addressing_mode_in(addr_space, gv, offset, base, scale)
+            }
+
+            fn scaling_factor_cost_at(
+                &self,
+                access_bytes: u64,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> Cost {
+                self.0.scaling_factor_cost_at(access_bytes, gv, offset, base, scale)
+            }
+
+            fn is_legal_addressing_mode_at(
+                &self,
+                addr_space: u32,
+                access_bytes: u64,
+                gv: bool,
+                offset: i64,
+                base: bool,
+                scale: i64,
+            ) -> bool {
+                self.0.is_legal_addressing_mode_at(addr_space, access_bytes, gv, offset, base, scale)
             }
 
             fn cast_cost(

@@ -14,6 +14,10 @@ pub struct X86Backend {
     pub longest: usize,
 }
 
+/// The backend the object writers ask to fill a field: the field facts do not
+/// depend on the mode (the nop and unwind facts, which do, are layout's).
+pub static FIELDS: X86Backend = X86Backend { sixteen: false, wide: false, longest: 1 };
+
 impl AsmBackend for X86Backend {
     fn kind_info(
         &self,

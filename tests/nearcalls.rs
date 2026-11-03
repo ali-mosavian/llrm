@@ -67,7 +67,7 @@ fn test_nib_enters_an_unexported_function_near() {
 
 #[test]
 fn test_basic_enters_a_module_internal_procedure_near() {
-    let source = "DECLARE FUNCTION Down% (n AS INTEGER)\nPRINT Down%(3)\nFUNCTION Down% (n AS INTEGER)\n  IF n = 0 THEN Down% = 0 ELSE Down% = Down%(n - 1) + n\nEND FUNCTION\n";
+    let source = "DECLARE FUNCTION Down% (n AS INTEGER)\nn% = INT(RND * 5)\nPRINT Down%(n%)\nFUNCTION Down% (n AS INTEGER)\n  IF n = 0 THEN Down% = 0 ELSE Down% = Down%(n - 1) + n\nEND FUNCTION\n";
     let asm = compiled(
         "llrm-qb",
         "near.bas",
@@ -77,6 +77,8 @@ fn test_basic_enters_a_module_internal_procedure_near() {
     let body = procedure(&asm, "DOWN");
     // The recursion is a closed form now (the pin's tail-recursion
     // elimination and IndVars), so the call that enters it near is main's.
+    // The argument is not a constant: `Down%(3)` folds to 6 and no procedure
+    // is left to enter.
     assert!(body.starts_with("DOWN proc near") && !body.contains("retf"), "{asm}");
     assert!(asm.contains("call DOWN\n"), "{asm}");
 }
@@ -109,20 +111,26 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 
 /// Queens' `safe(q, row, col)` reads `q[r]` for `r < row` under a bounds check
 /// on the slice's length, 12, which reaches it as a field of the descriptor.
-/// llrm's own bounds analysis and field promotion folded the check (a0ed5eb43
-/// retired them as llrm-only); the pin does not: `opt -O2` over the same IR
-/// (queens.nib's MIR before the promotion, converted) keeps the descriptor
-/// argument and all three `call @N$EBND` (one in `safe`, two in `place`). The
-/// checks stay, as the pin's.
+/// DEVIATE SD443 (the extra IPSCCP after `promote.`, interprocedural.rs; owner
+/// w2, fix-by 2026-11-07): the checks
+/// are folded. The pin keeps them: its ArgumentPromotion refuses a recursive
+/// function's descriptor that holds a pointer (ArgumentPromotion.cpp#L581 at
+/// d1106deb71cc), so `opt -O2` keeps the descriptor argument and both
+/// `call @N$EBND` (one in `safe`, one in `place`; measured with the pin's
+/// `opt -passes='default<O2>'` over queens' IR, with and without `noinline`).
+/// Ours promotes the length, the extra IPSCCP folds it (queens -O2: 225467 to
+/// 182177 instructions). Exit: by-value slice parameters (#6140) remove the
+/// descriptor, then #6159 lands and this returns to the pin shape: the two
+/// calls.
 #[test]
-fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
+fn test_nib_queens_folds_its_bounds_checks_where_the_pin_keeps_them() {
     let asm = compiled(
         "llrm-nib",
         "queens.nib",
         include_str!("../bench/queens/queens.nib"),
         &["-fno-inline-functions", "-fno-inline-functions-called-once"],
     );
-    assert!(asm.contains("call far ptr N$EBND"), "{asm}");
+    assert!(!asm.contains("N$EBND"), "{asm}");
 }
 
 /// A slice of a module array is a far pointer to DGROUP: pushed as segment and
@@ -150,4 +158,19 @@ fn test_nib_reads_a_local_array_slice_through_ss() {
     );
     let body = procedure(&asm, "_safe");
     assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
+}
+
+/// The exit of the DEVIATE above: the pin's shape, the two checks stay (the
+/// pin's `opt -O2` and #6159's build both have two; a0ed5eb43's "three" was
+/// wrong). Run it with `--ignored`; #6159 turns it on and the test above goes.
+#[test]
+#[ignore = "the pin shape: on when #6159 lands (exit of the extra IPSCCP DEVIATE)"]
+fn test_nib_queens_keeps_its_bounds_checks_as_the_pin_does() {
+    let asm = compiled(
+        "llrm-nib",
+        "queens.nib",
+        include_str!("../bench/queens/queens.nib"),
+        &["-fno-inline-functions", "-fno-inline-functions-called-once"],
+    );
+    assert_eq!(asm.matches("call far ptr N$EBND").count(), 2, "{asm}");
 }

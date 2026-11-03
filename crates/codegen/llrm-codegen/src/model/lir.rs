@@ -104,6 +104,13 @@ impl PartialEq for DebugTags {
 
 impl Eq for DebugTags {}
 
+/// What a word-pair join (`Insn::pair`) joins.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairKind {
+    Far,
+    Long,
+}
+
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// `call` is a shared owned reference
@@ -147,6 +154,10 @@ pub struct Insn {
     pub invariant: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
+    /// It joins two words into one dword (DEVIATE PAIR1: the `or`/`shrd` of a
+    /// far pointer's offset and selector, or of a long's halves), as the DAG's
+    /// `PAIR_FAR`/`PAIR_LONG` marked it at selection.
+    pub pair: Option<PairKind>,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
@@ -233,7 +244,15 @@ impl LirBody {
     pub fn named_values(&self) -> BTreeSet<u32> {
         self.notes
             .iter()
-            .filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None })
+            .flat_map(|note| match &note.value {
+                NoteValue::Value(value) | NoteValue::Offset(value, _) | NoteValue::Arrived(value, _) => vec![*value],
+                NoteValue::Expr(expr) => expr
+                    .args
+                    .iter()
+                    .filter_map(|arg| if let NoteArg::Value(value) = arg { Some(*value) } else { None })
+                    .collect(),
+                _ => Vec::new(),
+            })
             .collect()
     }
 
@@ -586,6 +605,7 @@ impl Insn {
             volatile: false,
             invariant: false,
             reads_complete: false,
+            pair: None,
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),
@@ -1104,13 +1124,38 @@ pub struct DebugNote {
 }
 
 /// What a note says a variable (or a piece of it) is.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum NoteValue {
     /// Nothing: its value was deleted.
     Nothing,
     /// The value, by the number its register had in SSA.
     Value(u32),
     /// A constant.
+    Constant(i64),
+    /// The value plus a constant (`DW_OP_plus_uconst, n, DW_OP_stack_value`).
+    Offset(u32, i64),
+    /// What the operations make of the arguments.
+    Expr(Arc<NoteExpr>),
+    /// A parameter's own value, which arrived in the register: where no
+    /// register holds it, it is what the function was entered with
+    /// (`DW_OP_entry_value`).
+    Arrived(u32, RegId),
+}
+
+/// A value made of other values (`!DIArgList` with a `!DIExpression`).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NoteExpr {
+    pub args: Vec<NoteArg>,
+    pub ops: Vec<llrm_debug::ExprOp>,
+    /// The result is the value, not the address of it.
+    pub value: bool,
+}
+
+/// An argument of a [`NoteExpr`].
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum NoteArg {
+    /// The value, by the number its register had in SSA.
+    Value(u32),
     Constant(i64),
 }
 
@@ -1342,6 +1387,19 @@ impl BlockOdds {
 }
 
 impl LirBody {
+    /// How many of `notes` stand before some instruction: the others were
+    /// lost by a pass (or belonged to code that was deleted).
+    #[must_use]
+    pub fn notes_standing(&self) -> usize {
+        let standing: std::collections::BTreeSet<u32> = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .flat_map(|one| one.debug.before.iter().copied())
+            .collect();
+        standing.len()
+    }
+
     /// The edges from a block with more than one successor into a block with
     /// more than one predecessor: code that must run on one of them has no
     /// block of its own to go in until one is made.
@@ -1659,6 +1717,25 @@ mod tests {
         let walked: Vec<_> = body.iter_insns().collect();
         assert_eq!(walked.len(), 5);
         assert!(listed.iter().zip(&walked).all(|(one, other)| Arc::ptr_eq(one, other)));
+    }
+
+    /// `-g`'s notes stand before instructions: a count of those that still do
+    /// is what the `notes` debug channel reports, so a pass that drops them
+    /// shows in the sweep.
+    #[test]
+    fn test_notes_standing_counts_the_notes_some_instruction_still_has() {
+        let tagged = |at: i64, before: Vec<u32>| {
+            let one = instruction(at, None);
+            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before }, ..(*one).clone() })
+        };
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![tagged(0, vec![0, 2]), tagged(1, vec![2]), tagged(2, vec![])]).into()],
+            Default::default(),
+            Default::default(),
+        );
+        assert_eq!(body.notes_standing(), 2);
     }
 
     /// A table kept past the instruction it named answered for whatever was

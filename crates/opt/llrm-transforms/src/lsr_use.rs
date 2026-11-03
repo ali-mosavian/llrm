@@ -54,8 +54,9 @@
 //!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
-//! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
-//! post-indexed branches of `RateRegister` never apply and are not ported. A
+//! neither. `getPreferredAddressingMode` is none on x86; the post-indexed
+//! branch of `RateRegister` is ported (m68k prefers it), the pre-indexed one
+//! is not, nor are the post-indexed sites in the other LSR modules. A
 //! scalable `Immediate` does not exist (see [`crate::lsr_formula`]).
 
 use llrm_analysis::scev::expr::{Scev, Type};
@@ -270,14 +271,21 @@ impl Use {
 pub fn is_am_completely_folded_at(
     tti: &dyn Tti,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode_in(addr_space, base_gv, base_offset.0, has_base_reg, scale),
+        Kind::Address => tti.is_legal_addressing_mode_at(
+            access.addr_space,
+            access.bytes,
+            base_gv,
+            base_offset.0,
+            has_base_reg,
+            scale,
+        ),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
             if base_gv {
@@ -313,7 +321,7 @@ pub fn is_am_completely_folded_between(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -329,8 +337,8 @@ pub fn is_am_completely_folded_between(
     if (high > base) != (max > 0) {
         return false;
     }
-    is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(low), has_base_reg, scale)
-        && is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(high), has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(low), has_base_reg, scale)
+        && is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(high), has_base_reg, scale)
 }
 
 /// `isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy, F, L)`.
@@ -340,7 +348,7 @@ pub fn is_am_completely_folded_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     f: &Formula,
     l: BlockId,
 ) -> bool {
@@ -352,7 +360,7 @@ pub fn is_am_completely_folded_formula(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -373,7 +381,7 @@ pub fn is_am_completely_folded(
         lu.min_offset,
         lu.max_offset,
         lu.kind,
-        lu.access_ty.addr_space,
+        lu.access_ty,
         f.base_gv.is_some(),
         f.base_offset,
         f.has_base_reg,
@@ -389,7 +397,7 @@ pub fn is_legal_use(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -400,23 +408,13 @@ pub fn is_legal_use(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         base_gv,
         base_offset,
         has_base_reg,
         scale,
     ) || (scale == 1
-        && is_am_completely_folded_between(
-            tti,
-            min_offset,
-            max_offset,
-            kind,
-            addr_space,
-            base_gv,
-            base_offset,
-            true,
-            0,
-        ))
+        && is_am_completely_folded_between(tti, min_offset, max_offset, kind, access, base_gv, base_offset, true, 0))
 }
 
 /// `isLegalUse(TTI, MinOffset, MaxOffset, Kind, AccessTy, F)`.
@@ -425,20 +423,10 @@ pub fn is_legal_use_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     f: &Formula,
 ) -> bool {
-    is_legal_use(
-        tti,
-        min_offset,
-        max_offset,
-        kind,
-        addr_space,
-        f.base_gv.is_some(),
-        f.base_offset,
-        f.has_base_reg,
-        f.scale,
-    )
+    is_legal_use(tti, min_offset, max_offset, kind, access, f.base_gv.is_some(), f.base_offset, f.has_base_reg, f.scale)
 }
 
 /// `isLegalAddImmediate`.
@@ -462,14 +450,15 @@ pub fn scaling_factor_cost(
         return TtiCost::FREE;
     }
     // Not completely folded: an extra cost only for a scale other than 1.
-    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f, l) {
+    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f, l) {
         return TtiCost::of(i64::from(f.scale != 1));
     }
     match lu.kind {
         Kind::Address => {
             // The price at both ends of the offsets.
             let at = |offset: Immediate| {
-                tti.scaling_factor_cost(
+                tti.scaling_factor_cost_at(
+                    lu.access_ty.bytes,
                     f.base_gv.is_some(),
                     f.base_offset.add_unsigned(offset).0,
                     f.has_base_reg,
@@ -535,16 +524,15 @@ impl Cost {
         self.c.num_regs == u32::MAX
     }
 
-    /// `isLess`: fewer instructions first (`-lsr-insns-cost` is on), then the
-    /// target's order.
+    /// `isLess`: the target's order. The pin ranks by instructions first only
+    /// when `-lsr-insns-cost` is on the command line
+    /// (`getNumOccurrences() > 0`), which nothing here passes; x86 puts them
+    /// first in its own `isLSRCostLess`, AArch64 second.
     pub fn is_less(
         &self,
         tti: &dyn Tti,
         other: &Cost,
     ) -> bool {
-        if self.c.insns != other.c.insns {
-            return self.c.insns < other.c.insns;
-        }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }
 
@@ -625,7 +613,7 @@ impl Cost {
                 && !is_am_completely_folded_at(
                     r.tti,
                     Kind::Address,
-                    lu.access_ty.addr_space,
+                    lu.access_ty,
                     f.base_gv.is_some(),
                     offset,
                     f.has_base_reg,
@@ -699,8 +687,9 @@ impl Cost {
             // An addrec of another loop is invariant in `l` (LSR handles
             // innermost loops only).
             if header != r.l {
-                // One that exists as a phi is free.
-                if is_existing_phi(r.se, r.cx, reg) {
+                // One that exists as a phi is free (unless post-indexed
+                // addressing is favored).
+                if is_existing_phi(r.se, r.cx, reg) && !r.tti.preferred_addressing_mode().has_post_indexed() {
                     return;
                 }
                 // A sibling's induction variable is not for this loop to add.
@@ -714,6 +703,20 @@ impl Cost {
             }
 
             let mut loop_cost = 1;
+            // A pointer that steps by a constant from an invariant start is a
+            // post-indexed access's own increment: free where every fixup of
+            // the use runs each trip.
+            let ty = crate::lsr_generate::tti_ty(r.se.type_of(reg));
+            if r.tti.preferred_addressing_mode().has_post_indexed()
+                && (r.tti.is_post_inc_load_legal(ty) || r.tti.is_post_inc_store_legal(ty))
+                && let Some((start, step, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(step).is_some()
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+                && lu.all_fixups_unconditional
+            {
+                loop_cost = 0;
+            }
             // A loop that counts down to zero under a hardware loop folds its
             // addrec into the loop instruction.
             if lu.kind == Kind::ICmpZero && f.counts_down_to_zero(r.se) && r.hardware_loop_profitable {
@@ -756,6 +759,32 @@ impl Cost {
             self.c.num_iv_muls += 1;
         }
     }
+}
+
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L3960
+/// `mayUsePostIncMode`: `s` steps by a constant from a start invariant in the
+/// loop, and the target has a post-indexed access of its type, for an integer
+/// address use.
+pub fn may_use_post_inc_mode(
+    tti: &dyn Tti,
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    lu: &Use,
+    s: Scev,
+    l: BlockId,
+) -> bool {
+    let int_access = lu.access_ty.mem_ty.is_some_and(|ty| cx.context.types.int_bits(ty).is_some());
+    if lu.kind != Kind::Address || !int_access {
+        return false;
+    }
+    let Some((start, step, _)) = se.match_affine_add_rec(s) else { return false };
+    if se.as_constant(step).is_none() {
+        return false;
+    }
+    let ty = crate::lsr_generate::tti_ty(se.type_of(s));
+    (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
+        && se.as_constant(start).is_none()
+        && se.is_loop_invariant(cx, start, Some(l))
 }
 
 /// Whether the loop of header `outer` contains the loop of header `inner`.

@@ -39,6 +39,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
         &nib::fixture(&format!("{fixture}.nib")),
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
     )?;
     Ok((llrm_codegen::backend::masm::text(&module).expect("prints"), object))
 }
@@ -203,6 +204,7 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
         &source,
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
     )
     .expect("an object")
     .len();

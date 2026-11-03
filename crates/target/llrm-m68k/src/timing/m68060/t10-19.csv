@@ -1,0 +1,6 @@
+#title,Return Instruction Execution Times,page,10-21,notes,
+Instruction,Execution Time
+RTD,7(1/0)
+RTE,17(3/0)
+RTR,8(2/0)
+RTS,7(1/0)

@@ -1038,3 +1038,37 @@ done:
 fn the_edits_after_the_last_step_leave_the_trip_counts_standing() {
     assert_eq!(counts_over_a_sink_and_deletion(), 1);
 }
+
+/// memcpy's `while (n-- > 0)` after the guard: `ugt %i, 1` on a counter that
+/// starts at `n >= 1`.
+const DOWN_COUNTER: &str = "define i32 @f(i32 %n) {
+entry:
+  %g = icmp sgt i32 %n, 0
+  br i1 %g, label %loop, label %exit
+loop:
+  %i = phi i32 [ %n, %entry ], [ %dec, %loop ]
+  %dec = add i32 %i, -1
+  %c = icmp ugt i32 %i, 1
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 0
+}
+";
+
+/// `exitne` turned the compare to `!=` on x86 and moved nine `bq32` rows the
+/// wrong way (jpeg +75 insns). A target that does not say it prefers the
+/// rewrite keeps the pin's IR.
+#[test]
+fn test_a_target_that_does_not_prefer_exit_ne_keeps_the_strict_compare() {
+    let mut module = parsed(DOWN_COUNTER);
+    let text = crate::testing::managed_on(&mut module, IndVars { lftr: false, size: false }, Default::default());
+    assert!(text.contains("icmp ugt i32 %i, 1"), "{text}");
+}
+
+#[test]
+fn test_a_target_that_prefers_exit_ne_gets_the_not_equal_compare() {
+    let mut module = parsed(DOWN_COUNTER);
+    let machine = crate::testing::Tuned { exit_ne: true, ..Default::default() };
+    let text = crate::testing::managed_on(&mut module, IndVars { lftr: false, size: false }, machine);
+    assert!(text.contains("icmp ne i32 %i, 1"), "{text}");
+}

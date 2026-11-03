@@ -9,7 +9,7 @@ on:
         description: "all, or pintools (skips the two hour-long clang builds)"
         default: all
   push:
-    branches: [feat/parity, main]
+    branches: [release/next, main]
     paths: [toolchain/clang/pin, toolchain/clangbuild.sh, toolchain/cache.sh, toolchain/pintoolsbuild.sh, .github/actions/pintools-tree/action.yml, .github/workflows/toolchain.yml]
 jobs:
   clang:

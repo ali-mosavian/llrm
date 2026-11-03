@@ -111,6 +111,7 @@ pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
 pub mod combine_castcall;
+pub mod combine_casted_logic;
 pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
@@ -130,6 +131,7 @@ pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
+pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
 pub mod combine_icmp_ranges;
 pub mod combine_invert;
@@ -194,6 +196,7 @@ pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
+pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
@@ -293,17 +296,25 @@ pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
+pub mod maskscale;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memloops;
+#[cfg(test)]
+mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+mod mirror;
 pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod pageindex;
+#[cfg(test)]
+mod pageindex_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
@@ -312,6 +323,7 @@ mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
+pub mod pipeline_text;
 pub mod ports;
 pub mod predicateinfo;
 pub mod profit;
@@ -367,6 +379,9 @@ pub mod trivialunswitch;
 pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod typepromotion;
+pub mod typepromotion_pass;
+#[cfg(test)]
+mod typepromotion_pass_tests;
 pub mod uncondicmp;
 pub mod undefpred;
 pub mod uremloop;

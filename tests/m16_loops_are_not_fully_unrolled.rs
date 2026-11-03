@@ -118,21 +118,64 @@ fn at_os_an_aligned_fill_is_words_and_at_o2_dwords() {
     assert!(listing("-O2").contains("rep stosd"));
 }
 
-/// `x / 120` at -O2 became a 32-bit multiply by a magic number and four more
-/// instructions (about 32 bytes, against 11 for `idiv`): qlight.c was 391
-/// bytes against `idiv`'s 279, recpow.c 275 against 178. m16 keeps the divide
-/// at every level.
+/// -O3 unroll-and-jam (partial and runtime unrolling on, partial threshold
+/// 150) copied matmul's outer body: 9 `imul` against 2 at -O2, 455 code bytes
+/// against 297 (Borland C's 298): the m16 bar is bytes at every level.
 #[test]
-fn at_o2_a_divide_by_a_constant_stays_a_divide() {
+fn at_o3_a_nest_of_eight_trip_loops_is_not_jammed() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
-    std::fs::write(directory.join("d.c"), "long f(long x) { return x / 120; }\n").unwrap();
+    let source = format!("{}/bench/matmul/matmul.c", env!("CARGO_MANIFEST_DIR"));
     let output = common::cc::llrm_c()
         .current_dir(directory)
-        .args(["-O2", "-m16", "-march=i386", "-S", "-o", "d.s", "d.c"])
+        .args(["-O3", "-m16", "-march=i486", "-S", "-o", "a.s", &source])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let text = std::fs::read_to_string(directory.join("d.s")).unwrap();
-    assert!(text.contains("idiv"), "{text}");
+    let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
+    let multiplies = text.matches("imul").count();
+    assert!(multiplies <= 2, "{multiplies} multiplies\n{text}");
+}
+
+/// -O3's non-trivial unswitch copied a loop on a loop-invariant condition:
+/// two loops, two `add` bodies, +51 code bytes on queens (178 -> 229 against
+/// Borland C's 172). The byte bar holds at -O3.
+#[test]
+fn at_o3_a_loop_on_an_invariant_condition_is_not_copied() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(
+        directory.join("u.c"),
+        "void f(int *a, int n, int flag)\n{\n    int i;\n    for (i = 0; i < n; i++) {\n        if (flag) a[i] += 3;\n        else a[i] -= 5;\n    }\n}\n",
+    )
+    .unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O3", "-m16", "-march=i486", "-S", "-o", "u.s", "u.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("u.s")).unwrap();
+    let bodies = text.matches("add word ptr [bx]").count();
+    assert!(bodies <= 1, "{bodies} loop bodies\n{text}");
+}
+
+/// Copies of a recursive body inside itself (REC-1, depth 2) made `fib` 152
+/// bytes at -O2 against Borland C's 83 (4 calls where the loop-and-call form
+/// has 1); rectwo and frames were 259 and 338 against 104 and 251.
+#[test]
+fn at_o2_a_recursive_function_is_not_copied_into_itself() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(directory.join("fib.c"), "int fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }\n")
+        .unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .args(["-O2", "-m16", "-march=i486", "-S", "-o", "fib.s", "fib.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(directory.join("fib.s")).unwrap();
+    let calls = text.matches("call").count();
+    assert!(calls <= 2, "{calls} calls\n{text}");
 }

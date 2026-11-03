@@ -9,10 +9,11 @@
 //! DEVIATE 1: no vectors, and only integer constants are inverted.
 //!
 //! DEVIATE 2: owed, each where it stood: the `bitcast` arms (a `not` of a
-//! `bitcast` of a compare, of a `sext` of a bool), `sinkNotIntoLogicalOp`,
-//! min/max and `is_fpclass` intrinsics, `foldNotXor`, `getFreelyInverted`, a
-//! `not` of a compare with several uses (`canFreelyInvertAllUsersOf`, now
-//! inline in `combine_compares`), and `fcmp`.
+//! `bitcast` of a compare, of a `sext` of a bool), min/max and `is_fpclass`
+//! intrinsics, `foldNotXor` and `fcmp`. `sinkNotIntoLogicalOp` is in, with
+//! `canFreelyInvertAllUsersOf` and `freelyInvertAllUsersOf` of
+//! `combine_invert`; a phi is never freely inverted there (no insertion point
+//! after its definition).
 //!
 //! # Example
 //! `~(X + 5)` is `-6 - X`:
@@ -110,17 +111,86 @@ pub(crate) fn fold_not(
     // not (cmp A, B) = !cmp A, B
     if let Some(compare) = c.definition_of(not_op)
         && let Opcode::ICmp(pred) = c.function.instruction(compare).opcode
-        && one_use
+        && (one_use || c.can_freely_invert_all_users_of(compare, None))
     {
         c.function.set_icmp_predicate(compare, pred.inverse());
         c.add_to_worklist(compare);
-        return Some(Visit::Replace(not_op));
+        c.freely_invert_all_users_of(not_op, None);
+        return Some(Visit::Changed);
     }
 
-    if one_use {
-        return fold_not_of_select(c, not_op);
+    if one_use && let Some(found) = fold_not_of_select(c, not_op) {
+        return Some(found);
+    }
+
+    // OWED: the `bitcast` arms.
+    if let Some(logic) = c.definition_of(not_op)
+        && sink_not_into_logical_op(c, logic)
+    {
+        return Some(Visit::Changed);
     }
     None
+}
+
+/// [`sinkNotIntoLogicalOp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L5138):
+/// `~(x &/| y)` is `(~x) |/& (~y)` when both are free to invert and every use
+/// of the result can be updated.
+fn sink_not_into_logical_op(
+    c: &mut Combiner,
+    logic: InstId,
+) -> bool {
+    let Some(result) = c.function.instruction(logic).result else { return false };
+    let value = Operand::Value(result);
+    let (is_and, op0, op1) = {
+        let q = query(c, None);
+        let Some((is_and, a, b)) = pattern::logical_and(&q, value)
+            .map(|(a, b)| (true, a, b))
+            .or_else(|| pattern::logical_or(&q, value).map(|(a, b)| (false, a, b)))
+        else {
+            return false;
+        };
+        // If this logic op has not been simplified yet, just bail out and let
+        // that happen first. Otherwise, the code below may wrongly invert.
+        if a == b {
+            return false;
+        }
+        // If one of the operands is a user of the other, freelyInvert will
+        // change the operands of the op, which may cause miscompilation.
+        if pattern::not(&q, a) == Some(b) || pattern::not(&q, b) == Some(a) {
+            return false;
+        }
+        (is_and, a, b)
+    };
+    let is_binary = matches!(c.function.instruction(logic).opcode, Opcode::Binary(_));
+    // Can our users be adapted? And can the operands be adapted?
+    if !c.can_freely_invert_all_users_of(logic, None)
+        || !c.can_freely_invert(op0, logic)
+        || !c.can_freely_invert(op1, logic)
+    {
+        return false;
+    }
+    let op0 = c.freely_invert(op0, logic);
+    let op1 = c.freely_invert(op1, logic);
+    let ty = c.type_of(value);
+    let new = if is_binary {
+        let op = if is_and { BinaryOp::Or } else { BinaryOp::And };
+        c.insert_after(logic, Opcode::Binary(op), ty, vec![op0, op1])
+    } else if is_and {
+        // select x, true, y
+        let on_true = c.all_ones(ty);
+        c.insert_after(logic, Opcode::Select, ty, vec![op0, on_true, op1])
+    } else {
+        // select x, y, false
+        let on_false = c.int(ty, 0);
+        c.insert_after(logic, Opcode::Select, ty, vec![op0, op1, on_false])
+    };
+    let new_value = c.value_of(new);
+    c.replace_inst_with(logic, new_value);
+    // We can not just create an outer `not`, it will most likely be
+    // immediately folded back, reconstructing our initial pattern, so
+    // immediately manually fold it away.
+    c.freely_invert_all_users_of(new_value, None);
+    true
 }
 
 /// The arms of `foldNot` for a `not` of a binary operator.

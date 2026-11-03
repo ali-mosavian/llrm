@@ -237,48 +237,46 @@ END FUNCTION
 ```asm
 DOT proc near
 L1_1:
-    mov dx, word ptr P%+14
-    mov ax, dx
-    dec ax
+    mov ax, word ptr P%+14
+    mov dx, ax
+    dec dx
     mov cx, word ptr Q%+14
     mov bx, cx
     dec bx
-    cmp ax, bx
+    cmp dx, bx
     jl L1_11
 L1_10:
-    mov ax, bx
+    mov dx, bx
 L1_11:
-    test ax, ax
+    test dx, dx
     js L1_2_1
 L1_2:
+    dec cx                      ; UBOUND(b)
+    dec ax
+    cmp cx, ax
+    jl L1_25
+L1_24:
+    mov cx, ax
+L1_25:
     push bp                     ; a plain frame, not B$ENRA; near, as --whole-program
     mov bp, sp                  ; sees every caller. a() is [bp+6], b() [bp+4]
     sub sp, 2
     push si
     push di
-    xor eax, eax
     mov es, word ptr P%+2
-    mov si, word ptr P%+10
+    mov ax, word ptr P%+10
+    mov word ptr [bp-2], ax
     mov fs, word ptr Q%+2
     mov di, word ptr Q%+10
-    dec cx                      ; UBOUND(b)
-    dec dx
-    cmp cx, dx
-    jl L1_26
-L1_25:
-    mov cx, dx
-L1_26:
     inc cx
+    xor eax, eax
     xor bx, bx
-    mov word ptr [bp-2], di
 L1_3:
-    movsx edx, word ptr es:[bx+si]
-    mov di, si
     mov si, word ptr [bp-2]
-    movsx esi, word ptr fs:[bx+si]
+    movsx edx, word ptr es:[bx+si]
+    movsx esi, word ptr fs:[bx+di]
     imul esi, edx
     add eax, esi
-    mov si, di
     add bx, 2                   ; [flag reuse] the step's flags end the loop at 0
     dec cx
     jne L1_3

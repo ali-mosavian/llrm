@@ -363,6 +363,8 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
@@ -565,6 +567,8 @@ b3:
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -626,6 +630,8 @@ b5:
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -916,6 +922,8 @@ b6:
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -1021,6 +1029,8 @@ fn six_registers() -> llrm_x86::tti::X86 {
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
     };
     X86::of_cpu("i486").unwrap().in_real_mode(real)
 }

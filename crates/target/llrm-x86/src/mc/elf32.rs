@@ -23,22 +23,25 @@ impl Machine for I386 {
     const NUMBER: u16 = 3;
     const ADDEND: bool = false;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::FIELDS
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
-        let from = reloc.pc_bias;
-        let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {
-            (FixupKind::DATA_4, false) => (R_386_32, 4, 0),
-            (FixupKind::DATA_2, false) => (R_386_16, 2, 0),
-            (FixupKind::DATA_1, false) => (R_386_8, 1, 0),
-            (FixupKind::DATA_4, true) => (R_386_PC32, 4, from),
-            (fixup::BRANCH_4, true) => (R_386_PLT32, 4, 4),
-            (fixup::BRANCH_2, true) => (R_386_PC16, 2, 2),
-            (FixupKind::DATA_2, true) => (R_386_PC16, 2, from),
-            (FixupKind::DATA_1, true) => (R_386_PC8, 1, from),
+        let (kind, width) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_4, false) => (R_386_32, 4),
+            (FixupKind::DATA_2, false) => (R_386_16, 2),
+            (FixupKind::DATA_1, false) => (R_386_8, 1),
+            (FixupKind::DATA_4, true) => (R_386_PC32, 4),
+            (fixup::BRANCH_4, true) => (R_386_PLT32, 4),
+            (fixup::BRANCH_2, true) => (R_386_PC16, 2),
+            (FixupKind::DATA_2, true) => (R_386_PC16, 2),
+            (FixupKind::DATA_1, true) => (R_386_PC8, 1),
             (fixup::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
             (fixup::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF i386 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from })
+        Ok(Relocation { kind, width })
     }
 }
 
@@ -49,7 +52,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::ObjectTarget;
+    use llrm_debug::DebugObjectTarget;
     use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -124,7 +127,6 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
     }
 
@@ -230,16 +232,15 @@ mod tests {
     /// in its place.
     #[test]
     fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [
-            (llrm_object::debug::Format::CodeView, "CodeView"),
-            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-        ] {
-            let mut made = object(vec![text(vec![0], vec![])], vec![]);
-            made.debug = Some(llrm_object::debug::Info {
-                options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+        for (format, name) in
+            [(llrm_debug::Format::CodeView, "CodeView"), (llrm_debug::Format::TurboDebugger, "Turbo Debugger")]
+        {
+            let made = object(vec![text(vec![0], vec![])], vec![]);
+            let debug = Some(llrm_debug::Info {
+                options: llrm_debug::DebugOptions { format, ..Default::default() },
                 ..Default::default()
             });
-            let why = crate::mc::X86Objects.write_object("elf", &made).unwrap_err().0;
+            let why = crate::mc::X86Objects.write_described("elf", &made, debug.as_ref()).unwrap_err().0;
             assert!(why.contains("cannot carry") && why.contains(name), "{why}");
         }
     }

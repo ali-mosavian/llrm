@@ -333,6 +333,88 @@ pub fn keeps_division(
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.
 pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 
+/// What the DAG builder asks of a target for every target. The x86-style paths
+/// (calling.toml conventions, string instructions, libcall routines) read the
+/// whole [`Target`] through [`BuilderArch::full`], which a target without one
+/// answers with `None` and the builder refuses.
+pub trait BuilderArch {
+    fn registers(&self) -> &'static llrm_lir::registers::Info;
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId;
+    fn stack_slot_bytes(&self) -> i64;
+    fn stack_alignment(&self) -> i64;
+    /// The address-space roles (`layout().spaces.roles`).
+    fn roles(&self) -> llrm_mir::spaces::Spaces;
+    fn full(&self) -> Option<&dyn Target>;
+}
+
+impl<T: Target> BuilderArch for T {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        Target::registers(self)
+    }
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        Target::register_named(self, name)
+    }
+    fn stack_slot_bytes(&self) -> i64 {
+        Target::stack_slot_bytes(self)
+    }
+    fn stack_alignment(&self) -> i64 {
+        Target::stack_alignment(self)
+    }
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        Target::layout(self).spaces.roles
+    }
+    fn full(&self) -> Option<&dyn Target> {
+        Some(self)
+    }
+}
+
+impl BuilderArch for &dyn Target {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        Target::registers(*self)
+    }
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        Target::register_named(*self, name)
+    }
+    fn stack_slot_bytes(&self) -> i64 {
+        Target::stack_slot_bytes(*self)
+    }
+    fn stack_alignment(&self) -> i64 {
+        Target::stack_alignment(*self)
+    }
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        Target::layout(*self).spaces.roles
+    }
+    fn full(&self) -> Option<&dyn Target> {
+        Some(*self)
+    }
+}
+
+/// Which register allocator compiles a target's functions
+/// (`TargetPassConfig::createRegAllocPass`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Allocator {
+    /// The translated greedy allocator, which the pin runs for every target
+    /// that has one.
+    Greedy,
+    /// The spike graph-colouring allocator (`llrm-spike-mf`): a target waits
+    /// on it until its greedy port lands.
+    Spike,
+    /// An allocator of the target's own.
+    Own,
+    /// None: the pin's target replaces register allocation (wasm's
+    /// `addRegAssignAndRewriteOptimized` returns false).
+    None,
+}
+
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
@@ -340,8 +422,24 @@ pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
 
+    /// Its object writers and what each format says of the code it holds
+    /// (LLVM's `MCObjectWriter` and `MCAsmInfo`), which the backend is handed
+    /// instead of naming a target.
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget;
+
+    /// The machine as a debug writer reads it (`MCRegisterInfo` and the
+    /// fixup kinds of a segment): everything but the register file, which the
+    /// caller reads from [`Target::registers_text`] once.
+    fn debug_target(&self) -> llrm_debug::DebugTarget;
+
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
+
+    /// The allocator that compiles this target's functions: the pin's choice
+    /// unless the target says otherwise.
+    fn register_allocator(&self) -> Allocator {
+        Allocator::Greedy
+    }
 
     /// Whether `--isel` unnamed selects through the DAG, not the old selector.
     fn selects_by_dag(&self) -> bool {

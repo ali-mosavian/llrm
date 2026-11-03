@@ -432,7 +432,7 @@ pub fn rule(
             Intrinsic::Unary(FloatFunction::Sqrt) => (Operation::Sqrt, vec![float(0)?], returned()?),
             // As the rounding mode says: only an integral input is exact under
             // every one.
-            Intrinsic::LRint => (Operation::Convert, vec![float(0)?], integer(true)?),
+            Intrinsic::LRint | Intrinsic::LLRint => (Operation::Convert, vec![float(0)?], integer(true)?),
             _ => return None,
         },
         _ => return None,

@@ -219,7 +219,7 @@ fn array_source() -> &'static str {
     "DECLARE SUB t ()\nt\nEND\nSUB t\nDIM grid(10) AS INTEGER\nDIM total AS INTEGER\ngrid(1) = 5\ntotal = grid(1)\nPRINT total\nEND SUB\n"
 }
 
-fn array_object(debug_format: llrm_object::debug::Format) -> (Vec<Rc<omf::Record>>, tempfile::TempDir) {
+fn array_object(debug_format: llrm_debug::Format) -> (Vec<Rc<omf::Record>>, tempfile::TempDir) {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "arr.bas", array_source().as_bytes());
     let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
@@ -235,7 +235,7 @@ fn array_object(debug_format: llrm_object::debug::Format) -> (Vec<Rc<omf::Record
 
 #[test]
 fn codeview_says_a_basic_array_as_its_descriptor_struct() {
-    let (records, _directory) = array_object(llrm_object::debug::Format::Default);
+    let (records, _directory) = array_object(llrm_debug::Format::Default);
     let shape = llrm_codegen::objectfile::cv4info::shape(&records);
     assert!(shape.iter().any(|one| one.starts_with("LOCAL T.GRID") && one.contains("struct ARRAY")), "{shape:#?}");
     assert!(shape.iter().any(|one| one.contains("TOTAL")), "{shape:#?}");
@@ -243,7 +243,7 @@ fn codeview_says_a_basic_array_as_its_descriptor_struct() {
 
 #[test]
 fn dwarf_says_a_basic_array_as_its_descriptor_struct_and_compiles() {
-    let (records, _directory) = array_object(llrm_object::debug::Format::Dwarf { version: 2 });
+    let (records, _directory) = array_object(llrm_debug::Format::Dwarf { version: 2 });
     let text: String = records.iter().flat_map(|one| one.body.iter().map(|&byte| char::from(byte))).collect();
     for name in ["TOTAL", "GRID", "ARRAY", "dimensions", "element_size"] {
         assert!(text.contains(name), "the DWARF names {name}");

@@ -10,6 +10,13 @@ void B_OEGA(void *pad)
     on_error(pad != 0);
 }
 
+/* B$OEGP: ON LOCAL ERROR GOTO, with the handler's address or 0. A function with a handler of either kind registers its
+   frame at entry, and an error lands in the innermost one, so the registration is the same switch as B$OEGA's. */
+void B_OEGP(unsigned pad)
+{
+    on_error(pad != 0);
+}
+
 void B_SERR(short number)
 {
     raise((unsigned short)number);

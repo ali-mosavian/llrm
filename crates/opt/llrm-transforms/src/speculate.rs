@@ -21,8 +21,8 @@
 //!   speculate. A store runs early (`HoistCondStores`) with
 //!   `isSafeToSpeculateStore` (D6).
 //! - D2. No branch weights or `!unpredictable` (`isProfitableToSpeculate` is
-//!   true), no ephemeral values (no assumption cache), no pseudo probes, no
-//!   `minsize` (costs are `SizeAndLatency`).
+//!   true), no ephemeral values (no assumption cache), no pseudo probes. A
+//!   `minsize` function is priced as `CodeSize` (`cost_kind`).
 //! - D3. A hoisted instruction keeps the metadata kinds LLVM keeps and loses
 //!   the rest, as in [`twoentryphi`](crate::twoentryphi) (D4 there).
 //! - D4. No constant expressions in function bodies: LLVM's price of one is not
@@ -57,6 +57,23 @@ use crate::twoentryphi::{Speculation, metadata_dropped};
 
 /// `phi-node-folding-threshold`, in `TCC_Basic`.
 const THRESHOLD: i64 = 2;
+
+/// The cost kind SimplifyCFG prices speculation with: `TCK_CodeSize` for a
+/// `minsize` function, else `TCK_SizeAndLatency`
+/// (`SimplifyCFG.cpp` `validateAndCostRequiredSelects`,
+/// `performBranchToCommonDestFolding`).
+pub(crate) fn cost_kind(function: &Function) -> CostKind {
+    let minsize = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "minsize"
+            ),
+        );
+    if minsize { CostKind::CodeSize } else { CostKind::SizeAndLatency }
+}
 
 /// `isSafeToSpeculateStore`: where `store` writes what a store or a load just
 /// before the branch of `block` read or wrote, the location is known to be
@@ -142,7 +159,7 @@ fn selects_priced(
             continue;
         }
         let ty = Ty::of(&context.types, function.instruction(phi).ty)?;
-        cost = cost + spec.tti.cmp_sel_cost(CmpSel::Select, ty, CostKind::SizeAndLatency);
+        cost = cost + spec.tti.cmp_sel_cost(CmpSel::Select, ty, cost_kind(function));
         if crate::alwaysundef::always_undefined(context, spec, function, original, phi, false)
             || crate::alwaysundef::always_undefined(context, spec, function, speculated, phi, false)
         {
@@ -211,7 +228,7 @@ pub fn executed(
                 &spec.outer.globals,
                 function,
                 inst,
-                CostKind::SizeAndLatency,
+                cost_kind(function),
             );
             if !price.valid || price.value > THRESHOLD {
                 return false;

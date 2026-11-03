@@ -41,6 +41,7 @@ import benchlist  # noqa: E402
 import basecounts  # noqa: E402
 import shards  # noqa: E402
 import maps  # noqa: E402
+import native  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
@@ -79,6 +80,12 @@ LOADERS: dict[Path, tuple[Path, ...]] = {}  # an exe -> the files that must sit 
 COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
+JUDGED_SIZES = ("code_bytes", "data_bytes", "static_bytes")  # bss is judged through the footprint (data + bss), not alone
+
+
+def with_footprint(row: dict) -> dict:
+    """The row with `static_bytes` = data + bss: a zero table moved from data to bss shrinks the image and leaves the footprint."""
+    return {**row, "static_bytes": row["data_bytes"] + row["bss_bytes"]} if "data_bytes" in row and "bss_bytes" in row else row
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace(dosbatch.CYCLES, "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
@@ -128,6 +135,7 @@ class Variant:
     timed_only: bool = False  # no instruction count (the emulator would step ~10^8 of them): timed in DOSBox, sized, output-checked there
     data: tuple[str, ...] = ()  # files it reads, as run_tests' `data:` header: `@name` is a cached corpus
     ci_bytes: int = 0  # the default bench (no --time) feeds a timed-only program this many bytes of its corpus, and checks NAME.ci.out
+    emulated: bool = False  # timed_only, and yet counted by the m16 emulator, which serves its declared `data` files from a private folder
 
 
 def directory_name(directory: Path) -> str:
@@ -142,17 +150,18 @@ def benchmarks(selected: list[str]) -> list[Path]:
 ONLY: list[str] | None = None  # `--lang`: the languages measured; None: every one the directory has
 
 
-def variants(directory: Path) -> list[Variant]:
+def variants(directory: Path, every_language: bool = False) -> list[Variant]:
     settings = tomllib.loads((directory / "bench.toml").read_text())
     name = directory_name(directory)
     out = []
     for language, suffix in LANGUAGES.items():
         source = directory / f"{directory.name}{suffix}"
-        if source.exists() and (ONLY is None or language in ONLY):
+        if source.exists() and (every_language or ONLY is None or language in ONLY):
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
-                              bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0))))
+                              bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0)),
+                              bool(settings.get("emulated"))))
     return out
 
 
@@ -302,17 +311,31 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
     return failed
 
 
+def code_fields(obj: Path) -> dict:
+    """The object's code bytes without alignment padding, the padding apart (`align_bytes`, reported not gated), and why the padding could
+    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`)."""
+    size = sizes.code_size(obj)
+    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {})}
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
-    stem, exe, listing, region, want, obj = job
+    stem, exe, listing, region, want, obj, *more = job
     if region is None:  # timed only: its output is checked where it is timed
         data, bss = sizes.data_bytes(obj)
-        return {"code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+        return {**code_fields(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
         return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
-    result = icount.run(exe, entry, exe.parent)
+    cwd = exe.parent
+    if more and more[0]:  # the files it reads, in a folder of its own: the programs of one folder write the same output names
+        cwd = exe.with_suffix(".run")
+        shutil.rmtree(cwd, ignore_errors=True)
+        cwd.mkdir()
+        for file in more[0]:
+            shutil.copy(file, cwd / file.name)
+    result = icount.run(exe, entry, cwd)
     got = run_tests.lines(result.output.decode("latin1"))
     if result.error and not (result.error == icount.NEVER_ENTERED and got == want):
         return {"error": result.error}
@@ -320,8 +343,8 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
-        return {"instructions": 0, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+        return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -420,7 +443,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], None if variant.timed_only else variant.region, expected_output(directory), obj)))
+            owned.append((key, (stem, built[0], built[1], None if variant.timed_only and not variant.emulated else variant.region, expected_output(directory), obj)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
@@ -474,17 +497,18 @@ def net_times(measured: dict) -> dict:
 def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Path) -> dict:
     """The kernel's 486 clocks, from the emulator that prices the flat image (tools/bench/flatcount.py). The emulator counts every
     instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE, DOSBox's repeated string instructions counted as it does: flatcount.DOSBOX_REP_SLICE), and a price of another run is no price. Reported, not gated."""
-    if instructions > flatcount.LIMIT // 2:
+    limit = int(os.environ.get("LLRM_FLAT_LIMIT") or flatcount.LIMIT)  # raised for the cells the default cap cannot reach (grep: 642M instructions), the same for main and tip
+    if instructions > limit // 2:
         print(f"WARNING {key}: no clocks: {instructions} instructions are too many to emulate", file=sys.stderr)
         return {}
-    ran = flatcount.run(image, region.upper(), cwd)
+    ran = flatcount.run(image, region.upper(), cwd, limit)
     if ran.error or ran.region is None:
         print(f"WARNING {key}: no clocks: {ran.error}", file=sys.stderr)
         return {}
     if not flatcount.agrees(ran.region.instructions, instructions, ran.rep_iterations):
         print(f"WARNING {key}: no clocks: the emulator counted {ran.region.instructions} instructions, DOSBox {instructions}", file=sys.stderr)
         return {}
-    return {"clocks": ran.region.clocks}
+    return {"clocks": ran.region.clocks, **({"emu_limit": limit} if limit != flatcount.LIMIT else {})}
 
 
 def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
@@ -514,7 +538,7 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         if not ran.sized.get(region.upper()):
             print(f"WARNING {key}: {region} has no length in the image's debug info, so code after it that no symbol names is counted in it", file=sys.stderr)
         data, bss = sizes.data_bytes(obj)
-        return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
+        return key, {"instructions": ran.inclusive[region.upper()], **code_fields(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
     with ThreadPoolExecutor() as pool:
         found = dict(pool.map(one, flat.items()))
@@ -534,6 +558,14 @@ def stage(text: str) -> None:
     print(f"bench: [{time.monotonic() - START:6.0f}s] {text}", file=sys.stderr, flush=True)
 
 
+def native_sources(name: str, directory: Path, work: Path) -> tuple[Path, Path] | None:
+    """The sources the x86_64 row runs and sizes: the harness's own (kept_a_call) for the program's C variant, in a folder of its own."""
+    variant = next((one for one in variants(directory, every_language=True) if one.language == "c"), None)  # `--lang c64` leaves ONLY without "c"
+    folder = work / "kept"
+    folder.mkdir(parents=True, exist_ok=True)
+    return kept_a_call(variant, folder, name.replace("/", "_")) if variant else None
+
+
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}. The levels are independent (a folder each) and are
     measured at once, in a process each; a timed run keeps them one after the other."""
@@ -545,6 +577,8 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         with ProcessPoolExecutor(max_workers=len(opts)) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
+    if ONLY is None or native.OURS in ONLY:
+        out |= native.measure([(directory_name(one), one) for one in benchmarks(selected)], BIN, opts, work / "native", BENCH, native_sources)
     return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
 
 
@@ -586,7 +620,11 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         elif directory == STARTUP:
             plain[key] = exe  # timed, not counted
         else:
-            jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
+            # an emulated program is counted on the cut of its corpus the default bench times (ci_bytes), even under --time
+            fed = timing_input(variant, directory, folder / "ci-input" / stem) if variant.emulated else None
+            files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))  # an unavailable corpus leaves it timed only
+            counted = not variant.timed_only or bool(files)
+            jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
@@ -636,6 +674,14 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
             elif not broken:
                 measured[key] = {"xpass": variant.known, **measured[key]}
     return measured
+
+
+def input_files(variant: Variant) -> tuple[Path, ...]:
+    """The files `variant` declares it reads (`// data:`; `@name` a cached corpus), or () where the corpus is not here."""
+    try:
+        return tuple(corpus.path(one[1:]) if one.startswith("@") else variant.source.parent / one for one in variant.data)
+    except corpus.Unavailable:
+        return ()
 
 
 def timing_input(variant: Variant, directory: Path, reduced: Path | None = None) -> dict | None:
@@ -720,44 +766,69 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     return True
 
 
-def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
+TUNE_486 = ROOT / "machine" / "tune" / "x86" / "i486.toml"  # the CPU the flat clocks are priced for (flatcount.py)
+M16_TIMINGS = ROOT / "crates" / "target" / "llrm-x86-m16" / "src" / "timings.times"
+
+
+def m16_rate() -> int:
+    """The `speed_milliclocks_per_byte` row of the m16 sheet: one price for every CPU column (policy); 0 where the row is absent or the columns disagree."""
+    for line in M16_TIMINGS.read_text().splitlines():
+        cells = line.split()
+        if cells[:1] == ["speed_milliclocks_per_byte"]:
+            values = set(cells[1:])
+            return int(values.pop()) if len(values) == 1 and next(iter(values), "").isdigit() else 0
+    return 0
+
+
+def rate_for(language: str, opt: str) -> int:
+    """What a byte of code is worth in thousandths of a clock at speed on the target of `language`, from the target's own rows: m16 at -O2/-O3 its
+    `speed_milliclocks_per_byte`; the flat x86-32 target at -O2/-O3 the 486's line fill (clocks to fill a line, per byte of line). 0 where the target has
+    none and at -Os."""
+    if language == FLAT and opt in ("O2", "O3"):
+        tune = tomllib.loads(TUNE_486.read_text())
+        return 1000 * tune["line_fill_clocks"] // tune["cache_line"] if "line_fill_clocks" in tune else 0
+    return m16_rate() if language in ("bas", "bq16", "c", "nib") and opt in ("O2", "O3") else 0
+
+
+def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), rate: int = 0) -> list[str]:
     """What fails the gate for one measurement: a count above its baseline (worse) unless a waiver (tools/bench/waivers) names its row,
     counter and this count. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
-    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged."""
+    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged. Clocks (the 486 kernel clocks) are judged like the counts.
+    Where the target prices a byte (`rate`, milliclocks per byte; -O2/-O3), the cell passes when 1000 * delta clocks + rate * delta code bytes <= 0 and
+    clocks, code bytes, instructions and memory operands are not gated alone: they are in the row.
+    Elsewhere (-Os, -O1 aside, and targets without a rate) code bytes and clocks are strict; instructions and memory operands are reported and gate
+    only when bytes and clocks both equal the base's. A cell without clocks on either side is strict on every metric."""
     if want is None:
         return []
+    if want.get("instructions") == 0 and "error" not in got:  # a base that executed nothing is no base: parity/control Os read 0 on main and 158 B was compared
+        return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
+    if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
+        return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
+    got, want = with_footprint(got), with_footprint(want)
     problems = []
-    for counter in (*COUNTERS, *SIZES):
+    priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
+    if priced:
+        clocks, size = got["clocks"] - want["clocks"], got["code_bytes"] - want["code_bytes"]
+        if 1000 * clocks + rate * size > 0:
+            problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
+    timed = not priced and all(one in side for one in ("clocks", "code_bytes") for side in (got, want))
+    tied = timed and got["clocks"] == want["clocks"] and got["code_bytes"] == want["code_bytes"]
+    for counter in (*COUNTERS, "clocks", *JUDGED_SIZES):
         if counter not in got:
             continue
         if counter not in want:
+            if counter in COUNTERS:  # a base without it ran no strict check on it: the gate would pass on a number never compared
+                problems.append(f"{label}: base has no {counter} (not judged; regenerate the base)")
+            continue
+        if priced and counter in ("instructions", "memory_operands", "clocks", "code_bytes"):
+            continue
+        if timed and not tied and counter in COUNTERS:
             continue
         if got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
             continue
         if got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
     return problems
-
-
-def clock_limits() -> dict[str, int]:
-    """The -Os m16 rows whose 486 clocks are above main's and may not grow (clock_limits.toml, one debt class each in docs/working/ci.md):
-    row label -> clocks it may reach. A row with none is not judged."""
-    return tomllib.loads((Path(__file__).parent / "clock_limits.toml").read_text()).get("clocks", {})
-
-
-def main_clocks() -> dict[str, int]:
-    """Main's -Os m16 clocks per row (main_clocks.toml): what a row may reach without an entry in clock_limits.toml."""
-    return tomllib.loads((Path(__file__).parent / "main_clocks.toml").read_text()).get("clocks", {})
-
-
-def clock_problems(label: str, got: dict, limits: dict[str, int], main: dict[str, int] | None = None) -> list[str]:
-    """A listed row above its limit fails: the clocks the step measured already, the same harness as main's. A row above main's with
-    no entry fails too: without it the first run of a regressed row would be red only by luck of the list."""
-    if label in limits and got.get("clocks", 0) > limits[label]:
-        return [f"{label}: clocks {got['clocks']} > limit {limits[label]} (tools/bench/clock_limits.toml)"]
-    if label not in limits and main and got.get("clocks", 0) > main.get(label, float("inf")):
-        return [f"{label}: clocks {got['clocks']} > main's {main[label]} and no entry in tools/bench/clock_limits.toml"]
-    return []
 
 
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
@@ -774,7 +845,8 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict,
     a waiver excuses (its row, counter and this count) is excused here too: the ratio is the count over a constant, so a waived count
     always moved it and no waiver on a row with references could pass."""
     problems = []
-    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+    got, want, ref = with_footprint(got), with_footprint(want), with_footprint(ref)
+    for counter in (*COUNTERS, *JUDGED_SIZES, "kernel_ms"):
         if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
             continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
@@ -800,14 +872,23 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
     return problems
 
 
+def native_problems(label: str, got: dict, want: dict | None, waived: list[dict]) -> list[str]:
+    """The x86_64 row: an error fails; a count above the base's fails (code bytes: executable sections of the object; instructions: user-mode, per run)."""
+    if "skip" in got:
+        return []
+    if "error" in got:
+        return [f"{label}: {got['error']}"]
+    if want is not None and "instructions" in want:
+        want = {**want, "instructions": want["instructions"] + 1}  # the count is a rounded mean over 100 runs of a native process: one instruction is its resolution
+    return against(label, got, want, waived)
+
+
 def judge(measured: dict, selected: list[str], opts: list[str], base: dict | None = None, same: set[str] | None = None) -> list[str]:
     """What fails the gate. `base`: the base's rows of ours (basecounts.base_counts), what a row of ours may not exceed; `same`: the programs
     the base and this tree have alike (a row of another program compares two programs, not two compilers). The references' rows come from
     each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
-    limits = clock_limits()
-    main = main_clocks()
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -830,8 +911,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
-                    problems += against(label, got, want, waived)
-                    problems += clock_problems(label, got, limits, main)
+                    problems += against(label, got, want, waived, rate_for(variant.language, opt))
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
@@ -842,6 +922,10 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
                     if (name, reference, level) in measured:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
+        for opt in opts:  # the x86_64 row: no variant of its own, it runs the C source
+            got = measured.get((name, native.OURS, opt))
+            if got is not None:
+                problems += native_problems(f"{name} {native.OURS} -{opt}", got, (base or {}).get((name, native.OURS, opt)) if same is None or name in same else None, waived)
     return problems
 
 
@@ -861,6 +945,21 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
         elif name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
             lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions" + (f", {got['memory_operands']} memory operands" if "memory_operands" in got else ""))
     return lines
+
+
+def align_lines(measured: dict) -> list[str]:
+    """Warnings, not failures: how many cells count some code bytes whole because those did not decode to their end, naming the cells where most of the
+    code is so (the padding there is not told), and padding in a size-optimised cell (no loop alignment is expected at -Os or -Oz)."""
+    lines, unread, mostly = [], [], []
+    for (name, language, opt), got in sorted(measured.items()):
+        if got.get("align_unread"):
+            unread.append(got["align_unread"])
+            if got["align_unread"] * 2 >= got["code_bytes"] + got.get("align_bytes", 0):
+                mostly.append(f"ALIGN-UNREAD {name} {language} -{opt}: {got['align_unread']} of {got['code_bytes']} bytes are counted with their padding")
+        if got.get("align_bytes", 0) and opt in ("Os", "Oz"):
+            lines.append(f"ALIGN {name} {language} -{opt}: {got['align_bytes']} bytes of alignment padding at a size level")
+    summary = [f"ALIGN-UNREAD {len(unread)} cells count {sum(unread)} bytes whole (data inside code: not decoded for padding)"] if unread else []
+    return summary + mostly + lines
 
 
 def geomean(values: list[float]) -> float:
@@ -921,6 +1020,14 @@ def base_rows(args, names: list[str] | None = None) -> tuple[dict, set[str], str
     if unbuilt:
         print("edited programs the base compiler could not build, not judged: " + " ".join(unbuilt), flush=True)
     return base, same, base_sha
+
+
+def compare_baselines(first: Path, second: Path) -> int:
+    """Exit 1, naming the cells, when two runs of one compiler disagree: a baseline that two runs do not reproduce judges nothing."""
+    one, two = (basecounts.rows_of(json.loads(path.read_text())) for path in (first, second))
+    problems = basecounts.unstable_cells(one, two)
+    print("\n".join(problems) or f"STABLE {len(one.keys() & two.keys())} cells")
+    return 1 if problems else 0
 
 
 def base_leg(args, slice_of: tuple[int, int] | None = None) -> int:
@@ -1021,7 +1128,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
-    parser.add_argument("--lang", nargs="+", choices=list(LANGUAGES), help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
+    parser.add_argument("--lang", nargs="+", choices=[*LANGUAGES, native.OURS], help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")
@@ -1030,11 +1137,14 @@ def main() -> int:
     parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
     parser.add_argument("--shard", metavar="I/N", help="only shard I of N of the benchmarks (shards.toml), judged alone; --json then writes shard-I.json for --merge. `base` or `base:I/N`: the base's counts, all or slice I, in base.json or base-I.json")
     parser.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: print the verdict of the N shard-*.json in DIR (add --record on a main push)")
+    parser.add_argument("--compare-baselines", nargs=2, type=Path, metavar=("A", "B"), help="judge nothing: refuse (exit 1, cells named) when two --json runs of one compiler differ in any count")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
     global ONLY
     ONLY = args.lang
+    if args.compare_baselines:
+        return compare_baselines(*args.compare_baselines)
     if args.merge:
         return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
     if args.shard == "base":
@@ -1059,6 +1169,12 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+        args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
+    print("HARNESS", basecounts.harness_digest())
+    unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
+    if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
+        print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")
+        return 1
     if args.record:
         import measure
 
@@ -1091,9 +1207,11 @@ def main() -> int:
         judged, judged_programs, left_out, uncovered = basecounts.coverage(measured, base, same)
         problems += uncovered
         print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
+        print(*basecounts.coverage_detail(measured, base, same), sep="\n")
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
+    print(*align_lines(measured), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused

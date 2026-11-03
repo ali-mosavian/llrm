@@ -1,7 +1,7 @@
 //! `.debug_ranges` (2-4) and `.debug_rnglists` (5): the code a DIE covers when
 //! it is not one range.
 
-use llrm_object::debug::Range;
+use llrm_debug::Range;
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};

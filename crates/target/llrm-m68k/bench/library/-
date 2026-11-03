@@ -1,0 +1,20 @@
+k:
+	movem.l	%d2-%d3, -(%sp)
+	suba.l	#12, %sp
+	move.l	(28,%sp), %d3
+	move.l	%d3, (4,%sp)
+	move.l	(24,%sp), %d2
+	move.l	%d2, (%sp)
+	jsr	__divsi3
+	move.l	%d3, (4,%sp)
+	move.l	%d2, %d1
+	sub.l	%d0, %d1
+	move.l	%d1, (%sp)
+	move.l	%d0, %d3
+	add.l	%d2, %d3
+	jsr	__mulsi3
+	add.l	%d0, %d3
+	move.l	%d3, %d0
+	adda.l	#12, %sp
+	movem.l	(%sp)+, %d2-%d3
+	rts

@@ -14,7 +14,15 @@ fn dword(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(EVT::I32, chain, ptr, info)
 }
 
@@ -82,9 +90,13 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
         let joined = dag.get_node(ISD::Xor, EVT::I32, &[lo, hi]);
         dag.set_root(joined);
         let tli = p5();
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
-            .run()
-            .unwrap();
+        DagLegalizer::new(
+            &mut dag,
+            &tli,
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        )
+        .run()
+        .unwrap();
         let root = dag.get_root();
         let (low, high) = (dag.operand(root, 0), dag.operand(root, 1));
         assert_eq!((dag.opcode(low), low.res), (ISD::MergeValues, 0));

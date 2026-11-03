@@ -1,0 +1,10 @@
+#title,Table 8-11. Multiprecision Instruction Execution Times,page,8-9,notes,
+Instruction,Size,"op Dn, Dn","op M, M"
+ADDX,"Byte, Word",4(1/0),18(3/1)
+,Long,8(1/0),30(5/2)
+CMPM,"Byte, Word",—,12(3/0)
+,Long,—,20(5/0)
+SUBX,"Byte, Word",4(1/0),18(3/1)
+,Long,8(1/0),30(5/2)
+ABCD,Byte,6(1/0),18(3/1)
+SBCD,Byte,6(1/0),18(3/1)

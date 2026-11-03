@@ -4,7 +4,7 @@ const EBP: RegId = RegId::EBP;
 const ESI: RegId = RegId::ESI;
 const ESP: RegId = RegId::ESP;
 const SP: RegId = RegId::SP;
-use llrm_object::debug::FrameRow;
+use llrm_debug::FrameRow;
 
 use super::rows;
 

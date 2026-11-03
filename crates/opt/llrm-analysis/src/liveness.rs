@@ -219,6 +219,30 @@ pub fn pressure_of(
     peak
 }
 
+/// `pressure_of` over the `blocks` alone, solving liveness for the counted
+/// values only.
+pub fn pressure_in(
+    function: &Function,
+    blocks: &[BlockId],
+    counted: &dyn Fn(ValueId) -> bool,
+) -> usize {
+    let found = live_where(function, counted);
+    let mut peak = 0;
+    for &block in blocks {
+        let mut alive = found.live_out[&id(block)].clone();
+        let size = |alive: &IdSet<ValueId>| alive.iter().filter(|&one| counted(one)).count();
+        peak = peak.max(size(&alive));
+        for op in split(function, block).1.into_iter().rev() {
+            if let Some(one) = op.result {
+                alive.remove(&one);
+            }
+            alive.extend(reads(op));
+            peak = peak.max(size(&alive));
+        }
+    }
+    peak
+}
+
 /// An instruction, the values live before it and those live across it.
 pub struct LivePoint {
     pub inst: InstId,

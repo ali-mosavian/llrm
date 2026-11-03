@@ -1252,10 +1252,8 @@ fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
             .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
             .count()
     };
-    llrm_x86_m16::with_pin_tuning(|| {
-        assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
-        assert_eq!(calls(true), 1, "-Os: the divide routine");
-    });
+    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+    assert_eq!(calls(true), 1, "-Os: the divide routine");
 }
 
 /// An indirect call with no stack arguments said nothing of what its callee
@@ -1331,4 +1329,88 @@ fn a_call_disturbs_the_registers_its_arguments_arrive_in() {
     let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
     let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
     assert!(disturbs.contains(&named("edx")) && disturbs.contains(&named("ebx")), "{disturbs:?}");
+}
+
+const MINSIZE_CONSTANT_ARGUMENTS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare void @g(i32, i32)
+define void @f() minsize {
+entry:
+  call void @g(i32 0, i32 -1)
+  ret void
+}
+";
+
+/// At minsize 0 and -1 are stored with `and [m], 0` / `or [m], -1`; the
+/// arguments stayed stores (`sub sp, 8; mov bx, sp; and [bx], 0`, +4 B
+/// each, 4383 B over BAS at -Oz) where the pin's `classifyInstruction`
+/// converts both to pushes.
+#[test]
+fn minsize_constant_arguments_are_pushed_not_stored() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_ARGUMENTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    let call = names.iter().position(|n| n == "call").expect("a call");
+    assert_eq!(&names[call - 2..call], ["push", "push"], "both arguments are pushed: {names:?}");
+    assert!(!names.iter().any(|n| n == "and" || n == "or"), "no constant store is left: {names:?}");
+}
+
+const MINSIZE_CONSTANT_STORES: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+@a = global i16 7
+@b = global i32 7
+define void @f() minsize {
+entry:
+  store i16 0, ptr @a
+  store i32 -1, ptr @b
+  ret void
+}
+";
+
+/// The pin's `OptForMinSize` store patterns (X86InstrCompiler.td:1308) key on
+/// the function's `minsize`, which the selector ignored: `mov dword [b], -1`
+/// (9 B at m16) stayed where `or dword [b], -1` is 6.
+#[test]
+fn minsize_stores_of_zero_and_minus_one_are_and_or() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_STORES).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(names.iter().any(|n| n == "and") && names.iter().any(|n| n == "or"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "mov"), "no mov of an immediate is left: {names:?}");
+}
+
+const I16_MULTIPLY_BY_SEVEN: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %x) {
+entry:
+  %m = mul i16 %x, 7
+  %s = add i16 %m, 3
+  ret i16 %s
+}
+";
+
+/// histo -O2 `(data*7 + seed) & 255` was `imul ax, ax, 7` (13 clocks on the
+/// 486) where main had `shl; sub`: instructions -10%, clocks +26%. The pin
+/// leaves an `i16` multiply to `imul`; m16 prices at the 486 and does not.
+#[test]
+fn an_i16_multiply_by_seven_is_a_chain_at_m16_not_an_imul() {
+    let module = crate::testing::module(I16_MULTIPLY_BY_SEVEN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("imul") || n == "mul"), "an imul is left: {names:?}");
 }

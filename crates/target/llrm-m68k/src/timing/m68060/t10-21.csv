@@ -1,0 +1,10 @@
+#title,Multiprecision Instruction Execution Times,page,10-22,notes,"¹ Where <ea>y,<ea>x is (Ay)+,(Ax)+ for CMPM and -(Ay),-(Ax) for all other instructions."
+Instruction,Size,"op Dy,Dx","op <ea>y,<ea>x¹"
+ADDX,"Byte, Word",1(0/0),2(2/1)
+"""",Long,1(0/0),2(2/1)
+CMPM,"Byte, Word",—,2(2/0)
+"""",Long,—,2(2/0)
+SUBX,"Byte, Word",1(0/0),2(2/1)
+"""",Long,1(0/0),2(2/1)
+ABCD,Byte,1(0/0),2(2/1)
+SBCD,Byte,1(0/0),2(2/1)

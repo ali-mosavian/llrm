@@ -42,10 +42,11 @@ fn a_wide_constant_is_built_outside_the_loop_that_uses_it() {
         .unwrap_or_else(|| panic!("a loop branch: {asm}"));
     let target = lines[back].rsplit(' ').next().unwrap();
     let start = lines.iter().position(|l| label(l).as_deref() == Some(target)).expect("the loop label");
-    // Premise: the constant is built somewhere (not folded away).
-    assert!(lines.iter().any(|l| l.starts_with("movk")), "{asm}");
-    let inside: Vec<&&str> =
-        lines[start..=back].iter().filter(|l| l.starts_with("movk") || l.starts_with("movz")).collect();
+    // Premise: the constant is made somewhere (not folded away): the pin
+    // loads this double from the constant pool, once, before the loop.
+    let made = |l: &str| l.starts_with("movk") || l.starts_with("movz") || (l.starts_with("ldr") && l.contains("lCPI"));
+    assert!(lines.iter().any(|l| made(l)), "{asm}");
+    let inside: Vec<&&str> = lines[start..=back].iter().filter(|l| made(l)).collect();
     assert!(inside.is_empty(), "constant rebuilt in the loop: {inside:?}\n{asm}");
 }
 
@@ -91,8 +92,13 @@ fn the_page_and_the_offset_of_a_global_plus_offset_agree() {
 #[test]
 fn the_size_level_makes_smaller_code_than_the_speed_level() {
     let text = include_str!("data/list_optsize.ll");
-    let lines = |level| driver::assembly(text, Platform::Darwin, level).expect("lowers").lines().count();
-    assert!(lines(driver::Level::Os) * 2 < lines(driver::Level::O2), "-Os is no smaller than -O2");
+    let asm = |level| driver::assembly(text, Platform::Darwin, level).expect("lowers");
+    let instructions =
+        |level| asm(level).lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    assert!(instructions(driver::Level::Os) < instructions(driver::Level::O2), "-Os is no smaller than -O2");
+    // The pin's `llc` makes 40 instructions of this IR (its `optsize`
+    // functions).
+    assert!(instructions(driver::Level::Os) <= 40, "-Os is larger than the pin's");
     assert!(driver::Level::parse("s") == Ok(driver::Level::Os) && driver::Level::parse("q").is_err());
 }
 
@@ -132,9 +138,10 @@ fn a_product_added_or_subtracted_is_one_multiply_accumulate() {
         assert_eq!(mnemonics(&add), ["madd", "ret"], "{add}");
         let sub = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %c, %m\n"), bits);
         assert_eq!(mnemonics(&sub), ["msub", "ret"], "{sub}");
-        // The product on the left of a subtract is not an `msub`.
+        // The product on the left of a subtract is not an `msub`: the pin
+        // negates `c` (`sub` from the zero register) and fuses the product.
         let neg = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %m, %c\n"), bits);
-        assert_eq!(mnemonics(&neg), ["madd", "sub", "ret"], "{neg}");
+        assert_eq!(mnemonics(&neg), ["sub", "madd", "ret"], "{neg}");
         let two =
             asm(&format!("  %m = mul i{bits} %a, %b\n  %n = mul i{bits} %c, %c\n  %r = add i{bits} %m, %n\n"), bits);
         assert_eq!(mnemonics(&two), ["madd", "madd", "ret"], "{two}");
@@ -345,13 +352,16 @@ fn a_memset_pattern_becomes_a_store_loop() {
 /// A constant several calls use was made once and kept in a callee-saved
 /// register (`movz x19, #0` and a save and restore of `x19`, a `mov` at each
 /// use); with every callee-saved register taken it went through a stack slot
-/// instead. The pin makes it again at each use: loop_fusion's `main` was 1.84x.
+/// instead. The pin makes it again at each use (`mov x0, xzr`, which this
+/// printer writes `orr x0, xzr, xzr`): loop_fusion's `main` was 1.84x.
 #[test]
 fn a_constant_used_by_several_calls_is_made_at_each_use() {
     let asm = driver::assembly(include_str!("data/constants_across_calls.ll"), Platform::Darwin, true)
         .expect("the function lowers");
     assert!(!asm.contains("x19"), "{asm}");
-    assert_eq!(asm.matches("movz x0, #0").count(), 2, "{asm}");
+    assert!(asm.contains("movz w0, #550"), "{asm}");
+    // Two arguments and the returned zero.
+    assert_eq!(asm.matches("orr x0, xzr, xzr").count(), 3, "{asm}");
 }
 
 /// An add whose only reader the mid-end removed (a store to a write-only
@@ -563,7 +573,13 @@ fn accesses_at_several_offsets_from_base_plus_index_share_the_sum() {
 fn a_compare_read_by_selects_and_a_branch_is_made_once_and_not_materialized() {
     let asm = driver::assembly(include_str!("data/select_pair_and_branch.ll"), Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("csinc w") && !asm.contains("ands wzr"), "{asm}");
-    assert_eq!(asm.matches("subs xzr, x20, #32").count(), 1, "{asm}");
+    // The pin compares against 32 once for both selects, then against 31.
+    assert_eq!(
+        asm.lines().filter(|l| l.trim_start().starts_with("subs xzr, x") && l.ends_with("#32")).count(),
+        1,
+        "{asm}"
+    );
+    assert_eq!(asm.matches("csel").count(), 1, "{asm}");
 }
 
 /// Inline-cost decisions were only visible through two undocumented environment
@@ -643,4 +659,168 @@ fn a_loop_of_memset_patterns_is_not_fully_unrolled() {
     let asm = driver::assembly(include_str!("data/memset_pattern_rows.ll"), Platform::Darwin, true).expect("lowers");
     let stores = asm.lines().filter(|line| line.trim_start().starts_with("strh")).count();
     assert_eq!(stores, 1, "{asm}");
+}
+
+/// The arm64 `Lowering` answered the base class, so CodeGenPrepare left an
+/// `i8` switch narrow and a later `sext` of the loaded byte in its use block;
+/// the pin widens the switch to `i32` and sign-extends beside the load
+/// (or_chain_of_equalities `@g`).
+#[test]
+fn a_byte_switch_is_widened_and_the_sign_extension_follows_the_load() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"
+target triple = \"arm64-apple-macosx\"
+
+declare void @sink(i32)
+
+define void @f(ptr %p) {
+b0:
+  %v = load i8, ptr %p
+  switch i8 %v, label %other [
+    i8 33, label %hit
+    i8 35, label %hit
+    i8 37, label %hit
+    i8 38, label %hit
+  ]
+
+hit:
+  call void @sink(i32 7)
+  br label %other
+
+other:
+  %w = sext i8 %v to i32
+  call void @sink(i32 %w)
+  ret void
+}
+";
+    let mut program = driver::program(text, Platform::Darwin).expect("the module reads");
+    driver::optimized(&mut program).expect("the pipeline runs");
+    let after = llrm_mir::print::module(&program.modules[0]);
+    assert!(after.contains("switch i32"), "{after}");
+    let (entry, _) = after.split_once("\nhit:").or_else(|| after.split_once("\n8:")).unwrap_or((&after, ""));
+    assert!(entry.contains("sext i8"), "the sign extension follows the load: {after}");
+}
+
+/// `isExtFreeImpl` (AArch64ISelLowering.cpp#L19014): an extension read only
+/// by constant shifts, same-type truncs and GEP scales of 2..16 bytes is free;
+/// any other reader makes it cost an instruction.
+#[test]
+fn an_extension_is_free_only_for_the_users_the_bfm_family_folds() {
+    use llrm_arm64::tti::AArch64Lowering;
+    use llrm_mir::lowering::{ExtUser, Lowering};
+    let free = |users: &[ExtUser]| AArch64Lowering.is_ext_free_impl(users);
+    assert!(free(&[ExtUser::ConstShl, ExtUser::SameTypeTrunc, ExtUser::Gep { store_bits: 32 }]));
+    assert!(!free(&[ExtUser::Gep { store_bits: 8 }]), "scale 1 needs no shift");
+    assert!(!free(&[ExtUser::Gep { store_bits: 256 }]), "scale 32 does not fit the addressing mode");
+    assert!(!free(&[ExtUser::ConstShl, ExtUser::Other]));
+}
+
+/// `-g` on arm64 wrote no debug information at all (`Object::debug` was always
+/// none): a debugger could not name a function or print a variable. At -O0 each
+/// variable lives in its frame object, `a` at `sp+0` and the frame 32 bytes, so
+/// 32 bytes below the canonical frame address.
+#[test]
+fn a_variable_in_the_frame_has_its_place_below_the_frame_address() {
+    use llrm_debug::Location;
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
+            .expect("lowers");
+    let info = object.debug.as_ref().expect("debug information");
+    let function = info.functions.iter().find(|one| one.name == "f").expect("the function");
+    let places: Vec<(&str, &Location)> =
+        function.variables.iter().map(|one| (one.name.as_str(), &one.location)).collect();
+    assert_eq!(
+        places,
+        [
+            ("a", &Location::Frame { disp: -32 }),
+            ("b", &Location::Frame { disp: -28 }),
+            ("t", &Location::Frame { disp: -24 })
+        ]
+    );
+    use llrm_debug::DebugObjectTarget;
+    let elf = llrm_arm64::mc::Arm64Objects
+        .write_described("elf", &object.object, object.debug.as_ref())
+        .expect("the DWARF writer takes it");
+    assert!(elf.windows(8).any(|window| window == b".debug_i"), "a .debug_info section");
+}
+
+/// The line table of an arm64 object: a row where the source place changes,
+/// and one at the function's start for the line it is declared at (clang's
+/// rows for the same function, bar its `prologue_end` flags).
+#[test]
+fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "debug_o0", driver::Level::O0, true)
+            .expect("lowers");
+    let rows: Vec<(usize, u32, u32)> = object
+        .debug
+        .as_ref()
+        .expect("debug information")
+        .lines
+        .iter()
+        .map(|one| (one.offset, one.line, one.column))
+        .collect();
+    assert_eq!(rows, [(0, 2, 0), (12, 3, 11), (20, 3, 18), (24, 3, 16), (28, 3, 7), (32, 4, 12), (36, 4, 3)]);
+}
+
+/// `-g` must not change the code: the source place each operation carries
+/// through the passes decides nothing. The fixtures (clang's -O0 and -O2
+/// output) lower to the same bytes with and without it.
+#[test]
+fn debug_information_leaves_the_code_as_it_was() {
+    for (text, level) in
+        [(include_str!("data/debug_o0.ll"), driver::Level::O0), (include_str!("data/debug_o2.ll"), driver::Level::O2)]
+    {
+        let text_of = |debug| {
+            let object = driver::object_with(text, Platform::Linux, "same", level, debug).expect("lowers");
+            object.sections[0].image.clone()
+        };
+        assert!(!text_of(false).is_empty(), "premise: code");
+        assert_eq!(text_of(false), text_of(true));
+    }
+}
+
+/// The pin flags the first row after the frame is built `prologue_end` and the
+/// first row that takes it down `epilogue_begin`. The arm64 line table had
+/// neither: the functions had no body bounds, so gdb stepped into the prologue
+/// and a debugger could not tell where the epilogue began.
+#[test]
+fn an_arm64_function_has_its_body_bounds_and_the_line_table_flags_them() {
+    for (text, level) in
+        [(include_str!("data/debug_o0.ll"), driver::Level::O0), (include_str!("data/debug_o2.ll"), driver::Level::O2)]
+    {
+        let object = driver::object_with(text, Platform::Linux, "flags", level, true).expect("lowers");
+        let info = object.debug.as_ref().expect("debug information");
+        let function = info.functions.first().expect("a function");
+        let (start, end) = function.body.expect("the body's bounds");
+        let range = &function.ranges[0];
+        assert!(0 < start && start < end && end < range.length, "{start}..{end} of {}", range.length);
+        assert_eq!((start % 4, end % 4), (0, 0));
+        assert!(
+            info.lines.iter().any(|one| one.offset == range.offset + start)
+                && info.lines.iter().any(|one| one.offset == range.offset + end),
+            "a row at each bound: {:?}",
+            info.lines
+        );
+    }
+}
+
+/// A row is a statement where its line is not the line before it (the pin's
+/// rule for a function without key instructions); the arm64 table made every
+/// row a statement, so a debugger stopped at each column of a line.
+#[test]
+fn an_arm64_row_on_the_line_before_it_is_not_a_statement() {
+    let object =
+        driver::object_with(include_str!("data/debug_o0.ll"), Platform::Linux, "stmt", driver::Level::O0, true)
+            .expect("lowers");
+    let info = object.debug.as_ref().expect("debug information");
+    let mut previous = None;
+    let mut expected = std::collections::BTreeSet::new();
+    for row in &info.lines {
+        if previous == Some(row.line) {
+            expected.insert((0, row.offset));
+        }
+        previous = Some(row.line);
+    }
+    assert!(!expected.is_empty(), "premise: a line with more than one row");
+    assert_eq!(info.not_stmt, expected);
 }

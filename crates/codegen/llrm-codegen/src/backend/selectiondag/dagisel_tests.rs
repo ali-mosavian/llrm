@@ -18,12 +18,13 @@ fn hooks() -> X86Hooks {
         opt_for_size: false,
         min_size: false,
         has_frame_pointer: true,
+        multiply_early_out: false,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
     })
 }
 
 fn mem_info() -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None }
 }
 
 fn input(
@@ -179,6 +180,100 @@ fn the_pins_physical_registers_are_physical_register_nodes() {
     assert!(matches!(data(flags), NodeData::PhysReg(r) if r == super::dagisel_adapter::EFLAGS_ID));
 }
 
+/// A target whose map lacks a register the selector names read it as a
+/// virtual register of the pin's number (AArch64's NZCV, 7, became vreg 7).
+/// The adapter now records a refusal; x86's map still reads a stranger as
+/// virtual.
+#[test]
+fn a_register_the_target_cannot_map_is_a_refusal_not_a_virtual_register() {
+    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::generated::ids::mvt;
+    use llrm_lir::registers::RegId;
+
+    use super::dagisel_adapter::PinRegisters;
+
+    struct OneRegister;
+    impl PinRegisters for OneRegister {
+        fn phys_reg(
+            &self,
+            pin: u16,
+        ) -> Option<RegId> {
+            (pin == 1).then_some(RegId::from_raw(1))
+        }
+        fn pin_register(
+            &self,
+            id: RegId,
+        ) -> Option<u16> {
+            (id == RegId::from_raw(1)).then_some(1)
+        }
+        fn unmapped(
+            &self,
+            pin: u16,
+        ) -> bool {
+            pin > 1
+        }
+    }
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut x86 = DagisAdapter::new(&mut dag);
+    x86.register(199, mvt::i32);
+    assert_eq!(x86.refusal(), None, "x86 keeps reading an unnamed register as virtual");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut adapter = DagisAdapter::with_registers(&mut dag, &OneRegister);
+    adapter.register(0, mvt::i32);
+    adapter.register(1, mvt::i32);
+    assert_eq!(adapter.refusal(), None);
+    adapter.register(7, mvt::i32);
+    assert!(adapter.refusal().is_some_and(|why| why.contains("pin register 7")));
+}
+
+/// m68k's `PC` is a register of the pin's that no instruction names: it has no
+/// id of ours, so a matcher read it as a virtual register and the pc-relative
+/// load of a global addressed from an unset `An`. A target says which numbers
+/// are fixed and `register_of` answers them; others stay virtual.
+#[test]
+fn a_fixed_register_with_no_id_is_a_register_of_the_pin_not_a_virtual_one() {
+    use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::generated::ids::mvt;
+    use llrm_lir::registers::RegId;
+
+    use super::dagisel_adapter::PinRegisters;
+
+    struct WithPc;
+    impl PinRegisters for WithPc {
+        fn phys_reg(
+            &self,
+            _pin: u16,
+        ) -> Option<RegId> {
+            None
+        }
+        fn pin_register(
+            &self,
+            _id: RegId,
+        ) -> Option<u16> {
+            None
+        }
+        fn is_fixed(
+            &self,
+            register: u16,
+        ) -> bool {
+            register == 9
+        }
+    }
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut adapter = DagisAdapter::with_registers(&mut dag, &WithPc);
+    let (pc, other) = (adapter.register(9, mvt::i32), adapter.register(10, mvt::i32));
+    assert_eq!(adapter.register_of(pc.node), Some(9));
+    assert_eq!(adapter.register_of(other.node), None, "any other number is virtual");
+
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let mut x86 = DagisAdapter::new(&mut dag);
+    let nine = x86.register(9, mvt::i32);
+    assert_eq!(x86.register_of(nine.node), None, "a target that says nothing has no fixed register");
+}
+
 /// The adapter said no store truncates, so a narrow store of a wide value
 /// matched the plain store patterns (and `ST_Fp64m32`'s truncating pattern
 /// never could).
@@ -255,6 +350,21 @@ fn an_f80_zero_and_one_are_selected_as_the_x87_constants() {
     assert_eq!(machine_name(&dag, one.node), "LD_Fp180");
 }
 
+/// A pattern that takes a float as an immediate (`fpimm`, wasm's `f64.const`)
+/// asks for the constant as a target constant; a `ConstantFP` stayed a
+/// `ConstantFP`, which no machine instruction's pattern accepts.
+#[test]
+fn a_float_constant_converts_to_a_target_constant() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let value = dag.get_constant_fp(2.5f64.to_bits().into(), EVT::Simple(super::mvt::MVT::F64));
+    let mut adapter = DagisAdapter::new(&mut dag);
+    let target = adapter.convert_to_target(PinValue::new(value.node, value.res));
+    let target = SDValue { node: target.node, res: target.res };
+    assert_eq!(dag.opcode(target), ISD::TargetConstantFP);
+    assert_eq!(dag.value_type(target), EVT::Simple(super::mvt::MVT::F64));
+}
+
 /// Every node of ours that the matcher passes through has an id in
 /// `own_ids.txt`: `LLRM_FARCALL` had none, mapped to no opcode, and a call
 /// through a function pointer was `CannotSelect(Target(24584))` (7 m16
@@ -275,7 +385,7 @@ fn every_own_node_has_a_pin_id() {
 /// to the file, so the generated ids did not know it.
 #[test]
 fn every_own_target_id_is_in_own_ids() {
-    let nodes = include_str!("../../../../../../crates/target/llrm-x86/src/dag/x86isd.rs");
+    let nodes = include_str!("../../../../../../crates/codegen/llrm-sdag/src/x86isd.rs");
     let ids = include_str!("../../../../../../tools/dagisel/own_ids.txt");
     let listed: Vec<(&str, &str)> = ids.lines().filter_map(|line| line.split_once(' ')).collect();
     let mut missing = Vec::new();
@@ -372,7 +482,15 @@ fn an_x87_fist_to_a_stack_slot_is_an_ist_pseudo() {
         };
         let slot = dag.get_frame_index(EVT::I32, 3);
         let chain = dag.entry_node();
-        let info = MemInfo { mem_vt: int, align: 4, volatile: false, base: MemBase::Stack(3), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: int,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(3),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let fist = dag.intern(
             super::x86_lowering::x86isd::FIST,
             &[EVT::OTHER],
@@ -408,8 +526,15 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
         dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0, 0));
     let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: f64_vt, align: 8, volatile: false, base: MemBase::ConstantPool(0), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: f64_vt,
+        align: 8,
+        volatile: false,
+        base: MemBase::ConstantPool(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let load = dag.get_load(f64_vt, chain, address, info);
     let mut adapter = DagisAdapter::new(&mut dag);
 
@@ -631,6 +756,29 @@ fn a_node_morphed_to_read_a_later_node_is_walked_through() {
     );
 }
 
+/// `setcc a, b, cc` morphed to an instruction that reads only `a` and `b` left
+/// the condition-code node live, and selection then refused it
+/// (`CannotSelect("CondCodeNode")`: 6 of wasm's 29 IR tests).
+#[test]
+fn a_morphed_node_deletes_the_operands_it_stops_reading() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    use llrm_dagisel::generated::ids::mvt;
+
+    use super::isd::CondCode;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let (a, b) = (input(&mut dag, 40), input(&mut dag, 41));
+    let cc = dag.get_cond_code(CondCode::SetEq);
+    let setcc = dag.get_node(ISD::SetCC, EVT::I1, &[a, b, cc]);
+    let root = dag.get_node(ISD::Truncate, EVT::I1, &[setcc]);
+    dag.set_root(root);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    assert!(!adapter.is_dead(cc.node), "the premise: the code is live before");
+    let operands = [a, b].map(|v| PinValue { node: v.node, res: 0 });
+    adapter.morph_node_to(setcc.node, 1, &[mvt::i1], &operands);
+    assert!(adapter.is_dead(cc.node), "the code node outlived the node that read it");
+    assert!(!adapter.is_dead(a.node), "an operand still read was deleted");
+}
+
 /// A node marked selected (`setNodeId(-1)`) ends the spread of
 /// `EnforceNodeIdInvariant`: a replacement invalidates the unselected users
 /// above it, not everything after the selected node.
@@ -652,4 +800,22 @@ fn a_selected_node_stops_the_spread_of_invalidated_ids() {
     adapter.replace_uses(PinValue { node: nodes[0].node, res: 0 }, PinValue { node: other.node, res: 0 });
     assert!(adapter.id_of(nodes[1].node) < -1, "the unselected user of the replacement is invalidated");
     assert!(adapter.id_of(nodes[3].node) > 0, "invalidation ran through the selected node");
+}
+
+/// The arm64 bitfield matchers asked the structural `known_zero` (constants,
+/// `and`, shifts) for the non-zero bits of a value; a `umin` with 15 was
+/// unknown, so a field the pin proves narrow was matched wide or not at all.
+/// The adapter answers `computeKnownBits`.
+#[test]
+fn the_adapter_answers_the_known_zero_bits_of_the_dag() {
+    use llrm_dagisel::dag::SDValue as PinValue;
+    use llrm_dagisel::x86_addr::{AddrDag, known_zero};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let x = input(&mut dag, 40);
+    let fifteen = dag.get_constant(15, EVT::I32);
+    let min = dag.get_node(ISD::UMin, EVT::I32, &[x, fifteen]);
+    let adapter = DagisAdapter::new(&mut dag);
+    let value = PinValue::new(min.node, 0);
+    assert_eq!(known_zero(&adapter, value, 0), 0, "premise: the structural subset knows nothing of a umin");
+    assert_eq!(adapter.known_zero_bits(value), 0xffff_fff0);
 }

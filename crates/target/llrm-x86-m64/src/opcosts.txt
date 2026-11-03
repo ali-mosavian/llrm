@@ -6,6 +6,11 @@
 add = alu_rr
 multiply = imul_r32
 divide = idiv_r32
+multiply_long = imul_r32
+multiply_high = smul_min_w4
+divide_long = idiv_r32
+# None: the multiply-high is priced at the 486's shortest multiply (`multiply_high`), the dividend being the multiplier.
+divide_margin = 0
 shift = shift_ri
 address = lea
 carry = carry(movzx, alu_rr, shift_ri, mov_rr)
@@ -52,6 +57,7 @@ unroll_budget = 150
 alu_rr = 4
 xchg_rr = 4
 imul_r32 = 6
+smul_min_w4 = 6
 idiv_r32 = 6
 shift_ri = 6
 lea = 6

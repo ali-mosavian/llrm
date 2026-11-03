@@ -7,7 +7,6 @@ crates/codegen/llrm-codegen/src/backend/lifetimes.rs	9
 crates/frontends/bcobj/src/emit.rs	5
 crates/ir/llrm-mir/src/interpret.rs	2
 crates/ir/llrm-mir/src/lint.rs	3
-crates/ir/llrm-mir/src/loops.rs	3
 crates/ir/llrm-mir/src/parse.rs	2
 crates/ir/llrm-mir/src/print.rs	2
 crates/ir/llrm-mir/src/scalarevolution.rs	2
@@ -24,12 +23,10 @@ crates/opt/llrm-analysis/src/frameescape.rs	26
 crates/opt/llrm-analysis/src/induction.rs	35
 crates/opt/llrm-analysis/src/interprocedural.rs	1
 crates/opt/llrm-analysis/src/liveness.rs	3
-crates/opt/llrm-analysis/src/loopclone.rs	4
 crates/opt/llrm-analysis/src/manager.rs	18
 crates/opt/llrm-analysis/src/memory.rs	11
 crates/opt/llrm-analysis/src/memoryssa.rs	14
 crates/opt/llrm-analysis/src/noreturn.rs	6
-crates/opt/llrm-analysis/src/parameter_ranges.rs	2
 crates/opt/llrm-analysis/src/peelsize.rs	6
 crates/opt/llrm-analysis/src/ranges.rs	60
 crates/opt/llrm-analysis/src/regions.rs	10
@@ -42,7 +39,6 @@ crates/opt/llrm-transforms/src/floatfold.rs	4
 crates/opt/llrm-transforms/src/floatloop.rs	2
 crates/opt/llrm-transforms/src/fold.rs	5
 crates/opt/llrm-transforms/src/gvn.rs	3
-crates/opt/llrm-transforms/src/hoist.rs	8
 crates/opt/llrm-transforms/src/indvars.rs	1
 crates/opt/llrm-transforms/src/inferspace.rs	7
 crates/opt/llrm-transforms/src/inline.rs	5
@@ -50,13 +46,9 @@ crates/opt/llrm-transforms/src/interprocedural.rs	4
 crates/opt/llrm-transforms/src/ipacp.rs	3
 crates/opt/llrm-transforms/src/lcssa.rs	3
 crates/opt/llrm-transforms/src/lcssamerges.rs	1
-crates/opt/llrm-transforms/src/loadjoins.rs	3
 crates/opt/llrm-transforms/src/loopclone.rs	1
-crates/opt/llrm-transforms/src/loopmotion.rs	3
-crates/opt/llrm-transforms/src/lsr.rs	10
 crates/opt/llrm-transforms/src/profit.rs	1
 crates/opt/llrm-transforms/src/promote.rs	5
 crates/opt/llrm-transforms/src/rotate.rs	2
 crates/opt/llrm-transforms/src/spill.rs	19
 crates/opt/llrm-transforms/src/transform.rs	8
-crates/opt/llrm-transforms/src/unroll.rs	2

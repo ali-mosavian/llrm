@@ -34,7 +34,7 @@ def commit(root: Path, name: str, text: str, branch: str) -> None:
 
 
 def test_a_branch_that_conflicts_with_the_tip_names_the_files(tmp_path):
-    """#3436's batch refused PRs that did not merge with feat/parity: the owner learns it from the runner an hour later."""
+    """#3436's batch refused PRs that did not merge with release/next: the owner learns it from the runner an hour later."""
     root = repo(tmp_path)
     commit(root, "a.txt", "one\nthree\n", "parity")
     commit(root, "a.txt", "one\nfour\n", "pr")
@@ -108,8 +108,8 @@ def test_a_lib_test_that_fails_here_and_passes_on_the_tip_is_named_and_one_the_t
     def run(command, **kwargs):
         return SimpleNamespace(returncode=101, stdout=out, stderr="")
 
-    why = pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/x.rs"], "origin/feat/parity", run, lambda root, failed, base: {"llrm-codegen": {"backend::x::test_old"}})
-    assert why == ["lib test fails here and passes on origin/feat/parity: llrm-codegen::backend::x::test_new"]
+    why = pc.lib_failures(Path("."), ["llrm-codegen"], ["crates/codegen/llrm-codegen/src/x.rs"], "origin/release/next", run, lambda root, failed, base: {"llrm-codegen": {"backend::x::test_old"}})
+    assert why == ["lib test fails here and passes on origin/release/next: llrm-codegen::backend::x::test_new"]
 
 
 def test_a_new_machine_phase_runs_the_slot_list_tests_of_llrm_transforms():
@@ -204,7 +204,7 @@ def test_a_docs_only_branch_is_told_of_a_scanner_it_turns_red(tmp_path, monkeypa
     and names one that fails here and passes on the base; one red on both is the base's."""
     monkeypatch.setattr(pc.parity_smoke, "integration_failures", lambda targets, root=None, run=None: {"integration docs_links::test_every_markdown_link_resolves"})
     named = pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: set())
-    assert named == ["scanner fails here and passes on origin/feat/parity: integration docs_links::test_every_markdown_link_resolves"]
+    assert named == ["scanner fails here and passes on origin/release/next: integration docs_links::test_every_markdown_link_resolves"]
     assert pc.scanner_failures(tmp_path, ["docs/working/x.md"], on_base=lambda targets: {"integration docs_links::test_every_markdown_link_resolves"}) == []
 
 
@@ -226,3 +226,18 @@ def test_a_branch_that_leaves_a_generated_page_stale_is_told_before_it_is_marked
     assert len(out) == 1 and "docs/a.md" in out[0] and "docs/b.md" not in out[0] and "build.py --sync" in out[0]
     assert pc.docs_failures(tmp_path, docs=lambda root: {"docs/b.md"}, docs_on_base=lambda: {"docs/b.md"}) == [], "a page the tip has stale is not the branch's"
     assert pc.docs_failures(tmp_path, docs=lambda root: set()) == []
+
+
+def test_a_source_hidden_by_a_bare_target_ignore_fails_the_check_and_an_anchored_one_passes(tmp_path):
+    """A bare `target` line in .gitignore hid crates/target/**: the new file built locally and was missing in the runner's checkout. A root `/target` hides only the build dir."""
+    repo = tmp_path / "r"
+    (repo / "crates" / "target" / "x").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text("target\n")
+    (repo / "crates" / "target" / "x" / "new.rs").write_text("fn f() {}\n")
+    (repo / "crates" / "__pycache__").mkdir()
+    (repo / "crates" / "__pycache__" / "a.pyc").write_text("x")
+    found = pc.ignored_sources(repo)
+    assert len(found) == 1 and found[0].startswith("crates/target/x/new.rs: git ignores"), found
+    (repo / ".gitignore").write_text("/target\n__pycache__\n")
+    assert pc.ignored_sources(repo) == []
