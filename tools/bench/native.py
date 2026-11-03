@@ -55,6 +55,26 @@ def instructions_of(executable: Path, argument: str, cwd: Path, repeats: int = 7
     return sorted(found)[len(found) // 2] if found else None
 
 
+WINDOW = 100  # extra runs between the two counts; widened (WIDE) while a window of them stays this cheap
+WIDE, CHEAP = 1000, 10_000_000
+
+
+def instructions_per_run(exe: Path, cwd: Path) -> int | str:
+    """User-mode instructions of one run of the kernel: (count of 1 + N runs - count of 1 run) / N, rounded; or why not. A run costs a fixed
+    start-up plus the kernel, and the first run is cold, so the difference per run is not an integer (crc read 482.4): the counter's few-instruction
+    jitter over 100 runs (0.1) moved it across .5 and the row read 482 or 483. A window of 1000 runs cuts the jitter to 0.01 where 1000 runs stay cheap."""
+    few, many = instructions_of(exe, "1", cwd), instructions_of(exe, str(1 + WINDOW), cwd)
+    if few is None or many is None or many <= few:
+        return f"instructions: {few} for one run, {many} for {1 + WINDOW}"
+    window = WINDOW
+    if many - few < CHEAP:
+        window = WIDE
+        many = instructions_of(exe, str(1 + window), cwd)
+        if many is None or many <= few:
+            return f"instructions: {few} for one run, {many} for {1 + window}"
+    return round((many - few) / window)
+
+
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
     """The command and environment that compile `source` to the object `out`: the same flags for every compiler; ours is flagless in the gated column (like for like with the base: main 65098fd950 ignores -fno-pic) and `-fno-pic` in its reported column, as gcc and clang are; `main` becomes `bench_main_`, which the driver runs."""
     flags = [f"-{opt}", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
@@ -92,12 +112,12 @@ def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt:
     want = (directory / f"{directory.name}.out").read_text().splitlines()[:1]
     if ran.returncode != 0 or ran.stdout.split()[:1] != want[:1]:
         return {"error": f"prints {ran.stdout.split()[:1]}, want {want[:1]}"}
-    few, many = instructions_of(exe, "1", directory), instructions_of(exe, "101", directory)
-    if few is None or many is None or many <= few:
-        return {"error": f"instructions: {few} for one run, {many} for 101"}
+    per_run = instructions_per_run(exe, directory)
+    if isinstance(per_run, str):
+        return {"error": per_run}
     data, bss = sizes.data_bytes(obj)
     size = sizes.code_size(obj)
-    return {"instructions": round((many - few) / 100), "code_bytes": size.code, "align_bytes": size.align, "data_bytes": data, "bss_bytes": bss, **({"align_unread": size.unread} if size.unread else {})}
+    return {"instructions": per_run, "code_bytes": size.code, "align_bytes": size.align, "data_bytes": data, "bss_bytes": bss, **({"align_unread": size.unread} if size.unread else {})}
 
 
 def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], work: Path, bench: Path, keep=None) -> dict[tuple[str, str, str], dict]:

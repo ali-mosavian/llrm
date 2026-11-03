@@ -232,3 +232,17 @@ def test_data_bytes_counts_the_constants_gcc_keeps_in_rodata_not_only_text(tmp_p
     assert done.returncode == 0, done.stderr
     monkeypatch.setattr(harness, "OUT", tmp_path)
     assert harness.data_bytes("p", "gccO2") == 16
+
+
+def test_code_bytes_leaves_out_alignment_padding(tmp_path, monkeypatch):
+    """The leg counted whole .text: a loop gcc aligned with nops read as growth (the judge's code_bytes leaves padding out, so the two disagreed).
+    6 bytes of code, `.p2align 4`, 1 byte of code: 17 bytes in the section, 7 of code and 10 of padding."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\nmovl $1,%eax\nret\n.p2align 4\nret\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.gccO2.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    monkeypatch.setattr(harness, "archive_code", lambda prog, variant: 0)
+    assert harness.code_size("p", "gccO2") == (7, 10)
+    assert harness.code_bytes("p", "gccO2") == 7
