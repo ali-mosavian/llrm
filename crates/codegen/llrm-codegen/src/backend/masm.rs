@@ -585,15 +585,19 @@ pub fn jump_tables(
     out
 }
 
-/// The tables of `tables` (from [`jump_tables`]) that are position independent,
-/// each 4-aligned, and the others: a table of differences is never written, so
-/// it goes in the read-only data (`.rodata`) as the pin's.
+/// The tables of `tables` (from [`jump_tables`]) that are position independent
+/// or of 64-bit pointers, each aligned to its entry, and the others: a table of
+/// differences is never written, so it goes in the read-only data (`.rodata`)
+/// as the pin's.
 pub fn split_read_only(tables: Vec<Datum>) -> (Vec<Datum>, Vec<Datum>) {
     let (mut read_only, mut writable) = (Vec::new(), Vec::new());
     let mut group: Vec<Datum> = Vec::new();
     let mut flush = |group: &mut Vec<Datum>| {
-        if matches!(group.get(1), Some(Datum::Difference(_))) {
-            read_only.push(Datum::Align(Align { to: 4 }));
+        // A 64-bit table of pointers (`-fno-pic`) is as unwritten and is the
+        // pin's `.rodata` too; the narrower ones stay where they were.
+        let wide = matches!(group.get(1), Some(Datum::Pointer(Pointer { bytes: 8, .. })));
+        if matches!(group.get(1), Some(Datum::Difference(_))) || wide {
+            read_only.push(Datum::Align(Align { to: if wide { 8 } else { 4 } }));
             read_only.append(group);
         } else {
             writable.append(group);
