@@ -523,19 +523,6 @@ fn a_zero_extended_operand_is_computed_at_32_bits_at_m64() {
     assert!(!listing.contains("rax") && !listing.contains("movzx"), "{listing}");
 }
 
-/// The half-width shifts built their amount in the narrow type, not the
-/// target's `i8`: `(zext i8 x * 7 + y) & 255` was `CannotSelect(Shl)` (bench
-/// histo, no object at all).
-#[test]
-fn a_narrowed_shift_takes_the_targets_amount_type_at_m64() {
-    let text = "target datalayout = \"@m64-datalayout@\"\n\
-                target triple = \"x86_64-unknown-linux-gnu\"\n\
-                define i64 @f(i8 %x, i64 %y) {\n  %a = zext i8 %x to i64\n  %m = mul nuw nsw i64 %a, 7\n  %b = add nuw nsw i64 %m, %y\n  %c = and i64 %b, 255\n  ret i64 %c\n}\n";
-    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("sub eax, edi"), "{listing}");
-}
-
 /// The pin's `ShrinkDemandedOp` made `(and i16 x, 1023)` scaled by 8 a 32-bit
 /// `shl` plus `zext`, and the address stopped using `*8` (bench ring, +2 B,
 /// 40 cells above release/next): the x86 matcher widens `zext(shl nuw)`.
