@@ -263,9 +263,10 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
     );
 }
 
-/// With only `i8` and `i16` legal an `i64` is four registers (`getNumRegisters`),
-/// not two: a value carried to the next block was refused at "integer wider
-/// than two registers", so no 8- or 16-bit target could compile a `long long`.
+/// With only `i8` and `i16` legal an `i64` is four registers
+/// (`getNumRegisters`), not two: a value carried to the next block was refused
+/// at "integer wider than two registers", so no 8- or 16-bit target could
+/// compile a `long long`.
 #[test]
 fn an_i64_carried_across_blocks_is_four_i16_registers_when_only_i16_is_legal() {
     let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\
@@ -277,8 +278,17 @@ fn an_i64_carried_across_blocks_is_four_i16_registers_when_only_i16_is_legal() {
     let mut info = FunctionLoweringInfo::new(function);
     let mut target = BuilderTarget::m16();
     target.legal_ints = vec![8, 16];
-    let entry = build_block(&module, function, &layout, &target, &llrm_x86_m16::M16, &convention, &mut info, function.entry().unwrap())
-        .unwrap_or_else(|why| panic!("{}", why.0));
+    let entry = build_block(
+        &module,
+        function,
+        &layout,
+        &target,
+        &llrm_x86_m16::M16,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
     let dump = entry.dag.dump();
     assert_eq!(dump.matches("CopyToReg").count(), 4, "{dump}");
 }

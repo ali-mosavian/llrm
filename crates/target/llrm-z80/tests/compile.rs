@@ -827,12 +827,12 @@ fn a_loaded_bit_read_by_a_branch_a_select_and_a_zext_compiles() {
 
 /// A result with no row in the convention (`i64`, eight bytes) panicked in
 /// `result_registers` ("calling.toml has a result row"): 7 programs of
-/// tests/run/c killed the compiler instead of being named as refused.
+/// tests/run/c killed the compiler. It is written through the pointer the
+/// caller passes in `hl`.
 #[test]
-fn a_result_the_convention_has_no_registers_for_is_refused_not_a_panic() {
-    let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine i64 @f() {{\n  ret i64 5\n}}");
-    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses an eight-byte result");
-    assert!(why.contains("no registers"), "{why}");
+fn a_result_the_convention_has_no_registers_for_is_written_through_a_pointer() {
+    let out = compiled("define i64 @f() {\n  ret i64 5\n}", "f");
+    assert!(out.contains("ld (hl), e"), "{out}");
 }
 
 /// `abi::z80()` parsed calling.toml on every call lowering: 12% of a debug

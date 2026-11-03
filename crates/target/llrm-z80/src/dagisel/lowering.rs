@@ -108,14 +108,8 @@ pub fn target_lowering() -> TargetLowering {
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
     for (vt, names) in [
-        (
-            MVT::I32,
-            ["__divsi3", "__udivsi3", "__modsi3", "__umodsi3", "__ashlsi3", "__lshrsi3", "__ashrsi3"],
-        ),
-        (
-            MVT::I64,
-            ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__ashldi3", "__lshrdi3", "__ashrdi3"],
-        ),
+        (MVT::I32, ["__divsi3", "__udivsi3", "__modsi3", "__umodsi3", "__ashlsi3", "__lshrsi3", "__ashrsi3"]),
+        (MVT::I64, ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__ashldi3", "__lshrdi3", "__ashrdi3"]),
     ] {
         for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip(names) {
             tl.set_libcall_name(op, vt, name);
@@ -190,8 +184,8 @@ impl Hooks for Z80Lowering {
         // `LowerCallTo` splits a type the target holds in no register: a long
         // travels as two words and a long long as four, low first
         let mut outs = Vec::new();
-        // a result of no register is the pointer to its memory, the first argument
-        // (`CanLowerReturn` false: the hidden `sret` pointer)
+        // a result of no register is the pointer to its memory, the first
+        // argument (`CanLowerReturn` false: the hidden `sret` pointer)
         let slot = (ret == EVT::I64).then(|| dag.create_stack_temporary(8, 1));
         if let Some(cell) = slot {
             outs.push(Out {
@@ -236,10 +230,12 @@ impl Hooks for Z80Lowering {
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
         let ins = match ret {
             EVT::I64 => Vec::new(),
-            _ => vec![
-                In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
-                if ret == EVT::I32 { 2 } else { 1 }
-            ],
+            _ => {
+                vec![
+                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
+                    if ret == EVT::I32 { 2 } else { 1 }
+                ]
+            }
         };
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();

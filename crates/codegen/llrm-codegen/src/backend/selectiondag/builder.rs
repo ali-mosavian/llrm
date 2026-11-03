@@ -880,7 +880,8 @@ impl Builder<'_> {
         all
     }
 
-    /// `getCopyFromParts` for equal parts: the halves are paired, then the pairs.
+    /// `getCopyFromParts` for equal parts: the halves are paired, then the
+    /// pairs.
     fn join_parts(
         &mut self,
         vt: EVT,
@@ -1171,7 +1172,14 @@ impl Builder<'_> {
             let pointer = self.target.dag.pointer;
             let hidden = self.calling_parts(pointer)?;
             let split = hidden.len() > 1;
-            ins.extend(hidden.into_iter().map(|vt| In { vt, pointer: true, arg_vt: pointer, split, sret: true, ext: Ext::Any }));
+            ins.extend(hidden.into_iter().map(|vt| In {
+                vt,
+                pointer: true,
+                arg_vt: pointer,
+                split,
+                sret: true,
+                ext: Ext::Any,
+            }));
         }
         let hidden_parts = ins.len();
         for &arg in &parameters {
@@ -2036,7 +2044,15 @@ impl Builder<'_> {
             let split = pieces.len() > 1;
             let hidden: Vec<Out> = pieces
                 .into_iter()
-                .map(|value| Out { value, ext: Ext::Any, pointer: true, arg_vt: pointer, split, variadic: false, sret: true })
+                .map(|value| Out {
+                    value,
+                    ext: Ext::Any,
+                    pointer: true,
+                    arg_vt: pointer,
+                    split,
+                    variadic: false,
+                    sret: true,
+                })
                 .collect();
             outs.splice(0..0, hidden);
             slot = Some((index, address));
@@ -3981,7 +3997,8 @@ mod f80_tests {
             "declare i32 @g(i8)\ndefine i32 @f(i8 %a) {\n  %r = call i32 @g(i8 %a)\n  ret i32 %r\n}",
             stub,
         );
-        // the hidden pointer is four byte parts, then the byte argument: five bytes
+        // the hidden pointer is four byte parts, then the byte argument: five
+        // bytes
         assert_eq!(stub.outs.lock().unwrap()[0], (5, 5));
         assert!(stub.ins.lock().unwrap().is_empty(), "the call has no register result");
     }
