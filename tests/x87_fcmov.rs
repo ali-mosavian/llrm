@@ -69,3 +69,15 @@ fn test_a_long_double_maximum_is_fcmov_at_m64() {
     let text = assembled_source(source, &["--target=x86_64-linux"]);
     assert!(text.contains("fcmov") && !text.contains(" ja "), "{text}");
 }
+
+/// Every x87 compare kept AX free for the `fnstsw` that `fcomi` does not
+/// need, and the zero before an `fcomi` stayed a `mov` (its flags were not
+/// known written): the answer was made in ECX and copied (`ge` of two long
+/// doubles at m64: two insns more than the pin).
+#[test]
+fn test_a_long_double_compare_answers_in_the_return_register() {
+    let source = "int f(long double a, long double b) { return a >= b; }\n";
+    let text = assembled_source(source, &["--target=x86_64-linux", "-O2"]);
+    assert!(text.contains("xor eax, eax") && text.contains("setae al"), "{text}");
+    assert!(!text.contains("mov eax,") && !text.contains("movzx"), "{text}");
+}

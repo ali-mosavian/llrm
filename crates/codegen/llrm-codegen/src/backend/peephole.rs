@@ -2602,6 +2602,8 @@ pub fn _flag_effect(
         if !name.is_empty() && !_reads_flags(name) {
             let written = match name {
                 "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "neg" => every,
+                // They set ZF, PF and CF and clear the rest.
+                "fcomi" | "fcomip" | "fucomi" | "fucomip" => every,
                 // They keep the carry.
                 "inc" | "dec" => every.minus(&_flag_lanes(RflagsBits::CF)),
                 _ => Lanes::new(),

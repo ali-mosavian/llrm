@@ -478,12 +478,12 @@ fn _compares_clobber(
     word: RegId,
 ) -> LirBody {
     let compares = |one: &Insn| {
-        one.what
-            .as_ref()
-            .is_some_and(
-                |what| what.op == Operation::Compare
-                    && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10)),
-            )
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::Compare
+                    // `fcomi` sets the flags itself: no `fnstsw ax` follows it.
+                    && !matches!(what.name.as_deref(), Some("fcomi" | "fcomip"))
+                    && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10))
+        })
     };
     if !body.iter_insns().any(|one| compares(one)) {
         return body.clone();
