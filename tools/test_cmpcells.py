@@ -31,7 +31,13 @@ def test_equal_and_better_are_not_flagged():
     assert cmpcells.worse(BASE, BASE) == []
 
 
-def test_estimator_noise_is_not_flagged():
-    # +30 instructions of 100000 and a 40 ms run that doubles: both are noise
-    assert cmpcells.worse(BASE, {"c O2": [100.0, 100030.0, 500.0]}) == []
+def test_thirty_more_instructions_on_a_small_cell_are_worse():
+    assert [c for c, _ in cmpcells.worse({"k O2": [50.0, 200.0, 1.0]}, {"k O2": [50.0, 230.0, 1.0]})] == ["k O2"]
+
+
+def test_an_unchanged_row_is_clean():
+    assert cmpcells.worse({"k O2": [50.0, 200.0, 500.0]}, {"k O2": [50.0, 200.0, 500.0]}) == []
+
+
+def test_a_short_run_moving_in_ms_is_not_flagged():
     assert cmpcells.worse({"c": [10.0, 9000.0, 1.0]}, {"c": [10.0, 9000.0, 43.0]}) == []
