@@ -27,6 +27,7 @@ for f in ('include/softfloat.h', 'include/sf_helpers.h'):
     out.append(prep(f))
 for f in subprocess.check_output(['tests/fp_sources.sh', 'f32'], text=True).split():
     out.append(prep(f))
+out.append(prep('lib/int/clzsi2.c'))
 for f in subprocess.check_output(['tests/fp_sources.sh', 'f64'], text=True).split():
     out.append(prep(f, '_d'))
 for f in subprocess.check_output(['tests/fp_sources.sh', 'f32_64'], text=True).split():

@@ -11,7 +11,7 @@ printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $
   echo 'typedef unsigned char sfu8; typedef signed char sfi8; typedef short sfi16; typedef unsigned short sfu16; typedef long sfi32; typedef unsigned long sfu32; typedef unsigned long long sfu64; typedef long long sfi64;'
   echo '#define UINT32_C(x) x##ul'; echo '#define UINT64_C(x) x##ull'; echo '#define INT32_MAX 2147483647L'; echo '#define INT32_MIN (-2147483647L-1)'; echo '#define UINT32_MAX 4294967295ul'
   echo '#ifdef __SOFT_LIB'
-  for f in include/softfloat.h include/sf_helpers.h $(tests/fp_sources.sh f32); do
+  for f in include/softfloat.h include/sf_helpers.h $(tests/fp_sources.sh f32) lib/int/clzsi2.c; do
     python3 tests/flatten.py $f | sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g'
   done | awk 'BEGIN{print "#define SF_INTABI 1"; print ENVIRON["SF_M16"]} {print}'
   echo '#endif'
