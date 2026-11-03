@@ -342,7 +342,10 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
             Some(_) => {
                 let read = from_prologue(&name, body)?;
                 if !read.codes.is_empty() {
-                    return Err(refused(&name, "its code has a prologue the compiler declared no `.seh_*` directive for"));
+                    return Err(refused(
+                        &name,
+                        "its code has a prologue the compiler declared no `.seh_*` directive for",
+                    ));
                 }
                 read
             }

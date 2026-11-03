@@ -229,3 +229,26 @@ fn a_probed_frame_declares_its_allocation_after_the_sub() {
         assert_eq!(info.bytes().unwrap(), bytes(expected), "{size}");
     }
 }
+
+/// A function the compiler declared a frame for but no `.seh_*` directive,
+/// whose bytes do push and allocate, is a lowerer path that forgot to declare:
+/// the bytes were read back and described, so a missing directive passed
+/// unseen.
+#[test]
+fn a_declared_frame_with_no_directive_over_code_with_a_prologue_is_refused() {
+    use llrm_object::Frame;
+    let frame = |length| Frame { section: 0, offset: 0, length, rows: Vec::new(), cfi: Vec::new(), seh: Vec::new() };
+    // push rbp; sub rsp, 32; ret
+    let pushing = [0x55, 0x48, 0x83, 0xEC, 0x20, 0xC3];
+    let mut object = with(&pushing);
+    object.frames.push(frame(pushing.len()));
+    let error = expanded(&object).err().expect("refused");
+    assert!(error.0.contains("declared no `.seh_*` directive"), "{}", error.0);
+    // Control: a declared frame over code without a prologue is a leaf, not an
+    // error.
+    let mut leaf = with(&[0xC3]);
+    leaf.frames.push(frame(1));
+    assert!(expanded(&leaf).is_ok());
+    // Code that declared no frame at all (an assembled object) is still read.
+    assert!(expanded(&with(&pushing)).is_ok());
+}
