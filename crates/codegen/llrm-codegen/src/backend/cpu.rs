@@ -947,12 +947,13 @@ mod widen_load_tests {
     use super::*;
 
     /// `mov dl,[m]` became `movzx edx,[m]` on the 486, three clocks for one
-    /// (x_strlen -O2 m32, +348 k clk over gcc). Priced from the description: the
-    /// 386 loads in four clocks, so it widens;
+    /// (x_strlen -O2 m32, +348 k clk over gcc). Priced from the description:
+    /// the 386 loads in four clocks, so it widens;
     /// the Pentium Pro and later stall on the partial register, so widen there.
     #[test]
     fn test_a_load_widens_only_where_the_extension_is_no_slower() {
-        for (name, byte, word) in [("386", true, true), ("486", false, false), ("P5", false, false), ("P6", true, true)] {
+        for (name, byte, word) in [("386", true, true), ("486", false, false), ("P5", false, false), ("P6", true, true)]
+        {
             let cpu = profile(name).expect("a cpu");
             assert_eq!(cpu.widens_load(1), Ok(byte), "{name} byte");
             assert_eq!(cpu.widens_load(2), Ok(word), "{name} word");

@@ -153,7 +153,9 @@ impl FixupBw {
         let ([Loc::Reg(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
         match (name, dest.width, source) {
             // MOV8rm: not for size, the extending form takes a byte more.
-            ("mov", 1, Loc::Mem(_)) if !self.size && self.widens_byte => self.try_replace_load(regs, bits, one, *dest, dead),
+            ("mov", 1, Loc::Mem(_)) if !self.size && self.widens_byte => {
+                self.try_replace_load(regs, bits, one, *dest, dead)
+            }
             // MOV16rm
             ("mov", 2, Loc::Mem(_)) if self.widens_word => self.try_replace_load(regs, bits, one, *dest, dead),
             // MOV8rr, MOV16rr

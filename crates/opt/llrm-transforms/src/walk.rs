@@ -292,8 +292,7 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed)
-                                .then_some(&mut trials),
+                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed).then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
