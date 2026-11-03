@@ -15,4 +15,6 @@ long rot(short n, float seed)
     }
     return (long)(a0 + 2 * a1 + 3 * a2 + 4 * a3 + 5 * a4 + 6 * a5 + 7 * a6 + 8 * a7 + 9 * a8 + 10 * a9);
 }
-int main(void) { report(rot(7, 1.0f)); return 0; }
+/* The trip count is read from memory: a constant 7 is copied out at -O2 and the rotation never runs as a loop. */
+static volatile short trips = 7;
+int main(void) { report(rot(trips, 1.0f)); return 0; }
