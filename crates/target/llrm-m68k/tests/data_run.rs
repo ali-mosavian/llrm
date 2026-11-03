@@ -26,14 +26,16 @@ fn fixture(name: &str) -> PathBuf {
 
 /// Every function label global, which is what `llrm-cc -S` leaves to the
 /// caller.
-fn globalised(text: &str) -> String {
+fn globalised(
+    text: &str,
+    names: &[&str],
+) -> String {
     let mut out = String::from(".text\n");
     for line in text.lines() {
         let label = line
             .strip_suffix(':')
             .filter(|name| !name.starts_with(".L") && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
-        if let Some(name) = label.filter(|name| ["sum", "letter", "word_value", "through_table", "bump"].contains(name))
-        {
+        if let Some(name) = label.filter(|name| names.contains(&name)) {
             out.push_str(&format!(".globl {name}\n"));
         }
         out.push_str(line);
@@ -43,18 +45,36 @@ fn globalised(text: &str) -> String {
 }
 
 fn run_with(cpu: &str) {
+    run_fixture(
+        cpu,
+        "globals.ll",
+        "main.c",
+        &["sum", "letter", "word_value", "through_table", "bump"],
+        "exit code names the first failing check (1 sum, 2 string, 3 i16, 4 pointers, 5 counter)",
+    );
+}
+
+/// `ir` through the m68k driver at `cpu`, linked with the C `main` and run
+/// under qemu; `names` are the functions the C side calls.
+fn run_fixture(
+    cpu: &str,
+    ir: &str,
+    main: &str,
+    names: &[&str],
+    meaning: &str,
+) {
     let (Some(mut assemble), Some(mut link)) = (binutils("as"), binutils("gcc")) else { return };
     let Some(qemu) = support::qemu() else { return };
-    let ir = std::fs::read_to_string(fixture("globals.ll")).unwrap();
+    let ir = std::fs::read_to_string(fixture(ir)).unwrap();
     let text = driver::assembly(&ir, driver::cpu_of(cpu).expect("a cpu"), Level::O2).expect("compiles");
     let source = support::unique_path("data-s");
     let object = support::unique_path("data-o");
     let exe = support::unique_path("data-exe");
-    std::fs::write(&source, globalised(&text)).unwrap();
+    std::fs::write(&source, globalised(&text, names)).unwrap();
     assert!(assemble.arg(format!("-m{cpu}")).arg("-o").arg(&object).arg(&source).status().unwrap().success(), "{text}");
     let linked = link
         .args(["-msoft-float", &format!("-m{cpu}"), "-O1", "-nostdlib", "-static", "-ffreestanding"])
-        .arg(fixture("main.c"))
+        .arg(fixture(main))
         .arg(&object)
         .arg("-o")
         .arg(&exe)
@@ -65,11 +85,7 @@ fn run_with(cpu: &str) {
     for path in [source, object, exe] {
         std::fs::remove_file(path).ok();
     }
-    assert_eq!(
-        code,
-        Some(0),
-        "{cpu}: exit code names the first failing check (1 sum, 2 string, 3 i16, 4 pointers, 5 counter):\n{text}"
-    );
+    assert_eq!(code, Some(0), "{cpu}: {meaning}:\n{text}");
 }
 
 /// A global was not in the assembly at all (`driver::assembly` printed the
@@ -83,4 +99,19 @@ fn globals_of_every_kind_are_laid_out_and_read_back_at_68000() {
 #[test]
 fn globals_of_every_kind_are_laid_out_and_read_back_at_68020() {
     run_with("68020");
+}
+
+const SHAPES: &[&str] = &["one", "two", "touch_bss", "abc_length", "padsum", "f", "name"];
+const SHAPE_CODES: &str = "exit code names the first failing shape (11 bss, 12 integers, 13 strings, 14 pointers, 15 padded struct, 16 function-local statics)";
+
+/// Each shape fails alone with its own exit code, so a dropped section, a
+/// lost relocation addend or a missing padding byte names itself.
+#[test]
+fn zero_integers_strings_pointers_padding_and_statics_read_back_at_68000() {
+    run_fixture("68000", "shapes.ll", "shapes.c", SHAPES, SHAPE_CODES);
+}
+
+#[test]
+fn zero_integers_strings_pointers_padding_and_statics_read_back_at_68020() {
+    run_fixture("68020", "shapes.ll", "shapes.c", SHAPES, SHAPE_CODES);
 }
