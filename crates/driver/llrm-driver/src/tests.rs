@@ -254,6 +254,35 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A `zeroext` argument compared for (in)equality with a constant is compared
+/// in the register it arrived in: the pin's `combineSetCC` turns
+/// `cmpeq(trunc(x), C)` into `cmpeq(x, C)` where the upper bits of `x` are zero.
+/// sieve m64 -O2 had `test di, di` (a 66 prefix) where the pin has `test edi, edi`.
+#[test]
+fn a_zeroext_argument_equality_is_compared_in_its_register_at_m64() {
+    let compare = |ty: &str, param: &str, predicate: &str, constant: i64| {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             define i32 @f({ty} {param} %a) {{\nentry:\n  %c = icmp {predicate} {ty} %a, {constant}\n\
+               br i1 %c, label %t, label %e\nt:\n  ret i32 1\ne:\n  ret i32 2\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    for (ty, narrow) in [("i16", "di"), ("i8", "dil")] {
+        let listing = compare(ty, "zeroext", "eq", 5);
+        assert!(listing.contains("cmp edi, 5"), "{ty}: {listing}");
+        assert!(!listing.contains(&format!("cmp {narrow}, 5")), "{ty}: {listing}");
+        // No assertion about the upper bits: the argument is not extended.
+        let plain = compare(ty, "", "eq", 5);
+        assert!(plain.contains(&format!("cmp {narrow}, 5")), "{ty} plain: {plain}");
+    }
+    // The pin leaves the unsigned orders at the narrow type.
+    let listing = compare("i16", "zeroext", "ult", 5);
+    assert!(listing.contains("cmp di, 5"), "{listing}");
+}
+
 /// A byte or word add that keeps its source live was a copy and a narrow add
 /// at m64 (`mov r10d, edx; add r10b, 0xec`); the pin makes it a three-address
 /// `lea r9d, [r8 - 20]` (`convertToThreeAddressWithLEA`, `LEA64_32r`).
