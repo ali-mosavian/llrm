@@ -10,7 +10,9 @@ static int32_t to_i32_bits(sf32 a)
     int e = (int)((a >> 23) & 0xFF) - 127;
     if (e < 0) return 0;
     if (e >= 31) { /* from 2^31 up: saturates; -2^31 is the saturated value itself */
+#ifndef SF_FIX_NAN_UNDEF
         if ((a << 1) > 0xFF000000u) return 0;
+#endif
         return (a & SIGN) ? INT32_MIN : INT32_MAX;
     }
     uint32_t m = (a & 0x7FFFFFu) | 0x800000u;
