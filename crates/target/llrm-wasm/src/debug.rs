@@ -131,15 +131,12 @@ pub fn sections(
             far: false,
             module: procedure.module,
             variables,
+            frame_base: function.frame_base.map(FrameBase::WasmLocal),
             blocks: Vec::new(),
             frame: Vec::new(),
             all_calls: false,
             calls: Vec::new(),
         });
-    }
-    // One frame base for the unit, until a function can state its own.
-    if let Some(local) = functions.iter().find_map(|one| one.frame_base) {
-        info.frame_base = FrameBase::WasmLocal(local);
     }
     info.code = vec![Range { section: 0, offset: 0, length: at }];
     object

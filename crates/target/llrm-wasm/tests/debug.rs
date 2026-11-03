@@ -88,3 +88,17 @@ fn an_o0_frame_variable_is_an_fbreg_from_a_wasm_local_frame_base() {
     let verified = linked("debug_vars_o0.ll", &["--verify"]);
     assert!(verified.contains("No errors"), "{verified}");
 }
+
+/// Two functions with frame pointers in different locals shared the first
+/// one's `DW_AT_frame_base`, so the second function's `fbreg` variables read
+/// the wrong local. Clang writes each subprogram its own.
+#[test]
+fn each_function_states_its_own_frame_base() {
+    let info = linked("debug_two_o0.ll", &["--debug-info"]);
+    let bases: Vec<&str> = info.lines().filter(|l| l.contains("DW_AT_frame_base")).collect();
+    assert_eq!(bases.len(), 2, "{info}");
+    assert_ne!(bases[0], bases[1], "{info}");
+    for want in ["fbreg +12", "fbreg +8", "fbreg +4", "fbreg +0"] {
+        assert!(info.contains(want), "{want} missing:\n{info}");
+    }
+}
