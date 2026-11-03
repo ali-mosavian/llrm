@@ -52,6 +52,10 @@ pub struct Frontend {
     /// Integer arithmetic and narrowing raise error 6, Overflow:
     /// `-fsanitize=signed-integer-overflow`.
     pub checked_overflow: bool,
+    /// The target's integer divide faults where the quotient overflows
+    /// (`Target::idiv_overflow_traps`): INTEGER `\\` and MOD divide in 16 bits
+    /// and leave `-32768 \\ -1` to the processor and the runtime's handler.
+    pub idiv_overflow_traps: bool,
     /// Each procedure compares SP with the runtime's limit on entry:
     /// `-fsanitize=stack`.
     pub checked_stack: bool,
@@ -59,6 +63,8 @@ pub struct Frontend {
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
     pub whole_program: bool,
+    /// Procedures `--whole-program` keeps public: `--export NAME`.
+    pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation:
     /// `--array-merging`.
     pub array_merging: bool,
@@ -79,6 +85,9 @@ pub struct Frontend {
     /// the 16-bit target's).
     pub near_bytes: usize,
     pub far_bytes: usize,
+    /// The runtime's `pow` and CURRENCY scaling stand in for the x87 where the
+    /// target has no extended float: its description states no `f80`.
+    pub without_extended_float: bool,
     pub includes: Vec<PathBuf>,
 }
 
@@ -98,10 +107,12 @@ impl Frontend {
             checked_division: false,
             debug: false,
             checked_overflow: false,
+            idiv_overflow_traps: false,
             checked_stack: false,
             mbf: false,
             alternate_math: false,
             whole_program: false,
+            exports: Vec::new(),
             array_merging: false,
             runtime_frames: false,
             error_lines: false,
@@ -110,6 +121,7 @@ impl Frontend {
             segment_bytes: None,
             near_bytes: 0,
             far_bytes: 0,
+            without_extended_float: false,
             includes: Vec::new(),
         }
     }
@@ -141,15 +153,18 @@ fn _options(
             checked_arrays: frontend.checked_arrays,
             checked_division: frontend.checked_division,
             checked_overflow: frontend.checked_overflow,
+            idiv_overflow_traps: frontend.idiv_overflow_traps,
             mbf: frontend.mbf,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,
+            exports: frontend.exports.clone(),
             array_merging: frontend.array_merging,
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
             segment_bytes: frontend.segment_bytes,
             near_bytes: frontend.near_bytes,
             far_bytes: frontend.far_bytes,
+            without_extended_float: frontend.without_extended_float,
             bc_codeview: frontend.bc_codeview,
             run_time_module: frontend.run_time_module,
         },

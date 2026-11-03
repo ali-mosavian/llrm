@@ -140,6 +140,23 @@ impl MemoryLocation {
         let named = llrm_mir::memory::callee(unit.context, unit.function, call)
             .and_then(|one| unit.globals.get(one.0 as usize)?.name.as_deref())
             .and_then(llrm_mir::intrinsics::Intrinsic::named);
+        // `MemoryLocation.cpp#L200-L230`: the bytes an `invariant.start` or
+        // `.end` covers are its constant size operand; the scope `.end` takes
+        // first is a descriptor never dereferenced.
+        match named {
+            Some(llrm_mir::intrinsics::Intrinsic::InvariantStart) if arg == 1 => {
+                let size = llrm_mir::intrinsics::length(unit.context, *op.operands.first()?)?;
+                return Some(Self::new(pointer, LocationSize::Precise(size)));
+            }
+            Some(llrm_mir::intrinsics::Intrinsic::InvariantEnd) if arg == 0 => {
+                return Some(Self::new(pointer, LocationSize::Precise(0)));
+            }
+            Some(llrm_mir::intrinsics::Intrinsic::InvariantEnd) if arg == 2 => {
+                let size = llrm_mir::intrinsics::length(unit.context, *op.operands.get(1)?)?;
+                return Some(Self::new(pointer, LocationSize::Precise(size)));
+            }
+            _ => {}
+        }
         let touches = match named {
             Some(llrm_mir::intrinsics::Intrinsic::MemSet) => arg == 0,
             Some(llrm_mir::intrinsics::Intrinsic::MemCpy | llrm_mir::intrinsics::Intrinsic::MemMove) => arg < 2,

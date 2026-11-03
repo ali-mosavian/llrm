@@ -88,7 +88,7 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        # A pull request into main cannot read the caches saved on feat/parity (toolchain/clangfetch.sh). A tree with no artifact either stays missing.
+        # A pull request into main cannot read the caches saved on release/next (toolchain/clangfetch.sh). A tree with no artifact either stays missing.
         sh toolchain/clangfetch.sh "llrm-${{ steps.clang.outputs.pin_name }}" "${{ steps.clang.outputs.pin }}" || true
         sh toolchain/clangfetch.sh "llrm-${{ steps.clang.outputs.m16_name }}" "${{ steps.clang.outputs.m16 }}" || true
     - name: The pin's tools tree (built by the pintools job)

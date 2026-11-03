@@ -133,6 +133,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FAdd => pin::FADD,
         FSub => pin::FSUB,
         FMul => pin::FMUL,
+        FMA => pin::FMA,
         FDiv => pin::FDIV,
         FRem => pin::FREM,
         FNeg => pin::FNEG,
@@ -157,6 +158,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FExp2 => pin::FEXP2,
         FRint => pin::FRINT,
         LRint => pin::LRINT,
+        LLRint => pin::LLRINT,
         FCopySign => pin::FCOPYSIGN,
         SetCC => pin::SETCC,
         Select => pin::SELECT,
@@ -166,13 +168,31 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         Br => pin::BR,
         BrJT => pin::BR_JT,
         BrInd => pin::BRIND,
-        Load => pin::LOAD,
-        Store => pin::STORE,
+        Load | LoadPre | LoadPost => pin::LOAD,
+        Store | StorePre | StorePost => pin::STORE,
         AtomicSwap => pin::ATOMIC_SWAP,
+        AtomicLoad => pin::ATOMIC_LOAD,
+        AtomicStore => pin::ATOMIC_STORE,
+        AtomicFence => pin::ATOMIC_STORE - 2,
+        AtomicLoadAdd => pin::ATOMIC_LOAD_ADD,
+        // No x86 table names these, so the generated ids lack
+        // them: `ISD::NodeType`'s order after
+        // `ATOMIC_SWAP` ([ISDOpcodes.h
+        // L1425](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/ISDOpcodes.h#L1425)).
+        AtomicCmpSwap => pin::ATOMIC_STORE + 1,
+        AtomicCmpSwapWithSuccess => pin::ATOMIC_STORE + 2,
+        AtomicLoadSub => pin::ATOMIC_LOAD_ADD + 1,
+        AtomicLoadAnd => pin::ATOMIC_LOAD_ADD + 2,
+        AtomicLoadClr => pin::ATOMIC_LOAD_ADD + 3,
+        AtomicLoadOr => pin::ATOMIC_LOAD_ADD + 4,
+        AtomicLoadXor => pin::ATOMIC_LOAD_ADD + 5,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
         Trap => pin::TRAP,
+        IntrinsicWoChain => pin::INTRINSIC_WO_CHAIN,
+        IntrinsicWChain => pin::INTRINSIC_W_CHAIN,
+        IntrinsicVoid => pin::INTRINSIC_VOID,
         TargetExternalSymbolNode => pin::TargetExternalSymbol,
         JumpTable => pin::JumpTable,
         RegisterMask => pin::RegisterMask,
@@ -274,16 +294,71 @@ pub fn pin_register(id: llrm_lir::registers::RegId) -> Option<u16> {
     (0..=u16::MAX.min(200)).find(|&number| phys_reg(number) == Some(id))
 }
 
+/// A target's physical registers in the pin's numbering: the ids the builder
+/// names them by, and back.
+pub trait PinRegisters {
+    fn phys_reg(
+        &self,
+        register: u16,
+    ) -> Option<llrm_lir::registers::RegId>;
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16>;
+
+    /// Whether `register` is a fixed register of the pin's with no id here
+    /// (m68k's `PC`, which no instruction names): `register_of` then
+    /// answers it, so a matcher can tell it from a virtual one.
+    fn is_fixed(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
+
+    /// Whether `register` is one the target cannot map. Selection then refuses
+    /// ([`DagisAdapter::refusal`]); the default reads it as virtual.
+    fn unmapped(
+        &self,
+        _register: u16,
+    ) -> bool {
+        false
+    }
+}
+
+/// x86's registers (the default of an adapter).
+pub struct X86Registers;
+
+impl PinRegisters for X86Registers {
+    fn phys_reg(
+        &self,
+        register: u16,
+    ) -> Option<llrm_lir::registers::RegId> {
+        phys_reg(register)
+    }
+    fn pin_register(
+        &self,
+        id: llrm_lir::registers::RegId,
+    ) -> Option<u16> {
+        pin_register(id)
+    }
+}
+
 impl DagisAdapter<'_> {
     /// The `Register` node for the pin's register number: physical when the
-    /// builder names it so.
+    /// builder names it so. A number the target does not know is a virtual
+    /// register for now and a [`DagisAdapter::refusal`].
     fn register_node(
         &mut self,
         vt: EVT,
         register: u16,
     ) -> SDValue {
-        match phys_reg(register) {
+        match self.registers.phys_reg(register) {
             Some(id) => self.dag.get_phys_register(vt, id),
+            None if self.registers.unmapped(register) => {
+                self.refusal.get_or_insert_with(|| format!("pin register {register} has no id on this target"));
+                self.dag.get_register(vt, u32::from(register))
+            }
             None => self.dag.get_register(vt, u32::from(register)),
         }
     }
@@ -310,10 +385,21 @@ pub struct DagisAdapter<'a> {
     /// made, and `-(id + 1)` for an unselected successor of a selected node
     /// (`InvalidateNodeId`): topological pruning looks at positive ids only.
     node_id: Vec<i32>,
+    /// The target's registers in the pin's numbering.
+    registers: &'a dyn PinRegisters,
+    refusal: Option<String>,
 }
 
 impl<'a> DagisAdapter<'a> {
     pub fn new(dag: &'a mut SelectionDAG) -> DagisAdapter<'a> {
+        Self::with_registers(dag, &X86Registers)
+    }
+
+    /// An adapter of another target's registers.
+    pub fn with_registers(
+        dag: &'a mut SelectionDAG,
+        registers: &'a dyn PinRegisters,
+    ) -> DagisAdapter<'a> {
         // A node nothing reaches from the root is no user of what it read
         // (`hasOneUse`): the combiner deleted it, or it is a chain node it
         // replaced (a `brcond` the lowering turned into `X86ISD::BRCOND`).
@@ -331,7 +417,13 @@ impl<'a> DagisAdapter<'a> {
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;
         }
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id, registers, refusal: None }
+    }
+
+    /// Why selection must be refused: the selector named a register the target
+    /// cannot map.
+    pub fn refusal(&self) -> Option<&str> {
+        self.refusal.as_deref()
     }
 
     /// `Node->setNodeId(-1)`.
@@ -474,6 +566,12 @@ impl<'a> DagisAdapter<'a> {
 }
 
 impl Dag for DagisAdapter<'_> {
+    fn compute_num_sign_bits(
+        &self,
+        value: PinValue,
+    ) -> u32 {
+        super::known_bits::num_sign_bits(self.dag, ours(value))
+    }
     fn opcode(
         &self,
         node: u32,
@@ -491,9 +589,10 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
-            NodeData::PhysReg(id) => pin_register(id),
+            NodeData::PhysReg(id) => self.registers.pin_register(id),
             // `$noreg`
             NodeData::Register(0) => Some(0),
+            NodeData::Register(number) => u16::try_from(number).ok().filter(|&number| self.registers.is_fixed(number)),
             _ => None,
         }
     }
@@ -651,7 +750,10 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<LoadExt> {
         let node = &self.dag.nodes()[node as usize];
-        (node.opcode == ISD::Load).then(|| match node.data {
+        matches!(
+            node.opcode,
+            ISD::Load | ISD::LoadPre | ISD::LoadPost | ISD::AtomicLoad
+        ).then(|| match node.data {
             NodeData::Mem(info) => match info.ext {
                 None => LoadExt::NonExt,
                 Some(super::actions::LoadExt::ExtLoad) => LoadExt::Ext,
@@ -663,9 +765,21 @@ impl Dag for DagisAdapter<'_> {
     }
     fn is_indexed(
         &self,
-        _: u32,
+        node: u32,
     ) -> bool {
-        false
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPre | ISD::LoadPost | ISD::StorePre | ISD::StorePost
+        )
+    }
+    fn is_post_indexed(
+        &self,
+        node: u32,
+    ) -> bool {
+        matches!(
+            self.dag.nodes()[node as usize].opcode,
+            ISD::LoadPost | ISD::StorePost
+        )
     }
     fn is_truncating_store(
         &self,
@@ -673,7 +787,7 @@ impl Dag for DagisAdapter<'_> {
     ) -> bool {
         let n = &self.dag.nodes()[node as usize];
         match n.data {
-            NodeData::Mem(info) if n.opcode == ISD::Store => {
+            NodeData::Mem(info) if matches!(n.opcode, ISD::Store | ISD::StorePre | ISD::StorePost) => {
                 self.dag.value_type(n.ops[1]).size_in_bits() > info.mem_vt.size_in_bits()
             }
             _ => false,
@@ -715,6 +829,15 @@ impl Dag for DagisAdapter<'_> {
             _ => false,
         }
     }
+    fn fp_bits(
+        &self,
+        value: PinValue,
+    ) -> Option<u128> {
+        match self.dag.node(ours(value)).data {
+            NodeData::ConstFp { bits } => Some(bits),
+            _ => None,
+        }
+    }
     fn fp_class(
         &self,
         value: PinValue,
@@ -744,6 +867,28 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> bool {
         self.dag.nodes()[node as usize].flags.has(SDNodeFlags::DISJOINT)
+    }
+    fn atomic_ordering(
+        &self,
+        node: u32,
+    ) -> Option<u8> {
+        use llrm_mir::opcode::AtomicOrdering::*;
+        let node = &self.dag.nodes()[node as usize];
+        let NodeData::Mem(info) = node.data else { return None };
+        info.ordering.map(|ordering| match ordering {
+            Unordered => 1,
+            Monotonic => 2,
+            Acquire => 4,
+            Release => 5,
+            AcqRel => 6,
+            SeqCst => 7,
+        })
+    }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.dag.nodes()[node as usize].flags.has(SDNodeFlags::NO_UNSIGNED_WRAP)
     }
     fn masked_value_is_zero(
         &self,
@@ -803,6 +948,13 @@ impl Dag for DagisAdapter<'_> {
             let bits = self.dag.constant(v).expect("a constant");
             let vt = self.dag.value_type(v);
             return theirs(self.dag.get_constant_with(bits, vt, true, false));
+        }
+        if self.dag.opcode(v) == ISD::ConstantFP {
+            let NodeData::ConstFp { bits } = self.dag.node(v).data else {
+                unreachable!("a float constant has its bits")
+            };
+            let vt = self.dag.value_type(v);
+            return theirs(self.dag.get_target_constant_fp(bits, vt));
         }
         value
     }
@@ -877,7 +1029,16 @@ impl Dag for DagisAdapter<'_> {
     ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
+        let old_operands: Vec<u32> = self.dag.nodes()[node as usize].ops.iter().map(|o| o.node).collect();
         let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
+        // `SelectionDAG::MorphNodeTo` deletes the operands the new node no
+        // longer reads, and what only they read (a folded shift and its
+        // amount).
+        for operand in old_operands {
+            if operand != self.dag.entry_node().node && !self.has_live_users(operand) {
+                self.remove(operand);
+            }
+        }
         // `MorphNodeTo` reuses the node with new operands and resets its id
         // ("to the isel this is a newly allocated machine node"): left small
         // it would be pruned from a walk toward the later nodes it now reads.
@@ -972,6 +1133,15 @@ impl Dag for DagisAdapter<'_> {
 }
 
 impl AddrDag for DagisAdapter<'_> {
+    fn known_zero_bits(
+        &self,
+        value: PinValue,
+    ) -> u64 {
+        let ours = ours(value);
+        let bits = self.dag.value_type(ours).size_in_bits();
+        let all = u64::MAX.checked_shr(u64::BITS - bits.min(u64::BITS)).unwrap_or(0);
+        super::known_bits::known_bits(self.dag, ours).zero as u64 & all
+    }
     fn segment_override(
         &self,
         node: u32,
@@ -1041,6 +1211,11 @@ impl AddrDag for DagisAdapter<'_> {
                     offset: i64::from(offset),
                     flags: 0,
                 })
+            }
+            // Only the position-independent table is a symbol operand
+            // (`relative_jump_tables`); the others keep it in a register.
+            NodeData::JumpTable(index) if self.dag.relative_jump_tables() => {
+                Some(Wrapped { symbol: Symbol { kind: SymbolKind::JumpTable, id: index }, offset: 0, flags: 0 })
             }
             _ => None,
         }
@@ -1124,6 +1299,7 @@ impl AddrDag for DagisAdapter<'_> {
             }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
             SymbolKind::ConstantPool { .. } => (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id, disp)),
+            SymbolKind::JumpTable => (ISD::TargetJumpTable, NodeData::JumpTable(symbol.id)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))

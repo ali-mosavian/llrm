@@ -19,12 +19,13 @@ from pathlib import Path
 from dataclasses import field
 from dataclasses import dataclass
 
+from unicorn import x86_const
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_16, Uc, UcError
 from unicorn.x86_const import (
     UC_X86_REG_AX, UC_X86_REG_BX, UC_X86_REG_CS, UC_X86_REG_CX, UC_X86_REG_DS, UC_X86_REG_DX, UC_X86_REG_EFLAGS, UC_X86_REG_SI,
-    UC_X86_REG_ES, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
+    UC_X86_REG_ES, UC_X86_REG_FPCW, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
 )
-from iced_x86 import Decoder, Mnemonic, OpKind
+from iced_x86 import Decoder, MemorySizeExt, Mnemonic, OpKind, Register, RegisterExt
 
 PSP = 0x1000
 LOAD = PSP + 0x10  # the image's first paragraph
@@ -64,12 +65,29 @@ class Run:
     rep_iterations: int = 0  # flat target: the region's repeated string instructions' iterations after the first of each (tools/bench/flatcount.py)
 
 
+_NAME = {value: name for name, value in vars(Register).items() if name.isupper() and isinstance(value, int)}  # iced's Register is a module of ints
+
+
+def _segmented(uc, one):
+    """The multiplier of a MUL/IMUL whose operand is memory, read the way real mode addresses it: the effective segment register's base plus the
+    16-bit (or, with an address-size prefix, 32-bit) offset, and the operand's own width (vsgcc's reader takes 4 flat bytes of a 32-bit form)."""
+    offset = one.memory_displacement
+    for register, scale in ((one.memory_base, 1), (one.memory_index, one.memory_index_scale)):
+        if register != Register.NONE:
+            offset += uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[register]}")) * scale
+    wide = any(RegisterExt.is_gpr32(r) for r in (one.memory_base, one.memory_index))
+    segment = uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[one.memory_segment]}"))
+    return int.from_bytes(bytes(uc.mem_read(segment * 16 + (offset & (0xFFFFFFFF if wide else 0xFFFF)), MemorySizeExt.size(one.memory_size))), "little")
+
+
 def _multiplier(multiplier_of, uc, one):
-    """The multiplier operand's value, or None (the table's least) where vsgcc's reader does not know the operand's form:
-    it reads 32-bit forms, and a 16-bit program also multiplies by a memory operand through a segment."""
+    """The multiplier operand's value, or None (the table's least) where it cannot be read. A memory operand is read through its segment
+    (_segmented): vsgcc's reader is flat and raised on the 16-bit registers, so every such multiply was priced as the table's least."""
     try:
+        if one.op_kind(one.op_count - 1) == OpKind.MEMORY:
+            return _segmented(uc, one)
         return multiplier_of(uc, one)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, AttributeError):
         return None
 
 
@@ -78,6 +96,17 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     one = Decoder(16, raw).decode()
     memory = 0 if one.mnemonic == Mnemonic.LEA else sum(1 for at in range(one.op_count) if one.op_kind(at) in MEMORY_KINDS)
     return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
+
+
+def dos_file(cwd: Path, name: str) -> Path:
+    """`C:\\DIR\\FILE` as a path under the program's directory: the drive and the leading backslash name the root, which is `cwd`. DOS names
+    ignore case: an existing file of another case (`signal` for `SIGNAL`) is the one named; stft_fixed read -1 from a corpus file `signal`."""
+    path = cwd / (name[2:] if name[1:2] == ":" else name).replace("\\", "/").lstrip("/")
+    if not path.exists() and path.parent.is_dir():
+        for one in path.parent.iterdir():
+            if one.name.lower() == path.name.lower():
+                return one
+    return path
 
 
 def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
@@ -104,6 +133,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     for register, value in ((UC_X86_REG_DS, PSP), (UC_X86_REG_ES, PSP), (UC_X86_REG_SS, LOAD + ss), (UC_X86_REG_SP, sp), (UC_X86_REG_CS, LOAD + cs), (UC_X86_REG_IP, ip)):
         uc.reg_write(register, value)
 
+    uc.reg_write(UC_X86_REG_FPCW, 0x037F)  # DOS's FPU state; Unicorn's own is 0 (single precision)
     result = Run()
     state = {"active": whole, "done": False, "entry_sp": -1 if whole else 0, "files": {0: io.BytesIO(stdin)} if stdin is not None else {}, "next": 5, "vectors": {}}
     counts = Counts()
@@ -172,8 +202,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         uc.reg_write(UC_X86_REG_EFLAGS, (flags | 1) if on else (flags & ~1))
 
     def dos_path(name):
-        """`C:\\DIR\\FILE` as a path under the program's directory: the drive and the leading backslash name the root, which is `cwd`."""
-        return cwd / name[2:].replace("\\", "/").lstrip("/") if name[1:2] == ":" else cwd / name.replace("\\", "/").lstrip("/")
+        return dos_file(cwd, name)
 
     def exit_(ax):
         result.exit_code = ax & 0xFF

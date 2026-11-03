@@ -2751,3 +2751,63 @@ fn test_the_o1_and_o2_simplify_lists_both_match_the_registry() {
         let _ = pipeline::Fixed::linear(&applied, crate::parity::Phase::Simplify);
     }
 }
+
+/// -Os and -Oz ran with no function carrying `optsize`/`minsize`, so every
+/// pass that reads them was inert (nib -115 B, BAS -750 B at -Oz left on the
+/// table). Clang sets both at -Oz, `optsize` alone at -Os, neither at -O2.
+#[test]
+fn size_levels_mark_every_defined_function_as_clang_does() {
+    let text = "
+declare i16 @ext(i16)
+
+define i16 @main() {
+b:
+  %a = call i16 @ext(i16 3)
+  ret i16 %a
+}
+";
+    let flags = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        let entered = |program: &mut Program| {
+            program.exports.entries.insert("main".to_owned());
+            pipeline::applied(program, &applied)
+        };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), entered)
+            .and_then(|done| done)
+            .unwrap();
+        let printed = crate::testing::printed(&module);
+        let header =
+            printed.lines().find(|line| line.starts_with("define") && line.contains("@main")).unwrap().to_owned();
+        (header.contains("optsize"), header.contains("minsize"))
+    };
+    assert_eq!(flags(pipeline::Options::standard()).0, false, "-O2 marks nothing");
+    let (opt, min) = flags(pipeline::Options::size());
+    assert!(opt && !min, "-Os: optsize alone");
+    let (opt, min) = flags(pipeline::Options::min_size());
+    assert!(opt && min, "-Oz: optsize and minsize");
+}
+
+/// The shadow harness left cgpaddr out by `LLRM_NO_CGPADDR`, an environment
+/// flag read inside the pipeline: a stray variable changed any compile. The
+/// option (`cgpaddr: false`, `-fno-llrm-cgpaddr`) leaves it out, and the
+/// variable does nothing.
+#[test]
+fn cgpaddr_is_left_out_by_its_option_and_not_by_the_environment() {
+    // SAFETY: the variable is read by no code; the test fails if one starts to.
+    unsafe { std::env::set_var("LLRM_NO_CGPADDR", "1") };
+    assert!(pipeline::Options::default().wanted("cgpaddr"));
+    let options = pipeline::Options { cgpaddr: false, ..pipeline::Options::default() };
+    assert!(!options.wanted("cgpaddr"));
+}
+
+/// The target's price of a code byte at speed counts at -O2 and -O3 only: at
+/// -O1 and -Os every metric is gated by itself. m32's derived price made the
+/// pattern fill at -O1 take lru 127 -> 148 clocks for 32 B (a net loss at the
+/// price).
+#[test]
+fn the_byte_price_at_speed_counts_at_o2_and_o3_only() {
+    use pipeline::Options;
+    assert!(Options::standard().prices_bytes() && Options::aggressive().prices_bytes());
+    assert!(!Options::basic().prices_bytes() && !Options::size().prices_bytes());
+}

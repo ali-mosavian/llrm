@@ -2176,6 +2176,7 @@ impl State<'_, '_> {
             let declaration = GlobalValue {
                 name: name.into(),
                 linkage: Linkage::External,
+                visibility: llrm_mir::Visibility::Default,
                 unnamed_addr: Default::default(),
                 address_space: 0,
                 kind: GlobalKind::Function(Box::new(function)),

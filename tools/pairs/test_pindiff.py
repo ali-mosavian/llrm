@@ -226,7 +226,7 @@ def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
 
 def test_a_known_failure_that_is_gone_is_reported_not_failed():
     """The sweep exited 1 when #5202 fixed x_ll_div's Freeze crash: the fixing PR could not land until it edited KNOWN in step, and w9/w13
-    could not drop the entry at all while crashsweep.py was not on feat/parity (2026-10-27). A fix is reported (`FIXED?`); only a new crash fails."""
+    could not drop the entry at all while crashsweep.py was not on release/next (2026-10-27). A fix is reported (`FIXED?`); only a new crash fails."""
     sweep = load("crashsweep")
     crc = ("m16", "O2", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40:")
     lru = ("m16", "O0", "lru", "-", "clang: lru.c:5:22: error")

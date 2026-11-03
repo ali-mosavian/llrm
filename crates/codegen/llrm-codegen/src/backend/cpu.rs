@@ -165,6 +165,9 @@ pub struct Profile {
     /// -Oz (`Function::hasMinSize` on every function, as clang marks them): the
     /// machine passes that ask it take size over speed.
     pub min_size: bool,
+    /// -O2 and -O3: the target's price of a code byte at speed counts
+    /// (`Options::prices_bytes`); -O1, -Os and -Oz gate every metric alone.
+    pub speed_rate: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
     /// pin rounds; QB follows real BC text.
@@ -275,6 +278,18 @@ impl Profile {
         self.address_forms.iter().find(|form| form.index_width == 4)
     }
 
+    /// Which tied instructions become a `lea` here (`ThreeAddress`): the
+    /// target's address forms decide, so no pass names a register or a mode.
+    pub fn three_address(&self) -> crate::twoaddress::ThreeAddress {
+        use crate::twoaddress::ThreeAddress;
+        match self.dword_address_form() {
+            None if self.address_forms.iter().any(|form| form.index_width == 8) => ThreeAddress::Wide,
+            None => ThreeAddress::Off,
+            Some(form) if form.secondary => ThreeAddress::AddSubWords,
+            Some(_) => ThreeAddress::All,
+        }
+    }
+
     /// The dataclass constructor with every defaulted field at its default, and
     /// the registers and cost model of the target `arch`.
     pub fn new(
@@ -319,6 +334,7 @@ impl Profile {
             rounds_float_spills: false,
             stable_loads: true,
             min_size: false,
+            speed_rate: true,
             spills_extended: false,
             exhaustive: false,
             model: arch.cost_model(),
@@ -338,6 +354,15 @@ impl Profile {
     /// for size (the target's, none elsewhere).
     pub fn size_milliclocks_per_byte(&self) -> i64 {
         if self.size || self.min_size { self.target().size_milliclocks_per_byte() } else { 0 }
+    }
+
+    /// Clocks a byte of code is worth at speed, in thousandths: the target's
+    /// rate at -O2 and -O3, none at -O1 and for size.
+    pub fn speed_milliclocks_per_byte(&self) -> i64 {
+        if self.size || self.min_size || !self.speed_rate {
+            return 0;
+        }
+        self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
     }
 
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
@@ -363,6 +388,26 @@ impl Profile {
             && self.cost("alu_rr")? + self.cost("mov_rm")? + self.partial_register_stall < self.cost("movzx")?)
     }
 
+    /// Whether X86FixupBWInsts' `movzx r32,m` is no slower than the partial
+    /// load it replaces, `mov r8,m` or `mov r16,m` with its 66h prefix; a CPU
+    /// that stalls on the partial register pays for the stall besides. The
+    /// 486 and the Pentium take three clocks for the extension and one for
+    /// the byte load.
+    ///
+    /// DEVIATE FB1 (owner x86-m16, 2026-11-02; permanent per-CPU price from
+    /// the timing table): the pin widens on every x86, with no feature gate
+    /// ([`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L165)).
+    /// gcc keeps `mov dl,[buf+eax]` in x_strlen's copy loop; the pin's
+    /// `movzx edx,[buf+eax]` costs 2 extra clocks per byte copied, +348 k clk
+    /// at -O2 m32.
+    pub fn widens_load(
+        &self,
+        width: u8,
+    ) -> Result<bool, String> {
+        let narrow = self.cost("mov_rm")? + if width == 2 { self.prefix_cost } else { 0 };
+        Ok(self.cost("movzx")? <= narrow + self.partial_register_stall)
+    }
+
     /// Whether `and r,255` and `and r,65535` are better as the `movzx` of the
     /// low byte or word (X86InstrCompiler.td): shorter, so for size; for
     /// clocks only where the extension is no slower than the `and`. The 486
@@ -374,6 +419,15 @@ impl Profile {
     /// Whether `words` pops into a dead register clean a call's arguments
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
+    ///
+    /// DEVIATE PO1 (owner w10, 2026-10-30): the pin pops only at `minsize`
+    /// (`X86FrameLowering::eliminateCallFramePseudoInstr`,
+    /// X86FrameLowering.cpp:4116, `F.hasMinSize() && adjustStackWithPops`; pin
+    /// llc -mcpu=i486 keeps `add esp,8` at `optsize`). Here -Os pops too: one
+    /// byte shorter per two-word site, two memory operands more (qmove bas
+    /// -Os memops 32 against 29, bytes equal). Main 65098fd950 has this same
+    /// function, so no row moves against main. Exit: -Os is at or below main
+    /// without it, then this is `self.min_size` only.
     pub fn pops_arguments(
         &self,
         words: i64,
@@ -454,6 +508,7 @@ fn _profile(
     operations.pieces_clear_size = table.clear_ratio_size.unwrap_or(0);
     operations.jump_table = table.jump_table.unwrap_or(0);
     operations.cache_line = table.cache_line.unwrap_or(0);
+    operations.line_fill_clocks = table.line_fill_clocks.unwrap_or(0);
     Ok(Profile {
         pentium_pairing: table.pairing,
         address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
@@ -468,12 +523,7 @@ fn _profile(
 /// The profiles made so far, by target, CPU and size: each made once, as the
 /// passes hold them.
 static _MADE: LazyLock<
-    std::sync::Mutex<
-        crate::support::hash::HashMap<
-            (&'static str, String, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
-            &'static Profile,
-        >,
-    >,
+    std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, [bool; 11]), &'static Profile>>,
 > = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
@@ -514,7 +564,7 @@ pub fn tuned_with(
     search: bool,
     exhaustive: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true, false)
+    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true, false, true)
 }
 
 /// `tuned_with`, the backend's optional phases left out where not
@@ -532,6 +582,7 @@ pub fn tuned_optimizing(
     spills_extended: bool,
     stable_loads: bool,
     min_size: bool,
+    speed_rate: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
@@ -540,16 +591,19 @@ pub fn tuned_optimizing(
     let key = (
         arch.name(),
         name.to_owned(),
-        size,
-        search,
-        exhaustive,
-        optimized,
-        float_store,
-        aggressive,
-        rounds_float_spills,
-        spills_extended,
-        stable_loads,
-        min_size,
+        [
+            size,
+            search,
+            exhaustive,
+            optimized,
+            float_store,
+            aggressive,
+            rounds_float_spills,
+            spills_extended,
+            stable_loads,
+            min_size,
+            speed_rate,
+        ],
     );
     if let Some(&one) = made.get(&key) {
         return Ok(one);
@@ -565,6 +619,7 @@ pub fn tuned_optimizing(
         spills_extended,
         stable_loads,
         min_size,
+        speed_rate,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -616,6 +671,22 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    /// TA-4 was written as a pass's own rule for the m16 prefixed `lea`; the
+    /// mode comes from the address forms, so a flat dword form, a 64-bit one
+    /// and none give their own modes, and the m16 profiles the prefixed
+    /// one.
+    #[test]
+    fn test_the_lea_mode_follows_the_targets_address_forms() {
+        use crate::twoaddress::ThreeAddress;
+        let m16 = profile("486").unwrap();
+        assert_eq!(m16.three_address(), ThreeAddress::AddSubWords);
+        let dword = m16.dword_address_form().expect("a dword form").clone();
+        let with = |forms: Vec<_>| Profile { address_forms: forms.into(), ..m16.clone() }.three_address();
+        assert_eq!(with(Vec::new()), ThreeAddress::Off);
+        assert_eq!(with(vec![AddressForm { secondary: false, ..dword.clone() }]), ThreeAddress::All);
+        assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }]), ThreeAddress::Wide);
+    }
 
     #[test]
     fn test_every_public_cpu_name_has_one_immutable_profile() {
@@ -872,6 +943,25 @@ mod zeroed_load_tests {
 }
 
 #[cfg(test)]
+mod widen_load_tests {
+    use super::*;
+
+    /// `mov dl,[m]` became `movzx edx,[m]` on the 486, three clocks for one
+    /// (x_strlen -O2 m32, +348 k clk over gcc). Priced from the description:
+    /// the 386 loads in four clocks, so it widens;
+    /// the Pentium Pro and later stall on the partial register, so widen there.
+    #[test]
+    fn test_a_load_widens_only_where_the_extension_is_no_slower() {
+        for (name, byte, word) in [("386", true, true), ("486", false, false), ("P5", false, false), ("P6", true, true)]
+        {
+            let cpu = profile(name).expect("a cpu");
+            assert_eq!(cpu.widens_load(1), Ok(byte), "{name} byte");
+            assert_eq!(cpu.widens_load(2), Ok(word), "{name} word");
+        }
+    }
+}
+
+#[cfg(test)]
 mod mask_tests {
     use super::*;
 
@@ -887,5 +977,36 @@ mod mask_tests {
             cpu.size = true;
             assert_eq!(cpu.masks_by_extension(), Ok(true), "{name} for size");
         }
+    }
+
+    /// The target's price of a code byte at speed reaches the backend's pool
+    /// constants and multiply chains at -O2 and -O3 only: -O1 and the size
+    /// levels never price bytes. m32's derived price (312 milliclocks per byte
+    /// on a 486) made -O1 trade clocks for bytes (lru 127 -> 148 clocks).
+    #[test]
+    fn the_byte_price_at_speed_reaches_the_backend_at_o2_and_o3_only() {
+        let rate = |size: bool, min_size: bool, speed_rate: bool| {
+            tuned_optimizing(
+                &llrm_x86_m32::M32,
+                "486",
+                size,
+                true,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                min_size,
+                speed_rate,
+            )
+            .expect("a 486")
+            .speed_milliclocks_per_byte()
+        };
+        assert_eq!(
+            (rate(false, false, true), rate(false, false, false), rate(true, false, true), rate(false, true, true)),
+            (312, 0, 0, 0)
+        );
     }
 }

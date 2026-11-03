@@ -68,8 +68,8 @@ use crate::support::hash::{IndexMap, IndexSet};
 pub const _TIED: [Operation; 5] =
     [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select, Operation::Exchange];
 
-/// `lea`: which tied instructions become a `lea` before allocation (DEVIATE
-/// TA-4, twoaddress.rs).
+/// `lea`: which tied instructions become a `lea` before allocation
+/// (`Profile::three_address`).
 #[derive(Default)]
 pub struct TwoAddress {
     pub lea: crate::twoaddress::ThreeAddress,
@@ -449,12 +449,31 @@ fn _swappable(one: &Insn) -> Option<(u32, u32, u32)> {
     swappable_held(one).map(|(into, first, second)| (into.value, first.value, second.value))
 }
 
-/// Whether the two sources of `what` can swap places (`isCommutable`).
+/// Whether the two sources of `what` can swap places (`isCommutable`). The
+/// scalar SSE `add` and `mul` (X86InstrSSE.td `sse12_fp_scalar`, `isCommutable
+/// = 1`) and the packed logic ops commute as the integer ones do.
 pub fn commutative(what: &Semantics) -> bool {
-    (what.op == Operation::Binary && matches!(
-        what.name.as_deref(),
-        Some("add" | "adc" | "and" | "or" | "xor")
-    ))
+    (what.op == Operation::Binary
+        && matches!(
+            what.name.as_deref(),
+            Some(
+                "add"
+                    | "adc"
+                    | "and"
+                    | "or"
+                    | "xor"
+                    | "addss"
+                    | "addsd"
+                    | "mulss"
+                    | "mulsd"
+                    | "andps"
+                    | "andpd"
+                    | "orps"
+                    | "orpd"
+                    | "xorps"
+                    | "xorpd"
+            )
+        ))
         || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))
 }
 

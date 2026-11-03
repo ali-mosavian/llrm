@@ -129,6 +129,8 @@ pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
 pub mod allocresult;
+pub mod assignment_tracking;
+pub mod livedebugvariables;
 
 pub mod arithmetic;
 pub mod arrival;
@@ -161,6 +163,7 @@ pub mod floatalloc;
 pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
+pub mod fmuladd;
 pub mod fpconvert;
 pub mod fpcopyprop;
 pub mod fpregs;
@@ -202,6 +205,8 @@ pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
+pub mod ivshare;
+pub mod ivzero;
 pub mod jumps;
 pub mod lanes;
 pub mod latecleanup;
@@ -211,6 +216,7 @@ pub mod legalize;
 pub mod libmcalls;
 #[cfg(test)]
 mod libmcalls_tests;
+pub mod licm_core;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
@@ -332,6 +338,7 @@ pub mod select {
     }
 }
 pub mod bodyfacts;
+pub mod deadspills;
 pub mod regclass;
 pub mod registerinfo;
 pub mod repbsf;

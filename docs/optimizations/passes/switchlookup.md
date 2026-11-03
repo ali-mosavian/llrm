@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlookup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlookup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:1d3abae12377e6125f95836f7ed57708a2e3eb197078b980c71a6079fe8cc046 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:c148f7ddb20465aad9ba11331451200fc25f9dfd425e4065ce213681d720ff7b -->
 
 # switchlookup
 
@@ -19,7 +19,7 @@ check where the default can run. A step of `simplifySwitch`
 | [`reuseTableCompare`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L7502) | `table_compare_reused` |
 
 The legality questions (`isTypeLegal`, `fitsInLegalInteger`) are asked of
-the target ([`Tti::is_type_legal`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/tti.rs)) and
+the target (`Tti::is_type_legal`) and
 the data layout, not answered here.
 
 ## How it works

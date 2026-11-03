@@ -757,7 +757,13 @@ pub fn main(argv: &[String]) -> i32 {
                 Some("obj" | "o")
             )
         {
-            let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
+            let bytes = objbuild::written_in(
+                &built,
+                name,
+                objbuild::CodeLayout::OneSegment,
+                format,
+                args.codegen.arch.objects(),
+            )?;
             llrm_codegen::support::debug::timed("write output", || {
                 llrm_codegen::driver::flags::write_output(&output, bytes)
             })?;
@@ -3534,7 +3540,9 @@ mod tests {
         // among them; the flip's are `flat_listing`'s.
         args.codegen.libcalls.clear();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
-        let bytes = llrm_codegen::backend::objbuild::written(&built, "x.c").unwrap();
+        let bytes =
+            llrm_codegen::backend::objbuild::written(&built, "x.c", llrm_target::Target::objects(&llrm_x86_m32::M32))
+                .unwrap();
         let (mut at, mut out) = (0, Vec::new());
         while at < bytes.len() {
             let length = usize::from(u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]));

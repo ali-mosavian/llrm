@@ -166,7 +166,19 @@ impl Coalescer {
         }
         let depths = ranges::depths_shared(body);
         let depth = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
-        Some((crate::coalescer::env::TargetEnv { palettes: palettes.into(), pins, size: self.size }, depth))
+        Some((
+            crate::coalescer::env::TargetEnv {
+                palettes: palettes.into(),
+                pins,
+                size: self.size,
+                keep_pinned: false,
+                joins_global_copies: true,
+                aliases: Default::default(),
+                should_join: Box::new(|_| true),
+                freq: Vec::new(),
+            },
+            depth,
+        ))
     }
 }
 

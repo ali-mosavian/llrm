@@ -33,7 +33,7 @@ fn is_compare(inst: &Inst) -> bool {
 }
 
 /// Whether `op` may write the flags.
-fn writes_flags(op: &Op) -> bool {
+pub(crate) fn writes_flags(op: &Op) -> bool {
     match op {
         Op::Call { .. } | Op::Return { .. } => true,
         Op::I(inst) => match inst {

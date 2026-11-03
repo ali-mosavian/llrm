@@ -63,6 +63,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir fixednarrow` | x | on | on | on | on | on |
 | `mir lsr`: ivopts groups / all-candidates / always-prune bounds | x | 250 / 40 / 10 | 250 / 40 / 10 | 250 / 40 / 10 | none | 250 / 40 / 10 |
 | `mir differences` | x | on | on | on | on | on |
+| `mir maskscale` (real mode only: a masked counter read as an index becomes the byte offset; DEVIATE LP-7) | x | on | on | on | on | on |
 | `mir window` | x | on | on | on | on | on |
 | `mir rotate` | x | on | on | on | on | on |
 | `mir rotate` (header copy, `tree-ch`; not at -Os) | x | on | on | on | on | on |

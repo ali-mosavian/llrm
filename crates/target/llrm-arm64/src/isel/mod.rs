@@ -25,7 +25,7 @@ mod fp;
 mod index;
 mod int;
 mod mem;
-mod memops;
+pub(crate) mod memops;
 mod shifted;
 mod val;
 mod widemul;
@@ -87,6 +87,13 @@ pub struct Selector<'a> {
     pub(crate) conjunctions: conjunction::Conjunctions,
     /// The block being filled.
     pub(crate) current: usize,
+    /// The load or store being selected is volatile: the accesses it makes say
+    /// so.
+    volatile_access: bool,
+    /// Operations carry the source place they are selected from.
+    lines: bool,
+    /// The source place of the instruction being selected.
+    place: Option<llrm_codegen::model::lir::SrcLoc>,
     /// How many accesses name each global (by symbol): one that is named more
     /// than once has its address made once per block (`shared_global`)
     /// instead of an `adrp` at each access.
@@ -110,10 +117,23 @@ pub fn select(
     layout: &DataLayout,
     platform: Platform,
 ) -> Selected<MFunc> {
+    selected(module, function, layout, platform, false)
+}
+
+/// [`select`], each operation carrying the source place of the instruction it
+/// was selected from where `lines`.
+pub fn selected(
+    module: &Module,
+    function: GlobalId,
+    layout: &DataLayout,
+    platform: Platform,
+    lines: bool,
+) -> Selected<MFunc> {
     let global = module.global(function);
     let name = global.name.owned().ok_or("an unnamed function")?;
     let body = global.function().ok_or("a variable is not selected")?;
     let mut selector = Selector::new(module, body, layout, platform, &name);
+    selector.lines = lines;
     selector.run()?;
     Ok(selector.finish())
 }
@@ -137,7 +157,8 @@ impl<'a> Selector<'a> {
             }
         }
         let mut mf = MFunc::new(name);
-        mf.blocks = (0..order.len()).map(|at| MBlock { label: block_label(name, at), ops: Vec::new() }).collect();
+        mf.blocks =
+            (0..order.len()).map(|at| MBlock { label: block_label(name, at), ops: Default::default() }).collect();
         Self {
             module,
             function,
@@ -153,6 +174,9 @@ impl<'a> Selector<'a> {
             chains: chain::Chains::default(),
             conjunctions: conjunction::Conjunctions::default(),
             current: 0,
+            volatile_access: false,
+            lines: false,
+            place: None,
             global_uses: HashMap::new(),
             global_regs: HashMap::new(),
             global_pages: HashMap::new(),
@@ -207,7 +231,21 @@ impl<'a> Selector<'a> {
         self.global_needs_address = needs_address;
     }
 
-    fn finish(self) -> MFunc {
+    fn finish(mut self) -> MFunc {
+        self.mf.declared = self
+            .function
+            .debug_records()
+            .iter()
+            .filter_map(|record| {
+                let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+                match self.vals.get(&address)? {
+                    Val::Ptr(AddrExpr { base: Base::Slot(slot), offset: 0, index: None }) => {
+                        Some((record.variable, *slot))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
         self.mf
     }
 
@@ -215,13 +253,20 @@ impl<'a> Selector<'a> {
         &mut self,
         op: Op,
     ) {
-        self.mf.blocks[self.current].ops.push(op);
+        let place = self.place;
+        self.mf.blocks[self.current].ops.push_at(op, place);
     }
 
     pub(crate) fn inst(
         &mut self,
         inst: Inst,
     ) {
+        let mut inst = inst;
+        if self.volatile_access
+            && let Inst::Load { mmo, .. } | Inst::Store { mmo, .. } = &mut inst
+        {
+            mmo.volatile = true;
+        }
         self.emit(Op::I(inst));
     }
 
@@ -268,6 +313,9 @@ impl<'a> Selector<'a> {
             let block = self.order[at];
             let insts: Vec<InstId> = self.function.iter_block(block).collect();
             for inst in insts {
+                if self.lines {
+                    self.place = llrm_codegen::backend::isel::dbg_line(self.module, self.function, inst);
+                }
                 self.select_inst(inst)?;
             }
         }
@@ -450,17 +498,7 @@ impl<'a> Selector<'a> {
         &self,
         global: GlobalId,
     ) -> bool {
-        use llrm_mir::{GlobalKind, Linkage};
-        let global = self.module.global(global);
-        let defined = match &global.kind {
-            GlobalKind::Function(function) => !function.is_declaration(),
-            GlobalKind::Variable(variable) => variable.initializer.is_some(),
-        };
-        let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
-        let _ = defined;
-        // Darwin reaches anything not defined here through the GOT; Linux
-        // static code reaches all of it directly.
-        self.platform == Platform::Darwin && !local && !defined
+        global_needs_got(self.module, self.platform, global)
     }
 
     fn constant_expression(
@@ -530,8 +568,18 @@ impl<'a> Selector<'a> {
                 self.define(result, value)
             }
             Opcode::Alloca { allocated, align, .. } => self.alloca(inst, &instruction, *allocated, *align),
-            Opcode::Load { .. } => self.load(&instruction),
-            Opcode::Store { .. } => self.store(&instruction),
+            Opcode::Load { volatile, .. } => {
+                self.volatile_access = *volatile;
+                let selected = self.load(&instruction);
+                self.volatile_access = false;
+                selected
+            }
+            Opcode::Store { volatile, .. } => {
+                self.volatile_access = *volatile;
+                let selected = self.store(&instruction);
+                self.volatile_access = false;
+                selected
+            }
             Opcode::GetElementPtr { source } => self.gep(&instruction, *source),
             Opcode::Call(info) => self.call(inst, &instruction, info),
             // A call, then a branch to the normal block. The unwind edge is
@@ -754,4 +802,23 @@ impl Selector<'_> {
             Val::Ptr(_) | Val::Agg(_) => None,
         }
     }
+}
+
+/// [`Selector::needs_got`] for any module: the one rule, shared with the DAG
+/// path.
+pub(crate) fn global_needs_got(
+    module: &Module,
+    platform: Platform,
+    global: GlobalId,
+) -> bool {
+    use llrm_mir::{GlobalKind, Linkage};
+    let global = module.global(global);
+    let defined = match &global.kind {
+        GlobalKind::Function(function) => !function.is_declaration(),
+        GlobalKind::Variable(variable) => variable.initializer.is_some(),
+    };
+    let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+    // Darwin reaches anything not defined here through the GOT; Linux
+    // static code reaches all of it directly.
+    platform == Platform::Darwin && !local && !defined
 }

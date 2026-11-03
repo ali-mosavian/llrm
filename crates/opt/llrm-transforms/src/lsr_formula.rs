@@ -35,6 +35,9 @@ use llrm_support::hash::HashMap;
 pub struct MemAccessTy {
     pub mem_ty: Option<TypeId>,
     pub addr_space: u32,
+    /// The bytes of `mem_ty` (the target's `isLegalAddressingMode` reads the
+    /// size); 0 where it is unknown.
+    pub bytes: u64,
 }
 
 impl MemAccessTy {
@@ -43,7 +46,7 @@ impl MemAccessTy {
 
     /// `getUnknown`.
     pub fn unknown(addr_space: u32) -> Self {
-        Self { mem_ty: None, addr_space }
+        Self { mem_ty: None, addr_space, bytes: 0 }
     }
 }
 

@@ -371,7 +371,9 @@ impl Builder<'_> {
         let chain = self.info.part_regs(first, total);
         let (mut at, mut leaves) = (0, Vec::new());
         for (vt, parts) in layout {
-            leaves.push(self.copy_from_reg(chain[at], vt)?);
+            // A leaf's type is not kept here: unmarked would let the pack take
+            // a pointer's halves, so it is marked as one.
+            leaves.push(self.copy_from_reg(chain[at], vt, true)?);
             at += parts;
         }
         Ok(self.merge(&leaves))

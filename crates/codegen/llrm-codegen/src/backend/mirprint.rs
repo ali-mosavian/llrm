@@ -442,6 +442,10 @@ fn instruction(
             let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
             writeln!(out, "    {} = SETCCr {code}, implicit $eflags", vreg(d)?).unwrap()
         }
+        (set, Some(Loc::Mem(m)), []) if set.starts_with("set") && condition(&format!("j{}", &set[3..])).is_some() => {
+            let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
+            writeln!(out, "    SETCCm {}, {code}, implicit $eflags", cell(m, symbols)?).unwrap()
+        }
         ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
             writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
         }
@@ -517,6 +521,27 @@ fn instruction(
 /// A register whose first definition writes only part of it has nothing to keep
 /// of the rest: the pin's verifier wants that said (`undef %5.sub_8bit = ...`).
 fn undef_first_partial_defs(text: &str) -> String {
+    // A register read only in part never needs the rest of it: each partial
+    // write is `undef`, wherever the paths that write it meet.
+    let mut whole = BTreeSet::new();
+    let mut partial = BTreeSet::new();
+    for line in text.lines() {
+        let reads = line.split_once(" = ").map_or(line, |(_, reads)| reads);
+        let bytes = reads.as_bytes();
+        for (at, _) in reads.match_indices('%') {
+            let end = (at + 1..bytes.len()).find(|&k| !bytes[k].is_ascii_digit()).unwrap_or(bytes.len());
+            if end == at + 1 {
+                continue;
+            }
+            let value = &reads[at + 1..end];
+            if reads[end..].starts_with(".sub_") {
+                partial.insert(value)
+            } else {
+                whole.insert(value)
+            };
+        }
+    }
+    let only_in_part: BTreeSet<&str> = partial.difference(&whole).copied().collect();
     let mut defined = BTreeSet::new();
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
@@ -527,7 +552,7 @@ fn undef_first_partial_defs(text: &str) -> String {
             && token[1..].split('.').next().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()) && !n.is_empty());
         if marked {
             let value = token[1..].split('.').next().unwrap_or("").to_owned();
-            if token.contains(".sub_") && !defined.contains(&value) {
+            if token.contains(".sub_") && (!defined.contains(&value) || only_in_part.contains(value.as_str())) {
                 let indent = &line[..line.len() - line.trim_start().len()];
                 out.push_str(&format!("{indent}undef {}\n", line.trim_start()));
                 defined.insert(value);
@@ -1000,6 +1025,19 @@ mod tests {
         assert!(text.contains("%2 = SETCCr 13, implicit $eflags"), "{text}");
     }
 
+    /// `sete [cell]` (a flag read stored straight to memory) was refused, so
+    /// x_life's -Os function never reached the pin.
+    #[test]
+    fn test_a_set_on_flags_into_a_cell_prints() {
+        let cell = Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, 8)), 1));
+        let set = insn("sete", Operation::Unary, vec![cell], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![set, ret]))];
+        let body = LirBody::new("setm", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("SETCCm %fixed-stack.0, 1, $noreg, 0, $noreg, 4, implicit $eflags"), "{text}");
+    }
+
     /// A nameless instruction that is not a return (a marker) printed as
     /// `RET 0`, which ended the block early for the pin.
     #[test]
@@ -1066,6 +1104,20 @@ mod tests {
             "    %5.sub_8bit = MOV8ri 1\n    %5.sub_8bit = MOV8ri 2\n    %6 = COPY %5\n",
         );
         assert_eq!(text, "    undef %5.sub_8bit = MOV8ri 1\n    %5.sub_8bit = MOV8ri 2\n    %6 = COPY %5\n");
+    }
+
+    /// A byte written on three paths and read only as a byte (x_life's
+    /// `sete`/`mov bl, 1`/`xor` merge): only the first textual write was
+    /// `undef`, and the pin's verifier aborted on the other two.
+    #[test]
+    fn test_every_partial_write_of_a_register_only_read_in_part_is_undef() {
+        let text = super::undef_first_partial_defs(
+            "    %5.sub_8bit = MOV8ri 1\n    %5 = MOV32ri 0\n    %5.sub_8bit = MOV8ri 2\n    MOV8mr %7, 1, $noreg, 0, $noreg, %5.sub_8bit\n",
+        );
+        assert_eq!(
+            text,
+            "    undef %5.sub_8bit = MOV8ri 1\n    %5 = MOV32ri 0\n    undef %5.sub_8bit = MOV8ri 2\n    MOV8mr %7, 1, $noreg, 0, $noreg, %5.sub_8bit\n"
+        );
     }
 
     #[test]

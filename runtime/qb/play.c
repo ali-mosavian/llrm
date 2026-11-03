@@ -106,11 +106,17 @@ unsigned music_waiting(void)
     return (head + QUEUE - tail) % QUEUE;
 }
 
+/* What a wait for the tick does between looks at the queue: nothing where the tick runs by itself (a timer interrupt, a
+   thread); a host with one thread that runs it from outside (wasm32) says so with its own. */
+#ifndef QB_IDLE
+#define QB_IDLE() ((void)0)
+#endif
+
 /* Waits, with the tick running, until `done` is so. */
 static void wait_for_room(void)
 {
     while ((head + 1) % QUEUE == tail)
-        ;
+        QB_IDLE();
 }
 
 /* A time in thousandths of a tick as whole ticks, the part left over kept in
@@ -164,7 +170,7 @@ static void play_note(Player *p, int note, long time)
        as sound */
     if (p->foreground)
         while (tail != head || sound_left)
-            ;
+            QB_IDLE();
     wait_for_room();
     at = &queue[head];
     at->hertz = note ? frequency(note) : 0;
@@ -342,7 +348,7 @@ void B_SOND(short hertz, float duration)
     }
     if (player.foreground)
         while (tail != head || sound_left)
-            ;
+            QB_IDLE();
     wait_for_room();
     at = &queue[head];
     at->hertz = (unsigned)hertz;
@@ -361,6 +367,14 @@ static void music_stop(void)
     dev_tone(0);
     if (tick_started)
         dev_tick_stop();
+}
+
+/* CLEAR: what is queued is not played and the speaker is quiet; the tick keeps running (clear.c). */
+void music_clear(void)
+{
+    tail = head;
+    sound_left = quiet_left = 0;
+    dev_tone(0);
 }
 
 static Comp comp = {0, C_SN, {0, 0, 0, 0, music_stop}};

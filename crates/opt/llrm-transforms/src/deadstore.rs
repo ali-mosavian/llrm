@@ -643,12 +643,13 @@ impl<'a> Dse<'a> {
         )
     }
 
-    /// `isNoopIntrinsic`: lifetime markers.
+    /// `isNoopIntrinsic`: lifetime markers and `invariant.end`.
     fn is_noop_intrinsic(
         &self,
         inst: InstId,
     ) -> bool {
         memory::lifetime(self.context, self.callees, self.function, inst).is_some()
+            || self.aa.unit().intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::InvariantEnd)
     }
 
     // ---- objects ------------------------------------------------------------

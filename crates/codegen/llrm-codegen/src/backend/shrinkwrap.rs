@@ -97,13 +97,16 @@
 //! the restore, or where it falls into it. A block that reaches the restore any
 //! other way refuses the placement (`saverestore`'s DEVIATE 2).
 //!
-//! DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
-//! epilogue on an edge, or that does not end in a return, is refused; the
-//! registers stay saved at the entry. The pin wraps those and duplicates the
-//! `ret` into each early exit, which costs a byte per exit, and the branch that
-//! skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
-//! smaller). Exit: the placement is made as the pin does once jumps are sized
-//! after the epilogue is placed.
+//! DEVIATE 2: under `size` (the m16 `-Os` targets) a restore is wrapped only
+//! where it adds no byte: one epilogue, on the late path's fall-through or
+//! unconditional jump, that pushes no short branch past its range (127 forward,
+//! 128 back; sizes from the encoder). Two epilogues, a landing pad for a taken
+//! edge, or a branch that would grow keep the registers saved at the entry. The
+//! pin wraps all of those and duplicates the `ret` into each early exit, which
+//! costs a byte per exit (QCport m16 -Os +9 B; queens bq16 +12 B with three
+//! exits). Before: every split refused (fib bq16 -Os 1017956 clocks); now fib
+//! 908496 at the same bytes. Exit: the placement is made as the pin does once
+//! jumps are sized after the epilogue is placed.
 //!
 //! # See also
 //! LLVM's
@@ -244,13 +247,21 @@ pub fn wrapped(
         // the epilogue at the end of each predecessor, before its jump to the
         // restore or where it falls into it, and refuses any other.
         let split = placement.split.as_deref().unwrap_or_default();
-        // Under `size` the split changes where the early exit lands, and a
-        // branch over the epilogue grows past its short form (QCport m16 -Os
-        // +9 B, nothing smaller): the registers stay saved at the entry. The
-        // caller states `size` only for a target that says so (the pin has no
-        // such check).
-        if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
-            continue;
+        // Under `size` the split is taken only where it adds no byte: one
+        // epilogue, on a fall-through or an unconditional jump, that pushes no
+        // short branch past its range (see DEVIATE 2). The caller states `size`
+        // only for a target that says so (the pin has no such check).
+        if size {
+            let pops = kept.len() + usize::from(with_frame);
+            let at = match (uses.is_return(placement.restore), split) {
+                (true, []) => None,
+                (true, [one]) if ends_on_edge_into(body, *one, placement.restore) => Some(*one),
+                (false, []) => Some(placement.restore),
+                _ => continue,
+            };
+            if at.is_some_and(|at| epilogue_outgrows_a_jump(body, at, pops)) {
+                continue;
+            }
         }
         if !split.iter().all(|&one| {
             ends_on_edge_into(body, one, placement.restore) || ends_on_taken_edge_into(body, one, placement.restore)
@@ -313,6 +324,64 @@ pub fn wrapped(
         });
     }
     None
+}
+
+/// Whether `pops` one-byte pops at the end of block `at` push a short branch
+/// over them out of its range (127 forward, 128 back), or an instruction's size
+/// is not known: the epilogue is then not free in bytes.
+fn epilogue_outgrows_a_jump(
+    body: &LirBody,
+    at: BlockId,
+    pops: usize,
+) -> bool {
+    let sizes: Option<Vec<Vec<usize>>> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            block
+                .insns
+                .iter()
+                .map(|insn| match &insn.what {
+                    None => Some(0),
+                    Some(what) => crate::backend::select::emit_in(body.bits, what, 0, None, true, false, None)
+                        .map(|made| made.code.len()),
+                })
+                .collect()
+        })
+        .collect();
+    let Some(sizes) = sizes else { return true };
+    let mut start = Vec::with_capacity(sizes.len() + 1);
+    let mut offset = 0usize;
+    for block in &sizes {
+        start.push(offset);
+        offset += block.iter().sum::<usize>();
+    }
+    start.push(offset);
+    let last = at.0 as usize;
+    let epilogue = start[last + 1];
+    for (b, block) in body.blocks.iter().enumerate() {
+        let mut end = start[b];
+        for (i, insn) in block.insns.iter().enumerate() {
+            end += sizes[b][i];
+            let Some(target) = insn.what.as_ref().and_then(|what| what.target) else { continue };
+            let Some(t) = body.blocks.iter().position(|other| other.at == target) else { continue };
+            // The block's own final jump has the epilogue before it.
+            if b == last && i + 1 == block.insns.len() {
+                continue;
+            }
+            // The bytes go in at `epilogue`: what starts at or after it moves.
+            let (low, high) = (end.min(start[t]), end.max(start[t]));
+            let moved = |place: usize| place >= epilogue;
+            let at_branch = end - sizes[b][i];
+            if moved(at_branch) != moved(start[t])
+                && high - low + pops > if start[t] >= end { 127 } else { 128 }
+                && high - low <= if start[t] >= end { 127 } else { 128 }
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether the end of `from` is on its one edge into `to` and no other: it
@@ -450,6 +519,18 @@ impl<'a> Uses<'a> {
 }
 
 impl Frame for Uses<'_> {
+    /// `X86FrameLowering::canUseAsPrologue`: the frame's `sub esp` writes the
+    /// flags, so a block entered with a flag live (a second `jcc` on one
+    /// `cmp`) cannot set it up. DEVIATE: the pin keeps the block and adjusts
+    /// with `lea`; here the Save moves up to a block the flags are not live
+    /// into.
+    fn can_use_as_prologue(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        !self.framed || !crate::backend::peephole::flags_live_in(self.body, self.block(block).at)
+    }
+
     fn touches(
         &self,
         block: BlockId,
@@ -589,6 +670,40 @@ mod tests {
         assert!(!any_named(regs, &one, |named| named == regs.root(RegId::EDI)));
     }
 
+    fn named_branch(
+        at: i64,
+        name: &str,
+        target: i64,
+    ) -> Arc<Insn> {
+        insn(at, Semantics { name: Some(name.into()), target: Some(target), ..Semantics::new(ir::Operation::Branch) })
+    }
+
+    /// `fib` with its recursion copied into itself four deep: `cmp edi,4; jb
+    /// early; push rbx; sub rsp,48; jne late`. The frame was set up in the
+    /// block of the second jump, whose flags the `sub` wrote: `fib(4)` took the
+    /// wrong arm and `fib(5)` returned 6 (bench frames printed 619185, not
+    /// 616371). The Save must sit where no flag is live.
+    #[test]
+    fn test_a_frame_is_not_set_up_in_a_block_entered_with_the_flags_live() {
+        let compare = insn(
+            0,
+            Semantics {
+                name: Some("cmp".into()),
+                sources: vec![Loc::Reg(Reg { register: RegId::EDI, width: 4 })],
+                ..Semantics::new(ir::Operation::Compare)
+            },
+        );
+        let blocks = vec![
+            block(0, vec![compare, named_branch(2, "jb", 30)], vec![30, 10]),
+            block(10, vec![touch(10, RegId::ESP), named_branch(12, "jne", 20)], vec![20, 14]),
+            block(14, vec![touch(14, RegId::ESP)], vec![20]),
+            block(20, vec![touch(20, RegId::ESP), ret(22)], vec![]),
+            block(30, vec![ret(30)], vec![]),
+        ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::new(), Some((RegId::EBP, RegId::ESP)), false, false);
+        assert!(wrap.is_none_or(|wrap| !wrap.opens.contains_key(&10)), "the frame opens in the block the flags enter");
+    }
+
     /// The early exit saved every register the late path uses, and popped them
     /// again: hanoi's `push ecx` before the `n == 0` test.
     #[test]
@@ -633,17 +748,55 @@ mod tests {
         assert_eq!(wrap.closes_after, BTreeMap::from([(2, esi)]));
     }
 
-    /// Under `size` the late edge's epilogue moves the early exit past the pops
-    /// and a short branch grows (QCport m16 -Os +9 B): the save stays at the
-    /// entry.
+    /// fib bq16 -Os: the leaf (`n < 2`) pushed and popped si and di with the
+    /// rest because a split restore was refused, +10.8% clocks (1017956 vs
+    /// 908496). One epilogue on the late path's fall-through adds no byte, so
+    /// `size` takes it.
     #[test]
-    fn test_a_split_restore_is_refused_under_size() {
+    fn test_a_single_split_restore_is_taken_under_size_where_no_jump_outgrows() {
         let blocks = vec![
             block(0, vec![branch(2, 3)], vec![3, 2]),
             block(2, vec![touch(20, RegId::ESI)], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).expect("a wrap");
+        assert_eq!(wrap.closes_after, BTreeMap::from([(2, vec![Piece::Saved(RegId::ESI)])]));
+    }
+
+    /// queens bq16 -Os grew 12 B when three exits of the late path each got a
+    /// copy of the pops and a jump: more than one epilogue is refused.
+    #[test]
+    fn test_two_split_epilogues_are_refused_under_size() {
+        let blocks = vec![
+            block(0, vec![branch(2, 4)], vec![4, 2]),
+            block(2, vec![touch(20, RegId::ESI), branch(22, 4)], vec![4, 3]),
+            block(3, vec![touch(30, RegId::ESI)], vec![4]),
+            block(4, vec![ret(40)], vec![]),
+        ];
         assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).is_none());
+    }
+
+    /// The pops put between a short branch and its target push it past 127
+    /// bytes (QCport m16 -Os +9 B): the save stays at the entry.
+    #[test]
+    fn test_a_split_that_pushes_a_short_branch_out_of_range_is_refused_under_size() {
+        let fill = |count: i64| (0..count).map(|n| touch(100 + n, RegId::EAX)).collect::<Vec<_>>();
+        // At 16 bits `mov r32, imm` is 6 bytes: 19 of them and the two below
+        // are 126, the branch's whole range but one byte, and two pops
+        // make it 128.
+        let blocks = |count: i64| {
+            vec![
+                block(0, vec![branch(2, 3)], vec![3, 2]),
+                block(2, [vec![touch(20, RegId::ESI), touch(21, RegId::EDI)], fill(count)].concat(), vec![3]),
+                block(3, vec![ret(30)], vec![]),
+            ]
+        };
+        let both = BTreeSet::from([RegId::ESI, RegId::EDI]);
+        assert!(
+            wrapped(&body(blocks(10)), &both, None, false, true).is_some(),
+            "premise: a short branch is left alone"
+        );
+        assert!(wrapped(&body(blocks(19)), &both, None, false, true).is_none());
     }
 
     /// The late path that does not fall into the return but is laid out away

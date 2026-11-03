@@ -400,3 +400,40 @@ b0:
     assert_eq!(after.matches("load").count(), 1, "{after}");
     assert!(after.contains("!range"), "{after}");
 }
+
+/// EarlyCSE.cpp#L1459: an `invariant.start` of the location makes it
+/// invariant from the generation it stands in, so a load of it after a call
+/// that may write memory is the load before it. MIR had no `invariant.start`,
+/// so both loads stayed.
+#[test]
+fn test_a_load_past_a_call_is_the_one_before_under_an_invariant_start() {
+    let with = |start_before_first_load: bool, start_after_call: bool| {
+        let start = "%s = call ptr @llvm.invariant.start.p0(i64 4, ptr %q)";
+        run(&format!(
+            "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @ext(ptr)
+
+define i32 @f(ptr %q, ptr %p) {{
+b0:
+  {}
+  %a = load i32, ptr %q
+  call void @ext(ptr %p)
+  {}
+  %b = load i32, ptr %q
+  %c = add i32 %a, %b
+  ret i32 %c
+}}
+",
+            if start_before_first_load { start } else { "" },
+            if start_after_call { start } else { "" },
+        ))
+    };
+    let none = with(false, false);
+    assert_eq!(none.matches("load i32").count(), 2, "premise: the call separates the loads: {none}");
+    let scoped = with(true, false);
+    assert_eq!(scoped.matches("load i32").count(), 1, "{scoped}");
+    // The scope began after the call: the first load was of a location that
+    // was still being written.
+    let late = with(false, true);
+    assert_eq!(late.matches("load i32").count(), 2, "{late}");
+}

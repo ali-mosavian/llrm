@@ -59,7 +59,7 @@ def test_a_panic_is_keyed_by_its_place_and_message_not_by_rusts_backtrace_note()
 
 
 def test_a_commit_that_does_not_build_is_passed_over_not_a_crash():
-    """The bisection of the 48-compile BitCast failure died on `CalledProcessError`: feat/parity did not build for three hours (#2544 with #2564), so the
+    """The bisection of the 48-compile BitCast failure died on `CalledProcessError`: release/next did not build for three hours (#2544 with #2564), so the
     middle commit of the window had no llrm-c. The first bad commit that builds is the answer."""
     commits = [f"c{i}" for i in range(20)]
     unbuildable = {f"c{i}" for i in range(8, 13)}
@@ -147,7 +147,7 @@ def test_a_program_whose_header_makes_it_real_mode_only_is_not_compiled_at_m32(t
 
 
 def test_the_header_names_the_sha_the_binary_was_built_from_not_the_ref_at_print_time(tmp_path, monkeypatch, capsys):
-    """origin/feat/parity moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
+    """origin/release/next moved during a sweep and the header named 864f2b3fa for a binary built from 50a88a94b."""
     binary = tmp_path / "llrm-c"
     binary.write_text("#!/bin/sh\necho llrm-c " + "a" * 40 + "\n")
     binary.chmod(0o755)

@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 141 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -16,6 +16,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
+| assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. |  | [assignment_tracking](assignment_tracking.md) |
 | bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
 | bodyfacts | Facts about the definitions of a body's values that the passes around the allocator ask: which values are literals, addresses or copies, which loads of a cell hold until their last use, and what may write a cell. | `spiller`, `ssaspill`, `constrain`, `floatassign`, `peep`, `greedy::remat`. | [bodyfacts](bodyfacts.md) |
 | booleans | Setcc chains the target's cost table prices above a branch, made selects for `selects::lowered` to branch. | Inside `selects::priced`, after the selects of the module were folded and | [booleans](booleans.md) |
@@ -35,7 +36,8 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | cpu | One immutable description of a code-generation tuning target: a CPU's prices and a target's registers, address forms and cost model. | The driver (`driver/mod.rs`, `Options::cpu`) builds it from the machine's | [cpu](cpu.md) |
 | datagroup | Make the data segment register a fourth selector register where the stack lives in the data group. | Register allocation (`allocate.rs`): `names_data_segment` before it, | [datagroup](datagroup.md) |
 | deadmi | An instruction nothing reads is gone: `DeadMachineInstructionElim` after selection. | Named by `flow`. | [deadmi](deadmi.md) |
-| debuginfo | `-g`: build a module's debug information as [`llrm_object::debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
+| deadspills | Drops a spill store no later read of its slot can see. | Named by `peephole`. | [deadspills](deadspills.md) |
+| debuginfo | `-g`: build a module's debug information as [`llrm_debug::Info`], the format-neutral model each object format's writer encodes. | `described` when a module is assembled (`assemble.rs`; `driver/basic.rs` | [debuginfo](debuginfo.md) |
 | division | Select a dword division by a constant as a multiply by its reciprocal, where the CPU's prices make that cheaper. | `isel.rs` (`divide`), for each division by a constant. | [division](division.md) |
 | earlytaildup | Which blocks early tail duplication may copy, and into which predecessors: `shouldTailDuplicate`, `isSimpleBB`, `canCompletelyDuplicateBB` and `canTailDuplicate` of [TailDuplicator.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp) with `PreRegAlloc` set and `LayoutMode` clear. | `flow::machine_with`, first of the machine phases. | [earlytaildup](earlytaildup.md) |
 | edges | Breaks one edge of a body: a block of its own that jumps on. | `machinesink`. | [edges](edges.md) |
@@ -53,6 +55,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | floatassign | Makes the floating code ready for register allocation: x87 integer conversions and compares go through memory, and loads of one cell are one value. | Machine phase after `floatfold` and `phielim`, before `RegAlloc`, once per | [floatassign](floatassign.md) |
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `machinesched` and before `floatassign`, once per | [floatfold](floatfold.md) |
 | floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`. | [floatregions](floatregions.md) |
+| fmuladd | Expands `llvm.fmuladd` into an `fmul` and an `fadd` in MIR before the old instruction selector, which has no fused multiply-add to select. | Once per module in `driver::optimized`, unless the selector is the DAG, | [fmuladd](fmuladd.md) |
 | fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
 | fpcopyprop | Copy propagation over the x87 registers FP0..FP6: LLVM's `MachineCopyPropagation` for the RFP class. | At the start of `FloatAlloc`, under RFP. | [fpcopyprop](fpcopyprop.md) |
 | fpregs | The x87 registers FP0..FP6 as the values the stackifier tracks. | At the start of `fpstack::converted`; a body with no x87 register operand | [fpregs](fpregs.md) |
@@ -67,6 +70,8 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
 | intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
+| ivshare | Streams that walk the same index share one pointer (DEVIATE LSR2). | Named by `flow`. | [ivshare](ivshare.md) |
+| ivzero | A loop's index ends at zero (DEVIATE LSR3). | A machine phase after `IvShare`, at every -O level but -O0. | [ivzero](ivzero.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | latecleanup | Removes an immediate load to a register that an identical, earlier load in every path to it already left there: LLVM's `MachineLateInstrsCleanup` ([MachineLateInstrsCleanup.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLateInstrsCleanup.cpp)). | After `prologue`, before `peephole`: where rematerialization and the | [latecleanup](latecleanup.md) |
@@ -74,6 +79,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | leaopt | Two address computations that differ only in a displacement are one: LLVM's `X86OptimizeLEAs` ([X86OptimizeLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86OptimizeLEAs.cpp)). | A machine phase after `machinesink` and before `phielim` | [leaopt](leaopt.md) |
 | legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
 | libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
+| licm_core | The target-neutral half of early `MachineLICM`: which loops have a preheader, which values a loop reads from outside, which copies a loop phi takes, and the walk that moves what the target's policy calls hoistable to the end of the preheader. |  | [licm_core](licm_core.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit` and `regclass` | [live](live.md) |

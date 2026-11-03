@@ -1,7 +1,7 @@
 //! `.debug_line`: the line program, one sequence per section of code with
 //! lines.
 
-use llrm_object::debug::{ChecksumKind, Info};
+use llrm_debug::{ChecksumKind, Info};
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};
@@ -18,6 +18,7 @@ const LNS_ADVANCE_PC: u8 = 2;
 const LNS_ADVANCE_LINE: u8 = 3;
 const LNS_SET_FILE: u8 = 4;
 const LNS_SET_COLUMN: u8 = 5;
+const LNS_NEGATE_STMT: u8 = 6;
 const LNS_PROLOGUE_END: u8 = 10;
 const LNS_EPILOGUE_BEGIN: u8 = 11;
 const LNE_END_SEQUENCE: u8 = 1;
@@ -61,6 +62,7 @@ struct Row {
     column: u32,
     prologue_end: bool,
     epilogue_begin: bool,
+    is_stmt: bool,
 }
 
 pub fn program(
@@ -171,6 +173,7 @@ pub fn program(
                 column: one.column,
                 prologue_end: false,
                 epilogue_begin: false,
+                is_stmt: !info.not_stmt.contains(&(section, one.offset)),
             })
             .collect();
         rows.sort_by_key(|one| one.offset);
@@ -194,6 +197,7 @@ pub fn program(
                 };
                 if prologue {
                     rows[at_row].prologue_end = true;
+                    rows[at_row].is_stmt = true;
                 } else {
                     rows[at_row].epilogue_begin = true;
                 }
@@ -213,7 +217,7 @@ pub fn program(
         buf.uleb(1 + address as u64);
         buf.u8(LNE_SET_ADDRESS);
         buf.address(address, symbol, start as i64 - base as i64);
-        let (mut at, mut line, mut file, mut column) = (start, 1i64, 1u64, 0u64);
+        let (mut at, mut line, mut file, mut column, mut stmt) = (start, 1i64, 1u64, 0u64, true);
         for row in rows {
             if number(row.file) != file {
                 file = number(row.file);
@@ -234,6 +238,10 @@ pub fn program(
                 buf.u8(LNS_ADVANCE_PC);
                 buf.uleb((row.offset - at) as u64);
                 at = row.offset;
+            }
+            if row.is_stmt != stmt {
+                buf.u8(LNS_NEGATE_STMT);
+                stmt = row.is_stmt;
             }
             if row.prologue_end {
                 buf.u8(LNS_PROLOGUE_END);

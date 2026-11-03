@@ -28,7 +28,7 @@ name: ci
 on:
   pull_request:
     # A draft runs plan and static only (minutes); marking it ready starts the full gate.
-    # Parity work targets the integration branch feat/parity and a stack targets its parent's branch: only a pull request into main runs the gate.
+    # Parity work targets the integration branch release/next and a stack targets its parent's branch: only a pull request into main runs the gate.
     branches: [main]
     types: [labeled]
   push:
@@ -209,7 +209,7 @@ jobs:
           retention-days: 1
 
   # The clang trees the llrm-cc tests drive (toolchain/clangbuild.sh), restored or built here and saved under THIS run's ref: a pull request
-  # into main cannot read the caches toolchain.yml saves on feat/parity (run 40780286803). Runs beside build; cold, a tree is ~1 h (cached after).
+  # into main cannot read the caches toolchain.yml saves on release/next (run 40780286803). Runs beside build; cold, a tree is ~1 h (cached after).
   toolchain:
     needs: plan
     if: ${{ !cancelled() && needs.plan.outputs.draft != 'true' && needs.plan.outputs.any == 'true' }}

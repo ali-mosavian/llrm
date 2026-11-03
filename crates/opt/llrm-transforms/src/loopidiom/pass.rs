@@ -60,6 +60,8 @@ pub struct LoopIdiom {
     pub routines: Vec<llrm_mir::libfunc::Routine>,
     /// -Os or -Oz.
     pub for_size: bool,
+    /// -O2 and -O3: the target's byte price at speed counts.
+    pub speed_rate: bool,
 }
 
 impl LoopIdiom {
@@ -77,6 +79,7 @@ impl LoopIdiom {
             library: Library { memset: true, memset_pattern16: false, memcpy: true },
             routines,
             for_size: false,
+            speed_rate: true,
         }
     }
 }
@@ -146,11 +149,17 @@ impl FunctionPass for LoopIdiom {
         let mark = unit.function.mark();
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
         let mut se = held.take();
-        let size_costs = self.for_size.then(|| outer.target().size_costs());
-        let clock_costs = self
-            .for_size
-            .then(|| (outer.target().costs(), outer.target().size_milliclocks_per_byte()))
-            .filter(|(_, rate)| *rate > 0);
+        // DEVIATE: a target that weighs bytes against clocks at speed (m16:
+        // 1 clock = 2 B) prices a fill by the bytes it adds as `-Os` does, and
+        // its clocks at that rate. Exit: none.
+        let rate = tti.as_deref().filter(|_| self.speed_rate).map_or(0, |tti| tti.speed_milliclocks_per_byte());
+        let size_costs = (self.for_size || rate > 0).then(|| outer.target().size_costs());
+        let clock_costs = if self.for_size {
+            Some((outer.target().costs(), outer.target().size_milliclocks_per_byte())).filter(|(_, rate)| *rate > 0)
+        } else {
+            Some((outer.target().costs(), rate)).filter(|(_, rate)| *rate > 0)
+        };
+        let speed_costs = (!self.for_size && rate == 0).then(|| outer.target().costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -165,9 +174,12 @@ impl FunctionPass for LoopIdiom {
                 cur_loop,
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
+                speed: speed_costs.as_ref(),
                 tti: tti.as_deref(),
             };
-            let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
+            let mut options = self.options;
+            options.force_memset_pattern_intrinsic |= self.for_size && outer.target().fills_by_pattern();
+            let mut idiom = LoopIdiomRecognize::new(options, self.library);
             idiom.routines = self.routines.clone();
             idiom.for_size = self.for_size;
             if idiom.run_on_loop(&mut run) == Some(true) {

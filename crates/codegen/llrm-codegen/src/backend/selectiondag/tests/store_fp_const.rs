@@ -12,7 +12,8 @@ fn store_of(
     let ptr = dag.get_register(EVT::I32, 5);
     let value = dag.get_constant_fp(bits, vt);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 };
+    let info =
+        MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0, ordering: None };
     let store = dag.get_store(chain, value, ptr, info);
     dag.set_root(store);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();

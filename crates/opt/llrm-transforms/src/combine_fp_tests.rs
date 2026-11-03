@@ -16,6 +16,7 @@ fn visit(
         Opcode::Binary(BinaryOp::FSub) => super::visit_fsub(c, inst),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
+        Opcode::Call(_) => c.visit_call(inst),
         _ => Visit::None,
     }
 }
@@ -130,4 +131,34 @@ fn test_a_subtraction_from_negative_zero_is_a_negation_and_of_a_negation_an_addi
     assert!(out.contains("fneg double %x"), "{out}");
     let out = combined("double", "  %n = fneg double %x\n  %r = fsub double %x, %n\n");
     assert!(out.contains("fadd double %x, %x"), "{out}");
+}
+
+/// `@f(double %x)` returning `%r` after `visitCallInst` of `fmuladd`, with the
+/// intrinsic declared.
+fn fused(body: &str) -> String {
+    let mut module = parsed(&format!(
+        "declare double @llvm.fmuladd.f64(double, double, double)\ndefine double @f(double %x, i32 %n) {{\nb0:\n{body}  ret double %r\n}}\n"
+    ));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// x_horner on the pin (`opt -O2`): the Horner seed `fmuladd(0.0, x, 1.5)` with
+/// `x = i * 0.01` (finite, not negative) is `0.0 + 1.5`, so the loop's first
+/// step is 1.5. Ours kept the call, and with it `fldz; fmul st(0), st(1)`
+/// in each trip: x_horner at m32 ran 102484 clocks against the pin's 92080.
+#[test]
+fn test_a_fmuladd_with_a_zero_factor_and_a_finite_non_negative_other_folds_to_its_addend() {
+    let out = fused(
+        "  %f = uitofp i32 %n to double\n  %k = fmul nnan double %f, 1.0e-2\n  %r = call double @llvm.fmuladd.f64(double 0.0, double %k, double 1.5)\n",
+    );
+    assert!(out.contains("ret double 1.500000e+00"), "{out}");
+    let kept = fused("  %r = call double @llvm.fmuladd.f64(double 0.0, double %x, double 1.5)\n");
+    assert!(
+        kept.contains("llvm.fmuladd.f64(double 0.000000e+00, double %x"),
+        "x may be infinite or NaN: the call stays: {kept}"
+    );
 }

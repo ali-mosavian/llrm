@@ -662,7 +662,9 @@ pub(crate) fn _keeps(
             }
         }
     };
-    holds && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
+    // A register the cell is addressed by, written, names another cell.
+    let moved = one.defines.iter().any(|defined| define.uses.contains(defined));
+    holds && !moved && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.

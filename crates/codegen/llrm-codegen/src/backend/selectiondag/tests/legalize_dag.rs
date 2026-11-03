@@ -10,7 +10,15 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: vt,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -111,4 +119,89 @@ fn a_shift_amount_is_made_an_i8() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Shl);
     assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I8);
+}
+
+/// A target that expands the unordered float codes (wasm has `lt`/`le`/`gt`/
+/// `ge`/`eq`/`ne` and no `ule`) was refused at `setcc` ("convert node to
+/// libcall"): only x86's `oeq` and `une` were translated.
+/// `LegalizeSetCCCondCode` swaps the operands, inverts the code, or joins two
+/// compares.
+#[test]
+fn an_unordered_float_code_the_target_expands_is_inverted_swapped_or_split() {
+    let f64 = EVT::Simple(MVT::F64);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for cc in
+        [CondCode::SetULt, CondCode::SetULe, CondCode::SetUGt, CondCode::SetUGe, CondCode::SetUEq, CondCode::SetONe]
+    {
+        tli.set_cond_code_action(cc, MVT::F64, Action::Expand);
+    }
+    let compare = |cc: CondCode| {
+        let mut dag = dag();
+        let (a, b) = (dag.get_register(f64, 1), dag.get_register(f64, 2));
+        let setcc = dag.get_setcc(EVT::I8, a, b, cc);
+        dag.set_root(setcc);
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        let code = |dag: &SelectionDAG, node: SDValue| match dag.node(dag.operand(node, 2)).data {
+            NodeData::CondCode(cc) => cc,
+            other => panic!("not a code: {other:?}"),
+        };
+        match dag.opcode(root) {
+            ISD::SetCC => (ISD::SetCC, vec![code(&dag, root)]),
+            op => {
+                let operands = [dag.operand(root, 0), dag.operand(root, 1)];
+                (op, operands.iter().filter(|o| dag.opcode(**o) == ISD::SetCC).map(|o| code(&dag, *o)).collect())
+            }
+        }
+    };
+    // `ule` is not legal: the inverse, `ogt`, is, and the result is negated.
+    assert_eq!(compare(CondCode::SetULe), (ISD::Xor, vec![CondCode::SetOGt]));
+    // `ult` swapped is `ugt`, also expanded; its inverse `oge` is legal.
+    assert_eq!(compare(CondCode::SetULt), (ISD::Xor, vec![CondCode::SetOGe]));
+    // `ueq` has no inverse or swap the target takes: `eq` or unordered.
+    assert_eq!(compare(CondCode::SetUEq), (ISD::Or, vec![CondCode::SetEq, CondCode::SetUo]));
+}
+
+/// `frem`, `fsin` and `lrint` marked `LibCall` were refused ("convert node to
+/// libcall"): only the two-operand integer routines were translated. The call
+/// takes every operand of the node, and `lrint` of a double returns an integer.
+#[test]
+fn a_float_routine_is_a_libcall_with_all_its_operands() {
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize, EVT)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len(), ret));
+            Some(dag.get_register(ret, 40 + self.0.len() as u32))
+        }
+    }
+    let f64 = EVT::Simple(MVT::F64);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for (op, name) in [(ISD::FRem, "fmod"), (ISD::FSin, "sin"), (ISD::LRint, "lrint")] {
+        tli.set_operation_action(op, MVT::F64, Action::LibCall);
+        tli.set_libcall_name(op, MVT::F64, name);
+    }
+    let mut dag = dag();
+    let (a, b) = (dag.get_register(f64, 1), dag.get_register(f64, 2));
+    let rem = dag.get_node(ISD::FRem, f64, &[a, b]);
+    let sin = dag.get_node(ISD::FSin, f64, &[rem]);
+    let rint = dag.get_node(ISD::LRint, EVT::I32, &[sin]);
+    dag.set_root(rint);
+    let mut calls = Calls::default();
+    DagLegalizer::new(&mut dag, &tli, &mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("lrint", 1, EVT::I32), ("sin", 1, f64), ("fmod", 2, f64)]);
 }

@@ -91,3 +91,60 @@ fn a_declaration_keeps_the_dbg_attachment_clang_puts_after_declare() {
     let again = parse::module(&once).expect("what is printed parses");
     assert_eq!(print::module(&again), once);
 }
+
+const ARGLIST: &str = include_str!("clang/arglist.ll");
+
+/// clang -O2 -g writes `#dbg_value(!DIArgList(i32 %a, i32 %b), !var,
+/// !DIExpression(DW_OP_LLVM_arg, 0, ...))` for a variable that is a sum of
+/// values. The parser stopped at it ("expected a type, found DIArgList") and
+/// ten of the benchmark programs could not be built with `-g` at all.
+#[test]
+fn a_debug_value_of_an_argument_list_parses_keeps_its_values_and_prints_back() {
+    let module = parse::module(ARGLIST).expect("the argument list parses");
+    let function = module
+        .functions()
+        .map(|(.., function)| function)
+        .find(|function| function.debug_records().iter().any(|one| matches!(one.what, llrm_mir::DebugWhat::Args(_))))
+        .expect("a function with a variadic record");
+    let record = function
+        .debug_records()
+        .iter()
+        .find(|one| matches!(one.what, llrm_mir::DebugWhat::Args(_)))
+        .expect("the record");
+    let llrm_mir::DebugWhat::Args(list) = record.what else { unreachable!() };
+    assert_eq!(function.debug_args(list).len(), 3);
+    let again = parse::module(&print::module(&module)).expect("what is printed parses");
+    let kept = |module: &llrm_mir::module::Module| -> usize {
+        module
+            .functions()
+            .flat_map(|(.., function)| {
+                function.debug_records().iter().map(|one| matches!(one.what, llrm_mir::DebugWhat::Args(_)))
+            })
+            .filter(|one| *one)
+            .count()
+    };
+    assert_eq!((kept(&module), kept(&again)), (1, 1));
+}
+
+/// clang's assignment tracking: `#dbg_assign` records and `!DIAssignID`
+/// attachments. The parser stopped at the first record, so every `-O2 -g`
+/// file clang wrote without `-fexperimental-assignment-tracking=disabled`
+/// (12 of 70 bench programs) was refused.
+#[test]
+fn test_dbg_assign_records_parse_print_and_parse_again() {
+    let module = parse::module(include_str!("clang/assign.ll")).expect("assignment tracking parses");
+    let (_, function) =
+        module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).map(|(i, _, f)| (i, f)).unwrap();
+    let assigns = function
+        .debug_records()
+        .iter()
+        .filter(|one| matches!(one.what, llrm_mir::module::DebugWhat::Assign { .. }))
+        .count();
+    assert_eq!(assigns, 2);
+    let text = print::module(&module);
+    assert_eq!(text.matches("#dbg_assign").count(), 2, "{text}");
+    assert_eq!(text.matches(", !DIAssignID !").count(), 2, "two attachments: {text}");
+    assert_eq!(text.matches("= distinct !DIAssignID()").count(), 2, "{text}");
+    let again = parse::module(&text).expect("the printed form parses");
+    assert_eq!(print::module(&again), text);
+}

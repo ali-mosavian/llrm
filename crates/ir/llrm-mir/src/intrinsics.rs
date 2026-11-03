@@ -89,6 +89,9 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
+    /// `llvm.llrint`: `LRint` with a `long long` result, which a target
+    /// without the instruction calls `llrint` for.
+    LLRint,
     MemSet,
     /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
     /// as the third says and as wide as the second, each become the second.
@@ -102,6 +105,15 @@ pub enum Intrinsic {
     MemMove,
     LifetimeStart,
     LifetimeEnd,
+    /// `llvm.invariant.start`: from here the memory its second argument
+    /// reaches, as far as the constant first one says (-1: the whole object),
+    /// is never written, until the `invariant.end` of its result or the end of
+    /// the program. Returns the pointer-typed scope that ends it. A pass may
+    /// use it and no code runs it.
+    InvariantStart,
+    /// `llvm.invariant.end`: ends the scope its first argument, an
+    /// `invariant.start`'s result, began, over the same size and memory.
+    InvariantEnd,
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
@@ -375,6 +387,8 @@ enum Slot {
     /// `{ T, i1 }` of the nth overloaded type.
     WithFlag(usize),
     Int(u32),
+    /// A pointer in address space 0, whatever the overload is.
+    Ptr,
     Void,
 }
 
@@ -499,7 +513,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 73] = [
+const TABLE: [Spec; 76] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -573,6 +587,14 @@ const TABLE: [Spec; 73] = [
     Spec {
         name: "llvm.lrint",
         intrinsic: Intrinsic::LRint,
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.llrint",
+        intrinsic: Intrinsic::LLRint,
         overloads: &[Kind::Int, Kind::Float],
         returns: Slot::Any(0),
         parameters: &[Slot::Any(1)],
@@ -683,6 +705,24 @@ const TABLE: [Spec; 73] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         own: Some(Own { attrs: LIFETIME_ATTRS, memory: &[(Some("argmem"), "write")], parameters: LIFETIME_PARAMETERS }),
+    },
+    // `Intrinsics.td` states both: the size is `immarg`, the scope result and
+    // argument are `ptr` whatever the overloaded pointer is.
+    Spec {
+        name: "llvm.invariant.start",
+        intrinsic: Intrinsic::InvariantStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Ptr,
+        parameters: &[Slot::Int(64), Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.invariant.end",
+        intrinsic: Intrinsic::InvariantEnd,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Ptr, Slot::Int(64), Slot::Any(0)],
+        own: None,
     },
     Spec {
         name: "llrm.ia16.in",
@@ -1004,6 +1044,7 @@ impl Intrinsic {
                     _ => false,
                 },
                 Slot::Int(bits) => types.int_bits(ty) == Some(bits),
+                Slot::Ptr => matches!(types.get(ty), Type::Pointer(0)),
                 Slot::Void => types.is_void(ty),
             }
         };
