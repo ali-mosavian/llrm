@@ -50,14 +50,17 @@ impl Level {
 
     fn mid_end(self) -> llrm_transforms::pipeline::Options {
         use llrm_transforms::pipeline::Options as MidEnd;
-        match self {
+        // `SelectionDAGBuilder::visitSwitch` lowers the switches (`br_table`);
+        // the mid-end's `switchlower` would leave isel a compare tree.
+        let options = match self {
             Self::O0 => MidEnd::none(),
             Self::O1 => MidEnd::basic(),
             Self::O2 => MidEnd::default(),
             Self::O3 => MidEnd::speed(),
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
-        }
+        };
+        MidEnd { lower_switches: false, ..options }
     }
 }
 
@@ -70,7 +73,10 @@ fn optimized(
     let machine: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(crate::machine::WasmMachine);
     let mut program = llrm_mir::program::Program::new(vec![module], machine)?;
     let options = MidEnd { library: Vec::new(), ..level.mid_end() };
-    llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
+    // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
+    // DIR.
+    let dump = std::env::var_os("LLRM_WASM_DUMP").map(std::path::PathBuf::from);
+    llrm_transforms::pipeline::applied(&mut program, &Applied { options, dump, ..Applied::default() })?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = program.modules.remove(0);
     // `LLRM_WASM_IR=1`: the module the backend gets, on standard error.

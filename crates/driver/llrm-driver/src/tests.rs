@@ -2277,6 +2277,47 @@ fn a_dense_switch_at_m64_is_a_read_only_table_of_pc_relative_entries() {
     }
 }
 
+/// A dense switch at m64 without the "PIC Level" flag (`-fno-pic`) is the pin's
+/// static table: a pointer per case, `R_X86_64_64` against the block, jumped
+/// through as `jmp *table(,%rax,8)`. Ours was always the PC-relative table of
+/// 4-byte offsets, which only a PIE needs.
+#[test]
+fn a_dense_switch_at_m64_without_the_pic_level_flag_is_a_table_of_pointers() {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text += "d:\n  ret void\n}\n!llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    let table = object.sections.iter().find(|one| one.role == llrm_object::Role::ROData).expect("a read-only section");
+    assert_eq!(table.image.len(), 8 * 8);
+    assert!(
+        table.relocs.len() == 8
+            && table.relocs.iter().all(|one| !one.pc_rel && one.kind == llrm_object::FixupKind::DATA_8),
+        "{:?}",
+        table.relocs
+    );
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("*8]"), "{listing}");
+}
+
 /// The same table through the Mach-O and COFF writers: each takes it (the
 /// entries are `S + A - P` against the code, as in ELF), and COFF's fields are
 /// the `slot + 4 - table` its `REL32` adds the code's address to.
@@ -2388,4 +2429,87 @@ fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
         let line = listing.lines().map(str::trim).find(|line| line.starts_with(jump)).expect(&listing);
         assert!(line.ends_with(tail), "{mode}: the jump names no index: {line}\n{listing}");
     }
+}
+
+/// A function whose `{` is on the line after its name: the pin's first row is
+/// `scopeLine` (2), then the first statement (3) where the body starts. Ours
+/// began at the first statement, so the line table had no row for the `{`.
+#[test]
+fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O0", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_scope_line_m32.ll"),
+        );
+        let rows: Vec<(usize, u32)> = info.lines.iter().map(|row| (row.offset, row.line)).collect();
+        let body = info.functions[0].body.expect("a body").0;
+        assert_eq!(rows[0], (0, 2), "{isel}: {rows:?}");
+        assert_eq!(rows[1], (body, 3), "{isel}: {rows:?}");
+    }
+}
+
+/// An instruction with no place at the top of a block is line 0 in the pin,
+/// and not a statement; ours left the place of the block before it on every
+/// instruction, so a loop's `-O2` table had no line-0 row at all.
+#[test]
+fn a_block_that_starts_with_no_place_has_a_line_0_row_that_is_not_a_statement() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O2", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_phi_m32_o2.ll"),
+        );
+        let zero: Vec<usize> = info.lines.iter().filter(|row| row.line == 0).map(|row| row.offset).collect();
+        assert!(!zero.is_empty(), "{isel}: {:?}", info.lines);
+        assert!(zero.iter().all(|&at| info.not_stmt.contains(&(0, at))), "{isel}: {:?}", info.not_stmt);
+    }
+}
+
+/// The debug information of `text` (function `f`) at m32.
+fn debug_info(
+    arguments: &[&str],
+    text: &str,
+) -> llrm_debug::Info {
+    let (built, _) = compiled(&flags(arguments), text, "f").unwrap();
+    llrm_codegen::backend::objbuild::built_for(
+        &built,
+        "phi.c",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::Elf,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+    .debug
+    .expect("debug information")
+}
+
+/// A row on the line of the row before it is not a statement (the pin: a
+/// statement is a line change). Ours marked every row of `a * 2 + a` a
+/// statement, so a debugger stopped on it once per column.
+#[test]
+fn a_row_on_the_same_line_as_the_row_before_is_not_a_statement() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O0", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_same_line_m32.ll"),
+        );
+        let rows: Vec<(usize, u32)> = info.lines.iter().map(|row| (row.offset, row.line)).collect();
+        assert!(rows.windows(2).any(|pair| pair[0].1 == pair[1].1), "premise: two rows on a line: {rows:?}");
+        for pair in rows.windows(2) {
+            let stmt = !info.not_stmt.contains(&(0, pair[1].0));
+            assert_eq!(stmt, pair[0].1 != pair[1].1, "{isel}: {rows:?} not_stmt {:?}", info.not_stmt);
+        }
+    }
+}
+
+/// The copy that puts a call's argument in its register is of the call's line
+/// (the pin's `COPY` has the call's `DebugLoc`). Ours had none, so every case
+/// block of a switch began with a line-0 row: 5 of them in 8 cases.
+#[test]
+fn the_argument_move_of_a_switch_case_is_of_the_calls_line() {
+    let info = debug_info(
+        &["-m32", "-O2", "-g", "-fobject-format=elf", "--isel=dag"],
+        include_str!("../tests/data/debug_switch_args_m32_o2.ll"),
+    );
+    let zero = info.lines.iter().filter(|row| row.line == 0).count();
+    assert!(zero <= 2, "{zero} line-0 rows: {:?}", info.lines);
 }

@@ -292,10 +292,7 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.as_deref().is_some_and(|tti| {
-                                    size != crate::inlinecost::CallerSize::Speed || tti.speed_inline_by_code_size()
-                                }))
-                                .then_some(&mut trials),
+                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed).then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
@@ -599,7 +596,7 @@ impl ProgramPass for Walk {
 /// simplifier has merged them, 188 clocks, and 185482 copied before), the
 /// calls it makes of itself are fewer than one per call (below), or the body
 /// is sized for bytes (gcc does not inline recursively at -Os).
-fn self_calls(
+pub(crate) fn self_calls(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     id: GlobalId,
@@ -855,7 +852,7 @@ const TRIAL_CALLER: usize = 300;
 /// carrying its operand-size prefix, a divide by a constant its multiply-high
 /// sequence. The `CodeSize` units of the cost model count instructions of
 /// the pin's x86, not bytes of a 16-bit encoding.
-fn function_bytes(
+pub(crate) fn function_bytes(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     costs: &llrm_mir::target::OperationCosts,
