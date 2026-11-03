@@ -91,13 +91,14 @@ pub mod opcode {
     pub const SUB8i: u16 = 404;
     pub const SUB8m: u16 = 405;
     pub const SUB8r: u16 = 406;
-    pub const UMUL8X8: u16 = 407;
-    pub const XOR16: u16 = 408;
-    pub const XOR16i: u16 = 409;
-    pub const XOR8i: u16 = 410;
-    pub const XOR8m: u16 = 411;
-    pub const XOR8r: u16 = 412;
-    pub const ZEXT8: u16 = 413;
+    pub const SUBZX8: u16 = 407;
+    pub const UMUL8X8: u16 = 408;
+    pub const XOR16: u16 = 409;
+    pub const XOR16i: u16 = 410;
+    pub const XOR8i: u16 = 411;
+    pub const XOR8m: u16 = 412;
+    pub const XOR8r: u16 = 413;
+    pub const ZEXT8: u16 = 414;
 }
 
 pub mod reg {

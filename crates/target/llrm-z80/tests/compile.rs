@@ -501,6 +501,18 @@ fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
     assert_eq!(kinds, [Kind::Op("XOR8r"), Kind::Op("PACK")], "{kinds:?}");
 }
 
+/// `*a - *b` of two bytes widened to int went `ld l, a; ld h, #0; ld c, d;
+/// ld b, #0; or a, a; sbc hl, bc; ex de, hl`: 11 B and 45 T for what is a byte
+/// subtraction and its borrow (`sub a, d; ld e, a; sbc a, a; ld d, a`). scmp lost
+/// to SDCC on bytes, clocks and instructions with it.
+#[test]
+fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borrow() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @f(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %d = sub i16 %x, %y\n  ret i16 %d\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("sbc a, a") && !out.contains("sbc hl"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

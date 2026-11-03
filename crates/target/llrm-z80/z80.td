@@ -118,6 +118,12 @@ let Predicates = [HasZ180], Defs = [F] in
                         [(set i16:$d, (mul (zext i8:$a), (zext i8:$b)))]>;
 
 
+// The difference of two zero-extended bytes: the byte subtraction, then the borrow as the high byte
+// (`sub a, b; ld lo, a; sbc a, a; ld hi, a`). strcmp's `*a - *b` and every absolute difference of bytes.
+let Defs = [F, A] in
+  def SUBZX8 : Z80Inst<(outs GR16:$d), (ins ACC:$a, GR8:$b), "subzx $d, $a, $b",
+                       [(set i16:$d, (sub (zext i8:$a), (zext i8:$b)))]>;
+
 // Word logic is the two bytes' ops, expanded when emitted (the 6502's OR16 is the same); the join of two bytes
 // into a pair, `lo | (hi << 8)`, is the more specific pattern below and wins.
 multiclass Logic16<string n, SDPatternOperator op> {

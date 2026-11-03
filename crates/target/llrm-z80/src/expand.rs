@@ -311,6 +311,15 @@ impl Printer<'_> {
                 self.push("sbc a, a");
                 self.push(format!("ld {}, a", name(dh)));
             }
+            "SUBZX8" => {
+                // the subtraction's low byte, then its borrow as the high byte
+                let (pair, from) = (self.register(inst, 0)?, self.source(inst, 2)?);
+                let (dl, dh) = lanes(pair)?;
+                self.push(format!("sub a, {from}"));
+                self.push(format!("ld {}, a", name(dl)));
+                self.push("sbc a, a");
+                self.push(format!("ld {}, a", name(dh)));
+            }
             "ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" => {
                 let mnemonic = op[..op.len() - 2].to_lowercase();
                 let source = self.source(inst, 2)?;
