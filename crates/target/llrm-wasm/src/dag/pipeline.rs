@@ -138,6 +138,10 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    fn rebuild_brcond_condition(&self) -> bool {
+        true
+    }
+
     fn merge_stores_after_legalization(
         &self,
         _mem: EVT,
@@ -232,7 +236,13 @@ pub fn select_block(
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
+    if llrm_codegen::support::env_var("LLRM_DAGDUMP0").is_some() {
+        eprintln!("BEFORE\n{}", dag.dump());
+    }
     combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, optimize);
+    if llrm_codegen::support::env_var("LLRM_DAGDUMP0").is_some() {
+        eprintln!("AFTER1\n{}", dag.dump());
+    }
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
         eprintln!("{}", dag.dump());

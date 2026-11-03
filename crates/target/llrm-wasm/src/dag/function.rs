@@ -7,6 +7,7 @@ use llrm_codegen::backend::isel::Convention;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig, MemInfo, SelectionDAG};
@@ -241,7 +242,26 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     for &block in function.layout() {
+        if optimize {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values
+            // do once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| visited.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| (bits <= 64 && bits != 0).then(|| if bits <= 32 { 32 } else { 64 });
+                    live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+            visited.insert(block);
+        }
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);

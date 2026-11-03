@@ -72,7 +72,15 @@ fn optimized(
     use llrm_transforms::pipeline::{Applied, Options as MidEnd};
     let machine: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(crate::machine::WasmMachine);
     let mut program = llrm_mir::program::Program::new(vec![module], machine)?;
-    let options = MidEnd { library: Vec::new(), ..level.mid_end() };
+    // `LLRM_WASM_BACKEND_ONLY=1`: no mid-end, so an IR that already went
+    // through it (`LLRM_WASM_IR`) is compared with the pin's `llc` as it
+    // stands. A second run is no fixed point (it inlined `gcd` in recgcd
+    // -O1).
+    let options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
+        MidEnd::none()
+    } else {
+        MidEnd { library: Vec::new(), ..level.mid_end() }
+    };
     // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
     // DIR.
     let dump = std::env::var_os("LLRM_WASM_DUMP").map(std::path::PathBuf::from);
