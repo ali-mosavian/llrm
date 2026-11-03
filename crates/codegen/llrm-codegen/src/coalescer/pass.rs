@@ -172,6 +172,7 @@ impl Coalescer {
                 pins,
                 size: self.size,
                 keep_pinned: false,
+                joins_global_copies: true,
                 aliases: Default::default(),
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),

@@ -77,6 +77,7 @@ pub fn program(text: &str) -> Result<Program, String> {
         kept.push('\n');
     }
     let mut module = llrm_mir::parse::module(&kept).map_err(|error| error.to_string())?;
+    module.refuse_aliases("m68k")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let expected = crate::kernels::DATALAYOUT;
     match module.datalayout.as_deref() {

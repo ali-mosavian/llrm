@@ -91,7 +91,7 @@ pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
                     apply(&mut state, *cfi);
                     row(offset, &state, &mut out);
                 }
-                Inst::Mark(_) => {}
+                Inst::Mark(_) | Inst::Label(_) => {}
                 _ => offset += 4,
             }
         }

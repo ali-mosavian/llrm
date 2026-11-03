@@ -760,6 +760,40 @@ b4:
     assert_eq!(body.matches("urem").count() + body.matches("udiv").count(), 1, "{after}");
 }
 
+/// `s += (i * 97) % 211` stays a remainder where the pass expands it: the
+/// pin's `SCEVExpander::visitAddExpr` recognizes the canonical form of an
+/// unsimplified `urem` (`matchURem`) and emits `urem`. Ours expanded `x - (x /
+/// c) * c`: a `div_u`, a `mul` and an `add` where one `rem_u` is (wasm recsum,
+/// 42032 instructions where the pin's llc runs 30030).
+#[test]
+fn a_urem_the_pass_expands_is_a_urem() {
+    let text = "define i32 @f(i32 %n) {
+b1:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %pre, label %b3
+pre:
+  br label %b4
+exit:
+  %last = phi i32 [ %s2, %b4 ]
+  br label %b3
+b3:
+  %r = phi i32 [ 0, %b1 ], [ %last, %exit ]
+  ret i32 %r
+b4:
+  %s = phi i32 [ %s2, %b4 ], [ 0, %pre ]
+  %i = phi i32 [ %i2, %b4 ], [ 0, %pre ]
+  %m = mul nuw nsw i32 %i, 97
+  %q = urem i32 %m, 211
+  %s2 = add nuw nsw i32 %q, %s
+  %i2 = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i2, %n
+  br i1 %done, label %exit, label %b4
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[5], &[300]]);
+    assert!(after.contains("urem") && !after.contains("udiv"), "{after}");
+}
+
 /// The exit value was expanded at the end of the exit block, after the store
 /// that reads it: addrm.bas -Os m16 died in live ranges ("a unique value").
 #[test]

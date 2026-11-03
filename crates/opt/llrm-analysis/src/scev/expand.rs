@@ -719,7 +719,7 @@ impl Run<'_> {
         s: Scev,
         ops: &[Use],
     ) -> Operand {
-        // Recognize the canonical representation of an unsimplified urem.
+        // Recognize the canonical representation of an unsimplifed urem.
         let urem = {
             let cx = cx!(self);
             self.se.match_urem(&cx, s)

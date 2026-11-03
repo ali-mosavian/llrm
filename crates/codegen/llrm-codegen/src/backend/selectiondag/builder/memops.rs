@@ -147,6 +147,9 @@ impl Builder<'_> {
         // The SysV `va_list` is a four-field record over a register save area
         // (`LowerVASTART`), not the stack pointer the 32-bit one is; the entry
         // block's lowering of the arguments made the area.
+        if let Some(area) = self.info.variadic_area.clone() {
+            return self.visit_va_in_area(instruction, intrinsic, &area);
+        }
         if self.target.dag.pointer == EVT::I64
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
@@ -176,6 +179,70 @@ impl Builder<'_> {
         };
         let node = self.dag.get_node(code, EVT::OTHER, &ops);
         self.dag.set_root(node);
+        Ok(())
+    }
+
+    /// `LowerVASTART` of a target whose `va_list` is words over the frame: each
+    /// word stored to the list. `VAEND` is its chain, `VACOPY` a copy of the
+    /// list's 8-byte words.
+    fn visit_va_in_area(
+        &mut self,
+        instruction: &Instruction,
+        intrinsic: &Intrinsic,
+        area: &super::super::target_calling::VariadicArea,
+    ) -> Result<(), Refused> {
+        use super::super::target_calling::VaWord;
+        let pointer = self.target.dag.pointer;
+        let memory = |mem_vt: EVT| MemInfo {
+            mem_vt,
+            align: mem_vt.size_in_bits() / 8,
+            volatile: false,
+            base: MemBase::Unknown,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        match intrinsic {
+            Intrinsic::VaStart => {
+                let list = self.get_value(instruction.operands[0])?;
+                for &(offset, bytes, word) in &area.words {
+                    let vt = if bytes == 8 { EVT::I64 } else { EVT::I32 };
+                    let value = match word {
+                        VaWord::Frame { index, offset } => {
+                            let base = self.dag.get_frame_index(pointer, index);
+                            if offset == 0 {
+                                base
+                            } else {
+                                let step = self.dag.get_constant(offset as u64 as u128, pointer);
+                                self.dag.get_node(ISD::Add, pointer, &[base, step])
+                            }
+                        }
+                        VaWord::Constant(value) => {
+                            self.dag.get_constant(value as u64 as u128 & ((1u128 << (bytes * 8)) - 1), vt)
+                        }
+                    };
+                    let step = self.dag.get_constant(u128::from(offset), pointer);
+                    let address = self.dag.get_node(ISD::Add, pointer, &[list, step]);
+                    let root = self.root();
+                    let store = self.dag.get_store(root, value, address, memory(vt));
+                    self.dag.set_root(store);
+                }
+            }
+            Intrinsic::VaCopy => {
+                let destination = self.get_value(instruction.operands[0])?;
+                let source = self.get_value(instruction.operands[1])?;
+                for offset in (0..area.size).step_by(8) {
+                    let step = self.dag.get_constant(u128::from(offset), pointer);
+                    let from = self.dag.get_node(ISD::Add, pointer, &[source, step]);
+                    let to = self.dag.get_node(ISD::Add, pointer, &[destination, step]);
+                    let root = self.root();
+                    let load = self.dag.get_load(EVT::I64, root, from, memory(EVT::I64));
+                    let store = self.dag.get_store(SDValue { node: load.node, res: 1 }, load, to, memory(EVT::I64));
+                    self.dag.set_root(store);
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -515,35 +582,46 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&stores)))
     }
 
-    /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
-    /// stores take more bytes than a `rep stosb` fill is the fill, unless the
-    /// fill's extra clocks outweigh the bytes it saves (`SizeTrade`). The pin
-    /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
-    /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
-    /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
-    /// hook on the target description.
+    /// DEVIATE SD223 (real mode): a constant memset whose stores take more
+    /// bytes than a `rep stosb` fill is the fill. The pin counts stores
+    /// (`MaxStoresPerMemset`); in real mode each dword store carries a `66`
+    /// prefix and the fill costs `FILL_BYTES`. Tuned for size the bytes
+    /// decide (clocks never do); at speed the fill is taken where the bytes
+    /// it saves, at the target's `milliclocks_per_byte`, pay for the clocks it
+    /// adds. Mirrors the old selector's `stored_bytes` rule. Owner w12. Exit:
+    /// a store-cost hook on the target description.
     fn fill_is_smaller(
         &self,
         length: u64,
         opt_size: bool,
+        zero: bool,
     ) -> bool {
-        if !opt_size || self.target.dag.pointer.size_in_bits() != 16 {
+        if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }
         let dwords = length / 4;
         let words = u64::from(length % 4 >= 2);
         let bytes = u64::from(length % 2 == 1);
-        let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
-        let stored = setup + dwords * each + words * 5 + bytes * 4;
+        // The value in a register (`xor ecx, ecx` 3 B, `mov ecx, imm32` 6; each
+        // store 4, 3, 3 B) or as immediates (`mov dword ptr [m], imm32` 8, a
+        // word 5, a byte 4): whichever is fewer. A 10-byte clear is 14 bytes
+        // of stores against 16 of fill (the object's, measured), a 7-byte one
+        // 13.
+        let setup = if zero { 3 } else { 6 };
+        let register = setup + dwords * 4 + words * 3 + bytes * 3;
+        let immediates = dwords * 8 + words * 5 + bytes * 4;
+        let stored = register.min(immediates);
         if stored <= FILL_BYTES {
             return false;
         }
-        let Some(trade) = self.target.size_trade else {
+        if opt_size {
             return true;
+        }
+        let Some(trade) = self.target.size_trade else {
+            return false;
         };
         let stores = (dwords * (trade.store + trade.prefix) as u64 + (words + bytes) * trade.store as u64) as i64;
         let fill = trade.fill + length as i64 * trade.fill_cell;
-        // Tuning constant fitted to sc.c, weapons, mdl and lru, not derived.
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
@@ -921,7 +999,7 @@ impl Builder<'_> {
                     self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
+                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
                     _ => None,
@@ -997,7 +1075,14 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     None => None,
                 };
-                match inline.or_else(|| calling.emit_memcpy(&mut self.dag, root, dst, other, size)) {
+                let hooked = |dag: &mut _| {
+                    if copy {
+                        calling.emit_memcpy(dag, root, dst, other, size)
+                    } else {
+                        calling.emit_memmove(dag, root, dst, other, size)
+                    }
+                };
+                match inline.or_else(|| hooked(&mut self.dag)) {
                     Some(chain) => chain,
                     None => {
                         self.hooked_mem_libcall(if copy { "memcpy" } else { "memmove" }, root, [dst, other, size])?

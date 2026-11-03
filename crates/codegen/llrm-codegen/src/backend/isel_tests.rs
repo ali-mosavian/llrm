@@ -115,6 +115,7 @@ fn listing_float_store(
         false,
         true,
         false,
+        true,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
@@ -5901,6 +5902,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
             r#type: int,
             parameters,
             all_calls: false,
+            scope_line: None,
         },
     );
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.

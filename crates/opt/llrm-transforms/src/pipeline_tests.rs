@@ -2800,3 +2800,14 @@ fn cgpaddr_is_left_out_by_its_option_and_not_by_the_environment() {
     let options = pipeline::Options { cgpaddr: false, ..pipeline::Options::default() };
     assert!(!options.wanted("cgpaddr"));
 }
+
+/// The target's price of a code byte at speed counts at -O2 and -O3 only: at
+/// -O1 and -Os every metric is gated by itself. m32's derived price made the
+/// pattern fill at -O1 take lru 127 -> 148 clocks for 32 B (a net loss at the
+/// price).
+#[test]
+fn the_byte_price_at_speed_counts_at_o2_and_o3_only() {
+    use pipeline::Options;
+    assert!(Options::standard().prices_bytes() && Options::aggressive().prices_bytes());
+    assert!(!Options::basic().prices_bytes() && !Options::size().prices_bytes());
+}

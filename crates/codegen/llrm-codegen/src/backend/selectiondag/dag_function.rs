@@ -747,6 +747,7 @@ fn div_prices(
         extend: costs.extend,
         multiply: costs.multiply,
         multiply_long: costs.multiply_long,
+        multiply_high: costs.multiply_high,
         divide: costs.divide,
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
@@ -757,7 +758,7 @@ fn div_prices(
 /// The clock prices a size-only pick weighs against bytes (m16: the fill it
 /// prices is real mode's).
 fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
-    let rate = cpu.size_milliclocks_per_byte();
+    let rate = cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte());
     if rate == 0 {
         return None;
     }
@@ -1064,11 +1065,7 @@ fn selected_in(
     // SD446: a target that trades bytes for clocks at speed prices a constant
     // multiply by its block's frequency (the IR one: no machine block exists
     // before selection).
-    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks {
-        0
-    } else {
-        cpu.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
-    };
+    let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
     let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
     let frequencies = (mul_rate > 0 && !mul_by_clocks).then(|| {

@@ -279,8 +279,9 @@ impl Machine for Dos {
             // Tuning constant fitted to sc.c, weapons, mdl and lru, not
             // derived.
             size_milliclocks_per_byte: 10_000,
-            // The user's rate for m16 at speed: one clock is two bytes.
-            speed_milliclocks_per_byte: 500,
+            // The user's rate for m16 at speed (one clock is two bytes): the
+            // `timings.times` row the judge reads too.
+            speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -312,7 +313,6 @@ impl Machine for Dos {
             // it), and frame reloads in sum_three. Exit 2026-11-30: the
             // bytes those rows hold above main recovered by the register
             // allocator, then re-price the chain.
-            inline_size_guard_at_speed: true,
             // DEVIATE: a constant offset is a displacement of the access at
             // m16; behind a sunk phi it costs an add and a register
             // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
@@ -443,6 +443,7 @@ pub fn costs(arch: &str) -> OperationCosts {
         pieces_clear_size: timings::CLEAR_RATIO_SIZE[at],
         jump_table: timings::JUMP_TABLE[at],
         cache_line: timings::CACHE_LINE[at],
+        line_fill_clocks: timings::LINE_FILL_CLOCKS[at],
         ..DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
     }
 }

@@ -215,7 +215,9 @@ impl Builder<'_> {
         if self.has_opt_size() || self.target.tuning.split_merged_conditions {
             return false;
         }
-        let Some(tti) = self.target.tti.clone() else { return true };
+        // `TargetLoweringBase::getJumpConditionMergingParams`: {-1, -1, -1},
+        // which always splits.
+        let Some(tti) = self.target.tti.clone() else { return false };
         let tti = tti.0;
         let shared = |logic: Logic| match logic {
             Logic::And => llrm_mir::jumpmerge::Logic::And,
@@ -690,10 +692,13 @@ mod tests {
         assert_eq!(split_blocks_with(CHEAP, true, knob), 1, "the knob splits it");
     }
 
-    /// Without a cost model the conditions stay together, as before.
+    /// Without a cost model the target says nothing and the pin's default
+    /// `getJumpConditionMergingParams` ({-1, -1, -1}) splits: `br (select c, d,
+    /// false)` was one branch plus a `setcc` pair on wasm, two branches at
+    /// the pin.
     #[test]
-    fn without_a_cost_model_conditions_stay_together() {
-        assert_eq!(split_blocks(DEEP, false), 0);
+    fn without_a_cost_model_conditions_split_as_the_pins_default() {
+        assert_eq!(split_blocks(DEEP, false), 1);
     }
 
     /// An `or` of two `==` splits whatever it costs (no CCMP here), and a
