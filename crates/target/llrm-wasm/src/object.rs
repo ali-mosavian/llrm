@@ -320,6 +320,8 @@ pub struct Encoded {
     /// The function has a personality: the pin keeps the indirect function
     /// table alive for it.
     pub personality: bool,
+    /// The body offset and source line of each instruction that has one.
+    pub lines: Vec<(usize, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -381,7 +383,11 @@ pub fn encode_function(f: &Function) -> Encoded {
         body.push(val_type(ty));
     }
     let mut relocs = Vec::new();
+    let mut lines = Vec::new();
     for inst in f.blocks.iter().flatten() {
+        if inst.line != 0 {
+            lines.push((body.len(), inst.line));
+        }
         encode_instruction(&mut body, inst, &f.symbols, &f.signatures, &mut relocs);
     }
     Encoded {
@@ -395,6 +401,7 @@ pub fn encode_function(f: &Function) -> Encoded {
         binding: f.binding,
         hidden: f.hidden,
         personality: f.personality,
+        lines,
     }
 }
 
