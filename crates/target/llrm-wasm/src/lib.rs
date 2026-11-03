@@ -11,6 +11,7 @@ pub mod custom_inserter;
 pub mod dag;
 pub mod dagisel;
 pub mod dead_mi;
+pub mod debug;
 pub mod driver;
 pub mod eh_reentry;
 pub mod exception_info;
@@ -40,6 +41,7 @@ pub mod reg_stackify;
 pub mod set_p2align;
 pub mod sort_region;
 pub mod spike_coalesce;
+pub mod stack_coloring;
 pub mod tail_duplicate;
 pub mod unreachable_blocks;
 

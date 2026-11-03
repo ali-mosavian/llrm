@@ -390,6 +390,22 @@ pub fn compiled_dumping(
 ) -> Result<(masm::Module, llrm_target::object::Format), String> {
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
+    // The system the module's triple names writes its own object format unless
+    // `-fobject-format=` says otherwise.
+    let system = bound
+        .target
+        .layout()
+        .platforms
+        .into_iter()
+        .find(|one| triple.as_deref().is_some_and(|stated| crate::same_system(&one.triple, stated)));
+    if let Some(why) = system.as_ref().and_then(|one| one.pending.as_ref()).filter(|_| !flags.allow_pending_abi) {
+        return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
+    }
+    let mut flags = flags.clone();
+    if let (None, Some(system)) = (flags.object_format, system) {
+        flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);
+    }
+    let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
     module.refuse_aliases("x86").map_err(|error| format!("{name}: {error}"))?;
     if llrm_codegen::support::debug::enabled("mir") {
@@ -651,7 +667,7 @@ mod options_tests {
     }
 }
 
-fn compile(
+pub(crate) fn compile(
     flags: &Flags,
     source: &Path,
     dump: Option<&Path>,
@@ -665,7 +681,7 @@ fn compile(
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
         let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format, objects)
+        let bytes = objbuild::written_in(&built, file, layout_of(flags, format), format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }
@@ -732,5 +748,18 @@ mod text_tests {
             "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
                 .replace("llvm.ia16", "llrm.ia16")
         );
+    }
+}
+
+/// One COMDAT per function where `-ffunction-sections` asks for it and the
+/// format has them (OMF); one segment for the module's code otherwise.
+fn layout_of(
+    flags: &Flags,
+    format: llrm_target::object::Format,
+) -> objbuild::CodeLayout {
+    if flags.function_sections && format == llrm_target::object::Format::Omf {
+        objbuild::CodeLayout::PerProcedure
+    } else {
+        objbuild::CodeLayout::OneSegment
     }
 }

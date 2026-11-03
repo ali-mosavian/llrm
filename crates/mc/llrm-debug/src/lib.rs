@@ -171,6 +171,9 @@ pub enum FrameBase {
     /// The code keeps none; a debugger finds the cell from the caller's frame,
     /// which call frame information gives at every address.
     Cfa { bias: i64, far_bias: i64 },
+    /// WebAssembly local `index`, which holds the frame address
+    /// (`DW_OP_WASM_location 0, index`).
+    WasmLocal(u32),
 }
 
 /// What a debug writer needs to know of the machine, so it reads no
@@ -497,6 +500,13 @@ pub enum Location {
     /// What the register held when the function was entered
     /// (`DW_OP_entry_value`), which is in no place now.
     EntryValue(String),
+    /// The value of WebAssembly local `index` (`DW_OP_WASM_location 0, index`,
+    /// `DW_OP_stack_value`).
+    WasmLocal(u32),
+    /// The value in WebAssembly operand-stack slot `index`
+    /// (`DW_OP_WASM_location 2, index`, `DW_OP_stack_value`): a stackified
+    /// value, which has no local.
+    WasmStack(u32),
     /// What the operations make of the arguments, which are in no place of
     /// their own: a register, a frame cell or a constant each, with the bytes
     /// of the value a cell holds, pushed by [`ExprOp::Arg`]. The value itself
@@ -611,6 +621,10 @@ pub struct Function {
     pub body: Option<(usize, usize)>,
     /// Called and returned from far.
     pub far: bool,
+    /// What its frame cells are measured from, where that is not the unit's
+    /// ([`Info::frame_base`]): WebAssembly's frame pointer is a local of its
+    /// own in each function.
+    pub frame_base: Option<FrameBase>,
     /// The module's own code, whose variables are the module's.
     pub module: bool,
     /// Parameters first, in order, then the locals.
@@ -677,6 +691,22 @@ pub struct CallSite {
     pub offset: usize,
     pub origin: Option<CallOrigin>,
     pub parameters: Vec<CallParameter>,
+}
+
+/// Whether `argument` asks a compiler driver for debug information: `-g` and
+/// the forms that name a format (`-gdwarf-5`, `-gcodeview`, `-gtd`), not `-g0`.
+pub fn is_debug_flag(argument: &str) -> bool {
+    argument.starts_with("-g") && argument != "-g0"
+}
+
+/// What a driver of a target with no debug writer says to `argument`, instead
+/// of calling it unrecognized: the flag is known, the target cannot do it.
+pub fn no_writer(
+    program: &str,
+    argument: &str,
+    target: &str,
+) -> String {
+    format!("{program}: {argument}: no debug writer for {target} yet")
 }
 
 pub use llrm_object::FrameRow;
@@ -868,5 +898,24 @@ mod writer_tests {
         let with = expanded(&object, Some(&Info::default()), &Marks).unwrap();
         let without = expanded(&object, None, &Marks).unwrap();
         assert_eq!((with.sections.len(), without.sections.len()), (1, 0));
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    /// A driver took `-gdwarf-5` and `-g` for unknown flags where it has no
+    /// writer ("unrecognized argument"), and `-g0` (which asks for nothing)
+    /// must not be refused.
+    #[test]
+    fn the_flags_that_ask_for_debug_information_are_known_and_g0_is_not_one() {
+        for flag in ["-g", "-gdwarf-5", "-gdwarf-2", "-gcodeview", "-gtd"] {
+            assert!(is_debug_flag(flag), "{flag}");
+        }
+        for flag in ["-g0", "-O2", "-S", "-o", "x.ll", "--isel=dag"] {
+            assert!(!is_debug_flag(flag), "{flag}");
+        }
+        assert_eq!(no_writer("llrm-x-llc", "-g", "x"), "llrm-x-llc: -g: no debug writer for x yet");
     }
 }

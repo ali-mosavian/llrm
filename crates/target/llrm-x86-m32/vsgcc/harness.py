@@ -258,7 +258,8 @@ def cost(ins, taken, first_rep, mem, multiplier=None, prefixes=0):
     """The 486's clocks of `ins`, each from the compiler's own `timings.times` (clocks.py), and `prefixes` operand- and address-size
     prefixes (clocks.prefixes of its bytes) at the table's clock each. A branch is `taken` or not; a string instruction is the
     `first_rep` of its repeat or one more; `multiplier` is the operand a MUL reads."""
-    return _form_clocks(ins, taken, first_rep, multiplier) + prefixes * clocks.PREFIX
+    # The prefix is decoded once: a repeated string instruction pays it with its first iteration, not each.
+    return _form_clocks(ins, taken, first_rep, multiplier) + (prefixes * clocks.PREFIX if first_rep else 0)
 
 
 def _form_clocks(ins, taken, first_rep, multiplier):
@@ -385,6 +386,13 @@ def built_abi():
     """The convention build.sh compiled llrm's side in, as it recorded it: a work directory of an earlier build says so too."""
     record = OUT / "abi"
     return record.read_text().strip() if record.exists() else "watcom"
+
+
+def built_ld():
+    """The long double width, 80 or 64 bits, build.sh compiled both sides at, as it recorded it (a directory of an earlier build has 8
+    bytes in llrm and 12 in gcc: the 64 of Watcom's side was beside the 80 of the reference)."""
+    record = OUT / "ld"
+    return int(record.read_text()) if record.exists() else 64
 
 
 def stub_digest():
@@ -569,7 +577,7 @@ def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":
