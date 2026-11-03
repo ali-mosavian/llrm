@@ -1376,9 +1376,11 @@ fn combine_cmov(
         let simpler = cond_code(dag, simpler);
         return Some(dag.get_node(x86isd::CMOV, vt, &[false_op, true_op, simpler, flags]));
     }
-    let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else { return None };
+    let (Some(mut true_c), Some(mut false_c)) = (dag.constant(true_op), dag.constant(false_op)) else {
+        return cmov_of_two_conditions(dag, vt, false_op, true_op, code, flags);
+    };
     if !vt.is_integer() {
-        return None;
+        return cmov_of_two_conditions(dag, vt, false_op, true_op, code, flags);
     }
     // The true value is the larger one.
     if true_c < false_c {
@@ -1414,6 +1416,62 @@ fn combine_cmov(
         return Some(result);
     }
     None
+}
+
+/// `checkBoolTestAndOrSetCCCombine`: `cond` is an `and` or `or` of two `setcc`s
+/// of one flags value (under a test against zero): their condition codes, the
+/// flags, and whether it is the `and`.
+fn and_or_of_setccs(
+    dag: &SelectionDAG,
+    cond: SDValue,
+) -> Option<(u128, u128, SDValue, bool)> {
+    let mut cond = cond;
+    if dag.opcode(cond) == x86isd::CMP {
+        if !dag.is_null_constant(dag.operand(cond, 1)) {
+            return None;
+        }
+        cond = dag.operand(cond, 0);
+    }
+    let is_and = match dag.opcode(cond) {
+        ISD::And | x86isd::AND => true,
+        ISD::Or | x86isd::OR => false,
+        _ => return None,
+    };
+    let (first, second) = (dag.operand(cond, 0), dag.operand(cond, 1));
+    if dag.opcode(first) != x86isd::SETCC
+        || dag.opcode(second) != x86isd::SETCC
+        || dag.operand(first, 1) != dag.operand(second, 1)
+    {
+        return None;
+    }
+    Some((dag.constant(dag.operand(first, 0))?, dag.constant(dag.operand(second, 0))?, dag.operand(first, 1), is_and))
+}
+
+/// `combineCMov`, `COND_NE` of an `and`/`or` of two `setcc`s (`a == b ? x : y`
+/// on floats: `cmovne; cmovp`): two conditional moves on the one flags value,
+/// not a `setcc` pair, a logical op and a test.
+fn cmov_of_two_conditions(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    false_op: SDValue,
+    true_op: SDValue,
+    code: u128,
+    flags: SDValue,
+) -> Option<SDValue> {
+    if code != cond::NE {
+        return None;
+    }
+    let (mut first, mut second, flags, is_and) = and_or_of_setccs(dag, flags)?;
+    let (mut false_op, mut true_op) = (false_op, true_op);
+    if is_and {
+        std::mem::swap(&mut false_op, &mut true_op);
+        first ^= 1;
+        second ^= 1;
+    }
+    let first = cond_code(dag, first);
+    let low = dag.get_node(x86isd::CMOV, vt, &[false_op, true_op, first, flags]);
+    let second = cond_code(dag, second);
+    Some(dag.get_node(x86isd::CMOV, vt, &[low, true_op, second, flags]))
 }
 
 /// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
