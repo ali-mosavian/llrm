@@ -26,6 +26,11 @@ fn ret() -> Inst {
     terminator("ret", true, None)
 }
 
+/// A return of its own, so two ways that end differently are not one tail.
+fn halt() -> Inst {
+    terminator("halt", true, None)
+}
+
 fn layout(blocks: Vec<Vec<Inst>>) -> MFunction<()> {
     let mut function = MFunction::new("f");
     for (id, insts) in blocks.into_iter().enumerate() {
@@ -78,7 +83,7 @@ fn a_branch_to_a_block_that_only_jumps_goes_past_it() {
 /// A jump to the block laid out next is dropped.
 #[test]
 fn a_jump_to_the_next_block_is_dropped() {
-    let mut function = layout(vec![vec![terminator("branch", false, Some(2)), jump(1)], vec![ret()], vec![ret()]]);
+    let mut function = layout(vec![vec![terminator("branch", false, Some(2)), jump(1)], vec![ret()], vec![halt()]]);
     assert!(branch_fold::<Two>(&mut function));
     assert_eq!(shape(&function)[0], (0, names(&["branch 2"])));
 }
@@ -96,7 +101,7 @@ fn a_conditional_branch_to_the_next_block_is_reversed() {
 /// A fixed layout is left alone.
 #[test]
 fn a_layout_with_nothing_to_fold_stays() {
-    let mut function = layout(vec![vec![terminator("branch", false, Some(2))], vec![ret()], vec![ret()]]);
+    let mut function = layout(vec![vec![terminator("branch", false, Some(2))], vec![ret()], vec![halt()]]);
     let before = shape(&function);
     assert!(!branch_fold::<Two>(&mut function));
     assert_eq!(shape(&function), before);
@@ -181,21 +186,21 @@ fn the_constant_both_ways_begin_with_runs_before_the_compare() {
         compare(0),
         [
             vec![load_constant(1, 65535), op("loop", vec![Operand::Use(v(1))]), ret()],
-            vec![load_constant(2, 65535), ret()],
+            vec![load_constant(2, 65535), halt()],
         ],
     );
     assert!(branch_fold_hoisting::<Two>(&mut function, &registers()));
     assert_eq!(first_block(&function), names(&["constant", "compare", "branch 2"]));
     assert_eq!(shape(&function)[1].1, names(&["loop", "ret"]));
-    assert_eq!(shape(&function)[2].1, names(&["ret"]));
-    assert!(!branch_fold::<Two>(&mut guard(compare(0), [vec![ret()], vec![ret()]])));
+    assert_eq!(shape(&function)[2].1, names(&["halt"]));
+    assert!(!branch_fold::<Two>(&mut guard(compare(0), [vec![ret()], vec![halt()]])));
 }
 
 /// A constant into the register the compare reads would change what it
 /// compares.
 #[test]
 fn an_instruction_that_writes_what_the_compare_reads_stays() {
-    let mut function = guard(compare(0), [vec![load_constant(0, 1), ret()], vec![load_constant(0, 1), ret()]]);
+    let mut function = guard(compare(0), [vec![load_constant(0, 1), ret()], vec![load_constant(0, 1), halt()]]);
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["compare", "branch 2"]));
 }
@@ -203,10 +208,10 @@ fn an_instruction_that_writes_what_the_compare_reads_stays() {
 /// Different registers or different values are not one instruction.
 #[test]
 fn instructions_that_differ_stay() {
-    let mut function = guard(compare(0), [vec![load_constant(1, 1), ret()], vec![load_constant(3, 1), ret()]]);
+    let mut function = guard(compare(0), [vec![load_constant(1, 1), ret()], vec![load_constant(3, 1), halt()]]);
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["compare", "branch 2"]));
-    let mut function = guard(compare(0), [vec![load_constant(1, 1), ret()], vec![load_constant(2, 2), ret()]]);
+    let mut function = guard(compare(0), [vec![load_constant(1, 1), ret()], vec![load_constant(2, 2), halt()]]);
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["compare", "branch 2"]));
 }
@@ -232,10 +237,10 @@ fn an_instruction_that_sets_flags_hoists_only_where_they_are_dead() {
     };
     let mut reads = op("reads", vec![]);
     reads.reads_flags = true;
-    let mut function = guard(compare(0), [vec![adds(1), ret()], vec![adds(2), ret()]]);
+    let mut function = guard(compare(0), [vec![adds(1), ret()], vec![adds(2), halt()]]);
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["add", "compare", "branch 2"]));
-    let mut function = guard(compare(0), [vec![adds(1), reads.clone(), ret()], vec![adds(2), ret()]]);
+    let mut function = guard(compare(0), [vec![adds(1), reads.clone(), ret()], vec![adds(2), halt()]]);
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["compare", "branch 2"]));
 }
@@ -249,7 +254,7 @@ fn a_copy_that_sets_flags_stays_below_the_branch_that_reads_them() {
     let copy = |to| Inst::new(Kind::Copy, vec![Operand::Def(v(to)), Operand::Use(v(0))]);
     let mut set = op("set", vec![Operand::Def(v(3))]);
     set.reads_flags = true;
-    let mut function = guard(compare(0), [vec![copy(1), ret()], vec![copy(2), ret()]]);
+    let mut function = guard(compare(0), [vec![copy(1), ret()], vec![copy(2), halt()]]);
     function.blocks[0].insts.insert(1, set);
     branch_fold_hoisting::<Two>(&mut function, &registers());
     assert_eq!(first_block(&function), names(&["compare", "set", "branch 2"]));

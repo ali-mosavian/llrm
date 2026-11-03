@@ -816,7 +816,8 @@ fn selected_in(
         let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
         TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
     };
-    // The soft-float routines are spelled as the C compiler spelled their definitions.
+    // The soft-float routines are spelled as the C compiler spelled their
+    // definitions.
     for (name, number, symbol) in libcalls {
         tli.set_libcall_symbol(name, symbol.clone(), *number);
     }

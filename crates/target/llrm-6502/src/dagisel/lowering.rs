@@ -214,7 +214,10 @@ impl Hooks for MosLowering {
         }
         let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
         let part_vt = if count > 1 { EVT::I16 } else { ret };
-        let ins = vec![In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any }; count as usize];
+        let ins = vec![
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any };
+            count as usize
+        ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();
         let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;

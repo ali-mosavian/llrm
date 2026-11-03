@@ -1032,7 +1032,10 @@ impl Builder<'_> {
             // No FPU: a float in registers arrives as the integer of its width.
             let soft = self.soft_float()
                 && declared.is_floating_point()
-                && matches!(self.convention.parameters.get(at), Some(Parameter::Registers(_)));
+                && matches!(
+                    self.convention.parameters.get(at),
+                    Some(Parameter::Registers(_))
+                );
             let vt = if soft { EVT::integer(declared.size_in_bits()) } else { declared };
             // the registers a convention names split a value as
             // `getNumRegisters` does

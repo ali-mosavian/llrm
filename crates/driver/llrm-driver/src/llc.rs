@@ -453,7 +453,8 @@ pub fn compiled_dumping(
         .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
         .unwrap_or(default);
     options.libcalls.extend(libm_calls(library, format.name()));
-    // The soft-float routines are C compiled under the program's own convention, not the Watcom library's.
+    // The soft-float routines are C compiled under the program's own
+    // convention, not the Watcom library's.
     options.libcalls.extend(soft_float_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
@@ -479,7 +480,8 @@ fn libm_calls(
 
 /// The soft-float routines, spelled as the C compiler spells a definition of
 /// them: what a function with no x87 calls for a float operation. The runtime
-/// (`runtime/compiler-rt`) is C, so its objects carry the convention's spelling.
+/// (`runtime/compiler-rt`) is C, so its objects carry the convention's
+/// spelling.
 fn soft_float_calls(
     default: &llrm_target::calling::Convention,
     format: &str,

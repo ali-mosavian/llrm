@@ -1043,8 +1043,9 @@ define i8 @minus(i8 %n) {
 
 /// A float argument, result, load, store, select and negation compiled for a
 /// target with no floating-point registers: the float is the integer of its
-/// width (`TypeSoftenFloat`). `float f(float x, float y) { return x; }` panicked
-/// in the call lowering ("legal parts: F32"), so did every float parameter.
+/// width (`TypeSoftenFloat`). `float f(float x, float y) { return x; }`
+/// panicked in the call lowering ("legal parts: F32"), so did every float
+/// parameter.
 #[test]
 fn a_float_is_carried_as_the_integer_of_its_width() {
     let request = Request::new(Level::O2);
@@ -1056,7 +1057,8 @@ fn a_float_is_carried_as_the_integer_of_its_width() {
     let negate = "define float @n(float %x) {\n  %r = fneg float %x\n  ret float %r\n}";
     let negated = assembly(&module(negate), &request).unwrap();
     assert!(negated.contains("eor #128"), "the sign bit flipped:\n{negated}");
-    let choose = "define float @s(i1 %c, float %x, float %y) {\n  %r = select i1 %c, float %x, float %y\n  ret float %r\n}";
+    let choose =
+        "define float @s(i1 %c, float %x, float %y) {\n  %r = select i1 %c, float %x, float %y\n  ret float %r\n}";
     assembly(&module(choose), &request).unwrap();
 }
 
@@ -1076,7 +1078,10 @@ fn a_double_crosses_a_block_as_four_words() {
 fn a_float_global_is_emitted_as_its_bits() {
     let text = "@d = global double 1.5\n@f = global float 2.0\ndefine ptr @p() {\n  ret ptr @d\n}\ndefine ptr @q() {\n  ret ptr @f\n}";
     let asm = assembly(&module(text), &Request::new(Level::O2)).unwrap();
-    assert!(asm.contains(".byte 0,0,0,0,0,0,248,63") && asm.contains(".byte 0,0,0,64"), "the bits of 1.5 and 2.0:\n{asm}");
+    assert!(
+        asm.contains(".byte 0,0,0,0,0,0,248,63") && asm.contains(".byte 0,0,0,64"),
+        "the bits of 1.5 and 2.0:\n{asm}"
+    );
 }
 
 /// A float add, a multiply, an int-to-float and a compare are calls of the
@@ -1088,7 +1093,10 @@ fn a_float_operation_is_a_call_of_its_softfloat_routine() {
     let request = Request::new(Level::O2);
     let call = |body: &str, routine: &str| {
         let text = assembly(&module(body), &request).unwrap();
-        assert!(text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")), "{routine}:\n{text}");
+        assert!(
+            text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")),
+            "{routine}:\n{text}"
+        );
     };
     call("define float @f(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}", "__addsf3");
     call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
@@ -1174,4 +1182,25 @@ define i8 @rem() {
     let source = "source:\n  ldx #$CF\n  lda #$FF\n  sta rc2\n  sta rc3\n  lda #$C7\n  rts\n";
     let function = format!("{}{source}", without_equates(&text));
     assert_eq!(common::run_with("narrow-range-rem", "  jsr rem\n", &function), 0xA7);
+}
+
+/// `x > 65535` and `x < 65536` are one test of the high word. The low word of
+/// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
+/// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
+/// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+#[test]
+fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
+    let branch = |compare: &str, then: &str, other: &str| {
+        module(&format!(
+            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+        ))
+    };
+    let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();
+    let greater = assembly(&branch("ugt i32 %x, 65535", "t", "e"), &Request::new(Level::O1)).unwrap();
+    let less = assembly(&branch("ult i32 %x, 65536", "e", "t"), &Request::new(Level::O1)).unwrap();
+    for text in [&greater, &less] {
+        assert!(!text.contains("ldx #255") && !text.contains("sbc"), "a word compared with its bound:\n{text}");
+    }
+    assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }

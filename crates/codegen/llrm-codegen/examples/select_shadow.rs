@@ -62,8 +62,16 @@ fn main() {
     // `M16=1` selects for real mode: 16-bit pointers, the m16 table, real-mode
     // addresses.
     let m16 = std::env::var_os("M16").is_some();
-    let features =
-        Features { cmov: false, bmi: false, lzcnt: false, popcnt: false, movbe: false, shld_slow: false, sse2: false, soft_float: false };
+    let features = Features {
+        cmov: false,
+        bmi: false,
+        lzcnt: false,
+        popcnt: false,
+        movbe: false,
+        shld_slow: false,
+        sse2: false,
+        soft_float: false,
+    };
     let (target, tli, arch, cpu, address_mode): (_, _, &dyn llrm_target::Target, _, _) = if m16 {
         (
             BuilderTarget::m16().with_libcalls(RUNTIME),

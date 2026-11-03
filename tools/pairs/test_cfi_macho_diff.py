@@ -38,3 +38,16 @@ def test_each_fde_gives_its_instructions_and_the_cie_none():
 
 def test_no_eh_frame_gives_no_functions():
     assert c.frames_of(".eh_frame contents:\n") == []
+
+
+def test_the_triple_names_an_os_with_compact_unwind():
+    """The bare `x86_64-apple-macosx` is OS 10.4, where the pin writes no `__compact_unwind`: the first x86-64 Mach-O comparison read the pin as
+    having none and a drop of ours was proposed from it."""
+    import re
+
+    import unwind_macho_diff as u
+
+    for triple in (c.TRIPLE, u.TRIPLES["x86_64"]):
+        version = re.search(r"macos(?:x)?(\d+)(?:\.(\d+))?", triple)
+        assert version is not None, triple
+        assert (int(version.group(1)), int(version.group(2) or 0)) >= (10, 6), triple

@@ -130,6 +130,15 @@ pub enum Refusal {
 struct WasmCombines;
 
 impl CombineHooks for WasmCombines {
+    /// `TargetLowering::convertSelectOfConstantsToMath`: wasm keeps the pin's
+    /// default, so `(shl (select c, 1, 2), 2)` folds into one `select 4, 8`.
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
@@ -139,6 +148,10 @@ impl CombineHooks for WasmCombines {
     }
 
     fn rebuild_brcond_condition(&self) -> bool {
+        true
+    }
+
+    fn fold_bin_op_into_select(&self) -> bool {
         true
     }
 
