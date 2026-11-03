@@ -471,14 +471,15 @@ fn _refolded(
             if cpu.size || cpu.min_size { cpu.size_milliclocks_per_byte() } else { cpu.speed_milliclocks_per_byte() };
         // A target with an exchange rate takes clocks for bytes at it, and
         // never grows code built for size; one without takes neither worse.
-        // The load goes and each fold adds a memory operand, so more than one
-        // fold grows the count that code built for size, and a target with no
-        // exchange rate, may not. A swap loads the cell in the loop, where the
-        // copy it replaces read none: a memory operand a trip, against one
-        // outside the loop (nbody nib -Os: +1200 executed).
+        // The load goes and each fold adds a memory operand: a target with no
+        // exchange rate may not grow the count, code built for size takes the
+        // bytes (a count of one more is reported, not gated). A swap loads the
+        // cell in the loop, where the copy it replaces read none: a memory
+        // operand a trip, against one outside the loop (nbody nib -Os: +1200
+        // executed).
         let folds = plan.iter().filter(|(_, planned)| matches!(planned, Planned::Fold(_))).count();
         let swaps = plan.iter().any(|(_, planned)| matches!(planned, Planned::Swap { .. }));
-        let operands_kept = folds <= 1 && !swaps;
+        let operands_kept = (folds <= 1 || cpu.size || cpu.min_size) && !swaps;
         let pays = if rate == 0 {
             saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0) && operands_kept
         } else if cpu.size || cpu.min_size {
@@ -1213,20 +1214,20 @@ mod tests {
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
     }
 
-    /// qmove bq16 -Os: the load of a float two instructions read was read from
-    /// its cell by both, one memory operand more than the `fld` it replaced
-    /// (33 against main's 32). Code built for size keeps the load.
+    /// qmove -Os: the load of a float two instructions read stayed, an `fxch`
+    /// and 8 bytes more than the memory forms (c +2 B over main). Code built
+    /// for size takes the smaller, a memory operand more or not.
     #[test]
-    fn test_a_load_two_instructions_read_stays_in_code_built_for_size() {
+    fn test_a_load_two_instructions_read_is_read_from_its_cell_in_code_built_for_size() {
         let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile");
         let body = one_block(vec![
-            fld(0, 1, global(0, 0)),
+            fld(0, 1, frame(-8)),
             insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![]),
             arith(2, "fmul", 3, 2, 1),
             arith(3, "fadd", 4, 3, 1),
             fstp(4, 4, frame(-4)),
         ]);
-        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fld1", "fmul", "fadd", "fstp"]);
+        assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
     }
 
     /// A store to the cell between two reads changes the value the second one
