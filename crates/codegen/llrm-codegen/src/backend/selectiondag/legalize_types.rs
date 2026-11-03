@@ -1434,7 +1434,8 @@ impl<'a> TypeLegalizer<'a> {
         let amount = self.dag.get_any_ext_or_trunc(amount, shift_vt);
         // the amount's bit set moves the window up one half for FSHR and down
         // one for FSHL
-        let (lower, upper) = if op == ISD::FShr { ([in1, in2, in3], [in2, in3, in4]) } else { ([in2, in3, in4], [in1, in2, in3]) };
+        let (lower, upper) =
+            if op == ISD::FShr { ([in1, in2, in3], [in2, in3, in4]) } else { ([in2, in3, in4], [in1, in2, in3]) };
         let [s1, s2, s3] = [0, 1, 2].map(|i| self.dag.get_select(half, cond, upper[i], lower[i]));
         let (lo, hi) = (self.dag.get_node(op, half, &[s2, s1, amount]), self.dag.get_node(op, half, &[s3, s2, amount]));
         (lo, hi)

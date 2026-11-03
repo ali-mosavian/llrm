@@ -192,7 +192,8 @@ fn an_i32_funnel_shift_expands_to_two_half_width_funnel_shifts() {
         for amount in [1u128, 5, 15, 16, 17, 31] {
             let (x, y) = (0x1234_5678u128, 0x9ABC_DEF0u128);
             let mut dag = dag();
-            let (xn, yn) = (dag.get_constant_with(x, EVT::I32, false, true), dag.get_constant_with(y, EVT::I32, false, true));
+            let (xn, yn) =
+                (dag.get_constant_with(x, EVT::I32, false, true), dag.get_constant_with(y, EVT::I32, false, true));
             let zn = dag.get_constant(amount, EVT::I8);
             let funnel = dag.get_node(op, EVT::I32, &[xn, yn, zn]);
             let low = dag.get_node(ISD::Truncate, EVT::I16, &[funnel]);
