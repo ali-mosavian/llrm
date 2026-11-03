@@ -1,10 +1,10 @@
 #!/bin/bash
 # usage: tests/x86_m16_kernels.sh [NV] [BENCH_DIR] -> bench programs sfm16_{add,mul,div} (ours) and sfm16crt_{add,mul,div} (compiler-rt) in BENCH_DIR
 # (default <repo>/bench) for tools/bench/bench.py --lang c: NV vectors from tests/gen_vectors.c, flattened to one freestanding file with 32-bit long,
-# SF_EXTRA="#define SF_DIV_NEWTON 1" adds a line to the flattened ours. Expected output from the same file run natively at -O0. compiler-rt is preprocessed for a 16-bit int (msp430) so its types match llrm-cc's x86_16.
+# ours uses include/sf_x86_m16.h unless SF_EXTRA is set (SF_EXTRA= alone: the library defaults); SF_EXTRA="#define SF_DIV_NEWTON 1" adds a line to the flattened ours. Expected output from the same file run natively at -O0. compiler-rt is preprocessed for a 16-bit int (msp430) so its types match llrm-cc's x86_16.
 set -e
 cd "$(dirname "$0")/.."
-NV=${1:-400}; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
+NV=${1:-400}; SF_EXTRA=${SF_EXTRA-$(sed -E 's/\buint(32|64)_t\b/sfu\1/g' include/sf_x86_m16.h)}; export SF_EXTRA; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 P=${LLRM_CLANG_M16:-/opt/llrm-pin/bin/clang}; CRT=${COMPILER_RT:-$HOME/scratch/llvm-src-m16/compiler-rt/lib/builtins}
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen $NV | sed 's/uint32_t/unsigned long/' > $T/vectors.h
 printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $T/rep.c

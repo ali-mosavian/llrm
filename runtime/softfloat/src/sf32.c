@@ -73,9 +73,9 @@ static sf32 mul_bits(sf32 a, sf32 b)
     sf_mul32x32(ma, mb, &hi, &lo);
 #endif
     /* The product has its top bit at 47 or 46; keep 27 bits and fold the rest. */
-    int e = ea + eb - 127, sh = 20;
-    if (hi >> 15) { sh = 21; e++; }
-    uint32_t m = (hi << (32 - sh)) | (lo >> sh) | ((lo << (32 - sh)) != 0);
+    int e = ea + eb - 126;
+    if (!(hi >> 15)) { e--; hi = (hi << 1) | (lo >> 31); lo <<= 1; }
+    uint32_t m = (hi << 11) | (lo >> 21) | ((lo << 11) != 0);
     return pack_near(sign, e, m);
 }
 
@@ -104,12 +104,13 @@ static sf32 div_bits(sf32 a, sf32 b)
      * call: with a widening SF_MUL32X32, x86 m16 400 divs 404k -> 277k clocks, x86 m32 through llrm-cc 280k -> 222k, but gcc 191k -> 223k
      * and with the default 16x16 partials m16 563k: an integrator opts in. */
     uint32_t hi, lo, mb8 = mb << 8, x = 0x7504F333u - mb8;
-    for (int i = 0; i < 3; i++) {
-        sf_mul32x32(x, mb8, &hi, &lo);
-        uint32_t corr = 0u - hi;
-        sf_mul32x32(x, corr, &hi, &lo);
-        x = (hi << 1) | (lo >> 31);
-    }
+#define NEWTON_STEP() do { \
+        sf_mul32x32(x, mb8, &hi, &lo); \
+        uint32_t corr = 0u - hi; \
+        sf_mul32x32(x, corr, &hi, &lo); \
+        x = (hi << 1) | (lo >> 31); \
+    } while (0)
+    NEWTON_STEP(); NEWTON_STEP(); NEWTON_STEP();
     if (x < 0x80000000u) x = 0xFFFFFFFFu;
     sf_mul32x32(ma << 8, x, &hi, &lo);
     q = hi >> 4;

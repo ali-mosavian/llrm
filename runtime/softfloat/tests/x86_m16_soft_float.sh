@@ -3,7 +3,7 @@
 # soft-float library flattened beside it (SF_INTABI). Build with LLRM_BENCH_FLAGS=-mno-80387; the expected output is the same program on the host FPU (SSE, round to nearest).
 set -e
 cd "$(dirname "$0")/.."
-NV=${1:-400}; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
+NV=${1:-400}; SF_M16=$(sed -E "s/\buint(32|64)_t\b/sfu\1/g" include/sf_x86_m16.h); export SF_M16; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 TERM=${TERM_ONLY:-all}; n=sfm16_float${TERM_ONLY:+_$TERM_ONLY}; mkdir -p $B/$n
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen $NV | sed 's/uint32_t/unsigned long/' > $T/vectors.h
 printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $T/rep.c
@@ -13,7 +13,7 @@ printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $
   echo '#ifdef __SOFT_LIB'
   for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
     sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
-  done | awk 'BEGIN{print "#define SF_INTABI 1"} {print}'
+  done | awk 'BEGIN{print "#define SF_INTABI 1"; print ENVIRON["SF_M16"]} {print}'
   echo '#endif'
   cat $T/vectors.h
   cat <<'C'

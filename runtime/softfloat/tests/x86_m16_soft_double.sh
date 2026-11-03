@@ -23,6 +23,7 @@ def prep(path, suffix=''):
         s = re.sub(r'\b%s\b' % a, b, s)
     return s
 out = ['#define SF_INTABI 1']
+out.append(prep('include/sf_x86_m16.h'))
 for f in ('include/softfloat.h', 'include/sf_helpers.h'):
     out.append(prep(f))
 out.append(prep('src/sf32.c'))
