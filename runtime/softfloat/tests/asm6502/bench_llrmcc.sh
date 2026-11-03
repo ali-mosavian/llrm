@@ -29,7 +29,7 @@ E2
     srcs="$T/m.c"; [ $k = full ] && srcs="$T/m.c $S/src/sf32.c $S/src/sf32_conv.c"
     : > $T/all.s
     for c in $srcs; do
-      $LLRM_CC --target=6502-sim65 -$OPT $d -DSF_INTABI ${SF6502-"-DSF_SHIFT_STEPS=1"} -I$S/include -I$T -S $c -o $T/$(basename $c .c).s
+      $LLRM_CC --target=6502-sim65 -$OPT $d -DSF_INTABI ${SF6502--include $S/include/sf_6502.h} -I$S/include -I$T -S $c -o $T/$(basename $c .c).s
     done
     { grep -h '^rc[0-9]* = ' $T/*.s | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; for c in $srcs; do grep -v '^rc[0-9]* = ' $T/$(basename $c .c).s; done; cat $MOS_RT; } > $T/p.s
     cl65 -t sim6502 -m $T/$k.map -o $T/$k.bin $T/p.s 2>$T/err || { cat $T/err; exit 1; }

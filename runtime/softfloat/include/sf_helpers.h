@@ -26,9 +26,18 @@ static inline int sf_clz64(uint64_t x)
     return hi ? sf_clz32(hi) : 32 + sf_clz32((uint32_t)x);
 }
 
-#ifdef SF_SHIFT_STEPS
-/* x >> n, with every dropped bit folded into bit 0; here as constant steps (bytes, then single bits), for a target whose shift libcall loops one bit per iteration (6502). */
+/* x >> n, with every dropped bit folded into bit 0. */
 static inline uint32_t sf_shr_sticky32(uint32_t x, int n)
+{
+    if (n <= 0) return x;
+    if (n >= 32) return x != 0;
+    return (x >> n) | ((x << (32 - n)) != 0);
+}
+
+#ifdef SF_SHIFT_STEPS
+/* The same as constant steps (bytes, then single bits), for a target whose shift libcall loops one bit per iteration (6502). Only the addition uses it: where
+ * the shift is rare (multiply, divide, pack) the steps cost more bytes than the cycles they save. */
+static inline uint32_t sf_shr_sticky32_add(uint32_t x, int n)
 {
     uint32_t lost = 0;
     if (n <= 0) return x;
@@ -38,14 +47,7 @@ static inline uint32_t sf_shr_sticky32(uint32_t x, int n)
     return x | (lost != 0);
 }
 #else
-
-/* x >> n, with every dropped bit folded into bit 0. */
-static inline uint32_t sf_shr_sticky32(uint32_t x, int n)
-{
-    if (n <= 0) return x;
-    if (n >= 32) return x != 0;
-    return (x >> n) | ((x << (32 - n)) != 0);
-}
+#define sf_shr_sticky32_add sf_shr_sticky32
 #endif
 
 static inline uint64_t sf_shr_sticky64(uint64_t x, int n)
