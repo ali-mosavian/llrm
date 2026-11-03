@@ -1114,3 +1114,37 @@ b2:
     assert!(after.contains("llvm.memset"), "{after}");
     assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
 }
+
+/// nbody_single nib -Os: a six-dword zero loop stayed a loop (fpbench +12 B,
+/// nbody +44 B and +74 clocks, stft +31 B over `rep stos`): the -Os price
+/// counted a fill's cells per byte, 24 for a `rep stosw` of 12. The cells are
+/// the blocks the backend steps by.
+#[test]
+fn a_six_dword_clear_at_os_is_one_fill_priced_in_its_own_blocks() {
+    let text = "@z = global [6 x i32] zeroinitializer, align 4
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr [6 x i32], ptr @z, i16 0, i16 %i
+  store i32 0, ptr %p, align 4
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 6
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let mut pass = crate::loopidiom::pass::LoopIdiom::new();
+    pass.for_size = true;
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(pass);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("llvm.memset"), "{after}");
+}

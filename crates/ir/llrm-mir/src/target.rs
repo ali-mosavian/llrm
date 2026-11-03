@@ -729,3 +729,28 @@ mod tests {
         assert_eq!(pin.inline_threshold, None);
     }
 }
+
+/// The block, in bytes, a constant-size `memset` is stored by as `rep stos`
+/// (`emitConstantSizeRepstos`'s `getOptimalRepType`, and the real-mode fills
+/// below it): at most `word` bytes for size, a dword at speed. Up to 128
+/// bytes at a 4-byte alignment the block follows the alignment; otherwise
+/// whole dwords or words at speed, and bytes for size. The backend lowers by
+/// it and the loop idiom prices a fill by it. A minimum-size build (`-Oz`)
+/// has its own rule, not stated here.
+pub fn rep_stos_block(
+    bytes: u64,
+    alignment: u64,
+    word: u64,
+    opt_size: bool,
+) -> u64 {
+    const MAX_INLINE_SIZE: u64 = 128;
+    if bytes <= MAX_INLINE_SIZE && alignment >= 4 {
+        alignment.min(if opt_size { word } else { word.max(4) })
+    } else if !opt_size && bytes % 4 == 0 {
+        4
+    } else if !opt_size && bytes % 2 == 0 && alignment >= 2 {
+        2
+    } else {
+        1
+    }
+}

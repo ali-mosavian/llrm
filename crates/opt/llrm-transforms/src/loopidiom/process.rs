@@ -316,18 +316,28 @@ impl LoopIdiomRecognize {
                     // cells, one a store, not of bytes.
                     let cells = is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val).is_none()
                         && self.options.force_memset_pattern_intrinsic;
-                    // DEVIATE: the -Os price counts a byte fill's cells per
-                    // byte (QCport -Os, 41 B, was fitted to
-                    // it); at speed they are dwords, as
-                    // `profit` counts them. Owner llrm-target-x86-m16,
-                    // exit 2026-11-20.
+                    // The cells are the blocks the backend stores the fill by
+                    // (`rep_stos_block`: dwords at speed, the pointer's width
+                    // for size, bytes past 128 or unaligned).
+                    let word = u64::from(run.env.layout.pointer(0).index_bits / 8);
+                    let alignment = args.store_alignment.unwrap_or(1);
                     let cells = trips
                         .zip(width)
                         .map(
-                            |(trips, width)| match (cells, self.for_size) {
-                                (true, _) => trips * stores,
-                                (false, true) => trips * width * stores,
-                                (false, false) => (trips * width * stores + 3) / 4,
+                            |(trips, width)| {
+                                let bytes = trips * width * stores;
+                                match cells {
+                                    true => trips * stores,
+                                    false => {
+                                        let block = llrm_mir::target::rep_stos_block(
+                                            u64::try_from(bytes / (groups.len() as i64).max(1)).unwrap_or(0),
+                                            alignment,
+                                            word,
+                                            self.for_size,
+                                        );
+                                        (bytes + block as i64 - 1) / block as i64
+                                    }
+                                }
                             },
                         );
                     (clocks, rate, trips, cells)

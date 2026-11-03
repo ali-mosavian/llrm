@@ -1026,7 +1026,7 @@ impl Builder<'_> {
                             && !self.runtime_has("memset")
                             && (bytes % 4 == 0 || (bytes % 2 == 0 && alignment >= 2)) =>
                     {
-                        self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
+                        self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
@@ -1704,7 +1704,7 @@ impl Builder<'_> {
             // `getOptimalRepType`: a dword at most on a target with 32-bit
             // registers, whatever its pointers; for size the pointer's width
             // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
-            let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
+            let block = llrm_mir::target::rep_stos_block(size, alignment, word, self.has_opt_size());
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;
