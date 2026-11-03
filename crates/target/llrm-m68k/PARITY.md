@@ -83,6 +83,14 @@ refuses it (`memcpy_runtime`, `memfuncs_runtime` at `-c`; gas leaves it to `ld`,
 truncate). The pin has the same form. Owner: m68k. Exit 2026-11-12: absolute `.l` on the 68000, the
 68020's 32-bit PC displacement, picked by object size and clocks.
 
+**M68K-HEX: a select's merged value may sit in an address register.** `hex` at 68020 `-Os` is 90 B
+against gcc's 62 B. The select is a phi (`EmitLoweredSelect`) whose result the pin's MIR has as
+`dr32`, read through a sub-register COPY; ours has it `Xr32` and reads it through a plain copy, so
+the allocator may take `%a1` and every use pays a copy. Owner: m68k. Exit: convergence step 5 (m68k
+onto the shared greedy, which owns the class choice of a phi-merged value; ~2026-12-04). Card:
+`~/scratch/handoff/m68k-hex-card-2026-11-04.md`. A pre-allocation `lea` to `add` on the arm was tried
+and made `hex` 94 -> 98 B.
+
 ## Instruments
 
 - Clocks: `src/timing.rs`, MC68000UM section 8 (16-bit timing; section 7 is the 8-bit MC68008) and
