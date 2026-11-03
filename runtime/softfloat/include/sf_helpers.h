@@ -68,4 +68,48 @@ static inline void sf_mul24x24_loop(uint32_t a, uint32_t b, uint32_t *hi, uint32
     *hi = h >> 8;
 }
 
+
+/* m >> 3 rounded to nearest even (the three dropped bits are the guard bits). Adding 3 plus the kept bit carries exactly when the dropped bits are over a half,
+ * or a half and the kept bit is odd: one add and one shift. A target whose 32-bit add is dearer than a compare (6502) defines SF_ROUND_BRANCHY. */
+static inline uint32_t sf_round3(uint32_t m)
+{
+#ifdef SF_ROUND_BRANCHY
+    uint32_t r = m & 7;
+    m >>= 3;
+    if (r > 4 || (r == 4 && (m & 1))) m++;
+    return m;
+#else
+    return (m + 3 + ((m >> 3) & 1)) >> 3;
+#endif
+}
+
+/* The same for a 56-bit working mantissa (binary64). */
+static inline uint64_t sf_round3_64(uint64_t m)
+{
+    uint64_t r = m & 7;
+    m >>= 3;
+    if (r > 4 || (r == 4 && (m & 1))) m++;
+    return m;
+}
+
+/* Round to nearest even and pack for 1 <= e <= 254 (no overflow, no denormal): sf32_pack without its two range paths. */
+static inline uint32_t pack_round(uint32_t sign, int e, uint32_t m)
+{
+    m = sf_round3(m);
+    return sign + ((uint32_t)(e - 1) << 23) + m;
+}
+
+uint32_t sf32_pack(uint32_t sign, int e, uint32_t m); /* softfloat.h declares it too; files that include only this header need it */
+
+#ifdef SF_PACK_INLINE
+/* sf32_pack with that common case in the caller: saves a call and the callee's saved registers. */
+static inline uint32_t pack_near(uint32_t sign, int e, uint32_t m)
+{
+    if ((unsigned)(e - 1) < 254u) return pack_round(sign, e, m);
+    return sf32_pack(sign, e, m);
+}
+#else
+#define pack_near sf32_pack
+#endif
+
 #endif

@@ -20,10 +20,10 @@
 //! 256..258 are segment overrides on an `i32`. Exit: none. Owner sdag-b.
 //! Review 2026-11-13.
 //!
-//! DEVIATE SD14: the floating types are legal (x87 or SSE register classes)
-//! unless the target says `with_soft_float`, which softens `f32` and `f64`;
-//! the pin's `ExpandFloat` arm and the softening of `f80` are not translated.
-//! Reason: no target of ours needs them. Exit: none. Owner sdag-b. Review
+//! DEVIATE SD14: the floating types are legal (x87 register classes) unless
+//! the target is built with [`TargetLoweringInfo::with_soft_float`]; the
+//! pin's `ExpandFloat` arms are not translated. Reason: no target of ours has
+//! a float type wider than the x87's. Exit: none. Owner sdag-b. Review
 //! 2026-11-13.
 //!
 //! # See also
@@ -40,8 +40,8 @@ pub enum TypeAction {
     Legal,
     PromoteInteger,
     ExpandInteger,
-    /// A float of a target with no floating-point registers is carried as the
-    /// integer of its width (`TypeSoftenFloat`).
+    /// A float with no register class (`TypeSoftenFloat`): it travels as the
+    /// integer of its width and its operations are library calls.
     SoftenFloat,
 }
 
@@ -54,12 +54,12 @@ pub struct TargetLoweringInfo {
     /// Per entry of `INTEGERS`: its action and the type it becomes.
     integers: [(TypeAction, MVT); 6],
     far: bool,
+    /// No FPU: `f32` and `f64` have no register class.
+    soft_float: bool,
     /// `getScalarShiftAmountTy`.
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
     set_cc_result: MVT,
-    /// No floating-point register class: `f32` and `f64` are softened.
-    soft_float: bool,
 }
 
 /// What `getScalarShiftAmountTy` returns.
@@ -95,12 +95,11 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8, soft_float: false }
+        TargetLoweringInfo { integers, far, soft_float: false, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
     }
 
-    /// The target has no floating-point register class, so `f32` and `f64` are
-    /// `TypeSoftenFloat` (the pin's default when `addRegisterClass` is not
-    /// called for them).
+    /// The target has no FPU: `f32` and `f64` are softened to `i32` and
+    /// `i64` (`TypeSoftenFloat`).
     pub fn with_soft_float(mut self) -> TargetLoweringInfo {
         self.soft_float = true;
         self
@@ -169,14 +168,16 @@ impl TargetLoweringInfo {
                 assert!(self.far, "this target has no far pointer");
                 (TypeAction::ExpandInteger, EVT::I16)
             }
-            EVT::Simple(MVT::F32) if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
-            EVT::Simple(MVT::F64) if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
             EVT::Simple(mvt) => match INTEGERS.iter().position(|&int| int == mvt) {
                 Some(at) => {
                     let (action, to) = self.integers[at];
                     (action, EVT::Simple(to))
                 }
-                None => (TypeAction::Legal, vt),
+                None => match mvt {
+                    MVT::F32 if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
+                    MVT::F64 if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
+                    _ => (TypeAction::Legal, vt),
+                },
             },
             EVT::Int(bits) => {
                 if bits < 8 || !bits.is_power_of_two() {
@@ -225,6 +226,18 @@ impl TargetLoweringInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A soft-float target would keep `f32` in an x87 register without the
+    /// flag; with it, `f32` and `f64` travel as `i32` and `i64`.
+    #[test]
+    fn soft_float_softens_f32_and_f64_only_when_asked() {
+        let fpu = TargetLoweringInfo::x86_16();
+        assert_eq!(fpu.type_conversion(EVT::Simple(MVT::F32)), (TypeAction::Legal, EVT::Simple(MVT::F32)));
+        let soft = TargetLoweringInfo::x86_16().with_soft_float();
+        assert_eq!(soft.type_conversion(EVT::Simple(MVT::F32)), (TypeAction::SoftenFloat, EVT::I32));
+        assert_eq!(soft.type_conversion(EVT::Simple(MVT::F64)), (TypeAction::SoftenFloat, EVT::I64));
+        assert_eq!(soft.type_conversion(EVT::I32), (TypeAction::Legal, EVT::I32));
+    }
 
     /// Every target compared into an `i8`; AArch64 compares into an `i32`.
     #[test]
