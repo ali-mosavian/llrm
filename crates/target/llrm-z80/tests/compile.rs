@@ -1073,3 +1073,62 @@ fn a_float_argument_is_refused_not_a_panic() {
     let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses a float");
     assert!(why.contains("not a byte or a word"), "{why}");
 }
+
+/// A flag writer scheduled between a compare and its branch overwrites the
+/// flags the branch reads (gcd returned 4 where the answer is 6). The emitter
+/// makes the compare again before the branch. Fed the split order directly,
+/// whatever the scheduler would do.
+#[test]
+fn a_compare_is_made_again_when_a_flag_writer_sits_between_it_and_its_branch() {
+    use llrm_codegen::backend::selectiondag::SDValue;
+    use llrm_codegen::backend::selectiondag::isd::ISD;
+    use llrm_z80::dagisel::generated::ids::opcode as instr;
+    use llrm_z80::driver::selections;
+    use llrm_z80::mfunc::{Kind, emit};
+
+    let ir = include_str!("kernels/ir/find.ll");
+    let (_, selection) =
+        selections(ir, &Request::new(Level::O2)).expect("selects").into_iter().find(|(one, _)| one == "find").unwrap();
+    let mut selection = selection.expect("selected");
+    let compares = |selection: &llrm_z80::dagisel::function::Selection| {
+        let function = emit("find", selection).expect("emitted");
+        function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("CP8m")).count()
+    };
+    assert_eq!(compares(&selection), 1, "premise: scheduled apart, the compare is made once");
+
+    let block = selection
+        .blocks
+        .iter_mut()
+        .find(|block| {
+            block
+                .units
+                .iter()
+                .any(
+                    |unit| matches!(
+                        block.dag.node(SDValue { node: unit.nodes[0], res: 0 }).opcode,
+                        ISD::Machine(op) if op == u32::from(instr::CP8m)
+                    ),
+                )
+        })
+        .expect("the block with the compare");
+    let at = |block: &llrm_z80::dagisel::function::Selected, wanted: u16| {
+        block
+            .units
+            .iter()
+            .position(
+                |unit| matches!(
+                    block.dag.node(SDValue { node: unit.nodes[0], res: 0 }).opcode,
+                    ISD::Machine(op) if op == u32::from(wanted)
+                ),
+            )
+    };
+    // the increment and the copy of its result, after the compare
+    let (cp, inc) = (at(block, instr::CP8m).unwrap(), at(block, instr::INC8).unwrap());
+    assert!(inc < cp, "premise: the increment is scheduled before the compare");
+    let moved: Vec<_> = block.units.drain(inc..=inc + 1).collect();
+    let cp = cp - 2;
+    for (at, unit) in moved.into_iter().enumerate() {
+        block.units.insert(cp + 1 + at, unit);
+    }
+    assert_eq!(compares(&selection), 2, "the compare is made again after the increment");
+}

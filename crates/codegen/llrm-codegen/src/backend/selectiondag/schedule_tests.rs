@@ -571,9 +571,9 @@ fn flag_dag(seed: u64) -> (SelectionDAG, SDValue, SDValue, SDValue) {
 /// gets the compare next to its branch.
 #[test]
 fn a_flag_writer_is_not_scheduled_between_a_compare_and_the_branch_that_reads_it() {
-    let pref = super::schedule::Preference::Source;
+    let pref = super::schedule::Preference::Ilp;
     let between = |fixed: bool| {
-        let (dag, branch, cmp, sum) = flag_dag(2);
+        let (dag, branch, cmp, sum) = flag_dag(8);
         let order = schedule(&dag, branch, &FlagValue { fixed, pref });
         let (c, s, b) = (position(&order, cmp), position(&order, sum), position(&order, branch));
         (c < s && s < b, format!("cmp {c} add {s} br {b}"))
