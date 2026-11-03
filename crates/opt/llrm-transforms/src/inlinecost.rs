@@ -2033,7 +2033,9 @@ impl<'a> Analyzer<'a> {
         let Some(tti) = self.site.tti else { return false };
         let rate = tti.speed_inline_milliclocks_per_byte();
         let growth = self.growth_per_site();
-        if rate == 0 || growth <= 0 || self.site.sole_call_to_local {
+        // Growth under one call's size is inside the estimate's resolution: the
+        // sites of a dying callee fold differently and must not split.
+        if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local {
             return false;
         }
         let saved = llrm_mir::instructioncost::instruction_cost(
