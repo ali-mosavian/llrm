@@ -57,6 +57,19 @@ def test_noivopts_flag_only_at_os():
     assert B.level_flags("Os", False) == ["-Os"]
 
 
+def test_sf_z80_harness_sources_exist():
+    """build.sh read runtime/softfloat/src/sf32.c after a286a52c00 moved it to compiler-rt: the harness died with
+    'No such file' on release/next and every softfloat gcc cell was unmeasurable."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+    d = os.path.join(root, "tools", "gcc-columns", "sf-z80")
+    for n in ("build.sh", "run.sh"):
+        for rel in re.findall(r"\.\./\.\./\.\./(runtime/[A-Za-z0-9_/.-]+)", open(os.path.join(d, n)).read()):
+            assert os.path.exists(os.path.join(root, rel)), f"{n}: {rel} does not exist"
+    names = re.search(r'F="([^"]+)"', open(os.path.join(d, "build.sh")).read()).group(1).split()
+    for f in names:
+        assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
+
+
 def test_z80_16bit_result_is_charged_the_de_store():
     """gcc's driver stored a 16-bit result with ld (nn),hl (16 T), the DE columns with ld (nn),de (20 T): every 16-bit gcc
     cell was 4 T optimistic (add16 read 78, by hand 82). 16-bit = ex de,hl 4 T + store 4 T; 8-bit in A for both."""
