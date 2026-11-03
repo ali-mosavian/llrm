@@ -1324,7 +1324,7 @@ pub fn laid_out(
         // (`beginInstruction`: `DL.getLine() != OldLine`).
         let mut old = 0;
         for row in &rows {
-            if row.line != 0 && row.line == old {
+            if row.line != 0 && row.line == old && !segment.forced.contains(&row.offset) {
                 info.not_stmt.insert((section, row.offset));
             }
             if row.line != 0 {

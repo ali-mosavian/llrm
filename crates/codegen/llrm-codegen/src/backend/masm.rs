@@ -650,6 +650,9 @@ pub enum Mark {
     /// The code after it is this source line's: the procedure's `index`th
     /// line, where [`line_label`] names it.
     Line { line: SrcLoc, index: u32 },
+    /// The line row before it is a statement however its line compares with
+    /// the last row's (`ForceIsStmtInstrs`).
+    ForceStmt,
     /// The procedure's own code starts, its prologue done: the first code
     /// of a source line.
     BodyStart,
@@ -1851,6 +1854,7 @@ fn built(
     // The prologue is the first line's, not the previous procedure's last.
     let mut line = first.and_then(|one| one.line);
     let mut lines = 0..;
+    let forced_blocks = forced_statement_blocks(blocks);
     let mut marked = |line: SrcLoc| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
     // The arguments are in their registers from the first byte: what the entry
     // says of them stands before the prologue.
@@ -1965,6 +1969,7 @@ fn built(
             last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
         let mut closed = false;
         let mut top = index > 0;
+        let mut first_lined = true;
         for one in &block.insns {
             if let Some(pieces) =
                 closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
@@ -2000,9 +2005,16 @@ fn built(
                 line = Some(SrcLoc { line: 0, ..before });
                 out.extend(line.map(&mut marked));
             }
+            // Only the block's first line can be forced.
+            let force_here = one.line.is_some_and(|place| place.line != 0)
+                && std::mem::take(&mut first_lined)
+                && forced_blocks.contains(&block.at);
             if one.line.is_some() && one.line != line {
                 line = one.line;
                 out.extend(line.map(&mut marked));
+                if force_here {
+                    out.push(Item::Mark(Mark::ForceStmt));
+                }
             }
             match what.op {
                 Operation::Move if _segment(regs, &what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
@@ -3468,12 +3480,62 @@ pub fn _signed(n: i64) -> String {
     }
 }
 
+/// The blocks whose first line is a statement whatever the line before it was
+/// (`DwarfDebug::findForceIsStmtInstrs`): some predecessor ends on another line
+/// than the block's first, or has no line at all. The pin reads each branch's
+/// own line; the last line of the block stands for them here.
+fn forced_statement_blocks(blocks: &[crate::model::lir::Block]) -> std::collections::HashSet<i64> {
+    let first_line = |block: &crate::model::lir::Block| {
+        block.insns.iter().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
+    };
+    let last_line = |block: &crate::model::lir::Block| {
+        block.insns.iter().rev().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
+    };
+    let mut forced = std::collections::HashSet::new();
+    for block in blocks {
+        for next in block.succ.iter() {
+            let Some(target) = blocks.iter().find(|one| one.at == *next) else { continue };
+            if first_line(target).is_some() && last_line(block) != first_line(target) {
+                forced.insert(target.at);
+            }
+        }
+    }
+    forced
+}
+
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_masm.py`: the jwasm printer spells each operand as
     //! select encodes it.
 
     use super::*;
+
+    /// A block of one instruction on `line`, leading to `succ`.
+    fn lined(
+        at: i64,
+        line: u32,
+        succ: &[i64],
+    ) -> crate::model::lir::Block {
+        let mut one = lir::Insn::new(at, None, None, vec![], vec![]);
+        one.line = Some(SrcLoc::line(line));
+        let mut block = lir::LirBlock::new(at, vec![std::sync::Arc::new(one)]);
+        block.succ = succ.to_vec().into();
+        block.into()
+    }
+
+    /// The first line of a join is a statement when a predecessor ends on
+    /// another line; ours marked no row `ForceStmt`, so a row on the line of
+    /// the one before it was never a statement, whichever way control came.
+    #[test]
+    fn a_block_whose_predecessor_ends_on_another_line_is_forced() {
+        // 1 (line 4) -> 3 (line 6) <- 2 (line 5); 2 (line 5) -> 4 (line 5)
+        // only.
+        let blocks = [lined(1, 4, &[3]), lined(2, 5, &[3, 4]), lined(3, 6, &[]), lined(4, 5, &[])];
+        let forced = forced_statement_blocks(&blocks);
+        assert!(forced.contains(&3), "{forced:?}");
+        // Block 4's one predecessor ends on its line.
+        assert!(!forced.contains(&4), "{forced:?}");
+    }
 
     fn no_names() -> IndexMap<(Space, i64), String> {
         IndexMap::default()
