@@ -394,6 +394,7 @@ impl Peephole {
             body
         };
         let body = if self.zeroed_loads { zeroed_loads(self.rules, &body, &self.cpu)? } else { body };
+        let body = split_loads(self.rules, &body);
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = zero_compares(
             self.rules,
@@ -2292,6 +2293,15 @@ pub fn widened_moves(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.widened_moves, body, &Facts::new(body, None))
+}
+
+/// A sign-extending word load as the dword load and the in-place extension
+/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`, `peephole.peep`).
+pub fn split_loads(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.split_loads, body, &Facts::new(body, None))
 }
 
 /// The extension of a word whose register is zero above it as a copy of the

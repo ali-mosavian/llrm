@@ -445,6 +445,20 @@ fn a_signed_bit_field_read_is_one_byte_sextload_at_m32() {
     assert!(!listing.contains("movsx eax, al"), "{listing}");
 }
 
+/// A signed word of a global at m32 is `mov eax, [g]; cwde` (5 + 1 B), not
+/// `movsx eax, word ptr [g]` (7 B): the sextload fold cost 33 B on jpeg_fixed
+/// -O2 and +2 B at -Os; the peephole splits it where the pair is shorter.
+#[test]
+fn a_signed_word_of_a_global_is_a_load_and_cwde_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @g = global i32 0, align 4\n\
+                define i32 @f() {\n  %1 = load i32, ptr @g, align 4\n  %2 = shl i32 %1, 16\n  %3 = ashr exact i32 %2, 16\n  ret i32 %3\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movsx eax, ax") && !listing.contains("movsx eax, word ptr"), "{listing}");
+}
+
 /// A nest whose inner loop the O3 unroll removes: the parent's IndVars sees the
 /// unrolled body and writes the sum as a constant, the loop goes (byte_multiply
 /// O3 1636 B against the pin's 18 instructions).
