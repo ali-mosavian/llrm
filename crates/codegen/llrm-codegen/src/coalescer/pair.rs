@@ -79,7 +79,7 @@ pub trait CoalescerEnv {
     /// The pin always joins it (`TRI->shouldCoalesce` is the only veto,
     /// RegisterCoalescer.cpp#L2080); a target whose profitability for these
     /// joins is not yet known says false. Exit: m68k profitability rule
-    /// (11-08).
+    /// (2026-11-15).
     fn joins_sub_registers(&self) -> bool {
         true
     }

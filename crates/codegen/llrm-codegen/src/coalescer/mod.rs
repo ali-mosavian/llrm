@@ -41,7 +41,9 @@
 //! `TRI->shouldCoalesce` (RegisterCoalescer.cpp#L2080, which M68k does not
 //! override); a target may switch the joins off. m68k does: they raised
 //! `movem` 71 -> 89 in div_constants_short (68020 -O1) and cost 15 of 90
-//! cell-CPU rows. Exit: a profitability rule, 2026-11-08.
+//! cell-CPU rows. Exit: 2026-11-15, re-evaluated when the allocator-sensitivity
+//! work (pair roles) lands; no join rule explains the rows (the harmful joins
+//! leave palettes unchanged and shift one dequeue order).
 //!
 //! DEVIATE C9 (no number): a parameter's value on entry is defined by no
 //! instruction, so LLVM's phi rule ("any real interference would show up in a
