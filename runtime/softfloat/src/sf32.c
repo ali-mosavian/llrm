@@ -114,6 +114,15 @@ static sf32 div_bits(sf32 a, sf32 b)
     while ((int32_t)r < 0) { q--; r += mb; }
     while (r >= mb) { q++; r -= mb; }
     inexact = r != 0;
+#elif defined(SF_DIV_HW32)
+    /* The quotient in four 32/32 hardware divisions: the integer bit, then 8, 8, 8 and 3 fraction bits, each a division of the remainder
+     * (< mb < 2^24) shifted up by the step width. For a target whose 32-bit divide is cheap (x86 m32, m68k 020+). */
+    uint32_t r = ma, t;
+    q = r >= mb;
+    if (q) r -= mb;
+#define DIV_STEP(w) do { t = r << (w); q = (q << (w)) | t / mb; r = t % mb; } while (0)
+    DIV_STEP(8); DIV_STEP(8); DIV_STEP(8); DIV_STEP(3);
+    inexact = r != 0;
 #else
     /* One quotient bit per step. */
     uint32_t r = ma;
