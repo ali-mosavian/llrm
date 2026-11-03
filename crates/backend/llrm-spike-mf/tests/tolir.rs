@@ -1680,3 +1680,33 @@ fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
         assert!(kept, "v{dear} costs twice to spill and was spilled");
     }
 }
+
+/// A copy the allocator adds (a tied use, a phi's incoming value) stood under
+/// no source place, so the line table put its row under the line before it.
+#[test]
+fn a_copy_added_for_an_instruction_or_a_phi_has_the_origin_of_its_neighbour() {
+    let mut f = MFunction::<()>::new("copies");
+    f.classes = vec![(); 3];
+    let mut add = op("add", vec![Operand::Def(v(1)), Operand::Use(v(0)), Operand::Use(v(0))]);
+    add.ties = vec![(0, 1)];
+    add.origin = 7;
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(add);
+    let mut jump = branch(1);
+    jump.origin = 8;
+    entry.insts.push(jump);
+    let mut next = Block { id: 1, ..Block::default() };
+    next.phis.push(llrm_spike_mf::Phi { result: v(2), incoming: vec![(0, v(1))] });
+    next.insts.push(ret());
+    f.blocks = vec![entry, next];
+    let f = lowered(f);
+    for block in &f.blocks {
+        for inst in block.insts.iter().filter(|inst| inst.kind == Kind::Copy) {
+            let beside = block.insts.iter().find(|one| one.origin != 0).map(|one| one.origin);
+            if block.id == 0 {
+                assert_ne!(inst.origin, 0, "copy {:?} has no place beside {beside:?}", inst.operands);
+            }
+        }
+    }
+}
