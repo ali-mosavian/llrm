@@ -64,3 +64,15 @@ fn a_mixed_switch_has_a_br_table_for_its_dense_run_when_optimizing() {
     let at = |level| assembly(text, Width::W32, Options { level, ..Options::default() }).unwrap();
     assert_eq!(at(Level::O2).matches("br_table").count(), 1, "{}", at(Level::O2));
 }
+
+/// A constant a switch leaf returns is set on the leaf's own path
+/// (`MachineSinking` splits the leaf's edge to the join: it is unlikely, 29%).
+/// The blocks a switch makes had no edge probability, so the edge stayed whole
+/// and every path set the constant, and the leaf tested `i32.eqz`: 996 more
+/// instructions run in the switch bench.
+#[test]
+fn a_switch_leaf_sets_its_constant_on_its_own_path() {
+    let text = include_str!("ir/switch_loop_phi_o2.ll");
+    let out = assembly(text, Width::W32, Options { level: Level::O2, ..Options::default() }).unwrap();
+    assert_eq!(out.matches("i32.eqz").count(), 0, "{out}");
+}
