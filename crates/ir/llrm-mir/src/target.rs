@@ -118,6 +118,13 @@ pub trait Machine {
     /// them.
     fn spaces(&self) -> Spaces;
 
+    /// Whether the target's pipeline takes vector values. None does yet
+    /// (vectors are deferred, not designed out): a function holding one is
+    /// refused before the mid-end, which assumes scalars.
+    fn has_vector_mir(&self) -> bool {
+        false
+    }
+
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
