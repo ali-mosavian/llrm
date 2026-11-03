@@ -366,6 +366,7 @@ fn main() -> ExitCode {
                     min_size: false,
                     only_when_forced: false,
                     prepare_for_lto: false,
+                    target_unrolling: false,
                 };
                 let names: Vec<String> = module
                     .functions()

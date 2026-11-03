@@ -13,9 +13,11 @@
 //!   [`UnrolledInstAnalyzer`](llrm_analysis::loopunrollanalyzer) and finds the
 //!   unrolled cost under the threshold boosted by the dynamic cost saved.
 //!
-//! A count that is not the whole trip count would be partial or runtime
-//! unrolling, which this pass (`OnlyFullUnroll`) does not do. The loop is then
-//! unrolled by [`crate::loopunroll::unroll_loop_blocks`].
+//! A count that is not the whole trip count is partial unrolling, which the
+//! pass does only as `LoopUnrollPass` (`Options::target_unrolling`: the
+//! target's `AllowPartial` and `UpperBound`) and only where the count divides
+//! the trip count; runtime unrolling (the remainder loop) is not here yet. The
+//! loop is then unrolled by [`crate::loopunroll::unroll_loop_blocks`].
 //!
 //! # Deviations
 //! - U3 `computePeelCount` is `looppeel.rs` (S2); its deviations are PL1 to PL5
@@ -101,6 +103,9 @@ pub struct Options {
     /// `OnlyWhenForced`.
     pub only_when_forced: bool,
     pub prepare_for_lto: bool,
+    /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
+    /// `UpperBound` are the target's, not forced off.
+    pub target_unrolling: bool,
 }
 
 /// What the pass reads and changes.
@@ -367,9 +372,11 @@ pub(crate) fn gather_unrolling_preferences(
 ) -> UnrollingPreferences {
     let mut up = gather_unrolling_preferences_of_target(run, has_calls);
     // Apply the values provided by the full unroll pass.
-    up.partial = false;
-    up.runtime = false;
-    up.upper_bound = false;
+    if !run.options.target_unrolling {
+        up.partial = false;
+        up.runtime = false;
+        up.upper_bound = false;
+    }
     if UNROLL_MAX_UPPER_BOUND == 0 {
         up.upper_bound = false;
     }
@@ -1376,9 +1383,17 @@ fn try_to_unroll_loop(
         };
     }
 
-    // Do not attempt partial/runtime unrolling in the full unroller.
-    if (trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count {
+    // `LoopFullUnrollPass` does not do partial or runtime unrolling.
+    let partial = trip_count != 0 && count < trip_count && trip_count % count == 0;
+    if !run.options.target_unrolling
+        && ((trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count)
+    {
         why(run, lp, "partial/runtime unroll in FullLoopUnroll");
+        return Unrolled::Unmodified;
+    }
+    // Runtime unrolling (the remainder loop) is not here yet.
+    if run.options.target_unrolling && !partial && (trip_count == 0 || count < trip_count) {
+        why(run, lp, "runtime unroll is not translated");
         return Unrolled::Unmodified;
     }
 
@@ -1394,7 +1409,7 @@ fn try_to_unroll_loop(
     let latches = lp.get_loop_latches(run.function);
     let unroll_options = UnrollOptions {
         count,
-        max_trip_count: count,
+        max_trip_count: if partial { trip_count } else { count },
         max_or_zero,
         exits: exits.into_iter().filter(|exit| exit.trip_count != 0).collect(),
     };
@@ -1787,6 +1802,9 @@ pub struct LoopFullUnroll {
     /// `OnlyWhenForced`: only a loop that asks to be unrolled is
     /// (`!PTO.LoopUnrolling`, clang's `-fno-unroll-loops`, the default at -O1).
     pub only_when_forced: bool,
+    /// The pin's `LoopUnrollPass` (`AllowPartial`, `Runtime` and `UpperBound`
+    /// from the target) where false is `LoopFullUnrollPass`.
+    pub target_unrolling: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -1830,6 +1848,7 @@ impl FunctionPass for LoopFullUnroll {
                 min_size: false,
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
+                target_unrolling: self.target_unrolling,
             },
         };
         let changed = unroll_loops(&mut run);

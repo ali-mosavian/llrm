@@ -356,6 +356,8 @@ fn a_constant_for_a_loop_exit_phi_is_set_on_the_exit_edge() {
     assert!(constant > end_loop, "{text}");
 }
 
+// The loops stay rolled: the test is about where the exit blocks sit, and the
+// target unrolls a loop of this size.
 const TWO_LOOP_EXITS: &str = "declare void @sort(ptr, i32, i32)
 declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
@@ -376,7 +378,7 @@ define i32 @f(i16 %0) {
   store i32 %9, ptr %11, align 4
   %12 = add nsw i32 %4, 4
   %exitcond2 = icmp eq i32 %12, 0
-  br i1 %exitcond2, label %13, label %3
+  br i1 %exitcond2, label %13, label %3, !llvm.loop !0
 
 13:
   call void @sort(ptr %2, i32 0, i32 1023)
@@ -385,7 +387,7 @@ define i32 @f(i16 %0) {
 14:
   %15 = add nsw i32 %18, 4
   %exitcond1 = icmp eq i32 %15, 0
-  br i1 %exitcond1, label %16, label %17
+  br i1 %exitcond1, label %16, label %17, !llvm.loop !0
 
 16:
   br label %25
@@ -412,13 +414,16 @@ define i32 @f(i16 %0) {
   %34 = add nuw nsw i32 %28, 1
   %35 = getelementptr i8, ptr %26, i32 4
   %exitcond = icmp eq i32 1024, %34
-  br i1 %exitcond, label %36, label %25
+  br i1 %exitcond, label %36, label %25, !llvm.loop !0
 
 36:
   %37 = phi i32 [ %33, %25 ], [ -1, %17 ]
   call void @llvm.lifetime.end.p0(i64 -1, ptr nonnull %2)
   ret i32 %37
 }
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.disable\"}
 ";
 
 /// The split block of a loop exit stayed next to the loop, so the code jumped

@@ -1553,6 +1553,7 @@ impl FunctionPass for LoopUnrollAndJam {
                 min_size: false,
                 only_when_forced: false,
                 prepare_for_lto: false,
+                target_unrolling: false,
             },
         };
         let mut changed = false;
