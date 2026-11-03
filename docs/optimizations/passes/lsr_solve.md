@@ -52,6 +52,14 @@ counter and a `cmp`, where the byte index ending at zero shares the
 counter and saves the `cmp`. Exit: none while the pin's rule picks the
 worse solution under its own cost model.
 
+DEVIATE LU7: the register budget at m32 is the registers the target allocates
+(`Machine::registers`: ebp and esp excluded), not the pin's eight
+([`getNumberOfRegisters`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173)).
+Eight let a four-register zero-test index look affordable beside two other
+values and shellsort bq32 -Os spilled it (+13 B, +125 instructions); the pin,
+with the same IR and eight, keeps the pointer walk. Exit: none, a machine fact
+(m16 states its six the same way); m64 follows when a cell needs it.
+
 DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
 values its body defines that SCEV does not make a recurrence, in registers
 of the target's width, `Tti::gpr_bits`) are taken off the budget the solver

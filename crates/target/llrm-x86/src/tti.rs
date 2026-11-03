@@ -56,6 +56,9 @@ pub struct X86 {
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
+    /// General registers a value may sit in, where the target's description
+    /// states them (frame and stack pointers excluded); none: the pin's count.
+    pub registers: Option<u32>,
     /// The target's tuning table (`Machine::tuning`); the pin's by default.
     pub tuning: llrm_mir::target::Tuning,
 }
@@ -139,6 +142,7 @@ impl X86 {
                 macro_fusion: false,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             "core2" => Some(X86 {
@@ -148,6 +152,7 @@ impl X86 {
                 macro_fusion: true,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
@@ -159,6 +164,7 @@ impl X86 {
                 macro_fusion: true,
                 quad: true,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             _ => None,
@@ -183,6 +189,14 @@ impl X86 {
         real_mode: RealMode,
     ) -> X86 {
         X86 { real_mode: Some(real_mode), ..self.clone() }
+    }
+
+    /// The registers the target's description allocates.
+    pub fn with_registers(
+        &self,
+        registers: u32,
+    ) -> X86 {
+        X86 { registers: Some(registers), ..self.clone() }
     }
 
     /// The target's tuning table.
@@ -986,7 +1000,7 @@ impl Tti for X86 {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+        self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold

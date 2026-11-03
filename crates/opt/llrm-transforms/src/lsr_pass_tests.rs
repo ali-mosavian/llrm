@@ -1342,3 +1342,42 @@ b80:
   unreachable
 }
 ";
+
+/// shellsort bq32 -Os: the m32 model budgeted the pin's 8 registers though ebp
+/// and esp are never allocated, so the zero-test index off the array (4 regs,
+/// one instruction fewer) looked affordable beside two other values and the
+/// loop spilled (+13 B, +125 instructions). With the 6 the target allocates the
+/// pointer and the exit compare on the value counter stay.
+#[test]
+fn the_registers_the_m32_target_allocates_bound_the_budget() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define void @f(ptr %p0, ptr %p3, i32 %k) {
+b1:
+  %h = load i32, ptr %p0
+  br label %b5
+b5:
+  %v6 = phi i32 [ 0, %b1 ], [ %v16, %b5 ]
+  %v7 = shl nuw nsw i32 %v6, 2
+  %v8 = getelementptr i8, ptr %p3, i32 %v7
+  %v9 = mul nuw nsw i32 %v6, 109
+  %v10 = add nuw nsw i32 %v9, 37
+  %v11 = shl nuw nsw i32 %v6, 7
+  %v12 = xor i32 %v10, %v11
+  %v13 = load i32, ptr %p0
+  %v14 = and i32 %v13, 65535
+  %v15 = xor i32 %v12, %v14
+  store i32 %v15, ptr %v8
+  %v16 = add nuw nsw i32 %v6, 1
+  %c = icmp eq i32 %v16, 64
+  br i1 %c, label %e, label %b5
+e:
+  ret void
+}
+";
+    let mut module = parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
+}
