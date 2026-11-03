@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
+import elfsize  # noqa: E402
 import benchlist  # noqa: E402
 DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 
@@ -173,6 +174,11 @@ def segments(obj: Path) -> list[Segment]:
     return [Segment(name, klass, size, min(loaded, size), bits, tuple(pieces)) for name, klass, size, loaded, bits, pieces in found]
 
 
+def is_elf(obj: Path) -> bool:
+    with open(obj, "rb") as file:
+        return file.read(4) == b"\x7fELF"
+
+
 def is_code(segment: Segment) -> bool:
     return segment.klass.upper().endswith("CODE")  # CODE, and the BASIC runtime's BC_CODE
 
@@ -187,6 +193,8 @@ class CodeSize:
 def code_size(obj: Path) -> CodeSize:
     """The object's code bytes without alignment padding (a layout move of a few bytes before an aligned loop is not growth), and the padding
     apart. `unread`: bytes the decoder skipped as no instruction; they stay in `code`."""
+    if is_elf(obj):
+        return CodeSize(*elfsize.code_size(obj, padding))
     code = align = unread = 0
     for one in segments(obj):
         if not is_code(one):
@@ -214,6 +222,8 @@ def code_bytes(obj: Path) -> int:
 def data_bytes(obj: Path) -> tuple[int, int]:
     """(initialised, uninitialised) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
     BC_SEGS): the bytes its LEDATA and LIDATA records carry, and the rest of each SEGDEF. Not the stack, nor debug records."""
+    if is_elf(obj):
+        return elfsize.data_bytes(obj)
     kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
     return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 

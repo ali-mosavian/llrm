@@ -243,6 +243,30 @@ pub fn pressure_in(
     peak
 }
 
+/// `pressure_in`, each value weighing `weight` (zero: not counted) -- the
+/// registers a value takes, an `i32` being two words on a 16-bit target.
+pub fn pressure_weighted(
+    function: &Function,
+    blocks: &[BlockId],
+    weight: &dyn Fn(ValueId) -> usize,
+) -> usize {
+    let found = live_where(function, &|one| weight(one) > 0);
+    let mut peak = 0;
+    for &block in blocks {
+        let mut alive = found.live_out[&id(block)].clone();
+        let size = |alive: &IdSet<ValueId>| alive.iter().map(|one| weight(one)).sum::<usize>();
+        peak = peak.max(size(&alive));
+        for op in split(function, block).1.into_iter().rev() {
+            if let Some(one) = op.result {
+                alive.remove(&one);
+            }
+            alive.extend(reads(op));
+            peak = peak.max(size(&alive));
+        }
+    }
+    peak
+}
+
 /// An instruction, the values live before it and those live across it.
 pub struct LivePoint {
     pub inst: InstId,

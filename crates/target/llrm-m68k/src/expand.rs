@@ -182,7 +182,8 @@ pub fn finish(
             _ => None,
         })
         .collect();
-    let has_calls = insts.iter().any(|inst| inst.call);
+    // a tail call has no call sequence: it leaves the frame it is in
+    let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
     let max_call_frame = insts
         .iter()
         .filter(|inst| inst.kind == Kind::Op("ADJCALLSTACKDOWN"))
@@ -331,6 +332,11 @@ pub fn finish(
             Kind::Op("RET") => {
                 closing.iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
+            }
+            Kind::Op("TCRETURNq") => {
+                let [target, _] = &operands[..] else { return Err("TCRETURNq operands".to_owned()) };
+                closing.iter().for_each(|op| frame_op(op, &mut out));
+                out.push(mc::Inst { opcode: "BRA16", operands: vec![target.clone()] });
             }
             Kind::Op("MOVM32pm_P") => {
                 let [mc::Operand::Imm(disp), ref base, mc::Operand::Reg(src)] = operands[..] else {

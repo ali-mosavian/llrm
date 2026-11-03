@@ -2,10 +2,10 @@
 ; Same ABI and scratch budget as sf32.s: a in rc2..rc5, b in rc6..rc9, result A:X:rc2:rc3.
 ;
 ; The tricks: mantissas are normalized once (denormals too) so both loops see 24-bit values with bit 23 set;
-; multiply is Woz's shift-add on a 6-byte right-shifting product, one ror chain per bit, the add carry re-enters
-; through the chain's carry; divide is a restoring loop whose quotient shifts into the same cells that become the
-; rounding block, the trial subtraction lives in A/X/Y and is committed only on success; the exponent is a signed
-; 16-bit sum that is range-checked once, in the shared tail.
+; multiply is Woz's shift-add on a 4-byte window (product top byte in A, one multiplier byte below it, which fills
+; with product bits), the add carry re-enters through the chain's carry; divide compares first and subtracts only
+; for a 1, R's top byte in A, 24 quotient bits in three sentinel groups (a ratio below 1 steps once first), guard and
+; sticky from 2R against D; the exponent is a signed 16-bit sum that is range-checked once, in the shared tail.
 
 .setcpu "6502"
 .include "sf32.inc"
@@ -20,6 +20,91 @@
 e16lo = rc2             ; result exponent, signed 16 bit
 e16hi = rc3
 opf   = rc24            ; 0 multiply, 1 divide; special-value path only
+
+
+.ifdef SF_MUL_LUT
+; add (row byte) * M[j] into the sum at cell lo and the cells above it
+.macro QPROD j, lo
+    ldy rc20+j
+    sec
+    lda (rc2),y
+    sbc (rc6),y
+    tax
+    lda (rc4),y
+    sbc (rc24),y
+    tay
+    txa
+    clc
+    adc lo
+    sta lo
+    tya
+    QUP lo
+.endmacro
+.macro QUP lo                ; A + carry into the cell after lo, carry rippling up to rc19
+.if lo = rc23
+    adc rc16
+    sta rc16
+    bcc :+
+    inc rc17
+    bne :+
+    inc rc18
+    bne :+
+    inc rc19
+:
+.elseif lo = rc16
+    adc rc17
+    sta rc17
+    bcc :+
+    inc rc18
+    bne :+
+    inc rc19
+:
+.elseif lo = rc17
+    adc rc18
+    sta rc18
+    bcc :+
+    inc rc19
+:
+.else
+    adc rc19
+    sta rc19
+.endif
+.endmacro
+.endif
+
+.ifdef SF_DIV_LUT
+; subtract (q) * D[j] from the window at cells lo, hi, the borrow rippling up to rc18
+.macro QSUB j, lo, hi
+    ldy rc20+j
+    sec
+    lda (rc2),y
+    sbc (rc6),y
+    sta rc23
+    lda (rc4),y
+    sbc (rc24),y
+    tax
+    sec
+    lda lo
+    sbc rc23
+    sta lo
+    stx rc23
+    lda hi
+    sbc rc23
+    sta hi
+.if hi = rc16
+    bcs :++
+    lda rc17
+    bne :+
+    dec rc18
+:   dec rc17
+:
+.elseif hi = rc17
+    bcs :+
+    dec rc18
+:
+.endif
+.endmacro
+.endif
 
 .segment "CODE"
 
@@ -79,48 +164,354 @@ mulbody:
     txa
     sbc #0
     sta e16hi
+.ifdef SF_MUL_NIB
+; nibble products: x*y = nibt[x << 4 | y] (symmetric, so (c & $f0) | n indexes c's high nibble times n without shifts);
+; n*c = lo + 16*hi per byte, so every term lands byte aligned in E (weight 1) or O (weight 16); P = E + 16*O
+; E = rc2..rc7 (P0..P5), O = nibo (bss), nibble cells rc16..rc19
+    lda rc5
+    BHI1_EOR
+    and #$80
+    pha
+    lda e16lo
+    pha
+    lda e16hi
+    pha
+    ldx #2
+:   lda rc16,x              ; multiplicand nibbles: low ones in place, high ones masked
+    and #$0f
+    sta nibcl,x
+    lda rc16,x
+    and #$f0
+    sta nibch,x
+    dex
+    bpl :-
     lda #0
+    ldx #5
+:   sta rc2,x
+    sta nibo,x
+    dex
+    bpl :-
+    inx
+nrow:                       ; multiplier byte X: a = low nibble, h = high nibble
+    lda rc20,x
+    and #$0f
+    sta rc16
+    asl a
+    asl a
+    asl a
+    asl a
+    sta rc17                ; a << 4
+    lda rc20,x
+    and #$f0
+    sta rc18                ; h << 4
+    lsr a
+    lsr a
+    lsr a
+    lsr a
     sta rc19
+; E[x+i] += a * lo(c_i)
+    clc
+    lda rc17
+    ora nibcl+0
+    tay
+    lda rc2+0,x
+    adc nibt,y
+    sta rc2+0,x
+    lda rc17
+    ora nibcl+1
+    tay
+    lda rc2+1,x
+    adc nibt,y
+    sta rc2+1,x
+    lda rc17
+    ora nibcl+2
+    tay
+    lda rc2+2,x
+    adc nibt,y
+    sta rc2+2,x
+    bcc :+
+    inc rc2+3,x
+    bne :+
+    inc rc2+4,x
+    bne :+
+    inc rc2+5,x
+:
+; O[x+i] += a * hi(c_i)
+    clc
+    lda nibch+0
+    ora rc16
+    tay
+    lda nibo+0,x
+    adc nibt,y
+    sta nibo+0,x
+    lda nibch+1
+    ora rc16
+    tay
+    lda nibo+1,x
+    adc nibt,y
+    sta nibo+1,x
+    lda nibch+2
+    ora rc16
+    tay
+    lda nibo+2,x
+    adc nibt,y
+    sta nibo+2,x
+    bcc :+
+    inc nibo+3,x
+    bne :+
+    inc nibo+4,x
+    bne :+
+    inc nibo+5,x
+:
+; O[x+i] += h * lo(c_i)
+    clc
+    lda rc18
+    ora nibcl+0
+    tay
+    lda nibo+0,x
+    adc nibt,y
+    sta nibo+0,x
+    lda rc18
+    ora nibcl+1
+    tay
+    lda nibo+1,x
+    adc nibt,y
+    sta nibo+1,x
+    lda rc18
+    ora nibcl+2
+    tay
+    lda nibo+2,x
+    adc nibt,y
+    sta nibo+2,x
+    bcc :+
+    inc nibo+3,x
+    bne :+
+    inc nibo+4,x
+    bne :+
+    inc nibo+5,x
+:
+; E[x+i+1] += h * hi(c_i)
+    clc
+    lda nibch+0
+    ora rc19
+    tay
+    lda rc2+1,x
+    adc nibt,y
+    sta rc2+1,x
+    lda nibch+1
+    ora rc19
+    tay
+    lda rc2+2,x
+    adc nibt,y
+    sta rc2+2,x
+    lda nibch+2
+    ora rc19
+    tay
+    lda rc2+3,x
+    adc nibt,y
+    sta rc2+3,x
+    bcc :+
+    inc rc2+4,x
+    bne :+
+    inc rc2+5,x
+    bne :+
+    inc rc2+6,x
+:
+    inx
+    cpx #3
+    beq :+
+    jmp nrow
+:   ldy #4                  ; E += 16 * O
+:   asl nibo
+    rol nibo+1
+    rol nibo+2
+    rol nibo+3
+    rol nibo+4
+    rol nibo+5
+    dey
+    bne :-
+    clc
+    ldx #0
+:   lda rc2,x
+    adc nibo,x
+    sta rc2,x
+    inx
+    txa
+    eor #6
+    bne :-
+    lda rc7                 ; block P5..P2, sticky P1 | P0
+    sta rc19
+    lda rc6
+    sta rc18
+    lda rc5
+    sta rc17
+    lda rc4
+    sta rc16
+    ldx #1
+    lda rc19
+    bmi :+                  ; product >= 2: exponent up (X = 1)
+    dex
+    asl rc3                 ; else one place left, as the shift-add leaves it
+    rol rc16
+    rol rc17
+    rol rc18
+    rol rc19
+:   lda rc3                 ; sticky before e16 takes rc2/rc3 back
+    ora rc2
+    beq :+
+    lda #1
+    ora rc16
+    sta rc16
+:   pla
+    sta e16hi
+    pla
+    sta e16lo
+    txa
+    beq :+
+    inc e16lo
+    bne :+
+    inc e16hi
+:   pla
+    sta rsg
+    jmp mdtail2
+.pushseg
+.bss
+nibcl: .res 3
+nibch: .res 3
+nibo:  .res 6
+.segment "SFLUT"
+nibt: .repeat 256, i
+    .byte (i >> 4) * (i & 15)
+.endrepeat
+.popseg
+.else
+.ifdef SF_MUL_LUT
+; quarter squares: x*y = q1[x+y] - q2[255-x+y], q1[n] = n*n/4, q2[n] = (n-255)^2/4; nine 8x8 products, 6-byte sum
+; pointers (zero page, lo byte = the row's byte of a): rc2 q1 lo, rc4 q1 hi, rc6 q2 lo, rc24 q2 hi
+; sum P0 = mp0 (bss), P1 = rc23, P2..P5 = rc16..rc19
+    lda rc5                 ; sign, exponent, a's upper bytes: the pointers reuse their cells
+    BHI1_EOR
+    and #$80
+    pha
+    lda e16lo
+    pha
+    lda e16hi
+    pha
+    lda rc18
+    pha
+    lda rc17
+    pha
+    lda #>q1lo
+    sta rc3
+    lda #>q1hi
+    sta rc5
+    lda #>q2lo
+    sta rc7
+    lda #>q2hi
+    sta rc25
+    lda rc16
+    ldx #0
+    stx rc16
+    stx rc17
+    stx rc18
+    stx rc19
+    jsr qrow0
+    pla
+    jsr qptr
+    QPROD 0, rc23
+    QPROD 1, rc16
+    QPROD 2, rc17
+    pla
+    jsr qptr
+    QPROD 0, rc16
+    QPROD 1, rc17
+    QPROD 2, rc18
+    pla
+    sta e16hi
+    pla
+    sta e16lo
+    lda rc19
+    bmi :+                  ; product >= 2: exponent up
+    asl rc23                ; else one place left, as the shift-add leaves it
+    rol rc16
+    rol rc17
+    rol rc18
+    rol rc19
+    jmp :++
+:   inc e16lo
+    bne :+
+    inc e16hi
+:   lda rc23
+    ora mp0
+    beq :+
+    lda #1
+    ora rc16
+    sta rc16
+:   pla
+    sta rsg
+    jmp mdtail2
+qrow0:                      ; row 0 into the zeroed sum: its first product is stored, not added
+    jsr qptr
+    ldy rc20
+    sec
+    lda (rc2),y
+    sbc (rc6),y
+    sta mp0
+    lda (rc4),y
+    sbc (rc24),y
+    sta rc23
+    QPROD 1, rc23
+    QPROD 2, rc16
+    rts
+.else
+    lda rc16                ; C - 1: each add enters with the multiplier bit (1) as its carry
+    bne :++
+    lda rc17
+    bne :+
+    dec rc18
+:   dec rc17
+:   dec rc16
+    lda #0                  ; P2 lives in A
     sta rc23
     sta rc24
-    ldx #3                  ; three multiplier bytes, eight steps each, unrolled
+    ldx #$fd                ; rc23,x walks the multiplier bytes rc20..rc22 (zero-page wrap)
     clc
+mbyte:
+    ldy #2                  ; two passes of four bits per byte; nothing here touches the carry
+    sty rc25
 mloop:
-.repeat 8
-    ror rc19
+.repeat 4
+    ror a
     ror rc23
     ror rc24
-    ror rc22
-    ror rc21
-    ror rc20                ; carry = multiplier bit
+    ror rc23,x              ; carry = multiplier bit; product bits fill the byte from the top
     bcc :+
-    clc
+    tay
     lda rc24
     adc rc16
     sta rc24
     lda rc23
     adc rc17
     sta rc23
-    lda rc19
+    tya
     adc rc18
-    sta rc19
 :
 .endrepeat
-    dex
-    beq mdone
-    jmp mloop
-mdone:
+    dec rc25
+    bne mloop
+    inx
+    bne mbyte
     bcc mfin                ; the adds came one place early: V' = 2V; no carry out means V' < 2^48 and P is the mantissa
-    ror rc19                ; product >= 2: shift once more, exponent up
+    ror a                   ; product >= 2: shift once more, exponent up
     ror rc23
     ror rc24
     ror rc22
     ror rc21
-    ror rc20
     inc e16lo
     bne mfin
     inc e16hi
 mfin:
+    sta rc19
     lda rc23
     sta rc18
     lda rc24
@@ -132,8 +523,10 @@ mfin:
 :   ora rc22
     sta rc16                ; guard byte with the sticky bit
     jmp mdtail
+.endif
+.endif
 
-; ---- divide: R = rc23..25 (low first), D = rc20..22, quotient rc16..19 (the rounding block)
+; ---- divide: R = rc23, rc24, A (low first), D = rc20..22, quotient rc17..19, guard and sticky rc16 (the rounding block)
 divbody:
     tya
     sec
@@ -153,98 +546,270 @@ divbody:
     txa
     sbc #0
     sta e16hi
+.ifdef SF_DIV_LUT
+; Measured slower than the bit loop (sim65); kept for comparison.
+; radix 256: each digit q is estimated low from R's top 16 bits and a reciprocal of D's top byte (rtab, at most 3 low),
+; R*256 - q*D comes from quarter-square products, and the estimate is corrected upward
+    lda rc18                ; ratio >= 1: integer digit 1 and R - D; else the exponent one down
+    cmp rc22
+    bne :+
+    lda rc17
+    cmp rc21
+    bne :+
     lda rc16
+    cmp rc20
+:   php                     ; carry: the integer digit
+    bcc :+
+    lda rc16
+    sbc rc20
+    sta rc16
+    lda rc17
+    sbc rc21
+    sta rc17
+    lda rc18
+    sbc rc22
+    sta rc18
+    jmp qsave
+:   lda e16lo
+    bne :+
+    dec e16hi
+:   dec e16lo
+qsave:
+    lda rc5                 ; sign and exponent wait on the stack: the pointers reuse their cells
+    BHI1_EOR
+    and #$80
+    pha
+    lda e16lo
+    pha
+    lda e16hi
+    pha
+    lda #>q1lo
+    sta rc3
+    lda #>q1hi
+    sta rc5
+    lda #>q2lo
+    sta rc7
+    lda #>q2hi
+    sta rc25
+    lda #3
+    sta dcnt
+qdig:                       ; R = rc18:rc17:rc16 < D
+    ldx rc22
+    lda rtab-128,x
+    jsr qptr
+    ldy rc17                ; q = (R's top 16 bits * rt) >> 15: hi(rt*r1) + rt*r2*256
+    lda (rc2),y
+    cmp (rc6),y
+    lda (rc4),y
+    sbc (rc24),y
+    sta rc23
+    ldy rc18
+    sec
+    lda (rc2),y
+    sbc (rc6),y
+    tax
+    lda (rc4),y
+    sbc (rc24),y
+    tay
+    txa
+    clc
+    adc rc23
+    sta rc23
+    tya
+    adc #0
+    asl rc23
+    rol a
+    sta qv
+    jsr qptr
+    lda #0                  ; window rc18:rc17:rc16:rc19 = R * 256, minus q * D
+    sta rc19
+    QSUB 0, rc19, rc16
+    QSUB 1, rc16, rc17
+    QSUB 2, rc17, rc18
+qcor:                       ; while the window >= D: subtract, q up
+    lda rc18
+    bne :+
+    lda rc17
+    cmp rc22
+    bne qc2
+    lda rc16
+    cmp rc21
+    bne qc2
+    lda rc19
+    cmp rc20
+qc2:
+    bcc qnext
+:   sec
+    lda rc19
+    sbc rc20
+    sta rc19
+    lda rc16
+    sbc rc21
+    sta rc16
+    lda rc17
+    sbc rc22
+    sta rc17
+    bcs :+
+    dec rc18
+:   inc qv
+    jmp qcor
+qnext:
+    lda rc17
+    sta rc18
+    lda rc16
+    sta rc17
+    lda rc19
+    sta rc16
+    lda qv
+    pha
+    dec dcnt
+    beq :+
+    jmp qdig
+:   asl rc16                ; guard and sticky from 2R against D; X = 2 when R != 0
+    rol rc17
+    rol rc18
+    ldx #0
+    bcs qabove
+    lda rc18
+    ora rc17
+    ora rc16
+    beq qgs
+    ldx #2                  ; R != 0
+    lda rc18
+    cmp rc22
+    bne :+
+    lda rc17
+    cmp rc21
+    bne :+
+    lda rc16
+    cmp rc20
+:   bcc qbelow
+qabove:
+    ldx #2
+    lda #$81
+    bne qgs
+qbelow:
+    lda #1
+qgs:
+    sta rc16
+    pla
+    sta rc17
+    pla
+    sta rc18
+    pla
+    sta rc19
+    pla
+    sta e16hi
+    pla
+    sta e16lo
+    pla
+    sta rsg
+    plp
+    bcc :+                  ; integer digit 1: the block is 1:q1:q2:q3, one place right; guard = q3's last bit
+    stx rc16
+    ror rc19
+    ror rc18
+    ror rc17
+    ror rc16
+:   jmp mdtail2
+.else
+    lda rc16                ; R = rc23, rc24 and A (top byte); D = rc20..22
     sta rc23
     lda rc17
     sta rc24
+    ldy #1                  ; three 8-bit quotient groups, each collected in rc4 behind a sentinel bit, go to rc16+X
+    sty rc4
+    ldx #3
     lda rc18
-    sta rc25
-    lda #$40                ; the quotient's 26 bits come in groups of 2, 8, 8, 8, each collected in rc4 behind a sentinel bit
-    sta rc4
-    ldx #3                  ; the group goes to rc16+X
+    cmp rc22                ; ratio < 1: one step down, so the first quotient bit is always 1
+    bne :+
+    ldy rc24
+    cpy rc21
+    bne :+
+    ldy rc23
+    cpy rc20
+:   bcs dsub
+    ldy e16lo
+    bne :+
+    dec e16hi
+:   dec e16lo
+    jmp dnext
 dloop:
-    lda rc25                ; compare first: the top byte nearly always decides, and only a quotient bit of 1 pays for the subtract
-    cmp rc22
+    cmp rc22                ; compare first: the top byte nearly always decides, and only a quotient bit of 1 pays for the subtract
     bne dcmp
-    lda rc24
-    cmp rc21
+    ldy rc24
+    cpy rc21
     bne dcmp
-    lda rc23
-    cmp rc20
+    ldy rc23
+    cpy rc20
 dcmp:
     bcc dno                 ; R < D: quotient bit 0 (carry clear)
-    lda rc23                ; carry is set: R - D, and the quotient bit 1 is the carry left by the last sbc
+dsub:
+    tay                     ; carry is set: R - D, and the quotient bit 1 is the carry left by the last sbc
+    lda rc23
     sbc rc20
     sta rc23
     lda rc24
     sbc rc21
     sta rc24
-    lda rc25
+    tya
     sbc rc22
-    sta rc25
 dno:
     rol rc4
     bcs dgroup
 dnext:
     asl rc23
     rol rc24
-    rol rc25
+    rol a
     bcc dloop
-    sec                     ; R overflowed 24 bits: the next bit is 1 and R - D is exact modulo 2^24
+    tay                     ; R overflowed 24 bits: the next bit is 1 and R - D is exact modulo 2^24
     lda rc23
     sbc rc20
     sta rc23
     lda rc24
     sbc rc21
     sta rc24
-    lda rc25
+    tya
     sbc rc22
-    sta rc25
     sec
     bcs dno
 dgroup:                     ; the sentinel fell out: rc4 holds the group
-    lda rc4
-    sta rc16,x
-    dex
-    bmi ddone
-    lda #1
-    sta rc4
-    bne dnext
-ddone:
-    ldy #0                  ; sticky: any remainder
-    lda rc23
-    ora rc24
-    ora rc25
-    beq :+
+    ldy rc4
+    sty rc16,x
     ldy #1
-:   ldx #0                  ; align the 26-bit quotient to bit 31: 6 shifts, or 7 when the ratio was < 1
-dnorm:
-    lda rc19
-    bmi dnormd
-    asl rc16
-    rol rc17
-    rol rc18
-    rol rc19
-    inx
-    bne dnorm
-dnormd:
-    cpx #7
-    bne dnd2
-    lda e16lo
-    bne dnd1
-    dec e16hi
-dnd1:
-    dec e16lo
-dnd2:
-    tya
-    ora rc16
+    sty rc4
+    dex
+    bne dnext
+    asl rc23                ; guard and sticky from 2R against D
+    rol rc24
+    rol a
+    bcs dabove
+    cmp rc22                ; 2R = D cannot happen: the quotient's odd part would divide ma's
+    bne :+
+    ldy rc24
+    cpy rc21
+    bne :+
+    ldy rc23
+    cpy rc20
+:   bcc dbelow
+dabove:
+    lda #$81
+    bne dst
+dbelow:
+    ora rc24
+    ora rc23
+    beq dst
+    lda #1
+dst:
     sta rc16
+.endif
 ; ---- shared tail: block rc16..19 normalized, e16 = biased exponent of its top bit, sign from rc5/rc9
 mdtail:
     lda rc5
     BHI1_EOR
     and #$80
     sta rsg
+mdtail2:
     lda e16hi
     bmi mden
     bne mdinf
@@ -310,17 +875,7 @@ ubn:
     sta rc20
     lda #1
     sta rc23
-ubl:
-    lda rc22
-    bmi ubok
-    asl rc20
-    rol rc21
-    rol rc22
-    iny
-    bne ubl
-ubok:
-    lda #1
-    rts
+    jmp unw                 ; X = 4: unp's normalization
 .endif
 
 ; ---- unpack operand at offset X (0 a, 4 b): mantissa rc16+X.., exponent rc19+X, Y = normalization shift
@@ -358,6 +913,20 @@ undn:
     sta rc16,x
     lda #1
     sta rc19,x
+unw:
+    lda rc18,x              ; a zero top byte moves up whole
+    bne unl
+    lda rc17,x
+    sta rc18,x
+    lda rc16,x
+    sta rc17,x
+    lda #0
+    sta rc16,x
+    tya
+    clc
+    adc #8
+    tay
+    bne unw
 unl:
     lda rc18,x
     bmi unok
@@ -467,3 +1036,43 @@ inval:
     lda #0
     tax
     rts
+
+.if .defined(SF_MUL_LUT) .or .defined(SF_DIV_LUT)
+qptr:
+    sta rc2
+    sta rc4
+    eor #$ff
+    sta rc6
+    sta rc24
+    rts
+.pushseg
+.bss
+.ifdef SF_MUL_LUT
+mp0: .res 1
+.endif
+.ifdef SF_DIV_LUT
+qv:  .res 1
+dcnt: .res 1
+.endif
+.segment "SFLUT"         ; page aligned (linker config)
+q1lo: .repeat 512, n
+    .byte <(n * n / 4)
+.endrepeat
+q1hi: .repeat 512, n
+    .byte >(n * n / 4)
+.endrepeat
+q2lo: .repeat 512, n
+    .byte <((n - 255) * (n - 255) / 4)
+.endrepeat
+q2hi: .repeat 512, n
+    .byte >((n - 255) * (n - 255) / 4)
+.endrepeat
+
+.ifdef SF_DIV_LUT
+rtab:                       ; 2^15 / (d + 1) for the divisor's top byte d = 128..255
+.repeat 128, n
+    .byte 32768 / (n + 129)
+.endrepeat
+.endif
+.popseg
+.endif

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 232 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 233 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -85,6 +85,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | constmerge | Identical constants of a module are one, as LLVM's `ConstantMerge`. | Named by `pipeline`. | [constmerge](constmerge.md) |
 | constraintelim | `constraint-elimination`: conditions the dominating branches, assumes and memory accesses already decide become constants, by Fourier-Motzkin elimination on a system of linear constraints over the values compared. | The pipeline's `constraint-elimination@699` slot, after Reassociate | [constraintelim](constraintelim.md) |
 | constraintelim_induction | `constraint-elimination`: the facts a loop's inductions give. | `constraintelim::State::add_info_for`. | [constraintelim_induction](constraintelim_induction.md) |
+| copyback | A by-reference copy-out nothing can change: BASIC passes a far array's element to a near formal through a slot, and stores the slot back after the call. | In the interprocedural step, before [`crate::argpromotion`](argpromotion.md), once the | [copyback](copyback.md) |
 | counting | What a counted-loop rewrite places before the loop: its seeds, skip test and exit values (LLVM's SCEVExpander, as IndVarSimplify and LoopRotate use it). | [`crate::loopidioms`](loopidioms.md), [`crate::window`](window.md) and | [counting](counting.md) |
 | cvp | Correlated value propagation: a value is replaced, narrowed or given a flag when the branches and ranges around it prove the fact, as LLVM's `correlated-propagation`. | Alone, through `llrm-pass cvp`; not in the pipeline. `tools/difftest` | [cvp](cvp.md) |
 | dead | Instructions nothing needs, removed: LLVM's ADCE and DCE. | Once per pass of the function fixed point, after `algebraic`, and again | [dead](dead.md) |
