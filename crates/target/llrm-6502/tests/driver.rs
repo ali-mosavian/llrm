@@ -952,6 +952,37 @@ attributes #0 = { noinline }"#,
     assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
 }
 
+/// `x << n` of a 32-bit value by a variable called the bit loop at every level:
+/// 25 clocks a bit, 530 for the shift by 21 that f32 add makes on average (18%
+/// of that routine). At `-O2` the call is the speed variant, whole bytes first;
+/// at `-Os` it stays the 18-byte loop.
+#[test]
+fn a_variable_long_shift_calls_the_speed_variant_at_o2_only() {
+    let ir = module(
+        r#"define i32 @shl(i32 %x, i32 %n) {
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+define i32 @shr(i32 %x, i32 %n) {
+  %r = lshr i32 %x, %n
+  ret i32 %r
+}
+define i32 @sar(i32 %x, i32 %n) {
+  %r = ashr i32 %x, %n
+  ret i32 %r
+}"#,
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3_fast", "__lshrsi3_fast", "__ashrsi3_fast"] {
+        assert!(fast.contains(&format!("{routine}\n")), "no call to {routine} at -O2:\n{fast}");
+    }
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3", "__lshrsi3", "__ashrsi3"] {
+        assert!(small.contains(&format!(" {routine}\n")), "no call to {routine} at -Os:\n{small}");
+    }
+    assert!(!small.contains("_fast"), "a speed variant at -Os:\n{small}");
+}
+
 /// A four-trip loop over a global stayed a loop at `-O2` (22 B, 98 clocks for
 /// `sum4`, against 13 B and 34 clocks unrolled): the driver turned the unroller
 /// off (DEVIATE 6502-5). The pin unrolls it fully at `-O2`; `buf` holds

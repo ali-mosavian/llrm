@@ -568,3 +568,16 @@ fn timing_tables_have_no_carriage_returns() {
     walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/timing"), &mut found);
     assert!(found.is_empty(), "CRLF in {found:?}");
 }
+
+/// objdump's `divull %d5,%d2,%d2` was unpriced on every family CPU: the
+/// hardware-divide exes of softfloat were costed without their divides.
+#[test]
+fn a_gnu_long_divide_costs_what_the_two_operand_form_does() {
+    for cpu in [Cpu::M68030, Cpu::M68040, Cpu::M68060] {
+        let gnu = llrm_m68k::timing::from_gnu("divull %d5,%d2,%d2").unwrap();
+        let signed = llrm_m68k::timing::from_gnu("divsll %d5,%d2,%d2").unwrap();
+        assert_eq!(clocks(cpu, &gnu), clocks(cpu, "divu.l %d5, %d2"));
+        assert_eq!(clocks(cpu, &signed), clocks(cpu, "divs.l %d5, %d2"));
+        assert!(clocks(cpu, &gnu) > 10, "{cpu:?}");
+    }
+}
