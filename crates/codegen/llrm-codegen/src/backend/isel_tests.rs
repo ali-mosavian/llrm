@@ -3000,10 +3000,11 @@ fn test_a_float_load_compared_second_is_the_comparisons_operand() {
             "define i16 @f(double %x, ptr %p) addrspace(1) {{\n  %w = load double, ptr %p\n  %c = fcmp {test}\n  br i1 %c, label %y, label %n\ny:\n  ret i16 1\nn:\n  ret i16 0\n}}\n"
         ))
     };
-    assert_eq!(
-        compared("ogt double %x, %w")[..3],
-        ["fld qword ptr [bp+6]", "mov bx, word ptr [bp+14]", "fcomp qword ptr [bx]"]
-    );
+    // The pointer load and `fld` sink to the compare in either order.
+    let mut first = compared("ogt double %x, %w")[..3].to_vec();
+    assert_eq!(first.pop().as_deref(), Some("fcomp qword ptr [bx]"));
+    first.sort();
+    assert_eq!(first, ["fld qword ptr [bp+6]", "mov bx, word ptr [bp+14]"]);
     // Compared first, the cell would have to be st(0): it is loaded.
     assert!(
         compared("olt double %x, %w").contains(&"fld qword ptr [bx]".to_owned()),
