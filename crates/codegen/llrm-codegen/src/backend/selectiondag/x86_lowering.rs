@@ -244,6 +244,7 @@ impl CombineHooks for X86Lowering<'_> {
         op: ISD,
     ) -> bool {
         op == ISD::Mul
+            || op == ISD::SetCC
             || op == ISD::Add
             || op == ISD::Sub
             || op == x86isd::ADD
@@ -264,6 +265,7 @@ impl CombineHooks for X86Lowering<'_> {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
+            ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1101,6 +1103,43 @@ fn check_bool_test(
     }
     let inner = dag.constant(dag.operand(test, 0))?;
     Some((dag.operand(test, 1), if opposite { inner ^ 1 } else { inner }))
+}
+
+/// `combineSetCC` ([L58770][pin]): `cmpeq(trunc(x), C)` is `cmpeq(x, C)` when
+/// the upper bits of `x` are zero, in the legal type `x` has: a `zeroext`
+/// `i16` argument is compared as the register it arrived in (`cmpl $5, %edi`,
+/// not `cmpw`, which takes a 66h prefix). Only the equality forms; the pin
+/// leaves `ult` and `ugt` at the narrow type.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L58770-L58782
+fn combine_integer_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    level: CombineLevel,
+) -> Option<SDValue> {
+    let NodeData::CondCode(cond) = dag.node(dag.operand(node, 2)).data else { return None };
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
+        || level == CombineLevel::BeforeLegalizeTypes
+        || dag.opcode(lhs) != ISD::Truncate
+        || dag.constant(rhs).is_none()
+    {
+        return None;
+    }
+    let source = dag.operand(lhs, 0);
+    let (source_vt, op_vt) = (dag.value_type(source), dag.value_type(lhs));
+    // A type the target holds in a register: not a pair (m16's dword).
+    let legal = source_vt.size_in_bits() >= 32 && source_vt.size_in_bits() <= dag.config().pointer.size_in_bits().max(32);
+    if !legal {
+        return None;
+    }
+    let upper = super::fold::mask(source_vt.size_in_bits()) & !super::fold::mask(op_vt.size_in_bits());
+    if !super::known_bits::masked_value_is_zero(dag, source, upper) {
+        return None;
+    }
+    let constant = dag.get_zext_or_trunc(rhs, source_vt);
+    Some(dag.get_setcc(dag.value_type(node), source, constant, cond))
 }
 
 /// `combineX86SetCC`: a `setcc` of a boolean test reads the inner flags.
