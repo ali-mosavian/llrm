@@ -163,11 +163,13 @@ fn locate_with(
                     // Over the stretches of the value number the note stands in
                     // (`extendDef` follows the `VNInfo` of the def), not of
                     // whatever else the register's interval holds.
+                    // A note before the value's first stretch (an argument's
+                    // arrival) is of the first one.
                     let number = segments
                         .get(&value)
                         .into_iter()
                         .flatten()
-                        .find(|segment| segment.start <= start && start < segment.end)
+                        .find(|segment| start < segment.end)
                         .and_then(|segment| segment.vn);
                     for segment in segments
                         .get(&value)
@@ -717,6 +719,19 @@ mod tests {
         let table = BTreeMap::from([(7, vec![held(10, 20, 1), held(20, 30, 2)])]);
         let found = locate_without_gaps(&[note(12, 1, NoteValue::Value(7))], &table, 50);
         assert_eq!(ranges(&found), [(12, 20, Where::Place(reg(1)))]);
+    }
+
+    /// An argument said at the entry is of the value it arrived as: a copy of
+    /// it into another register is a value of its own, and the variable stays
+    /// in the argument's register (observed.c `bump.by`: ours moved it to
+    /// `eax` at the copy, the pin kept `esi` throughout).
+    #[test]
+    fn an_argument_stays_in_its_register_after_a_copy_of_it_is_made() {
+        let held = |start, end, register: u32, vn| Segment { start, end, place: reg(register), vn: Some(vn) };
+        let table = BTreeMap::from([(7, vec![held(18, 50, 1, 1), held(50, 98, 2, 2)])]);
+        let said = [note(16, 1, NoteValue::Arrived(7, RegId::from_raw(1)))];
+        let found = locate_without_gaps(&said, &table, 100);
+        assert_eq!(found.iter().filter(|one| one.at == Where::Place(reg(2))).count(), 0, "{found:?}");
     }
 
     /// A parameter whose register is last read at the first instruction read
