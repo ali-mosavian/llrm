@@ -59,6 +59,13 @@ fn trace(
         .expect("timeout runs qemu-m68k");
     let mut pcs = Vec::new();
     for line in BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
+        // a trace that ends in a fault is a short program, not a cheap one
+        assert!(
+            !line.contains("uncaught target signal"),
+            "{} faulted on {cpu} after {} instructions: {line} (CYCLES_QEMU_CPU names the CPU to run on)",
+            exe.display(),
+            pcs.len()
+        );
         let Some(fields) = line.split_once('[').and_then(|(_, rest)| rest.split_once(']')) else { continue };
         if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
             pcs.push(pc);
@@ -91,7 +98,46 @@ fn qemu_cpu_for(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::qemu_cpu_for;
+    use std::process::Command;
+
+    use super::{qemu_cpu_for, trace};
+
+    /// A 68020 program (`divu.l`) assembled and linked with the m68k binutils;
+    /// `None` without `$GCC_M68K`.
+    fn program_with_divu_l() -> Option<std::path::PathBuf> {
+        let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty())?;
+        let dir = std::env::temp_dir().join(format!("cycles-fault-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (source, object, exe) = (dir.join("p.s"), dir.join("p.o"), dir.join("p.exe"));
+        std::fs::write(
+            &source,
+            ".globl _start\n_start:\n\tmoveq #5,%d0\n\tmoveq #3,%d1\n\tdivu.l %d1,%d0\n\tmoveq #1,%d0\n\tmoveq #0,%d1\n\ttrap #0\n",
+        )
+        .unwrap();
+        let tool = |name: &str| {
+            let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
+            command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
+            command
+        };
+        assert!(tool("as").args(["-m68020", "-o"]).arg(&object).arg(&source).status().unwrap().success());
+        assert!(tool("ld").arg("-o").arg(&exe).arg(&object).status().unwrap().success());
+        Some(exe)
+    }
+
+    /// The 68020 program on `m68000` faulted at `divu.l`; its trace of three
+    /// instructions was priced as the whole program, with no error.
+    #[test]
+    #[should_panic(expected = "faulted on m68000")]
+    fn a_trace_that_ends_in_a_fault_is_refused() {
+        let Some(exe) = program_with_divu_l() else { panic!("faulted on m68000 (skipped: no GCC_M68K)") };
+        trace(&exe, 1000, "m68000");
+    }
+
+    #[test]
+    fn the_same_program_traces_on_the_cpu_it_needs() {
+        let Some(exe) = program_with_divu_l() else { return };
+        assert!(trace(&exe, 1000, "m68020").len() >= 6);
+    }
 
     /// A 68040 or 68060 program ran on `m68000`, faulted at its first 68020+
     /// instruction and was priced for the few it had executed (339
