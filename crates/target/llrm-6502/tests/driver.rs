@@ -1274,6 +1274,30 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
+/// A 64-bit add carried between its words by compares: the legalizer tested the
+/// carry operation at the 32-bit half, which is no legal type here, instead of
+/// the 16-bit piece it expands to, so `a + b` took 163 instructions with a
+/// `cmp`/`bcc` pair per carry. It is an `adc` chain; `0x1_FFFF_FFFF + 1` has
+/// high word 2.
+#[test]
+fn a_64_bit_add_is_a_carry_chain_not_compares() {
+    let ir = module(
+        r#"@a = internal global i64 8589934591
+@b = internal global i64 1
+define i8 @probe() {
+  %x = load volatile i64, ptr @a
+  %y = load volatile i64, ptr @b
+  %s = add i64 %x, %y
+  %h = lshr i64 %s, 32
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("cmp"), "a carry made by a compare:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 2, "{text}");
+}
+
 /// A loaded `i1` that a `select` or an extension tests was selected into a
 /// compare of its own zero extension: `llrm-6502-llc` ran until it had taken
 /// 217 GB. A bit in memory is a byte, `x & 1`. `pick` is 7 for a stored 1 and
