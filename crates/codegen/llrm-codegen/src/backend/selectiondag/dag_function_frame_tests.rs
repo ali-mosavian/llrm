@@ -1218,15 +1218,6 @@ fn a_zero_clear_of_doubles_that_is_a_fill_stays_rep_stos() {
     assert!(ops.iter().any(|o| o.starts_with("Fill")) && !ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
 }
 
-/// At -O2 the same clear is priced: the 24 bytes it saves pay, at the 486's
-/// rate, for the clocks of a `fldz` and two `fst` over four stores.
-#[test]
-fn at_speed_a_zero_clear_of_doubles_is_x87_stores() {
-    let ops = memset_ops(16, false);
-    assert!(ops.iter().filter(|o| o.starts_with("FloatStore")).count() == 2, "{ops:?}");
-    assert!(!ops.iter().any(|o| o.starts_with("Store")), "{ops:?}");
-}
-
 /// ring nib -O2: a 2 KB zero clear was 256 `fst`s, +2017 B over the `rep stosd`
 /// for -17 clocks. Only a clear the backend would store inline is `fst`s.
 #[test]
@@ -1235,6 +1226,15 @@ fn at_speed_a_clear_past_the_inline_stores_stays_rep_stos() {
     assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
     let ops = memset_ops(32, false);
     assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "8 dwords are past the 4 stores: {ops:?}");
+}
+
+/// matmul nib -O2: two 16-byte clears as `fldz`, two `fst`, `fstp st(0)` were
+/// 46 B smaller and 142 clocks slower: the release was not in the price, and
+/// the 22 B it saves do not pay 15 clocks a clear at two bytes a clock.
+#[test]
+fn at_speed_the_release_of_the_fldz_is_in_the_price_of_x87_stores() {
+    let ops = memset_ops(16, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
 }
 
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.

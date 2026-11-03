@@ -175,6 +175,8 @@ pub struct SizeTrade {
     /// `fldz` and a `fst` of a double.
     pub float_load: i64,
     pub float_store: i64,
+    /// The `fstp st(0)` that releases the `fldz`.
+    pub float_release: i64,
 }
 
 impl BuilderTarget {

@@ -771,6 +771,7 @@ fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
         prefix: costs.prefix,
         float_load: costs.float_load,
         float_store: costs.float_store,
+        float_release: costs.float_release,
     })
 }
 

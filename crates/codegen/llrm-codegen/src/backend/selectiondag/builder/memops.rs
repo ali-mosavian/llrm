@@ -642,6 +642,7 @@ impl Builder<'_> {
     ) -> Option<SDValue> {
         const FLDZ: u64 = 2;
         const FST_QWORD: u64 = 3;
+        const FSTP: u64 = 2;
         if self.target.dag.pointer.size_in_bits() != 16
             || self.target.tuning.x87_stack_slots.is_none()
             || self.volatile_memory
@@ -651,7 +652,7 @@ impl Builder<'_> {
             return None;
         }
         let (dwords, cells) = (length / 4, length / 8);
-        let x87 = FLDZ + cells * FST_QWORD;
+        let x87 = FLDZ + cells * FST_QWORD + FSTP;
         // Never over a fill: its price here (`FILL_BYTES`) cannot see the setup
         // that neighbouring fills share, and fpbench/nbody_single -Os grew 2 B
         // taking the `fst`s over two adjacent ones.
@@ -670,7 +671,7 @@ impl Builder<'_> {
         if !opt_size {
             let trade = self.target.size_trade?;
             let int_clocks = (dwords * (trade.store + trade.prefix) as u64) as i64;
-            let x87_clocks = trade.float_load + cells as i64 * trade.float_store;
+            let x87_clocks = trade.float_load + cells as i64 * trade.float_store + trade.float_release;
             if (ints - x87) as i64 * trade.milliclocks_per_byte < (x87_clocks - int_clocks) * 1000 {
                 return None;
             }
