@@ -14,10 +14,11 @@
 # 68040: MC68040UM 7.4.2 (printed 7-12): a burst line read is five clocks for a
 #   16 byte line, eight burst-inhibited.
 # 68060: MC68060UM 7.7.2 (printed 7-15), 10.3.3 (10-13): five clocks, 16 bytes.
-# 68030: pending its manual's bus chapter; the interim 500 is 1 clock = 2 bytes.
+# 68030: MC68030UM 7.3.7 (printed 7-59): a burst fill is S0-S3, the two-clock
+#   synchronous read, then S4-S9, three more longwords a clock each (states are
+#   half clocks): five clocks for a 16 byte line.
 default_cpu           m68000
 cpus                  m68000 m68010 m68020 m68030 m68040 m68060
 march                 68000  68010  68020  68030  68040  68060
-cache_line                 2      2      4      -     16     16
-line_fill_clocks           4      4      3      -      5      5
-speed_milliclocks_per_byte -      -      -    500      -      -
+cache_line                 2      2      4     16     16     16
+line_fill_clocks           4      4      3      5      5      5
