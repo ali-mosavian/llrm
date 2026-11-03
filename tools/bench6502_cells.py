@@ -1,12 +1,16 @@
 """Compare two 6502 bench outputs cell by cell (`ours` columns), n/a counts as a failure.
 
-usage: bench6502_cells.py BASE.txt NEW.txt
+usage: bench6502_cells.py BASE.txt NEW.txt [--cc BASE_LLRM_CC NEW_LLRM_CC]
+
+The header says how many `ours` cells compiled in each leg, and with `--cc` the md5 of each leg's llrm-cc. A leg with no compiled
+cell is a failure (exit 1): two logs of `n/a (llrm-cc: No such file)` once compared as "0 of 0 cells" and looked unchanged.
 
 A cell that is numeric in BASE and n/a (or gone) in NEW is listed first and the exit status is 1: a build
 that stopped assembling is not "unchanged", and a sum over the cells both runs have would hide it.
 """
 import re
 import sys
+from pathlib import Path
 
 CELL = re.compile(r"(\d+) B(?: linked)?(?:, \d+ B body)?, (\d+) cy")
 
@@ -34,9 +38,23 @@ def compare(base, new):
     return broken, both
 
 
+def md5(path):
+    import hashlib
+
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
 def main(argv):
     base, new = rows(argv[1]), rows(argv[2])
     broken, both = compare(base, new)
+    compiled = lambda d: sum(1 for v in d.values() if v)
+    print(f"base: {compiled(base)} of {len(base)} ours cells compiled; new: {compiled(new)} of {len(new)}")
+    if "--cc" in argv:
+        at = argv.index("--cc")
+        print(f"llrm-cc md5 base {md5(argv[at + 1])} new {md5(argv[at + 2])}")
+    if not compiled(base) or not compiled(new):
+        print("FAIL: a leg compiled no ours cell; the comparison says nothing")
+        return 1
     for key in broken:
         print("BROKEN", key[0], key[1], "was", base[key])
     total = lambda d, ks, i: sum(d[k][i] for k in ks)
