@@ -138,7 +138,7 @@ INTRINSICS = []
 def intr(name, ret, args):
     INTRINSICS.append((name, ret, args))
 INTS = ["i8", "i16", "i32", "i64"]
-FLOATS = [("f64", "double"), ("f32", "float")]
+FLOATS = [("f64", "double"), ("f32", "float"), ("f80", "x86_fp80")]
 PTRS = {"p0": "ptr", "p1": "ptr addrspace(1)", "p2": "ptr addrspace(2)"}
 for ty in INTS:
     for m in ["smax", "smin", "umax", "umin"]:
@@ -166,7 +166,7 @@ for dst, dty in PTRS.items():
             intr(f"llvm.memmove.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
 body = []; decls = []
 for n, (name, ret, args) in enumerate(INTRINSICS):
-    vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "i1": "false",
+    vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "x86_fp80": "%e", "i1": "false",
             "ptr": "%p", "ptr addrspace(1)": "%p1", "ptr addrspace(2)": "%p2"}
     cargs = ", ".join(f"{t} {vals[t]}" for t in args)
     # SimplifyCFG's switch-of-powers-of-two prices `cttz(x, true)`.
@@ -174,7 +174,7 @@ for n, (name, ret, args) in enumerate(INTRINSICS):
     if ".fix." in name: cargs = f"{args[0]} {vals[args[0]]}, {args[1]} {vals[args[1]]}, i32 3"
     body.append(f"  {'' if ret == 'void' else f'%v{n} = '}call {ret} @{name}({cargs})")
     decls.append(f"declare {ret} @{name}({', '.join(args)})")
-fn("intrinsics", "i8 %b, i16 %a, i32 %w, i64 %q, double %d, float %f, ptr %p, ptr addrspace(1) %p1, ptr addrspace(2) %p2", "\n".join(body), "\n".join(decls) + "\n")
+fn("intrinsics", "i8 %b, i16 %a, i32 %w, i64 %q, double %d, float %f, x86_fp80 %e, ptr %p, ptr addrspace(1) %p1, ptr addrspace(2) %p2", "\n".join(body), "\n".join(decls) + "\n")
 
 corpus = HEAD + G + "".join(FUNCS.values())
 open(os.path.join(HERE, "instructioncost_corpus.ll"), "w").write(corpus)

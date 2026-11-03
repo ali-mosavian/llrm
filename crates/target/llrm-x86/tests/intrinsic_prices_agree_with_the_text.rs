@@ -30,3 +30,18 @@ fn test_every_price_row_is_found_and_a_missing_name_is_not() {
     let x86 = X86::of_cpu("i486").unwrap();
     assert_eq!(x86.intrinsic_cost("llvm.no.such.thing", None, &[], CostKind::CodeSize), Cost::INVALID);
 }
+
+/// The price text had rows for f32 and f64 only, so every call of an
+/// `x86_fp80` intrinsic was invalid: the unroller could not size a loop that
+/// held `llvm.fmuladd.f80` (`x * 3.7L - 20`), and x_ld_to_int kept its outer
+/// loop and a `fiadd` of the counter in every inner trip, where the pin
+/// unrolls the outer loop and adds a constant.
+#[test]
+fn test_an_extended_intrinsic_has_a_price() {
+    let x86 = X86::of_cpu("i486").unwrap();
+    for kind in [CostKind::CodeSize, CostKind::SizeAndLatency, CostKind::Latency, CostKind::RecipThroughput] {
+        for name in ["llvm.fmuladd.f80", "llvm.sqrt.f80", "llvm.fabs.f80"] {
+            assert!(x86.intrinsic_cost(name, None, &[], kind) != Cost::INVALID, "{name} {kind:?}");
+        }
+    }
+}
