@@ -91,6 +91,7 @@ impl<T: Target> Converted<T> {
             self.body.pins.clone(),
             size,
             T::joins_global_copies(),
+            T::joins_pinned_copies(),
             registers,
             Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
@@ -193,6 +194,7 @@ pub fn to_lir<T: Target>(
         pins: IndexMap::default(),
         values: IndexMap::default(),
         origin: Vec::new(),
+        symbols: Vec::new(),
         marker: PhantomData::<T>,
     };
     // every physical register is a value before the first instruction, so a
@@ -361,6 +363,9 @@ struct Made<'f, T: Target> {
     pins: IndexMap<u32, RegId>,
     values: IndexMap<RegId, u32>,
     origin: Vec<(usize, usize)>,
+    /// The symbols the function's operands name, in order of first use: the
+    /// number a symbol's `Imm` carries as its address.
+    symbols: Vec<String>,
     marker: PhantomData<T>,
 }
 
@@ -474,9 +479,22 @@ impl<T: Target> Made<'_, T> {
                     sources.push(Loc::Held(held));
                 }
                 Operand::Imm(value) => sources.push(Loc::Imm(Imm { value: *value, width: 0, address: None })),
-                Operand::Symbol(_, offset) => {
+                Operand::Symbol(name, offset) => {
                     symbol = true;
-                    sources.push(Loc::Imm(Imm { value: *offset, width: 0, address: None }));
+                    // The symbol is part of the value: `_s` and `0` are two
+                    // literals, which `from_lir` must not take for one.
+                    let at = self
+                        .symbols
+                        .iter()
+                        .position(|one| one == name)
+                        .unwrap_or_else(
+                            || {
+                                self.symbols.push(name.clone());
+                                self.symbols.len() - 1
+                            },
+                        );
+                    let address = Some(Addr::new(Space::External, at as i64));
+                    sources.push(Loc::Imm(Imm { value: *offset, width: 0, address }));
                 }
                 Operand::Frame(slot) => {
                     sources.push(Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, i64::from(*slot))), 0)));

@@ -227,6 +227,11 @@ impl Tti for Z80Tti {
         }
     }
 
+    // There is no conditional move: a `select` is a branch on the Z80.
+    fn has_cmov(&self) -> bool {
+        false
+    }
+
     // The runtime has no routine that leaves both quotient and remainder: a
     // pair is two calls.
     fn has_div_rem_op(
