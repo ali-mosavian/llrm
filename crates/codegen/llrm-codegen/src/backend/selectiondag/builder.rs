@@ -812,10 +812,13 @@ impl Builder<'_> {
             Ok(reg_vt) => Ok((reg_vt, 1)),
             Err(_) => {
                 let widest = EVT::integer(*self.target.legal_ints.last().expect("a legal integer"));
-                if vt.is_integer() && vt.size_in_bits() == 2 * widest.size_in_bits() {
-                    Ok((widest, 2))
+                // a power of two of registers (`getNumRegisters` of an expanded
+                // integer)
+                let count = vt.size_in_bits() / widest.size_in_bits();
+                if vt.is_integer() && vt.size_in_bits() % widest.size_in_bits() == 0 && count.is_power_of_two() {
+                    Ok((widest, count as usize))
                 } else {
-                    Err(Refused("integer wider than two registers"))
+                    Err(Refused("integer wider than a power of two registers"))
                 }
             }
         }
@@ -861,6 +864,39 @@ impl Builder<'_> {
             return Ok((EVT::integer(vt.size_in_bits() / 2), 2));
         }
         self.parts(vt)
+    }
+
+    /// `getCopyToParts` for `count` equal parts, low first: halves, each halved.
+    fn split_parts(
+        &mut self,
+        value: SDValue,
+        part: EVT,
+        count: usize,
+    ) -> Vec<SDValue> {
+        if count == 1 {
+            return vec![value];
+        }
+        let half = EVT::integer(self.dag.value_type(value).size_in_bits() / 2);
+        let [low, high] = self.split_value(value, half);
+        let mut all = self.split_parts(low, part, count / 2);
+        all.extend(self.split_parts(high, part, count / 2));
+        all
+    }
+
+    /// `getCopyFromParts` of `parts.len()` equal parts, low first, paired up.
+    fn join_parts(
+        &mut self,
+        parts: &[SDValue],
+        vt: EVT,
+        pointer: bool,
+    ) -> SDValue {
+        if let [one] = parts {
+            return *one;
+        }
+        let half = EVT::integer(vt.size_in_bits() / 2);
+        let (low, high) = parts.split_at(parts.len() / 2);
+        let pair = [self.join_parts(low, half, false), self.join_parts(high, half, false)];
+        self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
     }
 
     /// `getCopyToParts` for two parts: the high half is extracted first.
@@ -2746,12 +2782,17 @@ impl Builder<'_> {
         }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
-        if parts == 2 {
+        if parts > 1 {
             // each part's copy chained to the one before; the halves paired
-            let regs = self.info.part_regs(reg, 2);
-            let low = self.dag.get_copy_from_reg(entry, regs[0], reg_vt);
-            let high = self.dag.get_copy_from_reg(SDValue { node: low.node, res: 1 }, regs[1], reg_vt);
-            return Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[low, high], pair_kind(vt, pointer)));
+            let regs = self.info.part_regs(reg, parts);
+            let mut chain = entry;
+            let mut copies = Vec::new();
+            for reg in regs {
+                let copy = self.dag.get_copy_from_reg(chain, reg, reg_vt);
+                chain = SDValue { node: copy.node, res: 1 };
+                copies.push(copy);
+            }
+            return Ok(self.join_parts(&copies, vt, pointer));
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
@@ -2786,9 +2827,9 @@ impl Builder<'_> {
         }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
-        if parts == 2 {
-            let regs = self.info.part_regs(reg, 2);
-            let halves = self.split_value(value, reg_vt);
+        if parts > 1 {
+            let regs = self.info.part_regs(reg, parts);
+            let halves = self.split_parts(value, reg_vt, parts);
             let copies: Vec<SDValue> =
                 halves.iter().zip(&regs).map(|(half, reg)| self.dag.get_copy_to_reg(entry, *reg, *half)).collect();
             let chain = self.dag.get_token_factor(&copies);

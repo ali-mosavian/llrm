@@ -1029,6 +1029,15 @@ fn a_float_is_carried_as_the_integer_of_its_width() {
     assembly(&module(choose), &request).unwrap();
 }
 
+/// A double live across a block is four i16 parts, not two: it stopped at
+/// "integer wider than two registers" (five corpus cells, e.g.
+/// float_in_place_update).
+#[test]
+fn a_double_crosses_a_block_as_four_words() {
+    let body = "define double @f(i1 %c, ptr %p, ptr %q) {\n  %a = load double, ptr %p\n  %b = load double, ptr %q\n  br i1 %c, label %t, label %e\nt:\n  ret double %a\ne:\n  ret double %b\n}";
+    assembly(&module(body), &Request::new(Level::O2)).unwrap();
+}
+
 /// A float add, a multiply, an int-to-float and a compare are calls of the
 /// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
 /// each stopped at "the target names no routine" or, for the compare, at a

@@ -543,6 +543,8 @@ impl<'a> TypeLegalizer<'a> {
                 let NodeData::ConstFp { bits } = self.dag.node(value).data else { unreachable!("a float constant has bits") };
                 self.dag.get_constant(bits, int)
             }
+            // `SoftenFloatRes_UNDEF`
+            ISD::Undef => self.dag.get_undef(int),
             ISD::BitCast if !self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
                 // `SoftenFloatRes_BITCAST`: the integer it was cast from.
                 self.dag.operand(value, 0)
