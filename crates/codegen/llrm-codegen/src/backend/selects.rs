@@ -154,12 +154,13 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
 /// integer select to `LowerSELECT` and `EmitLoweredSelect`, as the pin does
 /// (S2's exit); `(c & 1) ? x ^ k : x` is then `x ^ (k & -(c & 1))`, where the
 /// branch it was made into computed both arms and jumped. Floats and the
-/// rest are still branched here (no `CMOV_RFP*` expansion yet).
+/// rest are still branched here. An x87 `long double` select is kept too:
+/// `fcmov` where the target has `cmov`, `EmitLoweredSelect`'s diamond below.
 pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
     ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32" | "x86_fp80")
 }
 
 /// Every select of `module`'s functions made a branch and a phi.
@@ -708,6 +709,8 @@ done:
             assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}");
             assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
         }
-        assert!(!super::kept_for_isel(Selector::Dag, "float"), "no CMOV_RFP expansion yet");
+        assert!(!super::kept_for_isel(Selector::Dag, "float"), "no CMOV_FR expansion yet");
+        assert!(super::kept_for_isel(Selector::Dag, "x86_fp80"));
+        assert!(!super::kept_for_isel(Selector::Old, "x86_fp80"));
     }
 }

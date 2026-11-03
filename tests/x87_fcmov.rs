@@ -60,3 +60,12 @@ fn test_a_long_double_compare_is_the_status_word_where_the_target_has_no_fcomi()
     let text = assembled_source(COMPARE, &["-m32", "-mabi=sysv", "-march=i486"]);
     assert!(text.contains("sahf") && !text.contains("fcomi"), "{text}");
 }
+
+/// A `long double` maximum was a compare, a jump and two returns: the MIR
+/// select was branched before selection, so the DAG never saw `fcmov`.
+#[test]
+fn test_a_long_double_maximum_is_fcmov_at_m64() {
+    let source = "long double f(long double a, long double b) { return a > b ? a : b; }\n";
+    let text = assembled_source(source, &["--target=x86_64-linux"]);
+    assert!(text.contains("fcmov") && !text.contains(" ja "), "{text}");
+}
