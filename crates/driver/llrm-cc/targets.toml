@@ -57,7 +57,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=cdecl"]
@@ -76,7 +76,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=regparm3", "-mc-library"]
@@ -92,7 +92,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
   "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
 ]
@@ -111,7 +111,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
   "-fborland-extensions", "-fshort-wchar", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
