@@ -120,12 +120,17 @@ def driver(args, wide, expect, calls, rel=None):
     return "\n".join(s) + "\n"
 
 
+SIM = "sim65"
+
+
 def sim(binpath, cwd):
-    p = sh(["sim65", "-c", "-x", "200000000", binpath], cwd)
+    """(exit code, cycles, instructions or None): the simulator's own counts."""
+    p = sh([SIM, "-c", "-x", "200000000", binpath], cwd)
     m = re.search(r"(\d+) cycles", p.stdout)
     if not m:
         raise RuntimeError("no cycle count: " + (p.stdout + p.stderr)[-200:])
-    return p.returncode, int(m.group(1))
+    i = re.search(r"(\d+) instructions", p.stdout)
+    return p.returncode, int(m.group(1)), int(i.group(1)) if i else None
 
 
 def code_size(obj, cwd):
@@ -155,9 +160,12 @@ def main():
     ap.add_argument("--src", default=os.path.join(HERE, "..", "..", "crates/target/llrm-6502/tests/bench/kernels.c"))
     ap.add_argument("--out", default="")
     ap.add_argument("--hand", default=os.path.join(HERE, "..", "..", "crates/target/llrm-6502/tests/bench/hand"), help="dir of hand-corpus .spec/.c files, '' to skip")
+    ap.add_argument("--sim", default="sim65", help="sim65, or a build that also prints '<n> instructions'")
     ap.add_argument("--tsv", default="")
     ap.add_argument("--tsv-header", default="")
     a = ap.parse_args()
+    global SIM
+    SIM = os.path.abspath(a.sim) if os.sep in a.sim else a.sim
     kernels = [(n, ar, wd, ex, None, None) for n, ar, wd, ex in K]
     if a.hand:
         kernels += load_hand(a.hand)
@@ -199,6 +207,7 @@ def main():
             asm = open(f"{w}/k.s").read()
             kernel_sym = "_" + name
             ts = []
+            ins_ = []
             fail = None
             for calls in (1, 101):
                 open(f"{w}/d.s", "w").write(driver(args, wide, expect, calls, rel).replace("_KERNEL", kernel_sym))
@@ -210,19 +219,24 @@ def main():
                 if alien:
                     fail = "links the cc65 library (" + ",".join(alien) + "): other ABI"; break
                 try:
-                    rc, t = sim("x.bin", w)
+                    rc, t, ni = sim("x.bin", w)
                 except RuntimeError as e:
                     fail = str(e); break
                 if rc != 0:
                     fail = f"WRONG result (exit {rc}), hand-derived {expect:#x}"; break
                 ts.append(t)
+                ins_.append(ni)
             if fail:
                 bad.append((*cell, fail)); continue
             r = sh(["ca65", "-t", "sim6502", "-o", "k.o", "k.s"], w)
             body = code_size("k.o", w)
             used = helper_closure(asm, exports, imports)
             extra = sum(helper_bytes[h] for h in used)
-            rows[cell] = (body + extra, (ts[1] - ts[0]) // 100 - 9, None)
+            # the loop's dec cnt + bne are 2 instructions
+            n_ins = None
+            if None not in ins_ and (ins_[1] - ins_[0]) % 100 == 0:
+                n_ins = (ins_[1] - ins_[0]) // 100 - 2
+            rows[cell] = (body + extra, (ts[1] - ts[0]) // 100 - 9, n_ins)
             if (ts[1] - ts[0]) % 100:
                 bad.append((*cell, f"cycles per call not whole: {(ts[1]-ts[0])/100}")); del rows[cell]; continue
             if used:
@@ -245,7 +259,7 @@ def main():
             for l in lv:
                 if name in want:
                     c = rows.get((name, l))
-                    t.append("\t".join(["6502", name, l, "gcc"] + ([str(c[0]), str(c[1]), "", notes.get((name, l), "")] if c else ["", "", "", "n/a: " + nb.get((name, l), "not run")])))
+                    t.append("\t".join(["6502", name, l, "gcc"] + ([str(c[0]), str(c[1]), "" if c[2] is None else str(c[2]), notes.get((name, l), "")] if c else ["", "", "", "n/a: " + nb.get((name, l), "not run")])))
         open(a.tsv, "w").write("\n".join(t) + "\n")
     print(text)
 
