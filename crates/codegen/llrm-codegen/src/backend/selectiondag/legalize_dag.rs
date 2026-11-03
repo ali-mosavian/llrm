@@ -793,7 +793,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::CtTz | ISD::CtTzZeroPoison => self.expand_cttz(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             ISD::CtTzZeroPoison | ISD::CtLzZeroPoison => self.expand_zero_poison_count(node).map(|result| vec![result]),
-            ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
+            ISD::BitReverse => expand_bitreverse(self.dag, node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
             ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
@@ -1055,33 +1055,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return Some(self.dag.get_node(ISD::Sub, vt, &[width, count]));
         }
         Some(self.dag.get_node(ISD::CtPop, vt, &[mask]))
-    }
-
-    /// `TargetLowering::expandBITREVERSE`: a byte swap, then the nibbles, the
-    /// bit pairs and the bits of each byte swapped. DEVIATE SD218: a width
-    /// that is not a power of two (the pin's loop of single bits) is not
-    /// translated; none is legal on the targets here.
-    fn expand_bitreverse(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let vt = self.dag.value_type(node);
-        let bits = vt.size_in_bits();
-        if bits < 8 || !bits.is_power_of_two() {
-            return None;
-        }
-        let op = self.dag.operand(node, 0);
-        let splat = |byte: u128| (0..bits / 8).fold(0u128, |acc, i| acc | byte << (8 * i));
-        let mut value = if bits > 8 { self.dag.get_node(ISD::BSwap, vt, &[op]) } else { op };
-        for (by, mask) in [(4u128, 0x0F), (2, 0x33), (1, 0x55)] {
-            let (by, mask) = (self.dag.get_constant(by, EVT::I8), self.dag.get_constant(splat(mask), vt));
-            let high = self.dag.get_node(ISD::Srl, vt, &[value, by]);
-            let high = self.dag.get_node(ISD::And, vt, &[high, mask]);
-            let low = self.dag.get_node(ISD::And, vt, &[value, mask]);
-            let low = self.dag.get_node(ISD::Shl, vt, &[low, by]);
-            value = self.dag.get_node(ISD::Or, vt, &[high, low]);
-        }
-        Some(value)
     }
 
     /// `TargetLowering::expandCTTZ` and `expandCTLZ`, the first step: "if the
@@ -1390,4 +1363,31 @@ fn shrunk_f80(bits: u128) -> Option<(MVT, u128)> {
         return Some((MVT::F64, u128::from(word)));
     }
     None
+}
+
+/// `TargetLowering::expandBITREVERSE`: a byte swap, then the nibbles, the
+/// bit pairs and the bits of each byte swapped. DEVIATE SD218: a width
+/// that is not a power of two (the pin's loop of single bits) is not
+/// translated; none is legal on the targets here.
+pub(super) fn expand_bitreverse(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let bits = vt.size_in_bits();
+    if bits < 8 || !bits.is_power_of_two() {
+        return None;
+    }
+    let op = dag.operand(node, 0);
+    let splat = |byte: u128| (0..bits / 8).fold(0u128, |acc, i| acc | byte << (8 * i));
+    let mut value = if bits > 8 { dag.get_node(ISD::BSwap, vt, &[op]) } else { op };
+    for (by, mask) in [(4u128, 0x0F), (2, 0x33), (1, 0x55)] {
+        let (by, mask) = (dag.get_constant(by, EVT::I8), dag.get_constant(splat(mask), vt));
+        let high = dag.get_node(ISD::Srl, vt, &[value, by]);
+        let high = dag.get_node(ISD::And, vt, &[high, mask]);
+        let low = dag.get_node(ISD::And, vt, &[value, mask]);
+        let low = dag.get_node(ISD::Shl, vt, &[low, by]);
+        value = dag.get_node(ISD::Or, vt, &[high, low]);
+    }
+    Some(value)
 }
