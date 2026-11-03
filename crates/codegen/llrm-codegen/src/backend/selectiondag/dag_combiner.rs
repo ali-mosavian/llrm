@@ -458,6 +458,8 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     /// `OptLevel == CodeGenOptLevel::None`: the chain, store and load combines
     /// the pin skips at `-O0` are skipped.
     pub(super) opt_none: bool,
+    /// `BatchAA`, for a target whose `useAA` is true.
+    pub(super) alias: Option<&'a dyn super::chain_combine::AliasOracle>,
 }
 
 fn op_is_srl(op: ISD) -> bool {
@@ -480,6 +482,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             combined: NodeSet::default(),
             tli: None,
             opt_none: false,
+            alias: None,
         }
     }
 
@@ -489,6 +492,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         tli: &'a TargetLowering,
     ) -> DagCombiner<'a, H> {
         self.tli = Some(tli);
+        self
+    }
+
+    /// The alias analysis `mayAlias` asks when the addresses decide nothing.
+    pub fn with_alias(
+        mut self,
+        alias: &'a dyn super::chain_combine::AliasOracle,
+    ) -> DagCombiner<'a, H> {
+        self.alias = Some(alias);
         self
     }
 
@@ -936,6 +948,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
+            return Some(folded);
+        }
+        if let Some(folded) = super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond) {
             return Some(folded);
         }
         // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
@@ -2043,8 +2058,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
-        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
-            return self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags);
+        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags)
+        {
+            return Some(regrouped);
+        }
+        // `(add a, b)` is `(or disjoint a, b)` where the two share no bits
+        // ([L3318][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3318
+        if self.dag.config().add_to_or_disjoint && super::dagisel_adapter::no_common_bits(self.dag, n0, n1) {
+            return Some(self.dag.get_node_flags(ISD::Or, vt, &[n0, n1], SDNodeFlags::DISJOINT));
         }
         None
     }
