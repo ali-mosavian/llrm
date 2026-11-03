@@ -112,9 +112,9 @@ fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
 }
 
 /// The arguments a function keeps in its frame were stored with `ld -1(ix), a`
-/// / `ld -4(ix), l` / `ld -3(ix), h` after a pair of `push af` (crc16): 9 B more
-/// than the prologue's `push af` / `push hl`. Hand-built, so the allocation of
-/// the kernel does not decide it.
+/// / `ld -4(ix), l` / `ld -3(ix), h` after a pair of `push af` (crc16): 9 B
+/// more than the prologue's `push af` / `push hl`. Hand-built, so the
+/// allocation of the kernel does not decide it.
 #[test]
 fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
     use llrm_spike_mf::regalloc::Assignment;
@@ -131,8 +131,8 @@ fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
     ];
     function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
     let assignment = Assignment(vec![llrm_z80::reg::HL, llrm_z80::reg::A, llrm_z80::reg::B]);
-    let lines = finish(&function, &assignment, 0, &[(0, 2), (1, 1)], reads(&function))
-        .unwrap_or_else(|why| panic!("{why}"));
+    let lines =
+        finish(&function, &assignment, 0, &[(0, 2), (1, 1)], reads(&function)).unwrap_or_else(|why| panic!("{why}"));
     let insts: Vec<&str> = lines
         .iter()
         .filter_map(|line| match line {
@@ -627,8 +627,10 @@ fn a_join_s_copy_moves_into_the_one_entrance_that_lacks_it() {
     use llrm_spike_mf::Assignment;
     use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
     use llrm_z80::{reg, regalloc::Class};
-    let copy = |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
-    let jump = |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let jump =
+        |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
     let write = || {
         Inst::new(
             Kind::Op("ADD8i"),
@@ -647,21 +649,69 @@ fn a_join_s_copy_moves_into_the_one_entrance_that_lacks_it() {
         function.blocks.push(block(0, vec![copy(1, 0)]));
         function.blocks.push(block(1, vec![copy(0, 1), write(), leave.clone()]));
         function.blocks.push(block(2, back));
-        function.blocks.push(block(3, vec![Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("RET"), vec![]) }]));
+        function
+            .blocks
+            .push(block(3, vec![Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("RET"), vec![]) }]));
         function
     };
     // v0 a, v1 b
     let assignment = Assignment(vec![reg::A, reg::B]);
     let mut function = build(vec![write(), jump(1)]);
     llrm_z80::compile::place_copies_where_needed(&mut function, &assignment);
-    let counts: Vec<usize> = function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    let counts: Vec<usize> =
+        function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
     assert_eq!(counts, [1, 0, 1, 0], "{:?}", function.blocks);
     // a second block also enters the head without the copy: it stays
     let mut two = build(vec![write(), jump(1)]);
     two.blocks.push(block(4, vec![write(), jump(1)]));
     llrm_z80::compile::place_copies_where_needed(&mut two, &assignment);
-    let counts: Vec<usize> = two.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    let counts: Vec<usize> =
+        two.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
     assert_eq!(counts, [1, 1, 0, 0, 0], "{:?}", two.blocks);
+}
+
+/// gcd's `ld a, b` after the diamond's join ran on both sides, though one
+/// side (`ld b, a`) had just made it: the other side ends with the copy, and
+/// the join starts without it. The block that falls into the join and ends in
+/// nothing that reads either register takes it.
+#[test]
+fn a_diamonds_join_copy_moves_into_the_side_that_lacks_it() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let jump =
+        |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
+    let write = Inst::new(
+        Kind::Op("ADD8i"),
+        vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::A)), Operand::Imm(1)],
+    );
+    let branch = Inst {
+        terminator: true,
+        reads_flags: true,
+        ..Inst::new(Kind::Op("JPNC"), vec![Operand::Block(2), Operand::Use(Reg::Phys(reg::FLAGS))])
+    };
+    let block = |id, insts| Block { id, insts, phis: Vec::new() };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 2];
+    function.blocks.push(block(0, vec![branch]));
+    function.blocks.push(block(1, vec![copy(1, 0), jump(3)]));
+    function.blocks.push(block(2, vec![write]));
+    function
+        .blocks
+        .push(
+            block(
+                3,
+                vec![copy(0, 1), Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("RET"), vec![]) }],
+            ),
+        );
+    // v0 a, v1 b
+    let assignment = Assignment(vec![reg::A, reg::B]);
+    llrm_z80::compile::place_copies_where_needed(&mut function, &assignment);
+    let counts: Vec<usize> =
+        function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    assert_eq!(counts, [0, 1, 1, 0], "{:?}", function.blocks);
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:

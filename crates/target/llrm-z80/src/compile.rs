@@ -149,6 +149,7 @@ fn allocate(
     tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
+    place_copies_where_needed(&mut function, &assignment);
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
@@ -575,7 +576,6 @@ pub fn tidy_copies(
     assignment: &Assignment,
 ) {
     remove_copies_back(function, assignment);
-    place_copies_where_needed(function, assignment);
     sink_copies_to_the_branch(function, assignment);
 }
 
@@ -703,9 +703,10 @@ fn copies_in_force(
 /// entrance has made it already: `ld a, b` at a loop head, where the entry
 /// has just made it, runs every trip and once more at the exit; on the back
 /// edge alone it runs once a trip. Elsewhere (a diamond's join) the move made
-/// popcount and bsearch8 larger: the copy in a block of its own kept a jump. The flow into the join is the sum of its
-/// entrances, so the count of copies run never grows, and the code does not
-/// grow either: the copy moves, it is not copied.
+/// popcount and bsearch8 larger: the copy in a block of its own kept a jump.
+/// The flow into the join is the sum of its entrances, so the count of copies
+/// run never grows, and the code does not grow either: the copy moves, it is
+/// not copied.
 ///
 /// The pin has no such step: its allocator joins the copy out of existence
 /// (`canJoinPhys`) or leaves it where selection put it. Here the join of an
@@ -725,7 +726,8 @@ pub fn place_copies_where_needed(
         changed = false;
         let ended = copies_in_force(function, assignment, false);
         for head in 1..function.blocks.len() {
-            let entrances: Vec<usize> = (0..function.blocks.len()).filter(|&from| successors[from].contains(&head)).collect();
+            let entrances: Vec<usize> =
+                (0..function.blocks.len()).filter(|&from| successors[from].contains(&head)).collect();
             let Some(first) = function.blocks[head].insts.first() else { continue };
             let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (first.kind, &first.operands[..]) else {
                 continue;
@@ -743,16 +745,19 @@ pub fn place_copies_where_needed(
             }
             let block = &function.blocks[from];
             let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
-            let touched = block.insts[end..].iter().any(|inst| {
-                inst.operands.iter().any(|operand| match operand {
-                    Operand::Def(r) | Operand::Use(r) => {
-                        Z80Registers::overlaps(register(*r), dst) || Z80Registers::overlaps(register(*r), src)
-                    }
-                    _ => false,
-                })
-            });
-            // a block of nothing but its jump is an edge a branch folds away; the
-            // copy would keep it, and the jump with it
+            let touched = block
+                .insts[end..]
+                .iter()
+                .any(
+                    |inst| inst.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => {
+                            Z80Registers::overlaps(register(*r), dst) || Z80Registers::overlaps(register(*r), src)
+                        }
+                        _ => false,
+                    }),
+                );
+            // a block of nothing but its jump is an edge a branch folds away;
+            // the copy would keep it, and the jump with it
             if touched || end == 0 {
                 continue;
             }
