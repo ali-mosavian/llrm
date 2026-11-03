@@ -112,16 +112,22 @@ fn meaning(
         .map(|one| match one.as_str() {
             Some("string") => Ok(Parameter::String),
             Some("int") => Ok(Parameter::Int),
+            Some("place") => Ok(Parameter::Place),
             other => Err(format!("a parameter of kind {other:?}")),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let result = match (row.get("result"), row.get("view")) {
-        (Some(value), None) => Returns::Value(expression(&text(Some(value), "result")?)?),
-        (None, Some(view)) => Returns::View {
+    let result = match (row.get("result"), row.get("view"), row.get("copy")) {
+        (Some(value), None, None) => Returns::Value(expression(&text(Some(value), "result")?)?),
+        (None, Some(view), None) => Returns::View {
             length: expression(&text(view.get("length"), "view.length")?)?,
             data: expression(&text(view.get("data"), "view.data")?)?,
         },
-        _ => return Err("states one of result and view".to_owned()),
+        (None, None, Some(copy)) => Returns::Copy {
+            to: expression(&text(copy.get("to"), "copy.to")?)?,
+            from: expression(&text(copy.get("from"), "copy.from")?)?,
+            count: expression(&text(copy.get("count"), "copy.count")?)?,
+        },
+        _ => return Err("states one of result, view and copy".to_owned()),
     };
     let releases = row
         .get("releases")
@@ -143,8 +149,8 @@ fn meaning(
 }
 
 /// `text` as an expression: `or` over `==` and `<` over `+` and `-` over
-/// calls of `len`, `data`, `byte`, `slot`, `min` and `max`, parameters `$n` and
-/// integers.
+/// calls of `len`, `data`, `near`, `byte`, `slot`, `min`, `max` and `if`
+/// (condition, then, else), parameters `$n` and integers.
 pub fn expression(text: &str) -> Result<Expr, String> {
     let tokens = tokens(text)?;
     let mut at = 0;
@@ -253,6 +259,10 @@ fn parse_atom(
     match (token.as_str(), arguments.as_slice()) {
         ("len", [one]) => Ok(Expr::Length(parameter(one)?)),
         ("data", [one]) => Ok(Expr::Data(parameter(one)?)),
+        ("near", [one]) => Ok(Expr::Near(parameter(one)?)),
+        ("if", [when, then, otherwise]) => {
+            Ok(Expr::If(Box::new(when.clone()), Box::new(then.clone()), Box::new(otherwise.clone())))
+        }
         ("byte", [one]) => Ok(Expr::Byte(Box::new(one.clone()))),
         ("slot", [one]) => Ok(Expr::Slot(Box::new(one.clone()))),
         ("min", [a, b]) => Ok(Expr::Binary(Arithmetic::Min, Box::new(a.clone()), Box::new(b.clone()))),
@@ -283,7 +293,7 @@ mod tests {
     #[test]
     fn every_described_routine_loads() {
         let names: Vec<_> = routines().into_iter().map(|one| one.routine).collect();
-        assert_eq!(names, ["B$FLEN", "B$FASC", "B$FMID", "B$FCHR"]);
+        assert_eq!(names, ["B$FLEN", "B$FASC", "B$FMID", "B$FCHR", "B$SMID"]);
     }
 
     /// QB 4.5 and PDS 7.1 state their descriptor; VBDOS's far strings are not
