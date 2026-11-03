@@ -1,6 +1,12 @@
 //! A float load that only one arithmetic instruction reads becomes that
 //! instruction's memory operand: `fld [m]; faddp` is `fadd [m]`.
 //!
+//! DEVIATE FF1 (owner m16, exit 2026-11-17): a volatile cell folds too; the
+//! fused instruction stays volatile and ordered against every other volatile
+//! access. The pin keeps `fld [m]` for it. Cost rule: the fold drops an `fld`
+//! and a stack slot and keeps the one memory read, so it never costs a byte or a
+//! clock; the exit is the pin's own fold, or this stays with the exit moved.
+//!
 //! # How it works
 //! x87 arithmetic has a memory form for a float or a double (`fadd qword ptr
 //! [m]`). Folding saves the load and the x87 register the loaded value held.
