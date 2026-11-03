@@ -96,11 +96,15 @@ pub fn program(
         options.unroll = false;
         options.loop_unrolling = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
-        options.library = vec![llrm_mir::libfunc::Routine {
-            standard: "strlen",
-            symbol: "_strlen".to_owned(),
-            calling_convention: 0,
-        }];
+        // It is 12 B against the loop's 10, for 142 T fewer: not
+        // declared at the size levels.
+        if !matches!(request.level, Level::Os | Level::Oz) {
+            options.library = vec![llrm_mir::libfunc::Routine {
+                standard: "strlen",
+                symbol: "_strlen".to_owned(),
+                calling_convention: 0,
+            }];
+        }
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }

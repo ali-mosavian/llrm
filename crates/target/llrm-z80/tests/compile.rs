@@ -739,6 +739,16 @@ fn a_constant_offset_from_an_external_global_is_folded_into_the_symbol() {
     assert!(out.contains("#_str+6") && !out.contains("add hl"), "{out}");
 }
 
+/// At -Oz slen was the runtime's `strlen` (`cpir`): 12 B against the loop's 10
+/// (release/next), the bytes the level is for. The size levels keep the loop.
+#[test]
+fn a_string_loop_stays_a_loop_at_the_size_levels() {
+    let ir = include_str!("kernels/ir/slen.ll");
+    let oz = text(ir, "slen", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    let o2 = text(ir, "slen", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!oz.contains("_strlen") && o2.contains("_strlen"), "{oz}\n{o2}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
