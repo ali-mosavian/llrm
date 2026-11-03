@@ -19,16 +19,18 @@ fn module_of(functions: usize) -> String {
 
 /// `assembly` ran the mid-end over the whole module once for each function it
 /// printed: memory_expansion (1614 blocks, ~40 functions) took 294 s of CPU,
-/// 25,000 liveness solves. The solves of a module are now linear in its
-/// functions: eight functions cost no more than twice what four do.
+/// 25,000 liveness solves. The test counted `liveness::solves()`, which the
+/// mid-end stopped calling: it read 0 solves and passed on any behaviour
+/// (the guard `four > 0` failed instead). It counts the runs of the mid-end
+/// itself now: one per module, however many functions.
 #[test]
 fn the_mid_end_is_not_run_again_for_each_function() {
-    let solves = |functions: usize| {
-        let before = llrm_analysis::liveness::solves();
+    let runs = |functions: usize| {
+        let before = llrm_m68k::compile::mid_end_runs();
         assembly(&module_of(functions), Cpu::M68020, Level::O2).expect("compiles");
-        llrm_analysis::liveness::solves() - before
+        llrm_m68k::compile::mid_end_runs() - before
     };
-    let (four, eight) = (solves(4), solves(8));
-    assert!(four > 0, "no liveness solved: the counter measures nothing");
-    assert!(eight <= 2 * four + 2, "four functions {four} solves, eight {eight}");
+    let (four, eight) = (runs(4), runs(8));
+    assert!(four > 0, "the mid-end never ran: the counter measures nothing");
+    assert_eq!((four, eight), (1, 1), "four functions {four} runs, eight {eight}");
 }

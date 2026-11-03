@@ -243,6 +243,16 @@ pub fn text_with(
     Ok(out)
 }
 
+thread_local! {
+    static MID_ENDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has run the mid-end over a module, for a test
+/// that a driver runs it once per module and not once per function.
+pub fn mid_end_runs() -> usize {
+    MID_ENDS.with(std::cell::Cell::get)
+}
+
 /// `module` through the IR pass `llc` runs before selection that matters here,
 /// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
 /// the bench's reference does not either.)
@@ -257,6 +267,7 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
+    MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::passes::{Declared, Outer};
     let mut module = module.clone();
