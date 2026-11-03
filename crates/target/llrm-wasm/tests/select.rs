@@ -167,3 +167,33 @@ fn a_shift_is_the_shift_of_its_width() {
         assert_eq!(select(&mut dag, shift), name);
     }
 }
+
+/// Selection dropped the IR's `!dbg`: every selected instruction had line 0,
+/// so a `-g` wasm object had nothing to build `.debug_line` from.
+#[test]
+fn selected_instructions_carry_their_irs_source_line() {
+    let source =
+        std::fs::read_to_string(format!("{}/tests/ir/debug_lines.ll", env!("CARGO_MANIFEST_DIR"))).expect("fixture");
+    let module = llrm_wasm::driver::module(&source, llrm_wasm::Width::W32).expect("module");
+    let f = llrm_wasm::dag::compile_function(&module, "f", llrm_wasm::Width::W32, llrm_wasm::dag::Options::default())
+        .expect("compiles");
+    let lines: std::collections::BTreeSet<u32> = f.blocks.iter().flatten().map(|i| i.line).collect();
+    assert!(lines.is_superset(&[11, 12, 13].into()), "{lines:?}");
+}
+
+/// The encoder kept no instruction offsets: a `.debug_line` row had no code
+/// address to name.
+#[test]
+fn the_encoder_records_each_located_instructions_body_offset() {
+    let source =
+        std::fs::read_to_string(format!("{}/tests/ir/debug_lines.ll", env!("CARGO_MANIFEST_DIR"))).expect("fixture");
+    let module = llrm_wasm::driver::module(&source, llrm_wasm::Width::W32).expect("module");
+    let f = llrm_wasm::dag::compile_function(&module, "f", llrm_wasm::Width::W32, llrm_wasm::dag::Options::default())
+        .expect("compiles");
+    let encoded = llrm_wasm::object::encode_function(&f);
+    let offsets: Vec<usize> = encoded.lines.iter().map(|&(offset, _)| offset).collect();
+    assert!(offsets.windows(2).all(|w| w[0] < w[1]), "{:?}", encoded.lines);
+    assert!(offsets.last().is_some_and(|&last| last < encoded.body.len()), "{:?}", encoded.lines);
+    let lines: Vec<u32> = encoded.lines.iter().map(|&(_, line)| line).collect();
+    assert!(lines.contains(&11) && lines.contains(&13), "{lines:?}");
+}

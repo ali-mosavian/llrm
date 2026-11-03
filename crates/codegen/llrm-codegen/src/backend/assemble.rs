@@ -534,12 +534,15 @@ pub fn assembled_by(
         }
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
+    let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        visibility,
+        aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
             .chain(huge_segments)
@@ -1184,6 +1187,7 @@ fn staged(
         module.named(name).and_then(|id| module.global(id).function()).map_or(&[], |function| &function.attrs);
     if crate::backend::framefree::disable_frame_pointer_elim(function_attrs, !calls.is_empty()) {
         registers.optional = false;
+        registers.kept = true;
     }
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && !crate::backend::framefree::has_fp(

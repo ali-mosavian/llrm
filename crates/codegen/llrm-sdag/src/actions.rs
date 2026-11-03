@@ -482,7 +482,13 @@ impl TargetLowering {
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Expand);
             t.set_ops(&[CtTz], &[MVT::I128], Expand);
         } else {
-            t.set_ops(&[CtPop, Abs], &words, Custom);
+            // DEVIATE SD533 (exit: NEON `cnt` + `addv` when vector MIR lands):
+            // the pin's `LowerCTPOP` is `Custom` (v8i8 `cnt`, `uaddlv`); with
+            // no vector MIR the population count is the scalar
+            // bit-twiddle (`expandCTPOP`), so that the node is
+            // expanded, not refused.
+            t.set_ops(&[CtPop], &words, Expand);
+            t.set_ops(&[Abs], &words, Custom);
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Custom);
             t.set_ops(&[Parity], &[MVT::I64], Custom);
         }

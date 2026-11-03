@@ -127,6 +127,45 @@ pub fn names(
     Ok(out)
 }
 
+/// The visibility of each global that has one other than the default, and the
+/// aliases, by their names in the object. An alias is linked as a global is.
+pub fn exports(
+    module: &Module,
+    names: &IndexMap<(Space, i64), String>,
+    linked: &dyn Fn(&str) -> String,
+) -> (std::collections::BTreeMap<String, llrm_object::Visibility>, Vec<super::masm::Alias>) {
+    use llrm_mir::module::{Linkage, Visibility as Mir};
+    let visible = |visibility: Mir| match visibility {
+        Mir::Default => None,
+        Mir::Hidden => Some(llrm_object::Visibility::Hidden),
+        Mir::Protected => Some(llrm_object::Visibility::Protected),
+    };
+    let mut visibility = std::collections::BTreeMap::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let id = GlobalId(at as u32);
+        if let (Some(visible), Some(name)) =
+            (visible(global.visibility), names.get(&(space(module, id), i64::from(id.0))))
+        {
+            visibility.insert(name.clone(), visible);
+        }
+    }
+    let mut aliases = Vec::new();
+    for alias in &module.aliases {
+        let Some(target) = names.get(&(space(module, alias.aliasee), i64::from(alias.aliasee.0))) else { continue };
+        let name = linked(&alias.name);
+        if let Some(visible) = visible(alias.visibility) {
+            visibility.insert(name.clone(), visible);
+        }
+        let binding = match alias.linkage {
+            Linkage::Internal | Linkage::Private => llrm_object::Binding::Local,
+            Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr => llrm_object::Binding::Weak,
+            _ => llrm_object::Binding::Public,
+        };
+        aliases.push(super::masm::Alias { name, target: target.clone(), binding });
+    }
+    (visibility, aliases)
+}
+
 /// A far global's segment, named for `symbol`: a far pointer to code, as
 /// ON ERROR registers its handler, takes it.
 pub fn segment_name(

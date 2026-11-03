@@ -44,10 +44,10 @@ pub enum Token {
         negative: bool,
         magnitude: u128,
     },
-    /// A decimal floating literal, rounded once to a double and once to a
-    /// float: a float constant is the nearest float to the decimal, not to the
-    /// double nearest to it.
-    Float(f64, f32),
+    /// A decimal floating literal, rounded once to a double, once to a float
+    /// and once to an x86_fp80's 80 bits: a constant is the nearest value of
+    /// its own type to the decimal, not to the double nearest to it.
+    Float(f64, f32, u128),
     /// `f0x` and the digits of a float, double or x86_fp80: that type's bits.
     FloatBits {
         bits: u128,
@@ -349,5 +349,6 @@ fn number_at(
     }
     let value: f64 = text[at..end].parse().map_err(|_| format!("{} is not a number", &text[at..end]))?;
     let narrow: f32 = text[at..end].parse().map_err(|_| format!("{} is not a number", &text[at..end]))?;
-    Ok((Token::Float(value, narrow), end))
+    let wide = crate::decimal::x87_bits(&text[at..end]).ok_or_else(|| format!("{} is not a number", &text[at..end]))?;
+    Ok((Token::Float(value, narrow, wide), end))
 }

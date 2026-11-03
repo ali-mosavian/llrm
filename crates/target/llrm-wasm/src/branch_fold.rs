@@ -108,17 +108,17 @@ pub fn forward_branch_only_blocks(f: &mut Function) -> bool {
 /// The explicit branches ending a block, as `TargetInstrInfo::analyzeBranch`
 /// reports them.
 #[derive(Clone)]
-struct Ending {
+pub(crate) struct Ending {
     /// `TBB`: the target of the conditional branch, or of the only branch.
-    taken: Option<usize>,
+    pub(crate) taken: Option<usize>,
     /// `FBB`: the target of the unconditional branch after a conditional one.
-    other: Option<usize>,
+    pub(crate) other: Option<usize>,
     /// The condition, a `BR_IF` or `BR_UNLESS` with its target left out.
-    cond: Option<Inst>,
+    pub(crate) cond: Option<Inst>,
 }
 
 /// `None` when the block ends in a branch table: `analyzeBranch` fails.
-fn ending(
+pub(crate) fn ending(
     f: &Function,
     block: usize,
 ) -> Option<Ending> {
@@ -139,7 +139,7 @@ fn ending(
 }
 
 /// `removeBranch` then `insertBranch`.
-fn set_branches(
+pub(crate) fn set_branches(
     f: &mut Function,
     block: usize,
     taken: Option<usize>,
