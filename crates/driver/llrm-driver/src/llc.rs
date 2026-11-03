@@ -493,11 +493,11 @@ fn soft_float_calls(
         for cmp in ["eq", "ne", "lt", "le", "ge", "gt", "unord"] {
             names.push(format!("__{cmp}{width}f2"));
         }
-        for int in ["si", "di"] {
-            names.push(format!("__float{int}{}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__floatun{int}{}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__fix{}{int}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__fixuns{}{int}", if width == "s" { "sf" } else { "df" }));
+        for int in ["s", "d"] {
+            names.push(format!("__float{int}i{}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__floatun{int}i{}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__fix{}{int}i", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__fixuns{}{int}i", if width == "s" { "sf" } else { "df" }));
         }
     }
     names.extend(["__extendsfdf2".to_owned(), "__truncdfsf2".to_owned()]);

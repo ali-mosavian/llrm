@@ -48,6 +48,9 @@ use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 use super::x86_lowering::{ES, x86isd};
 
+/// The width of the C `int` the soft-float routines take for a conversion: a 32-bit integer is passed as is, a narrower one is extended to it.
+const INT_BITS: u32 = 32;
+
 /// A node's place in the walk (the pin's `NodeIdFlags` and its counts).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NodeId {
@@ -508,9 +511,9 @@ impl<'a> TypeLegalizer<'a> {
                 } else {
                     let bits = from.size_in_bits();
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
-                    let arg = if bits < 32 { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
+                    let arg = if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
                     let single = vt == EVT::Simple(MVT::F32);
-                    (arg, match (op == ISD::SIntToFp, bits <= 32, single) {
+                    (arg, match (op == ISD::SIntToFp, bits <= INT_BITS, single) {
                         (true, true, true) => "__floatsisf",
                         (true, true, false) => "__floatsidf",
                         (false, true, true) => "__floatunsisf",
@@ -691,7 +694,7 @@ impl<'a> TypeLegalizer<'a> {
                 (_, false) => "__unorddf2",
             }
         };
-        let mut compare = |this: &mut Self, stem: &'static str, cc: CondCode| -> Result<SDValue, LegalizeError> {
+        let compare = |this: &mut Self, stem: &'static str, cc: CondCode| -> Result<SDValue, LegalizeError> {
             // The routines return a C `int`: the pointer's width up to a long (16 at m16, 32 above).
             let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
             let result = this
