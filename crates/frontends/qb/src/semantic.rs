@@ -12,6 +12,7 @@ mod exclusive;
 mod format_spec;
 mod invariance;
 mod merging;
+mod near;
 mod shapes;
 mod tags;
 
@@ -378,6 +379,19 @@ struct Compiler {
     next_block: u32,
     data_offset: usize,
     implicit_storage: &'static str,
+    /// The array names the current procedure REDIMs or ERASEs.
+    resized: BTreeSet<String>,
+    /// The element pointers of arrays BC keeps in the far heap that are near here: an element
+    /// passed by reference is still copied in and out.
+    far_in_bc: BTreeSet<u32>,
+    /// The next array declared lives in the frame.
+    frame_next: bool,
+    /// Each frame array's descriptor place, and the place of its elements.
+    frame_arrays: BTreeMap<u32, u32>,
+    /// Some procedure REDIMs or ERASEs an array parameter, which may be any caller's array.
+    resized_formals: bool,
+    /// How deep in the procedure body `declarations_in` is.
+    declaring_depth: usize,
     next_data: u32,
     next_module_data: u32,
     /// CLEAR on a flat target: the data object listing every module variable
@@ -552,6 +566,10 @@ pub struct Options {
     pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
+    /// The most bytes of a procedure's constant-bound array the frame holds, where the runtime would allocate it (0: none).
+    pub frame_array_bytes: usize,
+    /// Every array is in DGROUP, so a formal reaches its elements near: set by the compile itself, where `all_near` holds.
+    pub near_arrays: bool,
     pub run_time_module: bool,
     /// Every procedure uses the runtime's frame entry and exit.
     pub runtime_frames: bool,
@@ -625,6 +643,7 @@ pub fn compile_with_warnings(
 
 /// The source `-g` describes: each expanded line's text, and its line in
 /// the main file.
+#[derive(Clone)]
 pub struct DebugSource {
     /// Each expanded line's text, for names' spelling; empty unless `debug`.
     pub text: Vec<String>,
@@ -644,7 +663,11 @@ pub fn compile_debugged(
     options: &Options,
     source: Option<DebugSource>,
 ) -> Result<(String, Vec<String>), SemanticError> {
-    let mut compiler = built_from(module, module_name, dialect, runtime, options, source)?;
+    let mut compiler = built_from(module, module_name, dialect, runtime, options, source.clone())?;
+    if options.frame_array_bytes > 0 && !options.near_arrays && near::all_near(&compiler) {
+        let options = Options { near_arrays: true, ..options.clone() };
+        compiler = built_from(module, module_name, dialect, runtime, &options, source)?;
+    }
     // /Ah and /D address every element through the descriptor at run time.
     if options.array_merging && !options.huge_arrays && !options.checked_arrays {
         merging::applied(&mut compiler);
@@ -699,6 +722,11 @@ fn built_from(
     let mut compiler = Compiler::new(module_name, dialect, runtime, options.clone());
     compiler.source = source;
     compiler.detached_results = detached_results;
+    compiler.resized_formals = module.procedures.iter().any(|procedure| {
+        let mut names = BTreeSet::new();
+        resized(&procedure.body, &mut names);
+        procedure.parameters.iter().any(|one| one.declaration.array && names.contains(&array_key(&one.declaration.name)))
+    });
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -813,7 +841,7 @@ fn built_from(
                             // element data may live outside DGROUP. Microsoft
                             // keeps that pointer split: selector at +2 and
                             // adjusted offset at +0Ah.
-                            descriptor_data: if parameter_type == STRING {
+                            descriptor_data: if parameter_type == STRING || compiler.options.near_arrays {
                                 "near"
                             } else if compiler.options.huge_arrays {
                                 "split_huge"
@@ -894,6 +922,8 @@ fn built_from(
             compiler.result_name = Some(canonical(&procedure.name).into());
         }
         compiler.each_declared.clear();
+        compiler.resized.clear();
+        resized(&procedure.body, &mut compiler.resized);
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
         compiler.handles_errors = handles_errors(&procedure.body);
@@ -1123,6 +1153,37 @@ fn slice_call(
     arguments.push(step.as_deref().cloned().unwrap_or(integer(1)));
     arguments.extend(extra);
     Expr::Apply { name: format!("{PRELUDE_PREFIX}{name}"), arguments, span }
+}
+
+/// How a procedure's array is named in `resized`.
+fn array_key(name: &str) -> String {
+    canonical(name).to_ascii_uppercase()
+}
+
+/// The arrays `statements` REDIM or ERASE, nested blocks included.
+fn resized(
+    statements: &[Statement],
+    out: &mut BTreeSet<String>,
+) {
+    for statement in statements {
+        match statement {
+            Statement::Redim(items) | Statement::RedimPreserve(items) => {
+                out.extend(items.iter().map(|one| array_key(&one.name)));
+            }
+            Statement::Erase(items) => {
+                for item in items {
+                    if let Expr::Name(name, _) | Expr::Apply { name, .. } = item {
+                        out.insert(array_key(name));
+                    }
+                }
+            }
+            nested => {
+                for body in nested.bodies() {
+                    resized(body, out);
+                }
+            }
+        }
+    }
 }
 
 /// QuickrBASIC arrays start at 0: no `lower TO upper`, no `OPTION BASE 1`.
@@ -1835,6 +1896,12 @@ impl Compiler {
             next_block: 2,
             data_offset: 0,
             implicit_storage: "module",
+            resized: BTreeSet::new(),
+            far_in_bc: BTreeSet::new(),
+            frame_next: false,
+            frame_arrays: BTreeMap::new(),
+            resized_formals: false,
+            declaring_depth: 0,
             next_data: 3,
             // Source globals need their own stable data identity so their
             // names survive to the OMF listing. Keep them outside the
@@ -2539,6 +2606,37 @@ impl Compiler {
         Ok(())
     }
 
+    /// Whether a procedure's array can live in its frame, as C's does: no
+    /// B$DDIM and B$ERAS, near data, a descriptor of constants.
+    ///
+    /// The DIM must run once, at the top of the procedure, on the llrm
+    /// runtime, in a program that is all in this module (`--whole-program`).
+    /// Then no array's descriptor is resized behind its back: nothing REDIMs
+    /// or ERASEs it here or through an array parameter.
+    fn in_frame(
+        &self,
+        item: &Declaration,
+    ) -> bool {
+        let bytes = item.bounds.iter().try_fold(1usize, |total, one| {
+            let low = one.lower.as_ref().map_or(Some(self.option_base), |bound| self.constant_integer(bound).ok())?;
+            let high = self.constant_integer(&one.upper).ok()?;
+            total.checked_mul(usize::try_from(high.checked_sub(low)?.checked_add(1)?).ok()?)
+        });
+        let width = match item.type_name.as_ref() {
+            Some(TypeName::String) => return false,
+            _ => self.named_type(&item.name, item.type_name.as_ref()).map(|one| self.width(one)),
+        };
+        self.options.frame_array_bytes > 0
+            && self.options.whole_program
+            && self.runtime == "llrm"
+            && !item.dynamic
+            && !self.resized_formals
+            && self.declaring_depth == 0
+            && !self.resized.contains(&array_key(&item.name))
+            && self.constant_bounds(item)
+            && matches!((bytes, width), (Some(count), Ok(width)) if count.saturating_mul(width) <= self.options.frame_array_bytes)
+    }
+
     fn declarations_in(
         &mut self,
         statements: &[Statement],
@@ -2605,6 +2703,7 @@ impl Compiler {
                             // regardless of the module's $STATIC default.
                             let mut dynamic = item.clone();
                             dynamic.dynamic = true;
+                            self.frame_next = self.in_frame(item);
                             self.declare_as(&dynamic, storage)?;
                         } else {
                             self.declaring_common =
@@ -2681,11 +2780,17 @@ impl Compiler {
                     {
                         self.declare_each_item(name, iterable, *span, storage)?;
                     }
-                    self.declarations_in(body, storage)?;
+                    self.declaring_depth += 1;
+                    let declared = self.declarations_in(body, storage);
+                    self.declaring_depth -= 1;
+                    declared?;
                 }
                 nested => {
                     for body in nested.bodies() {
-                        self.declarations_in(body, storage)?;
+                        self.declaring_depth += 1;
+                        let declared = self.declarations_in(body, storage);
+                        self.declaring_depth -= 1;
+                        declared?;
                     }
                 }
             }
@@ -2809,10 +2914,110 @@ impl Compiler {
         let bounds = self.bounds(declaration)?;
         let stated = bounds.clone();
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
-        self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        if let Some(&data) = self.frame_arrays.get(&descriptor_place) {
+            self.describe_frame(descriptor, data, element, &records);
+        } else {
+            self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        }
         self.holds(bounds::Held::Place(descriptor_place), Some(stated));
-        self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
+        self.tag_last(Tag::Allocate(Shape { frame: self.frame_arrays.contains_key(&descriptor_place), descriptor, records, element }));
         Ok(())
+    }
+
+    /// The frame object that holds the elements of the constant-bound array
+    /// `declaration`, whose descriptor is `descriptor_place`.
+    fn frame_data(
+        &mut self,
+        declaration: &Declaration,
+        element: u32,
+        descriptor_place: u32,
+    ) -> Result<(), SemanticError> {
+        let count = self.bounds(declaration)?.iter().try_fold(1usize, |total, (lower, upper)| {
+            let (Operand::Constant(_, Number::Integer(lower)), Operand::Constant(_, Number::Integer(upper))) =
+                (lower, upper)
+            else {
+                return None;
+            };
+            total.checked_mul(usize::try_from(upper - lower + 1).ok()?)
+        });
+        let Some(extent) = count.map(|count| count * self.width(element)) else {
+            return self.fail(format!("{}: a frame array has constant bounds", declaration.name));
+        };
+        let type_id = self.opaque_type(format!("{} elements", declaration.name), extent);
+        if self.beyond_segment(self.data_offset + extent) {
+            return self.fail(format!(
+                "{} does not fit: the near data segment (DGROUP, {} KiB) is full",
+                declaration.name,
+                self.segment_kib()
+            ));
+        }
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(Place {
+            volatile: false,
+            id: place,
+            name: format!("{}$frame", declaration.name),
+            type_id,
+            offset: self.place_offset("local", extent),
+            extent,
+            storage: "local",
+            symbol: 0,
+        });
+        self.data_offset += extent;
+        self.frame_arrays.insert(descriptor_place, place);
+        Ok(())
+    }
+
+    /// What B$DDIM would store in `descriptor` for an array of constant
+    /// `records` whose elements are the frame object `data`: the elements are
+    /// zero already (every local is, at entry), and nothing frees them.
+    /// FADF_STATIC says the runtime does not own them.
+    fn describe_frame(
+        &mut self,
+        descriptor: u32,
+        data: u32,
+        element: u32,
+        records: &[(Operand, Operand)],
+    ) {
+        let layout = self.ad();
+        let word = self.word_type();
+        let constant = |value: i64| Operand::Constant(word, Number::Integer(value));
+        let integer = |operand: &Operand| match operand {
+            Operand::Constant(_, Number::Integer(value)) => *value,
+            _ => unreachable!("a frame array has constant bounds"),
+        };
+        let store = |this: &mut Self, offset: usize, type_id: u32, value: Operand| {
+            let target = Operand::Indirect { base: descriptor, offset, type_id, volatile: false, inbounds: false };
+            this.emit("store", Vec::new(), vec![target, value]);
+        };
+        store(self, layout.rank, BYTE, Operand::Constant(BYTE, Number::Integer(records.len() as i64)));
+        store(self, layout.features, BYTE, Operand::Constant(BYTE, Number::Integer(0x40)));
+        store(self, layout.element, word, constant(self.width(element) as i64));
+        let mut lower_linear = 0;
+        for (record, (lower, upper)) in records.iter().enumerate() {
+            let (lower, upper) = (integer(lower), integer(upper));
+            store(self, layout.count(record), word, constant(upper - lower + 1));
+            store(self, layout.lower(record), word, constant(lower));
+            lower_linear = if record == 0 { lower } else { lower_linear * (upper - lower + 1) + lower };
+        }
+        let near_type = self.pointer_type(VOID);
+        let near = self.value(near_type);
+        self.emit("address", vec![near], vec![Operand::Place(data)]);
+        let far = self.far_address(Operand::Place(data), VOID);
+        let offset = self.value(INTEGER);
+        self.emit("pointer_offset", vec![offset], vec![Operand::Value(far)]);
+        let segment = self.value(INTEGER);
+        self.emit("pointer_segment", vec![segment], vec![Operand::Value(far)]);
+        store(self, layout.data, INTEGER, Operand::Value(offset));
+        if let Some(selector) = layout.selector {
+            store(self, selector, INTEGER, Operand::Value(segment));
+        }
+        // As the static descriptor: the data address less the lower bounds'
+        // elements, a near pointer so that element access folds to the frame.
+        let origin = self.value(near_type);
+        let bias = -lower_linear * self.width(element) as i64;
+        self.emit("ptr_offset", vec![origin], vec![Operand::Value(near), Operand::Constant(INTEGER, Number::Integer(bias))]);
+        store(self, layout.origin, near_type, Operand::Value(origin));
     }
 
     /// BC runs the DIM of a scalar the program already used: it stores the
@@ -2954,6 +3159,7 @@ impl Compiler {
             self.named_type(&declaration.name, declaration.type_name.as_ref())?
         };
         let module_symbol = self.basic_global_name(&declaration.name, selected, element);
+        let framed = std::mem::take(&mut self.frame_next);
         let spills = storage == "module" && self.spills_to_far(declaration, element)?;
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
@@ -3015,6 +3221,9 @@ impl Compiler {
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
+            if framed && storage == "local" {
+                self.frame_data(declaration, element, descriptor_place)?;
+            }
             self.pending_allocations.insert(
                 (self.position, key.clone()),
                 (declaration.clone(), descriptor_place, descriptor_type, element),
@@ -3036,7 +3245,7 @@ impl Compiler {
                     // Microsoft AD+2 supplies the allocation selector and
                     // AD+0Ah its offset. Treating these as DGROUP wrote the
                     // first MOD_TEX record through selector zero/DGROUP.
-                    descriptor_data: if element == STRING {
+                    descriptor_data: if element == STRING || self.frame_arrays.contains_key(&descriptor_place) {
                         "near"
                     } else if self.options.huge_arrays {
                         "split_huge"
@@ -5857,6 +6066,9 @@ impl Compiler {
             // is +0's offset and selector.
             let origin = matches!(address, "near" | "flat").then_some(data);
             self.tag_last(Tag::ElementOffset { descriptor, origin });
+            if address == "near" && element != STRING {
+                self.far_in_bc.insert(pointer);
+            }
             pointer
         };
         Ok(pointer)
@@ -6815,7 +7027,7 @@ impl Compiler {
         if let Some(held) = bounds::Held::of(&variable) {
             self.holds(held, Some(stated));
         }
-        self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
+        self.tag_last(Tag::Reallocate(Shape { frame: false, descriptor, records, element }));
         Ok(())
     }
 
@@ -8706,7 +8918,7 @@ impl Compiler {
                                 || SemanticError { message: "BYREF indirect base has no pointer type".into() },
                             )?;
                         let original = Operand::Indirect { base, offset, type_id, volatile, inbounds };
-                        if !self.options.one_space() && self.width(pointer_type) == 4 {
+                        if (!self.options.one_space() && self.width(pointer_type) == 4) || self.far_in_bc.contains(&base) {
                             // Ordinary BASIC BYREF formals carry a near
                             // address. BC bridges a field in a far dynamic
                             // array with a near copy-in/copy-out slot; pushing
@@ -10745,7 +10957,7 @@ impl Compiler {
             .filter_map(|(place, element)| {
                 self.places
                     .iter()
-                    .find(|one| one.id == place && one.storage == "local")
+                    .find(|one| one.id == place && one.storage == "local" && !self.frame_arrays.contains_key(&place))
                     .map(|one| (place, one.type_id, if element == Some(STRING) { strings } else { "B$ERAS" }))
             })
             .collect();

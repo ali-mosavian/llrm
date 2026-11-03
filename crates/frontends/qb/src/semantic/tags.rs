@@ -48,6 +48,8 @@ pub(super) enum Tag {
 /// The descriptor a DIM or REDIM fills, and each dimension record's bounds
 /// in record order: B$DDIM fills record 0 from the pair pushed last.
 pub(super) struct Shape {
+    /// The array's elements are a frame object, not the runtime's.
+    pub frame: bool,
     pub descriptor: u32,
     pub records: Vec<(Operand, Operand)>,
     pub element: u32,

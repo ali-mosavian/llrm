@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -103,6 +103,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--whole-program" => frontend.whole_program = true,
             "--export" => frontend.exports.push(value("--export")?),
             "--array-merging" => frontend.array_merging = true,
+            "--frame-arrays" => frontend.frame_array_bytes = 2048,
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,

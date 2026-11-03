@@ -68,7 +68,7 @@ _BSS            segment word public 'BSS'
 _BSS            ends
 
 STACK           segment para stack 'STACK'
-                byte    2048 dup (?)
+                byte    8192 dup (?)
 qb_atopsp       label   byte
 STACK           ends
 
