@@ -416,6 +416,32 @@ fn a_64_bit_add_of_a_live_source_is_a_lea_at_m64() {
     assert!(!listing.contains("add r") && !listing.contains("inc r"), "{listing}");
 }
 
+/// The Os fill rule flips at a length that depends on the byte: the value the
+/// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
+/// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
+/// byte is stores one step below the boundary and `rep stosq` at it.
+#[test]
+fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
+    let listing = |byte: u32, size: u32| {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @g = global [{size} x i8] zeroinitializer, align 16\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 {byte}, i64 {size}, i1 false)\n  ret void\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    // (byte, the longest fill that stays stores, the shortest that is `rep
+    // stosq`)
+    for (byte, stores, rep) in [(0, 32, 48), (255, 32, 48), (65, 48, 64)] {
+        let (inline, string) = (listing(byte, stores), listing(byte, rep));
+        assert!(inline.contains("movaps") && !inline.contains("rep stos"), "byte {byte}, {stores} B: {inline}");
+        assert!(string.contains("rep stosq") && !string.contains("movaps"), "byte {byte}, {rep} B: {string}");
+    }
+}
+
 /// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
 /// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
 /// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
