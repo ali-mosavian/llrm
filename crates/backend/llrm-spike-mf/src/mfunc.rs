@@ -124,32 +124,36 @@ pub struct Block {
 }
 
 impl Block {
-    /// An instruction with no place (a constant, a materialised address) takes
-    /// the place of the next one in its block that has one, the user it was
-    /// made for (the pin emits a node with its user's `DebugLoc`); one after
-    /// the last located instruction takes the last place.
-    ///
-    /// DEVIATE: every unlocated instruction is filled; the pin gives line 0
-    /// (flags 0) to one that feeds nothing located at a block top (a phi or
-    /// edge copy, a bare jump), as x86 does (#6512). Reason: the spike
-    /// targets' line tables take a row per place and have no line-0 row
-    /// (ca65 `.dbg line`, SDCC `C$` symbols). Exit: 2026-11-15, fill only
-    /// instructions that define a value a located one reads.
+    /// An instruction with no place that defines a register a later one reads
+    /// (a constant, a materialised address) takes the place of the first of
+    /// those readers, the user it was made for (the pin emits a node with its
+    /// user's `DebugLoc`). Any other stays at place 0: a bare jump, an edge
+    /// copy, what follows the last located instruction. Line 0 is the pin's
+    /// row for it, which is the format's to write (or to leave to the row
+    /// before it).
     pub fn place_unlocated(&mut self) {
-        let mut next = 0;
+        let mut reader: std::collections::HashMap<Reg, u32> = std::collections::HashMap::new();
         for inst in self.insts.iter_mut().rev() {
-            if inst.origin != 0 {
-                next = inst.origin;
-            } else {
-                inst.origin = next;
+            if inst.origin == 0 {
+                inst.origin = inst
+                    .operands
+                    .iter()
+                    .find_map(|operand| match operand {
+                        Operand::Def(reg) => reader.get(reg).copied(),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
             }
-        }
-        let mut last = 0;
-        for inst in &mut self.insts {
-            if inst.origin != 0 {
-                last = inst.origin;
-            } else {
-                inst.origin = last;
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Def(reg) => {
+                        reader.remove(reg);
+                    }
+                    Operand::Use(reg) if inst.origin != 0 => {
+                        reader.insert(*reg, inst.origin);
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -189,6 +193,8 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The function is built for size (`shouldOptimizeForSize`).
+    pub optimize_for_size: bool,
     /// The source places the instructions' [`Inst::origin`]s number, from 1.
     pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
     /// `-g`: the source variables and where each is.
@@ -208,6 +214,7 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            optimize_for_size: false,
             places: Vec::new(),
             variables: Vec::new(),
         }

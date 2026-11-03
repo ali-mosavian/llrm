@@ -229,6 +229,7 @@ impl ProgramPass for Walk {
         let mut params = crate::inlinecost::InlineParams {
             allow_recursive_call: recursion.is_some(),
             recursive_callee_limit: recursion.map_or(i64::MAX, |one| one.callee),
+            recursive_edge_growth: edge_growth_bar(program.target.tti().as_deref(), self.inline.limit >= 250),
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
@@ -358,7 +359,11 @@ impl ProgramPass for Walk {
                                 module
                                     .global(id)
                                     .function()
-                                    .is_some_and(|body| crate::inline::gcc_work(body) <= one.callee)
+                                    .is_some_and(
+                                        |body| crate::inline::gcc_work(body) <= one.callee
+                                            && crate::inline::recursive_edge_growth(body)
+                                                <= edge_growth_bar(tti.as_deref(), self.inline.limit >= 250),
+                                    )
                             }),
                         };
                         if fits && recursion.is_some() && tree.is_some() {
@@ -562,12 +567,16 @@ impl ProgramPass for Walk {
                 // bodies are simplified.
                 if !members.is_empty() {
                     let mut stated = false;
-                    for id in llrm_analysis::functionattrs::post_order(
+                    let callees = modules[at].get::<llrm_mir::passes::CalleeEffects>(module);
+                    let stated_now = llrm_analysis::functionattrs::post_order_with(
                         module,
                         &program.layout,
                         program.target.spaces(),
+                        &callees,
                         &members,
-                    ) {
+                    );
+                    drop(callees);
+                    for id in stated_now {
                         modules[at].changed(id);
                         stated = true;
                     }
@@ -697,6 +706,15 @@ pub(crate) fn priced_copy_depth(
 /// the simplifier folds the chains of tests those copies make (`n - 1 == 0`,
 /// `n - 2 == 0`, ...) through `algebraic::_offset_compared` whoever else reads
 /// the sum, which the pin does only with one use.
+/// DEVIATE REC-2: the growth a recursive edge may add at -O2 or -O3
+/// (`Tti::recursive_edge_growth`); no bar where the target states none.
+fn edge_growth_bar(
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    o3: bool,
+) -> i64 {
+    tti.and_then(|tti| tti.recursive_edge_growth()).map_or(i64::MAX, |(o2, o3_bar)| if o3 { o3_bar } else { o2 })
+}
+
 pub const SELF_COPIED: &str = "llrm-self-copied";
 
 /// DEVIATE (recursion): the copies of a tree-recursive function in itself, as
@@ -724,6 +742,8 @@ pub struct SelfInline {
     pub speed_rate: bool,
     /// `-finline-recursive`.
     pub flag: bool,
+    /// -O3: gcc's `max-inline-insns-auto` is the larger bar.
+    pub o3: bool,
     /// Inlining is on (`Threshold.limit != 0`).
     pub inlining: bool,
 }
@@ -756,7 +776,11 @@ impl SelfInline {
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
                 let mut copies = 0;
-                let frequencies = self_calls(module, &program.layout, id, self.for_size);
+                let frequencies = self_calls(module, &program.layout, id, self.for_size).filter(|_| {
+                    let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
+                    let body = module.global(id).function().expect("a marked function");
+                    crate::inline::recursive_edge_growth(body) <= bar
+                });
                 if let Some(frequencies) = frequencies {
                     let tti = program.target.tti();
                     let (depth, callee) = match (

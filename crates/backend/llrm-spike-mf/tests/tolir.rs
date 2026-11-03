@@ -759,6 +759,33 @@ fn test_a_call_that_reads_a_pair_and_clobbers_its_byte_is_no_conflict() {
     assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
 }
 
+/// A call that reads a pair, clobbers it, and returns in one of its bytes: the
+/// pair's argument range and the call's clobber of it are one range by the time
+/// the result's range starts at the call, so the clobber was no longer "a range
+/// of its own" and the result looked like a second value meeting in the
+/// register. Greedy refused bench_nbody -Os, bintree, grep, wc_mixed
+/// ("greedy refused"): `PIN-CONFLICT` at every call returning in a byte it also
+/// clobbered.
+#[test]
+fn test_a_call_that_reads_a_pair_and_returns_in_its_byte_is_no_conflict() {
+    let mut f = MFunction::<()>::new("returns");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    let mut with_result = call();
+    with_result.operands.push(Operand::Use(Reg::Phys(RegId::EBX)));
+    with_result.operands.push(Operand::Def(Reg::Phys(RegId::BL)));
+    only.insts.push(with_result);
+    only.insts.push(op("get", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
+}
+
 /// A value copied out of a pair is not joined into the pair when one of its
 /// bytes is written while the value lives: the join would make the value hold
 /// the byte's cell. crc16's pointer, joined into `rs1` while `rc3` carried a
@@ -1083,6 +1110,73 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
         .filter_map(|i| i.operands.iter().find_map(|o| if let Operand::Imm(n) = o { Some(*n as i64) } else { None }))
         .collect();
     assert_eq!(literals, vec![7, 9, 7], "{literals:?}");
+}
+
+/// A symbol and the literal 0 are two literals. The converter wrote both as
+/// `Imm 0`, so a zero made again came back as the symbol's address: a loop
+/// variable that starts at 0 started at `_s` (llrm-z80 on tests/run/c
+/// `copy_runs`: 481909 for 929463).
+#[test]
+fn test_a_zero_made_again_is_not_taken_for_a_symbol() {
+    use llrm_codegen::model::ir::Held;
+    let mut f = MFunction::<()>::new("symbol_and_zero");
+    f.classes = vec![(); 2];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut address = op("ldi", vec![Operand::Def(v(0)), Operand::Symbol("s".into(), 0)]);
+    address.rematerializable = true;
+    let mut zero = op("ldi", vec![Operand::Def(v(1)), Operand::Imm(0)]);
+    zero.rematerializable = true;
+    entry.insts.extend([address, zero]);
+    entry.insts.push(op("store", vec![Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(1))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let mut decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let edited = decided.edited.as_mut().expect("an edited body");
+    edited
+        .blocks[0]
+        .insns
+        .edit(
+            |insns| {
+                let address = insns.iter().position(|one| one.defines == [1]).expect("the symbol");
+                let zero = insns.iter().position(|one| one.defines == [2]).expect("the zero");
+                let mut again = (*insns[zero]).clone();
+                again.at = insns[address].at;
+                again.covers = Some((again.at, again.at));
+                again.defines = vec![3];
+                again.spill_reload = true;
+                again.rematerialized = true;
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                let store = insns.iter().position(|one| one.uses == [2]).expect("the read");
+                insns[store] = insns[store].renamed(&|name| if name == 2 { 3 } else { name });
+                insns.insert(address + 1, std::sync::Arc::new(again));
+            },
+        );
+    let back = from_lir::<Flat>(&f, &converted, &decided, regs()).expect("writes back");
+    let literals: Vec<String> = back
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.kind == Kind::Op("ldi"))
+        .filter_map(|i| {
+            i.operands
+                .iter()
+                .find_map(
+                    |o| match o {
+                        Operand::Imm(n) => Some(n.to_string()),
+                        Operand::Symbol(name, _) => Some(name.clone()),
+                        _ => None,
+                    },
+                )
+        })
+        .collect();
+    assert_eq!(literals, ["s", "0", "0"], "{literals:?}");
 }
 
 /// A function states no branch odds, so greedy's block frequencies took every
@@ -1684,18 +1778,36 @@ fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
 /// A constant materialised for a call stood under no place, so its row (and
 /// the compare's line before it) covered it: the argument of a call was listed
 /// under the line of the branch before the block (6502 -O0, c.c line 3 for
-/// the `lda #10` of line 5).
+/// the `lda #10` of line 5). One that feeds an unlocated instruction that
+/// feeds a located one takes that one's place too.
 #[test]
 fn an_unlocated_instruction_takes_the_place_of_the_one_it_feeds() {
     let mut f = MFunction::<()>::new("places");
-    let mut call = op("call", vec![]);
+    let mut call = op("call", vec![Operand::Use(v(1))]);
     call.origin = 5;
     let mut block = Block { id: 0, ..Block::default() };
-    block.insts = vec![op("const", vec![Operand::Def(v(0))]), call, op("tail", vec![])];
+    block.insts =
+        vec![op("const", vec![Operand::Def(v(0))]), op("add", vec![Operand::Def(v(1)), Operand::Use(v(0))]), call];
     f.blocks = vec![block];
     f.place_unlocated();
     let origins: Vec<u32> = f.blocks[0].insts.iter().map(|one| one.origin).collect();
     assert_eq!(origins, vec![5, 5, 5]);
+}
+
+/// Every unlocated instruction took a neighbour's place, so a bare jump at a
+/// block top and what follows the last located instruction were listed under
+/// a source line the pin gives line 0.
+#[test]
+fn an_unlocated_instruction_that_feeds_nothing_stays_unplaced() {
+    let mut f = MFunction::<()>::new("places");
+    let mut call = op("call", vec![]);
+    call.origin = 5;
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts = vec![op("jump", vec![]), op("const", vec![Operand::Def(v(0))]), call, op("tail", vec![])];
+    f.blocks = vec![block];
+    f.place_unlocated();
+    let origins: Vec<u32> = f.blocks[0].insts.iter().map(|one| one.origin).collect();
+    assert_eq!(origins, vec![0, 0, 5, 0]);
 }
 
 /// A copy the allocator adds (a tied use, a phi's incoming value) stood under

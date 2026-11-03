@@ -131,6 +131,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
             return Some(self.dag.get_node(ISD::UDiv, vt, &[n0, n1]));
         }
+        if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
+        }
         self.visit_sdiv_like(n0, n1, node)
     }
 
@@ -341,6 +346,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let (one, zero) = (self.dag.get_constant(1, vt), self.dag.get_constant(0, vt));
             return Some(self.dag.get_select(vt, test, one, zero));
         }
+        if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_udivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
+        }
         self.visit_udiv_like(n0, n1, node)
     }
 
@@ -457,10 +467,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
                 return Some(self.dag.get_node(ISD::URem, vt, &[n0, n1]));
             }
+            if let Some(narrow) = self.dag.config().narrow_divrem
+                && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+            {
+                return Some(narrowed);
+            }
         } else if self.dag.constant(n1).is_some_and(|c| c.is_power_of_two()) {
             let ones = self.dag.get_all_ones_constant(vt);
             let below = self.dag.get_node(ISD::Add, vt, &[n1, ones]);
             return Some(self.dag.get_node(ISD::And, vt, &[n0, below]));
+        } else if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_udivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
         }
         if self.dag.constant(n1).is_none_or(|c| c == 0) {
             return None;

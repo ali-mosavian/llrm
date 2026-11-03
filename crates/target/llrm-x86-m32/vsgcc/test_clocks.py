@@ -59,3 +59,15 @@ def test_a_double_shift_costs_what_the_486_sheet_says_not_a_clock():
     assert harness.cost(one(32, 0x0F, 0xAC, 0xD3, 0x05), False, True, 0) == clocks.UNTABLED["shld_imm"]          # shrd ebx, edx, 5
     assert harness.cost(one(32, 0x0F, 0xA5, 0xD3), False, True, 0) == clocks.UNTABLED["shld_cl"] == 3           # shld ebx, edx, cl
     assert harness.cost(one(32, 0x0F, 0xAD, 0xD3), False, True, 0) == clocks.UNTABLED["shld_cl"]                 # shrd ebx, edx, cl
+
+
+def test_an_extended_load_and_store_cost_what_the_486_sheet_says_not_the_dword_figure():
+    """Every `fld m` cost 3 and every `fst(p) m` 8 (the table's m32/m64 and m64 rows): `fld tbyte` is 6 on the sheet (Table 10.3), `fstp tbyte`
+    6 and `fstp dword` 7. The long double rows read 3 clocks a `fld tbyte` cheap, which understated every compiler's m80 traffic and the gain of
+    keeping a constant on the stack (x_ld_to_int: 256 loads = 768 clocks)."""
+    assert harness.cost(one(32, 0xDB, 0x28), False, True, 0) == clocks.UNTABLED["fld_m80"] == 6      # fld tbyte [eax]
+    assert harness.cost(one(32, 0xD9, 0x00), False, True, 0) == clocks.clocks("x87_load") == 3       # fld dword [eax]
+    assert harness.cost(one(32, 0xDD, 0x00), False, True, 0) == 3                                     # fld qword [eax]
+    assert harness.cost(one(32, 0xDB, 0x38), False, True, 0) == clocks.UNTABLED["fstp_m80"] == 6     # fstp tbyte [eax]
+    assert harness.cost(one(32, 0xD9, 0x18), False, True, 0) == clocks.UNTABLED["fst_m32"] == 7       # fstp dword [eax]
+    assert harness.cost(one(32, 0xDD, 0x18), False, True, 0) == clocks.clocks("x87_store") == 8       # fstp qword [eax]

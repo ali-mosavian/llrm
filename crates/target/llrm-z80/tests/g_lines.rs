@@ -176,3 +176,15 @@ fn the_adb_writes_a_parameter_as_sdcc_does() {
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(parameters(&variables_adb(Level::O2)), sdcc);
 }
+
+/// An instruction with no location (the `ret` here) was listed under the line
+/// before it; the pin gives it line 0, which SDCC spells `C$f.c$0$..`.
+#[test]
+fn an_unlocated_instruction_after_a_located_one_is_line_zero() {
+    let ir = LOCATED.replace("  ret i16 %d, !dbg !8", "  ret i16 %d");
+    let request = Request { debug: true, ..Request::new(Level::O2) };
+    let on = text(&ir, "f", 0, &request).expect("compiles");
+    assert!(on.contains("C$f.c$0$"), "{on}");
+    let off = text(&ir, "f", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!off.contains("C$"), "{off}");
+}

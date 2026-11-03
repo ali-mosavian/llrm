@@ -192,3 +192,5 @@ A change to a pass, analysis, flag, level, tool, target or runtime updates its d
 | [cgp-switch-type](cgp-switch-type.md) | `optimizeSwitchType`: a switch on i8/i16 is widened to i32 as the pin does; m16 keeps it narrow; byte evidence |
 | [scaling-gate-rebaseline-2026-10-28](scaling-gate-rebaseline-2026-10-28.md) | The 43 `test_scaling_gate` tests re-baselined per test against the current step names: old to new mapping, bounds |
 | [scev-persistent-se](scev-persistent-se.md) | One persistent SE across the loop passes: trip-count computes 7 -> 3, plan, files, risks |
+| [darwin-cause-cards-2026-11-03](darwin-cause-cards-2026-11-03.md) | arm64-macos: cells worse than the best of pin and gcc-13, same-IR check, cause per cell, DOS-flavoured programs (2026-11-03) |
+| [darwin-winners-2026-11-03](darwin-winners-2026-11-03.md) | arm64-macos winner table per level (bytes, clocks) from the 440-row matrix, with the cause card of each cell above best |

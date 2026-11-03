@@ -171,6 +171,9 @@ pub enum FrameBase {
     /// The code keeps none; a debugger finds the cell from the caller's frame,
     /// which call frame information gives at every address.
     Cfa { bias: i64, far_bias: i64 },
+    /// WebAssembly local `index`, which holds the frame address
+    /// (`DW_OP_WASM_location 0, index`).
+    WasmLocal(u32),
 }
 
 /// What a debug writer needs to know of the machine, so it reads no
@@ -497,6 +500,13 @@ pub enum Location {
     /// What the register held when the function was entered
     /// (`DW_OP_entry_value`), which is in no place now.
     EntryValue(String),
+    /// The value of WebAssembly local `index` (`DW_OP_WASM_location 0, index`,
+    /// `DW_OP_stack_value`).
+    WasmLocal(u32),
+    /// The value in WebAssembly operand-stack slot `index`
+    /// (`DW_OP_WASM_location 2, index`, `DW_OP_stack_value`): a stackified
+    /// value, which has no local.
+    WasmStack(u32),
     /// What the operations make of the arguments, which are in no place of
     /// their own: a register, a frame cell or a constant each, with the bytes
     /// of the value a cell holds, pushed by [`ExprOp::Arg`]. The value itself
@@ -611,6 +621,10 @@ pub struct Function {
     pub body: Option<(usize, usize)>,
     /// Called and returned from far.
     pub far: bool,
+    /// What its frame cells are measured from, where that is not the unit's
+    /// ([`Info::frame_base`]): WebAssembly's frame pointer is a local of its
+    /// own in each function.
+    pub frame_base: Option<FrameBase>,
     /// The module's own code, whose variables are the module's.
     pub module: bool,
     /// Parameters first, in order, then the locals.

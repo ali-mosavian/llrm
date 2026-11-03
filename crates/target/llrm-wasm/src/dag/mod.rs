@@ -2,6 +2,7 @@
 //! its calling lowering, the selection pipeline and the emitter, then the
 //! machine passes in the pin's `-O0` order.
 
+pub mod alias;
 pub mod call;
 pub mod emit;
 pub mod function;
@@ -109,6 +110,13 @@ pub fn compile_function(
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
+    f.variables = blocks
+        .first()
+        .map(|first| {
+            first.declared.iter().map(|&(record, frame)| crate::mir::Variable { record, frame, disp: 0 }).collect()
+        })
+        .unwrap_or_default();
+    f.argument_variables = blocks.first().map(|first| first.argument_variables.clone()).unwrap_or_default();
     f.nothrow = non_throwing(module);
     f.callee_memory = callee_memory(module);
     f.personality = unwinding
@@ -129,6 +137,10 @@ pub fn compile_function(
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
     if options.level != crate::driver::Level::O0 {
+        if crate::early_tail_duplicate::early_tail_duplicate(&mut f) {
+            remove_unreachable_blocks(&mut f);
+        }
+        crate::stack_coloring::stack_coloring(&mut f, blocks.first().map_or(&[], |block| &block.stack_colors));
         crate::dead_mi::dead_machine_instruction_elim(&mut f);
         crate::machine_licm::machine_licm(&mut f);
         crate::machine_cse::machine_cse(&mut f);
@@ -141,7 +153,6 @@ pub fn compile_function(
     phi_elimination(&mut f);
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
-    fix_irreducible_control_flow(&mut f);
     late_eh_prepare(&mut f);
     // The pin turns off `RegisterCoalescer` at -O1.
     if matches!(
@@ -150,25 +161,33 @@ pub fn compile_function(
     ) {
         crate::spike_coalesce::coalesce(&mut f);
     }
-    if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
-        remove_unreachable_blocks(&mut f);
-    }
+    let for_size = matches!(
+        options.level,
+        crate::driver::Level::Os | crate::driver::Level::Oz
+    );
     if options.level != crate::driver::Level::O0 {
-        if crate::branch_fold::fold_branches(&mut f) {
+        // `BranchFolder::OptimizeFunction`: tail merging, then the branches,
+        // until neither changes anything.
+        for _ in 0..=f.blocks.len() {
+            let mut changed = crate::tail_merge::tail_merge(&mut f, for_size);
+            changed |= crate::branch_fold::forward_branch_only_blocks(&mut f);
+            changed |= crate::branch_fold::fold_branches(&mut f);
+            if !changed {
+                break;
+            }
             remove_unreachable_blocks(&mut f);
         }
     }
     if options.level != crate::driver::Level::O0 {
-        let for_size = matches!(
-            options.level,
-            crate::driver::Level::Os | crate::driver::Level::Oz
-        );
         if crate::tail_duplicate::tail_duplicate(&mut f, for_size) {
             remove_unreachable_blocks(&mut f);
-            // The pin runs `FixIrreducibleControlFlow` after it.
-            fix_irreducible_control_flow(&mut f);
         }
     }
+    // The pin runs `FixIrreducibleControlFlow` once, at every level, after
+    // branch folding and tail duplication (a merge can make a loop with two
+    // entries): run before the coalescer, its dispatch copies stay (x_switch
+    // -O2 668 B against the pin's 490).
+    fix_irreducible_control_flow(&mut f);
     if options.level != crate::driver::Level::O0 {
         crate::optimize_live_intervals::optimize_live_intervals(&mut f);
         crate::mem_intrinsic_results::mem_intrinsic_results(&mut f);

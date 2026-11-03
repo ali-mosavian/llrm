@@ -185,6 +185,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::machinelicm::MachineLicm {
             classes: Rc::clone(classes),
             saved: registers.saved.iter().map(|(whole, _)| classes.registers.root(*whole)).collect(),
+            size: target.size || target.min_size,
         }),
         // After the loop-invariant values are in the preheader: streams that
         // share one index share one pointer (DEVIATE LSR2).

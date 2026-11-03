@@ -270,6 +270,40 @@ fn set_on_condition(base: &str) -> bool {
     )
 }
 
+/// A byte of code where `timings.times` states no row: one clock is two bytes.
+const INTERIM_MILLICLOCKS_PER_BYTE: i64 = 500;
+
+/// What a byte of code is worth on `cpu`, in thousandths of a clock: the
+/// CPU's `timings.times` row.
+pub fn byte_milliclocks(cpu: SelectCpu) -> i64 {
+    crate::target::cpu_table(cpu.name())
+        .and_then(|table| table.byte_rate())
+        .filter(|rate| *rate > 0)
+        .unwrap_or(INTERIM_MILLICLOCKS_PER_BYTE)
+}
+
+/// Whether `extra_bytes` of code are worth `saved_clocks` on `cpu`: the trade
+/// passes only at N extra bytes per clock saved <= the row's allowance.
+pub fn trade_passes(
+    cpu: SelectCpu,
+    extra_bytes: i64,
+    saved_clocks: i64,
+) -> bool {
+    saved_clocks * 1000 >= extra_bytes * byte_milliclocks(cpu)
+}
+
+/// The order a priced choice minimizes on `cpu`: bytes then clocks for size,
+/// else clocks plus bytes at the CPU's byte price, ties to fewer clocks.
+pub fn order(
+    cpu: SelectCpu,
+    size: bool,
+    clocks: u32,
+    bytes: u32,
+) -> (i64, i64) {
+    let (clocks, bytes) = (i64::from(clocks), i64::from(bytes));
+    if size { (bytes, clocks) } else { (clocks * 1000 + bytes * byte_milliclocks(cpu), clocks) }
+}
+
 /// The clock periods of `text` on `cpu`. `bytes` is its encoded length (a
 /// conditional branch has a byte or a word displacement by it) and `taken`
 /// whether a branch was taken.
@@ -282,7 +316,11 @@ pub fn cost(
     cost_on(
         match cpu {
             SelectCpu::M68000 => Cpu::M68000,
+            SelectCpu::M68010 => Cpu::M68010,
             SelectCpu::M68020 => Cpu::M68020,
+            SelectCpu::M68030 => Cpu::M68030,
+            SelectCpu::M68040 => Cpu::M68040,
+            SelectCpu::M68060 => Cpu::M68060,
         },
         text,
         bytes,

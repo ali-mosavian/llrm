@@ -184,3 +184,53 @@ fn a_call_naming_an_alias_relocates_against_its_aliasee() {
     assert_eq!((bytes[at + 2], bytes[at + 4]), (0, 0), "a function-index relocation against symbol 0, `impl`");
     assert!(bytes.windows(5).any(|w| w == b"other"), "the alias is a symbol");
 }
+
+/// Debug sections were dropped: `.debug_line` and its `reloc..debug_line`
+/// never reached the object, so DWARF could not be linked.
+#[test]
+fn a_debug_section_and_its_relocations_are_written() {
+    use llrm_wasm::object::{DebugReloc, DebugSection, DebugTarget};
+    let source =
+        std::fs::read_to_string(format!("{}/tests/golden/four.ll", env!("CARGO_MANIFEST_DIR"))).expect("four.ll");
+    let first = source
+        .lines()
+        .find_map(|l| l.strip_prefix("define ").and_then(|l| l.split('@').nth(1)).map(|l| l.split('(').next().unwrap()))
+        .expect("a function");
+    let debug = [
+        DebugSection {
+            name: ".debug_line".into(),
+            bytes: vec![0; 16],
+            relocs: vec![
+                DebugReloc { offset: 4, target: DebugTarget::Function(first.into()), addend: 2 },
+                DebugReloc { offset: 8, target: DebugTarget::Section(1), addend: 0 },
+            ],
+        },
+        DebugSection { name: ".debug_str".into(), bytes: vec![b'x', 0], relocs: vec![] },
+    ];
+    let bytes = llrm_wasm::driver::object_with_debug(&source, Width::W32, Options::default(), &debug).expect("object");
+    let dir = std::env::temp_dir().join(format!("wasm-debug-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("d.wasm");
+    std::fs::write(&path, &bytes).unwrap();
+    let dump = |flags: &[&str]| {
+        let out = std::process::Command::new("wasm-objdump").args(flags).arg(&path).output().expect("wasm-objdump");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let headers = dump(&["-h"]);
+    for section in [".debug_line", ".debug_str", "reloc..debug_line"] {
+        assert!(headers.contains(section), "{section} missing:\n{headers}");
+    }
+    let relocs = dump(&["-x", "-r"]);
+    assert!(relocs.contains("R_WASM_FUNCTION_OFFSET_I32"), "{relocs}");
+    assert!(relocs.contains("R_WASM_SECTION_OFFSET_I32"), "{relocs}");
+    let linked = std::process::Command::new("wasm-ld")
+        .args(["--no-entry", "--export-all", "--allow-undefined", "-o"])
+        .arg(dir.join("linked.wasm"))
+        .arg(&path)
+        .output();
+    if let Ok(linked) = linked {
+        assert!(linked.status.success(), "wasm-ld: {}", String::from_utf8_lossy(&linked.stderr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

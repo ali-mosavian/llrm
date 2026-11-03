@@ -11,7 +11,8 @@ import argparse, hashlib, os, re, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 U8, U16 = "unsigned char", "unsigned"
-BUF, STR, TAB, R = 0x9000, 0x9010, 0x9020, 0x8F00
+BUF, STR, TAB, LZ, LZOUT, R = 0x9000, 0x9010, 0x9020, 0x9100, 0x9400, 0x8F00
+CU8 = "const unsigned char*"
 K = [
     ("zero", U8, [], 0), ("add8", U8, [(U8, "200"), (U8, "100")], 44),
     ("add16", U16, [(U16, "300"), (U16, "5000")], 5300), ("max8", U8, [(U8, "3"), (U8, "9")], 9),
@@ -27,16 +28,25 @@ K = [
     ("reverse", U8, [(U8 + "*", "buf"), (U8, "8")], 6),
     ("bsearch8", U8, [("const " + U8 + "*", "tab"), (U8, "8"), (U8, "17")], 5),
     ("sum16", U16, [("const " + U8 + "*", "buf"), (U8, "16")], 80), ("schr", U8, [("const char*", "str"), (U8, "111")], 4),
+    ("lz4", U16, [(CU8, "lz"), (U8 + "*", "lzout"), (U16, "634")], 634),
+    ("lz4c", U16, [(CU8, "lz"), (U8 + "*", "lzout"), (U16, "634")], 52785),
+    ("xs8", U8, [(U8, "0xA5"), (U8, "5")], 107), ("minmax", U8, [(CU8, "buf"), (U8, "16")], 8),
+    ("fletcher", U16, [(CU8, "buf"), (U8, "16")], 15952), ("hash16", U16, [("const char*", "str")], 51393),
+    ("dotx", U8, [(CU8, "buf"), (CU8, "tab"), (U8, "8")], 101),
 ]
 CRT0 = "\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n"
 DATA = f"""\t.module data
 \t.area _DABS (ABS)
 \t.org 0x{BUF:x}
-\t.globl _buf, _str, _tab
+\t.globl _buf, _str, _tab, _lz, _lzout
 _buf:\t.db 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3
 _str:\t.ascii "hello world"
 \t.db 0,0,0,0,0
 _tab:\t.db 2,5,8,11,14,17,20,23
+\t.org 0x{LZ:x}
+_lz:\t.db {open(os.path.join(HERE, "lz.txt")).read().strip()}
+\t.org 0x{LZOUT:x}
+_lzout:\t.ds 640
 """
 
 
@@ -83,7 +93,7 @@ def run(ihx, cwd):
 
 def driver(name, ret, args):
     protos = ", ".join(t for t, _ in args) or "void"
-    s = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[];\n"
+    s = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[]; extern unsigned char lz[]; extern unsigned char lzout[];\n"
     s += f"extern {ret} {name}({protos});\n#define RES (*(volatile {ret} *)0x{R:x})\n"
     s += "void main(void) {\n#ifndef EMPTY\n  RES = " + f"{name}({', '.join(a for _, a in args)});\n#endif\n}}\n"
     return s

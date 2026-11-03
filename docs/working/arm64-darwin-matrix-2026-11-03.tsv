@@ -1,0 +1,444 @@
+# arm64-darwin: Mac, kernel-only bytes (codebytes.kernel), us/run median of 11 with spread and load per row; head a924b93b6dda (llrm-cc md5 9ee9e0c8), default build (no gcc-gpl); never mix with qemu rows
+# clang = pin c0ff2112, gcc13 = gcc-13 fb695479, ours-cc = llrm-cc 9ee9e0c8; instrs empty (executed counts come from w15's harness)
+# shim flags: -include /Users/alim/work/personal/llrm-tools-rerun/tools/hostshim/host_shim.h -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -DPHYSICAL_TEXT_SCREEN=((unsigned long)host_text_screen); far/huge programs are flat reading
+target	prog	level	compiler	code_bytes	clocks	instrs	note
+arm64-darwin	bintree	O2	clang	344	2.72		darwin us, load 5.0, spread 12%, noisy
+arm64-darwin	bintree	O2	gcc13	320	3.67		darwin us, load 5.0, spread 4%
+arm64-darwin	bintree	O2	ours-cc	304	2.83		darwin us, load 5.0, spread 5%
+arm64-darwin	crc	O2	clang	156	0.03		darwin us, load 5.0, spread 15%, noisy
+arm64-darwin	crc	O2	gcc13	84	0.06		darwin us, load 4.9, spread 6%
+arm64-darwin	crc	O2	ours-cc	152	0.03		darwin us, load 4.9, spread 12%, noisy
+arm64-darwin	fib	O2	clang	104	18.40		darwin us, load 4.9, spread 3%
+arm64-darwin	fib	O2	gcc13	1216	8.31		darwin us, load 4.6, spread 4%
+arm64-darwin	fib	O2	ours-cc	108	17.69		darwin us, load 4.6, spread 14%, noisy
+arm64-darwin	floats	O2	clang	108	5.14		darwin us, load 4.5, spread 4%
+arm64-darwin	floats	O2	gcc13	128	5.21		darwin us, load 4.9, spread 38%, noisy
+arm64-darwin	floats	O2	ours-cc	100	5.10		darwin us, load 4.9, spread 1%
+arm64-darwin	fpbench	O2	clang	844	0.61		darwin us, load 4.9, spread 16%, noisy
+arm64-darwin	fpbench	O2	gcc13	448	0.69		darwin us, load 4.7, spread 14%, noisy
+arm64-darwin	fpbench	O2	ours-cc	848	0.55		darwin us, load 4.7, spread 11%, noisy
+arm64-darwin	frames	O2	clang	192	176.94		darwin us, load 4.7, spread 7%
+arm64-darwin	frames	O2	gcc13	1008	115.35		darwin us, load 4.4, spread 5%
+arm64-darwin	frames	O2	ours-cc	196	171.56		darwin us, load 4.3, spread 4%
+arm64-darwin	hanoi	O2	clang	160	14.19		darwin us, load 4.3, spread 5%
+arm64-darwin	hanoi	O2	gcc13	452	1.55		darwin us, load 4.3, spread 15%, noisy
+arm64-darwin	hanoi	O2	ours-cc	68	0.02		darwin us, load 4.2, spread 20%, noisy
+arm64-darwin	histo	O2	clang	444	1.97		darwin us, load 4.2, spread 4%
+arm64-darwin	histo	O2	gcc13	276	1.63		darwin us, load 4.2, spread 167%, noisy
+arm64-darwin	histo	O2	ours-cc	212	2.87		darwin us, load 4.2, spread 9%
+arm64-darwin	huge	O2	clang	588	9.57		darwin us, load 4.2, spread 8%, flat reading
+arm64-darwin	huge	O2	gcc13	176	36.89		darwin us, load 4.0, spread 4%, flat reading
+arm64-darwin	huge	O2	ours-cc	140	25.34		darwin us, load 4.0, spread 4%, flat reading
+arm64-darwin	jpeg_fixed	O2	clang	10828	1622.00		darwin us, load 4.0, spread 100%, noisy
+arm64-darwin	jpeg_fixed	O2	gcc13	4256	1762.29		darwin us, load 3.7, spread 29%, noisy
+arm64-darwin	jpeg_fixed	O2	ours-cc	8208	1631.38		darwin us, load 3.9, spread 76%, noisy
+arm64-darwin	jpeg_single	O2	clang	9236	1007.75		darwin us, load 3.9, spread 35%, noisy
+arm64-darwin	jpeg_single	O2	gcc13	4224	1485.50		darwin us, load 3.9, spread 19%, noisy
+arm64-darwin	jpeg_single	O2	ours-cc	7744	1581.17		darwin us, load 3.8, spread 26%, noisy
+arm64-darwin	lru	O2	clang	352	0.00		darwin us, load 3.8, spread 45%, noisy, flat reading
+arm64-darwin	lru	O2	gcc13	372	0.01		darwin us, load 3.8, spread 6%, flat reading
+arm64-darwin	lru	O2	ours-cc	388	0.00		darwin us, load 3.8, spread 16%, noisy, flat reading
+arm64-darwin	mandel	O2	clang	148	10.89		darwin us, load 3.9, spread 5%
+arm64-darwin	mandel	O2	gcc13	160	11.20		darwin us, load 3.9, spread 6%
+arm64-darwin	mandel	O2	ours-cc	148	11.01		darwin us, load 3.7, spread 7%
+arm64-darwin	matmul	O2	clang	1648	0.05		darwin us, load 3.7, spread 14%, noisy
+arm64-darwin	matmul	O2	gcc13	352	0.07		darwin us, load 3.7, spread 18%, noisy
+arm64-darwin	matmul	O2	ours-cc	1560	0.15		darwin us, load 3.7, spread 22%, noisy
+arm64-darwin	nbody	O2	clang	420	2.34		darwin us, load 3.7, spread 3%
+arm64-darwin	nbody	O2	gcc13	416	4.63		darwin us, load 3.5, spread 8%
+arm64-darwin	nbody	O2	ours-cc	420	2.22		darwin us, load 3.5, spread 6%
+arm64-darwin	nbody_fixed	O2	clang	656	44.28		darwin us, load 3.4, spread 4%
+arm64-darwin	nbody_fixed	O2	gcc13	532	51.20		darwin us, load 3.4, spread 5%
+arm64-darwin	nbody_fixed	O2	ours-cc	896	46.96		darwin us, load 3.4, spread 5%
+arm64-darwin	nbody_single	O2	clang	812	31.94		darwin us, load 3.4, spread 4%
+arm64-darwin	nbody_single	O2	gcc13	528	32.14		darwin us, load 3.4, spread 6%
+arm64-darwin	nbody_single	O2	ours-cc	852	30.74		darwin us, load 3.4, spread 4%
+arm64-darwin	particle	O2	clang	956	1.40		darwin us, load 3.4, spread 7%
+arm64-darwin	particle	O2	gcc13	336	6.38		darwin us, load 3.4, spread 4%
+arm64-darwin	particle	O2	ours-cc	280	7.18		darwin us, load 3.4, spread 336%, noisy
+arm64-darwin	queens	O2	clang	280	7.22		darwin us, load 3.4, spread 36%, noisy
+arm64-darwin	queens	O2	gcc13	276	8.78		darwin us, load 3.4, spread 17%, noisy
+arm64-darwin	queens	O2	ours-cc	264	7.56		darwin us, load 3.4, spread 13%, noisy
+arm64-darwin	quicksort	O2	clang	520	10.15		darwin us, load 3.3, spread 22%, noisy
+arm64-darwin	quicksort	O2	gcc13	416	11.83		darwin us, load 3.3, spread 3%
+arm64-darwin	quicksort	O2	ours-cc	340	11.04		darwin us, load 3.3, spread 13%, noisy
+arm64-darwin	recchop	O2	clang	724	0.21		darwin us, load 3.3, spread 19%, noisy
+arm64-darwin	recchop	O2	gcc13	1664	0.17		darwin us, load 3.3, spread 30%, noisy
+arm64-darwin	recchop	O2	ours-cc	220	0.28		darwin us, load 3.0, spread 15%, noisy
+arm64-darwin	recfloat	O2	clang	76	1.01		darwin us, load 3.0, spread 11%, noisy
+arm64-darwin	recfloat	O2	gcc13	80	1.12		darwin us, load 3.0, spread 45%, noisy
+arm64-darwin	recfloat	O2	ours-cc	72	1.57		darwin us, load 3.3, spread 5%
+arm64-darwin	recgcd	O2	clang	120	1.65		darwin us, load 3.3, spread 9%
+arm64-darwin	recgcd	O2	gcc13	132	1.64		darwin us, load 3.3, spread 7%
+arm64-darwin	recgcd	O2	ours-cc	136	1.84		darwin us, load 3.3, spread 9%
+arm64-darwin	recmany	O2	clang	180	2.60		darwin us, load 3.2, spread 2%
+arm64-darwin	recmany	O2	gcc13	180	2.74		darwin us, load 3.2, spread 14%, noisy
+arm64-darwin	recmany	O2	ours-cc	188	2.68		darwin us, load 3.1, spread 130%, noisy
+arm64-darwin	recpow	O2	clang	320	6.83		darwin us, load 3.1, spread 9%
+arm64-darwin	recpow	O2	gcc13	1632	6.02		darwin us, load 3.1, spread 15%, noisy
+arm64-darwin	recpow	O2	ours-cc	320	7.13		darwin us, load 3.0, spread 12%, noisy
+arm64-darwin	recsum	O2	clang	316	0.51		darwin us, load 3.0, spread 6%
+arm64-darwin	recsum	O2	gcc13	64	1.20		darwin us, load 3.0, spread 17%, noisy
+arm64-darwin	recsum	O2	ours-cc	64	1.19		darwin us, load 3.1, spread 8%
+arm64-darwin	rectwo	O2	clang	96	78.72		darwin us, load 3.1, spread 6%
+arm64-darwin	rectwo	O2	gcc13	752	21.41		darwin us, load 3.0, spread 8%
+arm64-darwin	rectwo	O2	ours-cc	96	75.98		darwin us, load 3.0, spread 15%, noisy
+arm64-darwin	ring	O2	clang	260	1.53		darwin us, load 3.0, spread 4%
+arm64-darwin	ring	O2	gcc13	160	1.94		darwin us, load 3.0, spread 2%
+arm64-darwin	ring	O2	ours-cc	88	2.76		darwin us, load 3.0, spread 4%
+arm64-darwin	scroll	O2	clang	252	7.15		darwin us, load 3.0, spread 7%
+arm64-darwin	scroll	O2	gcc13	260	7.22		darwin us, load 2.9, spread 4%
+arm64-darwin	scroll	O2	ours-cc	172	7.70		darwin us, load 2.9, spread 3%
+arm64-darwin	shellsort	O2	clang	1048	0.39		darwin us, load 2.9, spread 29%, noisy
+arm64-darwin	shellsort	O2	gcc13	336	0.47		darwin us, load 2.7, spread 13%, noisy
+arm64-darwin	shellsort	O2	ours-cc	564	0.55		darwin us, load 2.7, spread 6%
+arm64-darwin	sieve	O2	clang	228	1.11		darwin us, load 2.7, spread 8%
+arm64-darwin	sieve	O2	gcc13	212	1.26		darwin us, load 2.7, spread 14%, noisy
+arm64-darwin	sieve	O2	ours-cc	192	1.81		darwin us, load 2.8, spread 6%
+arm64-darwin	stft_fixed	O2	clang	1436	2376.92		darwin us, load 2.8, spread 29%, noisy
+arm64-darwin	stft_fixed	O2	gcc13	1328	2177.19		darwin us, load 2.7, spread 15%, noisy
+arm64-darwin	stft_single	O2	clang	1236	1834.74		darwin us, load 2.7, spread 23%, noisy, output differs from .out
+arm64-darwin	stft_single	O2	gcc13	1184	1866.87		darwin us, load 2.6, spread 25%, noisy, output differs from .out
+arm64-darwin	switch	O2	clang	324	7.02		darwin us, load 2.7, spread 15%, noisy
+arm64-darwin	switch	O2	gcc13	336	8.58		darwin us, load 2.7, spread 2%
+arm64-darwin	switch	O2	ours-cc	316	7.07		darwin us, load 2.7, spread 7%
+arm64-darwin	textfill	O2	clang	412	0.26		darwin us, load 2.7, spread 6%, flat reading
+arm64-darwin	textfill	O2	gcc13	176	1.16		darwin us, load 2.7, spread 4%, flat reading
+arm64-darwin	textfill	O2	ours-cc	88	1.82		darwin us, load 2.7, spread 7%, flat reading
+arm64-darwin	tile	O2	clang	200	0.80		darwin us, load 2.7, spread 5%
+arm64-darwin	tile	O2	gcc13	112	0.26		darwin us, load 2.6, spread 27%, noisy
+arm64-darwin	tile	O2	ours-cc	76	1.73		darwin us, load 2.6, spread 9%
+arm64-darwin	grep	O2	clang	820	2593.06		darwin us, load 2.6, spread 15%, noisy
+arm64-darwin	grep	O2	gcc13	644	3401.73		darwin us, load 2.6, spread 12%, noisy
+arm64-darwin	grep	O2	ours-cc	648	2529.65		darwin us, load 2.6, spread 16%, noisy
+arm64-darwin	bintree	O1	clang	376	3.00		darwin us, load 2.6, spread 19%, noisy
+arm64-darwin	bintree	O1	gcc13	396	5.11		darwin us, load 2.6, spread 4%
+arm64-darwin	bintree	O1	ours-cc	372	2.94		darwin us, load 2.6, spread 8%
+arm64-darwin	crc	O1	clang	80	0.06		darwin us, load 2.6, spread 14%, noisy
+arm64-darwin	crc	O1	gcc13	92	0.06		darwin us, load 2.6, spread 32%, noisy
+arm64-darwin	crc	O1	ours-cc	84	0.11		darwin us, load 2.6, spread 521%, noisy
+arm64-darwin	fib	O1	clang	88	16.06		darwin us, load 2.7, spread 4%
+arm64-darwin	fib	O1	gcc13	84	23.68		darwin us, load 2.7, spread 5%
+arm64-darwin	fib	O1	ours-cc	84	18.53		darwin us, load 2.7, spread 9%
+arm64-darwin	floats	O1	clang	108	5.09		darwin us, load 2.7, spread 2%
+arm64-darwin	floats	O1	gcc13	112	5.43		darwin us, load 2.5, spread 4%
+arm64-darwin	floats	O1	ours-cc	100	5.19		darwin us, load 2.5, spread 3%
+arm64-darwin	fpbench	O1	clang	440	0.83		darwin us, load 2.4, spread 10%, noisy
+arm64-darwin	fpbench	O1	gcc13	520	0.89		darwin us, load 2.4, spread 17%, noisy
+arm64-darwin	fpbench	O1	ours-cc	380	0.72		darwin us, load 2.4, spread 14%, noisy
+arm64-darwin	frames	O1	clang	176	169.45		darwin us, load 2.5, spread 6%
+arm64-darwin	frames	O1	gcc13	204	261.78		darwin us, load 2.5, spread 5%
+arm64-darwin	frames	O1	ours-cc	176	203.73		darwin us, load 2.4, spread 6%
+arm64-darwin	hanoi	O1	clang	96	13.73		darwin us, load 2.4, spread 7%
+arm64-darwin	hanoi	O1	gcc13	148	17.49		darwin us, load 2.4, spread 6%
+arm64-darwin	hanoi	O1	ours-cc	68	0.02		darwin us, load 2.4, spread 7%
+arm64-darwin	histo	O1	clang	204	3.04		darwin us, load 2.5, spread 5%
+arm64-darwin	histo	O1	gcc13	172	3.14		darwin us, load 2.5, spread 7%
+arm64-darwin	histo	O1	ours-cc	212	2.88		darwin us, load 2.5, spread 2%
+arm64-darwin	huge	O1	clang	164	29.53		darwin us, load 2.5, spread 5%, flat reading
+arm64-darwin	huge	O1	gcc13	156	36.90		darwin us, load 2.6, spread 7%, flat reading
+arm64-darwin	huge	O1	ours-cc	140	25.89		darwin us, load 2.6, spread 4%, flat reading
+arm64-darwin	jpeg_fixed	O1	clang	6368	3814.67		darwin us, load 5.1, spread 851%, noisy
+arm64-darwin	jpeg_fixed	O1	gcc13	4544	2685.58		darwin us, load 5.1, spread 57%, noisy
+arm64-darwin	jpeg_fixed	O1	ours-cc	7016	1647.25		darwin us, load 4.9, spread 52%, noisy
+arm64-darwin	jpeg_single	O1	clang	6412	1495.00		darwin us, load 4.9, spread 46%, noisy
+arm64-darwin	jpeg_single	O1	gcc13	4428	1494.75		darwin us, load 4.9, spread 21%, noisy
+arm64-darwin	jpeg_single	O1	ours-cc	7136	1567.88		darwin us, load 4.7, spread 33%, noisy
+arm64-darwin	lru	O1	clang	332	0.01		darwin us, load 4.7, spread 14%, noisy, flat reading
+arm64-darwin	lru	O1	gcc13	488	0.01		darwin us, load 4.7, spread 5%, flat reading
+arm64-darwin	lru	O1	ours-cc	328	0.00		darwin us, load 4.7, spread 5%, flat reading
+arm64-darwin	mandel	O1	clang	156	14.82		darwin us, load 4.7, spread 7%
+arm64-darwin	mandel	O1	gcc13	152	11.27		darwin us, load 4.7, spread 2%
+arm64-darwin	mandel	O1	ours-cc	156	12.58		darwin us, load 4.7, spread 4%
+arm64-darwin	matmul	O1	clang	364	0.27		darwin us, load 4.7, spread 17%, noisy
+arm64-darwin	matmul	O1	gcc13	320	0.29		darwin us, load 4.7, spread 19%, noisy
+arm64-darwin	matmul	O1	ours-cc	300	0.27		darwin us, load 4.7, spread 27%, noisy
+arm64-darwin	nbody	O1	clang	432	4.45		darwin us, load 4.4, spread 4%
+arm64-darwin	nbody	O1	gcc13	500	4.67		darwin us, load 4.4, spread 10%
+arm64-darwin	nbody	O1	ours-cc	384	4.45		darwin us, load 4.2, spread 10%
+arm64-darwin	nbody_fixed	O1	clang	428	48.62		darwin us, load 4.2, spread 8%
+arm64-darwin	nbody_fixed	O1	gcc13	564	56.54		darwin us, load 4.6, spread 14%, noisy
+arm64-darwin	nbody_fixed	O1	ours-cc	432	48.59		darwin us, load 4.5, spread 5%
+arm64-darwin	nbody_single	O1	clang	412	43.12		darwin us, load 4.5, spread 2%
+arm64-darwin	nbody_single	O1	gcc13	540	42.96		darwin us, load 4.3, spread 6%
+arm64-darwin	nbody_single	O1	ours-cc	420	33.84		darwin us, load 4.3, spread 5%
+arm64-darwin	particle	O1	clang	288	6.83		darwin us, load 4.1, spread 2%
+arm64-darwin	particle	O1	gcc13	340	6.93		darwin us, load 4.1, spread 4%
+arm64-darwin	particle	O1	ours-cc	280	6.79		darwin us, load 3.9, spread 4%
+arm64-darwin	queens	O1	clang	280	7.95		darwin us, load 3.9, spread 495%, noisy
+arm64-darwin	queens	O1	gcc13	248	8.65		darwin us, load 3.9, spread 18%, noisy
+arm64-darwin	queens	O1	ours-cc	264	7.65		darwin us, load 3.8, spread 11%, noisy
+arm64-darwin	quicksort	O1	clang	380	10.36		darwin us, load 3.8, spread 14%, noisy
+arm64-darwin	quicksort	O1	gcc13	360	11.37		darwin us, load 3.8, spread 13%, noisy
+arm64-darwin	quicksort	O1	ours-cc	356	11.85		darwin us, load 3.8, spread 5%
+arm64-darwin	recchop	O1	clang	204	0.31		darwin us, load 3.8, spread 8%
+arm64-darwin	recchop	O1	gcc13	212	0.32		darwin us, load 3.7, spread 25%, noisy
+arm64-darwin	recchop	O1	ours-cc	204	0.28		darwin us, load 3.7, spread 33%, noisy
+arm64-darwin	recfloat	O1	clang	92	1.02		darwin us, load 3.7, spread 13%, noisy
+arm64-darwin	recfloat	O1	gcc13	120	7.04		darwin us, load 3.7, spread 6%
+arm64-darwin	recfloat	O1	ours-cc	100	1.55		darwin us, load 3.6, spread 7%
+arm64-darwin	recgcd	O1	clang	164	1.65		darwin us, load 3.6, spread 17%, noisy
+arm64-darwin	recgcd	O1	gcc13	192	4.81		darwin us, load 3.6, spread 14%, noisy
+arm64-darwin	recgcd	O1	ours-cc	176	1.86		darwin us, load 3.6, spread 13%, noisy
+arm64-darwin	recmany	O1	clang	180	2.67		darwin us, load 3.6, spread 4%
+arm64-darwin	recmany	O1	gcc13	220	9.91		darwin us, load 3.4, spread 6%
+arm64-darwin	recmany	O1	ours-cc	188	2.66		darwin us, load 3.4, spread 7%
+arm64-darwin	recpow	O1	clang	308	6.46		darwin us, load 3.4, spread 4%
+arm64-darwin	recpow	O1	gcc13	328	9.46		darwin us, load 3.3, spread 2%
+arm64-darwin	recpow	O1	ours-cc	320	7.48		darwin us, load 3.3, spread 18%, noisy
+arm64-darwin	recsum	O1	clang	68	1.22		darwin us, load 3.1, spread 479%, noisy
+arm64-darwin	recsum	O1	gcc13	96	10.24		darwin us, load 3.1, spread 2%
+arm64-darwin	recsum	O1	ours-cc	64	1.19		darwin us, load 2.9, spread 4%
+arm64-darwin	rectwo	O1	clang	88	89.38		darwin us, load 2.9, spread 6%
+arm64-darwin	rectwo	O1	gcc13	112	108.45		darwin us, load 2.9, spread 4%
+arm64-darwin	rectwo	O1	ours-cc	88	91.31		darwin us, load 2.9, spread 7%
+arm64-darwin	ring	O1	clang	148	2.06		darwin us, load 2.8, spread 7%
+arm64-darwin	ring	O1	gcc13	80	2.07		darwin us, load 2.8, spread 5%
+arm64-darwin	ring	O1	ours-cc	88	2.76		darwin us, load 2.7, spread 2%
+arm64-darwin	scroll	O1	clang	176	7.84		darwin us, load 2.7, spread 8%
+arm64-darwin	scroll	O1	gcc13	184	85.10		darwin us, load 2.8, spread 3%
+arm64-darwin	scroll	O1	ours-cc	172	7.62		darwin us, load 2.8, spread 1%
+arm64-darwin	shellsort	O1	clang	236	0.38		darwin us, load 2.8, spread 7%
+arm64-darwin	shellsort	O1	gcc13	224	0.44		darwin us, load 2.8, spread 5%
+arm64-darwin	shellsort	O1	ours-cc	164	0.47		darwin us, load 2.7, spread 17%, noisy
+arm64-darwin	sieve	O1	clang	220	1.11		darwin us, load 2.7, spread 15%, noisy
+arm64-darwin	sieve	O1	gcc13	208	1.75		darwin us, load 2.7, spread 9%
+arm64-darwin	sieve	O1	ours-cc	184	1.82		darwin us, load 2.7, spread 4%
+arm64-darwin	stft_fixed	O1	clang	1020	2161.01		darwin us, load 2.7, spread 19%, noisy
+arm64-darwin	stft_fixed	O1	gcc13	1256	2279.14		darwin us, load 2.6, spread 9%
+arm64-darwin	stft_fixed	O1	ours-cc	1116	2264.14		darwin us, load 2.6, spread 54%, noisy
+arm64-darwin	stft_single	O1	clang	960	1931.62		darwin us, load 2.5, spread 30%, noisy, output differs from .out
+arm64-darwin	stft_single	O1	gcc13	1104	1890.72		darwin us, load 2.5, spread 24%, noisy, output differs from .out
+arm64-darwin	stft_single	O1	ours-cc	968	1900.30		darwin us, load 2.5, spread 22%, noisy, output differs from .out
+arm64-darwin	switch	O1	clang	324	6.90		darwin us, load 2.5, spread 13%, noisy
+arm64-darwin	switch	O1	gcc13	524	8.49		darwin us, load 2.4, spread 14%, noisy
+arm64-darwin	switch	O1	ours-cc	316	6.86		darwin us, load 2.4, spread 2%
+arm64-darwin	textfill	O1	clang	84	1.78		darwin us, load 2.4, spread 8%, flat reading
+arm64-darwin	textfill	O1	gcc13	84	1.66		darwin us, load 2.4, spread 8%, flat reading
+arm64-darwin	textfill	O1	ours-cc	88	1.75		darwin us, load 2.4, spread 193%, noisy, flat reading
+arm64-darwin	tile	O1	clang	72	1.47		darwin us, load 2.4, spread 7%
+arm64-darwin	tile	O1	gcc13	72	2.26		darwin us, load 2.4, spread 6%
+arm64-darwin	tile	O1	ours-cc	76	1.77		darwin us, load 2.4, spread 2%
+arm64-darwin	grep	O1	clang	640	2509.13		darwin us, load 2.4, spread 18%, noisy
+arm64-darwin	grep	O1	gcc13	632	3325.96		darwin us, load 2.5, spread 15%, noisy
+arm64-darwin	grep	O1	ours-cc	656	2459.84		darwin us, load 2.5, spread 16%, noisy
+arm64-darwin	bintree	O3	clang	364	2.54		darwin us, load 2.5, spread 23%, noisy
+arm64-darwin	bintree	O3	gcc13	1668	2.78		darwin us, load 2.5, spread 27%, noisy
+arm64-darwin	bintree	O3	ours-cc	304	2.77		darwin us, load 2.5, spread 4%
+arm64-darwin	crc	O3	clang	156	0.03		darwin us, load 2.5, spread 24%, noisy
+arm64-darwin	crc	O3	gcc13	148	0.06		darwin us, load 2.5, spread 30%, noisy
+arm64-darwin	crc	O3	ours-cc	152	0.03		darwin us, load 2.5, spread 24%, noisy
+arm64-darwin	fib	O3	clang	116	16.81		darwin us, load 2.5, spread 7%
+arm64-darwin	fib	O3	gcc13	1332	8.65		darwin us, load 2.4, spread 8%
+arm64-darwin	fib	O3	ours-cc	108	16.94		darwin us, load 2.4, spread 8%
+arm64-darwin	floats	O3	clang	108	5.02		darwin us, load 2.4, spread 3%
+arm64-darwin	floats	O3	gcc13	128	5.02		darwin us, load 2.4, spread 8%
+arm64-darwin	floats	O3	ours-cc	100	5.02		darwin us, load 2.3, spread 5%
+arm64-darwin	fpbench	O3	clang	1220	0.62		darwin us, load 2.3, spread 13%, noisy
+arm64-darwin	fpbench	O3	gcc13	964	0.56		darwin us, load 2.3, spread 12%, noisy
+arm64-darwin	fpbench	O3	ours-cc	1212	0.54		darwin us, load 2.3, spread 14%, noisy
+arm64-darwin	frames	O3	clang	204	167.42		darwin us, load 2.2, spread 4%
+arm64-darwin	frames	O3	gcc13	1088	122.76		darwin us, load 2.2, spread 6%
+arm64-darwin	frames	O3	ours-cc	196	170.30		darwin us, load 2.3, spread 6%
+arm64-darwin	hanoi	O3	clang	180	14.51		darwin us, load 2.3, spread 14%, noisy
+arm64-darwin	hanoi	O3	gcc13	500	1.31		darwin us, load 2.3, spread 6%
+arm64-darwin	hanoi	O3	ours-cc	68	0.02		darwin us, load 2.3, spread 21%, noisy
+arm64-darwin	histo	O3	clang	444	1.92		darwin us, load 2.3, spread 12%, noisy
+arm64-darwin	histo	O3	gcc13	276	1.61		darwin us, load 2.3, spread 12%, noisy
+arm64-darwin	histo	O3	ours-cc	212	2.84		darwin us, load 2.3, spread 9%
+arm64-darwin	huge	O3	clang	888	9.29		darwin us, load 2.3, spread 9%, flat reading
+arm64-darwin	huge	O3	gcc13	288	6.11		darwin us, load 2.2, spread 5%, flat reading
+arm64-darwin	huge	O3	ours-cc	140	25.06		darwin us, load 2.2, spread 3%, flat reading
+arm64-darwin	jpeg_fixed	O3	clang	10780	1350.33		darwin us, load 2.2, spread 157%, noisy
+arm64-darwin	jpeg_fixed	O3	gcc13	10016	1298.96		darwin us, load 2.2, spread 11%, noisy
+arm64-darwin	jpeg_fixed	O3	ours-cc	9632	1355.62		darwin us, load 2.1, spread 19%, noisy
+arm64-darwin	jpeg_single	O3	clang	9328	1009.54		darwin us, load 2.1, spread 14%, noisy
+arm64-darwin	jpeg_single	O3	gcc13	10096	1095.92		darwin us, load 2.1, spread 9%
+arm64-darwin	jpeg_single	O3	ours-cc	10028	1706.58		darwin us, load 2.2, spread 49%, noisy
+arm64-darwin	lru	O3	clang	356	0.01		darwin us, load 2.2, spread 10%, flat reading
+arm64-darwin	lru	O3	gcc13	372	0.01		darwin us, load 2.2, spread 33%, noisy, flat reading
+arm64-darwin	lru	O3	ours-cc	388	0.00		darwin us, load 2.2, spread 9%, flat reading
+arm64-darwin	mandel	O3	clang	148	10.92		darwin us, load 2.2, spread 5%
+arm64-darwin	mandel	O3	gcc13	160	11.19		darwin us, load 2.2, spread 6%
+arm64-darwin	mandel	O3	ours-cc	148	11.08		darwin us, load 2.2, spread 10%
+arm64-darwin	matmul	O3	clang	1504	0.04		darwin us, load 2.2, spread 20%, noisy
+arm64-darwin	matmul	O3	gcc13	2244	0.06		darwin us, load 2.2, spread 23%, noisy
+arm64-darwin	matmul	O3	ours-cc	1340	0.04		darwin us, load 2.2, spread 20%, noisy
+arm64-darwin	nbody	O3	clang	420	2.39		darwin us, load 2.2, spread 9%
+arm64-darwin	nbody	O3	gcc13	532	2.27		darwin us, load 3.0, spread 508%, noisy
+arm64-darwin	nbody	O3	ours-cc	420	3.87		darwin us, load 3.0, spread 54%, noisy
+arm64-darwin	nbody_fixed	O3	clang	1124	58.17		darwin us, load 2.9, spread 42%, noisy
+arm64-darwin	nbody_fixed	O3	gcc13	1248	46.46		darwin us, load 2.9, spread 29%, noisy
+arm64-darwin	nbody_fixed	O3	ours-cc	1156	53.25		darwin us, load 2.9, spread 17%, noisy
+arm64-darwin	nbody_single	O3	clang	1244	54.57		darwin us, load 3.2, spread 46%, noisy
+arm64-darwin	nbody_single	O3	gcc13	800	40.12		darwin us, load 3.2, spread 34%, noisy
+arm64-darwin	nbody_single	O3	ours-cc	1288	33.97		darwin us, load 3.2, spread 15%, noisy
+arm64-darwin	particle	O3	clang	1756	0.63		darwin us, load 3.4, spread 2%
+arm64-darwin	particle	O3	gcc13	948	0.68		darwin us, load 3.4, spread 16%, noisy
+arm64-darwin	particle	O3	ours-cc	400	4.99		darwin us, load 3.4, spread 5%
+arm64-darwin	queens	O3	clang	348	12.97		darwin us, load 3.4, spread 842%, noisy
+arm64-darwin	queens	O3	gcc13	4016	6.70		darwin us, load 3.4, spread 13%, noisy
+arm64-darwin	queens	O3	ours-cc	300	9.18		darwin us, load 3.2, spread 18%, noisy
+arm64-darwin	quicksort	O3	clang	540	10.74		darwin us, load 3.2, spread 6%
+arm64-darwin	quicksort	O3	gcc13	2416	11.44		darwin us, load 3.2, spread 9%
+arm64-darwin	quicksort	O3	ours-cc	340	12.74		darwin us, load 3.1, spread 10%
+arm64-darwin	recchop	O3	clang	724	0.25		darwin us, load 3.1, spread 12%, noisy
+arm64-darwin	recchop	O3	gcc13	6708	0.18		darwin us, load 3.1, spread 13%, noisy
+arm64-darwin	recchop	O3	ours-cc	220	0.33		darwin us, load 3.1, spread 10%
+arm64-darwin	recfloat	O3	clang	76	1.02		darwin us, load 3.1, spread 9%
+arm64-darwin	recfloat	O3	gcc13	80	1.28		darwin us, load 3.2, spread 15%, noisy
+arm64-darwin	recfloat	O3	ours-cc	72	1.72		darwin us, load 3.2, spread 538%, noisy
+arm64-darwin	recgcd	O3	clang	120	2.34		darwin us, load 3.2, spread 44%, noisy
+arm64-darwin	recgcd	O3	gcc13	132	1.61		darwin us, load 5.0, spread 8%
+arm64-darwin	recgcd	O3	ours-cc	136	1.80		darwin us, load 5.0, spread 16%, noisy
+arm64-darwin	recmany	O3	clang	180	2.59		darwin us, load 5.0, spread 2%
+arm64-darwin	recmany	O3	gcc13	180	2.75		darwin us, load 4.7, spread 2%
+arm64-darwin	recmany	O3	ours-cc	188	2.71		darwin us, load 4.7, spread 1%
+arm64-darwin	recpow	O3	clang	320	6.88		darwin us, load 4.6, spread 3%
+arm64-darwin	recpow	O3	gcc13	1632	6.10		darwin us, load 4.6, spread 4%
+arm64-darwin	recpow	O3	ours-cc	320	7.19		darwin us, load 4.3, spread 3%
+arm64-darwin	recsum	O3	clang	316	0.51		darwin us, load 4.3, spread 12%, noisy
+arm64-darwin	recsum	O3	gcc13	496	0.51		darwin us, load 4.3, spread 9%
+arm64-darwin	recsum	O3	ours-cc	64	1.19		darwin us, load 4.3, spread 5%
+arm64-darwin	rectwo	O3	clang	96	76.42		darwin us, load 4.2, spread 4%
+arm64-darwin	rectwo	O3	gcc13	752	21.14		darwin us, load 4.2, spread 10%, noisy
+arm64-darwin	rectwo	O3	ours-cc	96	76.57		darwin us, load 4.3, spread 6%
+arm64-darwin	ring	O3	clang	260	1.50		darwin us, load 4.3, spread 6%
+arm64-darwin	ring	O3	gcc13	160	1.91		darwin us, load 4.1, spread 5%
+arm64-darwin	ring	O3	ours-cc	88	2.77		darwin us, load 4.1, spread 21%, noisy
+arm64-darwin	scroll	O3	clang	252	7.10		darwin us, load 4.1, spread 6%
+arm64-darwin	scroll	O3	gcc13	212	7.11		darwin us, load 3.9, spread 4%
+arm64-darwin	scroll	O3	ours-cc	172	8.70		darwin us, load 3.9, spread 13%, noisy
+arm64-darwin	shellsort	O3	clang	3688	0.38		darwin us, load 3.9, spread 15%, noisy
+arm64-darwin	shellsort	O3	gcc13	644	0.47		darwin us, load 3.9, spread 30%, noisy
+arm64-darwin	shellsort	O3	ours-cc	1284	0.55		darwin us, load 3.9, spread 19%, noisy
+arm64-darwin	sieve	O3	clang	248	1.13		darwin us, load 3.9, spread 6%
+arm64-darwin	sieve	O3	gcc13	1104	1.03		darwin us, load 3.9, spread 9%
+arm64-darwin	sieve	O3	ours-cc	192	1.79		darwin us, load 3.9, spread 8%
+arm64-darwin	stft_fixed	O3	clang	1472	2526.67		darwin us, load 3.9, spread 16%, noisy
+arm64-darwin	stft_fixed	O3	gcc13	1296	2298.76		darwin us, load 3.7, spread 28%, noisy
+arm64-darwin	stft_single	O3	clang	1840	2330.70		darwin us, load 3.6, spread 42%, noisy, output differs from .out
+arm64-darwin	stft_single	O3	gcc13	1888	2195.91		darwin us, load 3.6, spread 72%, noisy, output differs from .out
+arm64-darwin	switch	O3	clang	324	6.95		darwin us, load 3.6, spread 10%, noisy
+arm64-darwin	switch	O3	gcc13	336	8.46		darwin us, load 3.5, spread 12%, noisy
+arm64-darwin	switch	O3	ours-cc	316	6.92		darwin us, load 3.5, spread 9%
+arm64-darwin	textfill	O3	clang	412	0.26		darwin us, load 3.5, spread 13%, noisy, flat reading
+arm64-darwin	textfill	O3	gcc13	176	1.14		darwin us, load 3.5, spread 13%, noisy, flat reading
+arm64-darwin	textfill	O3	ours-cc	88	1.90		darwin us, load 6.2, spread 7%, flat reading
+arm64-darwin	tile	O3	clang	192	0.69		darwin us, load 6.2, spread 12%, noisy
+arm64-darwin	tile	O3	gcc13	208	0.17		darwin us, load 6.2, spread 28%, noisy
+arm64-darwin	tile	O3	ours-cc	368	1.71		darwin us, load 6.2, spread 9%
+arm64-darwin	grep	O3	clang	904	2995.36		darwin us, load 6.2, spread 12%, noisy
+arm64-darwin	grep	O3	gcc13	628	3517.48		darwin us, load 6.2, spread 10%, noisy
+arm64-darwin	grep	O3	ours-cc	648	2490.97		darwin us, load 5.9, spread 16%, noisy
+arm64-darwin	bintree	Os	clang	336	2.57		darwin us, load 5.9, spread 24%, noisy
+arm64-darwin	bintree	Os	gcc13	308	3.67		darwin us, load 5.9, spread 9%
+arm64-darwin	bintree	Os	ours-cc	304	2.76		darwin us, load 5.9, spread 11%, noisy
+arm64-darwin	crc	Os	clang	80	0.05		darwin us, load 5.9, spread 23%, noisy
+arm64-darwin	crc	Os	gcc13	80	0.06		darwin us, load 6.5, spread 23%, noisy
+arm64-darwin	crc	Os	ours-cc	84	0.06		darwin us, load 6.5, spread 26%, noisy
+arm64-darwin	fib	Os	clang	104	18.18		darwin us, load 6.5, spread 2%
+arm64-darwin	fib	Os	gcc13	88	20.55		darwin us, load 6.1, spread 7%
+arm64-darwin	fib	Os	ours-cc	108	19.73		darwin us, load 6.1, spread 15%, noisy
+arm64-darwin	floats	Os	clang	96	6.22		darwin us, load 6.0, spread 38%, noisy
+arm64-darwin	floats	Os	gcc13	104	4.44		darwin us, load 6.0, spread 9%
+arm64-darwin	floats	Os	ours-cc	100	5.05		darwin us, load 5.7, spread 2%
+arm64-darwin	fpbench	Os	clang	448	0.67		darwin us, load 5.7, spread 8%
+arm64-darwin	fpbench	Os	gcc13	428	0.77		darwin us, load 5.7, spread 19%, noisy
+arm64-darwin	fpbench	Os	ours-cc	360	0.79		darwin us, load 5.6, spread 20%, noisy
+arm64-darwin	frames	Os	clang	192	294.24		darwin us, load 5.9, spread 96%, noisy
+arm64-darwin	frames	Os	gcc13	176	206.61		darwin us, load 5.9, spread 7%
+arm64-darwin	frames	Os	ours-cc	196	169.71		darwin us, load 5.6, spread 2%
+arm64-darwin	hanoi	Os	clang	160	14.15		darwin us, load 5.6, spread 3%
+arm64-darwin	hanoi	Os	gcc13	88	14.90		darwin us, load 5.7, spread 4%
+arm64-darwin	hanoi	Os	ours-cc	68	0.02		darwin us, load 5.7, spread 8%
+arm64-darwin	histo	Os	clang	252	2.38		darwin us, load 5.7, spread 22%, noisy
+arm64-darwin	histo	Os	gcc13	188	3.50		darwin us, load 5.4, spread 10%, noisy
+arm64-darwin	histo	Os	ours-cc	200	3.30		darwin us, load 5.4, spread 360%, noisy
+arm64-darwin	huge	Os	clang	148	30.58		darwin us, load 5.4, spread 18%, noisy, flat reading
+arm64-darwin	huge	Os	gcc13	120	37.67		darwin us, load 5.1, spread 17%, noisy, flat reading
+arm64-darwin	huge	Os	ours-cc	144	25.24		darwin us, load 5.1, spread 3%, flat reading
+arm64-darwin	jpeg_fixed	Os	clang	3756	2340.25		darwin us, load 5.0, spread 68%, noisy
+arm64-darwin	jpeg_fixed	Os	gcc13	3704	1855.54		darwin us, load 5.0, spread 10%
+arm64-darwin	jpeg_fixed	Os	ours-cc	4048	1601.00		darwin us, load 4.7, spread 16%, noisy
+arm64-darwin	jpeg_single	Os	clang	3776	1781.04		darwin us, load 4.7, spread 45%, noisy
+arm64-darwin	jpeg_single	Os	gcc13	3720	1917.25		darwin us, load 4.7, spread 23%, noisy
+arm64-darwin	jpeg_single	Os	ours-cc	4024	2141.08		darwin us, load 4.6, spread 158%, noisy
+arm64-darwin	lru	Os	clang	352	0.00		darwin us, load 4.6, spread 0%, flat reading
+arm64-darwin	lru	Os	gcc13	336	0.00		darwin us, load 4.6, spread 57%, noisy, flat reading
+arm64-darwin	lru	Os	ours-cc	388	0.00		darwin us, load 4.6, spread 35%, noisy, flat reading
+arm64-darwin	mandel	Os	clang	136	11.19		darwin us, load 4.4, spread 14%, noisy
+arm64-darwin	mandel	Os	gcc13	128	11.46		darwin us, load 4.4, spread 7%
+arm64-darwin	mandel	Os	ours-cc	148	11.04		darwin us, load 4.2, spread 1%
+arm64-darwin	matmul	Os	clang	472	0.10		darwin us, load 4.2, spread 15%, noisy
+arm64-darwin	matmul	Os	gcc13	296	0.26		darwin us, load 4.2, spread 16%, noisy
+arm64-darwin	matmul	Os	ours-cc	296	0.27		darwin us, load 4.2, spread 11%, noisy
+arm64-darwin	nbody	Os	clang	408	4.82		darwin us, load 4.2, spread 29%, noisy
+arm64-darwin	nbody	Os	gcc13	388	4.84		darwin us, load 4.1, spread 8%
+arm64-darwin	nbody	Os	ours-cc	400	4.70		darwin us, load 4.2, spread 8%
+arm64-darwin	nbody_fixed	Os	clang	396	48.93		darwin us, load 4.2, spread 15%, noisy
+arm64-darwin	nbody_fixed	Os	gcc13	532	60.08		darwin us, load 4.0, spread 3%
+arm64-darwin	nbody_fixed	Os	ours-cc	400	68.04		darwin us, load 4.4, spread 118%, noisy
+arm64-darwin	nbody_single	Os	clang	420	51.13		darwin us, load 4.4, spread 162%, noisy
+arm64-darwin	nbody_single	Os	gcc13	472	38.98		darwin us, load 4.4, spread 8%
+arm64-darwin	nbody_single	Os	ours-cc	396	36.88		darwin us, load 4.2, spread 14%, noisy
+arm64-darwin	particle	Os	clang	288	6.81		darwin us, load 4.2, spread 8%
+arm64-darwin	particle	Os	gcc13	296	7.20		darwin us, load 3.9, spread 14%, noisy
+arm64-darwin	particle	Os	ours-cc	260	6.75		darwin us, load 3.9, spread 4%
+arm64-darwin	queens	Os	clang	276	7.85		darwin us, load 3.9, spread 11%, noisy
+arm64-darwin	queens	Os	gcc13	228	10.62		darwin us, load 3.8, spread 5%
+arm64-darwin	queens	Os	ours-cc	264	10.28		darwin us, load 3.8, spread 19%, noisy
+arm64-darwin	quicksort	Os	clang	376	13.73		darwin us, load 3.8, spread 38%, noisy
+arm64-darwin	quicksort	Os	gcc13	324	16.20		darwin us, load 3.8, spread 16%, noisy
+arm64-darwin	quicksort	Os	ours-cc	340	11.07		darwin us, load 3.8, spread 26%, noisy
+arm64-darwin	recchop	Os	clang	256	0.30		darwin us, load 3.8, spread 23%, noisy
+arm64-darwin	recchop	Os	gcc13	192	0.40		darwin us, load 3.8, spread 15%, noisy
+arm64-darwin	recchop	Os	ours-cc	224	0.29		darwin us, load 3.8, spread 3%
+arm64-darwin	recfloat	Os	clang	72	1.02		darwin us, load 3.8, spread 3%
+arm64-darwin	recfloat	Os	gcc13	64	1.04		darwin us, load 3.8, spread 4%
+arm64-darwin	recfloat	Os	ours-cc	72	1.55		darwin us, load 3.7, spread 2%
+arm64-darwin	recgcd	Os	clang	120	1.63		darwin us, load 3.7, spread 12%, noisy
+arm64-darwin	recgcd	Os	gcc13	112	1.64		darwin us, load 3.7, spread 24%, noisy
+arm64-darwin	recgcd	Os	ours-cc	136	1.79		darwin us, load 3.7, spread 18%, noisy
+arm64-darwin	recmany	Os	clang	180	2.63		darwin us, load 3.7, spread 4%
+arm64-darwin	recmany	Os	gcc13	132	2.80		darwin us, load 3.7, spread 11%, noisy
+arm64-darwin	recmany	Os	ours-cc	188	2.69		darwin us, load 3.5, spread 8%
+arm64-darwin	recpow	Os	clang	324	7.32		darwin us, load 3.5, spread 20%, noisy
+arm64-darwin	recpow	Os	gcc13	200	7.87		darwin us, load 3.5, spread 7%
+arm64-darwin	recpow	Os	ours-cc	320	7.20		darwin us, load 3.3, spread 4%
+arm64-darwin	recsum	Os	clang	156	0.76		darwin us, load 3.3, spread 7%
+arm64-darwin	recsum	Os	gcc13	40	1.09		darwin us, load 3.3, spread 5%
+arm64-darwin	recsum	Os	ours-cc	64	1.20		darwin us, load 4.5, spread 5%
+arm64-darwin	rectwo	Os	clang	96	77.93		darwin us, load 4.5, spread 5%
+arm64-darwin	rectwo	Os	gcc13	92	109.06		darwin us, load 4.3, spread 13%, noisy
+arm64-darwin	rectwo	Os	ours-cc	96	88.54		darwin us, load 4.3, spread 18%, noisy
+arm64-darwin	ring	Os	clang	156	2.67		darwin us, load 4.3, spread 6%
+arm64-darwin	ring	Os	gcc13	76	2.08		darwin us, load 4.2, spread 2%
+arm64-darwin	ring	Os	ours-cc	88	2.89		darwin us, load 4.2, spread 7%
+arm64-darwin	scroll	Os	clang	152	8.82		darwin us, load 3.9, spread 20%, noisy
+arm64-darwin	scroll	Os	gcc13	192	8.73		darwin us, load 3.8, spread 7%
+arm64-darwin	scroll	Os	ours-cc	172	9.61		darwin us, load 3.8, spread 482%, noisy
+arm64-darwin	shellsort	Os	clang	256	0.49		darwin us, load 3.8, spread 14%, noisy
+arm64-darwin	shellsort	Os	gcc13	184	0.51		darwin us, load 3.8, spread 8%
+arm64-darwin	shellsort	Os	ours-cc	160	0.49		darwin us, load 3.8, spread 7%
+arm64-darwin	sieve	Os	clang	220	1.81		darwin us, load 3.8, spread 2%
+arm64-darwin	sieve	Os	gcc13	168	1.92		darwin us, load 3.6, spread 8%
+arm64-darwin	sieve	Os	ours-cc	196	1.73		darwin us, load 3.6, spread 4%
+arm64-darwin	stft_fixed	Os	clang	1016	2257.38		darwin us, load 4.9, spread 97%, noisy
+arm64-darwin	stft_fixed	Os	gcc13	1000	3022.61		darwin us, load 4.9, spread 15%, noisy
+arm64-darwin	stft_fixed	Os	ours-cc	1120	2322.69		darwin us, load 4.8, spread 16%, noisy
+arm64-darwin	stft_single	Os	clang	944	1975.84		darwin us, load 4.6, spread 29%, noisy, output differs from .out
+arm64-darwin	stft_single	Os	gcc13	944	1992.66		darwin us, load 4.6, spread 17%, noisy, output differs from .out
+arm64-darwin	stft_single	Os	ours-cc	976	2057.92		darwin us, load 4.5, spread 12%, noisy, output differs from .out
+arm64-darwin	switch	Os	clang	320	7.44		darwin us, load 4.5, spread 25%, noisy
+arm64-darwin	switch	Os	gcc13	256	8.57		darwin us, load 4.5, spread 3%
+arm64-darwin	switch	Os	ours-cc	316	6.93		darwin us, load 4.2, spread 4%
+arm64-darwin	textfill	Os	clang	216	0.32		darwin us, load 4.2, spread 7%, flat reading
+arm64-darwin	textfill	Os	gcc13	92	2.27		darwin us, load 4.2, spread 10%, flat reading
+arm64-darwin	textfill	Os	ours-cc	88	1.79		darwin us, load 4.0, spread 2%, flat reading
+arm64-darwin	tile	Os	clang	128	1.51		darwin us, load 4.0, spread 22%, noisy
+arm64-darwin	tile	Os	gcc13	72	2.21		darwin us, load 4.0, spread 10%
+arm64-darwin	tile	Os	ours-cc	80	1.64		darwin us, load 4.0, spread 13%, noisy
+arm64-darwin	grep	Os	clang	600	2546.67		darwin us, load 4.0, spread 14%, noisy
+arm64-darwin	grep	Os	gcc13	592	4212.76		darwin us, load 4.0, spread 15%, noisy
+arm64-darwin	grep	Os	ours-cc	648	2502.96		darwin us, load 4.7, spread 21%, noisy

@@ -9,7 +9,7 @@ use llrm_mir::program::Program;
 use llrm_target::Target;
 use llrm_transforms::pipeline::{Applied, Options};
 
-use crate::dagisel::function::{Selection, select_function};
+use crate::dagisel::function::{Selection, select_function_with};
 use crate::dagisel::hooks::Cpu;
 use crate::target::Z80;
 
@@ -100,6 +100,15 @@ pub fn program(
         // stand-in for the override table).
         options.unroll = false;
         options.loop_unrolling = false;
+        // No zero- or sign-extending load: the compare of a loaded byte stays a
+        // byte compare (`cp #255`), not a word compare of its extension.
+        options.extload = false;
+        // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
+        options.library = vec![llrm_mir::libfunc::Routine {
+            standard: "strlen",
+            symbol: "_strlen".to_owned(),
+            calling_convention: 0,
+        }];
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -127,7 +136,7 @@ pub fn selections(
     Ok(names
         .into_iter()
         .map(|name| {
-            let selected = select_function(module, &name, request.cpu);
+            let selected = select_function_with(module, &name, request.cpu, request.level != Level::O0);
             (name, selected)
         })
         .collect())
@@ -242,7 +251,9 @@ pub fn adb(
         let size = 2;
         out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
         out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
-        let Ok(selection) = select_function(module, &one.function, request.cpu) else { continue };
+        let Ok(selection) = select_function_with(module, &one.function, request.cpu, request.level != Level::O0) else {
+            continue;
+        };
         // Frame objects sit below IX, the locals first (`expand::layout`).
         let mut below = 0;
         let ends: Vec<i64> = selection
