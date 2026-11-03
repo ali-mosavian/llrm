@@ -1,9 +1,9 @@
 //! A function from IR to sdasz80 text: the shared DAG stages, then the Z80
 //! machine function, allocation, expansion and printing.
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::cfg::Cfg;
-use llrm_spike_mf::regalloc::{Assignment, eliminate_phis_with, two_address};
+use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_address};
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::{Request, selections};
@@ -145,6 +145,7 @@ fn allocate(
         dump(&function);
     }
     remove_identity_copies(&mut function, &assignment);
+    remove_copies_back(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     return_conditionally(&mut function);
@@ -427,6 +428,51 @@ pub fn remove_identity_copies(
                     _ => true,
                 },
             );
+    }
+}
+
+/// Drops a copy back into the register another copy just read from
+/// (`ld b, a` ... `ld a, b`) while neither register is written in between.
+///
+/// DEVIATE from `llrm_spike_mf::remove_redundant_copies`, which compares
+/// roots and would take `ld c, b` after `ld b, c` for the same register.
+/// Reason: `b` and `c` are lanes of one root. Exit: the shared helper compares
+/// lanes.
+pub fn remove_copies_back(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    for block in &mut function.blocks {
+        // `(destination, source)` of the copies still in force
+        let mut held: Vec<(RegId, RegId)> = Vec::new();
+        let mut keep = Vec::with_capacity(block.insts.len());
+        for inst in std::mem::take(&mut block.insts) {
+            let copy = match (inst.kind, &inst.operands[..]) {
+                (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => Some((register(*dst), register(*src))),
+                _ => None,
+            };
+            if copy.is_some_and(|(dst, src)| held.contains(&(src, dst))) {
+                continue;
+            }
+            if inst.call {
+                held.clear();
+            }
+            let written: Vec<RegId> = inst
+                .operands
+                .iter()
+                .filter_map(|o| if let Operand::Def(r) = o { Some(register(*r)) } else { None })
+                .collect();
+            held.retain(|&(to, from)| {
+                !written.iter().any(|&w| Z80Registers::overlaps(w, to) || Z80Registers::overlaps(w, from))
+            });
+            held.extend(copy);
+            keep.push(inst);
+        }
+        block.insts = keep;
     }
 }
 
