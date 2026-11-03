@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 141 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 142 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -135,6 +135,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 141 documen
 | slotcopies | Keeps one frame cell where a value is copied from a cell into a spill cell. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `postrasink`. | [slotcopies](slotcopies.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - `crate::backend::spiller`, which shares spill slots by the live range of | [slots](slots.md) |
 | spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: `crate::backend::splitkit` queries it for each value it | [spillplacement](spillplacement.md) |
+| stackcoloring | StackColoring ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/StackColoring.cpp#L1)), shared by every target: the static allocas whose lifetimes never overlap share one frame object. | - [`crate::backend::selectiondag::dag_function`](selectiondag.md), which groups the allocas | [stackcoloring](stackcoloring.md) |
 | stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
 | stepflags | Removes a compare of a value with a constant when a step of the same value already sets those flags. | Once per block in instruction selection, after `comparefold` and before | [stepflags](stepflags.md) |
 | storecombine | Packs two neighbouring literal word stores into one dword store. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [storecombine](storecombine.md) |
