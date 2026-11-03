@@ -68,3 +68,9 @@ def test_legs_built_from_one_binary_fail_and_differing_binaries_pass(tmp_path):
     assert go(("a", "a")).returncode == 1
     assert go(("a", "a"), ("a", "b")).returncode == 0
 
+
+
+def test_a_cell_with_the_same_bytes_and_more_clocks_is_listed_as_worse(tmp_path):
+    """The unroll A/B once read "none worse" while the list covered bytes only; clocks went up unseen."""
+    out = run(tmp_path, "| gcd | 47 B, 239 cy |\n", "| gcd | 47 B, 251 cy |\n")
+    assert "worse (0, 12, 'gcd', 'ours')" in out.stdout

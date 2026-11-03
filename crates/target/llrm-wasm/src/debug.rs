@@ -93,6 +93,7 @@ pub fn sections(
                     definition: Definition::Defined { section: 0, offset: start },
                     size: length,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
         let procedure = debug.procedures.get(&function.name);

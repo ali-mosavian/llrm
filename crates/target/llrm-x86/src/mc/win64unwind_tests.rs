@@ -22,6 +22,7 @@ fn with(code: &[u8]) -> Object {
             definition: Definition::Defined { section: 0, offset: 0 },
             size: code.len(),
             group: None,
+            visibility: Default::default(),
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),

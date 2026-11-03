@@ -42,6 +42,10 @@ fn run() -> i32 {
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if llrm_debug::is_debug_flag(other) => {
+                eprintln!("{}", llrm_debug::no_writer("llrm-wasm-llc", other, "wasm"));
+                return 2;
+            }
             other => {
                 eprintln!("llrm-wasm-llc: unrecognized argument {other}");
                 return 2;

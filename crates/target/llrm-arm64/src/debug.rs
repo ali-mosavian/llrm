@@ -76,14 +76,10 @@ pub fn info(
     };
     let mut at = 0;
     let declared = |symbol: &str| {
-        module
-            .functions()
-            .find_map(
-                |(_, global, body)| {
-                    let name = global.name.owned()?;
-                    (crate::data::symbol_name(platform, &name) == symbol).then(|| scope_line(module, body)).flatten()
-                },
-            )
+        module.functions().find_map(|(_, global, body)| {
+            let name = global.name.owned()?;
+            (crate::data::symbol_name(platform, &name) == symbol).then(|| module.subprogram_line(body)).flatten()
+        })
     };
     for function in functions {
         let length: usize = function.blocks.iter().map(|block| words(block) * 4).sum();
@@ -125,23 +121,6 @@ pub fn info(
     info.code = vec![Range { section: 0, offset: 0, length: at }];
     let _ = Language::default();
     Ok(Some(info))
-}
-
-/// The line a function's `!DISubprogram` says its body starts at (`scopeLine`):
-/// the first row (`DwarfDebug::beginFunctionImpl`).
-fn scope_line(
-    module: &llrm_mir::Module,
-    function: &llrm_mir::Function,
-) -> Option<u32> {
-    let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
-    let at = module.special.get(node)?.fields.iter().position(|one| one == "scopeLine")?;
-    match module.metadata.get(node.0 as usize)?.operands.get(at)? {
-        llrm_mir::MetadataOperand::Constant(value) => match module.context.get(*value).kind {
-            llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// The line table rows of `function`, whose code starts at `start`: one where
