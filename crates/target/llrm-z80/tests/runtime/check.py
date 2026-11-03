@@ -140,6 +140,19 @@ def cost(name, sig, args):
         t[tag], _ = run(ihx)
     return t["with"] - t["without"]
 
+def cost64(name, a, b, count=False):
+    """T-states of one long long call incl. its argument set-up, call and ret, minus the bare set-up."""
+    w = lambda v, k: (v >> (16 * k)) & 0xFFFF
+    pushes = "".join("\tld\thl,#%d\n\tpush\thl\n" % w(b, k) for k in (3, 2, 1, 0)) if not count else "\tld\thl,#%d\n\tpush\thl\n" % b
+    pushes += "".join("\tld\thl,#%d\n\tpush\thl\n" % w(a, k) for k in (3, 2))
+    base = f"\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n{pushes}\tld de,#%d\n\tld bc,#%d\n\tld hl,#0x8020\n" % (w(a, 0), w(a, 1))
+    t = {}
+    for tag, call in (("with", f"\tcall {name}\n"), ("without", "")):
+        rel = build("c", base + call + "\thalt\n\t.area _CODE\n\t.globl "+name+"\n")
+        ihx = link(rel, "c")
+        t[tag], _ = run(ihx)
+    return t["with"] - t["without"]
+
 def rtsize(name):
     # bytes of a routine: distance to the next global label in the listing
     lst = open(f"{W}/rt.lst").read() if os.path.exists(f"{W}/rt.lst") else ""
@@ -203,5 +216,7 @@ def main():
     print("ALL OK" if allok else "FAILURES")
     for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
+    for nm, a, b, count in (("__udivdi3", 0x123456789ABCDEF0, 1000003, False), ("__divdi3", 0x123456789ABCDEF0, 1000003, False), ("__udivdi3", 1000000, 10, False), ("__ashldi3", 1, 13, True), ("__lshrdi3", 0x123456789ABCDEF0, 37, True), ("__ashrdi3", 1 << 63, 63, True)):
+        print(f"{nm}({a:#x}, {b}): {cost64(nm, a, b, count)} T")
     sys.exit(0 if allok else 1)
 main()
