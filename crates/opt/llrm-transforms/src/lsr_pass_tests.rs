@@ -1463,3 +1463,54 @@ exit:
     assert!(after.contains("phi i8"), "{after}");
     assert!(!after.contains(" to i8"), "{after}");
 }
+
+fn three_address_registers() -> llrm_x86::tti::X86 {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: Some(3),
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    X86::of_cpu("i486").unwrap().in_real_mode(real)
+}
+
+/// qb-metadata hir_part3 `sum_three` at m16: three far rows summed by one
+/// counter. The cheapest formula by the general-register count scales the
+/// counter and holds three bases, more address registers (bx, si, di) than the
+/// target has: the loop reloaded two of them every trip (8 insns, 5 memory
+/// operands against 6 and 3).
+#[test]
+fn three_rows_summed_by_one_counter_do_not_need_more_address_registers_than_the_target_has() {
+    let text = "define i16 @f(ptr addrspace(1) %a, ptr addrspace(1) %b, ptr addrspace(1) %c, i16 %lo, i16 %end) {
+entry:
+  br label %loop
+loop:
+  %t = phi i16 [ 0, %entry ], [ %t3, %loop ]
+  %i = phi i16 [ %lo, %entry ], [ %next, %loop ]
+  %o = shl i16 %i, 1
+  %pa = getelementptr i8, ptr addrspace(1) %a, i16 %o
+  %va = load i16, ptr addrspace(1) %pa
+  %t1 = add i16 %va, %t
+  %pb = getelementptr i8, ptr addrspace(1) %b, i16 %o
+  %vb = load i16, ptr addrspace(1) %pb
+  %t2 = add i16 %t1, %vb
+  %pc = getelementptr i8, ptr addrspace(1) %c, i16 %o
+  %vc = load i16, ptr addrspace(1) %pc
+  %t3 = add i16 %t2, %vc
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %end
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i16 %t3
+}
+";
+    let after = reduced_real(text, &three_address_registers());
+    let in_loop = &after[after.find("loop:").expect("the loop")..];
+    assert!(!in_loop.contains("shl i16"), "{after}");
+}

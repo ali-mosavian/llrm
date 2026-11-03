@@ -62,7 +62,7 @@
 use llrm_analysis::scev::expr::{Scev, Ty, Type};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::tti::{Cost as TtiCost, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
@@ -501,6 +501,8 @@ pub struct Cost {
     /// The registers rated scaled so far, with their scale: the target's
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
+    /// The registers rated so far as part of an address (DEVIATE LU8).
+    addressed: Vec<Scev>,
 }
 
 impl Cost {
@@ -563,6 +565,38 @@ impl Cost {
             self.rate_primary_register(r, f, reg, regs, lu, losers.as_deref_mut());
             if self.is_loser() {
                 return;
+            }
+        }
+
+        // DEVIATE LU8: where the target's address forms name fewer registers
+        // than it has (m16: bx, si, di), the address registers past them are
+        // reloaded every trip, as the general registers past the budget are
+        // below.
+        let class = r.tti.address_registers();
+        if lu.kind == Kind::Address && class < r.tti.number_of_gpr_registers() {
+            let scaled = f.scaled_reg.filter(|_| f.scale > 1);
+            for reg in scaled.into_iter().chain(f.base_regs.iter().copied()) {
+                // A counter stepped in place is one of the loop's own
+                // recurrences, not a register held for the address.
+                if r.se.addrec_header(reg) == Some(r.l) && scaled != Some(reg) {
+                    continue;
+                }
+                // A constant or a global folds into the displacement; a far
+                // pointer cast from a segment alone has no offset to hold.
+                if holds_no_offset(r, reg) {
+                    continue;
+                }
+                if !self.addressed.contains(&reg) {
+                    self.addressed.push(reg);
+                    // One past the class shares a slot with another, and each
+                    // use of the two reloads it: two instructions; each more,
+                    // one.
+                    match self.addressed.len().checked_sub(class as usize) {
+                        Some(1) => self.c.insns += 2,
+                        Some(_) => self.c.insns += 1,
+                        _ => {}
+                    }
+                }
             }
         }
 
@@ -863,6 +897,25 @@ pub fn setup_cost(
             setup_cost(se, cx, tti, lhs.scev, depth - 1) + setup_cost(se, cx, tti, rhs.scev, depth - 1)
         }
         _ => 0,
+    }
+}
+
+/// Whether `s` takes no register in an address: a constant, or an address-space
+/// cast (a far pointer made of a segment, its offset zero).
+fn holds_no_offset(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    match r.se.unknown_value(s) {
+        Some(Operand::Constant(_)) => true,
+        Some(Operand::Value(v)) => {
+            let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
+            matches!(
+                r.cx.function.instruction(def).opcode,
+                Opcode::Cast(CastOp::AddrSpaceCast)
+            )
+        }
+        _ => false,
     }
 }
 
