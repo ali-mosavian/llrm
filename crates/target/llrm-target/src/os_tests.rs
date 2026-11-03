@@ -27,3 +27,15 @@ fn the_posix_header_declares_the_time_group_and_the_core() {
         assert!(text.contains(line), "{line} in\n{text}");
     }
 }
+
+/// The divide-fault handler is a field of each OS layer: the DOS ones declare
+/// error 11, the POSIX one (no SIGFPE handler) and a layer without the field
+/// declare none, so a front end keeps its overflow check there.
+#[test]
+fn test_only_a_layer_that_declares_a_divide_fault_handler_has_one() {
+    let dos16 = include_str!("../../../../runtime/shared/dos/m16/os.toml");
+    let dos32 = include_str!("../../../../runtime/shared/dos/m32/os.toml");
+    assert_eq!((crate::os::divide_fault_error(dos16), crate::os::divide_fault_error(dos32)), (Some(11), Some(11)));
+    assert_eq!(crate::os::divide_fault_error(crate::os::POSIX_LAYER), None);
+    assert_eq!(crate::os::divide_fault_error("os = \"dos\"\n"), None);
+}

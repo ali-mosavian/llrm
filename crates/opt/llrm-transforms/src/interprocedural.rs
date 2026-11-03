@@ -39,7 +39,9 @@
 //!    stays.
 //! 5. A loop of `ipa-cp.` ([`crate::ipacp`] cloning) and return propagation,
 //!    until nothing changes. What every caller passes is IPSCCP's, before the
-//!    walk ([`crate::walk::ModuleIpo`]); the pin does not run it again here.
+//!    walk ([`crate::walk::ModuleIpo`]); the pin does not run it again here,
+//!    but it runs once more after `promote.` changed a body (DEVIATE, below
+//!    it).
 //! 6. `ipa-deadargs.` ([`crate::deadargs`]): parameters nothing reads go.
 //! 7. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
 //!    and `ipa-noreturn.` cuts the code after a call to a private body every
@@ -657,12 +659,34 @@ pub fn optimized_with<E: From<String>>(
         Some(clocks) if rate > 0 => (clocks, false),
         _ => (costs, true),
     };
+    let mut promoted_any = false;
     for at in 0..count {
         for id in reporting(&mut program.modules[at], &mut modules[at], |module| {
             crate::argpromotion::promoted(module, &program.layout, priced, bytes)
         }) {
+            promoted_any = true;
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
+        }
+    }
+    // DEVIATE SD443: the pin's IPSCCP runs once, before the CGSCC walk
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1228),
+    // and its ArgumentPromotion leaves a recursive function's descriptor alone
+    // when it holds a pointer
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/ArgumentPromotion.cpp#L581),
+    // which this promotion does not. The length it makes an argument crosses
+    // the recursion as a value only IPSCCP's lattice folds. Exit: the
+    // by-value slice parameters (#6140) pass the length as a
+    // scalar the pin's own pipeline folds, promotion follows the pin's
+    // conditions, and a sweep shows this call does nothing; then it goes.
+    // Owner w2, fix-by 2026-11-07: #6140 lands, then #6159 (the promotion
+    // refuses this descriptor) merges and this call goes; if #6140 cannot
+    // land by 2026-11-05 the alternative exit is reported on the 5th.
+    // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
+    if promoted_any {
+        for (at, id) in crate::ipsccp::run_ipsccp_with(program, modules) {
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "ipsccp.")?;
         }
     }
 

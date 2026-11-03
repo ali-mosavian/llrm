@@ -140,3 +140,19 @@ fn a_merged_memset_keeps_the_alignment_of_its_first_access() {
     let after = merged(stores, &[&[7]]);
     assert!(after.contains("align 2 @a, i8 -1, i16 8, i1 false"), "{after}");
 }
+
+/// Two `double` zeros were not a fill: `isBytewiseValue` only saw integers,
+/// so a rolled nest's `x[2] = x[3] = 0.0` was `fldz` and two `fst` where the
+/// pin writes four zero dwords (x87_invariants: 18 float stores against 10).
+#[test]
+fn two_double_zeros_are_one_memset_and_negative_zero_is_not() {
+    let doubles = |value: &str| {
+        format!(
+            "@a = global [64 x i8] zeroinitializer\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store double {value}, ptr @a\n  %p = getelementptr i8, ptr @a, i16 8\n  store double {value}, ptr %p\n  %r = load i16, ptr @a\n  ret i16 %r\n}}\n"
+        )
+    };
+    let after = merged(&doubles("0.0"), &[&[7]]);
+    assert!(after.contains("i8 0, i16 16, i1 false"), "{after}");
+    let after = merged(&doubles("-0.0"), &[&[7]]);
+    assert!(!after.contains("llvm.memset"), "{after}");
+}

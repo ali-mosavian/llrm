@@ -36,6 +36,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_bitorder::{fold_bitwise_logic_with_intrinsics, match_bswap_or_bitreverse};
+use crate::combine_casted_logic::fold_casted_bitwise_logic;
 use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_funnel::match_funnel_shift;
 use crate::combine_icmp_logic::{fold_boolean_and_or, reassociate_boolean_operands};
@@ -293,7 +294,10 @@ pub fn visit_or(
     if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, false, false) {
         return Visit::Replace(found);
     }
-    reassociate_boolean_operands(c, inst, (op0, op1), false).map_or(Visit::None, Visit::Replace)
+    if let Some(found) = reassociate_boolean_operands(c, inst, (op0, op1), false) {
+        return Visit::Replace(found);
+    }
+    fold_casted_bitwise_logic(c, inst, op0, op1).unwrap_or(Visit::None)
 }
 
 #[cfg(test)]

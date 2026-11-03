@@ -80,6 +80,11 @@ pub struct Target {
     /// departures from it.
     #[serde(default)]
     pub description: Option<String>,
+    /// The file of `description`'s `src/machines` that states the layout and
+    /// the C sizes, where it is not `datalayout.toml` (wasm's has a file per
+    /// pointer width).
+    #[serde(default)]
+    pub description_file: Option<String>,
     #[serde(default)]
     pub wchar_bytes: Option<u32>,
     #[serde(default)]
@@ -106,6 +111,8 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -152,9 +159,17 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// The description file of crate `llrm-NAME`: `file`, else `datalayout.toml`.
+fn description_path(
+    name: &str,
+    file: Option<&str>,
+) -> String {
+    format!("{ROOT}/crates/target/llrm-{name}/src/machines/{}", file.unwrap_or("datalayout.toml"))
+}
+
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
-    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+    let path = description_path(name, target.description_file.as_deref());
     let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
     let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
@@ -364,14 +379,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             // clang writes the debug metadata, the backend the format `flag`
             // names.
             if !build.clang.iter().any(|one| one == "-g") {
-                // No `#dbg_assign`: the importer reads `#dbg_value` and
-                // `#dbg_declare` only.
-                build
-                    .clang
-                    .extend(
-                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
-                            .map(str::to_owned),
-                    );
+                // The backend makes the `#dbg_assign`s itself
+                // (`AssignmentTrackingPass`).
+                build.clang.extend(["-g", "-fdebug-compilation-dir=."].map(str::to_owned));
             }
             build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {

@@ -198,6 +198,8 @@ pub struct Accesses {
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
     source: Option<Rc<<Annotated as Analysis>::Result>>,
+    /// The calls' footprints `touched` holds for them were made from.
+    footprint_source: Option<Rc<<crate::manager::CallFootprints as Analysis>::Result>>,
     /// What the manager's plain accesses were made from: the references
     /// annotated, the calls' writes, and the module facts that decide a call.
     plain_source: Option<PlainSource>,
@@ -351,8 +353,8 @@ impl Analysis for Accesses {
     ) -> Self::Result {
         let annotated = analyses.get::<Annotated>(context, layout, function);
         let references = Result::as_ref(&*annotated).map_err(String::clone)?;
-        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
-        let footprints = Result::as_ref(&*footprints).map_err(String::clone)?;
+        let footprints_held = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let footprints = Result::as_ref(&*footprints_held).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
         // The pointer value solve `Annotated` shares: the objects a call's
@@ -364,7 +366,7 @@ impl Analysis for Accesses {
             unit = unit.with_point_values(values);
         }
         let made = Self::of(&unit, references.clone(), footprints);
-        Ok(Rc::new(Self { source: Some(annotated), ..made }))
+        Ok(Rc::new(Self { source: Some(annotated), footprint_source: Some(footprints_held), ..made }))
     }
 
     /// What an instruction touches is its own: a store or call moved to
@@ -403,6 +405,13 @@ impl Analysis for Accesses {
         let annotated = analyses.get::<Annotated>(context, layout, function);
         let unchanged = Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated;
         if !unchanged {
+            return None;
+        }
+        // A call's footprint names the values its arguments are made of; an
+        // edit to those (a gep's index replaced) leaves the references alone.
+        let footprints = analyses.get::<crate::manager::CallFootprints>(context, layout, function);
+        let was_footprints = held.footprint_source.as_ref()?;
+        if !(Rc::ptr_eq(&footprints, was_footprints) || *footprints == **was_footprints) {
             return None;
         }
         Some(if structure_kept(changes, function) {
@@ -607,6 +616,7 @@ impl Accesses {
             touched,
             fills: IndexMap::default(),
             source: None,
+            footprint_source: None,
             plain_source: None,
             graph: GraphCell::default(),
             lazy: false,
@@ -1287,13 +1297,27 @@ impl MemorySSA<'_> {
         // Objects that cannot meet rule a def out before any alias reasoning.
         let reach =
             Rc::clone(self.reaches.borrow_mut().get_or_insert_with(site, || Rc::new(Reach::of(&self.written[&site]))));
-        let missed = reach.misses(cell);
+        // An intrinsic's own semantics are the pin's stack's to answer: its
+        // capture analysis is flow-insensitive, so a local whose address is
+        // passed on after the load still clobbers it there
+        // (`print<memoryssa>`), where the objects-apart filter ruled the def
+        // out. Any other call or store keeps the filter: DEVIATE R1 (no
+        // number): the pin's stack knows no footprint of the QB runtime's
+        // routines (the writers `b$seg` lists, a private global's window), so
+        // `GlobalsAA` there answers Mod for what we know is kept. Lost: a
+        // load the pin leaves clobbered is not, at calls with a footprint;
+        // swept 63,773 nib and 248 C events, none with the local's address
+        // taken before the load. Exit: the footprints represented in the
+        // pin-shaped stack.
+        let asked = self.call_clobbers(site, cell);
+        let intrinsic = asked.is_some() && self.unit.intrinsic(site).is_some();
+        let missed = !intrinsic && reach.misses(cell);
         let found = if missed && !check_clobbers() {
             false
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = match self.call_clobbers(site, cell) {
+            let found = match asked {
                 Some(asked)
                     if stores.is_empty()
                         || !matches!(
@@ -1308,7 +1332,10 @@ impl MemorySSA<'_> {
                 Some(asked) => asked && stores.iter().any(|store| self.may_clobber_cached(cell, store)),
                 None => stores.iter().any(|store| self.may_clobber_cached(cell, store)),
             };
-            assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
+            assert!(
+                !reach_contradicts(asked.is_some(), missed, found),
+                "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber (answered by the footprint)"
+            );
             found
         };
         RUNS.with(|runs| runs.set(runs.get() + 1));
@@ -2131,4 +2158,15 @@ fn initialized_by(
         }
     }
     fills
+}
+
+/// Whether the objects-apart filter is contradicted by the answer it skipped:
+/// only where the footprint alone answers, the pin's stack being no authority
+/// for it; a call the stack answered keeps the filter as DEVIATE R1.
+fn reach_contradicts(
+    stack_answered: bool,
+    missed: bool,
+    found: bool,
+) -> bool {
+    missed && found && !stack_answered
 }

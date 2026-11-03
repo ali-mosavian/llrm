@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6a9b3b58ed21fe7fa39b42a8282ded19457315d10cd161a0e66c8792ab639e81 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:cf36ea25ceccbd49d7e61883558c26f52e30ddeab0b1016ccb34029eac63dac4 -->
 
 # pipeline
 
@@ -37,7 +37,7 @@ flowchart TB
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>maskscale window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -107,7 +107,7 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `typepromotion`, `cgpaddr` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |

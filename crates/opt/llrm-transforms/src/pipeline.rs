@@ -32,7 +32,7 @@
 //!   end
 //!   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
 //!   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
+//!   e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>maskscale window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
 //!   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
 //!   a --> sroa
 //!   sroa --> rnd
@@ -102,7 +102,7 @@
 //! | `drop_stores` | `dse` |
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
-//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
+//! | `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `typepromotion`, `cgpaddr` |
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
@@ -132,6 +132,7 @@ use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis, ProgramSummaries,
 use llrm_analysis::peelsize::Limits;
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module, UnnamedAddr};
+use llrm_mir::opcode::Attribute;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::program::Program;
 
@@ -143,7 +144,7 @@ use crate::{
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, window,
+    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -193,6 +194,12 @@ pub struct Options {
     /// disjoint. llrm only (the pin rematerializes invariant loads alone); off
     /// by default, `-fllrm-spares`. DEVIATE (no number), 8.0 M Ir at d_faces.
     pub spare_loads: bool,
+    /// A CFG simplification ahead of loop strength reduction, to tidy the
+    /// compare-and-branch that follows a `cmpxchg`: the pin's
+    /// `AArch64PassConfig` adds it (`EnableAtomicTidy`,
+    /// AArch64TargetMachine.cpp#L666, d1106deb71cc), X86's does not. Set by
+    /// the target's driver.
+    pub atomic_cfg_tidy: bool,
     /// `Homes`: a phi that also sits in a stored cell is spilled to that cell
     /// (gcc `REG_EQUIV`). llrm only; off by default, `-fllrm-homes`. DEVIATE
     /// (no number), 8.4 M Ir at d_faces.
@@ -203,6 +210,13 @@ pub struct Options {
     pub stable_loads: bool,
     pub promote: bool,
     pub strength: bool,
+    /// `cgpaddr`, the address-mode half of CodeGenPrepare. Off lets a pin
+    /// `llc`, whose own CodeGenPrepare runs inside it, take the module
+    /// before this one (`-fllrm-cgpaddr`).
+    pub cgpaddr: bool,
+    /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
+    /// target asks (`-fllrm-typepromotion`).
+    pub typepromotion: bool,
     /// The translated `LoopStrengthReduce` slot (LLVM's `-disable-lsr` turns it
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
@@ -251,6 +265,10 @@ pub struct Options {
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
     pub for_size: bool,
+    /// The target's price of a code byte at speed counts
+    /// (`Tti::speed_milliclocks_per_byte`): -O2 and -O3. -O1 and -Os gate
+    /// every metric by itself.
+    pub speed_rate: bool,
     /// `Function::hasMinSize`: -Oz. The only level where `LoopRotate` copies no
     /// header
     /// ([LoopRotation.cpp#L80](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopRotation.cpp#L80)).
@@ -286,10 +304,13 @@ impl Default for Options {
             drop_stores: true,
             sink: true,
             spare_loads: false,
+            atomic_cfg_tidy: false,
             stored_homes: false,
             stable_loads: false,
             promote: true,
             strength: true,
+            cgpaddr: true,
+            typepromotion: true,
             lsr: true,
             unroll: true,
             loop_unrolling: true,
@@ -305,6 +326,7 @@ impl Default for Options {
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
+            speed_rate: true,
             has_min_size: false,
             expensive: true,
             switch_conversion: true,
@@ -343,6 +365,7 @@ impl Options {
             unswitch: false,
             expensive: false,
             switch_conversion: false,
+            speed_rate: false,
             ..Self::default()
         }
     }
@@ -419,6 +442,11 @@ impl Options {
         self.for_size
     }
 
+    /// Whether the target's byte price at speed counts: -O2 and -O3.
+    pub fn prices_bytes(&self) -> bool {
+        self.speed_rate && !self.for_size
+    }
+
     /// Whether the code generator may grow code for speed: -O3 and -Omax
     /// (`CodeGenOptLevel::Aggressive`).
     pub fn aggressive_codegen(&self) -> bool {
@@ -454,8 +482,10 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" => self.strength && self.lsr,
-            "indvars" | "window" | "gepoffset" | "cgpaddr" => self.strength,
+            "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
+            "indvars" | "window" | "gepoffset" => self.strength,
+            "cgpaddr" => self.strength && self.cgpaddr,
+            "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
@@ -898,6 +928,7 @@ pub(crate) fn llvm_order(
                     "loopidiom@737",
                     Box::new(crate::loopidiom::pass::LoopIdiom {
                         for_size: size,
+                        speed_rate: applied.options.prices_bytes(),
                         ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
                     }),
                 ),
@@ -1042,6 +1073,9 @@ pub fn recorded(
     manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     manager.dump_inputs = llrm_support::env_flag!("LLRM_DUMP_INPUTS");
+    if applied.options.optimize && applied.options.prefers_size() {
+        mark_for_size(program, applied.options.has_min_size);
+    }
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
@@ -1078,6 +1112,7 @@ pub fn recorded(
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
+                speed_rate: applied.options.prices_bytes(),
                 simplify: Box::new(move |module, analyses, id, stage| {
                     TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
                     rerun(module, analyses, id, &mut simplify, true)
@@ -1099,7 +1134,7 @@ pub fn recorded(
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
-    let late = applied.options.inline.recursive.then(|| {
+    let late = Some({
         let mut simplify = Fixed::linear(&again_applied, Phase::Simplify);
         crate::walk::SelfInline {
             simplify: Box::new(move |module, analyses, id, stage| {
@@ -1108,6 +1143,9 @@ pub fn recorded(
                 TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             }),
             for_size: applied.options.prefers_size(),
+            speed_rate: applied.options.prices_bytes(),
+            inlining: applied.options.inline.limit != 0,
+            flag: applied.options.inline.recursive,
         }
     });
     manager.add_program(Interprocedural {
@@ -1161,6 +1199,10 @@ pub fn recorded(
     // again after each edit, as gcc's passes after IPA read the modref
     // summaries it made there.
     manager.freeze::<Summaries>();
+    // `AArch64PassConfig::addIRPasses`, after AtomicExpand and before LSR.
+    if applied.options.atomic_cfg_tidy && applied.options.simplifycfg {
+        manager.add(simplifycfg::SimplifyCfg { options: simplifycfg::Options::ATOMIC_TIDY });
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
@@ -1189,6 +1231,10 @@ pub fn recorded(
     }
     // After gvn's last partial redundancy elimination, which makes the phis it
     // sinks.
+    // The pin's `addCodeGenPrepare` runs TypePromotion, then CodeGenPrepare.
+    if applied.options.wanted("typepromotion") {
+        manager.add(typepromotion_pass::TypePromotion);
+    }
     // CodeGenPrepare's sinking: compares, masks, address phis and the address
     // arithmetic of a block's accesses, made in the block that uses them.
     if applied.options.wanted("cgpaddr") {
@@ -1237,6 +1283,27 @@ pub fn recorded(
     done
 }
 
+/// What clang does at -Os and -Oz: every defined function carries `optsize`,
+/// and `minsize` at -Oz (`Function::hasOptSize` / `hasMinSize` read them).
+fn mark_for_size(
+    program: &mut Program,
+    min_size: bool,
+) {
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            let GlobalKind::Function(function) = &mut global.kind else { continue };
+            if function.is_declaration() {
+                continue;
+            }
+            for name in ["optsize"].into_iter().chain(min_size.then_some("minsize")) {
+                if !function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name)) {
+                    function.attrs.push(Attribute::Flag(name.to_owned()));
+                }
+            }
+        }
+    }
+}
+
 /// Each loop's counters chosen once, on the loop the passes before leave. LSR
 /// requires LoopSimplify and LCSSA (`getAnalysisUsage`): an exit value read
 /// through a phi that is not LCSSA is not a use outside the loop, and LSR gave
@@ -1255,6 +1322,11 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
         passes.push(Box::new(algebraic::Differences));
+        // A masked counter read as an index is the byte offset, where the
+        // target prices a scaled index.
+        if applied.options.wanted("maskscale") {
+            passes.push(Box::new(crate::maskscale::MaskScale));
+        }
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
@@ -1762,6 +1834,7 @@ impl Run {
         globals.push(GlobalValue {
             name: "pipeline.body".to_owned().into(),
             linkage: Linkage::Internal,
+            visibility: llrm_mir::Visibility::Default,
             unnamed_addr: UnnamedAddr::default(),
             address_space: 0,
             kind: GlobalKind::Function(Box::new(unit.function.clone())),
@@ -1770,6 +1843,7 @@ impl Run {
             context: unit.context.clone(),
             datalayout: None,
             globals,
+            aliases: Vec::new(),
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),

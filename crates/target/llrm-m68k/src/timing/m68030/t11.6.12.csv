@@ -1,0 +1,18 @@
+#title,11.6.12 Shift/Rotate Instructions,page,11-45,notes,d Direction of shift/rotate: L or R. * Add Fetch Effective Address Time. % Indicates shift count is less than or equal to the size of data. + Indicates shift count is greater than size of data.
+Group,Mark,Instruction or Address Mode,Operands or Condition,Head,Tail,I-Cache Case,No-Cache Case
+,,LSd,"#<data>,Dy",4,0,4(0/0/0),4(0/1/0)
+,%,LSd,"Dx,Dy",6,0,6(0/0/0),6(0/1/0)
+,+,LSd,"Dx,Dy",8,0,8(0/0/0),8(0/1/0)
+,*,LSd,Mem by 1,0,0,4(0/0/1),4(0/1/1)
+,,ASL,"#<data>,Dy",2,0,6(0/0/0),6(0/1/0)
+,,ASL,"Dx,Dy",4,0,8(0/0/0),8(0/1/0)
+,*,ASL,Mem by 1,0,0,6(0/0/1),6(0/1/1)
+,,ASR,"#<data>,Dy",4,0,4(0/0/0),4(0/1/0)
+,%,ASR,"Dx,Dy",6,0,6(0/0/0),6(0/1/0)
+,+,ASR,"Dx,Dy",10,0,10(0/0/0),10(0/1/0)
+,*,ASR,Mem by 1,0,0,4(0/0/1),4(0/1/1)
+,,ROd,"#<data>,Dy",4,0,6(0/0/0),6(0/1/0)
+,,ROd,"Dx,Dy",6,0,8(0/0/0),8(0/1/0)
+,*,ROd,Mem by 1,0,0,6(0/0/1),6(0/1/1)
+,,ROXd,Dn,10,0,12(0/0/0),12(0/1/0)
+,*,ROXd,Mem by 1,0,0,4(0/0/0),4(0/1/0)

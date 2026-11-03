@@ -1,7 +1,7 @@
 //! The DIE tree of `Info`: the compile unit, its types, globals and functions.
 
-use llrm_object::debug::{
-    self as model, Block, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable,
+use llrm_debug::{
+    self as model, Block, ExprOp, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable,
 };
 use llrm_object::{Binding, Object, Unsupported};
 
@@ -30,6 +30,19 @@ const TAG_BASE: u16 = 0x24;
 const TAG_CONST: u16 = 0x26;
 const TAG_ENUMERATOR: u16 = 0x28;
 const TAG_SUBPROGRAM: u16 = 0x2e;
+const TAG_CALL_SITE: u16 = 0x48;
+const TAG_CALL_SITE_PARAMETER: u16 = 0x49;
+const TAG_GNU_CALL_SITE: u16 = 0x4109;
+const TAG_GNU_CALL_SITE_PARAMETER: u16 = 0x410a;
+const AT_DECLARATION: u16 = 0x3c;
+const AT_CALL_RETURN_PC: u16 = 0x7d;
+const AT_CALL_VALUE: u16 = 0x7e;
+const AT_CALL_ORIGIN: u16 = 0x7f;
+const AT_CALL_ALL_CALLS: u16 = 0x7a;
+const AT_GNU_CALL_SITE_VALUE: u16 = 0x2111;
+const AT_GNU_ALL_CALL_SITES: u16 = 0x2117;
+/// A reference to function `n`'s DIE, patched once every function has one.
+const FUNCTION_REF: usize = usize::MAX / 2;
 const TAG_VARIABLE: u16 = 0x34;
 const TAG_VOLATILE: u16 = 0x35;
 
@@ -69,6 +82,8 @@ struct Tree<'a> {
     /// The out-of-line description of each function inlined somewhere (what an
     /// inlined subroutine is an abstract origin of), by name.
     origins: Vec<(String, usize)>,
+    /// The DIE of each declaration of [`Info::declarations`].
+    declarations: Vec<usize>,
 }
 
 impl Tree<'_> {
@@ -318,6 +333,14 @@ impl Tree<'_> {
                 Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
             }
             Location::Register(name) => self.register(name),
+            // DW_OP_entry_value (DW_OP_GNU_entry_value before DWARF 5), the
+            // length of the register's expression and the expression, then
+            // DW_OP_stack_value.
+            Location::EntryValue(name) => {
+                let register = self.register(name)?;
+                let op = if self.version >= 5 { 0xa3 } else { 0xf3 };
+                Ok([vec![op], crate::uleb(register.len() as u64), register, vec![0x9F]].concat())
+            }
             // DW_OP_breg<n> disp: the register's value plus the displacement.
             Location::Relative { register, disp } => {
                 let named = self.register(register)?;
@@ -326,6 +349,77 @@ impl Tree<'_> {
                     // DW_OP_regx n -> DW_OP_bregx n.
                     _ => [vec![0x92], named[1..].to_vec(), crate::sleb(*disp)].concat(),
                 })
+            }
+            // The register's value plus the constant, as a value: DW_OP_breg<n>
+            // add, DW_OP_stack_value. A value in a cell is not said: its
+            // width is not known to dereference it.
+            Location::Offset(base, add) => match &**base {
+                Location::Register(name) => {
+                    let named = self.register(name)?;
+                    Ok([
+                        match named[..] {
+                            [one] if (0x50..0x70).contains(&one) => vec![one + 0x20],
+                            _ => [vec![0x92], named[1..].to_vec()].concat(),
+                        },
+                        crate::sleb(*add),
+                        vec![0x9F],
+                    ]
+                    .concat())
+                }
+                _ => refused("a value plus a constant is said for a value in a register"),
+            },
+            // The arguments each as a value on the stack (DW_OP_bregN 0, or
+            // DW_OP_consts), then the operations; DW_OP_stack_value where the
+            // result is the value.
+            Location::Expression { args, ops, value } => {
+                let mut pushed = Vec::new();
+                for (arg, bytes) in args {
+                    pushed.push(match arg {
+                        Location::Frame { .. } => {
+                            let Ok(size) = u8::try_from(*bytes) else {
+                                return refused("an expression's cell is read at a width of a byte count");
+                            };
+                            [self.expression(arg)?, vec![0x94, size]].concat()
+                        }
+                        Location::Register(name) => {
+                            let named = self.register(name)?;
+                            match named[..] {
+                                [one] if (0x50..0x70).contains(&one) => [vec![one + 0x20], crate::sleb(0)].concat(),
+                                _ => [vec![0x92], named[1..].to_vec(), crate::sleb(0)].concat(),
+                            }
+                        }
+                        Location::Constant(value) => [vec![0x11], crate::sleb(*value)].concat(),
+                        _ => return refused("an expression's argument is a register, a cell or a constant"),
+                    });
+                }
+                let mut out = Vec::new();
+                for op in ops {
+                    match *op {
+                        ExprOp::Arg(n) => match pushed.get(n as usize) {
+                            Some(bytes) => out.extend(bytes),
+                            None => return refused("an expression names an argument it does not have"),
+                        },
+                        ExprOp::Constu(n) => out.extend([vec![0x10], crate::uleb(n)].concat()),
+                        ExprOp::Consts(n) => out.extend([vec![0x11], crate::sleb(n)].concat()),
+                        ExprOp::PlusUconst(n) => out.extend([vec![0x23], crate::uleb(n)].concat()),
+                        ExprOp::Plus => out.push(0x22),
+                        ExprOp::Minus => out.push(0x1c),
+                        ExprOp::Mul => out.push(0x1e),
+                        ExprOp::And => out.push(0x1a),
+                        ExprOp::Or => out.push(0x21),
+                        ExprOp::Xor => out.push(0x27),
+                        ExprOp::Shl => out.push(0x24),
+                        ExprOp::Shr => out.push(0x25),
+                        ExprOp::Shra => out.push(0x26),
+                        ExprOp::Not => out.push(0x20),
+                        ExprOp::Neg => out.push(0x1f),
+                        ExprOp::Deref => out.push(0x06),
+                    }
+                }
+                if *value {
+                    out.push(0x9F);
+                }
+                Ok(out)
             }
             // DW_OP_consts, DW_OP_stack_value.
             Location::Constant(value) => Ok([vec![0x11], crate::sleb(*value), vec![0x9F]].concat()),
@@ -356,6 +450,9 @@ impl Tree<'_> {
             | Location::Register(_)
             | Location::Relative { .. }
             | Location::Constant(_)
+            | Location::Offset(..)
+            | Location::Expression { .. }
+            | Location::EntryValue(_)
             | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),
@@ -419,7 +516,7 @@ impl Tree<'_> {
         &self,
         name: &str,
     ) -> Result<Vec<u8>, Unsupported> {
-        let number = self.info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf);
+        let number = self.info.registers().dwarf(name);
         match number {
             Some(number) if number < 32 => Ok(vec![0x50 + number as u8]),
             Some(number) => Ok([vec![0x90], crate::uleb(u64::from(number))].concat()),
@@ -561,11 +658,9 @@ impl Tree<'_> {
                 // DW_OP_call_frame_cfa.
                 FrameBase::Cfa { .. } => vec![0x9C],
                 FrameBase::Register => {
-                    let base = self
-                        .info
-                        .registers
-                        .iter()
-                        .find(|register| register.name == self.info.frame_register)
+                    let registers = self.info.registers();
+                    let base = registers
+                        .named(&registers.frame)
                         .map(|register| register.name.clone())
                         .ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
                     self.register(&base)?
@@ -573,7 +668,96 @@ impl Tree<'_> {
             };
             die.attrs.push((AT_FRAME_BASE, Value::Expr(base)));
         }
+        if one.all_calls {
+            die.attrs.push((if self.version >= 5 { AT_CALL_ALL_CALLS } else { AT_GNU_ALL_CALL_SITES }, Value::Flag));
+        }
         self.scope(&mut die, &one.variables, &one.blocks)?;
+        for call in &one.calls {
+            let site = self.call_site(call)?;
+            die.children.push(site);
+        }
+        Ok(self.push(die))
+    }
+
+    /// A call: `DW_TAG_call_site` (`DW_TAG_GNU_call_site` before DWARF 5), the
+    /// function it reaches and the values its argument registers hold.
+    fn call_site(
+        &mut self,
+        call: &model::CallSite,
+    ) -> Result<usize, Unsupported> {
+        let five = self.version >= 5;
+        let mut die = Die::new(if five { TAG_CALL_SITE } else { TAG_GNU_CALL_SITE });
+        match call.origin {
+            Some(model::CallOrigin::Declaration(at)) => {
+                let target = *self
+                    .declarations
+                    .get(at)
+                    .ok_or_else(|| Unsupported(format!("DWARF: a call names declaration {at}, there are none")))?;
+                die.attrs.push((if five { AT_CALL_ORIGIN } else { AT_ABSTRACT_ORIGIN }, Value::Ref(target)));
+            }
+            Some(model::CallOrigin::Function(at)) => {
+                die.attrs.push((if five { AT_CALL_ORIGIN } else { AT_ABSTRACT_ORIGIN }, Value::Ref(FUNCTION_REF + at)));
+            }
+            None => {}
+        }
+        let pc = self.address(call.section, call.offset)?;
+        die.attrs.push((if five { AT_CALL_RETURN_PC } else { AT_LOW_PC }, pc));
+        for parameter in &call.parameters {
+            let mut one = Die::new(if five { TAG_CALL_SITE_PARAMETER } else { TAG_GNU_CALL_SITE_PARAMETER });
+            one.attrs.push((AT_LOCATION, Value::Expr(self.register(&parameter.register)?)));
+            let value = self.call_value(&parameter.value)?;
+            one.attrs.push((if five { AT_CALL_VALUE } else { AT_GNU_CALL_SITE_VALUE }, Value::Expr(value)));
+            let at = self.push(one);
+            die.children.push(at);
+        }
+        Ok(self.push(die))
+    }
+
+    fn call_value(
+        &self,
+        value: &model::CallValue,
+    ) -> Result<Vec<u8>, Unsupported> {
+        Ok(match value {
+            model::CallValue::Constant(n @ 0..=31) => vec![0x30 + *n as u8],
+            model::CallValue::Constant(n) if *n >= 0 => [vec![0x10], crate::uleb(*n as u64)].concat(),
+            model::CallValue::Constant(n) => [vec![0x11], crate::sleb(*n)].concat(),
+            model::CallValue::Entry(name) => {
+                let inner = self.register(name)?;
+                let op = if self.version >= 5 { 0xa3 } else { 0xf3 };
+                [vec![op], crate::uleb(inner.len() as u64), inner].concat()
+            }
+            model::CallValue::Register { name, offset } => match self.info.registers().dwarf(name) {
+                Some(number) if number < 32 => [vec![0x70 + number as u8], crate::sleb(*offset)].concat(),
+                Some(number) => [vec![0x92], crate::uleb(u64::from(number)), crate::sleb(*offset)].concat(),
+                None => return refused(format!("register {name} has no DWARF number")),
+            },
+        })
+    }
+
+    /// A function the unit calls and does not define: a declaration DIE.
+    fn declaration(
+        &mut self,
+        one: &model::Declaration,
+    ) -> Result<usize, Unsupported> {
+        let mut die = Die::new(TAG_SUBPROGRAM);
+        die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
+        die.attrs.push((AT_PROTOTYPED, Value::Flag));
+        let procedure = self.info.types.get(one.r#type).cloned();
+        if let Some(Type::Procedure { result: Some(result), .. }) = &procedure {
+            let _ = self.typed(&mut die, *result);
+        }
+        die.attrs.push((AT_DECLARATION, Value::Flag));
+        if one.external {
+            die.attrs.push((AT_EXTERNAL, Value::Flag));
+        }
+        if let Some(Type::Procedure { parameters, .. }) = &procedure {
+            for parameter in parameters {
+                let mut child = Die::new(TAG_FORMAL_PARAMETER);
+                self.typed(&mut child, *parameter)?;
+                let at = self.push(child);
+                die.children.push(at);
+            }
+        }
         Ok(self.push(die))
     }
 }
@@ -646,6 +830,7 @@ pub fn tree(
         locations: crate::buffer::Buf::default(),
         ranges: Vec::new(),
         origins: Vec::new(),
+        declarations: Vec::new(),
     };
     let mut unit = Die::new(TAG_COMPILE_UNIT);
     unit.attrs.push((AT_PRODUCER, Value::Str("llrm".into())));
@@ -693,9 +878,26 @@ pub fn tree(
             children.push(at);
         }
     }
+    let declarations: Vec<usize> =
+        info.declarations.iter().map(|one| tree.declaration(one)).collect::<Result<_, _>>()?;
+    tree.declarations = declarations.clone();
+    let mut function_dies = Vec::new();
     for function in &info.functions {
         let at = tree.function(function)?;
+        function_dies.push(at);
         children.push(at);
+    }
+    children.extend(declarations);
+    for die in &mut tree.dies {
+        for (_, value) in &mut die.attrs {
+            if let Value::Ref(at) = value {
+                if *at >= FUNCTION_REF {
+                    *at = *function_dies
+                        .get(*at - FUNCTION_REF)
+                        .ok_or_else(|| Unsupported("DWARF: a call names a function there is none of".into()))?;
+                }
+            }
+        }
     }
     children.extend(tree.origins.iter().map(|(_, at)| *at));
     tree.dies[0].children = children;

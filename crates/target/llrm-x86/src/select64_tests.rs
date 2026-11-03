@@ -344,3 +344,14 @@ fn a_quadword_bit_change_of_a_constant_bit_encodes() {
         assert_eq!(bytes(&what), expected, "{name}");
     }
 }
+
+/// `lea` of a symbol plus a register (static code) dropped the register and
+/// was refused: jpeg_fixed and stft_fixed failed to compile under -fno-pic.
+#[test]
+fn lea_of_a_symbol_beside_a_register_keeps_the_register() {
+    let place =
+        ir::AddressRef { through: RegId::RCX, ..ir::AddressRef::new(Some(llrm_lir::Addr::new(Space::External, 0))) };
+    let lea = sem(Operation::Address, Some("lea"), vec![rg(RegId::RAX, 8)], vec![Loc::Address(place)], None, false);
+    // lea sym(%rcx), %rax
+    assert_eq!(bytes(&lea), [0x48, 0x8d, 0x81, 0, 0, 0, 0]);
+}

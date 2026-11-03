@@ -191,3 +191,24 @@ class MapTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+def test_a_dos_name_finds_the_file_of_another_case(tmp_path):
+    """stft_fixed opens SIGNAL and the corpus file is `signal`: the emulator opened nothing and the program printed -1."""
+    (tmp_path / "signal").write_bytes(b"x")
+    assert icount.dos_file(tmp_path, "SIGNAL") == tmp_path / "signal"
+    assert icount.dos_file(tmp_path, "C:\\SIGNAL") == tmp_path / "signal"
+    assert icount.dos_file(tmp_path, "NEW") == tmp_path / "NEW"
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+def test_a_program_that_never_resets_the_fpu_starts_at_dos_control_word(tmp_path):
+    """Unicorn starts with FPCW 0 (single precision): stft_single nib, which has no fninit, printed 204598972 for DOSBox's 78803551."""
+    program = (
+        ".model small\n.386\n.387\n.stack 256\n.data\ncw dw 0\n.code\nstart:\n    mov ax, @data\n    mov ds, ax\n"
+        "    fnstcw [cw]\n    mov ah, 40h\n    mov bx, 1\n    mov cx, 2\n    mov dx, offset cw\n    int 21h\n    mov ax, 4C00h\n    int 21h\nend start\n"
+    )
+    (tmp_path / "F.ASM").write_text(program)
+    subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path}/F.OBJ", str(tmp_path / "F.ASM")], check=True)
+    subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(tmp_path / "F.EXE"), "file", str(tmp_path / "F.OBJ")], check=True)
+    assert icount.run(tmp_path / "F.EXE", None, tmp_path, whole=True).output == b"\x7f\x03"

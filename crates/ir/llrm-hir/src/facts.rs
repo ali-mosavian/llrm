@@ -5,7 +5,7 @@
 //! thing, named by HIR ids; MIR has no subjects, only the carriers `lower`
 //! makes.
 
-pub use llrm_mir::facts::{Effect, Fact, Kind};
+pub use llrm_mir::facts::{Effect, Fact, Kind, Region};
 
 /// A module's functions and instructions by id, found once, for every fact
 /// that names one.

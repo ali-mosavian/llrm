@@ -16,6 +16,8 @@
 //! # Used by
 //! `joinvals`, `register_coalescer`.
 
+use crate::liveness::liveintervals::LiveIntervals;
+use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::{Held, Loc, Operation};
 use crate::model::lir::Insn;
 
@@ -28,6 +30,26 @@ pub trait CoalescerEnv {
         b: u32,
     ) -> bool;
 
+    /// `TRI->shouldCoalesce(CopyMI, SrcRC, DstRC, NewRC, LIS)`: whether the
+    /// join of `src` and `dst` across `copy` goes ahead.
+    fn should_coalesce(
+        &self,
+        _lis: &LiveIntervals,
+        _copy: InstrKey,
+        _src: u32,
+        _dst: u32,
+    ) -> bool {
+        true
+    }
+
+    /// `JoinGlobalCopies` (`STI.enableJoinGlobalCopies()`, which is
+    /// `enableMachineScheduler()`: x86 and AArch64 true, WebAssembly and M68k
+    /// false): local copies wait for their loop depth's pass and terminal
+    /// copies go last. False: one top-down list per block, terminals last.
+    fn joins_global_copies(&self) -> bool {
+        true
+    }
+
     /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
     /// `dst`, which may now take only the registers both could.
     fn narrow(
@@ -35,6 +57,28 @@ pub trait CoalescerEnv {
         _dst: u32,
         _src: u32,
     ) {
+    }
+
+    /// A value a join must leave standing, whatever the interval sizes: a
+    /// value pinned to a register of its own, whose range the allocator keeps
+    /// other values out of. Merged into a virtual value it would be an
+    /// ordinary value with one register to choose from, and lose to the values
+    /// that took the register first.
+    fn keeps(
+        &self,
+        _value: u32,
+    ) -> bool {
+        false
+    }
+
+    /// The pinned values on registers that overlap `value`'s (a pair and its
+    /// bytes): `value` holds the units they hold, so a join that makes it
+    /// longer must keep clear of their ranges (`checkRegUnitInterference`).
+    fn aliases(
+        &self,
+        _value: u32,
+    ) -> Vec<u32> {
+        Vec::new()
     }
 
     /// A build for size: a copy of a constant is made again only where that

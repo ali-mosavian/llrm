@@ -63,6 +63,28 @@ pub fn keeps_stack_abi(name: &str) -> bool {
         .is_some_and(|names| names.iter().any(|one| one.as_str() == Some(name)))
 }
 
+/// Whether a call of `name` reclaims llrm's far heap (`moves_far_heap`).
+pub fn moves_far_heap(name: &str) -> bool {
+    listed("moves_far_heap", name)
+}
+
+/// Whether a call of `name` compacts llrm's local heap, which slides a near
+/// array (`moves_near_heap`).
+pub fn moves_near_heap(name: &str) -> bool {
+    listed("moves_near_heap", name)
+}
+
+fn listed(
+    key: &str,
+    name: &str,
+) -> bool {
+    TABLE
+        .get("llrm")
+        .and_then(|row| row.get(key))
+        .and_then(toml::Value::as_array)
+        .is_some_and(|names| names.iter().any(|one| one.as_str() == Some(name)))
+}
+
 /// What `family`'s runtime says of its stack, where it checks one.
 pub fn stack(family: &str) -> Option<StackCheck> {
     let row = row("stack", family)?;

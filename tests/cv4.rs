@@ -121,8 +121,8 @@ fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() 
 /// A small-model program the model describes and no frontend does: an enum, a
 /// `const`, a variable in a register, a block with a variable of its own.
 /// `main` is 28 bytes: `e = GREEN; si = 42; { k = 7 }; return 0`.
-fn synthetic() -> (llrm_object::Object, String) {
-    use llrm_object::debug::{
+fn synthetic() -> (llrm_debug::Described, String) {
+    use llrm_debug::{
         Block, Enumerator, File, Function, Info, Kind, Language, Line, Location, Range, Register, Scalar, Type,
         Variable,
     };
@@ -168,12 +168,17 @@ fn synthetic() -> (llrm_object::Object, String) {
             inlined: None,
         }],
         frame: Vec::new(),
+        all_calls: false,
+        calls: Vec::new(),
     };
     let info = Info {
         language: Language::C,
-        options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
-        frame_register: "bp".into(),
-        registers: vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        options: llrm_debug::DebugOptions { dialect: llrm_debug::Dialect::Cv4, ..Default::default() },
+        target: Some(llrm_x86::mc::fixup::debug_target(16).with_registers(
+            "bp",
+            "",
+            vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        )),
         code: vec![whole],
         types: vec![
             Type::Scalar(Scalar::Int { bytes: 2, signed: true }),
@@ -188,30 +193,32 @@ fn synthetic() -> (llrm_object::Object, String) {
             .to_vec(),
         ..Info::default()
     };
-    let object = Object {
-        name: "syn.c".into(),
-        bits: 16,
-        sections: vec![text],
-        symbols: vec![
-            Symbol {
-                name: "_main".into(),
-                binding: Binding::Public,
-                definition: Definition::Defined { section: 0, offset: 0 },
-                size: 0,
-                group: None,
-            },
-            Symbol {
-                name: "_isatty".into(),
-                binding: Binding::Public,
-                definition: Definition::Defined { section: 0, offset: length },
-                size: 0,
-                group: None,
-            },
-        ],
-        omf_groups: Vec::new(),
-        omf_comdat: Vec::new(),
-        frames: Vec::new(),
+    let object = llrm_debug::Described {
         debug: Some(info),
+        object: Object {
+            name: "syn.c".into(),
+            bits: 16,
+            sections: vec![text],
+            symbols: vec![
+                Symbol {
+                    name: "_main".into(),
+                    binding: Binding::Public,
+                    definition: Definition::Defined { section: 0, offset: 0 },
+                    size: 0,
+                    group: None,
+                },
+                Symbol {
+                    name: "_isatty".into(),
+                    binding: Binding::Public,
+                    definition: Definition::Defined { section: 0, offset: length },
+                    size: 0,
+                    group: None,
+                },
+            ],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        },
     };
     (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())
 }
@@ -240,7 +247,8 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     std::fs::write(scratch.path().join("syn.c"), source).unwrap();
     std::fs::write(
         scratch.path().join("syn.obj"),
-        llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf).unwrap(),
+        llrm_codegen::objectfile::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf)
+            .unwrap(),
     )
     .unwrap();
     dosbox::run(
@@ -495,10 +503,11 @@ fn a_block_in_two_pieces_is_written_over_its_hull() {
     let (mut object, _) = synthetic();
     let function = &mut object.debug.as_mut().unwrap().functions[0];
     function.blocks[0].ranges = vec![
-        llrm_object::debug::Range { section: 0, offset: 14, length: 3 },
-        llrm_object::debug::Range { section: 0, offset: 19, length: 3 },
+        llrm_debug::Range { section: 0, offset: 14, length: 3 },
+        llrm_debug::Range { section: 0, offset: 19, length: 3 },
     ];
-    let written = llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf);
+    let written =
+        llrm_codegen::objectfile::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf);
     let bytes = written.unwrap_or_else(|error| panic!("{error}"));
     let shape = llrm_codegen::objectfile::cv4info::shape(&llrm_codegen::objectfile::omf::parse(&bytes).unwrap());
     assert!(shape.iter().any(|one| one.contains("k")), "{shape:#?}");

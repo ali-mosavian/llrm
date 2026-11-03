@@ -1,0 +1,2 @@
+# Objects a leg of objsweep_gate.py may change against the merge-base, with the reason. Empty once the base has the change.
+# Base origin/release/next has the 32-bit and 64-bit ELF writer changes; this PR changes no x86 object.

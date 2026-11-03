@@ -263,6 +263,7 @@ impl Decoder<'_> {
                 "OPC_RecordNode" => Matcher::RecordNode,
                 "OPC_RecordMemRef" => Matcher::RecordMemRef,
                 "OPC_CaptureGlueInput" => Matcher::CaptureGlueInput,
+                "OPC_CaptureDeactivationSymbol" => Matcher::CaptureDeactivationSymbol,
                 "OPC_MoveParent" => Matcher::MoveParent,
                 "OPC_CheckImmAllOnesV" => Matcher::CheckImmAllOnesV,
                 "OPC_CheckImmAllZerosV" => Matcher::CheckImmAllZerosV,
@@ -283,6 +284,14 @@ impl Decoder<'_> {
                 "OPC_CheckTypeI32" => Matcher::CheckType(self.fixed_vt("i32")?),
                 "OPC_CheckTypeI64" => Matcher::CheckType(self.fixed_vt("i64")?),
                 "OPC_CheckTypeByHwMode" => Matcher::CheckType(self.hw_vt(&mut at)?),
+                "OPC_CheckTypeRes" => {
+                    let res = self.byte(&mut at)?;
+                    Matcher::CheckTypeRes { res, vt: self.vt(&mut at)? }
+                }
+                "OPC_CheckTypeResByHwMode" => {
+                    let res = self.byte(&mut at)?;
+                    Matcher::CheckTypeRes { res, vt: self.hw_vt(&mut at)? }
+                }
                 "OPC_CheckTypeByHwMode0" => Matcher::CheckType(self.hw.0[0]),
                 "OPC_CheckInteger" => Matcher::CheckInteger(self.signed_vbr(&mut at)?),
                 "OPC_CheckCondCode" => Matcher::CheckCondCode(self.byte(&mut at)?),
@@ -382,7 +391,12 @@ impl Decoder<'_> {
                     Matcher::CheckComplexPat { pattern: digit(name)?, record: self.byte(&mut at)? }
                 }
                 _ if name.starts_with("OPC_EmitConvertToTarget") => Matcher::EmitConvertToTarget(digit(name)?),
-                _ if name.starts_with("OPC_EmitCopyToReg") && !name.ends_with("TwoByte") => {
+                "OPC_EmitCopyToRegTwoByte" => {
+                    let record = self.byte(&mut at)?;
+                    let low = u16::from(self.byte(&mut at)?);
+                    Matcher::EmitCopyToReg { record, register: low | u16::from(self.byte(&mut at)?) << 8 }
+                }
+                _ if name.starts_with("OPC_EmitCopyToReg") => {
                     Matcher::EmitCopyToReg { record: digit(name)?, register: u16::from(self.byte(&mut at)?) }
                 }
                 _ if name.starts_with("OPC_EmitNode") && name != "OPC_EmitNodeXForm"
@@ -461,5 +475,33 @@ mod tests {
         // The alternative says 1 byte but `CheckOpcode` needs 2 more.
         let err = decode(&[0, 1, 2, 0], &[], &ids(), &hw()).err().unwrap();
         assert!(err.contains("table ends") || err.contains("overran"), "{err}");
+    }
+
+    /// `OPC_EmitCopyToRegTwoByte` (an AArch64 register past 255, `WZR`, `SP`)
+    /// was refused as not in the x86 table, so the AArch64 table could not
+    /// be decoded at all.
+    #[test]
+    fn a_copy_to_a_register_past_255_decodes_both_bytes() {
+        let ids = Ids::parse("OPC_EmitCopyToRegTwoByte 6\nOPC_CompleteMatch 4\nMVT::i32 7\n").unwrap();
+        let decoded = decode(&[6, 2, 0x34, 0x12], &[], &ids, &hw()).unwrap();
+        assert_eq!(decoded.root, [Node::Item(Matcher::EmitCopyToReg { record: 2, register: 0x1234 })]);
+    }
+
+    /// The AArch64 table opens a pattern with `OPC_CaptureDeactivationSymbol`.
+    #[test]
+    fn a_deactivation_symbol_capture_decodes() {
+        let ids = Ids::parse("OPC_CaptureDeactivationSymbol 12\nMVT::i32 7\n").unwrap();
+        let decoded = decode(&[12], &[], &ids, &hw()).unwrap();
+        assert_eq!(decoded.root, [Node::Item(Matcher::CaptureDeactivationSymbol)]);
+    }
+
+    #[test]
+    fn a_type_check_on_a_result_decodes() {
+        // WebAssembly's table checks result 1 of a node: the decode refused it
+        // as "not in the pin's x86 table".
+        let ids = Ids::parse("OPC_CheckTypeRes 0\nMVT::i32 7\n").unwrap();
+        let decoded = decode(&[0, 1, 7], &[], &ids, &hw()).unwrap();
+        let flat = flatten(&decoded.root, &decoded.lists);
+        assert_eq!(flat.items, [Matcher::CheckTypeRes { res: 1, vt: Vt(7) }]);
     }
 }

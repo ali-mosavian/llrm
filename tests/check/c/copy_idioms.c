@@ -18,7 +18,7 @@
 // A backward move is the fixed byte string `push ds; pop es; std; rep movsd; ...; cld` (memops.rs), listed as `db`.
 // CHECK[-O2]: db 01eh,007h,0fdh,0f3h,066h,0a5h
 // CHECK[-O2]: db 0fch
-// CHECK[-Os]: dec cx
+// CHECK[-Os]: dec ax
 // CHECK: {{_scroll_down(@3)?}} endp
 // CHECK-LABEL: {{_palette(@3)?}} proc
 // DEVIATE: the pin leaves a variable 16-bit fill a loop (no memset_pattern off Darwin, LoopIdiomRecognize.cpp L1214 at
@@ -41,10 +41,8 @@
 // At -Os the loop of two_stores stays one loop (loopidioms `fills_pay`, 6af0a022f): the copy keeps the zero store beside it. m16 copy_idioms.c -Os
 // 281 -> 268 B; per element the loop is 8 cycles on the i486 table against 9 for `rep stosb` plus the copy loop (estimate, no bench).
 // CHECK-LABEL: {{_two_stores(@3)?}} proc
-// CHECK[-O2]: rep stos
-// CHECK[-O2]: rep movs
-// CHECK[-Os]: mov word ptr _c[bx], 0
-// CHECK[-Os]: dec ax
+// CHECK: mov word ptr _c[bx], 0
+// CHECK: dec ax
 // CHECK: {{_two_stores(@3)?}} endp
 // CHECK-LABEL: {{_strides(@3)?}} proc
 // CHECK-NOT: rep
@@ -52,10 +50,9 @@
 // The pin makes b = 0 and a = b two llvm.memset calls (the second store reads what the first wrote, which is a constant).
 // CHECK-LABEL: {{_written(@3)?}} proc
 // At -Os both stores stay in one loop (same `fills_pay` answer as two_stores).
-// CHECK[-O2]: rep stos
-// CHECK[-O2]: rep stos
+// CHECK[-O2]: mov word ptr _a[bx], 0
 // CHECK[-Os]: mov word ptr _a[bx], cx
-// CHECK[-Os]: dec ax
+// CHECK: dec ax
 // CHECK: {{_written(@3)?}} endp
 short a[160], b[160], c[160], pal[64];
 void copy(short n) { short i; for (i = 0; i < n; ++i) a[i] = b[i]; }

@@ -2796,7 +2796,10 @@ impl LazyValueInfo {
         let held = imp.memoised();
         let Some(events) = imp.log.clone() else { return Vec::new() };
         let function = env.function;
-        let blocks: HashSet<BlockId> = function.layout().iter().copied().collect();
+        let mut blocks = crate::dense::IdSet::<BlockId>::new();
+        for &bb in function.layout() {
+            blocks.insert(bb);
+        }
         let placed = |inst: InstId| !function.is_erased(inst) && function.parent(inst).is_some();
         let alive = |v: Operand, cxt: Option<InstId>| {
             let value = match v {

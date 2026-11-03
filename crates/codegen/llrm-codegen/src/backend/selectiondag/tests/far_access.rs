@@ -9,7 +9,15 @@ fn legalized(store: bool) -> (SelectionDAG, SDValue, [SDValue; 2]) {
     let (offset, selector) = (dag.get_register(EVT::I16, 7), dag.get_register(EVT::I16, 8));
     let far = dag.get_node(ISD::BuildPair, MVT::Far.into(), &[offset, selector]);
     let (chain, value) = (dag.entry_node(), dag.get_register(EVT::I16, 9));
-    let info = MemInfo { mem_vt: EVT::I16, align: 2, volatile: false, base: MemBase::Unknown, ext: None, space: 259 };
+    let info = MemInfo {
+        mem_vt: EVT::I16,
+        align: 2,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 259,
+        ordering: None,
+    };
     let root = if store { dag.get_store(chain, value, far, info) } else { dag.get_load(EVT::I16, chain, far, info) };
     let root = if store { root } else { SDValue { node: root.node, res: 1 } };
     dag.set_root(root);

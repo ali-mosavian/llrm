@@ -59,6 +59,11 @@ pub struct Layout {
     pub llvm_cpu: Option<String>,
 }
 
+/// Whether the datalayout string `datalayout` states an x87 `f80`.
+pub fn states_extended_float(datalayout: &str) -> bool {
+    datalayout.split('-').any(|part| part.starts_with("f80:"))
+}
+
 impl AddressSpaces {
     /// The space of an unmarked pointer `width` bytes wide.
     pub fn unmarked(
@@ -121,6 +126,12 @@ impl Layout {
     /// (`f80`). The one place the size is stated; a frontend reads it here.
     pub fn long_double_bytes(&self) -> u64 {
         self.data().float_alloc_size(FloatKind::X86Fp80)
+    }
+
+    /// Whether the datalayout states an x87 `f80`: a target without one has no
+    /// extended float, so no instruction for `pow` and its kin.
+    pub fn extended_float(&self) -> bool {
+        states_extended_float(&self.datalayout)
     }
 
     /// A `long double`'s alignment in bytes.
@@ -286,6 +297,16 @@ mod tests {
         assert_eq!((with("f80:16").long_double_bytes(), with("f80:16").long_double_align()), (10, 2));
         assert_eq!((with("f80:32").long_double_bytes(), with("f80:32").long_double_align()), (12, 4));
         assert_eq!(Layout::parse(FLAT).unwrap().long_double_bytes(), 10);
+    }
+
+    /// `^` takes the library's `pow` where the datalayout has no `f80`; a
+    /// layout that states one keeps the x87 sequence.
+    #[test]
+    fn a_layout_has_an_extended_float_when_it_states_f80() {
+        let with = |f80: &str| Layout::parse(&FLAT.replace("e-p:32:32", &format!("e-p:32:32-{f80}"))).unwrap();
+        assert!(with("f80:16").extended_float() && with("f80:32").extended_float());
+        assert!(!Layout::parse(FLAT).unwrap().extended_float());
+        assert!(!states_extended_float("e-m:e-p:32:32-i64:64-n32:64-S128"));
     }
 
     /// The segment size was the compiler's own 64K, cutting a flat program's

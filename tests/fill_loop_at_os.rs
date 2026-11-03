@@ -49,3 +49,15 @@ fn at_os_stores_into_one_object_stay_a_loop_when_the_fill_saves_too_little() {
     assert!(!text.contains("rep stos"), "{text}");
     assert!(text.contains("jne"), "{text}");
 }
+
+const WORD_FILL: &str = "unsigned short screen[2000];\nvoid clear_tail(void)\n{\n    int i;\n    for (i = 1920; i < 2000; ++i)\n        screen[i] = 0x0720;\n}\n";
+
+/// scroll.c m16 -Os: the 80-trip fill of one word stayed a counted loop (the
+/// pin expands `memset.pattern` to one): 687174 clocks against main's
+/// 668279, 153 B against 141. It is `rep stosw`.
+#[test]
+fn at_os_a_word_fill_loop_is_rep_stosw() {
+    let text = fill_listing(WORD_FILL, &["-Os"]);
+    assert!(text.contains("rep stosw"), "{text}");
+    assert!(!text.contains("jne"), "{text}");
+}

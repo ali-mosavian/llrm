@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import inspect
 import os
 import re
 import pytest
@@ -1617,3 +1618,43 @@ def test_a_streamed_step_cut_mid_run_leaves_its_stage_lines_in_the_output(tmp_pa
     done = gate.run_step("bench", "echo 'bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores' >&2; sleep 60", tmp_path, os.environ.copy(), stall=2)
     assert done[1] == gate.STALL_CODE
     assert "[bench] bench: [3s] base counts, slice 1 of 3: 16 programs, 4 usable of 4 cores" in capsys.readouterr().out
+
+
+def test_objsweep_is_a_heavy_step_selected_by_the_object_and_debug_paths():
+    """Byte identity of the objects against the merge-base ran nowhere in the gate: a writer change moved 57 m64 objects unseen."""
+    for path in ("crates/mc/llrm-dwarf/src/types.rs", "crates/codegen/llrm-codegen/src/backend/objbuild.rs", "tools/pairs/objsweep_gate.py"):
+        assert "objsweep" in gate.plan([path]).steps, path
+    assert "objsweep" not in gate.plan(["tests/run.rs"]).steps
+    assert gate.load()["groups"]["objects"] == ["objsweep"]
+
+
+def test_the_torture_step_runs_the_64_bit_sample_and_fails_when_either_sample_fails(tmp_path):
+    """#6146's wrong code (tailmerge merging two sibling-call jumps) passed the torture sample, which cannot see it; the 64-bit sample is wired as a plain regression sweep and must fail the step when it fails."""
+    p = gate.plan(["tools/torture/torture.py"])
+    command = gate.commands(p, gate.load(), gate.packages())["torture"]
+    assert "plain regression sweep" in command and "--bits 64 --gate" in command
+    fake = tmp_path / "uv"
+    fake.write_text('#!/bin/sh\ncase "$*" in *"--bits 64"*) exit ${FAIL64:-0};; *) exit ${FAIL32:-0};; esac\n')
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(tmp_path)}
+
+    def run(**fail):
+        return subprocess.run(["bash", "-c", command], env={**env, **fail}, capture_output=True, text=True).returncode
+
+    assert run() == 0
+    assert run(FAIL64="1") == 1, "a wrong 64-bit result must fail the step"
+    assert run(FAIL32="1") == 1, "the 32-bit sample still fails the step"
+
+
+def test_the_steps_that_wait_on_one_dist_build_get_it_built_once_before_them():
+    """pytest-perf and objsweep waited 10 minutes on the measure step's `cargo build --profile dist` lock, had no CPU of their own and were
+    killed as stalled (gate 9a0cd57af1: 2 of 14 reds, neither a code fault)."""
+    assert gate.shared_builds(["pytest-perf", "objsweep", "measure"]) == [("measure-dist", "python3 tools/measure.py dist")]
+    assert gate.shared_builds(["lib", "fmt"]) == []
+
+
+def test_the_gate_builds_llrm_c_and_makes_a_skipped_missing_binary_a_failure():
+    """llrm-c is behind `c-legacy`; the gate stopped building it, tests/test_readme.py's C case skipped "llrm-c is not built" and examples/dot regressed at
+    m16 with every step green."""
+    assert "cargo test --release -q --workspace --no-run --features c-legacy" in gate.BUILD
+    assert "pytest_strict_bins" in inspect.getsource(gate).split("def cfg_pytest")[1]

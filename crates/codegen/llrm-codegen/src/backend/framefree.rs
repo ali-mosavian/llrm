@@ -91,6 +91,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_lir::registers::RegId;
+use llrm_mir::opcode::Attribute;
 
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::LirBody;
@@ -115,6 +116,32 @@ thread_local! {
     /// Blocks `without_frame_register` has looked over to find the blocks it
     /// follows, for a test of its slope.
     pub static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `MachineFunction::disableFramePointerElim`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/MachineFunction.cpp#L750>):
+/// the function's `"frame-pointer"` attribute keeps the frame register:
+/// `all` always, `non-leaf` and `non-leaf-no-reserve` where it calls.
+///
+/// DEVIATE FP1: `reserved` (the register is kept out of allocation without a
+/// frame) is read as `none`.
+pub fn disable_frame_pointer_elim(
+    attrs: &[Attribute],
+    has_calls: bool,
+) -> bool {
+    let policy = attrs
+        .iter()
+        .find_map(
+            |one| match one {
+                Attribute::Str(key, Some(value)) if key == "frame-pointer" => Some(value.as_str()),
+                _ => None,
+            },
+        );
+    match policy {
+        Some("all") => true,
+        Some("non-leaf" | "non-leaf-no-reserve") => has_calls,
+        _ => false,
+    }
 }
 
 /// What keeps a function's frame register, as `MachineFrameInfo` names it:

@@ -155,6 +155,13 @@ impl<'a> FunctionCompiler<'a> {
             stores.push(Store::Bytes { destination: destination.clone(), source: source.clone(), count });
             return Ok(());
         }
+        // Clang copies a record whole: one memcpy that MemCpyOpt forwards a
+        // call's result into, where a copy per field cannot be.
+        if self.types.copy_units(ElementType::Struct(destination.struct_id)).len() > 1 {
+            let count = self.types.width(destination.struct_id);
+            stores.push(Store::Bytes { destination: destination.clone(), source: source.clone(), count });
+            return Ok(());
+        }
         let copy = self.types.copy_units(ElementType::Struct(destination.struct_id));
         for (offset, type_name, count) in copy {
             if count > 1 {

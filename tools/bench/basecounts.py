@@ -26,8 +26,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CACHE = Path(os.environ.get("LLRM_BENCH_BASE_DIR") or Path.home() / ".cache/llrm/bench-base")
 # The rows the compiler under test makes: the reference compilers' (bas, ow, bcc, ...) do not move with it.
-OURS = ("bas", "c", "nib", "bq16", "bq32")
-COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_bytes")
+OURS = ("bas", "c", "nib", "bq16", "bq32", "c64")
+COUNTERS = ("instructions", "memory_operands", "clocks", "code_bytes", "data_bytes", "bss_bytes")
 # Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
 WAIVERS = "tools/bench/waivers"
 
@@ -55,32 +55,77 @@ def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
     rows = {k: v for k, v in rows.items() if k[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{key}-own.json"
-    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION}))
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root), "hash_version": HASH_VERSION, "harness": harness_digest(root)}))
     return path
 
 
-HASH_VERSION = 2  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT
+HASH_VERSION = 3  # 1: every file of the directory but expected.toml; 2: and not NOT_INPUT; 3: and the judge's files
+# What turns a run into counts and clocks. A program's hash includes them, so a change to the judge makes every program "edited": the base's rows are
+# measured again with the head's judge over the base compiler (with_edited), and a clock is never compared across two judges (the m16 multiplier fix
+# moved 67 of 342 cells' clocks, jpeg_fixed +4..5%, against a base that was measured by the old icount.py).
+JUDGE_FILES = (
+    "crates/target/llrm-x86-m16/bench/icount.py",
+    "crates/target/llrm-x86-m16/src/timings.times",
+    "crates/target/llrm-x86-m32/src/timings.times",
+    "crates/target/llrm-x86-m32/vsgcc/harness.py",
+    "crates/target/llrm-x86-m32/vsgcc/clocks.py",
+    "tools/sizes.py",
+    "crates/target/llrm-x86/bench/padding.py",
+    "tools/bench/flatcount.py",
+    "tools/bench/native.py",
+    "tools/bench/native_driver.c",
+    "tools/elfsize.py",
+)
 
 
 def _is_input(name: str) -> bool:
     return name != "expected.toml" and Path(name).suffix not in NOT_INPUT
 
 
-def _hash(files: list[tuple[str, bytes]]) -> str:
-    digest = hashlib.sha256()
+def harness_digest(root: Path = ROOT) -> str:
+    """The judge's files as 12 hex digits: the harness a measurement ran under, printed in a run's header and kept beside its json."""
+    return judge_digest(lambda name: (root / name).read_bytes() if (root / name).is_file() else None).hex()[:12]
+
+
+def harness_lines(base: str, head: str, cells: int) -> list[str]:
+    """A base measured under another harness than the head's is not compared: its counters differ by what the harness changed (the 486
+    multiplier rule moved fpbench nib Os 156229 -> 156261 on the same binaries), so each of its `cells` is NOBASE."""
+    return [f"HARNESS-MISMATCH base {base} head {head}: {cells} base cells are not compared (NOBASE); re-measure the base under the head's harness"] if base != head else []
+
+
+def _hash(files: list[tuple[str, bytes]], judge: bytes = b"") -> str:
+    digest = hashlib.sha256(judge)
     for name, data in sorted(files):
         digest.update(name.encode() + b"\0" + data)
     return digest.hexdigest()[:12]
 
 
+def judge_digest(read) -> bytes:
+    """The judge's files (`read(path)` returns their bytes, or None where the tree has none) as one digest."""
+    digest = hashlib.sha256()
+    for name in JUDGE_FILES:
+        digest.update(name.encode() + b"\0" + (read(name) or b"") + b"\0")
+    return digest.digest()
+
+
 def programs(root: Path = ROOT) -> dict[str, str]:
     """Each benchmark's hash: its sources and settings (not its baseline, the waivers or what a run is checked against). A row of a program
     that differs between the base and the head compares two programs, not two compilers, and is not judged."""
+    judge = judge_digest(lambda name: (root / name).read_bytes() if (root / name).is_file() else None)
     out = {}
     for settings in sorted((root / "bench").glob("**/bench.toml")):
         files = [(path.name, path.read_bytes()) for path in settings.parent.iterdir() if path.is_file() and _is_input(path.name)]
-        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files)
+        out[str(settings.parent.relative_to(root / "bench"))] = _hash(files, judge)
     return out
+
+
+def harness_at(sha: str, root: Path = ROOT) -> str:
+    """`harness_digest()` of the tree of commit `sha`, read from git: what a base counted by that tree ran under."""
+    def blob(name):
+        done = subprocess.run(["git", "cat-file", "blob", f"{sha}:{name}"], cwd=root, capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    return judge_digest(blob).hex()[:12]
 
 
 def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
@@ -89,13 +134,29 @@ def programs_at(sha: str, root: Path = ROOT) -> dict[str, str]:
     by_dir: dict[str, list[str]] = {}
     for path in listing:
         by_dir.setdefault(str(Path(path).parent), []).append(path)
+    def blob(name):
+        done = subprocess.run(["git", "cat-file", "blob", f"{sha}:{name}"], cwd=root, capture_output=True)
+        return done.stdout if done.returncode == 0 else None
+
+    judge = judge_digest(blob)
     out = {}
     for directory, paths in sorted(by_dir.items()):
         if f"{directory}/bench.toml" not in paths:
             continue
         files = [(Path(path).name, subprocess.run(["git", "cat-file", "blob", f"{sha}:{path}"], cwd=root, capture_output=True, check=True).stdout) for path in paths if _is_input(Path(path).name)]
-        out[str(Path(directory).relative_to("bench"))] = _hash(files)
+        out[str(Path(directory).relative_to("bench"))] = _hash(files, judge)
     return out
+
+
+def rebased(base: dict, overlay: dict, was: dict[str, str], now: dict[str, str]) -> dict:
+    """`base` (bench.py's --json rows) with the rows of every program edited since the base replaced by `overlay`, the base compiler's rows
+    on the head's sources. Refuses an edited program the overlay lacks: parity/qlight c read 15 clocks on main against 460 now because main
+    was measured on its own, constant-argument qlight.c, and the list called that a regression."""
+    edited = {name for name in now if name in was and was[name] != now[name]}
+    missing = sorted(edited - {key.rsplit("/", 2)[0] for key in overlay})
+    if missing:
+        raise SystemExit("the base ran other sources than the head's: no rows of the base compiler on the head's " + ", ".join(missing))
+    return {key: value for key, value in base.items() if key.rsplit("/", 2)[0] not in edited} | overlay
 
 
 def rows_of(raw: dict) -> dict[tuple[str, str, str], dict]:
@@ -123,6 +184,9 @@ def base_counts(
     path = cache / f"{tree}-own{'-timed' if timed else ''}.json"
     stored = json.loads(path.read_text()) if path.is_file() else {"rows": {}, "programs": {}}
     have = rows_of(stored["rows"])
+    if have and stored.get("harness") != harness_at(sha, root):  # recorded under no known harness: unverified, never compared
+        print(f"NOBASE {len(have)} recorded rows of {sha[:9]} carry no matching harness digest; measured again")
+        have = {}
     if all(any(key[2] == opt for key in have) for opt in opts):
         if stored.get("hash_version") != HASH_VERSION:  # counts do not depend on the hash; the programs' hashes do
             return have, programs_at(sha, root)
@@ -134,15 +198,31 @@ def base_counts(
     have |= {key: value for key, value in rows.items() if key[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".part")
-    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION}))
+    part.write_text(json.dumps({"rows": {"/".join(key): value for key, value in have.items()}, "programs": hashes, "hash_version": HASH_VERSION, "harness": harness_at(sha, root)}))
     os.replace(part, path)
     return have, hashes
+
+
+def unstable_cells(first: dict, second: dict) -> list[str]:
+    """The cells of ours that two runs of one compiler disagree on, one line each. A baseline is trusted only when a second run of the same
+    tree reproduces it: code and data bytes do not move with timing, so a difference is another build, a stale cache or another program."""
+    problems = []
+    for key in sorted(first.keys() & second.keys()):
+        if key[1] not in OURS:
+            continue
+        a, b = first[key], second[key]
+        moved = [f"{counter} {a.get(counter)} vs {b.get(counter)}" for counter in sorted(a.keys() | b.keys()) if a.get(counter) != b.get(counter)]
+        if moved:
+            problems.append(f"UNSTABLE {label(key)}: {', '.join(moved)}")
+    return problems
 
 
 def waivers(root: Path = ROOT) -> list[dict]:
     """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`. `exception = true`: a temporary trade-off, named in every run, and
     a failure once a row is no longer worse than the base."""
     out = []
+    if os.environ.get("LLRM_BENCH_WAIVERS") == "off":  # the second main merge takes no waiver: the judge then reads none
+        return out
     for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
@@ -227,6 +307,25 @@ def coverage(measured: dict, base: dict, same: set[str]) -> tuple[int, int, list
 
 def coverage_lines(judged: int, programs: int, left_out: list[str]) -> list[str]:
     return [f"JUDGED {judged} rows of {programs} programs" + (f"; left out, edited since the base: {' '.join(left_out)}" if left_out else "")]
+
+
+def coverage_detail(measured: dict, base: dict, same: set[str]) -> list[str]:
+    """Per language and level, the cells judged over the programs they cover, and the cells that were not: NOBASE (measured, the base has no row)
+    and NOHEAD (the base has the row, this run measured none). `JUDGED rows of programs` alone let 21 of 46 programs stand for the corpus."""
+    ours = {key for key in measured if key[1] in OURS}
+    levels = {(key[1], key[2]) for key in ours}
+    judged: dict[tuple[str, str], set[str]] = {}
+    for key in sorted(ours):
+        was = base.get(key)
+        if key[0] in same and was is not None and was.get("instructions") != 0 and not any(one in row for row in (measured[key], was) for one in ("error", "skip", "known", "xpass")):
+            judged.setdefault((key[1], key[2]), set()).add(key[0])
+    lines = [f"CELLS {language} -{opt}: {len(programs)} programs" for (language, opt), programs in sorted(judged.items())]
+    lines.append(f"CELLS total: {sum(map(len, judged.values()))} cells over {len(set().union(*judged.values()))} programs" if judged else "CELLS total: 0 cells over 0 programs")
+    nobase = [f"{key[0]} {key[1]} -{key[2]}" + (" (base executed 0 instructions)" if key in base else "") for key in sorted(ours) if key[0] in same and (key not in base or base[key].get("instructions") == 0)]
+    nohead = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(base) if key[1] in OURS and key[0] in same and (key[1], key[2]) in levels and key not in measured]
+    noclocks = [f"{key[0]} {key[1]} -{key[2]}" for key in sorted(ours) if key[0] in same and key in base and "clocks" not in measured[key] and "clocks" not in base[key]
+                and not any(one in row for row in (measured[key], base[key]) for one in ("error", "skip", "known", "xpass"))]
+    return lines + ([f"NOCLOCKS both sides: {', '.join(noclocks)}"] if noclocks else []) + ([f"NOBASE {len(nobase)} cells: {', '.join(nobase)}"] if nobase else []) + ([f"NOHEAD {len(nohead)} cells: {', '.join(nohead)}"] if nohead else [])
 
 
 def stale_summary(stale: list[str]) -> list[str]:

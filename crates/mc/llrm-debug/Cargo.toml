@@ -1,0 +1,9 @@
+[package]
+name = "llrm-debug"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's debug information model: what the backend describes and each debug writer encodes"
+
+[dependencies]
+llrm-object = { workspace = true }

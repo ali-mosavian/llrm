@@ -36,10 +36,9 @@
 //! docs/architecture/gvn-port.md (stage 2).
 //!
 //! DEVIATE, permanent (MIR lacks the construct):
-//! 1. Atomics, fences, `va_arg`, masked loads and stores,
-//!    `invariant.start`/`end`: MIR has none, so the ordering and fence arms of
-//!    `GetLocation` and of the scan are absent. A volatile access has no
-//!    location (it is `isUnordered` false).
+//! 1. Atomics, fences, `va_arg`, masked loads and stores: MIR has none, so the
+//!    ordering and fence arms of `GetLocation` and of the scan are absent. A
+//!    volatile access has no location (it is `isUnordered` false).
 //! 2. `getInvariantGroupPointerDependency` (and with it `NonLocalDefsCache`,
 //!    only it fills): MIR has no `invariant.group`. A query on an instruction
 //!    that carries one panics, `test_invariant_group_metadata_is_refused`.
@@ -256,6 +255,19 @@ pub fn get_location(
         Opcode::Load { .. } => (MemoryLocation::get(unit, inst), ModRefInfo::Ref),
         Opcode::Store { .. } => (MemoryLocation::get(unit, inst), ModRefInfo::Mod),
         opcode => {
+            // `MemoryDependenceAnalysis.cpp#L153-L162`.
+            if matches!(opcode, Opcode::Call(_)) {
+                let arg = match unit.intrinsic(inst) {
+                    Some(Intrinsic::InvariantStart) => Some(1),
+                    Some(Intrinsic::InvariantEnd) => Some(2),
+                    _ => None,
+                };
+                if let Some(arg) = arg {
+                    // They don't modify the memory, but Mod makes them
+                    // conservative.
+                    return (MemoryLocation::get_for_argument(unit, inst, arg), ModRefInfo::Mod);
+                }
+            }
             if matches!(opcode, Opcode::Call(_))
                 && matches!(
                     unit.intrinsic(inst),

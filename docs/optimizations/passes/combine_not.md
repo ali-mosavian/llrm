@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_not.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_not.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_not.rs sha256:560ae17f3902294574737e867145ac8e93a5594a0fff9c3b487886f4ddb5f727 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_not.rs sha256:8cacd5243b67155523f8aeaf8b7e792bb9c88fefb6614304d2e307612126258b -->
 
 # combine_not
 
@@ -14,10 +14,11 @@ MIRROR: the order of the arms, and the one-use condition of each.
 DEVIATE 1: no vectors, and only integer constants are inverted.
 
 DEVIATE 2: owed, each where it stood: the `bitcast` arms (a `not` of a
-`bitcast` of a compare, of a `sext` of a bool), `sinkNotIntoLogicalOp`,
-min/max and `is_fpclass` intrinsics, `foldNotXor`, `getFreelyInverted`, a
-`not` of a compare with several uses (`canFreelyInvertAllUsersOf`, now
-inline in `combine_compares`), and `fcmp`.
+`bitcast` of a compare, of a `sext` of a bool), min/max and `is_fpclass`
+intrinsics, `foldNotXor` and `fcmp`. `sinkNotIntoLogicalOp` is in, with
+`canFreelyInvertAllUsersOf` and `freelyInvertAllUsersOf` of
+`combine_invert`; a phi is never freely inverted there (no insertion point
+after its definition).
 
 ## Example
 `~(X + 5)` is `-6 - X`:

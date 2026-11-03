@@ -102,7 +102,7 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
+pub use llrm_sdag::{actions, isd, lowering, mvt, x86isd};
 pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitcast_combine;
@@ -119,6 +119,7 @@ mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
 pub mod dag_select;
+pub mod dag_target;
 pub mod dagisel_adapter;
 mod demanded_bits;
 pub mod div_combine;
@@ -134,11 +135,13 @@ pub mod fp_combine;
 pub mod fp_value;
 pub mod function_lowering;
 pub mod iminmax_combine;
+pub mod indexed_combine;
 pub mod inline_asm;
 pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
+pub mod live_out;
 pub mod logic_setcc;
 mod match_rotate;
 pub mod opcodes;
@@ -147,6 +150,7 @@ pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
 pub mod switchcg;
+pub mod target_calling;
 pub mod x86_carry;
 pub mod x86_lowering;
 pub mod x86_preprocess;

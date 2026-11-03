@@ -740,6 +740,7 @@ fn is_vector_intrinsic_call(
                 | Intrinsic::CopySign
                 | Intrinsic::Unary(_)
                 | Intrinsic::LRint
+                | Intrinsic::LLRint
                 | Intrinsic::LifetimeStart
                 | Intrinsic::LifetimeEnd
                 | Intrinsic::Assume

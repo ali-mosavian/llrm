@@ -1,0 +1,67 @@
+# The wasm DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# No ByHwMode types in the table: the `hw_modes` list is empty.
+[target]
+name = "wasm"
+llvm_build = "llvm-build-wasm"
+ns = "WebAssembly::"
+isd = "WebAssemblyISD::"
+llvm_dir = "WebAssembly"
+td = "WebAssembly.td"
+out = "src/dagisel/generated"
+cpus = ["wasm32", "wasm64"]
+# The registers the hand code names (the others are virtual).
+registers = ["ARGUMENTS", "SP32", "SP64", "VALUE_STACK"]
+# The header carries the instruction and register enums and the OPERAND_* types; the node enum is tblgen's.
+ids_includes = [
+  '#include "MCTargetDesc/WebAssemblyMCTargetDesc.h"',
+  "#define GET_SDNODE_ENUM",
+  '#include "WebAssemblyGenSDNodeInfo.inc"',
+]
+
+# The features that name a pattern predicate are decided per function, at selection time (`[dynamic]`): `generic` of
+# WebAssembly.td at the pin is +bulk-memory-opt, +reference-types, +sign-ext, +nontrapping-fptoint; `mvp` has none.
+[cpu.wasm32]
+features = []
+
+[cpu.wasm64]
+features = ["Addr64"]
+
+[dynamic]
+"Subtarget->hasBulkMemoryOpt()" = 'has_feature("BulkMemoryOpt")'
+"Subtarget->hasReferenceTypes()" = 'has_feature("ReferenceTypes")'
+"Subtarget->hasSignExt()" = 'has_feature("SignExt")'
+"Subtarget->hasNontrappingFPToInt()" = 'has_feature("NontrappingFPToInt")'
+
+[atom]
+# Position-dependent code: no PIC yet.
+"TM.isPositionIndependent()" = false
+
+[types]
+dead_prefixes = []
+
+[node_predicate]
+# One name per predicate is enough. The shared ones are llrm-dagisel's; `lane_idx_*`, `memory_vt_*`, `bool_node`
+# and `add_nuw` are in `src/dagisel/predicates.rs`.
+LaneIdx2 = "lane_idx_2"
+LaneIdx4 = "lane_idx_4"
+LaneIdx8 = "lane_idx_8"
+LaneIdx16 = "lane_idx_16"
+LaneIdx32 = "lane_idx_32"
+extloadi8 = "memory_vt_i8"
+extloadi16 = "memory_vt_i16"
+extloadi32 = "memory_vt_i32"
+extloadf16 = "memory_vt_f16"
+extloadvi8 = "memory_vt_v8i8"
+extloadvi16 = "memory_vt_v4i16"
+extloadvi32 = "memory_vt_v2i32"
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+load = "non_extending_load"
+unindexedload = "unindexed_load"
+truncstore = "truncating_store"
+extload = "ext_load"
+sextload = "sext_load"
+zextload = "zext_load"
+add_nuw = "add_nuw"
+bool_node = "bool_node"
+fpimm0 = "fp_imm_pos_zero"

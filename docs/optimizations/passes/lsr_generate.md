@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_generate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_generate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:3a04062d206fe8c1585db40a3ccf84745e59900201f66201e8f7ec5e504bf7f2 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:78bb160a9d9e2063e1be28768c58fcb306d00eb0da704e04b88a3a7fafeb3ed4 -->
 
 # lsr_generate
 
@@ -30,8 +30,8 @@ the compare's register.
 Nothing runs it yet: stage 4 of the translation of LSR.
 
 ## Limits
-DEVIATE: the pre- and post-indexed addressing branches
-(`AMK_PreIndexed`, `AMK_PostIndexed`; x86 prefers none) are not ported.
+DEVIATE: the pre-indexed addressing branches (`AMK_PreIndexed`; no target
+of ours prefers it) are not ported; the post-indexed ones are.
 Work per use is bounded by the formulae it has, which the caps bound.
 
 DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
