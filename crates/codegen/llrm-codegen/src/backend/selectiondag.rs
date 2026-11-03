@@ -144,6 +144,7 @@ pub mod libcall;
 pub mod live_out;
 pub mod logic_setcc;
 mod match_rotate;
+pub mod narrow_divrem;
 pub mod opcodes;
 mod reassociate;
 pub mod reduce_load_width;

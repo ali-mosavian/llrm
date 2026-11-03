@@ -3,15 +3,16 @@
 //! schedule) over a built block, with the Z80's tables and hooks. The same
 //! stages as m68k's `pipeline.rs`; `DagTarget` will replace the pair.
 //!
-//! DEVIATE: no target combines and no `PreprocessISelDAG`. Reason: the slice
-//! does not reach them. Exit: M7.
+//! DEVIATE: no target combines beyond [`Z80Combines`] and no
+//! `PreprocessISelDAG`. Reason: the slice does not reach them. Exit: M7.
 
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
+use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
@@ -105,6 +106,34 @@ pub enum Refusal {
     CannotSelect(String),
 }
 
+/// The Z80's combiner hooks.
+struct Z80Combines;
+
+impl CombineHooks for Z80Combines {
+    /// A byte or word multiply by a constant is a library call (`__mulhi3`, a
+    /// loop over the constant's bits, tens of T-states a bit); `2^n +- 1` as
+    /// shifts and one add is a `add hl, hl` and a copy per shifted bit.
+    fn decompose_mul_by_constant(
+        &self,
+        vt: EVT,
+        _c: u128,
+    ) -> bool {
+        matches!(vt, EVT::I8 | EVT::I16)
+    }
+
+    /// A word compare against a constant is two byte compares and a branch
+    /// between them; the compare of the loaded byte is one `cp`.
+    ///
+    /// DEVIATE: the pin widens (x86 and ARM compare words as cheaply as
+    /// bytes). Exit: a cost query for the wider compare.
+    fn extend_setcc_uses(
+        &self,
+        _wide: EVT,
+    ) -> bool {
+        false
+    }
+}
+
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.
 pub fn select_block(
     dag: &mut SelectionDAG,
@@ -113,15 +142,15 @@ pub fn select_block(
     let tli = target_lowering();
     let mut lowering = Z80Lowering;
     let arch = Z80;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
         .run()
         .map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    DagCombiner::new(dag, &mut NoCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
 
     let selector = Selector::new(match cpu {
         Cpu::Z80 => z80_z80::TABLE,

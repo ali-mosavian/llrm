@@ -15,8 +15,7 @@
 //! register-pressure case of `isProfitableToSinkTo` is "not profitable"; the
 //! successors are ordered by loop depth where the pin uses block frequency;
 //! an edge with no IR probability (a block a switch made) is "unlikely"
-//! (`SplitEdgeProbabilityThreshold`) when it leaves a loop; the
-//! `CEMergeCandidates` merge of equal copies is left out; a function with an
+//! (`SplitEdgeProbabilityThreshold`) when it leaves a loop; a function with an
 //! irreducible loop is left alone (`FixIrreducible` runs later here). Exit:
 //! the shared live intervals, block frequencies and branch probabilities
 //! (S4), no later than 2026-11-20.
@@ -26,7 +25,7 @@
 //! isProfitableToSinkTo, AllUsesDominatedByBlock}`,
 //! `MachineInstr::isSafeToMove`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use llrm_mir::domtree::{DomTree, PostDomTree};
 use llrm_mir::loopinfo::LoopInfo;
@@ -60,6 +59,12 @@ struct Sink {
     defs: Vec<u32>,
     /// `CEBCandidates`: the edges already considered this round.
     considered: HashSet<(usize, usize)>,
+    /// `CEMergeCandidates`: the block that first held back sinking a register
+    /// into a block, by `(register, block)`; a physical register is
+    /// `(true, id)`.
+    merge_candidates: HashMap<((bool, u32), usize), usize>,
+    /// The register each copy reads, for `lookThruCopyLike`.
+    copy_source: HashMap<VReg, VReg>,
     /// `ToSplit`: the edges to split at the end of the round.
     to_split: Vec<(usize, usize)>,
 }
@@ -173,6 +178,8 @@ impl Sink {
             uses: Vec::new(),
             defs: Vec::new(),
             considered: HashSet::new(),
+            merge_candidates: HashMap::new(),
+            copy_source: HashMap::new(),
             to_split: Vec::new(),
         };
         sink.index_registers(f);
@@ -189,6 +196,9 @@ impl Sink {
         for (b, insts) in f.blocks.iter().enumerate() {
             for inst in insts {
                 let is_phi = inst.opcode == PHI;
+                if let (true, [Operand::Def(d), Operand::Use(s)]) = (is_copy(inst.opcode), &inst.operands[..]) {
+                    self.copy_source.insert(*d, *s);
+                }
                 for (at, operand) in inst.operands.iter().enumerate() {
                     match *operand {
                         Operand::Def(r) => self.defs[r as usize] += 1,
@@ -368,12 +378,31 @@ impl Sink {
         to: usize,
         break_phi_edge: bool,
     ) {
-        if self.is_worth_breaking_critical_edge(f, from, at, to)
+        let (worth, deferred) = self.is_worth_breaking_critical_edge(f, from, at, to);
+        // With a deferred edge, `from` is considered only if both are legal.
+        if worth
+            && deferred.is_none_or(|d| {
+                self.to_split.contains(&(d, to)) || self.is_legal_to_break_critical_edge(d, to, break_phi_edge)
+            })
             && self.is_legal_to_break_critical_edge(from, to, break_phi_edge)
-            && !self.to_split.contains(&(from, to))
         {
-            self.to_split.push((from, to));
+            for edge in std::iter::once((from, to)).chain(deferred.map(|d| (d, to))) {
+                if !self.to_split.contains(&edge) {
+                    self.to_split.push(edge);
+                }
+            }
         }
+    }
+
+    /// `lookThruCopyLike`.
+    fn look_thru_copies(
+        &self,
+        mut reg: VReg,
+    ) -> VReg {
+        while let Some(&source) = self.copy_source.get(&reg) {
+            reg = source;
+        }
+        reg
     }
 
     /// `isWorthBreakingCriticalEdge`.
@@ -383,37 +412,53 @@ impl Sink {
         from: usize,
         at: usize,
         to: usize,
-    ) -> bool {
+    ) -> (bool, Option<usize>) {
         // Already considered this round: go ahead, so several cheap
         // instructions sink into the same block.
         if !self.considered.insert((from, to)) {
-            return true;
+            return (true, None);
         }
         let inst = &f.blocks[from][at];
         let cheap = is_copy(inst.opcode) || desc(inst.opcode).is_some_and(|info| info.has(flag::CHEAP_AS_A_MOVE));
         if !cheap {
-            return true;
+            return (true, None);
+        }
+        // The same register, or the same implicit def (`ARGUMENTS`, which
+        // every instruction here defines), held back for the same block from
+        // another edge: sink both.
+        let implicit = desc(inst.opcode).map_or(&[][..], |info| info.implicit_defs);
+        let keys = inst
+            .defs()
+            .map(|r| (false, self.look_thru_copies(r)))
+            .chain(implicit.iter().map(|&p| (true, u32::from(p))))
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(&held) = self.merge_candidates.get(&(key, to)) {
+                return (true, Some(held));
+            }
+            self.merge_candidates.insert((key, to), from);
         }
         // An unlikely edge (`SplitEdgeProbabilityThreshold`, 40%).
         match Self::edge_probability(f, from, to) {
             Some(prob) => {
                 if prob <= SPLIT_EDGE_PROBABILITY_THRESHOLD {
-                    return true;
+                    return (true, None);
                 }
             }
             None => {
                 if self.loops.get_loop_for(BlockId(from as u32)).is_some_and(|l| !l.contains(BlockId(to as u32))) {
-                    return true;
+                    return (true, None);
                 }
             }
         }
         // Cheap, but its only-use source is defined here, so both may sink.
-        inst.operands.iter().any(|operand| match *operand {
+        let enables_source = inst.operands.iter().any(|operand| match *operand {
             Operand::Use(r) => {
                 self.uses[r as usize].len() == 1 && f.blocks[from][..at].iter().any(|i| i.defs().any(|d| d == r))
             }
             _ => false,
-        })
+        });
+        (enables_source, None)
     }
 
     /// `getEdgeProbability(from, to)`, a numerator over 2^31; none when an

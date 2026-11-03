@@ -29,6 +29,7 @@ pub mod cycleinfo;
 pub mod datalayout;
 pub mod dbgimport;
 pub mod debuginfo;
+pub mod decimal;
 pub mod dense;
 pub mod depends;
 pub mod domtree;

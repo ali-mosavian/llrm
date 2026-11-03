@@ -327,8 +327,9 @@ pub fn functions_with(
             None => crate::regalloc::allocate(&mut machine),
         };
         dump("RegAlloc", &machine);
-        let variables = crate::frame::variable_offsets(&machine, &allocation);
-        let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
+        let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
+        let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
+            .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
         let blocks = crate::layout::fold(blocks, &mut tables);
         let blocks = crate::pairs::fold(blocks);
