@@ -6,6 +6,7 @@ import sys, os, subprocess, re, statistics, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from codebytes import kernel
 from cmp import regressions_vs_best
+import host
 H = os.path.dirname(os.path.abspath(__file__)); WORK = os.environ.get("BENCH_WORK", "/tmp/darwin-bench"); os.makedirs(WORK, exist_ok=True); REPO = os.environ.get("BENCH_REPO", os.getcwd())
 PIN = os.environ["LLRM_PIN_CLANG"]; GCC = "/opt/homebrew/bin/gcc-13"; LLRM = os.environ["LLRM_CC"]
 SDK = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
@@ -20,6 +21,7 @@ def sh(c, **k):
     try: return subprocess.run(c, capture_output=True, text=True, timeout=120, **k)
     except subprocess.TimeoutExpired: return subprocess.CompletedProcess(c, 124, "", "timeout")
 md5 = lambda p: hashlib.md5(open(p, "rb").read()).hexdigest()
+HOSTOBJ = host.objects(PIN, SDK, WORK + "/host", REPO)
 drv = WORK + "/driver.o"; sh(CC["pin"][0] + ["-O2", "-c", H + "/driver.c", "-o", drv])
 shim = WORK + "/input_shim.o"; sh(CC["pin"][0] + ["-O2", "-c", H + "/input_shim.c", "-o", shim])
 VEC = re.compile(r"^[0-9a-f]{16}\t(?!movi)\w+\.(?:2d|4s|2s|8h|4h|16b|8b)\b")  # SIMD arithmetic; q-register memset stores are not vectorization
@@ -41,14 +43,15 @@ for prog in progs:
         cells += 1; d = f"{WORK}/novec/{prog}.{level}.{name}"; os.makedirs(d, exist_ok=True)
         open(f"{d}/src.c", "w").write(src)
         env = {**os.environ, "LLRM_PIN_CLANG": PIN}
-        r = sh(cc + [f"-{level}", "-I", f"{REPO}/bench", "-Dmain=orig_main", "-c", f"{d}/src.c", "-o", f"{d}/k.o"] + extra, env=env)
+        r = sh(cc + [f"-{level}", "-I", f"{REPO}/bench", *host.include_flags(REPO, prog), *host.FLAT, "-Dmain=orig_main", "-c", f"{d}/src.c", "-o", f"{d}/k.o"] + extra, env=env)
         if r.returncode: fails += 1; rows[(prog, name)] = "compile failed"; continue
-        if sh([PIN, "-isysroot", SDK, f"{d}/k.o", drv] + ([shim] if prog == "grep" else []) + ["-o", f"{d}/t"]).returncode: fails += 1; rows[(prog, name)] = "link failed"; continue
-        got = [int(x) % 2**32 for x in sh([f"{d}/t", "1", "1", "once"]).stdout.split()]
-        o1 = sh([f"{d}/t", "1", "1"]).stdout.split()
+        if sh([PIN, "-isysroot", SDK, f"{d}/k.o", drv, *HOSTOBJ] + ([shim] if prog == "grep" else []) + ["-o", f"{d}/t"]).returncode: fails += 1; rows[(prog, name)] = "link failed"; continue
+        host.write_data(REPO, prog, d)
+        got = [int(x) % 2**32 for x in sh([f"{d}/t", "1", "1", "once"], cwd=d).stdout.split()]
+        o1 = sh([f"{d}/t", "1", "1"], cwd=d).stdout.split()
         if not o1: fails += 1; rows[(prog, name)] = "run failed"; continue
         k = max(1, int(BUDGET_US / max(float(o1[0]), 0.1)))
-        t = sorted(float(x) for x in sh([f"{d}/t", str(k), str(REPS)]).stdout.split())
+        t = sorted(host.timings(sh, f"{d}/t", d, k, REPS))
         n, vec = kernel_stats(f"{d}/k.o")
         rows[(prog, name)] = (want is None or got == want, kernel(f"{d}/k.o")[0], n, vec, statistics.median(t))
 print(f"{level}: cells compiled {cells - fails}/{cells}  load {os.getloadavg()}")

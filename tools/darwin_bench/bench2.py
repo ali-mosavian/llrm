@@ -5,6 +5,7 @@ import sys, os, subprocess, re, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from codebytes import kernel
 from cmp import regressions
+import host
 H = os.path.dirname(os.path.abspath(__file__)); WORK = os.environ.get("BENCH_WORK", "/tmp/darwin-bench"); os.makedirs(WORK, exist_ok=True); REPO = os.environ.get("BENCH_REPO", os.getcwd())
 SDK = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
 BUILDS = {"head": os.environ["LLRM_CC_HEAD"], "base": os.environ["LLRM_CC_BASE"]}
@@ -20,6 +21,7 @@ def sh(c, **k):
 PIN = os.environ["LLRM_PIN_CLANG"]
 shim = WORK + "/input_shim.o"; sh([PIN, "-isysroot", SDK, "-O2", "-c", H + "/input_shim.c", "-o", shim])
 drv = WORK + "/driver.o"; sh([PIN, "-isysroot", SDK, "-O2", "-c", H + "/driver.c", "-o", drv])
+HOSTOBJ = host.objects(PIN, SDK, WORK + "/host", REPO)
 rows = []
 for prog in progs:
     want = None if prog == "grep" else [int(x) % 2**32 for x in open(f"{REPO}/bench/{prog}/{prog}.out").read().split()]
@@ -31,19 +33,20 @@ for prog in progs:
         d = f"{WORK}/cmp/{prog}.{level}.{name}"; os.makedirs(d, exist_ok=True)
         open(f"{d}/src.c", "w").write(src)
         env = {**os.environ, "LLRM_PIN_CLANG": PIN}
-        r = sh([cc, "--target=arm64-apple-macosx", "-isysroot", SDK, f"-{level}", "-I", f"{REPO}/bench",
+        r = sh([cc, "--target=arm64-apple-macosx", "-isysroot", SDK, f"-{level}", "-I", f"{REPO}/bench", *host.include_flags(REPO, prog), *host.FLAT,
                 "-Dmain=orig_main", "-c", f"{d}/src.c", "-o", f"{d}/k.o"], env=env)
         if r.returncode: rows.append((prog, name, "compile failed " + r.stderr[:100].replace("\n", " "))); continue
-        r = sh([PIN, "-isysroot", SDK, f"{d}/k.o", drv] + ([shim] if prog == "grep" else []) + ["-o", f"{d}/t"])
+        r = sh([PIN, "-isysroot", SDK, f"{d}/k.o", drv, *HOSTOBJ] + ([shim] if prog == "grep" else []) + ["-o", f"{d}/t"])
         if r.returncode: rows.append((prog, name, "link failed")); continue
-        got = [int(x) % 2**32 for x in sh([f"{d}/t", "1", "1", "once"]).stdout.split()]
+        host.write_data(REPO, prog, d)
+        got = [int(x) % 2**32 for x in sh([f"{d}/t", "1", "1", "once"], cwd=d).stdout.split()]
         outs[name] = got
         ok = True if want is None else got == want
         kb, insns = kernel(f"{d}/k.o")
-        o1 = sh([f"{d}/t", "1", "1"]).stdout.split()
+        o1 = sh([f"{d}/t", "1", "1"], cwd=d).stdout.split()
         if not o1: rows.append((prog, name, "run failed")); continue
         k = max(1, int(BUDGET_US / max(float(o1[0]), 0.1)))
-        t = sorted(float(x) for x in sh([f"{d}/t", str(k), str(REPS)]).stdout.split())
+        t = sorted(host.timings(sh, f"{d}/t", d, k, REPS))
         rows.append((prog, name, ok, kb, insns, statistics.median(t)))
     if want is None and len(outs) == 2 and outs["head"] != outs["base"]:
         rows = [(r[0], r[1], False) + r[3:] if r[0] == prog else r for r in rows]

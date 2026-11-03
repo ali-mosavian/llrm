@@ -42,5 +42,8 @@ histo O2/O3 (µs vs gcc 2.1/1.6, vectors gone with -fno-vectorize), particle O2 
 ## Next
 Verify A1-A6 each with a fail-first test on a minimal function before any fix; A4 and A5 are the largest unrewritten mechanisms (every function with a large frame / a bounds-check pair).
 
-## D. Not measurable on arm64 (instrument, both sides fail)
-huge, jpeg_fixed, jpeg_single, lru, stft_fixed, stft_single, textfill fail on every compiler: DOS-only source (`__huge`, `bench_io.h` -> `<io.h>`/`llrm_os.h`, input files the bench does not ship). Needs an arm64 I/O shim like grep's `input_shim.c`; until then they are outside the 30 programs measured.
+## D. DOS-flavoured programs (host shim)
+huge, lru, textfill, jpeg_fixed, jpeg_single, stft_fixed, stft_single did not build on arm64 (far/huge, `<io.h>`, input files). `tools/darwin_bench/host.py` builds them for all compilers: flat `-Dfar= -Dhuge= -D__huge=`, POSIX `os.c`, a host text-screen buffer, data files in the run dir; one-shot programs (jpeg_*) are timed one call per process. Test: `test_host.py`.
+- llrm-cc fails to compile stft_fixed and stft_single: `llrm-arm64-llc: bitreverse of i8` and `Legalize(CtTzZeroPoison, I32)`; for w15 (unsupported intrinsics, not an instrument issue).
+- stft_single prints a value that differs from the x86 `.out` on every compiler (its libm twiddles, and `-ffp-contract` changes it): its output is unverified; rows are bytes-only evidence.
+- lru, textfill measure flat code, not real-mode far access.
