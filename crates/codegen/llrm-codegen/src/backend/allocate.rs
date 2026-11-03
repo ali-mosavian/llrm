@@ -380,6 +380,8 @@ pub fn greedy_rewritten(
             &frame.stacks,
             saved,
         );
+        let slots = found.insns.iter().map(|&(slot, id)| (id, slot)).collect();
+        edited = edited.with_slots(&slots);
         edited.placed = Arc::new(crate::backend::livedebugvariables::Placed { ranges: found.flow, insns: found.insns });
     }
     let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();

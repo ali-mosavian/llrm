@@ -689,6 +689,8 @@ fn flowed(
     use super::livedebugvariables::{Place, Where};
     use super::valuetrack::Where as Held;
 
+    // The anchors name an instruction by its slot (`DebugTags::slot`).
+    let slot_of: BTreeMap<u64, i64> = placed.insns.iter().map(|&(slot, id)| (id, slot)).collect();
     let starts: BTreeMap<u64, usize> = marks
         .iter()
         .rev()
@@ -698,7 +700,7 @@ fn flowed(
         Place::Register(register) => masm::Place::Register(register),
         Place::Cell(disp) => masm::Place::Cell { disp, bytes: 0 },
     };
-    super::livedebugvalues::history::in_code(&placed.ranges, &placed.insns, &|id| starts.get(&id).copied(), length)
+    super::livedebugvalues::history::in_code(&placed.ranges, &placed.insns, &|id| starts.get(&(*slot_of.get(&id)? as u64)).copied(), length)
         .into_iter()
         .map(|(var, ranges)| {
             let ranges = ranges

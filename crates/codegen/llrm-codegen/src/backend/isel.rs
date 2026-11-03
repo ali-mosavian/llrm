@@ -1845,7 +1845,7 @@ pub(crate) fn noted(
                         return Arc::clone(one);
                     }
                     taken.extend(ats_here);
-                    Arc::new(Insn { debug: DebugTags { defines: defined, before: ahead }, ..(**one).clone() })
+                    Arc::new(Insn { debug: DebugTags { defines: defined, before: ahead, slot: None }, ..(**one).clone() })
                 })
                 .collect();
             block.with_insns(insns)

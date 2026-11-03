@@ -1882,7 +1882,7 @@ fn built(
                     one.delivers.iter().zip(&one.debug.defines).filter(|(_, tag)| **tag != u32::MAX).map(
                         |((_, register), tag)| Item::Mark(Mark::Def { tag: *tag, place: Place::Register(*register) }),
                     );
-                let anchor = (!procedure.body.notes.is_empty()).then_some(Item::Mark(Mark::Insn(one.id())));
+                let anchor = one.debug.slot.map(|slot| Item::Mark(Mark::Insn(slot as u64)));
                 anchor
                     .into_iter()
                     .chain(defined)
@@ -2000,8 +2000,8 @@ fn built(
                 out.push(Item::Mark(Mark::BodyStart));
             }
             // The instruction's anchor, ahead of what is said before it.
-            if !procedure.body.notes.is_empty() && !one.arrival() {
-                out.push(Item::Mark(Mark::Insn(one.id())));
+            if let Some(slot) = one.debug.slot.filter(|_| !one.arrival()) {
+                out.push(Item::Mark(Mark::Insn(slot as u64)));
             }
             // What is said before an instruction stands there whether or not it
             // is emitted: a jump to the next block is not.
@@ -4637,15 +4637,15 @@ mod tests {
         assert_eq!(_operand(regs, &Loc::Address(r#where), &names).unwrap(), "L_b1+12[eax]");
     }
 
-    /// A body with debug notes has an anchor at every instruction, which the
-    /// debug ranges are placed by; one without notes (no `-g`) has none, so
-    /// its output is what it was.
+    /// An instruction the allocator counted at a slot has an anchor at that
+    /// slot, which the debug ranges are placed by; one it did not (no `-g`, or
+    /// notes with no ranges asked for) has none, so its output is what it was.
     #[test]
     fn test_a_body_with_notes_marks_every_instruction_and_one_without_marks_none() {
-        for noted in [true, false] {
+        for (noted, stamped) in [(true, true), (true, false), (false, false)] {
             let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
             let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
-            let ids = [r#move.id(), leave.id()];
+            let slots: crate::support::hash::HashMap<u64, i64> = [(r#move.id(), 16), (leave.id(), 32)].into_iter().collect();
             let mut body = lir::LirBody::new(
                 "get",
                 1,
@@ -4659,6 +4659,9 @@ mod tests {
                     piece: None,
                     value: lir::NoteValue::Constant(0),
                 }]);
+            }
+            if stamped {
+                body = body.with_slots(&slots);
             }
             let registers = llrm_target::FrameRegisters {
                 pointer: RegId::EBP,
@@ -4691,7 +4694,7 @@ mod tests {
                 .iter()
                 .filter_map(|item| if let Item::Mark(Mark::Insn(id)) = item { Some(*id) } else { None })
                 .collect();
-            assert_eq!(marked, if noted { ids.to_vec() } else { Vec::new() }, "noted: {noted}");
+            assert_eq!(marked, if stamped { vec![16, 32] } else { Vec::new() }, "noted: {noted}, stamped: {stamped}");
         }
     }
 }

@@ -91,6 +91,11 @@ pub struct DebugTags {
     pub defines: Vec<u32>,
     /// The notes (`LirBody::notes`) that stand before it.
     pub before: Vec<u32>,
+    /// The slot index the allocator counted this instruction at, when it
+    /// worked out where the variables are for the writer. A pass that changes
+    /// the instruction (`..clone()`) keeps it; one that makes a new one has
+    /// none.
+    pub slot: Option<i64>,
 }
 
 impl PartialEq for DebugTags {
@@ -319,6 +324,31 @@ impl LirBody {
             })
             .collect();
         if changed { self.with_blocks(blocks) } else { self.clone() }
+    }
+
+    /// `self` with each instruction told its slot (`DebugTags::slot`), by
+    /// the identity it has now; one not in `slots` is left as it is.
+    #[must_use]
+    pub fn with_slots(
+        &self,
+        slots: &crate::support::hash::HashMap<u64, i64>,
+    ) -> LirBody {
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| match slots.get(&one.id()) {
+                        Some(&slot) => one.retagged(DebugTags { slot: Some(slot), ..one.debug.clone() }),
+                        None => Arc::clone(one),
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.with_blocks(blocks)
     }
 
     /// `self`, a pass's result from `old`, with the values the instructions the
@@ -1731,7 +1761,7 @@ mod tests {
     fn test_notes_standing_counts_the_notes_some_instruction_still_has() {
         let tagged = |at: i64, before: Vec<u32>| {
             let one = instruction(at, None);
-            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before }, ..(*one).clone() })
+            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before, slot: None }, ..(*one).clone() })
         };
         let body = LirBody::new(
             "f",

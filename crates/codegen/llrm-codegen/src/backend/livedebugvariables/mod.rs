@@ -82,6 +82,29 @@ pub fn locate(
     end: i64,
     entry_values: bool,
 ) -> Vec<Located> {
+    locate_with(notes, segments, end, entry_values, true)
+}
+
+/// `locate`, with no `Undef` for the stretches a value is not held in when
+/// `gaps` is false: the pin's `LiveDebugVariables` emits a `DBG_VALUE` where
+/// an interval starts and none where it ends, so the variable stays where
+/// it was until `LiveDebugValues` sees the register written. (A note that
+/// says `Undef` itself still does.)
+pub fn locate_without_gaps(
+    notes: &[Positioned],
+    segments: &BTreeMap<u32, Vec<Segment>>,
+    end: i64,
+) -> Vec<Located> {
+    locate_with(notes, segments, end, false, false)
+}
+
+fn locate_with(
+    notes: &[Positioned],
+    segments: &BTreeMap<u32, Vec<Segment>>,
+    end: i64,
+    entry_values: bool,
+    gaps: bool,
+) -> Vec<Located> {
     let mut by_variable: BTreeMap<(u32, Option<(u32, u32)>), Vec<&Positioned>> = BTreeMap::new();
     for note in notes {
         by_variable.entry((note.variable, note.piece)).or_default().push(note);
@@ -127,12 +150,18 @@ pub fn locate(
                         _ => unreachable!(),
                     };
                     let mut from = start;
+                    let fill = |push: &mut dyn FnMut(i64, i64, Where), from: i64, to: i64| {
+                        let at = if from == start { lead } else { gap };
+                        if gaps || at != Where::Undef {
+                            push(from, to, at);
+                        }
+                    };
                     for segment in segments.get(&value).into_iter().flatten() {
                         let (low, high) = (segment.start.max(start), segment.end.min(stop));
                         if low >= high {
                             continue;
                         }
-                        push(from, low, if from == start { lead } else { gap });
+                        fill(&mut push, from, low);
                         push(
                             low,
                             high,
@@ -140,7 +169,7 @@ pub fn locate(
                         );
                         from = high;
                     }
-                    push(from, stop, if from == start { lead } else { gap });
+                    fill(&mut push, from, stop);
                 }
                 _ => push(start, stop, Where::Undef),
             }
@@ -351,7 +380,7 @@ pub fn ranges_of(
     let location = locate(&positioned, &table, i64::from(end), true);
     // LiveDebugVariables knows no entry values: where no place holds the
     // value it says nothing, and LiveDebugValues does the rest.
-    let bare = locate(&positioned, &table, i64::from(end), false);
+    let bare = locate_without_gaps(&positioned, &table, i64::from(end));
     // The pin's LiveDebugValues over those ranges: the stack pointer is not
     // known here, so no register is spared a call's mask (none is given).
     let target = crate::backend::livedebugvalues::FlowTarget {
@@ -658,6 +687,28 @@ mod tests {
         );
         assert!(!table.contains_key(&8), "a value with no slot gains no entry");
     }
+    /// A parameter whose register is last read at the first instruction read
+    /// as nowhere from there on, and the tracker closed it at that read: the
+    /// pin leaves one `DBG_VALUE` until the register is written, so `id(x)`
+    /// had one location for the whole function and ours ended at the return.
+    #[test]
+    fn a_value_that_dies_is_not_nowhere_afterwards_unless_a_note_says_so() {
+        let mut table = BTreeMap::new();
+        table.insert(7, vec![Segment { start: 10, end: 20, place: reg(1) }]);
+        let held = [note(10, 1, NoteValue::Value(7))];
+        assert_eq!(ranges(&locate_without_gaps(&held, &table, 50)), [(10, 20, Where::Place(reg(1)))]);
+        let said = [note(10, 1, NoteValue::Value(7)), note(30, 1, NoteValue::Nothing)];
+        assert_eq!(
+            ranges(&locate_without_gaps(&said, &table, 50)),
+            [(10, 20, Where::Place(reg(1))), (30, 50, Where::Undef)]
+        );
+        assert_eq!(
+            ranges(&locate(&held, &table, 50, false)),
+            [(10, 20, Where::Place(reg(1))), (20, 50, Where::Undef)],
+            "the ranges LiveDebugVariables reports keep the gap"
+        );
+    }
+
     /// The ranges the notes make were only printed (`LLRM_LDV_DUMP`), so
     /// nothing else could read them: a value noted before an instruction that
     /// uses it, in a register, is a range of the variable in that register.
