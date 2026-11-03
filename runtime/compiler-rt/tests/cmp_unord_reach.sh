@@ -9,7 +9,12 @@ done
 o=; for x in $T/*.o; do nm $x | grep -q ' T __unordsf2' && o=$x; done
 got=$(size -A $o | awk '/^\.text/{t+=$2} END{print t}'); echo "m32 -Os unord object $(basename $o): $got B (cap 42)"; [ "$got" -le 42 ] || rc=1
 if [ -n "$LLRM_OW" ]; then
-  r=$(bash tests/m16_split_padding.sh Os | awk '$1=="__ltsf2"{print $2}'); echo "m16 -Os __ltsf2 reach $r (cap 113)"; [ "${r:-999}" -le 113 ] || rc=1
-  r=$(bash tests/m16_split_padding.sh O2 | awk '$1=="__ltsf2"{print $2}'); echo "m16 -O2 __ltsf2 reach $r (cap 122)"; [ "${r:-999}" -le 122 ] || rc=1
+  # SF_CMP_SPLIT is off in config/x86_m16 (+10 clk per compare); the layout is kept priced: one file per entry, the core in __cmpsf2.
+  for flags_caps in ":Os:212:O2:221" "-DSF_CMP_SPLIT:Os:111:O2:119"; do
+    IFS=: read -r fl o1 c1 o2 c2 <<<"$flags_caps"
+    for oc in "$o1:$c1" "$o2:$c2"; do
+      r=$(SF_FLAGS=$fl bash tests/m16_split_padding.sh ${oc%:*} | awk '$1=="__ltsf2"{print $2}'); echo "m16 ${oc%:*} $fl __ltsf2 reach $r (cap ${oc#*:})"; [ "${r:-999}" -le "${oc#*:}" ] || rc=1
+    done
+  done
 fi
 exit $rc
