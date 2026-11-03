@@ -20,7 +20,7 @@ static SF_T SF_N(add_bits)(SF_T a, SF_T b)
     int ea, eb;
     SF_T ma = SF_UNPACK_ADD(a, &ea) << 3, mb = SF_UNPACK_ADD(b, &eb) << 3;
     if (ea - eb > SF_MB + 2) return a; /* b is under a quarter of a's last place; MB + 2 is the smallest gap that always rounds away (2^k - 1.5 * 2^(k-MB-2) rounds down) */
-    mb = sf_shr_sticky(mb, ea - eb);
+    mb = SF_SHR_STICKY_ADD(mb, ea - eb);
     SF_T sign = a & SF_SIGN, m;
     if ((a ^ b) & SF_SIGN) {
         m = ma - mb;
