@@ -12,6 +12,7 @@ pub mod dag;
 pub mod dagisel;
 pub mod dead_mi;
 pub mod driver;
+pub mod early_tail_duplicate;
 pub mod eh_reentry;
 pub mod exception_info;
 pub mod explicit_locals;

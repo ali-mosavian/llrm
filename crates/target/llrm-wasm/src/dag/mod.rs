@@ -129,6 +129,9 @@ pub fn compile_function(
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
     if options.level != crate::driver::Level::O0 {
+        if crate::early_tail_duplicate::early_tail_duplicate(&mut f) {
+            remove_unreachable_blocks(&mut f);
+        }
         crate::dead_mi::dead_machine_instruction_elim(&mut f);
         crate::machine_licm::machine_licm(&mut f);
         crate::machine_cse::machine_cse(&mut f);

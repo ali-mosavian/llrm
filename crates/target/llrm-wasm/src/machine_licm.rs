@@ -1,10 +1,11 @@
 //! `MachineLICM`, the early pass before `MachineCSE`
 //! ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/MachineLICM.cpp#L827)):
 //! an instruction in a loop that reads no register and is trivially
-//! rematerializable (a constant) moves to the loop's preheader, which an edge
-//! split makes where the loop has none; where an identical one is already
-//! there, the loop's is dropped for it. A cheap one that feeds a PHI of the
-//! loop stays (`HasLoopPHIUse`).
+//! rematerializable (a constant) moves to the preheader of the outermost loop
+//! holding it, which an edge split makes where the loop has none (inner loops
+//! get none: the pin starts from `MLI->begin()`); where an identical one is
+//! already there, the loop's is dropped for it. A cheap one that feeds a PHI of
+//! the loop stays (`HasLoopPHIUse`).
 //!
 //! DEVIATE 1: register pressure is not modelled. The pin's wasm pressure
 //! limits are the two reserved registers, so `CanCauseHighRegPressure` holds
@@ -62,8 +63,10 @@ pub fn machine_licm(f: &mut Function) -> bool {
             return changed;
         }
         let missing = loops
-            .get_loops_in_preorder()
+            .top_level_loops()
+            .collect::<Vec<_>>()
             .into_iter()
+            .rev()
             .find_map(
                 |l| {
                     let header = l.get_header();
@@ -87,7 +90,7 @@ pub fn machine_licm(f: &mut Function) -> bool {
         }
     }
     let mut replaced: HashMap<VReg, VReg> = HashMap::new();
-    for l in loops.get_loops_in_preorder() {
+    for l in loops.top_level_loops().collect::<Vec<_>>().into_iter().rev() {
         let header = l.get_header().0 as usize;
         let Some(preheader) = l.get_loop_preheader(&cfg).map(|b| b.0 as usize) else { continue };
         if f.is_eh_pad(header) {
@@ -278,5 +281,40 @@ mod tests {
         assert!(machine_licm(&mut f));
         assert_eq!(consts(&f.blocks[0]), 2);
         assert_eq!(consts(&f.blocks[1]), 0);
+    }
+
+    /// bb0 -> bb1 (outer header) -> bb2 (inner loop on itself) -> bb3 -> bb1.
+    /// The inner loop's only predecessor branches twice, so it has no
+    /// preheader.
+    fn nested_loops() -> Function {
+        let mut f = Function::default();
+        let (n, k, s) = (f.new_vreg(ValType::I32), f.new_vreg(ValType::I32), f.new_vreg(ValType::I32));
+        f.blocks = vec![
+            vec![konst(n, 3), Inst::new(op::BR, &[Operand::Block(1)])],
+            vec![Inst::new(op::BR_IF, &[Operand::Block(2), Operand::Use(n)]), Inst::new(op::BR, &[Operand::Block(4)])],
+            vec![
+                konst(k, 7),
+                Inst::new(op::ADD_I32, &[Operand::Def(s), Operand::Use(k), Operand::Use(n)]),
+                Inst::new(op::BR_IF, &[Operand::Block(2), Operand::Use(s)]),
+                Inst::new(op::BR, &[Operand::Block(3)]),
+            ],
+            vec![Inst::new(op::BR, &[Operand::Block(1)])],
+            vec![Inst::new(op::RETURN, &[])],
+        ];
+        f.succs = vec![vec![1], vec![2, 4], vec![2, 3], vec![1], vec![]];
+        f
+    }
+
+    /// An inner loop got a block of its own for a preheader (queens -O1 had
+    /// 17 blocks to the pin's 16): the pin runs the pass on the outermost
+    /// loops only, and a constant of the inner loop goes to the outer
+    /// preheader.
+    #[test]
+    fn only_the_outermost_loop_gets_a_preheader() {
+        let mut f = nested_loops();
+        assert!(machine_licm(&mut f));
+        assert_eq!(f.blocks.len(), 5);
+        assert_eq!(consts(&f.blocks[0]), 2);
+        assert_eq!(consts(&f.blocks[2]), 0);
     }
 }
