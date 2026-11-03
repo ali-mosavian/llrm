@@ -686,7 +686,7 @@ mod options_tests {
     }
 }
 
-fn compile(
+pub(crate) fn compile(
     flags: &Flags,
     source: &Path,
     dump: Option<&Path>,
@@ -700,7 +700,7 @@ fn compile(
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
         let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format, objects)
+        let bytes = objbuild::written_in(&built, file, layout_of(flags, format), format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }
@@ -767,5 +767,18 @@ mod text_tests {
             "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
                 .replace("llvm.ia16", "llrm.ia16")
         );
+    }
+}
+
+/// One COMDAT per function where `-ffunction-sections` asks for it and the
+/// format has them (OMF); one segment for the module's code otherwise.
+fn layout_of(
+    flags: &Flags,
+    format: llrm_target::object::Format,
+) -> objbuild::CodeLayout {
+    if flags.function_sections && format == llrm_target::object::Format::Omf {
+        objbuild::CodeLayout::PerProcedure
+    } else {
+        objbuild::CodeLayout::OneSegment
     }
 }

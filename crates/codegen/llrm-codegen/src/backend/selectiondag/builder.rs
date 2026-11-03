@@ -1869,8 +1869,11 @@ impl Builder<'_> {
             return Ok(vec![if narrow { self.dag.get_node(ext.node(), parts[0], &[value]) } else { value }]);
         }
         let [low, high] = self.split_value(value, EVT::integer(vt.size_in_bits() / 2));
-        let mut all = self.split_for_calling(low, ext)?;
-        all.extend(self.split_for_calling(high, ext)?);
+        // `getCopyToParts`: the parts of a big-endian target are reversed, the
+        // high half first
+        let (first, second) = if self.is_big_endian() { (high, low) } else { (low, high) };
+        let mut all = self.split_for_calling(first, ext)?;
+        all.extend(self.split_for_calling(second, ext)?);
         Ok(all)
     }
 
@@ -1898,9 +1901,18 @@ impl Builder<'_> {
             return self.dag.get_node(ISD::Truncate, vt, &[one]);
         }
         let half = EVT::integer(vt.size_in_bits() / 2);
-        let (low, high) = parts.split_at(parts.len() / 2);
+        let (first, second) = parts.split_at(parts.len() / 2);
+        // `getCopyFromParts`: a big-endian target's first half is the high one
+        let (low, high) = if self.is_big_endian() { (second, first) } else { (first, second) };
         let pair = [self.join_from_calling(low, half, None, false), self.join_from_calling(high, half, None, false)];
         self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
+    }
+
+    fn is_big_endian(&self) -> bool {
+        matches!(
+            self.target.target_nodes,
+            Some(TargetNodes { big_endian: true, .. })
+        )
     }
 
     fn is_pointer_type(
