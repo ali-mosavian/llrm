@@ -22,7 +22,18 @@ fn test_a_loop_nest_with_a_fused_extended_multiply_is_unrolled_around_its_inner_
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["--target=x86_32-wat", "-m32", "-mabi=sysv", "-mlong-double-80", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .args([
+            "--target=x86_32-wat",
+            "-m32",
+            "-mabi=sysv",
+            "-mlong-double-80",
+            "-march=i486",
+            "-O2",
+            "-S",
+            "-o",
+            "a.s",
+            "a.c",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
