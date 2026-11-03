@@ -714,6 +714,19 @@ fn a_diamonds_join_copy_moves_into_the_side_that_lacks_it() {
     assert_eq!(counts, [0, 1, 1, 0], "{:?}", function.blocks);
 }
 
+/// A `long long` compared and returned held its four argument registers for
+/// the whole of its range, and the allocator found no room to split it:
+/// "greedy could not allocate", the function refused. It is allocated again
+/// with the argument copies left unjoined.
+#[test]
+fn a_long_long_in_the_argument_registers_is_allocated() {
+    let out = compiled(
+        "define i64 @f(i64 %a) {\n  %c = icmp ult i64 %a, 4294967297\n  %z = zext i1 %c to i64\n  ret i64 %z\n}",
+        "f",
+    );
+    assert!(out.contains("ret"), "{out}");
+}
+
 /// digits moved the quotient from `de` to `hl` for the next trip with
 /// `ld l, e` / `ld h, d` at the end of a block: the copy's source was dead (the
 /// loop head loads `de` first), but the block ended before anything said so.
@@ -864,12 +877,12 @@ fn a_loaded_bit_read_by_a_branch_a_select_and_a_zext_compiles() {
 
 /// A result with no row in the convention (`i64`, eight bytes) panicked in
 /// `result_registers` ("calling.toml has a result row"): 7 programs of
-/// tests/run/c killed the compiler instead of being named as refused.
+/// tests/run/c killed the compiler. It is written through the pointer the
+/// caller passes in `hl`.
 #[test]
-fn a_result_the_convention_has_no_registers_for_is_refused_not_a_panic() {
-    let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine i64 @f() {{\n  ret i64 5\n}}");
-    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses an eight-byte result");
-    assert!(why.contains("no registers"), "{why}");
+fn a_result_the_convention_has_no_registers_for_is_written_through_a_pointer() {
+    let out = compiled("define i64 @f() {\n  ret i64 5\n}", "f");
+    assert!(out.contains("ld (hl), e"), "{out}");
 }
 
 /// `abi::z80()` parsed calling.toml on every call lowering: 12% of a debug

@@ -49,3 +49,10 @@ def test_two_harness_digests_are_all_nobase(tmp_path, capsys):
         files.append(str(tmp_path / f"{name}.json"))
     assert cellcheck.main(files) == 1
     assert "ALL NOBASE: harness digests differ (aaa vs bbb)" in capsys.readouterr().out
+
+
+def test_equal_bytes_and_instructions_with_other_clocks_is_a_pad_parity_candidate_and_still_fails():
+    key, head, base = "p/bq16/Os", row(1001, 100), row(1000, 100)
+    assert cellcheck.pad_parity({key: head}, {key: base}) == {key}
+    assert cellcheck.check({key: head}, {key: base})
+    assert cellcheck.pad_parity({key: row(1001, 101)}, {key: base}) == set()

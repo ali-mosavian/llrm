@@ -1330,7 +1330,7 @@ pub fn finish(
     }
     for (at, block) in function.blocks.iter().enumerate() {
         printer.out.push(Line::Label(label(number, block.id)));
-        let mut shown = 0;
+        let mut shown = None;
         let next = function.blocks.get(at + 1).map(|block| block.id);
         for (index, inst) in block.insts.iter().enumerate() {
             if printer.skip > 0 {
@@ -1338,10 +1338,16 @@ pub fn finish(
                 continue;
             }
             printer.at = (at, index);
-            if inst.origin != 0 && inst.origin != shown {
-                shown = inst.origin;
-                if let Some(place) = function.places.get(inst.origin as usize - 1) {
-                    printer.out.push(Line::Loc(place.line));
+            // Place 0 is line 0, the pin's row for an instruction with no
+            // location.
+            if shown != Some(inst.origin) {
+                shown = Some(inst.origin);
+                let line = match inst.origin {
+                    0 => Some(0),
+                    origin => function.places.get(origin as usize - 1).map(|place| place.line),
+                };
+                if let Some(line) = line {
+                    printer.out.push(Line::Loc(line));
                 }
             }
             printer.instruction(inst, next, &block.insts[index + 1..])?;

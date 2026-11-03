@@ -1165,6 +1165,9 @@ pub fn laid_out(
                                         entry: entry[usize::from(procedure.far)],
                                         from_cfa: addr.disp - if procedure.far { far_bias } else { bias },
                                     },
+                                    // no register arrives in a stack cell on a
+                                    // wasm local
+                                    model::FrameBase::WasmLocal(_) => return None,
                                 };
                                 super::arrival::stored(&code.image[start..end], cell, register).map(|at| (register, at))
                             },

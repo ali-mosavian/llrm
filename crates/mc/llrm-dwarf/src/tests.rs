@@ -838,3 +838,25 @@ fn a_sequence_per_function_is_addressed_by_its_own_symbol() {
     assert_eq!(targets(&expanded(&made.object, &info).unwrap()), [0]);
     assert_eq!(targets(&expanded_per_function(&made.object, &info).unwrap()), [0, 1]);
 }
+
+/// WebAssembly keeps a variable in a local and the frame address in another:
+/// the writer refused both, so no wasm variable could be described.
+#[test]
+fn a_wasm_local_is_a_wasm_location_and_a_frame_base() {
+    let mut made = object(
+        vec![
+            frame("x", 8),
+            Variable { name: "y".into(), r#type: 0, kind: Kind::Local, location: Location::WasmLocal(5) },
+        ],
+        vec![int()],
+        Format::Default,
+    );
+    made.debug.as_mut().unwrap().frame_base = llrm_debug::FrameBase::WasmLocal(3);
+    let written = expanded(&made.object, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    let has = |needle: &[u8]| info.image.windows(needle.len()).any(|window| window == needle);
+    assert!(has(&[0xED, 0x00, 3, 0x9F]), "the frame base, local 3");
+    assert!(has(&[0xED, 0x00, 5, 0x9F]), "y, local 5");
+    // x is still an offset from the frame base: DW_OP_fbreg 8.
+    assert!(has(&[0x91, 8]), "x");
+}
