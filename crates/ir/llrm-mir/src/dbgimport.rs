@@ -124,6 +124,7 @@ impl Import {
             {
                 let all_calls =
                     ident(module, subprogram, "flags").is_some_and(|flags| flags.contains("DIFlagAllCallsDescribed"));
+                let scope_line = int(module, subprogram, "scopeLine").and_then(|line| u32::try_from(line).ok());
                 debuginfo::add_function(
                     module,
                     &Function {
@@ -133,6 +134,7 @@ impl Import {
                         r#type: procedure,
                         parameters,
                         all_calls,
+                        scope_line,
                     },
                 );
             }

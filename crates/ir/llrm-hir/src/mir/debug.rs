@@ -178,6 +178,7 @@ pub(super) fn emitted<'h>(
                 r#type,
                 parameters,
                 all_calls: false,
+                scope_line: None,
             },
         );
     }
