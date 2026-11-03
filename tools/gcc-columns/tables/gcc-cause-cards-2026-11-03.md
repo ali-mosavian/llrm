@@ -139,3 +139,12 @@ gcc keeps the base in IY and bounds `mcopy` by an end pointer (M10) instead of a
 | crc16 | 633 B at -O2 | table, not codegen (loop cells lose) |
 
 All rows read from the listings (`gcc-vs-ours-asm-z80-2026-11-03.md`).
+
+## Step 2 estimate (2026-11-03): code-quality ideas stop under the 1% rule
+
+Upper bounds from a dataflow over the emitted -O2 asm of the 30 C kernels (labels merge predecessors; scripts `bench/proto_{y,a}_label.py`):
+- Y known across labels: 15 of 46 `ldy` could go (lz4 4, lz4c 5, scmp 3, 3 others); 2 clk + 2 B each, one per loop trip.
+- A kept live across labels: 8 `lda` could go (fletcher, gcd, lz4, lz4c, max8, popcount), most flags-dependent.
+- Branch relaxation: 17 `b?? skip; jmp` pairs, 16 of them in lz4/lz4c/crc16 whose bodies exceed the window. No `bra` on NMOS, so they stay.
+Each moves under 1% of the geomean over 69 programs (only 4-6 programs change, by 2-5% each). Not implemented. Instrument: static count on
+`-O2` asm without the 51 hand kernels; if oversight wants the hand kernels in the bound, it is a rerun of the same script.
