@@ -50,6 +50,15 @@ pub trait CoalescerEnv {
         true
     }
 
+    /// `canJoinPhys` (RegisterCoalescer.cpp#L1993) joins a copy with a
+    /// physical register only when it is reserved. A pinned value stands for a
+    /// register that is not (an argument register): joined, a value takes the
+    /// pin's unsplittable range. False: such a copy is left to the allocator.
+    /// True keeps the join (the targets that have not stated otherwise).
+    fn joins_pinned_copies(&self) -> bool {
+        true
+    }
+
     /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
     /// `dst`, which may now take only the registers both could.
     fn narrow(
