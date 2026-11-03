@@ -952,6 +952,35 @@ attributes #0 = { noinline }"#,
     assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
 }
 
+/// A four-trip loop over a global stayed a loop at `-O2` (22 B, 98 clocks for
+/// `sum4`, against 13 B and 34 clocks unrolled): the driver turned the unroller
+/// off (DEVIATE 6502-5). The pin unrolls it fully at `-O2`; `buf` holds
+/// 1, 2, 3, 4 so the sum is 10.
+#[test]
+fn a_four_trip_loop_is_unrolled_at_o2() {
+    let ir = module(
+        r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
+define i8 @sum4() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %sum, %loop ]
+  %p = getelementptr inbounds i8, ptr @buf, i16 %i
+  %v = load volatile i8, ptr %p
+  %sum = add i8 %s, %v
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+  ret i8 %sum
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("bne") && !text.contains("beq"), "the loop is still a loop:\n{text}");
+    assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
+}
+
 /// `buf[n + 3]` and `buf[n - 1]` with a byte `n` took eleven instructions, a
 /// 16-bit add of the address and an indirect load: the constant had no place in
 /// the indexed form (fill's `buf[n - 1]`: 46 B against llvm-mos's 22). It is
