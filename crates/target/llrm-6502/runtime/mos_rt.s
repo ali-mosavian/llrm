@@ -649,6 +649,108 @@ __ashrsi3:                      ; __sa >> __sb (arithmetic) -> __sa
 @done:
   rts
 
+; The speed variants (the compiler calls them at -O2): whole bytes move while
+; the count is 8 or more, 38 clocks a byte step against 200 for eight bit steps,
+; then the rest is shifted bit by bit. Same results as the bit loops for every
+; count, 32 and more included.
+.export __ashlsi3_fast
+__ashlsi3_fast:                 ; __sa << __sb (low byte) -> __sa
+  ldx __sb
+  beq @done
+@bytes:
+  cpx #8
+  bcc @bits
+  lda __sa+2
+  sta __sa+3
+  lda __sa+1
+  sta __sa+2
+  lda __sa
+  sta __sa+1
+  lda #0
+  sta __sa
+  txa
+  sec
+  sbc #8
+  tax
+  bne @bytes
+  rts
+@bits:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  dex
+  bne @bits
+@done:
+  rts
+
+.export __lshrsi3_fast
+__lshrsi3_fast:                 ; __sa >> __sb (logical) -> __sa
+  ldx __sb
+  beq @done
+@bytes:
+  cpx #8
+  bcc @bits
+  lda __sa+1
+  sta __sa
+  lda __sa+2
+  sta __sa+1
+  lda __sa+3
+  sta __sa+2
+  lda #0
+  sta __sa+3
+  txa
+  sec
+  sbc #8
+  tax
+  bne @bytes
+  rts
+@bits:
+  lsr __sa+3
+  ror __sa+2
+  ror __sa+1
+  ror __sa
+  dex
+  bne @bits
+@done:
+  rts
+
+.export __ashrsi3_fast
+__ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
+  ldx __sb
+  beq @done
+@bytes:
+  cpx #8
+  bcc @bits
+  lda __sa+1
+  sta __sa
+  lda __sa+2
+  sta __sa+1
+  lda __sa+3
+  sta __sa+2
+  cmp #$80                      ; the sign byte: carry is the sign
+  lda #0
+  sbc #0                        ; $FF for a positive value, 0 for a negative
+  eor #$FF                      ; the fill: $FF for a negative value
+  sta __sa+3
+  txa
+  sec
+  sbc #8
+  tax
+  bne @bytes
+  rts
+@bits:
+  lda __sa+3
+  cmp #$80
+  ror __sa+3
+  ror __sa+2
+  ror __sa+1
+  ror __sa
+  dex
+  bne @bits
+@done:
+  rts
+
 ; ---- memory fills and copies ----------------------------------------------------------------------
 ; memset(rs1 = dst, rc4 = byte, rs3 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
 ; returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its high
