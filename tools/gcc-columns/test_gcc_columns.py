@@ -55,3 +55,16 @@ def test_noivopts_flag_only_at_os():
     assert B.level_flags("Os", True) == ["-Os", "-fno-ivopts"]
     assert B.level_flags("O2", True) == ["-O2"]
     assert B.level_flags("Os", False) == ["-Os"]
+
+
+def test_host_check_catches_a_wrong_expect():
+    """The kernel expects were hand-derived; host_check must flag one that is off by one, and pass the shipped list."""
+    import host_check as H
+    assert H.main() == 0
+    saved = Z.K[:]
+    try:
+        n, r, a, w = Z.K[-1]
+        Z.K[-1] = (n, r, a, w + 1)
+        assert H.main() == 1
+    finally:
+        Z.K[:] = saved
