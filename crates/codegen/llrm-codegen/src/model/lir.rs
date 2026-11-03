@@ -139,6 +139,11 @@ pub struct Insn {
     /// it before the coalescer joins copies of different widths; a narrow def
     /// not listed starts the value, as it always has.
     pub partial_defs: Vec<u32>,
+    /// Where it copies one value into lanes of another, `(source, destination,
+    /// lanes of the destination)`: the `undef %d:sub0 = COPY` pairs
+    /// `eliminateRegSequence` makes from a `REG_SEQUENCE`. Liveness still takes
+    /// the destination whole; the lane model reads this (C1 step 1).
+    pub lane_copies: Vec<(u32, u32, llrm_lir::valuelanes::ValueLanes)>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -535,6 +540,9 @@ impl Insn {
         for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
         }
+        for &(from, to, _) in &self.lane_copies {
+            any |= moves(from)? | moves(to)?;
+        }
         for (held, _) in self.requires.iter().chain(&self.delivers) {
             any |= moves(held.value)?;
         }
@@ -559,7 +567,7 @@ impl Insn {
             let settled = |place: &Loc| -> Result<Loc, E> {
                 let mut failed = None;
                 let out = llrm_lir::mapped(place, |held| match rename(held.value) {
-                    Ok(value) => Held { value, width: held.width, offset: 0 },
+                    Ok(value) => Held { value, width: held.width, offset: held.offset },
                     Err(error) => {
                         failed.get_or_insert(error);
                         *held
@@ -576,10 +584,15 @@ impl Insn {
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
         made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
+        made.lane_copies = self
+            .lane_copies
+            .iter()
+            .map(|&(from, to, lanes)| Ok((rename(from)?, rename(to)?, lanes)))
+            .collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
                 .map(|(held, register)| {
-                    Ok((Held { value: rename(held.value)?, width: held.width, offset: 0 }, *register))
+                    Ok((Held { value: rename(held.value)?, width: held.width, offset: held.offset }, *register))
                 })
                 .collect()
         };
@@ -628,6 +641,7 @@ impl Insn {
             uses,
             undefs: Vec::new(),
             partial_defs: Vec::new(),
+            lane_copies: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),

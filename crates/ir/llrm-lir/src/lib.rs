@@ -919,9 +919,11 @@ mod tests {
         memory.index = Some(Held { value: 3, width: 2, offset: 0 });
         memory.through = RegId::BX;
 
-        let Loc::Mem(mapped_memory) =
-            mapped(&Loc::Mem(memory.clone()), |held| Held { value: held.value + 10, width: held.width, offset: 0 })
-        else {
+        let Loc::Mem(mapped_memory) = mapped(&Loc::Mem(memory.clone()), |held| Held {
+            value: held.value + 10,
+            width: held.width,
+            offset: held.offset,
+        }) else {
             panic!("a memory operand remains memory");
         };
         assert_eq!(mapped_memory.base, Some(Held { value: 11, width: 2, offset: 0 }));

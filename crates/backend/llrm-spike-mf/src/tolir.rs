@@ -45,6 +45,7 @@ use llrm_codegen::greedy::targetinfo::TargetRegisterInfo;
 use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_codegen::model::lir::{Block as LirBlockRef, Insn, LirBlock, LirBody};
 use llrm_lir::registers::{RegId, Regs};
+use llrm_lir::valuelanes::ValueLanes;
 use llrm_lir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
 
@@ -590,6 +591,16 @@ impl<T: Target> Made<'_, T> {
         }
         insn.symbol = symbol.then_some(true);
         insn.volatile = inst.side_effects;
+        // the lanes of the whole each part is copied into
+        if let Some((whole, parts)) = T::lane_moves(inst)
+            && let Some(Operand::Def(Reg::Virt(to)) | Operand::Use(Reg::Virt(to))) = inst.operands.get(whole)
+        {
+            for (part, offset, bytes) in parts {
+                if let Some(Operand::Def(Reg::Virt(from)) | Operand::Use(Reg::Virt(from))) = inst.operands.get(part) {
+                    insn.lane_copies.push((from + 1, to + 1, ValueLanes::at(offset, bytes)));
+                }
+            }
+        }
         insn
     }
 }

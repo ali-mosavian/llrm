@@ -784,7 +784,7 @@ pub fn shared(
                     *place = llrm_lir::mapped(place, |held| Held {
                         value: walk.read_as(one.id(), held.value),
                         width: held.width,
-                        offset: 0,
+                        offset: held.offset,
                     });
                 }
                 expression(&named)
