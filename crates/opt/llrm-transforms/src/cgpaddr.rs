@@ -617,9 +617,12 @@ fn matched(
             Some((instruction.operands[1 + at], scale))
         }
         (Some(_), Some(_)) => return plain(),
-        // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`: the first
-        // register is the base register, not an index, when the base is a
-        // global (else it is the base register and this one the index).
+        // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`
+        // ([CodeGenPrepare.cpp
+        // L4604](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L4604)):
+        // the first register is the base register, not an index. Only over a
+        // global: over a register base it is the second register, the index
+        // (wasm has none, so the pin's mode fails and nothing sinks).
         (Some(&(at, 1)), None) if reg.is_none() && is_global(unit.context, inner.base) => {
             reg = Some(instruction.operands[1 + at]);
             None
