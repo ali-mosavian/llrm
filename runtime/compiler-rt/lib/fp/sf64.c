@@ -131,7 +131,7 @@ static sf64 from_mag(uint64_t sign, uint64_t u)
 }
 
 sf_double SF_NAME(adddf3)(sf_double a, sf_double b) { return b2d(add_bits_64(d2b(a), d2b(b))); }
-sf_double SF_NAME(subdf3)(sf_double a, sf_double b) { return b2d(add_bits_64(d2b(a), d2b(b) ^ SF_SIGN)); }
+sf_double SF_NAME(subdf3)(sf_double a, sf_double b) { return b2d(sub_bits_64(d2b(a), d2b(b))); }
 sf_double SF_NAME(muldf3)(sf_double a, sf_double b) { return b2d(mul_bits_64(d2b(a), d2b(b))); }
 sf_double SF_NAME(divdf3)(sf_double a, sf_double b) { return b2d(div_bits_64(d2b(a), d2b(b))); }
 sf_double SF_NAME(negdf2)(sf_double a) { return b2d(d2b(a) ^ SF_SIGN); }
