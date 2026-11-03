@@ -94,9 +94,13 @@ def ours(op, opt):
         p = f'{d}/r/{opt}_{f}.s'; strip_exports(p)
         sh('ca65', '-t', 'sim6502', '-U', p, '-o', p[:-2] + '.o'); objs.append(p[:-2] + '.o')
     open(f'{d}/stub.s', 'w').write('rc2 = 130\n' + ''.join('rc%d = %d\n' % (i, 128 + i) for i in range(3, 8)) + f'.export {SYM[op]}\n{SYM[op]}:\n lda #0\n ldx #0\n' + ''.join(f' sta rc{i}\n' for i in range(2, 8)) + ' rts\n')
+    bss = sum(int(m.group(1)) for o in objs for m in [re.search(r'BSS:\s+(\d+)', sh('od65', '--dump-segsize', o).stdout)] if m)
+    if bss: open(f'{d}/stub.s', 'a').write(f'.segment "BSS"\n .res {bss}\n')  # same BSS as the library build: crt0's zerobss loop is not the operation
     sh('ca65', '-t', 'sim6502', f'{d}/stub.s', '-o', f'{d}/stub.o')
     for k, libo in (('r', objs), ('s', [f'{d}/stub.o'])):
         sh('cl65', '-t', 'sim6502', '-o', f'{d}/{k}.bin', '-Ln', f'{d}/{k}.lbl', '-m', f'{d}/{k}.map', f'{d}/main.o', *libo, f'{T}/mos.o')
+    seg = lambda m: {a: int(b, 16) for a, b in re.findall(r'^(ZEROPAGE|BSS|DATA)\s+\w+\s+\w+\s+(\w+)', open(m).read(), re.M)}
+    assert seg(f'{d}/r.map')['BSS'] == seg(f'{d}/s.map')['BSS'], f'{op} {opt}: the base binary must have the library build\'s BSS: crt0 zeroes it, and the extra cycles are not the operation'
     labels = {}
     for l in open(f'{d}/r.lbl'):
         m = re.match(r'al ([0-9A-F]+) \.(\w+)', l)
