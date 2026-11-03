@@ -80,6 +80,15 @@ fn set_byte(one: &Insn) -> Option<u32> {
     (what.op == Operation::Unary && name.starts_with("set") && into.width == 1).then_some(into.value)
 }
 
+/// Whether `one` is an x87 compare that sets the flags itself (`fcomi`): the
+/// decoder cannot say so before the stack is assigned, but the pin sees it as
+/// the `EFLAGS` definition (`UCOM_FpIr*`), which reads none.
+fn flags_compare(one: &Insn) -> bool {
+    one.what
+        .as_ref()
+        .is_some_and(|what| what.op == Operation::Compare && matches!(what.name.as_deref(), Some("fcomi" | "fcomip")))
+}
+
 /// `movzx into, byte`: `into`.
 fn zero_extend_of(
     one: &Insn,
@@ -136,7 +145,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
         while index < insns.len() {
             let one = Arc::clone(&insns[index]);
             let effect = liveness::effect(regs, bits, &one);
-            let writes_flags = effect.as_ref().is_some_and(|e| flag_lane(&e.writes));
+            let writes_flags = flags_compare(&one) || effect.as_ref().is_some_and(|e| flag_lane(&e.writes));
             // An instruction of unknown effect might write the flags: the
             // instruction before is no longer the latest definition we know.
             if effect.is_none() {
@@ -149,9 +158,11 @@ pub fn fixed(body: &LirBody) -> LirBody {
                     return None;
                 }
                 // The flag-writing instruction must not read the flags.
-                let def_effect = liveness::effect(regs, bits, &insns[flags_at])?;
-                if flag_lane(&def_effect.all_reads()) {
-                    return None;
+                if !flags_compare(&insns[flags_at]) {
+                    let def_effect = liveness::effect(regs, bits, &insns[flags_at])?;
+                    if flag_lane(&def_effect.all_reads()) {
+                        return None;
+                    }
                 }
                 let at = (index + 1..insns.len()).find(|&later| zero_extend_of(&insns[later], byte).is_some())?;
                 let into = zero_extend_of(&insns[at], byte)?;
@@ -200,7 +211,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
             if writes_flags {
                 // `inc` leaves CF: a `setb` after it reads an earlier carry,
                 // which a zero put before `inc` would clear.
-                let all = effect.as_ref().is_some_and(|e| every_flag.is_subset(&e.writes));
+                let all = flags_compare(&one) || effect.as_ref().is_some_and(|e| every_flag.is_subset(&e.writes));
                 flags_def = all.then_some(index);
             }
             index += 1;
@@ -256,5 +267,24 @@ mod tests {
         assert_eq!(names(None), ["mov", "cmp", "setb"], "the control: nothing between");
         let inc = insn(1, Operation::Unary, "inc", vec![held(4, 4)], vec![held(5, 4)], vec![4], vec![5]);
         assert_eq!(names(Some(inc)), ["cmp", "inc", "setb", "movzx"]);
+    }
+
+    /// `fcomi; seta; movzx` kept its `movzx`: the compare was an x87 one the
+    /// pass did not know writes the flags (`sgn` of a long double at -O2 m64,
+    /// 14 instructions against the pin's 13).
+    #[test]
+    fn test_a_setcc_after_an_fcomi_is_zero_then_setcc() {
+        let mut insns =
+            vec![insn(0, Operation::Compare, "fcomi", vec![], vec![held(1, 10), held(2, 10)], vec![], vec![1, 2])];
+        insns.push(insn(2, Operation::Unary, "seta", vec![held(3, 1)], vec![], vec![3], vec![]));
+        insns.push(insn(3, Operation::Extend, "movzx", vec![held(6, 4)], vec![held(3, 1)], vec![6], vec![3]));
+        let body = LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let done = fixed(&body);
+        let names: Vec<_> = done.blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
+        assert_eq!(names, ["mov", "fcomi", "seta"]);
     }
 }
