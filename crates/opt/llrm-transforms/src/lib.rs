@@ -172,6 +172,9 @@ pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
+pub mod copyback;
+#[cfg(test)]
+mod copyback_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;

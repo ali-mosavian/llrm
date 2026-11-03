@@ -650,6 +650,21 @@ pub fn optimized_with<E: From<String>>(
         bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
     }
 
+    // A by-reference copy-out the callee cannot change goes first: it is what
+    // made a body that only reads its arguments write memory, and the memory
+    // effects are stated again for `promote.` below.
+    let mut copied_out = false;
+    for at in 0..count {
+        for id in reporting(&mut program.modules[at], &mut modules[at], crate::copyback::elided) {
+            copied_out = true;
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "copyback.")?;
+        }
+    }
+    if copied_out {
+        stamped_all(program, modules).map_err(E::from)?;
+    }
+
     // A pointer a body only reads through is given as the fields it reads,
     // before what its callers pass is propagated: a length or a segment now
     // crosses the call as a value.
