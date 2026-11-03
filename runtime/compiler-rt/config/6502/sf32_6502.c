@@ -35,13 +35,16 @@ static sf32 finish(u32 sign, int e, u32 s)
     return sign + ((u32)(e - 1) << 23) + m;
 }
 
+#ifndef SF_EXT_MULDIV
 /* The adapter the 64-bit conversions use: three guard bits, implicit one at bit 26. */
 sf32 sf32_pack(u32 sign, int e, u32 m) { return finish(sign, e, m << 5); }
 
+#endif
 static NOINLINE sf32 nan_of(sf32 a, sf32 b) { return ((a << 1) > (INF << 1) ? a : b) | 0x400000u; }
 
 /* ---- add / sub ---- */
 
+#ifndef SF_EXT_MULDIV
 static NOINLINE sf32 add_special(sf32 a, sf32 b)
 {
     if ((a << 1) > (INF << 1) || (b << 1) > (INF << 1)) return nan_of(a, b);
@@ -51,6 +54,7 @@ static NOINLINE sf32 add_special(sf32 a, sf32 b)
     return a;                           /* b is zero */
 }
 
+#endif
 static u32 unpack24(sf32 a, int *e)     /* 24-bit mantissa with the implicit one; denormals have e = 1 and none */
 {
     u8 hi = (u8)(a >> 24), mid = (u8)(a >> 16);
@@ -61,6 +65,7 @@ static u32 unpack24(sf32 a, int *e)     /* 24-bit mantissa with the implicit one
     return m;
 }
 
+#ifndef SF_EXT_MULDIV
 static u32 unpack(sf32 a, int *e) { return unpack24(a, e) << 8; }
 
 static sf32 add_bits(sf32 a, sf32 b)
@@ -96,6 +101,7 @@ sf_float SF_NAME(addsf3)(sf_float a, sf_float b) { return b2f(add_bits(f2b(a), f
 sf_float SF_NAME(subsf3)(sf_float a, sf_float b) { return b2f(add_bits(f2b(a), f2b(b) ^ SIGN)); }
 sf_float SF_NAME(negsf2)(sf_float a) { return b2f(f2b(a) ^ SIGN); }
 
+#endif
 /* ---- mul ---- */
 
 static NOINLINE sf32 mul_special(sf32 a, sf32 b)
@@ -159,6 +165,7 @@ static sf32 div_bits(sf32 a, sf32 b)
 
 sf_float SF_NAME(divsf3)(sf_float a, sf_float b) { return b2f(div_bits(f2b(a), f2b(b))); }
 
+#ifndef SF_EXT_MULDIV
 /* ---- integer conversions ---- */
 
 static sf32 from_mag(u32 sign, u32 x)
@@ -224,3 +231,4 @@ int SF_NAME(lesf2)(sf_float a, sf_float b) { return SF_NAME(cmpsf2)(a, b); }
 int SF_NAME(gesf2)(sf_float a, sf_float b) { int c = cmp_bits(f2b(a), f2b(b)); return c == 2 ? -1 : c; }
 int SF_NAME(gtsf2)(sf_float a, sf_float b) { return SF_NAME(gesf2)(a, b); }
 int SF_NAME(unordsf2)(sf_float a, sf_float b) { return cmp_bits(f2b(a), f2b(b)) == 2; }
+#endif
