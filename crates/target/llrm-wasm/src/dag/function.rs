@@ -214,7 +214,9 @@ pub fn select_function(
     };
     // `getJumpConditionMergingParams`: the cost model splits every merged
     // condition into branches.
-    let target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    let mut target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    // `getOptLevel() != None`: clusters, jump tables, bit tests and peeling.
+    target.switch_optimize = optimize;
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
     let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(

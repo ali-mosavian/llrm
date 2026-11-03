@@ -42,3 +42,25 @@ fn the_final_return_falls_through_at_o2_and_not_at_o0() {
     assert!(text(Level::O2).contains("# fallthrough-return"), "{}", text(Level::O2));
     assert!(!text(Level::O2).contains("\treturn"), "{}", text(Level::O2));
 }
+
+/// The pin selects a dense switch as one `br_table` at every level. The shared
+/// mid-end lowered it first (`switchlower`) at -O1 and up, so isel never saw
+/// it and the code was a compare tree: eight cases, 40 instructions.
+#[test]
+fn a_dense_switch_is_one_br_table_at_every_level() {
+    let text = include_str!("ir/switch_calls_o2.ll");
+    for level in [Level::O0, Level::O1, Level::O2, Level::Os] {
+        let out = assembly(text, Width::W32, Options { level, ..Options::default() }).unwrap();
+        assert_eq!(out.matches("br_table").count(), 1, "{level:?}:\n{out}");
+    }
+}
+
+/// An optimizing pin clusters a mixed switch: the dense run is a `br_table`
+/// and the sparse values are compares (`getOptLevel() != None`). Ours searched
+/// no clusters at any level, so it was eleven compares and no table.
+#[test]
+fn a_mixed_switch_has_a_br_table_for_its_dense_run_when_optimizing() {
+    let text = include_str!("ir/switch_clusters_o2.ll");
+    let at = |level| assembly(text, Width::W32, Options { level, ..Options::default() }).unwrap();
+    assert_eq!(at(Level::O2).matches("br_table").count(), 1, "{}", at(Level::O2));
+}
