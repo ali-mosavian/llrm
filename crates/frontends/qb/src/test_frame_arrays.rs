@@ -191,3 +191,39 @@ END SUB
 ";
     assert_eq!(built(source).matches("call cc 1000 addrspace(1) void @llrm.qb.B$DDIM").count(), 2, "{}", built(source));
 }
+
+fn invariant_facts(source: &str) -> usize {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "sieve.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend {
+        whole_program: true,
+        frame_array_bytes: 8192,
+        ..qb_driver::Frontend::new("qb45", "llrm")
+    };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
+    program
+        .modules
+        .iter()
+        .flat_map(|module| &module.facts)
+        .filter(|stated| matches!(stated.fact, llrm_hir::facts::Fact::Invariant))
+        .count()
+}
+
+/// A frame array is DIM'd in its procedure, not in `__main`'s entry block, so
+/// no descriptor load was invariant: bq16 quicksort's `Sort` reloaded the
+/// origin in its loop and kept the descriptor pointer, 6 more clocks per
+/// element than C's array pointer, because ArgPromotion could not take it.
+#[test]
+fn a_frame_arrays_descriptor_words_are_invariant_loads() {
+    assert!(invariant_facts(SORT) > 0);
+}
+
+/// The control: a REDIM can rewrite the descriptor, so nothing is invariant.
+#[test]
+fn a_redimmed_arrays_descriptor_words_are_not_invariant_loads() {
+    let resized = SORT.replace(
+        "    DIM i AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)",
+        "    DIM i AS INTEGER\n    REDIM a(n + 1) AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)",
+    );
+    assert_eq!(invariant_facts(&resized), 0);
+}
