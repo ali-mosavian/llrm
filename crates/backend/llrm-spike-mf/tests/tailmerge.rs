@@ -219,3 +219,18 @@ fn a_loop_latch_is_not_merged_with_a_block_outside_the_loop() {
     let last = latch.insts.last().expect("a terminator");
     assert!(matches!(last.kind, Kind::Op("branch_not")), "the latch ends in {:?}", last.kind);
 }
+
+/// Every question about a block's neighbours rescanned the function, so the
+/// pass was cubic in the blocks: a 4341-line function (div_constants_long at
+/// m68k) spent 45% of its 3 s in `successors`. 3000 blocks that share nothing
+/// took minutes; they take milliseconds.
+#[test]
+fn the_pass_does_not_rescan_the_function_for_each_question() {
+    let blocks: Vec<Vec<Inst>> =
+        (0..3000).map(|n| vec![work(Box::leak(format!("w{n}").into_boxed_str())), ret()]).collect();
+    let mut function = layout(blocks);
+    let start = std::time::Instant::now();
+    branch_fold::<Two>(&mut function);
+    let took = start.elapsed();
+    assert!(took.as_secs() < 5, "3000 unrelated blocks took {took:?}");
+}
