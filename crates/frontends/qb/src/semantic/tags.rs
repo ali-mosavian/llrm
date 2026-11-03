@@ -50,6 +50,8 @@ pub(super) enum Tag {
 pub(super) struct Shape {
     /// The array's elements are a frame object, not the runtime's.
     pub frame: bool,
+    /// The array's name (`array_key`), for the placement model.
+    pub name: String,
     pub descriptor: u32,
     pub records: Vec<(Operand, Operand)>,
     pub element: u32,

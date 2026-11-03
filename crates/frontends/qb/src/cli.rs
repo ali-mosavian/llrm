@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -104,6 +104,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--export" => frontend.exports.push(value("--export")?),
             "--array-merging" => frontend.array_merging = true,
             "--frame-arrays" => frontend.frame_array_bytes = 8192,
+            "--keep-far" => frontend.keep_far.push(value("--keep-far")?),
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
@@ -142,6 +143,21 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
+    {
+        let cpu = bound.target.default_cpu();
+        let priced = llrm_codegen::backend::cpu::tuned_for(
+            &*bound.target,
+            cpu,
+            matches!(
+                flags.level,
+                llrm_codegen::driver::flags::Level::Os | llrm_codegen::driver::flags::Level::Oz
+            ),
+        )?
+        .target();
+        let costs = priced.costs();
+        frontend.room =
+            llrm_qb_room(priced.address_registers(), priced.segment_registers(), 2 * (costs.load + costs.store));
+    }
     // The bytes of the pointer that is the near space, and of the one that is
     // the far: a target with one space has the same for both.
     let spaces = &bound.target.layout().spaces;
@@ -301,5 +317,24 @@ mod tests {
         assert_eq!(runtime(&["p.bas"]), "llrm");
         assert_eq!(runtime(&["p.bas", "--runtime", "qb45"]), "qb45");
         assert_eq!(runtime(&["p.bas", "-fqb-runtime=pds71"]), "pds71");
+    }
+}
+
+/// The frame-array choice's view of the target: its integer and segment
+/// registers, and what one value spilled in a loop costs. A DIM and an ERASE
+/// together run `DIM_AND_ERASE` clocks: B$DDIM and B$ERAS around a
+/// small array, (873,036 - 35,033) / 1000 calls of a procedure that DIMs eight
+/// integers, with and without `--frame-arrays`, at -O2.
+fn llrm_qb_room(
+    addresses: i64,
+    segments: i64,
+    spill: i64,
+) -> crate::semantic::Room {
+    const DIM_AND_ERASE: i64 = 840;
+    crate::semantic::Room {
+        addresses: addresses.max(0) as usize,
+        segments: segments.max(0) as usize,
+        spill,
+        dim: DIM_AND_ERASE,
     }
 }

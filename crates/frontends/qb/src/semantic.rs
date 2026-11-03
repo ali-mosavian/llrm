@@ -13,6 +13,8 @@ mod format_spec;
 mod invariance;
 mod merging;
 mod near;
+mod placement;
+pub use placement::Room;
 mod shapes;
 mod tags;
 
@@ -385,6 +387,8 @@ struct Compiler {
     /// here: an element passed by reference is still copied in and out.
     /// The procedure being compiled, as `array_key` spells it.
     procedure_key: String,
+    // Every element access and array handed on, for `placement`.
+    usage: placement::Usage,
     /// The next array declared lives in the frame.
     frame_next: bool,
     /// Each frame array's descriptor place, and the place of its elements.
@@ -571,6 +575,10 @@ pub struct Options {
     /// The most bytes of a procedure's constant-bound array the frame holds,
     /// where the runtime would allocate it (0: none).
     pub frame_array_bytes: usize,
+    /// Upper-case names of arrays that stay the runtime's.
+    pub keep_far: BTreeSet<String>,
+    /// What the target holds, for `placement`: none leaves the model off.
+    pub room: placement::Room,
     /// Every array is in DGROUP, so a formal reaches its elements near: set by
     /// the compile itself, where `all_near` holds.
     pub near_arrays: bool,
@@ -674,8 +682,10 @@ pub fn compile_debugged(
     if options.frame_array_bytes > 0 {
         let mut options = options.clone();
         let denied = near::denied(&compiler);
-        if !denied.is_empty() {
+        let far = placement::kept_far(&compiler);
+        if !denied.is_empty() || !far.is_empty() {
             options.frame_deny = denied;
+            options.keep_far.extend(far);
             compiler = built_from(module, module_name, dialect, runtime, &options, source.clone())?;
         }
         if near::all_near(&compiler) {
@@ -834,6 +844,13 @@ fn built_from(
                     .fail(format!("{}: VOLATILE is not supported on an array parameter", parameter.declaration.name));
             }
             if is_array {
+                compiler
+                    .usage
+                    .formals
+                    .insert(
+                        (compiler.procedure_key.clone(), array_key(&parameter.declaration.name)),
+                        parameters.len() - 1,
+                    );
                 compiler.debug_parameter(
                     parameters.len() - 1,
                     &parameter.declaration.name,
@@ -1922,6 +1939,7 @@ impl Compiler {
             implicit_storage: "module",
             resized: BTreeSet::new(),
             procedure_key: String::new(),
+            usage: placement::Usage::default(),
             frame_next: false,
             frame_arrays: BTreeMap::new(),
             resized_formals: false,
@@ -2668,6 +2686,8 @@ impl Compiler {
             && !item.dynamic
             && !self.resized_formals
             && !self.options.frame_deny.contains(&self.procedure_key)
+            && !self.options.keep_far.contains(&array_key(&item.name))
+            && !self.options.keep_far.contains(&format!("{}/{}", self.procedure_key, array_key(&item.name)))
             && self.declaring_depth == 0
             && !self.resized.contains(&array_key(&item.name))
             && self.constant_bounds(item)
@@ -2962,6 +2982,7 @@ impl Compiler {
         self.holds(bounds::Held::Place(descriptor_place), Some(stated));
         self.tag_last(Tag::Allocate(Shape {
             frame: self.frame_arrays.contains_key(&descriptor_place),
+            name: array_key(&declaration.name),
             descriptor,
             records,
             element,
@@ -5852,6 +5873,7 @@ impl Compiler {
                 if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
                     let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
+                    self.note_access(pointer, name, &variable, arguments);
                     return Ok((
                         Operand::Indirect {
                             base: pointer,
@@ -5932,6 +5954,7 @@ impl Compiler {
                 if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
                     let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
+                    self.note_access(pointer, name, &variable, arguments);
                     return Ok((ProjectionBase::Indirect(pointer, false, true), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
@@ -6065,6 +6088,38 @@ impl Compiler {
         let pointer = self.value(element_pointer_type);
         self.emit("ptr_offset", vec![pointer], vec![Operand::Value(array_pointer), Operand::Value(bytes)]);
         Ok((pointer, element))
+    }
+
+    /// The array `variable`, named `name` in this procedure, as the placement
+    /// model knows it.
+    fn array_identity(
+        &self,
+        name: &str,
+        variable: &Variable,
+    ) -> placement::Array {
+        let procedure = self.procedure_key.clone();
+        let formal = variable.descriptor_place.is_none() && variable.descriptor.is_some();
+        match self.usage.formals.get(&(procedure.clone(), array_key(name))) {
+            Some(&position) if formal => placement::Array::Formal(procedure, position),
+            _ => placement::Array::Local(procedure, array_key(name)),
+        }
+    }
+
+    fn note_access(
+        &mut self,
+        pointer: u32,
+        name: &str,
+        variable: &Variable,
+        subscripts: &[Expr],
+    ) {
+        let array = self.array_identity(name, variable);
+        let (mut names, composite) = placement::subscripts(subscripts);
+        // A named constant is no register.
+        names.retain(|name| {
+            !self.constants.contains_key(name.as_str()) && !self.constants.contains_key(&name.to_ascii_lowercase())
+        });
+        let procedure = self.procedure_key.clone();
+        self.usage.accesses.push(placement::Access { procedure, pointer, array, names, composite });
     }
 
     fn descriptor_element(
@@ -7097,7 +7152,7 @@ impl Compiler {
         if let Some(held) = bounds::Held::of(&variable) {
             self.holds(held, Some(stated));
         }
-        self.tag_last(Tag::Reallocate(Shape { frame: false, descriptor, records, element }));
+        self.tag_last(Tag::Reallocate(Shape { frame: false, name: String::new(), descriptor, records, element }));
         Ok(())
     }
 
@@ -8884,7 +8939,9 @@ impl Compiler {
         let mut string_cleanups = Vec::new();
         let mut string_copybacks = Vec::new();
         let mut byref_copybacks = Vec::new();
-        for (argument, (parameter_type, by_value, segmented, array)) in arguments.iter().zip(&signature.parameters) {
+        for (position, (argument, (parameter_type, by_value, segmented, array))) in
+            arguments.iter().zip(&signature.parameters).enumerate()
+        {
             if *segmented {
                 if *array || *by_value {
                     return self.fail(format!("SEG parameter for {name} must be scalar BYREF"));
@@ -8923,6 +8980,8 @@ impl Compiler {
                 if *parameter_type != ANY && variable.element != Some(*parameter_type) {
                     return self.fail(format!("array argument type does not match {name}"));
                 }
+                let from = self.array_identity(array_name, &variable);
+                self.usage.flows.push((from, placement::Array::Formal(array_key(name), position)));
                 let descriptor = self.descriptor_pointer(&variable)?;
                 operands.push(Operand::Value(descriptor));
                 passing.push(Passing::Array(descriptor));

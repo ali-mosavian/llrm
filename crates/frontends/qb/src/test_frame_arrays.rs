@@ -3,6 +3,10 @@
 use super::driver as qb_driver;
 use super::test_hir::{optimized_mir, written};
 
+/// The 16-bit target's: three address registers, three segment registers, a
+/// spill of two loads and two stores at one clock each, a DIM and ERASE of 840.
+const M16: crate::semantic::Room = crate::semantic::Room { addresses: 3, segments: 3, spill: 4, dim: 840 };
+
 const SIEVE: &str = "DEFINT A-Z
 DECLARE FUNCTION Sieve& (limit AS INTEGER)
 PRINT LTRIM$(STR$(Sieve&(1024)))
@@ -33,6 +37,7 @@ fn optimized(source: &str) -> String {
     let frontend = qb_driver::Frontend {
         whole_program: true,
         frame_array_bytes: 8192,
+        room: M16,
         ..qb_driver::Frontend::new("qb45", "llrm")
     };
     let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
@@ -226,4 +231,106 @@ fn a_redimmed_arrays_descriptor_words_are_not_invariant_loads() {
         "    DIM i AS INTEGER\n    REDIM a(n + 1) AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)",
     );
     assert_eq!(invariant_facts(&resized), 0);
+}
+
+/// bq16 quicksort ran 288K clocks with its array in the frame against 264K
+/// with the runtime's: `Sort` holds the array's base and two subscripts in
+/// the three registers an address is made of, and spills the rest. The
+/// segment registers hold a far array's base for nothing, so an array handed
+/// to a loop like that stays the runtime's.
+#[test]
+fn an_array_parameter_indexed_twice_in_a_hot_loop_stays_the_runtimes() {
+    let source = "DEFINT A-Z
+DECLARE SUB Sort (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)
+DECLARE FUNCTION Drive& ()
+PRINT LTRIM$(STR$(Drive&))
+
+SUB Sort (a() AS INTEGER, lo AS INTEGER, hi AS INTEGER)
+    DIM pivot AS INTEGER, i AS INTEGER, j AS INTEGER, t AS INTEGER
+    IF lo >= hi THEN EXIT SUB
+    pivot = a(hi)
+    i = lo
+    FOR j = lo TO hi - 1
+        IF a(j) < pivot THEN
+            t = a(i): a(i) = a(j): a(j) = t
+            i = i + 1
+        END IF
+    NEXT
+    t = a(i): a(i) = a(hi): a(hi) = t
+    Sort a(), lo, i - 1
+    Sort a(), i + 1, hi
+END SUB
+
+FUNCTION Drive&
+    DIM values(0 TO 63) AS INTEGER
+    DIM k AS INTEGER
+    FOR k = 0 TO 63
+        values(k) = (k * 37) AND 63
+    NEXT
+    Sort values(), 0, 63
+    Drive& = values(5)
+END FUNCTION
+";
+    assert!(built(source).contains("B$DDIM"), "{}", built(source));
+}
+
+/// The control: one subscript in the loop leaves a register for the base, as
+/// bq16 queens does (7% fewer clocks with the array in the frame).
+#[test]
+fn an_array_parameter_indexed_once_in_a_hot_loop_stays_in_the_frame() {
+    let source = "DEFINT A-Z
+DECLARE FUNCTION Safe% (q() AS INTEGER, row AS INTEGER, col AS INTEGER)
+DECLARE FUNCTION Drive& ()
+PRINT LTRIM$(STR$(Drive&))
+
+FUNCTION Safe% (q() AS INTEGER, row AS INTEGER, col AS INTEGER)
+    DIM r AS INTEGER, d AS INTEGER
+    FOR r = 0 TO row - 1
+        d = q(r) - col
+        IF d = 0 OR d = row - r OR d = r - row THEN
+            Safe% = 0
+            EXIT FUNCTION
+        END IF
+    NEXT
+    Safe% = -1
+END FUNCTION
+
+FUNCTION Drive&
+    DIM q(0 TO 11) AS INTEGER
+    q(0) = 1
+    Drive& = Safe%(q(), 1, 3)
+END FUNCTION
+";
+    assert!(!built(source).contains("B$DDIM"), "{}", built(source));
+}
+
+/// bq16 grep ran 51.8M clocks against 44.4M: the scan loop sums two values
+/// read from arrays into a subscript, which no instruction forms in an address
+/// of a frame array (`[bp+si+bx]` is not one), so it takes the register the
+/// loop did not have. The arrays of that loop stay the runtime's, together.
+#[test]
+fn arrays_read_into_each_others_subscripts_in_a_hot_loop_stay_the_runtimes() {
+    let source = "DEFINT A-Z
+DECLARE FUNCTION Drive& ()
+PRINT LTRIM$(STR$(Drive&))
+
+FUNCTION Drive&
+    DIM nxt(0 TO 255) AS INTEGER, classof(0 TO 31) AS INTEGER, hit(0 TO 7) AS INTEGER
+    DIM s AS INTEGER, c AS INTEGER, k AS INTEGER, n AS INTEGER
+    DIM sum AS LONG
+    FOR k = 0 TO 7
+        hit(k) = k AND 1
+    NEXT
+    s = 0
+    FOR n = 1 TO 30
+        FOR k = 0 TO 99
+            c = (k * 7) AND 31
+            s = nxt(s * 32 + classof(c)) AND 7
+            IF hit(s) <> 0 THEN sum = sum + 1
+        NEXT
+    NEXT
+    Drive& = sum
+END FUNCTION
+";
+    assert!(built(source).contains("B$DDIM"), "{}", built(source));
 }

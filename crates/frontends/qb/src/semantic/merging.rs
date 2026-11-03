@@ -528,6 +528,7 @@ fn merged(
                         )];
                         one.tag = Some(Tag::Allocate(Shape {
                             frame: false,
+                            name: String::new(),
                             descriptor: shape.descriptor,
                             records,
                             element: INTEGER,
