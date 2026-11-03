@@ -463,7 +463,7 @@ fn libm_calls(
 
 /// The soft-float routines, spelled as the C compiler spells a definition of
 /// them: what a function with no x87 calls for a float operation. The runtime
-/// (`runtime/softfloat`) is C, so its objects carry the convention's spelling.
+/// (`runtime/compiler-rt`) is C, so its objects carry the convention's spelling.
 fn soft_float_calls(
     default: &llrm_target::calling::Convention,
     format: &str,
