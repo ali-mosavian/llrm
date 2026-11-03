@@ -756,6 +756,8 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
     "jumpthreading@809",
+    "cvp@669",
+    "cvp@810",
     "dfajumpthreading@806",
     "tailrec@688",
     "aggressive-instcombine@678",
