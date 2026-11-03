@@ -34,6 +34,10 @@ pub struct Segment {
     pub start: i64,
     pub end: i64,
     pub place: Place,
+    /// The value number (`VNInfo`) the stretch is of: one register can hold
+    /// several values over its interval once a tied instruction is joined
+    /// into it, and a note is of the one it stands in. None for a cell.
+    pub vn: Option<usize>,
 }
 
 /// What a variable is over a stretch, once the allocator has decided.
@@ -156,7 +160,21 @@ fn locate_with(
                             push(from, to, at);
                         }
                     };
-                    for segment in segments.get(&value).into_iter().flatten() {
+                    // Over the stretches of the value number the note stands in
+                    // (`extendDef` follows the `VNInfo` of the def), not of
+                    // whatever else the register's interval holds.
+                    let number = segments
+                        .get(&value)
+                        .into_iter()
+                        .flatten()
+                        .find(|segment| segment.start <= start && start < segment.end)
+                        .and_then(|segment| segment.vn);
+                    for segment in segments
+                        .get(&value)
+                        .into_iter()
+                        .flatten()
+                        .filter(|segment| number.is_none() || segment.vn == number)
+                    {
                         let (low, high) = (segment.start.max(start), segment.end.min(stop));
                         if low >= high {
                             continue;
@@ -197,6 +215,7 @@ pub fn segments_of(
         let list = out.entry(root).or_default();
         for segment in &lis.interval(value).segments {
             list.push(Segment {
+                vn: segment.valno.as_ref().map(|vn| std::rc::Rc::as_ptr(vn) as usize),
                 start: i64::from(segment.start.get_index()),
                 end: i64::from(segment.end.get_index()),
                 place: Place::Register(register),
@@ -224,7 +243,7 @@ pub fn add_cells(
         let Some(slot) = home(value) else { continue };
         let Some(stretches) = stacks.get(&slot) else { continue };
         let list = table.entry(value).or_default();
-        list.extend(stretches.iter().map(|&(start, end)| Segment { start, end, place: Place::Cell(slot) }));
+        list.extend(stretches.iter().map(|&(start, end)| Segment { start, end, place: Place::Cell(slot), vn: None }));
         list.sort_by_key(|segment| (segment.start, segment.end));
     }
 }
@@ -450,7 +469,7 @@ mod tests {
         end: i64,
         place: Place,
     ) -> Segment {
-        Segment { start, end, place }
+        Segment { start, end, place, vn: None }
     }
 
     fn ranges(found: &[Located]) -> Vec<(i64, i64, Where)> {
@@ -687,6 +706,19 @@ mod tests {
         );
         assert!(!table.contains_key(&8), "a value with no slot gains no entry");
     }
+
+    /// A tied instruction joined into its source's register makes one interval
+    /// of two values (gdb.c `l`, `add eax,eax`): the note is of the value it
+    /// stands in, so the variable ended at the redefinition (the pin's
+    /// 5..7) and ours listed it to the end of the interval (5..11).
+    #[test]
+    fn a_note_is_of_its_value_number_not_of_the_whole_interval() {
+        let held = |start, end, vn| Segment { start, end, place: reg(1), vn: Some(vn) };
+        let table = BTreeMap::from([(7, vec![held(10, 20, 1), held(20, 30, 2)])]);
+        let found = locate_without_gaps(&[note(12, 1, NoteValue::Value(7))], &table, 50);
+        assert_eq!(ranges(&found), [(12, 20, Where::Place(reg(1)))]);
+    }
+
     /// A parameter whose register is last read at the first instruction read
     /// as nowhere from there on, and the tracker closed it at that read: the
     /// pin leaves one `DBG_VALUE` until the register is written, so `id(x)`
@@ -694,7 +726,7 @@ mod tests {
     #[test]
     fn a_value_that_dies_is_not_nowhere_afterwards_unless_a_note_says_so() {
         let mut table = BTreeMap::new();
-        table.insert(7, vec![Segment { start: 10, end: 20, place: reg(1) }]);
+        table.insert(7, vec![Segment { start: 10, end: 20, place: reg(1), vn: None }]);
         let held = [note(10, 1, NoteValue::Value(7))];
         assert_eq!(ranges(&locate_without_gaps(&held, &table, 50)), [(10, 20, Where::Place(reg(1)))]);
         let said = [note(10, 1, NoteValue::Value(7)), note(30, 1, NoteValue::Nothing)];
