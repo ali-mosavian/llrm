@@ -205,6 +205,15 @@ fn live_at(
                     }
                 }
                 // A reference parameter's pointee is read from before the loop.
+                // KNOWN APPROXIMATION (exit 2026-11-15, when the spill-forecast
+                // pricing replaces this count): an array parameter's descriptor
+                // words are loaded through the same kind of operand and are
+                // counted here as scalars, on top of the base `formals` adds.
+                // The loop pays for the base once; the second count stands in
+                // for the element addresses and values the count does not
+                // see,
+                // and `an_array_parameter_in_a_loop_nest_stays_the_runtimes`
+                // (bubble at -Os, +5% clocks in the frame) fails without it.
                 if let Operand::Indirect { base, type_id, inbounds: false, .. } = operand {
                     if matches!(*type_id, INTEGER | LONG) && function.parameters.contains(base) && !(store && at == 0) {
                         reads.insert(u32::MAX - *base);

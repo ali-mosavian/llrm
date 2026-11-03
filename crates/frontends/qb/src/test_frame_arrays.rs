@@ -337,7 +337,10 @@ END FUNCTION
 /// the inner loop's counter, the outer loop's counter, the array's base and the
 /// two element addresses and values want seven of six registers, and the outer
 /// counter goes to memory. The outer loop's counter is live through the
-/// inner loop without being named in it.
+/// inner loop without being named in it. The model also reaches this
+/// answer through the array parameter's descriptor words counted as live
+/// scalars (a known approximation, see `live_at`): without that count the
+/// loop is judged to fit and this test fails.
 #[test]
 fn an_array_parameter_in_a_loop_nest_stays_the_runtimes() {
     let source = "DEFINT A-Z
