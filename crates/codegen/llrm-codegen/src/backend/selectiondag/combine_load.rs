@@ -10,8 +10,10 @@
 //!
 //! DEVIATE LS1 (owner m16, exit 2026-11-17): [`DagCombiner::split_dword_load`]
 //! splits a plain `i32` load read only as its two words. The pin's
-//! `ReduceLoadWidth` ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095)) narrows a load only when nothing else reads
-//! it; m16 only (`split_dword_loads`).
+//! `ReduceLoadWidth`
+//! ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095))
+//! narrows a load only when nothing else reads it; m16 only
+//! (`split_dword_loads`).
 //!
 //! # See also
 //! LLVM's `DAGCombiner::visitLOAD`
