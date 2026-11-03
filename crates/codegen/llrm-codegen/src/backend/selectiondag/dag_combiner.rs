@@ -580,6 +580,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Store => self.visit_store(node).or_else(|| self.indexed(node)),
             ISD::Freeze => self.visit_freeze(node),
             ISD::SetCC => self.visit_setcc(node),
+            ISD::BrCond => self.visit_brcond(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
             ISD::And => self
@@ -2281,6 +2282,113 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         None
+    }
+
+    /// `visitBRCOND`
+    /// ([L21199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L21199)):
+    /// the branch on a frozen condition is the branch on the condition, and a
+    /// condition that is a one-use `xor` is rebuilt as a compare
+    /// ([`Self::rebuild_set_cc`]). DEVIATE: the `BR_CC` fold is left out (x86
+    /// has no `BR_CC`), and so are the `FREEZE` folds under a `SETCC`.
+    fn visit_brcond(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (chain, cond, dest) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        if self.dag.opcode(cond) == ISD::Freeze && self.dag.has_one_use(cond.node) {
+            let inner = self.dag.operand(cond, 0);
+            return Some(self.dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, inner, dest]));
+        }
+        if self.dag.has_one_use(cond.node)
+            && let Some(rebuilt) = self.rebuild_set_cc(cond)
+        {
+            return Some(self.dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, rebuilt, dest]));
+        }
+        None
+    }
+
+    /// `rebuildSetCC`
+    /// ([L21289](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L21289)):
+    /// `(and x, 2^k) >> k` is `setne (and x, 2^k), 0`; `xor x, y` is `setne x,
+    /// y` and `xor (xor x, y), -1` is `seteq x, y`, after the `xor` is
+    /// simplified as it stands (so a compare pair under it is flipped by
+    /// De Morgan, not by this).
+    fn rebuild_set_cc(
+        &mut self,
+        mut n: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(n) == ISD::Srl
+            || (self.dag.opcode(n) == ISD::Truncate
+                && self.dag.has_one_use(self.dag.operand(n, 0).node)
+                && self.dag.opcode(self.dag.operand(n, 0)) == ISD::Srl)
+        {
+            if self.dag.opcode(n) == ISD::Truncate {
+                n = self.dag.operand(n, 0);
+            }
+            let (op0, op1) = (self.dag.operand(n, 0), self.dag.operand(n, 1));
+            if self.dag.opcode(op0) == ISD::And
+                && let (Some(shift), Some(mask)) = (self.dag.constant(op1), self.dag.constant(self.dag.operand(op0, 1)))
+                && self.dag.opcode(self.dag.operand(op0, 1)) == ISD::Constant
+                && mask.is_power_of_two()
+                && u128::from(mask.trailing_zeros()) == shift as u128
+            {
+                let vt = self.dag.value_type(op0);
+                let zero = self.dag.get_constant(0, vt);
+                let result = self.set_cc_result_type(vt);
+                return Some(self.dag.get_setcc(result, op0, zero, CondCode::SetNe));
+            }
+        }
+        if self.dag.opcode(n) == ISD::Xor {
+            while self.dag.opcode(n) == ISD::Xor {
+                match self.visit_xor(n) {
+                    Some(simplified) if simplified.node != n.node => n = simplified,
+                    _ => break,
+                }
+            }
+            if self.dag.opcode(n) != ISD::Xor {
+                return Some(n);
+            }
+            let (mut op0, mut op1) = (self.dag.operand(n, 0), self.dag.operand(n, 1));
+            if self.dag.opcode(op0) != ISD::SetCC && self.dag.opcode(op1) != ISD::SetCC {
+                let mut equal = false;
+                let ones = match self.dag.value_type(n).size_in_bits() {
+                    128.. => u128::MAX,
+                    bits => (1u128 << bits) - 1,
+                };
+                if self.dag.constant(op1) == Some(ones)
+                    && self.dag.has_one_use(op0.node)
+                    && self.dag.opcode(op0) == ISD::Xor
+                    && self.dag.value_type(op0) == EVT::I1
+                {
+                    n = op0;
+                    op0 = self.dag.operand(n, 0);
+                    op1 = self.dag.operand(n, 1);
+                    equal = true;
+                }
+                let cc = if equal { CondCode::SetEq } else { CondCode::SetNe };
+                let legal = self.level < CombineLevel::AfterLegalizeVectorOps
+                    || match (self.tli, self.dag.value_type(op0)) {
+                        (Some(tli), EVT::Simple(operand)) => tli.cond_code_action(cc, operand) == Action::Legal,
+                        _ => true,
+                    };
+                if legal {
+                    let result = self.set_cc_result_type(self.dag.value_type(n));
+                    return Some(self.dag.get_setcc(result, op0, op1, cc));
+                }
+            }
+        }
+        None
+    }
+
+    /// `getSetCCResultType` once types are legal, else the type itself.
+    fn set_cc_result_type(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        match self.tli {
+            Some(tli) if self.level >= CombineLevel::AfterLegalizeTypes => tli.types.set_cc_result_type(vt),
+            _ => vt,
+        }
     }
 
     /// `visitSTORE`'s two checks of the store the chain ends in

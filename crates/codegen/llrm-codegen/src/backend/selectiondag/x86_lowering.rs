@@ -168,6 +168,10 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    fn push_freeze_through_operands(&self) -> bool {
+        true
+    }
+
     fn is_compare_with_flags(
         &self,
         user: ISD,

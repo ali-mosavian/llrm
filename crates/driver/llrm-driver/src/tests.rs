@@ -2490,6 +2490,46 @@ fn a_store_the_next_to_the_same_word_overwrites_is_dropped_at_m64() {
     assert_eq!(stores, 0, "{listing}");
 }
 
+/// `select a, true, freeze b` of two compares is `(x^c)|(y^c) != 0` at x86: the
+/// freeze is pushed through the compare (`visitFREEZE`), where kept it hid the
+/// `or` of compares from `foldLogicOfSetCCs` and left two `setne`, an `or`, a
+/// `movzx` and an `and 1` (memcpy_runtime -O3 m32, 1084 -> 1101 B).
+#[test]
+fn an_or_of_two_compares_with_one_constant_is_one_setne_at_m32() {
+    let ir = "target datalayout = \"@m32-datalayout@\"\n\
+              target triple = \"i686-pc-linux-gnu\"\n\
+              @to = global [8 x i8] zeroinitializer\n\
+              define i32 @f(i32 %acc) {\n  %p = load i8, ptr @to\n  \
+              %q = load i8, ptr getelementptr (i8, ptr @to, i32 2)\n  \
+              %a = icmp ne i8 %p, -86\n  %b = icmp ne i8 %q, -86\n  \
+              %c = select i1 %a, i1 true, i1 %b\n  %z = zext i1 %c to i32\n  \
+              %r = add i32 %z, %acc\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), ir, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("setne").count(), 1, "{listing}");
+    assert!(!listing.contains("and ecx, 1"), "{listing}");
+}
+
+/// `br (select i1 %u, i1 %bit, i1 false)` is combined as the pin does: the
+/// `brcond` is visited first and `rebuildSetCC` makes `setne(select, -1)`
+/// before the select becomes an `and`. A select made an `and` ahead of the
+/// DAG left `xor(and, -1)`, which De Morgan turned into `setae` + `or`: a
+/// second flag in a spill slot (switch_table_holes -O2 m32, 122 -> 132 B).
+#[test]
+fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m32() {
+    let ir = "target datalayout = \"@m32-datalayout@\"\n\
+              target triple = \"i686-pc-linux-gnu\"\n\
+              declare void @a()\ndeclare void @b()\n\
+              define void @f(i32 %x) {\n  %u = icmp ult i32 %x, 14\n  %t = trunc i32 %x to i16\n  \
+              %s = lshr i16 8707, %t\n  %bit = trunc i16 %s to i1\n  \
+              %c = select i1 %u, i1 %bit, i1 false\n  br i1 %c, label %t1, label %e\nt1:\n  \
+              call void @a()\n  ret void\ne:\n  call void @b()\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), ir, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("setae"), "the compare was inverted:\n{listing}");
+    assert!(!listing.lines().any(|l| l.trim().starts_with("or ")), "the and became an or:\n{listing}");
+}
+
 /// `icmp ult` before `icmp ne` joined by `and` and branched on: the pin keeps
 /// each compare's IR order through De Morgan (`SDLoc(N00)`, `SDLoc(N01)`), so
 /// the source-order scheduler emits `cmp ecx, 7` before `cmp eax, 204`. Ours

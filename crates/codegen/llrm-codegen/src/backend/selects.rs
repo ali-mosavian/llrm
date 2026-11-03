@@ -159,7 +159,7 @@ pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
     ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i1" | "i8" | "i16" | "i32")
 }
 
 /// Every select of `module`'s functions made a branch and a phi.
