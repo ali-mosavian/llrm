@@ -1,5 +1,30 @@
 use crate::testing::parsed;
 
+/// A recursive function reading a slice descriptor's length: argument
+/// promotion takes the length in the descriptor's place (`promote.`), then the
+/// descriptor's unused data pointer goes (`ipa-deadargs.`).
+const DESCRIPTOR: &str = "define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d, i16 %n) noinline {
+b0:
+  %at = getelementptr i8, ptr addrspace(1) %d, i16 4
+  %len = load i16, ptr addrspace(1) %at
+  %done = icmp sle i16 %n, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %r = call i16 @sum(ptr addrspace(1) %d, i16 %m)
+  %s = add i16 %r, %len
+  ret i16 %s
+out:
+  ret i16 %len
+}
+
+define i16 @top(ptr addrspace(1) %p) {
+b0:
+  %r = call i16 @sum(ptr addrspace(1) %p, i16 3)
+  ret i16 %r
+}
+";
+
 const UNUSED_PARAMETER: &str = "define internal i16 @f(i16 %a, i16 %unused) noinline {
 b0:
   %done = icmp sle i16 %a, 0
@@ -29,7 +54,12 @@ fn pipeline_runs(
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
-            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, applied),
+            |program: &mut llrm_mir::program::Program| {
+                // Without an entry nothing is reachable, and no stage of the
+                // interprocedural step has a body to rerun.
+                program.exports.entries.insert("top".to_owned());
+                crate::pipeline::applied(program, applied)
+            },
         )
         .and_then(|done| done)
         .expect("the pipeline runs");
@@ -38,11 +68,12 @@ fn pipeline_runs(
 }
 
 /// The passes a body ran, per `LLRM_DEBUG=runs` line, for the lines of a run
-/// that a stage of the interprocedural step (`ipa-...`) asked for.
+/// that a stage of the interprocedural step (`ipa-...`, `promote.`, `ipsccp.`)
+/// asked for.
 fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
     lines
         .iter()
-        .filter(|line| line.starts_with("body ") && line.contains("trigger \"ipa-"))
+        .filter(|line| line.starts_with("body ") && ["trigger \"ipa-", "trigger \"promote.", "trigger \"ipsccp."].iter().any(|one| line.contains(one)))
         .map(|line| {
             let runs = line.split(" pass runs").next().and_then(|head| head.rsplit(' ').next());
             let name = line.rsplit("name ").next().unwrap_or_default();
@@ -58,8 +89,9 @@ fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
 /// (446, 293 and 287 M instructions).
 #[test]
 fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
-    let lines = pipeline_runs(UNUSED_PARAMETER, &crate::pipeline::Applied::default());
+    let lines = pipeline_runs(&format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS), &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() });
     let reruns = passes_run_by_ipa_stages(&lines);
+    assert!(!reruns.is_empty(), "no stage reran a body: {:?}", lines.iter().filter(|l| l.starts_with("body ")).map(|l| &l[..60.min(l.len())]).collect::<Vec<_>>());
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
 }
 

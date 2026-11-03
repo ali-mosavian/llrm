@@ -1140,6 +1140,13 @@ pub fn recorded(
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
+    // The pin follows IPSCCP, ArgumentPromotion and DeadArgumentElimination
+    // with `GlobalCleanup` (PromotePass, InstCombine, SimplifyCFG,
+    // PassBuilderPipelines.cpp#L1241) and runs the function simplification
+    // pipeline once per body, in the CGSCC walk: these stages leave a body to
+    // the walk's run, not a second full one (GVN ran five times on `main` of
+    // memory_expansion, the pin's twice).
+    let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
     let late = Some({
@@ -1164,8 +1171,14 @@ pub fn recorded(
             let done =
                 // The stage that only retargets loads and stores of globals
                 // keeps GlobalsAA past its bodies, as the walk's runs do.
-                rerun(module, analyses, id, &mut again, stage == "globalsra.")
-                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                rerun(
+                    module,
+                    analyses,
+                    id,
+                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    stage == "globalsra.",
+                )
+                .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
