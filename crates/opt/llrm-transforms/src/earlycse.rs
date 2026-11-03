@@ -1317,7 +1317,14 @@ impl FunctionPass for EarlyCse {
         let before = unit.function.fork();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let view = View::within(unit.context, unit.layout, &before, &outer).with_shape(&shape);
-        let simplifier = FunctionAnalyses::of(unit.context, view.globals, view.metadata, view.layout, &before);
+        let simplifier = FunctionAnalyses::of_declared(
+            unit.context,
+            view.globals,
+            view.metadata,
+            view.layout,
+            &before,
+            outer.assume_declared(),
+        );
         let shape = view.shape();
         // The manager's graph of this body, cloned: the removals below update
         // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp

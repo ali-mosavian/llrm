@@ -6,8 +6,12 @@ use llrm_mir::passes::PassManager;
 use llrm_mir::valuetracking::assume_scans;
 use llrm_transforms::combine_pass::Combine;
 use llrm_transforms::cvp::Cvp;
+use llrm_transforms::inferalignment::InferAlignment;
+use llrm_transforms::instsimplify::InstSimplify;
+use llrm_transforms::loopinstsimplify::LoopInstSimplify;
 
-/// Scans of the globals while `Combine` and `Cvp` run over `functions` bodies.
+/// Scans of the globals while `Combine`, `Cvp`, `InstSimplify`,
+/// `LoopInstSimplify` and `InferAlignment` run over `functions` bodies.
 fn scans(functions: usize) -> u64 {
     let mut text = String::new();
     for at in 0..functions {
@@ -17,6 +21,9 @@ fn scans(functions: usize) -> u64 {
     let mut manager = PassManager::default();
     manager.add(Combine { enabled: true });
     manager.add(Cvp);
+    manager.add(InstSimplify);
+    manager.add(LoopInstSimplify);
+    manager.add(InferAlignment);
     let before = assume_scans();
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     assume_scans() - before

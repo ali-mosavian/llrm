@@ -81,7 +81,28 @@ pub fn instsimplify(
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function);
+    instsimplify_declared(
+        context,
+        globals,
+        metadata,
+        layout,
+        callees,
+        function,
+        llrm_mir::valuetracking::assume_declared(globals),
+    )
+}
+
+/// `instsimplify`, told whether the module declares `llvm.assume`.
+pub fn instsimplify_declared(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    callees: &Callees,
+    function: &mut Function,
+    assume_declared: bool,
+) -> bool {
+    let analyses = FunctionAnalyses::of_declared(context, globals, metadata, layout, function, assume_declared);
     let mut changed = false;
     let (mut to_simplify, mut next) = (IdSet::<InstId>::default(), IdSet::<InstId>::default());
     loop {
@@ -155,7 +176,15 @@ impl FunctionPass for InstSimplify {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        if instsimplify(unit.context, &outer.globals, unit.metadata, unit.layout, outer.callees(), unit.function) {
+        if instsimplify_declared(
+            unit.context,
+            &outer.globals,
+            unit.metadata,
+            unit.layout,
+            outer.callees(),
+            unit.function,
+            outer.assume_declared(),
+        ) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
