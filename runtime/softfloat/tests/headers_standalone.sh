@@ -5,5 +5,8 @@ bad=0
 for f in src/*.c; do
   cc -fsyntax-only -Iinclude -DSF_INTABI=1 "$f" 2>/dev/null || { echo "FAIL $f"; bad=1; }
 done
-[ $bad = 0 ] && echo "ok: every src/*.c compiles alone"
+# sf_helpers.h once ended its include guard before sf_round3 and pack_near: a second include redefined them
+printf '#include "sf_helpers.h"\n#include "sf_helpers.h"\n' > ${TMPDIR:-/tmp}/twice.c
+cc -fsyntax-only -Iinclude -DSF_INTABI=1 ${TMPDIR:-/tmp}/twice.c 2>/dev/null || { echo "FAIL sf_helpers.h twice"; bad=1; }
+[ $bad = 0 ] && echo "ok: every src/*.c compiles alone, sf_helpers.h twice"
 exit $bad
