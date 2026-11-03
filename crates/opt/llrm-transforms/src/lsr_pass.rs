@@ -255,8 +255,6 @@ fn plan_loop(
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
     lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
-    lsr.unmanaged_pairs = crate::lsr_collect::unmanaged_address_pairs(se, &cx, header);
-    llrm_support::debug!("lsr", "  unmanaged address pairs: {}", lsr.unmanaged_pairs.len());
     lsr.size = size;
     llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
     lsr.chain_uses = chains.inc_set.clone();

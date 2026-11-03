@@ -82,8 +82,6 @@ pub struct RealMode {
     /// index of its classes, the frame's excluded); none: any general
     /// register.
     pub address_registers: Option<u32>,
-    /// The registers one of the two of a base-plus-index address must be.
-    pub address_bases: Option<u32>,
     /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
     /// stays is inlined into an `optsize` caller only if its code does not
     /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
@@ -1047,10 +1045,6 @@ impl Tti for X86 {
             .as_ref()
             .and_then(|real| real.address_registers)
             .unwrap_or_else(|| self.number_of_gpr_registers())
-    }
-
-    fn address_base_registers(&self) -> u32 {
-        self.real_mode.as_ref().and_then(|real| real.address_bases).unwrap_or_else(|| self.number_of_gpr_registers())
     }
 
     fn scaled_index_insns(&self) -> u32 {
