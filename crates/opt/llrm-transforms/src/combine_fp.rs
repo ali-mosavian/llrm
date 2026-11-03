@@ -42,7 +42,8 @@ use crate::combine_shared::simplify_associative_or_commutative;
 
 /// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
 /// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
-/// C2` is `X op (C1 op C2)` with `reassoc nsz`). DEVIATE 1 covers the rest.
+/// C2` is `X op (C1 op C2)` with `reassoc nsz`), then
+/// `foldBinopWithPhiOperands`. DEVIATE 1 covers the rest.
 pub fn visit_fadd_or_fmul(
     c: &mut Combiner,
     inst: InstId,
@@ -50,7 +51,10 @@ pub fn visit_fadd_or_fmul(
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
     }
-    if simplify_associative_or_commutative(c, inst) { Visit::Changed } else { Visit::None }
+    if simplify_associative_or_commutative(c, inst) {
+        return Visit::Changed;
+    }
+    c.fold_binop_with_phi_operands(inst)
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
@@ -62,6 +66,10 @@ pub fn visit_fsub(
 ) -> Visit {
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
+    }
+    let found = c.fold_binop_with_phi_operands(inst);
+    if !matches!(found, Visit::None) {
+        return found;
     }
     let instruction = c.function.instruction(inst).clone();
     let (op0, op1) = (instruction.operands[0], instruction.operands[1]);
@@ -155,6 +163,10 @@ pub fn visit_fdiv(
     // simplifyFDivInst
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
+    }
+    let found = c.fold_binop_with_phi_operands(inst);
+    if !matches!(found, Visit::None) {
+        return found;
     }
     fold_fdiv_constant_divisor(c, inst)
 }
