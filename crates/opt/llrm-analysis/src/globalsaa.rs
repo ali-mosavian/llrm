@@ -358,7 +358,9 @@ pub struct Contribution {
 /// those it was made under.
 #[derive(Default)]
 pub struct Bodies {
-    declarations: Option<Rc<Vec<GlobalValue>>>,
+    /// The listing's number, not the listing: one nothing else holds is
+    /// brought up to date in place.
+    declarations: Option<u64>,
     elsewhere: Option<Elsewhere>,
     per: IndexMap<GlobalId, (Mark, Rc<Contribution>)>,
 }
@@ -401,11 +403,10 @@ pub fn analysis(
         Some(all) => Result::as_ref(&*all).map_err(String::clone)?[program.module].clone(),
         None => Elsewhere::default(),
     };
-    let declarations = analyses.get::<Declarations>(module);
+    analyses.get::<Declarations>(module);
+    let declarations = analyses.listing();
     let mut memo = std::mem::take(analyses.memo::<Bodies>());
-    if analyses.from_scratch()
-        || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations))
-        || memo.elsewhere.as_ref() != Some(&elsewhere)
+    if analyses.from_scratch() || memo.declarations != Some(declarations) || memo.elsewhere.as_ref() != Some(&elsewhere)
     {
         memo.per.clear();
     }
