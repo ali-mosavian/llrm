@@ -440,6 +440,29 @@ fn a_copy_back_into_the_register_just_copied_from_is_dropped_between_bytes_only(
     assert_eq!(function.blocks[0].insts.len(), 2, "{:?}", function.blocks[0].insts);
 }
 
+/// fletcher -Oz never finished compiling: two copies that touch neither
+/// register each other's, with nothing between them and the branch, took turns
+/// moving to the end of the block for ever. Run on a thread, so a hang fails.
+#[test]
+fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let jump = Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(0)]) };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 4];
+    function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), copy(3, 2), jump], phis: Vec::new() });
+    let assignment = Assignment(vec![reg::A, reg::B, reg::C, reg::D]);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        llrm_z80::compile::sink_copies_to_the_branch(&mut function, &assignment);
+        let _ = done.send(());
+    });
+    assert!(finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "sink_copies_to_the_branch did not return");
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.

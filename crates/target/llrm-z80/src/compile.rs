@@ -638,9 +638,13 @@ pub fn sink_copies_to_the_branch(
                         _ => false,
                     })
             };
-            // only all the way: a copy stopped short sits between a reload and
-            // the compare it folds into
-            if (at + 1..end).any(|later| blocked(&block.insts[later])) {
+            // only past an instruction that is not a copy (two copies that
+            // touch neither register each other's would trade places for ever),
+            // and only all the way: a copy stopped short sits between a reload
+            // and the compare it folds into
+            if (at + 1..end).all(|later| block.insts[later].kind == Kind::Copy)
+                || (at + 1..end).any(|later| blocked(&block.insts[later]))
+            {
                 at += 1;
                 continue;
             }
