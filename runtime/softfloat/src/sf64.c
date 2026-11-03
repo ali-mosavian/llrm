@@ -18,7 +18,10 @@
 #define SF_PACK SF_N(pack_any)
 #include "sf_codec.inc"
 
-/* 64x64 -> 128 as hi:lo from 32x32 partial products. */
+/* 64x64 -> 128 as hi:lo: SF_MUL64X64 when the target has it, else 32x32 partial products. */
+#ifdef SF_MUL64X64
+#define mul64(a, b, hi, lo) SF_MUL64X64(a, b, hi, lo)
+#else
 static void mul64(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo)
 {
     uint32_t h, l;
@@ -31,6 +34,7 @@ static void mul64(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo)
     *lo = (ll & LOW32) | (mid << 32);
     *hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
 }
+#endif
 
 static inline sf64 mul_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t mb)
 {
