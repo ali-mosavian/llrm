@@ -1589,9 +1589,15 @@ fn jump_of(text: &str) -> Option<(Option<&str>, &str)> {
 /// does not price.
 ///
 /// DEVIATE: `jr` is slower taken (12 T against 10) and faster not taken (7
-/// against 10); SDCC's choice, kept for the byte. Exit: block frequencies at
-/// this stage.
-pub fn relax(lines: Vec<Line>) -> Vec<Line> {
+/// against 10). At the size levels every jump within reach is a `jr`, SDCC's
+/// choice. Where speed comes first, a jump that is always taken (`jp`) or
+/// usually (a conditional back edge) stays a `jp`, one byte longer and 2 T
+/// faster each time; a forward conditional jump is a `jr`. Exit: block
+/// frequencies at this stage.
+pub fn relax(
+    lines: Vec<Line>,
+    speed: bool,
+) -> Vec<Line> {
     const REACH: i64 = 100;
     let mut at = 0;
     let mut starts = Vec::with_capacity(lines.len());
@@ -1614,7 +1620,11 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
             if cc.is_some_and(|cc| !reach(cc)) {
                 return None;
             }
-            let distance = labels.get(label)? - (starts[index] + 2);
+            let target = *labels.get(label)?;
+            if speed && (cc.is_none() || target <= starts[index]) {
+                return None;
+            }
+            let distance = target - (starts[index] + 2);
             (distance.abs() <= REACH).then(|| (cc, label))
         });
         match relaxed {

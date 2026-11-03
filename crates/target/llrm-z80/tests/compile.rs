@@ -358,7 +358,7 @@ fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
     let start = out.find("L0_2:").expect("the loop label");
-    let end = out[start..].find("jr nz, L0_2").expect("the back edge") + start;
+    let end = out[start..].find("nz, L0_2").expect("the back edge") + start;
     assert!(!out[start..end].contains("ld l,"), "{out}");
 }
 
@@ -1134,4 +1134,17 @@ fn a_conditional_branch_to_the_same_return_block_as_the_jump_keeps_that_block() 
 fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
+}
+
+/// gcd -O2 ended its subtract arm with `jr` (12 T taken, always taken): 275
+/// clocks against gcc's `jp` at 274. Where speed comes first an always-taken
+/// jump stays a `jp`; at -Oz it is a `jr`, a byte less.
+#[test]
+fn an_always_taken_jump_is_jp_when_speed_comes_first_and_jr_when_size_does() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let fast = text(ir, "gcd", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "gcd", 0, &Request::new(Level::Oz)).expect("compiles");
+    let unconditional = |asm: &str, op: &str| asm.lines().any(|line| line.trim_start().starts_with(&format!("{op} L")));
+    assert!(unconditional(&fast, "jp") && !unconditional(&fast, "jr"), "{fast}");
+    assert!(unconditional(&small, "jr") && !unconditional(&small, "jp"), "{small}");
 }

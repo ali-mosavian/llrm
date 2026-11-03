@@ -1167,7 +1167,7 @@ pub fn lines(
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }
-    .map(expand::relax)
+    .map(|lines| expand::relax(lines, !matches!(request.level, Level::Os | Level::Oz)))
 }
 
 /// The function as text: its label, then one line per instruction.
