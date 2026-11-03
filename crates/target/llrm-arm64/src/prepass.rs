@@ -675,7 +675,7 @@ fn within_pressure(
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
-            (pool::GPR_CALLEE_SAVED.len(), pool::GPR_CALLER_SAVED.len())
+            (pool::GPR_CALLEE_SAVED.len(), crate::lir_view::gpr_caller_saved_count())
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
@@ -863,6 +863,38 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
+    }
+
+    /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
+    /// every trip, +2177 executed over the pin): the allocatable set lacked x15
+    /// and x18, which the pin hands out on Linux, so hoisting had room for 13.
+    #[test]
+    fn fifteen_loop_constants_are_all_hoisted_on_linux() {
+        crate::lir_view::set_darwin(false);
+        let mut ops = Vec::new();
+        for n in 0..15u32 {
+            ops.push(movz(100 + n, n as u16 + 1));
+            ops.push(add(64, 64, 100 + n));
+        }
+        ops.push(Op::I(Inst::CompareBranch {
+            nonzero: true,
+            width: Width::X,
+            rt: Gpr(64),
+            target: Target::Label("loop".into()),
+        }));
+        ops.push(branch_to("exit"));
+        let mut function = MFunc::new("f");
+        function.next_register = 300;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 0), branch_to("loop")].into() },
+            MBlock { label: "loop".into(), ops: ops.into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        hoist(&mut function);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(made(1), 0, "{function:#?}");
     }
 
     /// A value made in an outer loop was sunk into the inner loop that reads it

@@ -267,6 +267,7 @@ pub fn functions_with(
 ) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
+    crate::lir_view::set_darwin(platform == Platform::Darwin);
     let mut out = Vec::new();
     for (id, global, function) in module.functions() {
         if function.is_declaration() {
