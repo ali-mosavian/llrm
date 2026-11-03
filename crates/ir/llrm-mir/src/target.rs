@@ -404,6 +404,9 @@ pub struct OperationCosts {
     /// at most that many stores is stores, not a fill; 0: the table does not
     /// say.
     pub memset_stores: i64,
+    /// A store of a constant that fills a dword where the target needs a
+    /// prefix or a wider immediate for it; 0: `store + prefix`.
+    pub store_dword: i64,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -539,6 +542,7 @@ impl Default for OperationCosts {
             fill_cell: 1,
             fill_segment: 0,
             memset_stores: 0,
+            store_dword: 0,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,

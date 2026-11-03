@@ -885,8 +885,8 @@ pub(crate) fn fills_pay(
             let each = trip_clocks(context, layout, function, callees, blocks.iter(), clocks);
             // At speed the backend stores a small constant fill inline
             // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
-            let (fill, fill_bytes) = match inline.filter(|inline| at_speed && inline.stores() <= inline.max_stores) {
-                Some(inline) => (fills * inline.price(clocks), fills * inline.price(costs)),
+            let (fill, fill_bytes) = match inline.as_ref().filter(|inline| at_speed && inline.all_inline()) {
+                Some(inline) => (inline.price(clocks), inline.price(costs)),
                 None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
             };
             let saved = loop_bytes - fill_bytes;
@@ -898,29 +898,50 @@ pub(crate) fn fills_pay(
         })
 }
 
-/// A fill the backend may store inline: `bytes` long, and the most stores a
-/// constant memset takes before it is a `rep stos`
+/// The fills the backend may store inline, each `lengths` bytes long, and the
+/// most stores a constant memset takes before it is a `rep stos`
 /// (`Tuning::max_stores_per_memset`).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct InlineFills {
     pub max_stores: i64,
-    pub bytes: i64,
+    pub lengths: Vec<i64>,
 }
 
 impl InlineFills {
-    /// Its stores: dwords, then a word and a byte for the tail.
-    pub(crate) fn stores(self) -> i64 {
-        self.bytes / 4 + i64::from(self.bytes % 4 >= 2) + self.bytes % 2
+    /// One fill of `bytes`.
+    pub(crate) fn one(
+        max_stores: i64,
+        bytes: i64,
+    ) -> Self {
+        Self { max_stores, lengths: vec![bytes] }
     }
 
-    /// What those stores cost in `prices`: a dword store carries the
-    /// operand-size prefix where the target has one (`fill_is_smaller`).
+    /// The stores of a fill of `bytes`: dwords, then a word and a byte for the
+    /// tail.
+    fn stores_of(bytes: i64) -> i64 {
+        bytes / 4 + i64::from(bytes % 4 >= 2) + bytes % 2
+    }
+
+    /// Whether every fill is stores, none a `rep stos`.
+    pub(crate) fn all_inline(&self) -> bool {
+        self.lengths.iter().all(|&bytes| Self::stores_of(bytes) <= self.max_stores)
+    }
+
+    /// What those stores cost in `prices`, each fill by its own length: a dword
+    /// store of a constant is `store_dword` where the table says, else a store
+    /// with the operand-size prefix (`fill_is_smaller`).
     pub(crate) fn price(
-        self,
+        &self,
         prices: &OperationCosts,
     ) -> i64 {
-        let dwords = self.bytes / 4;
-        dwords * (prices.store + prices.prefix) + (self.stores() - dwords) * prices.store
+        let dword = if prices.store_dword > 0 { prices.store_dword } else { prices.store + prices.prefix };
+        self.lengths
+            .iter()
+            .map(|&bytes| {
+                let dwords = bytes / 4;
+                dwords * dword + (Self::stores_of(bytes) - dwords) * prices.store
+            })
+            .sum()
     }
 }
 

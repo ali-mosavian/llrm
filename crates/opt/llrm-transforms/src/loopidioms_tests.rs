@@ -1192,11 +1192,12 @@ b2:
 }
 ";
 
-/// lru's init loops (three trips of four stores to four small objects) stayed
-/// loops at m16 -O2: the model priced each fill as `rep stos` (17 clocks and 4
-/// a dword), 128 against the loop's 54, while the backend stores a fill of up
-/// to `MaxStoresPerMemset` stores inline, as main did (+24 clocks, +19
-/// instructions, +5 memory operands over main on lru c).
+/// lru's init loops (three trips of four stores to four global objects) at
+/// m16 -O2: four memsets stored inline are 72 bytes (a word store 6, a dword
+/// store 9 with its prefix and 32-bit immediate: 15, 15, 15, 27) against the
+/// loop's 43, for 11 clocks: lru c +29 B over the loop, which 500 mc/B does not
+/// pay. The price took one length for every fill and the dword store as a
+/// word store with a prefix (7 B), 52 B in all.
 #[test]
 fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
     let mut module = parsed(&format!("{DOS}{SMALL_INIT_LOOP}"));
@@ -1205,7 +1206,7 @@ fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
     manager.add(crate::loopidiom::pass::LoopIdiom::new());
     manager.run_module(&mut module, machine).unwrap();
     let after = printed(&module);
-    assert!(after.matches("call void @llvm.memset").count() == 4, "{after}");
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
 }
 
 const ZEROED_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer

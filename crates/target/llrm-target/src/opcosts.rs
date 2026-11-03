@@ -118,6 +118,10 @@ const OPERATIONS: [&str; 40] = [
     "unroll_budget",
 ];
 
+/// Operations a table may leave out: 0 in `OperationCosts` then, which its
+/// reader reads as "the usual sum".
+const OPTIONAL: [&str; 1] = ["store_dword"];
+
 impl Description {
     pub fn parse(text: &str) -> Result<Self, String> {
         let (mut operations, mut bytes, mut sizes) = (Vec::new(), Vec::new(), Vec::new());
@@ -153,7 +157,7 @@ impl Description {
                 ));
                 continue;
             }
-            if !OPERATIONS.contains(&name.as_str()) {
+            if !OPERATIONS.contains(&name.as_str()) && !OPTIONAL.contains(&name.as_str()) {
                 return Err(format!("opcosts.txt:{}: no operation `{name}`", index + 1));
             }
             let cost = cost(value, index + 1)?;
@@ -213,7 +217,10 @@ impl Description {
             Cost::Step(add) => step_cost(price(add)),
         };
         let mut out = OperationCosts::default();
-        for (name, cost) in operations {
+        let extra = replaced.iter().filter(|(name, _)| !operations.iter().any(|(one, _)| one == name));
+        for (name, cost) in
+            operations.iter().map(|(name, cost)| (name, cost)).chain(extra.map(|(name, cost)| (name, cost)))
+        {
             let cost = replaced.iter().find(|(one, _)| one == name).map_or(cost, |(_, replacement)| replacement);
             let value = value(cost);
             match name.as_str() {
@@ -257,6 +264,7 @@ impl Description {
                 "copy_variable" => out.copy_variable = value,
                 "direction" => out.direction = value,
                 "unroll_budget" => out.unroll_budget = value,
+                "store_dword" => out.store_dword = value,
                 other => unreachable!("`{other}` was checked"),
             }
         }
