@@ -33,7 +33,7 @@ E2
     for c in $srcs; do
       $LLRM_CC --target=6502-sim65 -$OPT $d -DSF_INTABI ${SF6502--include $S/config/6502/config.h} -I$S/include -I$T -S $c -o $T/$(basename $c .c).s
     done
-    { grep -h '^rc[0-9]* = ' $T/*.s | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; for c in $srcs; do grep -v '^rc[0-9]* = ' $T/$(basename $c .c).s; done; cat $MOS_RT; } > $T/p.s
+    { grep -h '^rc[0-9]* = ' $T/*.s | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; for c in $srcs; do grep -v '^rc[0-9]* = ' $T/$(basename $c .c).s || true; done; cat $MOS_RT; } > $T/p.s
     cl65 -t sim6502 -m $T/$k.map -o $T/$k.bin $T/p.s 2>$T/err || { cat $T/err; exit 1; }
     set +e; sim65 -c -x 500000000 $T/$k.bin >$T/$k.out 2>/dev/null; eval "f_$k=\$?"; set -e
     eval "c_$k=\$(sed -n 's/^\([0-9][0-9]*\) cycles.*/\1/p' $T/$k.out | head -1)"
