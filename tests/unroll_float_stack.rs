@@ -3,7 +3,10 @@
 
 mod common;
 
-fn adds(source: &str, level: &str) -> usize {
+fn adds(
+    source: &str,
+    level: &str,
+) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = common::cc::llrm_c()
