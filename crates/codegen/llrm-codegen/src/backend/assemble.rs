@@ -460,7 +460,11 @@ pub fn assembled_by(
             2..4 => 2,
             _ => 1,
         };
-        if to > 1 {
+        // A dword or word entry already on its boundary asks for nothing: the
+        // `align` would still raise the segment to dword, and the linker pads
+        // the next module's data up to it (+2 B in the linked exe of nine
+        // programs at m16 -Os).
+        if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
             data.push(masm::Datum::Align(masm::Align { to }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
