@@ -55,6 +55,11 @@ pub fn hardware(name: &str) -> Option<u8> {
     NAMES.iter().position(|one| *one == name).map(|number| number as u8)
 }
 
+/// A vector register's number by its name (`xmm6` is 6).
+pub fn xmm_number(name: &str) -> Option<u8> {
+    name.strip_prefix("xmm").and_then(|digits| digits.parse::<u8>().ok()).filter(|number| *number < 16)
+}
+
 /// Whether a function must keep the register of hardware number `number`.
 pub fn is_nonvolatile(number: u8) -> bool {
     NONVOLATILE.contains(&number)

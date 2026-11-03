@@ -252,3 +252,9 @@ fn a_declared_frame_with_no_directive_over_code_with_a_prologue_is_refused() {
     // Code that declared no frame at all (an assembled object) is still read.
     assert!(expanded(&with(&pushing)).is_ok());
 }
+
+#[test]
+fn a_vector_register_is_numbered_by_its_name() {
+    assert_eq!((xmm_number("xmm6"), xmm_number("xmm15")), (Some(6), Some(15)));
+    assert_eq!((xmm_number("xmm16"), xmm_number("rbx"), xmm_number("xmm")), (None, None, None));
+}

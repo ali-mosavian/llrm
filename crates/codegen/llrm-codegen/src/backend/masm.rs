@@ -865,11 +865,15 @@ impl CfiState {
 /// (`X86FrameLowering::BuildCFI`'s Win64 arm): `.seh_pushreg` for a push of a
 /// register the function must keep, `.seh_stackalloc` for `sub rsp` and for a
 /// push of any other register, `.seh_setframe` where the frame register is set
-/// from `rsp`. `hardware` is a register's number in the instruction set.
+/// from `rsp`, `.seh_savereg` for a store of a register the function must keep
+/// to `[rsp+d]` and `.seh_savexmm` for a store of `xmm6`..`xmm15` there.
+/// `hardware` is a register's number in the instruction set, `vector` a vector
+/// register's `xmm` number.
 fn seh_after(
     what: &Semantics,
     bp: &Loc,
     hardware: &dyn Fn(&Loc) -> Option<u8>,
+    vector: &dyn Fn(&Loc) -> Option<u8>,
 ) -> Option<Item> {
     use llrm_object::Seh;
     let imm = |loc: &Loc| match loc {
@@ -890,6 +894,19 @@ fn seh_after(
         },
         (Operation::Binary, Some("sub")) if what.dests.first() == Some(&sp_reg()) => {
             Seh::StackAlloc(u64::try_from(what.sources.get(1).and_then(imm)?).ok()?)
+        }
+        (Operation::Move, _) => {
+            let Some(Loc::Mem(to)) = what.dests.first() else { return None };
+            if to.through != STACK || to.addr.is_some() {
+                return None;
+            }
+            let at = u64::try_from(to.offset).ok()?;
+            let from = what.sources.first()?;
+            match (hardware(from), vector(from)) {
+                (Some(number), _) if llrm_x86::mc::win64unwind::is_nonvolatile(number) => Seh::SaveReg(number, at),
+                (None, Some(number)) if number >= 6 => Seh::SaveXmm(number, at),
+                _ => return None,
+            }
         }
         _ => return None,
     };
@@ -1924,6 +1941,10 @@ fn built(
         Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
         _ => None,
     };
+    let vector = |loc: &Loc| match loc {
+        Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::xmm_number),
+        _ => None,
+    };
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     let wrapped_frame = cfi.is_some() && wrap.is_some();
     let mut entry_saves: Vec<(u16, i64)> = Vec::new();
@@ -1939,7 +1960,7 @@ fn built(
             size = size_moved(one).or(size);
             let one = stated.as_ref().unwrap_or(one);
             let marks = cfi.after(one, &bp);
-            entry_items.extend(seh_after(one, &bp, &hardware));
+            entry_items.extend(seh_after(one, &bp, &hardware, &vector));
             // The System V callee-saved registers: rbx, rbp and r12 to r15
             // (ebx, ebp, esi, edi) (the frame register's own push
             // is told apart by its name).
@@ -4815,5 +4836,40 @@ mod split_tests {
     fn a_pointer_across_a_boundary_is_refused() {
         let pointer = Datum::Pointer(Pointer { name: "x".to_owned(), offset: 0, far: false, bytes: 2 });
         assert!(split_data(vec![fill(0xFFFF), pointer], 0x10000).is_err());
+    }
+
+    /// The stores of a Win64 prologue that keep a register: `mov [rsp+32], rbx`
+    /// is `.seh_savereg rbx, 32` and `movaps [rsp+16], xmm6` is
+    /// `.seh_savexmm xmm6, 16`. No producer declared them, so a function
+    /// that saved either was refused or described from its bytes.
+    #[test]
+    fn a_store_of_a_kept_register_to_the_stack_declares_a_save() {
+        use llrm_object::Seh;
+        let rbx = RegId::BX;
+        let xmm6 = RegId::new(iced_x86::Register::XMM6);
+        let hardware = |loc: &Loc| match loc {
+            Loc::Reg(one) if one.register == rbx => Some(3),
+            _ => None,
+        };
+        let vector = |loc: &Loc| match loc {
+            Loc::Reg(one) if one.register == xmm6 => Some(6),
+            _ => None,
+        };
+        let store = |name: &str, from: RegId, offset: i64| {
+            let to = Loc::Mem(ir::Mem { through: STACK, offset, disp_width: 1, ..ir::Mem::new(None, 8) });
+            semantics(Operation::Move, name, vec![to], vec![reg(from)])
+        };
+        let bp = reg(FRAME);
+        let declared = |what: &Semantics| seh_after(what, &bp, &hardware, &vector);
+        assert!(matches!(declared(&store("mov", rbx, 32)), Some(Item::Seh(Seh::SaveReg(3, 32)))));
+        assert!(matches!(declared(&store("movaps", xmm6, 16)), Some(Item::Seh(Seh::SaveXmm(6, 16)))));
+        // Control: a volatile register, and a store through another base, are
+        // not saves.
+        assert!(declared(&store("mov", RegId::AX, 32)).is_none());
+        let through_frame = {
+            let to = Loc::Mem(ir::Mem { through: FRAME, offset: 8, disp_width: 1, ..ir::Mem::new(None, 8) });
+            semantics(Operation::Move, "mov", vec![to], vec![reg(rbx)])
+        };
+        assert!(declared(&through_frame).is_none());
     }
 }
