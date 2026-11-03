@@ -3,9 +3,9 @@
 use llrm_6502::dagisel::hooks::Cpu;
 
 /// A branch looked its label up with a scan of the whole text: a function of
-/// 10,000 lines with 2,000 branches took 22% of the CPU time of memory_expansion
-/// at -O1 (54 s) in `estimate_calling` alone. The lines looked at are now the
-/// text's, once.
+/// 10,000 lines with 2,000 branches took 22% of the CPU time of
+/// memory_expansion at -O1 (54 s) in `estimate_calling` alone. The lines looked
+/// at are now the text's, once.
 #[test]
 fn the_labels_of_a_text_are_found_once_not_once_per_branch() {
     let mut text = String::new();

@@ -306,8 +306,8 @@ thread_local! {
     static LABEL_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The lines [`estimate_calling`] has looked at for labels on this thread, for a
-/// test that it reads the text once and not once per branch.
+/// The lines [`estimate_calling`] has looked at for labels on this thread, for
+/// a test that it reads the text once and not once per branch.
 pub fn label_scans() -> usize {
     LABEL_SCANS.with(std::cell::Cell::get)
 }
@@ -324,8 +324,8 @@ pub fn estimate_calling(
 ) -> Result<Estimate, String> {
     let expanded = expand_macros(text);
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
-    // the first line of each label, found once: a lookup per branch is a scan of
-    // the function per branch
+    // the first line of each label, found once: a lookup per branch is a scan
+    // of the function per branch
     let mut labels: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (at, line) in lines.iter().enumerate() {
         LABEL_SCANS.with(|scans| scans.set(scans.get() + 1));
