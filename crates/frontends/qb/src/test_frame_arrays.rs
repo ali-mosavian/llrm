@@ -91,7 +91,10 @@ fn a_callee_of_a_frame_array_reaches_its_elements_near() {
 /// stays the runtime's.
 #[test]
 fn an_array_that_is_redimmed_stays_the_runtimes() {
-    let resized = SORT.replace("    DIM i AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)", "    DIM i AS INTEGER\n    REDIM a(n + 1) AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)");
+    let resized = SORT.replace(
+        "    DIM i AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)",
+        "    DIM i AS INTEGER\n    REDIM a(n + 1) AS INTEGER\n    FOR i = 0 TO n - 1\n        a(i)",
+    );
     assert!(built(&resized).contains("B$DDIM"), "a formal that is REDIMmed was framed");
 }
 
@@ -99,7 +102,10 @@ fn an_array_that_is_redimmed_stays_the_runtimes() {
 /// BC refuses (error 10); the frame form would not.
 #[test]
 fn a_dim_inside_a_loop_stays_the_runtimes() {
-    let nested = SORT.replace("    DIM values(0 TO 15) AS INTEGER\n", "    DIM k AS INTEGER\n    FOR k = 0 TO 1\n        DIM values(0 TO 15) AS INTEGER\n    NEXT\n");
+    let nested = SORT.replace(
+        "    DIM values(0 TO 15) AS INTEGER\n",
+        "    DIM k AS INTEGER\n    FOR k = 0 TO 1\n        DIM values(0 TO 15) AS INTEGER\n    NEXT\n",
+    );
     assert!(built(&nested).contains("B$DDIM"), "a nested DIM was framed");
 }
 
@@ -127,13 +133,62 @@ FUNCTION Probe%
 END FUNCTION
 ";
 
-/// BC copies an element passed by reference out of its far array into a slot and
-/// back after the call, so `Touch t(1), t()` leaves 5 where the callee stored 99
-/// (real BC 4.5 prints 5). With the array in the frame the element was passed
-/// by address and the program printed 99.
+/// BC copies an element passed by reference out of its far array into a slot
+/// and back after the call, so `Touch t(1), t()` leaves 5 where the callee
+/// stored 99 (real BC 4.5 prints 5). With the array in the frame the element
+/// was passed by address and the program printed 99.
 #[test]
 fn an_element_of_a_frame_array_is_still_copied_in_and_out() {
     let mir = built(TOUCH);
     assert!(!mir.contains("B$DDIM"), "{mir}");
     assert!(mir.contains("B$PEI2(i16 5)"), "{mir}");
+}
+
+/// Each call of a recursive procedure would take another array off a stack
+/// that has room for few, so its arrays stay the heap's.
+#[test]
+fn a_recursive_procedures_array_stays_the_runtimes() {
+    let source = "DEFINT A-Z
+DECLARE SUB Walk (n AS INTEGER)
+Walk 9
+
+SUB Walk (n AS INTEGER)
+    DIM buf(0 TO 15) AS INTEGER
+    buf(0) = n
+    IF n > 0 THEN Walk n - 1
+    PRINT buf(0)
+END SUB
+";
+    assert!(built(source).contains("B$DDIM"), "a recursive procedure's array was framed");
+}
+
+/// The frame arrays of the procedures together are held to what the stack has
+/// room for: three of 2000 bytes do not fit in 4096, so the last stays the
+/// heap's.
+#[test]
+fn frame_arrays_together_stay_within_the_stack() {
+    let source = "DEFINT A-Z
+DECLARE SUB A ()
+DECLARE SUB B ()
+DECLARE SUB C ()
+A
+B
+C
+
+SUB A
+    DIM x(0 TO 999) AS INTEGER
+    x(1) = 1: PRINT x(1)
+END SUB
+
+SUB B
+    DIM y(0 TO 999) AS INTEGER
+    y(1) = 2: PRINT y(1)
+END SUB
+
+SUB C
+    DIM z(0 TO 999) AS INTEGER
+    z(1) = 3: PRINT z(1)
+END SUB
+";
+    assert_eq!(built(source).matches("call cc 1000 addrspace(1) void @llrm.qb.B$DDIM").count(), 1, "{}", built(source));
 }

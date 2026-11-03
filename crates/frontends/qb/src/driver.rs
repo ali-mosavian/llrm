@@ -68,7 +68,8 @@ pub struct Frontend {
     /// Lay out dynamic arrays read together in one allocation:
     /// `--array-merging`.
     pub array_merging: bool,
-    /// A procedure's constant-bound array of at most this many bytes lives in its frame: `--frame-arrays`.
+    /// A procedure's constant-bound array of at most this many bytes lives in
+    /// its frame: `--frame-arrays`.
     pub frame_array_bytes: usize,
     /// Every procedure uses the runtime's frame entry and exit:
     /// `--runtime-frames`.
@@ -164,6 +165,7 @@ fn _options(
             array_merging: frontend.array_merging,
             frame_array_bytes: frontend.frame_array_bytes,
             near_arrays: false,
+            frame_deny: Default::default(),
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
             segment_bytes: frontend.segment_bytes,

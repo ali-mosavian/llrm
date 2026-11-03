@@ -1026,6 +1026,19 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
                     }
+                    // Tuned for size, a fill of whole words at word alignment
+                    // is words where a word takes no prefix (real mode): the
+                    // same bytes as `rep stosb`'s and half the iterations.
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && self.target.dag.pointer.size_in_bits() == 16
+                            && !self.runtime_has("memset")
+                            && bytes % 2 == 0
+                            && alignment >= 2 =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, 2)?
+                    }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }

@@ -381,14 +381,17 @@ struct Compiler {
     implicit_storage: &'static str,
     /// The array names the current procedure REDIMs or ERASEs.
     resized: BTreeSet<String>,
-    /// The element pointers of arrays BC keeps in the far heap that are near here: an element
-    /// passed by reference is still copied in and out.
+    /// The element pointers of arrays BC keeps in the far heap that are near
+    /// here: an element passed by reference is still copied in and out.
     far_in_bc: BTreeSet<u32>,
+    /// The procedure being compiled, as `array_key` spells it.
+    procedure_key: String,
     /// The next array declared lives in the frame.
     frame_next: bool,
     /// Each frame array's descriptor place, and the place of its elements.
     frame_arrays: BTreeMap<u32, u32>,
-    /// Some procedure REDIMs or ERASEs an array parameter, which may be any caller's array.
+    /// Some procedure REDIMs or ERASEs an array parameter, which may be any
+    /// caller's array.
     resized_formals: bool,
     /// How deep in the procedure body `declarations_in` is.
     declaring_depth: usize,
@@ -566,10 +569,15 @@ pub struct Options {
     pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
-    /// The most bytes of a procedure's constant-bound array the frame holds, where the runtime would allocate it (0: none).
+    /// The most bytes of a procedure's constant-bound array the frame holds,
+    /// where the runtime would allocate it (0: none).
     pub frame_array_bytes: usize,
-    /// Every array is in DGROUP, so a formal reaches its elements near: set by the compile itself, where `all_near` holds.
+    /// Every array is in DGROUP, so a formal reaches its elements near: set by
+    /// the compile itself, where `all_near` holds.
     pub near_arrays: bool,
+    /// The procedures (`array_key`) that keep their arrays in the runtime's
+    /// heap: set by the compile itself.
+    pub frame_deny: BTreeSet<String>,
     pub run_time_module: bool,
     /// Every procedure uses the runtime's frame entry and exit.
     pub runtime_frames: bool,
@@ -664,9 +672,17 @@ pub fn compile_debugged(
     source: Option<DebugSource>,
 ) -> Result<(String, Vec<String>), SemanticError> {
     let mut compiler = built_from(module, module_name, dialect, runtime, options, source.clone())?;
-    if options.frame_array_bytes > 0 && !options.near_arrays && near::all_near(&compiler) {
-        let options = Options { near_arrays: true, ..options.clone() };
-        compiler = built_from(module, module_name, dialect, runtime, &options, source)?;
+    if options.frame_array_bytes > 0 {
+        let mut options = options.clone();
+        let denied = near::denied(&compiler);
+        if !denied.is_empty() {
+            options.frame_deny = denied;
+            compiler = built_from(module, module_name, dialect, runtime, &options, source.clone())?;
+        }
+        if near::all_near(&compiler) {
+            options.near_arrays = true;
+            compiler = built_from(module, module_name, dialect, runtime, &options, source)?;
+        }
     }
     // /Ah and /D address every element through the descriptor at run time.
     if options.array_merging && !options.huge_arrays && !options.checked_arrays {
@@ -722,11 +738,19 @@ fn built_from(
     let mut compiler = Compiler::new(module_name, dialect, runtime, options.clone());
     compiler.source = source;
     compiler.detached_results = detached_results;
-    compiler.resized_formals = module.procedures.iter().any(|procedure| {
-        let mut names = BTreeSet::new();
-        resized(&procedure.body, &mut names);
-        procedure.parameters.iter().any(|one| one.declaration.array && names.contains(&array_key(&one.declaration.name)))
-    });
+    compiler.resized_formals = module
+        .procedures
+        .iter()
+        .any(
+            |procedure| {
+                let mut names = BTreeSet::new();
+                resized(&procedure.body, &mut names);
+                procedure
+                    .parameters
+                    .iter()
+                    .any(|one| one.declaration.array && names.contains(&array_key(&one.declaration.name)))
+            },
+        );
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -765,6 +789,7 @@ fn built_from(
             module_places.clone(),
         );
         compiler.implicit_storage = if procedure.is_static { "static" } else { "local" };
+        compiler.procedure_key = array_key(&procedure.name);
         compiler.position = source_position(procedure.span);
         compiler.current_source_line = procedure.span.line;
         let mut parameters = Vec::new();
@@ -1156,7 +1181,7 @@ fn slice_call(
 }
 
 /// How a procedure's array is named in `resized`.
-fn array_key(name: &str) -> String {
+pub(super) fn array_key(name: &str) -> String {
     canonical(name).to_ascii_uppercase()
 }
 
@@ -1898,6 +1923,7 @@ impl Compiler {
             implicit_storage: "module",
             resized: BTreeSet::new(),
             far_in_bc: BTreeSet::new(),
+            procedure_key: String::new(),
             frame_next: false,
             frame_arrays: BTreeMap::new(),
             resized_formals: false,
@@ -1949,6 +1975,8 @@ impl Compiler {
     ) {
         self.variables = variables;
         self.seen.clear();
+        self.frame_arrays.clear();
+        self.far_in_bc.clear();
         self.constants = constants;
         self.next_place = places.iter().map(|place| place.id).max().unwrap_or(0) + 1;
         self.places = places;
@@ -2104,7 +2132,18 @@ impl Compiler {
         entries: &[u32],
     ) {
         let scalar = |place: &Place| integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE);
-        let locals: Vec<Place> = self.places.iter().filter(|place| place.storage == "local").cloned().collect();
+        // A frame array's descriptor is written whole where its DIM stands, so
+        // a zero beside it would only mix word and pointer stores in
+        // one field and cost the pointer its provenance; /D reads it to
+        // tell an array not yet dimensioned.
+        let framed: BTreeSet<u32> =
+            if self.options.checked_arrays { BTreeSet::new() } else { self.frame_arrays.keys().copied().collect() };
+        let locals: Vec<Place> = self
+            .places
+            .iter()
+            .filter(|place| place.storage == "local" && !framed.contains(&place.id))
+            .cloned()
+            .collect();
         let tracked = locals.iter().filter(|place| scalar(place)).map(|place| place.id).collect();
         let unassigned: BTreeSet<u32> =
             assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries, assignment::Named::MayRead)
@@ -2631,10 +2670,14 @@ impl Compiler {
             && self.runtime == "llrm"
             && !item.dynamic
             && !self.resized_formals
+            && !self.options.frame_deny.contains(&self.procedure_key)
             && self.declaring_depth == 0
             && !self.resized.contains(&array_key(&item.name))
             && self.constant_bounds(item)
-            && matches!((bytes, width), (Some(count), Ok(width)) if count.saturating_mul(width) <= self.options.frame_array_bytes)
+            && matches!(
+                (bytes, width),
+                (Some(count), Ok(width)) if count.saturating_mul(width) <= self.options.frame_array_bytes
+            )
     }
 
     fn declarations_in(
@@ -2920,8 +2963,31 @@ impl Compiler {
             self.emit_runtime_call("B$DDIM", Vec::new(), operands);
         }
         self.holds(bounds::Held::Place(descriptor_place), Some(stated));
-        self.tag_last(Tag::Allocate(Shape { frame: self.frame_arrays.contains_key(&descriptor_place), descriptor, records, element }));
+        self.tag_last(Tag::Allocate(Shape {
+            frame: self.frame_arrays.contains_key(&descriptor_place),
+            descriptor,
+            records,
+            element,
+        }));
         Ok(())
+    }
+
+    /// The bytes of the frame array `shape` allocates.
+    pub(super) fn frame_bytes(
+        &self,
+        shape: &Shape,
+    ) -> usize {
+        let count: i64 = shape
+            .records
+            .iter()
+            .map(|(lower, upper)| match (lower, upper) {
+                (Operand::Constant(_, Number::Integer(lower)), Operand::Constant(_, Number::Integer(upper))) => {
+                    upper - lower + 1
+                }
+                _ => 0,
+            })
+            .product();
+        count.max(0) as usize * self.width(shape.element)
     }
 
     /// The frame object that holds the elements of the constant-bound array
@@ -2932,14 +2998,20 @@ impl Compiler {
         element: u32,
         descriptor_place: u32,
     ) -> Result<(), SemanticError> {
-        let count = self.bounds(declaration)?.iter().try_fold(1usize, |total, (lower, upper)| {
-            let (Operand::Constant(_, Number::Integer(lower)), Operand::Constant(_, Number::Integer(upper))) =
-                (lower, upper)
-            else {
-                return None;
-            };
-            total.checked_mul(usize::try_from(upper - lower + 1).ok()?)
-        });
+        let count = self
+            .bounds(declaration)?
+            .iter()
+            .try_fold(
+                1usize,
+                |total, (lower, upper)| {
+                    let (Operand::Constant(_, Number::Integer(lower)), Operand::Constant(_, Number::Integer(upper))) =
+                        (lower, upper)
+                    else {
+                        return None;
+                    };
+                    total.checked_mul(usize::try_from(upper - lower + 1).ok()?)
+                },
+            );
         let Some(extent) = count.map(|count| count * self.width(element)) else {
             return self.fail(format!("{}: a frame array has constant bounds", declaration.name));
         };
@@ -3016,7 +3088,11 @@ impl Compiler {
         // elements, a near pointer so that element access folds to the frame.
         let origin = self.value(near_type);
         let bias = -lower_linear * self.width(element) as i64;
-        self.emit("ptr_offset", vec![origin], vec![Operand::Value(near), Operand::Constant(INTEGER, Number::Integer(bias))]);
+        self.emit(
+            "ptr_offset",
+            vec![origin],
+            vec![Operand::Value(near), Operand::Constant(INTEGER, Number::Integer(bias))],
+        );
         store(self, layout.origin, near_type, Operand::Value(origin));
     }
 
@@ -8918,7 +8994,9 @@ impl Compiler {
                                 || SemanticError { message: "BYREF indirect base has no pointer type".into() },
                             )?;
                         let original = Operand::Indirect { base, offset, type_id, volatile, inbounds };
-                        if (!self.options.one_space() && self.width(pointer_type) == 4) || self.far_in_bc.contains(&base) {
+                        if (!self.options.one_space() && self.width(pointer_type) == 4)
+                            || self.far_in_bc.contains(&base)
+                        {
                             // Ordinary BASIC BYREF formals carry a near
                             // address. BC bridges a field in a far dynamic
                             // array with a near copy-in/copy-out slot; pushing
