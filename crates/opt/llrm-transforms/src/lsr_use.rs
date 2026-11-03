@@ -59,7 +59,7 @@
 //! is not, nor are the post-indexed sites in the other LSR modules. A
 //! scalable `Immediate` does not exist (see [`crate::lsr_formula`]).
 
-use llrm_analysis::scev::expr::{Scev, Type};
+use llrm_analysis::scev::expr::{Scev, Ty, Type};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
@@ -580,7 +580,7 @@ impl Cost {
         let absorbed = f.unfolded_offset.is_non_zero()
             && lu.kind != Kind::Address
             && parts >= 2
-            && r.tti.address_form_adds_offsets()
+            && r.tti.address_form_adds_offsets(narrowest_bits(r, lu, f))
             && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
         if !absorbed {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
@@ -874,4 +874,23 @@ fn is_stack_slot(
     let Some(Operand::Value(v)) = r.se.unknown_value(s) else { return false };
     let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
     matches!(r.cx.function.instruction(def).opcode, Opcode::Alloca { .. })
+}
+
+/// The width the offset is added at: the formula's, or the use's own when the
+/// formula is a wider one truncated back.
+fn narrowest_bits(
+    r: &Rating,
+    lu: &Use,
+    f: &Formula,
+) -> u32 {
+    let bits = |ty: Option<Ty>| match ty {
+        Some(Ty::Int(bits)) => bits,
+        _ => u32::MAX,
+    };
+    lu.fixups
+        .iter()
+        .map(|fixup| bits(r.cx.function.operand_type(r.cx.context, fixup.operand).and_then(|t| r.se.ty_of(r.cx, t))))
+        .chain([bits(f.ty(r.se, r.cx))])
+        .min()
+        .unwrap_or(u32::MAX)
 }
