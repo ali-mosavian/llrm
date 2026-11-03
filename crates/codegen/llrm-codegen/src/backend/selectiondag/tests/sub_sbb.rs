@@ -44,7 +44,7 @@ fn a_negated_shifted_bit_is_a_bit_test_and_sbb() {
         sse2: false,
         min_size: false,
         i16_mul_chains: false,
-        sext_load: false,
+        sext_load: false, zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();

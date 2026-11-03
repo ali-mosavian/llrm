@@ -28,7 +28,7 @@ fn legalized(
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -96,7 +96,7 @@ fn an_unsigned_i64_adds_the_fudge_when_the_sign_was_set() {
         sse2: false,
         min_size: false,
         i16_mul_chains: false,
-        sext_load: false,
+        sext_load: false, zext_free: false,
         profile: None,
     };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);

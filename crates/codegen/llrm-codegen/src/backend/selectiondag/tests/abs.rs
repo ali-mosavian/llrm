@@ -15,7 +15,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
         sse2: false,
         min_size: false,
         i16_mul_chains: false,
-        sext_load: false,
+        sext_load: false, zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

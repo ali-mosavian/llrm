@@ -18,7 +18,7 @@ fn legalized(
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -81,7 +81,7 @@ fn equal_constants_share_a_pool_entry() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -109,7 +109,7 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
                 sse2: false,
                 min_size: false,
                 i16_mul_chains: false,
-                sext_load: false,
+                sext_load: false, zext_free: false,
                 profile: None,
             },
         )

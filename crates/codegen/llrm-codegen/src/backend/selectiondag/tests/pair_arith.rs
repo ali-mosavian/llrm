@@ -98,7 +98,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
                 sse2: false,
                 min_size: false,
                 i16_mul_chains: false,
-                sext_load: false,
+                sext_load: false, zext_free: false,
                 profile: None,
             },
         )

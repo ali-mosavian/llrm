@@ -1094,6 +1094,7 @@ fn selected_in(
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                 sext_load: true,
+                zext_free: m64,
                 profile: if mul_by_clocks {
                     Some(super::x86_lowering::MulPricing {
                         cpu,

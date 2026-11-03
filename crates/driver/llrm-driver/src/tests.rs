@@ -496,6 +496,20 @@ fn a_red_zone_that_costs_displacement_bytes_is_not_taken_at_m64() {
     assert!(!listing.contains("rsp+rdi*2-"), "{listing}");
 }
 
+/// `shl nuw nsw i64 (zext i32 x), 3` was a 64-bit shift (REX.W, a 7 B
+/// base-less `lea` once three-address): the pin's
+/// `ShrinkDemandedOp` and half-width shift run them as 32-bit ones, which
+/// zero-extend for free at x86-64 (pattern_fill Os).
+#[test]
+fn a_zero_extended_operand_is_computed_at_32_bits_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i32 %x, i32 %y) {\n  %a = zext i32 %x to i64\n  %s = shl nuw nsw i64 %a, 3\n  %b = zext i32 %y to i64\n  %t = add nuw nsw i64 %s, %b\n  ret i64 %t\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("shl edi, 3") && !listing.contains("shl r") && !listing.contains("rdi*8"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each

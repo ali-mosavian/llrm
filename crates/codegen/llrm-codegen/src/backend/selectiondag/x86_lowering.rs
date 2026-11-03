@@ -149,6 +149,8 @@ pub struct X86Lowering<'a> {
     /// (`movsx r, [m]`, not a load, `movsx`, `movsxd`). On for the x86 targets
     /// (the 2026-11-03 A/B at m16, m32 and m64 has no larger cell from it).
     pub sext_load: bool,
+    /// `X86TargetLowering::isZExtFree(i32, i64)`: `Subtarget.is64Bit()`.
+    pub zext_free: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
@@ -174,6 +176,32 @@ impl CombineHooks for X86Lowering<'_> {
 
     fn fold_sext_in_reg_of_load(&self) -> bool {
         self.sext_load
+    }
+
+    /// `X86TargetLowering::isTruncateFree` (any narrowing of integers) and
+    /// `isZExtFree` (i32 to i64 on x86-64).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        self.zext_free && wide == EVT::I64 && narrow == EVT::I32
+    }
+
+    /// `X86TargetLowering::isNarrowingProfitable`.
+    fn narrowing_profitable(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        !(wide == EVT::I32 && narrow == EVT::I16)
+    }
+
+    /// DEVIATE: the `ADD`/`SUB`/`MUL` case of `SimplifyDemandedBits` runs where
+    /// the target narrows (it carries `ShrinkDemandedOp`); the 16 and 32-bit
+    /// targets are judged later. Exit 2026-11-20.
+    fn simplify_demanded_add_sub_mul(&self) -> bool {
+        self.zext_free
     }
 
     fn is_compare_with_flags(

@@ -24,7 +24,7 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -67,7 +67,7 @@ fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )

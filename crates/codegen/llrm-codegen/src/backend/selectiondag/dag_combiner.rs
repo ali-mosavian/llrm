@@ -224,6 +224,27 @@ pub trait CombineHooks {
         false
     }
 
+    /// `isTruncateFree(wide, narrow) && isZExtFree(narrow, wide)`: the casts
+    /// `ShrinkDemandedOp` and the shift narrowings of `SimplifyDemandedBits`
+    /// need to run an operation at the narrower type. X86 has them only from
+    /// i64 to i32 on x86-64 (a 32-bit result zero-extends implicitly).
+    fn free_narrowing(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        false
+    }
+
+    /// `isNarrowingProfitable(N, wide, narrow)`; X86: not i32 to i16.
+    fn narrowing_profitable(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        true
+    }
+
     /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the
     /// only modes made) for an access of `vt`. x86 has no indexed forms.
     fn is_indexed_legal(

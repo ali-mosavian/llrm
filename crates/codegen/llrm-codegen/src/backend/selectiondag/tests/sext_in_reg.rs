@@ -37,7 +37,7 @@ fn a_one_bit_sign_extension_legalizes_to_a_negated_mask() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )

@@ -38,7 +38,7 @@ fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -76,7 +76,7 @@ fn an_i64_select_is_a_cmov() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -114,7 +114,7 @@ fn legalized_float_op(
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -193,7 +193,7 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -225,7 +225,7 @@ fn an_f32_to_f64_extend_survives_legalization() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -261,7 +261,7 @@ fn int_to_float_at_sse2_is_a_register_convert() {
                 sse2: true,
                 min_size: false,
                 i16_mul_chains: false,
-                sext_load: false,
+                sext_load: false, zext_free: false,
                 profile: None,
             },
         )
@@ -298,7 +298,7 @@ fn float_to_int_at_sse2_is_a_register_convert() {
                 sse2: true,
                 min_size: false,
                 i16_mul_chains: false,
-                sext_load: false,
+                sext_load: false, zext_free: false,
                 profile: None,
             },
         )
@@ -330,7 +330,7 @@ fn a_float_compare_at_sse2_is_fcmp_and_setcc() {
             sse2: true,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -360,7 +360,7 @@ fn a_float_constant_at_sse2_is_a_pool_load() {
             sse2: true,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -393,7 +393,7 @@ fn a_dynamic_alloca_moves_the_stack_pointer() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
@@ -429,7 +429,7 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
     )
