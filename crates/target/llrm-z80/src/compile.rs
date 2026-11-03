@@ -472,7 +472,10 @@ pub fn use_lanes_in_place(
                 continue;
             };
             let (byte, half) = (*byte, if op == "LO" { lo } else { hi });
-            if defs[byte as usize] != 1 || uses[byte as usize].iter().any(|one| *one != b) {
+            // a byte nothing virtual reads is read through its register by an
+            // instruction that names it (a copy into `a` that allocation made
+            // the identity is gone): it is still made
+            if defs[byte as usize] != 1 || uses[byte as usize].is_empty() || uses[byte as usize].iter().any(|one| *one != b) {
                 at += 1;
                 continue;
             }

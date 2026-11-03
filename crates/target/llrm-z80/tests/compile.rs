@@ -336,6 +336,36 @@ fn a_compare_read_for_equal_and_for_below_sets_both_flags_of_the_word() {
     assert!(out.matches("cp a, ").count() == 2 && !out.contains("sbc a,"), "{out}");
 }
 
+/// `reverse` at -Oz compared `a` with the counter without ever loading `a`
+/// from it: the byte of the counter pair was given `a` itself, its copy into
+/// `a` was dropped as the identity, and the pass that reads a byte from its
+/// pair's half saw no use of the byte and deleted the `LO` that made it. The
+/// compare read `a` implicitly. The loop exited at once and returned 3, not 6.
+#[test]
+fn a_byte_made_in_a_register_that_a_later_instruction_reads_is_still_made() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr16, Class::Gr8];
+    function.blocks.push(Block {
+        id: 0,
+        insts: vec![
+            Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(0)), Operand::Imm(0)]),
+            Inst::new(Kind::Op("LO"), vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(0))]),
+            Inst::new(
+                Kind::Op("CP8r"),
+                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::B))],
+            ),
+        ],
+        phis: Vec::new(),
+    });
+    // v0 in hl, its low byte given a
+    let assignment = Assignment(vec![reg::HL, reg::A]);
+    llrm_z80::compile::use_lanes_in_place(&mut function, &assignment);
+    assert!(function.blocks[0].insts.iter().any(|inst| inst.kind == Kind::Op("LO")), "{:?}", function.blocks[0].insts);
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
