@@ -407,6 +407,13 @@ pub fn gcc_work(body: &Function) -> i64 {
     gcc_insns(body) + (LOOP_TRIPS - 1) * looped
 }
 
+/// What a copy of `body` into itself adds, in `gcc_insns`: its size less the
+/// call it replaces (gcc's edge growth, `want_inline_small_function_p`).
+pub fn recursive_edge_growth(body: &Function) -> i64 {
+    let call = 1 + body.parameters().len() as i64;
+    gcc_insns(body) - call
+}
+
 fn semantic_count(body: &Function) -> i64 {
     body.walk().filter(|&(_, inst)| semantic(body, inst)).count() as i64
 }

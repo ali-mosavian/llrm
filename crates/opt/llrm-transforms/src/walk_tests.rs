@@ -267,6 +267,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
                     flag: true,
+                    o3: false,
                     inlining: true,
                 };
                 late.apply(program, &mut modules)
@@ -2434,7 +2435,14 @@ b0:
 
 /// Calls of `@fib` after the default pipeline on x86-m32 with `options`.
 fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
-    let mut module = parsed(&tree_recursion(0).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    m32_tree_calls(0, options)
+}
+
+fn m32_tree_calls(
+    extra: usize,
+    options: crate::pipeline::Options,
+) -> usize {
+    let mut module = parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
     llrm_mir::program::Program::lend(
         &mut module,
         crate::indvars::tests::m32(),
@@ -2454,4 +2462,15 @@ fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+}
+
+/// gcc rejects the recursive edge of quicksort and bintree at -O2 ("max-inline-insns-auto
+/// limit reached", growth 25-28 and 15-22 against 15) and takes it at -O3
+/// (30): a body that grows past 15 is copied at -O3 only.
+#[test]
+fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+    let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
+    let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
+    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o3 > 8, "not copied at -O3, {o3} calls");
 }
