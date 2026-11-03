@@ -28,6 +28,18 @@ pub struct Spaces {
     pub segment_bytes: Option<u64>,
 }
 
+impl Spaces {
+    /// `TargetMachine::isNoopAddrSpaceCast`: the near and the stack space
+    /// share their offsets, so a cast between them changes no register.
+    pub fn is_noop_addr_space_cast(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> bool {
+        from != to && [from, to].iter().all(|space| *space == self.near || *space == self.stack)
+    }
+}
+
 impl Default for Spaces {
     fn default() -> Self {
         Self::FLAT

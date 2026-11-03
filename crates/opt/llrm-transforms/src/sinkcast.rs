@@ -21,8 +21,11 @@
 //! ```
 //!
 //! MIRROR: `SinkCast`, the two entry conditions, the promotion of a narrow
-//! integer to the register that holds it. The pin leaves the address-space
-//! cast alone (a free one is a target's: x86 has none).
+//! integer to the register that holds it, and `isFreeAddrSpaceCast`: an
+//! address-space cast is sunk where the target's `isNoopAddrSpaceCast` says it
+//! is free (at m16, near and stack share their offsets: a frame address cast to
+//! the stack space ahead of a loop was a `lea` held in a register, each array
+//! `ss:[bx+si]` instead of `[bp+si-N]`).
 //!
 //! DEVIATE SD220 (real mode): a segment made a far pointer (`addrspacecast`
 //! from the segment space to the far or huge one) is sunk too. Far pointers
@@ -158,16 +161,22 @@ pub fn casts_sunk(
             kind,
             CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP
         );
-        let noop = integers
-            && kind != CastOp::AddrSpaceCast
-            && from >= to
-            && promoted(lowering, from) == promoted(lowering, to)
-            && !matches!(kind, CastOp::FPExt | CastOp::FPTrunc);
-        let expands = matches!(kind, CastOp::ZExt | CastOp::SExt) && to > widest(lowering);
         let space_of = |ty| match context.types.get(ty) {
             Type::Pointer(space) => Some(*space),
             _ => None,
         };
+        // `isFreeAddrSpaceCast` (CodeGenPrepare.cpp#L1547): only a cast the
+        // target makes no instruction for is sunk.
+        let free = kind != CastOp::AddrSpaceCast
+            || space_of(source)
+                .zip(space_of(one.ty))
+                .is_some_and(|(from, to)| spaces.is_noop_addr_space_cast(from, to));
+        let noop = integers
+            && free
+            && from >= to
+            && promoted(lowering, from) == promoted(lowering, to)
+            && !matches!(kind, CastOp::FPExt | CastOp::FPTrunc);
+        let expands = matches!(kind, CastOp::ZExt | CastOp::SExt) && to > widest(lowering);
         let far = kind == CastOp::AddrSpaceCast
             && space_of(source).is_some_and(|from| spaces.segment == Some(from))
             && space_of(one.ty).is_some_and(|to| to == spaces.far || spaces.huge == Some(to));
