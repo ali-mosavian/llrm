@@ -350,7 +350,8 @@ impl Usage {
         if !path.insert(index) {
             return 0;
         }
-        let deeper = self.graph.callees_of(index).into_iter().map(|next| self.chain(next, path, memo)).max().unwrap_or(0);
+        let deeper =
+            self.graph.callees_of(index).into_iter().map(|next| self.chain(next, path, memo)).max().unwrap_or(0);
         path.remove(&index);
         let total = self.frames[index] + deeper;
         memo.insert(index, total);

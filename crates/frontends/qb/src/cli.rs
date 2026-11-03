@@ -103,7 +103,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--whole-program" => frontend.whole_program = true,
             "--export" => frontend.exports.push(value("--export")?),
             "--array-merging" => frontend.array_merging = true,
-            "--frame-arrays" => frontend.frame_array_bytes = 2048,
+            "--frame-arrays" => frontend.frame_array_bytes = 8192,
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,

@@ -32,7 +32,7 @@ fn optimized(source: &str) -> String {
     let path = written(&directory, "sieve.bas", source.as_bytes());
     let frontend = qb_driver::Frontend {
         whole_program: true,
-        frame_array_bytes: 2048,
+        frame_array_bytes: 8192,
         ..qb_driver::Frontend::new("qb45", "llrm")
     };
     let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
@@ -109,11 +109,11 @@ fn a_dim_inside_a_loop_stays_the_runtimes() {
     assert!(built(&nested).contains("B$DDIM"), "a nested DIM was framed");
 }
 
-/// The array is the stack's, so it has a budget: 2 KB.
+/// The array is the stack's, so it has a budget: 8 KB.
 #[test]
 fn an_array_over_the_budget_stays_the_runtimes() {
-    let big = SORT.replace("0 TO 15", "0 TO 1999");
-    assert!(built(&big).contains("B$DDIM"), "a 4000-byte array was framed");
+    let big = SORT.replace("0 TO 15", "0 TO 4999");
+    assert!(built(&big).contains("B$DDIM"), "a 10000-byte array was framed");
 }
 
 const TOUCH: &str = "DEFINT A-Z
@@ -176,19 +176,19 @@ B
 C
 
 SUB A
-    DIM x(0 TO 999) AS INTEGER
+    DIM x(0 TO 2499) AS INTEGER
     x(1) = 1: PRINT x(1)
 END SUB
 
 SUB B
-    DIM y(0 TO 999) AS INTEGER
+    DIM y(0 TO 2499) AS INTEGER
     y(1) = 2: PRINT y(1)
 END SUB
 
 SUB C
-    DIM z(0 TO 999) AS INTEGER
+    DIM z(0 TO 2499) AS INTEGER
     z(1) = 3: PRINT z(1)
 END SUB
 ";
-    assert_eq!(built(source).matches("call cc 1000 addrspace(1) void @llrm.qb.B$DDIM").count(), 1, "{}", built(source));
+    assert_eq!(built(source).matches("call cc 1000 addrspace(1) void @llrm.qb.B$DDIM").count(), 2, "{}", built(source));
 }

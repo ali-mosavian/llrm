@@ -38,7 +38,7 @@ pub(super) fn all_near(compiler: &Compiler) -> bool {
 
 /// The stack the frame arrays of all the procedures may take together, which
 /// the runtime's stack leaves room for.
-const STACK_FOR_ARRAYS: usize = 4096;
+const STACK_FOR_ARRAYS: usize = 8192;
 
 /// The procedures whose frame arrays the stack cannot be promised for: one that
 /// can call itself (every call takes another array), then the biggest until
