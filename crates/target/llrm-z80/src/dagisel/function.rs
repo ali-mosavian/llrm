@@ -189,7 +189,13 @@ fn select_built(
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
+    // the scratch slots the legalizers ask for (a long long result's memory)
+    // are frame objects numbered after the function's
+    built.dag.first_temporary = info.next_stack_object();
     let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    for (size, align) in std::mem::take(&mut built.dag.temporaries) {
+        info.new_stack_object(size, align);
+    }
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges
