@@ -645,6 +645,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     ]);
     let env = TargetEnv {
         joins_global_copies: true,
+        joins_pinned_copies: true,
         joins_sub_registers: true,
         palettes: palettes.into(),
         pins: IndexMap::default(),
@@ -1105,6 +1106,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         size: false,
         keep_pinned: false,
         joins_global_copies: false,
+        joins_pinned_copies: true,
         joins_sub_registers: true,
         aliases: Default::default(),
         should_join: Box::new(|_| true),
@@ -1131,4 +1133,42 @@ fn test_the_low_view_of_a_register_hosts_the_narrow_value_and_the_high_byte_does
     let env = env_with_palettes(&[(1, &[RegId::EAX]), (2, &[RegId::AX]), (3, &[RegId::AH])]);
     assert!(env.can_share_sub(2, 1));
     assert!(!env.can_share_sub(3, 1));
+}
+
+/// `v1` arrives in a pinned register and `v2 := mov v1` is its only reader.
+/// The pin joins a copy with a physical register only when it is reserved
+/// (`canJoinPhys`); here the copy joined `v2` into the pin, which then held
+/// its register to `v2`'s last use: an `i64` through a hidden pointer on Z80
+/// had all three pairs held at the first store and failed to allocate.
+#[test]
+fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_says_so() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let was = body(&[(&[def(1), copy(2, 1), read(2)], &[])]);
+    let join = |joins_pinned_copies: bool| {
+        let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+        let env = TargetEnv {
+            joins_global_copies: true,
+            joins_pinned_copies,
+            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            pins: IndexMap::from_iter([(1, RegId::AX)]),
+            size: false,
+            keep_pinned: true,
+            aliases: Default::default(),
+            should_join: Box::new(|_| true),
+            freq: Vec::new(),
+            joins_sub_registers: true,
+            regs: None,
+        };
+        let mut lis = LiveIntervals::new(&was);
+        lis.interval(1);
+        lis.interval(2);
+        let copy_id = was.blocks[0].insns[1].id();
+        join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), copy_id)
+    };
+    assert_eq!(join(true), JoinResult::Joined, "premise: the copy joins when the target allows it");
+    assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
 }

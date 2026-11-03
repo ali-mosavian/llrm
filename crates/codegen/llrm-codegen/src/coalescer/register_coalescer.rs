@@ -196,6 +196,11 @@ pub fn join_copy(
     // partial pair keeps its wide value (`!CP.isPartial()`), so a narrow value
     // that is kept is not joined.
     let (keeps_src, keeps_dst) = (env.keeps(cp.src_reg()), env.keeps(cp.dst_reg()));
+    // `canJoinPhys`: only a reserved register is joined with; a pinned value
+    // is not one unless the target says so.
+    if keeps_src != keeps_dst && !env.joins_pinned_copies() {
+        return JoinResult::Rejected;
+    }
     if cp.is_partial() {
         if keeps_src {
             return JoinResult::Rejected;

@@ -398,6 +398,7 @@ impl Builder<'_> {
             | Location::Offset(..)
             | Location::Expression { .. }
             | Location::EntryValue(_)
+            | Location::WasmLocal(_)
             | Location::Pieces(_)
             | Location::Relative { .. } => return Ok(Vec::new()),
         }
@@ -717,6 +718,7 @@ mod tests {
             definition: Definition::Defined { section, offset },
             size: 0,
             group: None,
+            visibility: Default::default(),
         };
         let procedure = types.len();
         let mut types = types;

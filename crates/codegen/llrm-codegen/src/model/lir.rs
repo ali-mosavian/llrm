@@ -91,6 +91,11 @@ pub struct DebugTags {
     pub defines: Vec<u32>,
     /// The notes (`LirBody::notes`) that stand before it.
     pub before: Vec<u32>,
+    /// The slot index the allocator counted this instruction at, when it
+    /// worked out where the variables are for the writer. A pass that changes
+    /// the instruction (`..clone()`) keeps it; one that makes a new one has
+    /// none.
+    pub slot: Option<i64>,
 }
 
 impl PartialEq for DebugTags {
@@ -325,6 +330,31 @@ impl LirBody {
             })
             .collect();
         if changed { self.with_blocks(blocks) } else { self.clone() }
+    }
+
+    /// `self` with each instruction told its slot (`DebugTags::slot`), by
+    /// the identity it has now; one not in `slots` is left as it is.
+    #[must_use]
+    pub fn with_slots(
+        &self,
+        slots: &crate::support::hash::HashMap<u64, i64>,
+    ) -> LirBody {
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| match slots.get(&one.id()) {
+                        Some(&slot) => one.retagged(DebugTags { slot: Some(slot), ..one.debug.clone() }),
+                        None => Arc::clone(one),
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.with_blocks(blocks)
     }
 
     /// `self`, a pass's result from `old`, with the values the instructions the
@@ -1275,6 +1305,9 @@ pub struct LirBody {
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
+    /// Where each variable is over the code (`LiveDebugValues`), when the
+    /// allocator worked it out for the writer.
+    pub placed: Arc<crate::backend::livedebugvariables::Placed>,
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
@@ -1473,6 +1506,7 @@ impl LirBody {
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
+            placed: Arc::default(),
             arguments_in_cells: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
@@ -1544,6 +1578,7 @@ impl LirBody {
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
+            placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
@@ -1734,7 +1769,7 @@ mod tests {
     fn test_notes_standing_counts_the_notes_some_instruction_still_has() {
         let tagged = |at: i64, before: Vec<u32>| {
             let one = instruction(at, None);
-            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before }, ..(*one).clone() })
+            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before, slot: None }, ..(*one).clone() })
         };
         let body = LirBody::new(
             "f",
