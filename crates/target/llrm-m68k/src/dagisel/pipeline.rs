@@ -186,9 +186,9 @@ pub fn select_block_with(
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
     let mut lowering = M68kLowering { indexed };
-    let selector = Selector::new(match cpu {
-        Cpu::M68000 => m68k_m68000::TABLE,
+    let selector = Selector::new(match cpu.tables() {
         Cpu::M68020 => m68k_m68020::TABLE,
+        _ => m68k_m68000::TABLE,
     });
     let mut target = M68kTarget {
         tli: &tli,

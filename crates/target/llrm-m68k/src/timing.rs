@@ -282,7 +282,11 @@ pub fn cost(
     cost_on(
         match cpu {
             SelectCpu::M68000 => Cpu::M68000,
+            SelectCpu::M68010 => Cpu::M68010,
             SelectCpu::M68020 => Cpu::M68020,
+            SelectCpu::M68030 => Cpu::M68030,
+            SelectCpu::M68040 => Cpu::M68040,
+            SelectCpu::M68060 => Cpu::M68060,
         },
         text,
         bytes,

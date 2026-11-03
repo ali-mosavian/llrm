@@ -300,14 +300,18 @@ pub fn finish(
                 let [mc::Operand::Reg(dst), _] = operands[..] else { return Err("CCR_SAVE operands".to_owned()) };
                 let word = REGISTER_INFO.view(REGISTER_INFO.root(dst), 16).ok_or("no word view")?;
                 let (opcode, from) = match cpu {
-                    crate::dagisel::hooks::Cpu::M68000 => ("MOV16ds", mc::Operand::Symbol("%sr".to_owned(), 0)),
+                    cpu if !cpu.at_least(crate::dagisel::hooks::Cpu::M68010) => {
+                        ("MOV16ds", mc::Operand::Symbol("%sr".to_owned(), 0))
+                    }
                     _ => ("MOV16dc", mc::Operand::Reg(reg::CCR)),
                 };
                 out.push(mc::Inst { opcode, operands: vec![mc::Operand::Reg(word), from] });
             }
             Kind::Op("CCR_PUSH") => {
                 let (opcode, from) = match cpu {
-                    crate::dagisel::hooks::Cpu::M68000 => ("MOV16es", mc::Operand::Symbol("%sr".to_owned(), 0)),
+                    cpu if !cpu.at_least(crate::dagisel::hooks::Cpu::M68010) => {
+                        ("MOV16es", mc::Operand::Symbol("%sr".to_owned(), 0))
+                    }
                     _ => ("MOV16ec", mc::Operand::Reg(reg::CCR)),
                 };
                 out.push(mc::Inst { opcode, operands: vec![mc::Operand::Reg(reg::SP), from] });

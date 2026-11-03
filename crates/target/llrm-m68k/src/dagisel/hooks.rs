@@ -11,11 +11,31 @@ use super::addr;
 use super::generated::ids::isd as m68k_isd;
 use super::generated::{instrinfo, m68k_m68000, m68k_m68020};
 
-/// The CPUs the tables are generated for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The CPUs of the family, in order. The pin selects on three gates only
+/// (`IsM68000`, `AtLeastM68010`, `AtLeastM68020`), so the tables are generated
+/// for the 68000 and the 68020; the others use the nearest one below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Cpu {
     M68000,
+    M68010,
     M68020,
+    M68030,
+    M68040,
+    M68060,
+}
+
+impl Cpu {
+    pub fn at_least(
+        self,
+        other: Cpu,
+    ) -> bool {
+        self >= other
+    }
+
+    /// The CPU whose generated tables select for this one.
+    pub fn tables(self) -> Cpu {
+        if self.at_least(Cpu::M68020) { Cpu::M68020 } else { Cpu::M68000 }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -62,9 +82,9 @@ impl M68kHooks {
         cpu: Cpu,
         opt_none: bool,
     ) -> M68kHooks {
-        let patterns = match cpu {
-            Cpu::M68000 => m68k_m68000::COMPLEX_PATTERNS,
+        let patterns = match cpu.tables() {
             Cpu::M68020 => m68k_m68020::COMPLEX_PATTERNS,
+            _ => m68k_m68000::COMPLEX_PATTERNS,
         };
         let mut complex = vec![None; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
         for &(number, function, _) in patterns {
@@ -93,9 +113,9 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
         &self,
         predicate: u16,
     ) -> bool {
-        match self.cpu {
-            Cpu::M68000 => m68k_m68000::pattern_predicate(&NoDynamicPredicates, predicate),
+        match self.cpu.tables() {
             Cpu::M68020 => m68k_m68020::pattern_predicate(&NoDynamicPredicates, predicate),
+            _ => m68k_m68000::pattern_predicate(&NoDynamicPredicates, predicate),
         }
     }
 
@@ -105,9 +125,9 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
         value: SDValue,
         predicate: u16,
     ) -> bool {
-        match self.cpu {
-            Cpu::M68000 => m68k_m68000::node_predicate(dag, self, value, predicate),
+        match self.cpu.tables() {
             Cpu::M68020 => m68k_m68020::node_predicate(dag, self, value, predicate),
+            _ => m68k_m68000::node_predicate(dag, self, value, predicate),
         }
     }
 
