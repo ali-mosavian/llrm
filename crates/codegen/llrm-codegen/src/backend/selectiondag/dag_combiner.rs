@@ -2174,9 +2174,99 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(saturated) = self.fold_sub_to_usub_sat(vt, node) {
             return Some(saturated);
         }
+        if let Some(folded) = self.fold_sub_algebra(vt, n0, n1) {
+            return Some(folded);
+        }
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// The algebraic folds of `visitSUB`
+    /// ([L4411](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4411)
+    /// to L4470): `(sub -1, x)` is `~x`, `a - (0 - b)` is `a + b`, the
+    /// pairs that cancel, the constants that meet, and `a - (b - c)` is
+    /// `a + (c - b)`. O(1) per node.
+    fn fold_sub_algebra(
+        &mut self,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+    ) -> Option<SDValue> {
+        let mask = super::fold::mask(vt.size_in_bits());
+        let konst = |this: &Self, v: SDValue| this.dag.constant(v).filter(|_| !this.dag.is_opaque(v));
+        let (op0, op1) = (self.dag.opcode(n0), self.dag.opcode(n1));
+        if konst(self, n0) == Some(mask) {
+            return Some(self.dag.get_node(ISD::Xor, vt, &[n1, n0]));
+        }
+        // a - (0 - b) -> a + b
+        if op1 == ISD::Sub && self.dag.constant(self.dag.operand(n1, 0)) == Some(0) {
+            let b = self.dag.operand(n1, 1);
+            return Some(self.dag.get_node(ISD::Add, vt, &[n0, b]));
+        }
+        // a - (a - b) -> b
+        if op1 == ISD::Sub && self.dag.operand(n1, 0) == n0 {
+            return Some(self.dag.operand(n1, 1));
+        }
+        if op0 == ISD::Add {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            // (a + b) - a -> b, (a + b) - b -> a
+            if a == n1 {
+                return Some(b);
+            }
+            if b == n1 {
+                return Some(a);
+            }
+            // (a + c1) - c2 -> a + (c1 - c2)
+            if let (Some(c1), Some(c2)) = (konst(self, b), konst(self, n1)) {
+                let folded = self.dag.get_constant(c1.wrapping_sub(c2) & mask, vt);
+                return Some(self.dag.get_node(ISD::Add, vt, &[a, folded]));
+            }
+            // ((a + (b + c)) - b) -> a + c
+            let inner = b;
+            if self.dag.opcode(inner) == ISD::Add && self.dag.operand(inner, 0) == n1 {
+                let c = self.dag.operand(inner, 1);
+                return Some(self.dag.get_node(ISD::Add, vt, &[a, c]));
+            }
+            // ((a + (b - c)) - b) -> a - c
+            if self.dag.opcode(inner) == ISD::Sub && self.dag.operand(inner, 0) == n1 {
+                let c = self.dag.operand(inner, 1);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[a, c]));
+            }
+        }
+        // c2 - (a + c1) -> (c2 - c1) - a
+        if op1 == ISD::Add
+            && let (Some(c2), Some(c1)) = (konst(self, n0), konst(self, self.dag.operand(n1, 1)))
+        {
+            let folded = self.dag.get_constant(c2.wrapping_sub(c1) & mask, vt);
+            let a = self.dag.operand(n1, 0);
+            return Some(self.dag.get_node(ISD::Sub, vt, &[folded, a]));
+        }
+        if op0 == ISD::Sub {
+            let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            // (a - c1) - c2 -> a - (c1 + c2)
+            if let (Some(c1), Some(c2)) = (konst(self, b), konst(self, n1)) {
+                let folded = self.dag.get_constant(c1.wrapping_add(c2) & mask, vt);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[a, folded]));
+            }
+            // (c1 - a) - c2 -> (c1 - c2) - a
+            if let (Some(c1), Some(c2)) = (konst(self, a), konst(self, n1)) {
+                let folded = self.dag.get_constant(c1.wrapping_sub(c2) & mask, vt);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[folded, b]));
+            }
+            // ((a - (b - c)) - c) -> a - b
+            if self.dag.opcode(b) == ISD::Sub && self.dag.operand(b, 1) == n1 {
+                let inner = self.dag.operand(b, 0);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[a, inner]));
+            }
+        }
+        // a - (b - c) -> a + (c - b)
+        if op1 == ISD::Sub && self.dag.has_one_use(n1.node) {
+            let (b, c) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1));
+            let flipped = self.dag.get_node(ISD::Sub, vt, &[c, b]);
+            return Some(self.dag.get_node(ISD::Add, vt, &[n0, flipped]));
+        }
+        None
     }
 
     /// `getTruncatedUSUBSAT`
