@@ -65,6 +65,19 @@ pointers over one index (fpbench nib, +4 B). Exit: the pin's cost of a frame
 index once its x86 TTI is checked against `isLegalAddressingMode`, by
 2026-11-20.
 
+DEVIATE LU8 (in `generate_end_biased`, with `unmanaged_address_pairs`): of the
+two registers of a base-plus-index address one must be a base register, and the
+target has `Tti::address_base_registers` of them (m16: bx). The end-biased form
+pairs the exit counter with each array's base; where the loop's other accesses
+pair two registers none of which is the counter (an index that is no
+recurrence), and the base registers are fewer than the pairs, the form is not
+made: each pair no base register holds one of is swapped in and out around its
+access, two instructions a trip (grep nib -O2: +2.02M clocks). The pin has no
+end-biased form and prices every register alike. Exit: none, an addressing-mode
+fact of the target; a general register-class model replaces the greedy cover
+when a second class needs it. (A cost term for the same pairs was tried and
+benched worse: it moved loops the form never touched.)
+
 DEVIATE: the target hooks have no access type or address space on the
 legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
 neither. `getPreferredAddressingMode` is none on x86; the post-indexed

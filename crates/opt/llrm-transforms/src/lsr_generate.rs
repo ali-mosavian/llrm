@@ -1115,6 +1115,24 @@ impl Collection<'_, '_> {
                             .scev;
                         let mut f2 = f.clone();
                         f2.delete_base_reg(at);
+                        // DEVIATE LU8: the address would pair the counter with
+                        // its base, but the loop's
+                        // other accesses pair two registers
+                        // none of which is the counter, and the target has
+                        // fewer base registers than
+                        // pairs: each swap costs two
+                        // instructions a trip, more than the loop instruction
+                        // saved.
+                        let limit = self.tti.address_base_registers() as usize;
+                        if limit < self.tti.number_of_gpr_registers() as usize {
+                            let mut with = self.unmanaged_pairs.clone();
+                            with.push((reg, z));
+                            if crate::lsr_use::uncovered_pairs(&with, limit)
+                                > crate::lsr_use::uncovered_pairs(&self.unmanaged_pairs, limit)
+                            {
+                                continue;
+                            }
+                        }
                         let mut sums: Vec<ScevUse> = f2.base_regs.iter().map(|&b| ScevUse::of(b)).collect();
                         sums.push(ScevUse::of(bias));
                         let base = se.get_add_expr(cx, sums, Flags::default(), 0).scev;

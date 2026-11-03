@@ -65,7 +65,7 @@ use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::tti::{Cost as TtiCost, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
-use llrm_support::hash::{HashSet, IndexSet};
+use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
 
@@ -874,4 +874,30 @@ fn is_stack_slot(
     let Some(Operand::Value(v)) = r.se.unknown_value(s) else { return false };
     let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
     matches!(r.cx.function.instruction(def).opcode, Opcode::Alloca { .. })
+}
+
+/// How many of the pairs none of `limit` registers holds one of (the most
+/// held by one register is taken first, as a vertex cover is): the addresses
+/// whose base register has to be swapped in around the access.
+pub fn uncovered_pairs(
+    pairs: &[(Scev, Scev)],
+    limit: usize,
+) -> usize {
+    let mut rest: Vec<(Scev, Scev)> = pairs.to_vec();
+    for _ in 0..limit {
+        if rest.is_empty() {
+            break;
+        }
+        let mut degree: HashMap<Scev, usize> = HashMap::default();
+        for &(a, b) in &rest {
+            *degree.entry(a).or_default() += 1;
+            *degree.entry(b).or_default() += 1;
+        }
+        let Some((&pick, _)) = degree.iter().max_by_key(|&(&reg, &held)| (held, std::cmp::Reverse(format!("{reg:?}"))))
+        else {
+            break;
+        };
+        rest.retain(|&(a, b)| a != pick && b != pick);
+    }
+    rest.len()
 }
