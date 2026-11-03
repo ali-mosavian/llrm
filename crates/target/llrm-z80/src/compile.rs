@@ -145,8 +145,7 @@ fn allocate(
         dump(&function);
     }
     remove_identity_copies(&mut function, &assignment);
-    sink_copies_to_the_branch(&mut function, &assignment);
-    remove_copies_back(&mut function, &assignment);
+    tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     return_conditionally(&mut function);
@@ -430,6 +429,16 @@ pub fn remove_identity_copies(
                 },
             );
     }
+}
+
+/// The copies the allocation left, cleaned: the copies back first, since one
+/// that reads a register stops the copy before it from moving down.
+pub fn tidy_copies(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    remove_copies_back(function, assignment);
+    sink_copies_to_the_branch(function, assignment);
 }
 
 /// Moves a copy down to the block's branches when nothing after it reads or

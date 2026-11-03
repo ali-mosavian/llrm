@@ -439,12 +439,18 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
     function.classes = vec![Class::Gr8; 3];
     // v0 a, v1 b, v2 c: `ld b, a` can follow the compare of a; `ld c, b` cannot follow the compare of c
     function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), compare(0), branch.clone()], phis: Vec::new() });
-    function.blocks.push(Block { id: 1, insts: vec![copy(2, 1), compare(2), branch], phis: Vec::new() });
+    function.blocks.push(Block { id: 1, insts: vec![copy(2, 1), compare(2), branch.clone()], phis: Vec::new() });
     let assignment = Assignment(vec![reg::A, reg::B, reg::C]);
-    llrm_z80::compile::sink_copies_to_the_branch(&mut function, &assignment);
+    llrm_z80::compile::tidy_copies(&mut function, &assignment);
+    // v3 is a again: the copy back into a is dropped first, then the copy ahead of it follows the compare
+    let mut back = MFunction::new("g");
+    back.classes = vec![Class::Gr8; 4];
+    back.blocks.push(Block { id: 0, insts: vec![copy(1, 0), copy(3, 1), compare(3), branch], phis: Vec::new() });
+    llrm_z80::compile::tidy_copies(&mut back, &Assignment(vec![reg::A, reg::B, reg::C, reg::A]));
+    function.blocks.extend(back.blocks);
     let kinds: Vec<Vec<Kind>> = function.blocks.iter().map(|b| b.insts.iter().map(|inst| inst.kind).collect()).collect();
     let (cp, jp) = (Kind::Op("CP8i"), Kind::Op("JPNZ"));
-    assert_eq!(kinds, [vec![cp, Kind::Copy, jp], vec![Kind::Copy, cp, jp]]);
+    assert_eq!(kinds, [vec![cp, Kind::Copy, jp], vec![Kind::Copy, cp, jp], vec![cp, Kind::Copy, jp]]);
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:
