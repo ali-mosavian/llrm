@@ -186,6 +186,7 @@ fn module(
                 | Location::Expression { .. }
                 | Location::EntryValue(_)
                 | Location::WasmLocal(_)
+                | Location::WasmStack(_)
                 | Location::Pieces(_)
                 | Location::Relative { .. } => {}
             }

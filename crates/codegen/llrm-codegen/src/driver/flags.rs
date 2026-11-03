@@ -230,6 +230,9 @@ pub struct Flags {
     /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
     /// is an explicit `__cdecl`.
     pub regcall_default: bool,
+    /// `-fallow-pending-abi`: emit for a platform whose description says its
+    /// ABI is not yet carried.
+    pub allow_pending_abi: bool,
     /// `-frame-pointer=<all|non-leaf|non-leaf-no-reserve|reserved|none>`, the
     /// pin's `cl::opt` of `CommandFlags.cpp` (:204): the `"frame-pointer"`
     /// attribute of each function that has none.
@@ -265,6 +268,7 @@ impl Default for Flags {
             wrapv: false,
             float_store: false,
             regcall_default: false,
+            allow_pending_abi: false,
             frame_pointer: None,
             c_library: false,
             level: Level::O2,
@@ -352,6 +356,7 @@ impl Flags {
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            "-fallow-pending-abi" => self.allow_pending_abi = true,
             _ if flag.starts_with("-frame-pointer=") => {
                 let policy = &flag["-frame-pointer=".len()..];
                 if !["all", "non-leaf", "non-leaf-no-reserve", "reserved", "none"].contains(&policy) {

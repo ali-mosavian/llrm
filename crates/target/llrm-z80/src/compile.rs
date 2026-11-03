@@ -328,6 +328,19 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
             break;
         }
     }
+    // a byte some instruction other than a copy reads from its own register
+    // is wanted there too: loaded in `a` it would be copied out again
+    let read_elsewhere: std::collections::HashSet<u32> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind != Kind::Copy)
+        .flat_map(|inst| &inst.operands)
+        .filter_map(|operand| match operand {
+            Operand::Use(Reg::Virt(v)) => Some(*v),
+            _ => None,
+        })
+        .collect();
     for block in &mut function.blocks {
         for at in 0..block.insts.len().saturating_sub(1) {
             let (copy, load) = (&block.insts[at], &block.insts[at + 1]);
@@ -339,7 +352,7 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
             else {
                 continue;
             };
-            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) {
+            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) || read_elsewhere.contains(byte) {
                 continue;
             }
             let (Operand::Use(from), Operand::Def(to)) = (copy.operands[1].clone(), load.operands[0].clone()) else {
