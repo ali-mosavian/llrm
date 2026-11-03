@@ -15,7 +15,7 @@ fn run(program: &str, args: &[&str], file: &Path) -> Option<String> {
 fn high_pcs(info: &str) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     let (mut name, mut high, mut inside) = (String::new(), None, false);
-    let mut flush = |name: &mut String, high: &mut Option<u64>, out: &mut Vec<(String, u64)>| {
+    let flush = |name: &mut String, high: &mut Option<u64>, out: &mut Vec<(String, u64)>| {
         if let Some(high) = high.take() {
             out.push((std::mem::take(name), high));
         }
