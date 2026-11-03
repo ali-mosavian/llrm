@@ -548,7 +548,17 @@ fn found_with(
         .map(|(id, _, _)| *id)
         .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
         .collect();
-    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries, known: module.globals.len() as u32, base: Base::default() })
+    Ok(Globals {
+        tracked,
+        joined,
+        forged,
+        named,
+        writes,
+        bodies,
+        entries,
+        known: module.globals.len() as u32,
+        base: Base::default(),
+    })
 }
 
 /// The globals `module`'s initializers hold the address of. An initializer
