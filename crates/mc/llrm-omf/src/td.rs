@@ -398,6 +398,8 @@ impl Builder<'_> {
             | Location::Offset(..)
             | Location::Expression { .. }
             | Location::EntryValue(_)
+            | Location::WasmLocal(_)
+            | Location::WasmStack(_)
             | Location::Pieces(_)
             | Location::Relative { .. } => return Ok(Vec::new()),
         }
@@ -717,6 +719,7 @@ mod tests {
             definition: Definition::Defined { section, offset },
             size: 0,
             group: None,
+            visibility: Default::default(),
         };
         let procedure = types.len();
         let mut types = types;
@@ -733,6 +736,7 @@ mod tests {
             blocks: Vec::new(),
             frame: Vec::new(),
             all_calls: false,
+            frame_base: None,
             calls: Vec::new(),
         };
         let mut made = Info {

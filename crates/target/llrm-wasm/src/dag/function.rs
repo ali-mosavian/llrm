@@ -173,6 +173,9 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// StackColoring: the frame object each of the function's allocas moves to
+    /// once selection is done (`frame`'s first entries are the allocas').
+    pub stack_colors: Vec<i32>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -214,7 +217,9 @@ pub fn select_function(
     };
     // `getJumpConditionMergingParams`: the cost model splits every merged
     // condition into branches.
-    let target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    let mut target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    // `getOptLevel() != None`: clusters, jump tables, bit tests and peeling.
+    target.switch_optimize = optimize;
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
     let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
@@ -255,27 +260,44 @@ pub fn select_function(
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
+            // `addSuccessorWithProb`: the edges the builder made of a switch
+            // are the machine blocks' own; the IR's apply to a block it left
+            // alone.
+            let made: Vec<(u32, u32)> = info
+                .edge_probs
+                .iter()
+                .filter(|(from, ..)| *from == id)
+                .map(|&(_, to, probability)| (to.0, probability))
+                .collect();
             selected.push(Selected {
                 id: id.0,
                 origin: origin.0,
                 unwind: if unwinding { unwind_of(function, origin) } else { None },
                 landing: unwinding && id == origin && starts_with_landing_pad(function, origin),
                 phis,
-                probs: if n == 0 { probs.clone() } else { Vec::new() },
+                probs: if !made.is_empty() {
+                    made
+                } else if n == 0 {
+                    probs.clone()
+                } else {
+                    Vec::new()
+                },
                 dag: one.dag,
                 units,
                 mem_refs,
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                stack_colors: Vec::new(),
             });
         }
     }
-    let mut frame = static_frame(module, function, &layout, &info)?;
+    let (mut frame, stack_colors) = static_frame(module, function, &layout, &info)?;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.stack_colors.clone_from(&stack_colors);
     }
     Ok(selected)
 }
@@ -312,19 +334,20 @@ fn starts_with_landing_pad(
 
 /// The (size, alignment) of each static alloca, by the frame index
 /// `FunctionLoweringInfo` gave it: the type's size times a constant count, at
-/// its alignment (`FunctionLoweringInfo::set`).
+/// its alignment (`FunctionLoweringInfo::set`); and what StackColoring makes of
+/// them.
 fn static_frame(
     module: &Module,
     function: &llrm_mir::module::Function,
     layout: &DataLayout,
     info: &FunctionLoweringInfo,
-) -> Result<Vec<(u64, u64)>, String> {
+) -> Result<(Vec<(u64, u64)>, Vec<i32>), String> {
     use llrm_mir::context::ConstantKind;
     use llrm_mir::module::{Operand, ValueDef};
     use llrm_mir::opcode::Opcode;
 
-    let mut objects = vec![(0, 1); info.static_allocas.iter().map(|(_, &index)| index as usize + 1).max().unwrap_or(0)];
-    for (value, &index) in info.static_allocas.iter() {
+    let mut sizes = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return Err("an alloca that is no instruction".into());
         };
@@ -345,7 +368,9 @@ fn static_frame(
         // `AI->getAlign()`; an alloca that states none has the type's preferred
         // one (the IR reader's default).
         let align = align.map_or_else(|| layout.pref_align(types, allocated), u64::from);
-        objects[index as usize] = (size, align);
+        sizes.push((value, size as i64, align as i64));
     }
-    Ok(objects)
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    let colors = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
+    Ok((sizes.iter().map(|&(_, size, align)| (size as u64, align as u64)).collect(), colors.colors))
 }
