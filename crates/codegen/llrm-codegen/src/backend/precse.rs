@@ -145,9 +145,12 @@ fn candidate(
     if what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Held(_)]) {
         return false;
     }
-    // A symbol's address stays out: it is a load of memory the pin shares and
-    // ours cannot make again (CSE2).
+    // A qword symbol address is a candidate: the pin shares `lea sym(%rip)`
+    // (CSE2 keeps the narrower ones out).
+    let remade = matches!(&what.dests[..], [Loc::Held(into)] if into.width == 8)
+        && (what.op == Operation::Address || matches!(&what.sources[..], [Loc::Imm(imm)] if imm.address.is_some()));
     if one.uses.is_empty()
+        && !remade
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -332,7 +335,7 @@ impl Walk<'_> {
         let reads_value = !one.uses.is_empty();
         if !reads_value
             && old_readers.iter().all(|reader| match reader {
-                Reader::Insn(id) => self.copies(*id),
+                Reader::Insn(id) => self.copies(*id) || self.pinned_read(*id, old),
                 Reader::Phi(_) => false,
             })
         {
@@ -350,6 +353,19 @@ impl Walk<'_> {
                 },
             );
         local || !phi
+    }
+
+    /// The pin reads a value an instruction needs in a particular register
+    /// through a `COPY` into it (a call's argument).
+    fn pinned_read(
+        &self,
+        id: u64,
+        value: u32,
+    ) -> bool {
+        self.block_of
+            .get(&id)
+            .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
+            .is_some_and(|one| one.requires.iter().any(|(held, _)| held.value == value))
     }
 
     fn copies(
@@ -930,6 +946,72 @@ mod tests {
         assert_eq!(count(&shared, "add"), 1);
         let copy_of_v1 = shared.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| one.defines == [10]);
         assert!(!copy_of_v1, "the copy nothing reads is erased");
+    }
+
+    /// A symbol's address a call takes as an argument is read by a `COPY` in
+    /// the pin (heuristic 2: no register operand, only copies read it, so no
+    /// CSE). Ours read it in the call itself and shared it, so the address
+    /// lived across the function and `getbit` made `offset inbuf` five times
+    /// where the pin made it four.
+    #[test]
+    fn test_a_symbol_address_only_a_call_argument_reads_is_not_shared() {
+        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let symbol = || {
+            Loc::Imm(llrm_lir::Imm {
+                value: 0,
+                width: 8,
+                address: Some(crate::model::ir::Addr::new(crate::model::ir::Space::External, 0)),
+            })
+        };
+        let make = |at: i64, value: u32| {
+            insn(at, Operation::Move, "mov", vec![wide(value)], vec![symbol()], vec![value], vec![])
+        };
+        let build = |call_reads: bool| {
+            let mut reader = if call_reads {
+                insn(3, Operation::Call, "call", vec![], vec![], vec![], vec![11])
+            } else {
+                insn(3, Operation::Binary, "add", vec![wide(12)], vec![wide(11), wide(1)], vec![12], vec![11, 1])
+            };
+            if call_reads {
+                Arc::get_mut(&mut reader).unwrap().requires =
+                    vec![(Held { value: 11, width: 8 }, llrm_lir::registers::RegId::EAX)];
+            }
+            let entry = LirBlock {
+                succ: vec![1].into(),
+                ..LirBlock::new(
+                    0,
+                    vec![
+                        make(0, 10),
+                        insn(
+                            1,
+                            Operation::Binary,
+                            "add",
+                            vec![wide(13)],
+                            vec![wide(10), wide(1)],
+                            vec![13],
+                            vec![10, 1],
+                        ),
+                    ],
+                )
+            };
+            let next = LirBlock::new(1, vec![make(2, 11), reader]);
+            let mut body =
+                LirBody::new("symbol", 0, vec![entry.into(), next.into()], IndexMap::default(), IndexMap::default());
+            body.inputs = [1].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let made = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)])))
+                .count()
+        };
+        let read = shared(&build(false), &RegisterClasses::m16());
+        assert_eq!(made(&read), 1, "the premise: an address an add reads is shared");
+        let argument = shared(&build(true), &RegisterClasses::m16());
+        assert_eq!(made(&argument), 2, "{argument:?}");
     }
 
     /// `PerformSimplePRE` hoisted an expression into a block that ends in `ret`
