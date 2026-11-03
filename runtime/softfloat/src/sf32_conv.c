@@ -27,16 +27,6 @@ static sf32 from_u32_bits(uint32_t x) { return from_mag(0, x); }
 static sf32 from_i32_bits(int32_t x) { return x < 0 ? from_mag(SIGN, 0u - (uint32_t)x) : from_mag(0, (uint32_t)x); }
 
 /* |a| truncated; *big is set from 2^32 up, where the result saturates. */
-static uint32_t magnitude(sf32 a, int *big)
-{
-    int e = (int)((a >> 23) & 0xFF) - 127;
-    *big = 0;
-    if (e < 0) return 0;
-    if (e >= 32) { *big = 1; return 0; }
-    uint32_t m = (a & 0x7FFFFFu) | 0x800000u;
-    return e >= 23 ? m << (e - 23) : m >> (23 - e);
-}
-
 static int32_t to_i32_bits(sf32 a)
 {
     int e = (int)((a >> 23) & 0xFF) - 127;
@@ -52,10 +42,11 @@ static int32_t to_i32_bits(sf32 a)
 
 static uint32_t to_u32_bits(sf32 a)
 {
-    int big;
-    uint32_t m = magnitude(a, &big);
-    if (((a << 1) > 0xFF000000u) || (a & SIGN)) return 0;
-    return big ? UINT32_MAX : m;
+    int e = (int)((a >> 23) & 0xFF) - 127;
+    if (e < 0 || (a & SIGN)) return 0;
+    if (e >= 32) return (a << 1) > 0xFF000000u ? 0 : UINT32_MAX;
+    uint32_t m = (a & 0x7FFFFFu) | 0x800000u;
+    return e >= 23 ? m << (e - 23) : m >> (23 - e);
 }
 
 sf_float SF_NAME(floatsisf)(int32_t x) { return b2f(from_i32_bits(x)); }
