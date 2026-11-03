@@ -1298,6 +1298,20 @@ define i8 @probe() {
     assert_eq!(exit_code_of(&text, "probe"), 2, "{text}");
 }
 
+/// The subtract of the same: a borrow made by a compare in each limb, 165
+/// instructions for `a - b` of two arguments (119 as a chain).
+#[test]
+fn a_64_bit_subtract_of_arguments_is_a_borrow_chain_not_compares() {
+    let ir = module(
+        r#"define i64 @sub(i64 %a, i64 %b) {
+  %s = sub i64 %a, %b
+  ret i64 %s
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("cmp"), "a borrow made by a compare:\n{text}");
+}
+
 /// A loaded `i1` that a `select` or an extension tests was selected into a
 /// compare of its own zero extension: `llrm-6502-llc` ran until it had taken
 /// 217 GB. A bit in memory is a byte, `x & 1`. `pick` is 7 for a stored 1 and
