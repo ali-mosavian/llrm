@@ -74,3 +74,21 @@ def test_a_cell_with_the_same_bytes_and_more_clocks_is_listed_as_worse(tmp_path)
     """The unroll A/B once read "none worse" while the list covered bytes only; clocks went up unseen."""
     out = run(tmp_path, "| gcd | 47 B, 239 cy |\n", "| gcd | 47 B, 251 cy |\n")
     assert "worse (0, 12, 'gcd', 'ours')" in out.stdout
+
+
+def test_a_cell_with_the_same_bytes_and_clocks_and_more_instructions_is_listed_as_worse(tmp_path):
+    """Cells that carry instruction counts ("N in"): more instructions at equal bytes and clocks is worse."""
+    out = run(tmp_path, "| gcd | 47 B, 239 cy, 100 in |\n", "| gcd | 47 B, 239 cy, 110 in |\n")
+    assert "worse (0, 0, 'gcd', 'ours') instrs +10" in out.stdout
+    assert "instrs: 110 (base 100) over 1 of 1 cells" in out.stdout
+
+
+def test_cells_without_instruction_counts_print_na_not_equal(tmp_path):
+    out = run(tmp_path, "| gcd | 47 B, 239 cy |\n", "| gcd | 47 B, 239 cy |\n")
+    assert "instrs: n/a" in out.stdout
+    assert "worse" not in out.stdout
+
+
+def test_instructions_are_compared_only_where_both_legs_carry_them(tmp_path):
+    out = run(tmp_path, "| a | 1 B, 2 cy, 5 in |\n| b | 1 B, 2 cy |\n", "| a | 1 B, 2 cy, 5 in |\n| b | 1 B, 2 cy, 9 in |\n")
+    assert "instrs: 5 (base 5) over 1 of 2 cells" in out.stdout

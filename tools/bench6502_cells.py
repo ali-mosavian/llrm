@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-CELL = re.compile(r"(\d+) B(?: linked)?(?:, \d+ B body)?, (\d+) cy")
+CELL = re.compile(r"(\d+) B(?: linked)?(?:, \d+ B body)?, (\d+) cy(?:, (\d+) in)?")
 
 
 def rows(path):
@@ -28,7 +28,7 @@ def rows(path):
             for name, cell in zip(header[1:], cells[1:]):
                 if name.startswith("ours"):
                     found = CELL.match(cell)
-                    out[(cells[0], name)] = (int(found[1]), int(found[2])) if found else None
+                    out[(cells[0], name)] = (int(found[1]), int(found[2]), int(found[3]) if found[3] else None) if found else None
     return out
 
 
@@ -66,9 +66,23 @@ def main(argv):
         f"compared {len(both)} of {len(both) + len(broken)} cells: bytes {total(new, both, 0)} (base {total(base, both, 0)}), "
         f"cycles {total(new, both, 1)} (base {total(base, both, 1)})"
     )
-    worse = sorted(((new[k][0] - base[k][0], new[k][1] - base[k][1], k[0], k[1]) for k in both if new[k][0] > base[k][0] or new[k][1] > base[k][1]), reverse=True)
-    for row in worse[:15]:
-        print("worse", row)
+    # instructions are in some columns only; compared where both legs carry them, never read as equal where one does not
+    counted = [k for k in both if base[k][2] is not None and new[k][2] is not None]
+    if counted:
+        print(f"instrs: {sum(new[k][2] for k in counted)} (base {sum(base[k][2] for k in counted)}) over {len(counted)} of {len(both)} cells")
+    else:
+        print("instrs: n/a (no ours cell carries them)")
+    more = lambda k: k in counted and new[k][2] > base[k][2]
+    worse = sorted(
+        (
+            (new[k][0] - base[k][0], new[k][1] - base[k][1], k[0], k[1], (new[k][2] - base[k][2]) if more(k) else 0)
+            for k in both
+            if new[k][0] > base[k][0] or new[k][1] > base[k][1] or more(k)
+        ),
+        reverse=True,
+    )
+    for *row, extra in worse[:15]:
+        print("worse", tuple(row), *([f"instrs +{extra}"] if extra else []))
     return 1 if broken else 0
 
 
