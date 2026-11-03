@@ -45,6 +45,9 @@ pub trait Machine {
     /// ELFDATA2MSB: the file's own fields are big-endian. The section bytes
     /// are the target's.
     const BIG_ENDIAN: bool = false;
+    /// The least `sh_addralign` a section is given; the pin gives m68k's
+    /// `.rodata` and `.bss` their objects' own 2.
+    const MIN_SECTION_ALIGN: usize = 4;
     /// `e_flags`: the machine's own (llvm-mos writes its CPU there).
     const FLAGS: u32 = 0;
     /// `sh_type` of `.eh_frame`: `SHT_X86_64_UNWIND` on x86-64, else PROGBITS.
@@ -328,7 +331,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         vec![Header { name: 0, kind: 0, flags: 0, offset: 0, size: 0, link: 0, info: 0, align: 0, entry: 0 }];
     for (index, section) in object.sections.iter().enumerate() {
         let (_, kind, flags) = spelled[index];
-        let alignment = section.align.max(4).next_power_of_two();
+        let alignment = section.align.max(M::MIN_SECTION_ALIGN).next_power_of_two();
         align(&mut out, alignment);
         let offset = out.len() as u64;
         // Every type but NOBITS has its bytes in the file (`.eh_frame` is

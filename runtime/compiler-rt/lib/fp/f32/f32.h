@@ -13,6 +13,7 @@
 #define SF_QNAN SF32_QNAN
 #define sf_clz sf_clz32
 #define sf_shr_sticky sf_shr_sticky32
+#define SF_SHR_STICKY_ADD sf_shr_sticky32_add /* a target may step the addition's alignment shift (SF_SHIFT_STEPS) */
 #define SF_ROUND3 sf_round3
 #define SF_PACK pack_near
 #define SF_UNPACK SF_N(unpack)

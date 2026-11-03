@@ -11,7 +11,7 @@ export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"; source "$HERE/red-tip.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
@@ -36,6 +36,21 @@ while true; do
     touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; background_timeout "${SWEEP_TIMEOUT:-1800}" "${LAND_TMP:-/tmp/landing}/sweep.log" "$HERE/sweep-targets.sh"
   fi
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
+  # a red test on the tip lands nothing: the lib tests of the crates changed since the last green tip, once per tip (RED_TIP=0 turns it off; red-allow.txt excuses a test whose fix PR it names)
+  if [ "${RED_TIP:-1}" = 1 ]; then
+    tip=$(git -C "$W" rev-parse "origin/$LAND_BRANCH" 2>/dev/null); G="${LAND_TMP:-/tmp/landing}/tip-green.sha"; S="${LAND_TMP:-/tmp/landing}/tip-stop.txt"
+    if [ -n "$tip" ] && [ "$tip" != "$(cat "$G" 2>/dev/null)" ]; then
+      (cd "$W" && git checkout -q --detach "$tip") 2>/dev/null
+      # the packages changed since the last green tip and everything depending on them; none (only tooling changed) runs nothing
+      crates=--workspace; [ -s "$G" ] && crates=$(cd "$W" && tip_crates "$(cat "$G")" "$tip" 2>/dev/null)
+      out=; rc=0
+      if [ -n "$crates" ]; then
+        out=$( (cd "$W" && CARGO_TARGET_DIR="$T" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
+      fi
+      if stop=$(red_tip "$HERE/red-allow.txt" "$rc" <<<"$out"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
+    fi
+    [ -f "$S" ] && { cat "$S"; sleep 300; continue; }
+  fi
   batch=("$n")
   BATCH_CAP=${BATCH_CAP:-48}  # PRs per batch (runner.env); the window read from the queue is 24 more
   cand=($(sed -n "1,$((BATCH_CAP + 24))p" $Q))
