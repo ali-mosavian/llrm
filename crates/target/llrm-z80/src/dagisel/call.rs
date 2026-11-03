@@ -259,6 +259,14 @@ pub fn lower_return(
 pub struct Z80Calling;
 
 impl TargetCalling for Z80Calling {
+    fn can_lower_return(
+        &self,
+        parts: &[EVT],
+    ) -> bool {
+        let bytes: u32 = parts.iter().map(|vt| vt.size_in_bits() / 8).sum();
+        bytes == 0 || abi::z80().result_registers(i64::from(bytes)).is_some()
+    }
+
     /// `CanLowerReturn`: a result of a width the convention names no
     /// registers for is refused with the reason, where lowering it would
     /// have no place to leave it.

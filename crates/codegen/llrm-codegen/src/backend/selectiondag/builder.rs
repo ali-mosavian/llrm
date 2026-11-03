@@ -1132,6 +1132,24 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// The parts of the function's own scalar integer result when the target
+    /// cannot return them in registers: the result is returned through a
+    /// hidden pointer (`CanLowerReturn` false).
+    fn demoted_result(
+        &self,
+        calling: &'static dyn TargetCalling,
+        result: TypeId,
+    ) -> Result<bool, Refused> {
+        if self.module.context.types.is_void(result) || self.is_aggregate(result) {
+            return Ok(false);
+        }
+        let vt = self.type_of(result)?;
+        if vt.is_floating_point() || !vt.is_integer() {
+            return Ok(false);
+        }
+        Ok(!calling.can_lower_return(&self.calling_parts(vt)?))
+    }
+
     /// `LowerArguments` with the target's `LowerFormalArguments`, which takes
     /// every parameter at once.
     fn lower_arguments_with(
@@ -1145,6 +1163,17 @@ impl Builder<'_> {
         }
         let mut ins = Vec::new();
         let mut shapes = Vec::new();
+        let (result, _, _) = self.module.signature(self.function.ty);
+        let demoted = self.demoted_result(calling, result)?;
+        if demoted {
+            // `LowerArguments`: "put in an sret pointer parameter before all
+            // the other parameters"
+            let pointer = self.target.dag.pointer;
+            let hidden = self.calling_parts(pointer)?;
+            let split = hidden.len() > 1;
+            ins.extend(hidden.into_iter().map(|vt| In { vt, pointer: true, arg_vt: pointer, split, sret: true, ext: Ext::Any }));
+        }
+        let hidden_parts = ins.len();
         for &arg in &parameters {
             let ty = self.function.value(arg).ty;
             // An aggregate is passed leaf by leaf (`ComputeValueVTs`).
@@ -1187,7 +1216,7 @@ impl Builder<'_> {
             offsets.push(offset);
             -(offsets.len() as i32)
         };
-        let parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
         // `SaveVarArgRegisters`: the save areas are stack objects made after
         // the allocas', numbered from the next frame index.
         let mut requests: Vec<(u32, u32)> = Vec::new();
@@ -1205,6 +1234,16 @@ impl Builder<'_> {
         }
         if let Some(area) = &area {
             self.dag.set_root(area.chain);
+        }
+        if demoted {
+            // `DemoteRegister`: the hidden pointer is kept to store the result
+            let rest = parts.split_off(hidden_parts);
+            let hidden = self.join_from_calling(&parts, self.target.dag.pointer, None, true);
+            parts = rest;
+            let reg = self.info.new_reg();
+            self.info.demote_reg = Some(reg);
+            let copy = self.dag.get_copy_to_reg(self.dag.entry_node(), reg, hidden);
+            self.dag.set_root(copy);
         }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
@@ -1982,7 +2021,27 @@ impl Builder<'_> {
                 });
             }
         }
-        let void = self.module.context.types.is_void(result_type);
+        let mut void = self.module.context.types.is_void(result_type);
+        // `LowerCallTo`, `CanLowerReturn` false: the result comes back through
+        // a stack slot whose address is the first argument
+        let demoted = self.demoted_result(calling, result_type)?;
+        let mut slot = None;
+        if demoted {
+            let types = &self.module.context.types;
+            let size = self.layout.alloc_size(types, result_type) as u32;
+            let index = self.info.new_stack_object(size, 1);
+            let address = self.dag.get_frame_index(self.target.dag.pointer, index);
+            let pointer = self.target.dag.pointer;
+            let pieces = self.split_for_calling(address, Ext::Any)?;
+            let split = pieces.len() > 1;
+            let hidden: Vec<Out> = pieces
+                .into_iter()
+                .map(|value| Out { value, ext: Ext::Any, pointer: true, arg_vt: pointer, split, variadic: false, sret: true })
+                .collect();
+            outs.splice(0..0, hidden);
+            slot = Some((index, address));
+            void = true;
+        }
         // `ComputeValueVTs`: an aggregate result is its leaves, each answered
         // like a scalar result.
         let mut layout: Vec<(EVT, usize, bool)> = Vec::new();
@@ -2034,6 +2093,21 @@ impl Builder<'_> {
             &mut |size, align| info.new_stack_object(size, align),
         );
         self.dag.set_root(chain);
+        if let Some((index, address)) = slot {
+            let vt = self.type_of(result_type)?;
+            let info = MemInfo {
+                mem_vt: vt,
+                align: 1,
+                volatile: false,
+                base: MemBase::Stack(index),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let load = self.dag.get_load(vt, chain, address, info);
+            self.pending_loads.push(SDValue { node: load.node, res: 1 });
+            return Ok(Some(load));
+        }
         if void {
             return Ok(None);
         }
@@ -2393,6 +2467,27 @@ impl Builder<'_> {
             return Err(Refused("sret with a target's calling hook"));
         }
         let mut outs = Vec::new();
+        if let (Some(reg), Some(&operand)) = (self.info.demote_reg, instruction.operands.first()) {
+            // `visitRet` with a demoted result: stored through the hidden
+            // pointer, nothing is returned in registers
+            let value = self.get_value(operand)?;
+            let vt = self.dag.value_type(value);
+            let pointer = self.target.dag.pointer;
+            let address = self.dag.get_copy_from_reg(chain, reg, pointer);
+            let info = MemInfo {
+                mem_vt: vt,
+                align: 1,
+                volatile: false,
+                base: MemBase::Unknown,
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let store = self.dag.get_store(chain, value, address, info);
+            let node = calling.lower_return(&mut self.dag, store, &[]);
+            self.dag.set_root(node);
+            return Ok(());
+        }
         if let Some(&operand) = instruction.operands.first() {
             let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("a return of no type"))?;
             let values = self.value_parts(operand)?;
@@ -3770,9 +3865,18 @@ mod f80_tests {
     struct Bytes {
         outs: std::sync::Mutex<Vec<(usize, usize)>>,
         ins: std::sync::Mutex<Vec<EVT>>,
+        /// The most result parts it returns in registers; none set, any.
+        result_parts: usize,
     }
 
     impl TargetCalling for Bytes {
+        fn can_lower_return(
+            &self,
+            parts: &[EVT],
+        ) -> bool {
+            self.result_parts == 0 || parts.len() <= self.result_parts
+        }
+
         fn lower_call(
             &self,
             dag: &mut SelectionDAG,
@@ -3860,6 +3964,26 @@ mod f80_tests {
         let stub: &'static Bytes = Box::leak(Box::default());
         built_with_bytes("define i32 @f(i32 %a) {\n  ret i32 %a\n}", stub);
         assert_eq!(*stub.outs.lock().unwrap(), [(4, 4)]);
+    }
+
+    /// A result of more parts than the target returns in registers went to
+    /// the hook as parts it could not place: the build stopped at "a result
+    /// the convention has no registers for". It is returned through a hidden
+    /// pointer, the first argument (`CanLowerReturn` false): the callee stores
+    /// it, the caller reads it from a stack slot.
+    #[test]
+    fn a_result_the_target_cannot_return_in_registers_goes_through_a_hidden_pointer() {
+        let stub: &'static Bytes = Box::leak(Box::new(Bytes { result_parts: 2, ..Bytes::default() }));
+        built_with_bytes("define i32 @f(i32 %a) {\n  ret i32 %a\n}", stub);
+        assert_eq!(*stub.outs.lock().unwrap(), [(0, 0)], "nothing returned in registers");
+        let stub: &'static Bytes = Box::leak(Box::new(Bytes { result_parts: 2, ..Bytes::default() }));
+        built_with_bytes(
+            "declare i32 @g(i8)\ndefine i32 @f(i8 %a) {\n  %r = call i32 @g(i8 %a)\n  ret i32 %r\n}",
+            stub,
+        );
+        // the hidden pointer is four byte parts, then the byte argument: five bytes
+        assert_eq!(stub.outs.lock().unwrap()[0], (5, 5));
+        assert!(stub.ins.lock().unwrap().is_empty(), "the call has no register result");
     }
 
     /// Two byte arguments were both named for the one register x86 gives by

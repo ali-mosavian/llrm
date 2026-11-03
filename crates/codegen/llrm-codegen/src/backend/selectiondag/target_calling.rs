@@ -153,6 +153,16 @@ pub trait TargetCalling: Debug + Sync {
         true
     }
 
+    /// `CanLowerReturn`: whether a result of these parts leaves in registers.
+    /// When not, the function returns it through a hidden pointer, the first
+    /// parameter (`sret` demotion).
+    fn can_lower_return(
+        &self,
+        _parts: &[EVT],
+    ) -> bool {
+        true
+    }
+
     /// Whether the target places these parts (`outs` the values sent, `ins` the
     /// values received); the builder refuses with the reason when it does not.
     fn accepts(
