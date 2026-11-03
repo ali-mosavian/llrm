@@ -1069,6 +1069,11 @@ pub fn loop_register_units(
         }
     }
     let blocks: Vec<BlockId> = lp.get_blocks().to_vec();
-    llrm_analysis::liveness::pressure_weighted(cx.function, &blocks, &|one| weights.get(&one).copied().unwrap_or(0))
-        as u32
+    // DEVIATE LU7: the pin has no register-unit count here; this one follows
+    // only the loop's own values (and the phis that take them), so it costs the
+    // loop and not the function. Cells that need the count: shellsort -Os,
+    // stft, matmul.
+    llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
+        weights.get(&one).copied().unwrap_or(0)
+    }) as u32
 }
