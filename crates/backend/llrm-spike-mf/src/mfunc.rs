@@ -68,7 +68,8 @@ pub struct Inst {
     pub commutable: bool,
     /// The caller's number for the operation it was made from (the `DebugLoc`
     /// a `MachineInstr` carries); 0 for none. A clone keeps it, code the
-    /// allocator adds has none.
+    /// allocator adds has none. A target that lists its source places in
+    /// [`MFunction::places`] numbers them from 1.
     pub origin: u32,
 }
 
@@ -122,6 +123,59 @@ pub struct Block {
     pub phis: Vec<Phi>,
 }
 
+impl Block {
+    /// An instruction with no place (a constant, a materialised address) takes
+    /// the place of the next one in its block that has one, the user it was
+    /// made for (the pin emits a node with its user's `DebugLoc`); one after
+    /// the last located instruction takes the last place.
+    ///
+    /// DEVIATE: every unlocated instruction is filled; the pin gives line 0
+    /// (flags 0) to one that feeds nothing located at a block top (a phi or
+    /// edge copy, a bare jump), as x86 does (#6512). Reason: the spike
+    /// targets' line tables take a row per place and have no line-0 row
+    /// (ca65 `.dbg line`, SDCC `C$` symbols). Exit: 2026-11-15, fill only
+    /// instructions that define a value a located one reads.
+    pub fn place_unlocated(&mut self) {
+        let mut next = 0;
+        for inst in self.insts.iter_mut().rev() {
+            if inst.origin != 0 {
+                next = inst.origin;
+            } else {
+                inst.origin = next;
+            }
+        }
+        let mut last = 0;
+        for inst in &mut self.insts {
+            if inst.origin != 0 {
+                last = inst.origin;
+            } else {
+                inst.origin = last;
+            }
+        }
+    }
+}
+
+/// A source variable the debug info names, and where it lives for the whole
+/// function: the channel `-g` formats read, whatever the target.
+#[derive(Clone, Debug)]
+pub struct Variable {
+    pub name: String,
+    /// Its `!DIType` node, as the module the function was selected from has it.
+    pub r#type: llrm_mir::module::MetadataId,
+    /// The `!DIExpression` operations of the location, as written.
+    pub expr: Vec<llrm_mir::module::DwOp>,
+    pub parameter: bool,
+    pub place: VariablePlace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VariablePlace {
+    /// The register an argument arrives in.
+    Register(RegId),
+    /// Frame object `index`, `offset` bytes into it.
+    Frame { index: i32, offset: i64 },
+}
+
 /// `C` is the target's register class.
 #[derive(Clone, Debug)]
 pub struct MFunction<C> {
@@ -135,9 +189,18 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The source places the instructions' [`Inst::origin`]s number, from 1.
+    pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
+    /// `-g`: the source variables and where each is.
+    pub variables: Vec<Variable>,
 }
 
 impl<C> MFunction<C> {
+    /// [`Block::place_unlocated`] for every block.
+    pub fn place_unlocated(&mut self) {
+        self.blocks.iter_mut().for_each(Block::place_unlocated);
+    }
+
     pub fn new(name: &str) -> MFunction<C> {
         MFunction {
             name: name.to_owned(),
@@ -145,6 +208,8 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            places: Vec::new(),
+            variables: Vec::new(),
         }
     }
 

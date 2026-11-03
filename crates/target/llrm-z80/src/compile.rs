@@ -503,11 +503,31 @@ pub fn text(
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
-    let mut out = format!("_{name}::\n");
+    let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
+    let file = source.as_ref().map(|(file, _)| file.clone());
+    let mut out = String::new();
+    let mut rows = 0;
+    let symbol = |out: &mut String, text: String| out.push_str(&format!("\t{text}\t= .\n\t.globl\t{text}\n"));
+    // The function, and the line it starts at, stand ahead of its label.
+    if let Some((file, line)) = &source {
+        symbol(&mut out, format!("G${name}$0$0"));
+        if let Some(line) = line {
+            symbol(&mut out, format!("C${file}${line}$0_0${number}_0"));
+        }
+    }
+    out.push_str(&format!("_{name}::\n"));
     for line in lines(ir, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),
+            // SDCC's names for a line (`C$file$line$block_level$n`): a symbol
+            // at the address, which sdld puts in the `.cdb`.
+            Line::Loc(line) => {
+                if let Some(file) = &file {
+                    rows += 1;
+                    symbol(&mut out, format!("C${file}${line}$0_0${number}_{rows}"));
+                }
+            }
         }
     }
     Ok(out)
