@@ -302,6 +302,10 @@ struct Dse<'a> {
     /// `loc_for_write` per instruction; a memset's is dropped when it is
     /// shortened.
     written: std::cell::RefCell<IdMap<InstId, Option<Rc<Location>>>>,
+    /// `mayReadFromMemory` and `mayWriteToMemory` per instruction that is not a
+    /// plain load or store: the walks ask again for each killing def, and a
+    /// lazy `Accesses` derives them from the call's attributes every time.
+    touches: std::cell::RefCell<IdMap<InstId, (Option<bool>, Option<bool>)>>,
 }
 
 impl<'a> Dse<'a> {
@@ -340,6 +344,7 @@ impl<'a> Dse<'a> {
             captured: Default::default(),
             leaves: Default::default(),
             written: Default::default(),
+            touches: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -383,7 +388,12 @@ impl<'a> Dse<'a> {
         if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
             return own.writes;
         }
-        self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty())
+        if let Some(&(_, Some(writes))) = self.touches.borrow().get(&inst) {
+            return writes;
+        }
+        let writes = self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty());
+        self.touches.borrow_mut().get_or_insert_with(inst, Default::default).1 = Some(writes);
+        writes
     }
 
     /// `mayReadFromMemory`.
@@ -394,7 +404,12 @@ impl<'a> Dse<'a> {
         if let Some(own) = llrm_analysis::memory::own_bytes(&self.function.instruction(inst).opcode) {
             return own.reads;
         }
-        self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty())
+        if let Some(&(Some(reads), _)) = self.touches.borrow().get(&inst) {
+            return reads;
+        }
+        let reads = self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty());
+        self.touches.borrow_mut().get_or_insert_with(inst, Default::default).0 = Some(reads);
+        reads
     }
 
     fn is_store(
