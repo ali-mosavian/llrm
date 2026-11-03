@@ -1,4 +1,5 @@
 // flags: -Os -march=i486 -m32 -mabi=sysv | -Os -march=i486 -m32
+// targets: dos
 /* Locals addressed through esp once the frame register is omitted at -Os: eight volatile locals are read as eight pushed arguments, so
    each read happens with the earlier ones already on the stack. A wrong depth reads another cell. */
 extern void report(long value);

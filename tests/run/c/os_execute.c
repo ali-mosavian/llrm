@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 -DREAL_MODE | -O2 -march=i486 -m32
+// targets: dos
 /* The OS layer's load-and-execute: the command interpreter runs a command that writes a file, which is there after;
    a program that is not there is an error. */
 #include "llrm_os.h"
