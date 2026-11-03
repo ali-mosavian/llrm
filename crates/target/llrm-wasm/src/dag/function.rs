@@ -85,6 +85,7 @@ pub fn builder_target(
         shift_amount: pointer(width),
         shift_amount_of: Some(shift_amount_of),
         legal_ints: vec![32, 64],
+        soft_float: false,
         stack_align: Some(16),
         jump_tables: true,
         // WebAssemblyTargetLowering: setMinimumJumpTableEntries(2); the

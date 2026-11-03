@@ -90,6 +90,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// No floating-point registers: a float crosses blocks and calls as the
+    /// integer of its width, in parts (`TypeSoftenFloat`).
+    pub soft_float: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
@@ -322,6 +325,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -346,6 +350,7 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
             legal_ints: vec![8, 16, 32, 64],
+            soft_float: false,
             ..BuilderTarget::m32()
         }
     }
@@ -361,6 +366,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -777,12 +783,22 @@ impl Builder<'_> {
         }
     }
 
+    /// `vt` as the target carries it: the integer of its width when it has no
+    /// floating-point registers (`TypeSoftenFloat`), else itself.
+    fn softened(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        if self.target.soft_float && vt.is_floating_point() { EVT::integer(vt.size_in_bits()) } else { vt }
+    }
+
     /// The register type a value of `vt` is carried in across blocks:
     /// itself when legal, else the next legal width up.
     fn register_type(
         &self,
         vt: EVT,
     ) -> Result<EVT, Refused> {
+        let vt = self.softened(vt);
         if vt.is_floating_point() || vt == MVT::Far.into() {
             return Ok(vt);
         }
@@ -802,6 +818,7 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<(EVT, usize), Refused> {
+        let vt = self.softened(vt);
         match self.register_type(vt) {
             Ok(reg_vt) => Ok((reg_vt, 1)),
             Err(_) => {
@@ -1816,6 +1833,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // Without floating-point registers a float is the integer of its width.
+        let vt = self.softened(vt);
         // A float is one part, in a register of its own class: the target's
         // `accepts` says which.
         if vt.is_floating_point() {
@@ -1842,7 +1861,13 @@ impl Builder<'_> {
         value: SDValue,
         ext: Ext,
     ) -> Result<Vec<SDValue>, Refused> {
-        let vt = self.dag.value_type(value);
+        let mut value = value;
+        let mut vt = self.dag.value_type(value);
+        if self.softened(vt) != vt {
+            // `getCopyToParts` of a softened float: its bits as an integer.
+            vt = self.softened(vt);
+            value = self.dag.get_node(ISD::BitCast, vt, &[value]);
+        }
         let parts = self.calling_parts(vt)?;
         if parts.len() == 1 {
             let narrow = vt.size_in_bits() < parts[0].size_in_bits();
@@ -1862,6 +1887,11 @@ impl Builder<'_> {
         assert: Option<ISD>,
         pointer: bool,
     ) -> SDValue {
+        if self.softened(vt) != vt {
+            // `getCopyFromParts` of a softened float: the integer, bitcast.
+            let bits = self.join_from_calling(parts, self.softened(vt), None, false);
+            return self.dag.get_node(ISD::BitCast, vt, &[bits]);
+        }
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
                 return *one;
@@ -2673,6 +2703,10 @@ impl Builder<'_> {
         vt: EVT,
         pointer: bool,
     ) -> Result<SDValue, Refused> {
+        if self.softened(vt) != vt {
+            let bits = self.copy_from_reg(reg, self.softened(vt), false)?;
+            return Ok(self.dag.get_node(ISD::BitCast, vt, &[bits]));
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {
@@ -2707,7 +2741,12 @@ impl Builder<'_> {
         reg: u32,
         extend: ISD,
     ) -> Result<(), Refused> {
-        let vt = self.dag.value_type(value);
+        let mut value = value;
+        let mut vt = self.dag.value_type(value);
+        if self.softened(vt) != vt {
+            vt = self.softened(vt);
+            value = self.dag.get_node(ISD::BitCast, vt, &[value]);
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts == 2 {
@@ -3806,6 +3845,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -3910,6 +3950,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4016,6 +4057,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,

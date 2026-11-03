@@ -20,9 +20,10 @@
 //! 256..258 are segment overrides on an `i32`. Exit: none. Owner sdag-b.
 //! Review 2026-11-13.
 //!
-//! DEVIATE SD14: the floating types are always legal (x87 register classes);
-//! the pin's `SoftenFloat` and `ExpandFloat` arms are not translated. Reason:
-//! no target of ours lacks the x87. Exit: none. Owner sdag-b. Review
+//! DEVIATE SD14: the floating types are legal (x87 or SSE register classes)
+//! unless the target says `with_soft_float`, which softens `f32` and `f64`;
+//! the pin's `ExpandFloat` arm and the softening of `f80` are not translated.
+//! Reason: no target of ours needs them. Exit: none. Owner sdag-b. Review
 //! 2026-11-13.
 //!
 //! # See also
@@ -39,6 +40,9 @@ pub enum TypeAction {
     Legal,
     PromoteInteger,
     ExpandInteger,
+    /// A float of a target with no floating-point registers is carried as the
+    /// integer of its width (`TypeSoftenFloat`).
+    SoftenFloat,
 }
 
 /// The simple integer types, narrowest first (the pin's `i1`..`i128` without
@@ -54,6 +58,8 @@ pub struct TargetLoweringInfo {
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
     set_cc_result: MVT,
+    /// No floating-point register class: `f32` and `f64` are softened.
+    soft_float: bool,
 }
 
 /// What `getScalarShiftAmountTy` returns.
@@ -89,7 +95,15 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+        TargetLoweringInfo { integers, far, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8, soft_float: false }
+    }
+
+    /// The target has no floating-point register class, so `f32` and `f64` are
+    /// `TypeSoftenFloat` (the pin's default when `addRegisterClass` is not
+    /// called for them).
+    pub fn with_soft_float(mut self) -> TargetLoweringInfo {
+        self.soft_float = true;
+        self
     }
 
     /// A shift's amount has the type of the value shifted
@@ -155,6 +169,8 @@ impl TargetLoweringInfo {
                 assert!(self.far, "this target has no far pointer");
                 (TypeAction::ExpandInteger, EVT::I16)
             }
+            EVT::Simple(MVT::F32) if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
+            EVT::Simple(MVT::F64) if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
             EVT::Simple(mvt) => match INTEGERS.iter().position(|&int| int == mvt) {
                 Some(at) => {
                     let (action, to) = self.integers[at];

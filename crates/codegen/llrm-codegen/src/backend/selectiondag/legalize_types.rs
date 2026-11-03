@@ -74,6 +74,8 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// `SoftenedFloats`: the integer a float value is carried as.
+    softened: HashMap<SDValue, SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -116,6 +118,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            softened: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -236,6 +239,12 @@ impl<'a> TypeLegalizer<'a> {
                     }
                     return Ok(true);
                 }
+                TypeAction::SoftenFloat => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.soften_float_result(value)?;
+                    }
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -258,6 +267,7 @@ impl<'a> TypeLegalizer<'a> {
                 _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
+                TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);
@@ -2867,6 +2877,124 @@ impl<'a> TypeLegalizer<'a> {
                     what: "expand operand",
                 });
             }
+        };
+        if result.node == n {
+            return Ok(true);
+        }
+        self.replace_value_with(node, result);
+        Ok(false)
+    }
+
+    // --- softening -------------------------------------------------------
+
+    /// `GetSoftenedFloat`.
+    fn softened_float(
+        &self,
+        value: SDValue,
+    ) -> SDValue {
+        let value = self.remap(value);
+        let soft = *self.softened.get(&value).expect("operand softened before its user");
+        self.remap(soft)
+    }
+
+    /// `SetSoftenedFloat`.
+    fn set_softened_float(
+        &mut self,
+        value: SDValue,
+        result: SDValue,
+    ) {
+        let value = self.remap(value);
+        let result = self.analyze_new_value(result);
+        self.softened.insert(value, result);
+    }
+
+    /// `SoftenFloatResult`: the float result of `value` carried as the integer
+    /// of its width. The arithmetic cases are `SoftenFloatRes_Binary` and its
+    /// kin, libcalls, and are not translated yet.
+    fn soften_float_result(
+        &mut self,
+        value: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let vt = self.dag.value_type(value);
+        let to = self.tli.types.type_conversion(vt).1;
+        let node = SDValue { node: value.node, res: 0 };
+        let result = match self.dag.opcode(node) {
+            ISD::ConstantFP => {
+                // `SoftenFloatRes_ConstantFP`: the bits as an integer.
+                let NodeData::ConstFp { bits } = self.dag.node(node).data else { unreachable!("a float constant") };
+                self.dag.get_constant(bits, to)
+            }
+            ISD::Undef => self.dag.get_undef(to),
+            ISD::BitCast => {
+                // `SoftenFloatRes_BITCAST`: the integer it was made from.
+                let from = self.dag.operand(node, 0);
+                if self.dag.value_type(from) == to { from } else { self.dag.get_node(ISD::BitCast, to, &[from]) }
+            }
+            ISD::Load => {
+                // `SoftenFloatRes_LOAD`: the same bytes as an integer.
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let NodeData::Mem(info) = self.dag.node(node).data else { unreachable!("a load has a memory operand") };
+                if info.ext.is_some() || info.mem_vt != vt {
+                    return Err(LegalizeError::Unsupported { op: ISD::Load, ty: vt, what: "soften a converting load" });
+                }
+                let load = self.dag.get_load(to, chain, ptr, super::dag::MemInfo { mem_vt: to, ..info });
+                self.replace_value_with(SDValue { node: node.node, res: 1 }, SDValue { node: load.node, res: 1 });
+                load
+            }
+            ISD::Select => {
+                // `SoftenFloatRes_SELECT`.
+                let (cond, yes, no) = (
+                    self.dag.operand(node, 0),
+                    self.softened_float(self.dag.operand(node, 1)),
+                    self.softened_float(self.dag.operand(node, 2)),
+                );
+                self.dag.get_node(ISD::Select, to, &[cond, yes, no])
+            }
+            ISD::FNeg => {
+                // `SoftenFloatRes_FNEG`: flip the sign bit.
+                let operand = self.softened_float(self.dag.operand(node, 0));
+                let sign = self.dag.get_constant(1u128 << (to.size_in_bits() - 1), to);
+                self.dag.get_node(ISD::Xor, to, &[operand, sign])
+            }
+            ISD::FAbs => {
+                // `SoftenFloatRes_FABS`: clear the sign bit.
+                let operand = self.softened_float(self.dag.operand(node, 0));
+                let mask = self.dag.get_constant(super::fold::mask(to.size_in_bits()) >> 1, to);
+                self.dag.get_node(ISD::And, to, &[operand, mask])
+            }
+            op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften float result" }),
+        };
+        self.set_softened_float(value, result);
+        Ok(())
+    }
+
+    /// `SoftenFloatOperand`: a user of a softened float reads the integer.
+    fn soften_float_operand(
+        &mut self,
+        n: u32,
+        at: usize,
+    ) -> Result<bool, LegalizeError> {
+        let node = SDValue { node: n, res: 0 };
+        let operand_vt = self.dag.value_type(self.dag.operand(node, at));
+        let result = match self.dag.opcode(node) {
+            ISD::BitCast => {
+                // `SoftenFloatOp_BITCAST`: the integer it is.
+                let soft = self.softened_float(self.dag.operand(node, 0));
+                let vt = self.dag.value_type(node);
+                if self.dag.value_type(soft) == vt { soft } else { self.dag.get_node(ISD::BitCast, vt, &[soft]) }
+            }
+            ISD::Store if at == 1 => {
+                // `SoftenFloatOp_STORE`: the integer stored to the same bytes.
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else { unreachable!("a store has a memory operand") };
+                if info.mem_vt != operand_vt {
+                    return Err(LegalizeError::Unsupported { op: ISD::Store, ty: operand_vt, what: "soften a converting store" });
+                }
+                let soft = self.softened_float(self.dag.operand(node, 1));
+                let to = self.dag.value_type(soft);
+                self.dag.get_store(chain, soft, ptr, super::dag::MemInfo { mem_vt: to, ..info })
+            }
+            op => return Err(LegalizeError::Unsupported { op, ty: operand_vt, what: "soften float operand" }),
         };
         if result.node == n {
             return Ok(true);

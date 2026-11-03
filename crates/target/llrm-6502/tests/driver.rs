@@ -1009,3 +1009,22 @@ define i8 @minus(i8 %n) {
     assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
     assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
 }
+
+/// A float argument, result, load, store, select and negation compiled for a
+/// target with no floating-point registers: the float is the integer of its
+/// width (`TypeSoftenFloat`). `float f(float x, float y) { return x; }` panicked
+/// in the call lowering ("legal parts: F32"), so did every float parameter.
+#[test]
+fn a_float_is_carried_as_the_integer_of_its_width() {
+    let request = Request::new(Level::O2);
+    let pass = assembly(&module("define float @f(float %x, float %y) {\n  ret float %x\n}"), &request).unwrap();
+    assert!(pass.contains("ldy rc5"), "the high word moved down:\n{pass}");
+    let copy = "define void @g(ptr %p, ptr %q) {\n  %v = load float, ptr %p\n  store float %v, ptr %q\n  ret void\n}";
+    let copied = assembly(&module(copy), &request).unwrap();
+    assert_eq!(copied.matches("sta (").count(), 4, "four bytes stored:\n{copied}");
+    let negate = "define float @n(float %x) {\n  %r = fneg float %x\n  ret float %r\n}";
+    let negated = assembly(&module(negate), &request).unwrap();
+    assert!(negated.contains("eor #128"), "the sign bit flipped:\n{negated}");
+    let choose = "define float @s(i1 %c, float %x, float %y) {\n  %r = select i1 %c, float %x, float %y\n  ret float %r\n}";
+    assembly(&module(choose), &request).unwrap();
+}
