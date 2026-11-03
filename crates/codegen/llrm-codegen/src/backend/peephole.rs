@@ -2887,11 +2887,18 @@ pub fn zeroes(body: &LirBody) -> LirBody {
 
 /// `zeroes`, and with `ones`, `mov r,-1` as `or r,-1` on the same condition.
 ///
-/// DEVIATE MO1 (owner x87, 2026-11-03): the pin expands `MOV32ImmSExti8 -1` to
-/// `or r,-1` only at `minsize` (`X86InstrInfo::expandMOV32ImmSExti8`); here -Os
-/// does too: three bytes in place of five, one clock either way. Exit
-/// 2026-11-20: -Os is at or below main without it, then `ones` is
-/// `LirBody::min_size` only.
+/// DEVIATE MO1 (owner x87, 2026-11-03): at `minsize` the pin loads an imm8
+/// with `push imm8; pop r` (`MOV32ImmSExti8`, [X86InstrCompiler.td:353],
+/// expanded by `ExpandMOVImmSExti8`, [X86InstrInfo.cpp:6236]; pin d1106deb71).
+/// Here -Os loads -1 with `or r,-1`: the same three bytes, one clock where push
+/// and pop take five, and no stack traffic. Exit 2026-11-20: -Os is at or below
+/// main without it, then `ones` is `LirBody::min_size` only and the pin's
+/// push/pop applies.
+///
+/// [X86InstrCompiler.td:353]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L353
+/// [X86InstrInfo.cpp:6236]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L6236
 pub fn cleared(
     body: &LirBody,
     ones: bool,
