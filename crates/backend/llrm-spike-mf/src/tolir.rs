@@ -188,15 +188,16 @@ impl<T: Target> Converted<T> {
         });
         // What allocation reads is the original instruction, in the order the
         // scheduler chose.
-        let original: std::collections::HashMap<i64, Arc<Insn>> = allocatable
+        // By identity: the coalescer's clones of an instruction share its `at`.
+        let original: std::collections::HashMap<u64, Arc<Insn>> = allocatable
             .blocks
             .iter()
-            .flat_map(|block| block.insns.iter().map(|one| (one.at, Arc::clone(one))))
+            .flat_map(|block| block.insns.iter().map(|one| (one.id(), Arc::clone(one))))
             .collect();
         let blocks = scheduled
             .blocks
             .iter()
-            .map(|block| block.with_insns(block.insns.iter().map(|one| Arc::clone(&original[&one.at])).collect()))
+            .map(|block| block.with_insns(block.insns.iter().map(|one| Arc::clone(&original[&one.id()])).collect()))
             .collect();
         self.body = allocatable.with_blocks(blocks);
         self.body.registers = before;
@@ -252,7 +253,7 @@ impl<T: Target> Converted<T> {
                             writes.extend(memory.iter().copied());
                             reads.extend(memory.iter().copied());
                         }
-                        let mut made = (**one).clone();
+                        let mut made = (**one).clone().standing_for(one);
                         made.volatile = made.volatile || inst.side_effects;
                         if let Some(what) = made.what.as_mut() {
                             if what.op == Operation::Nothing && inst.may_store {

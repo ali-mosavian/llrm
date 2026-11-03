@@ -666,6 +666,17 @@ impl Insn {
         *self.ident.get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// `self`, an edited copy of `of`, standing for it: it keeps `of`'s
+    /// identity, for a caller that puts the original back by it.
+    #[must_use]
+    pub fn standing_for(
+        self,
+        of: &Insn,
+    ) -> Insn {
+        let _ = self.ident.0.set(of.id());
+        self
+    }
+
     /// `self` told other `-g` tags. Still the same instruction, so it keeps
     /// its identity: a new one would read as a removal and an insertion to
     /// the analyses that follow instructions by identity, and `-g` would
