@@ -503,9 +503,9 @@ mod tests {
         }
     }
 
-    /// An instruction the decoder cannot read (a name no table has) is of unknown
-    /// effect, so a scheduler cannot move anything across it; one that declares
-    /// its effect answers with it.
+    /// An instruction the decoder cannot read (a name no table has) is of
+    /// unknown effect, so a scheduler cannot move anything across it; one
+    /// that declares its effect answers with it.
     #[test]
     fn a_declared_effect_answers_for_an_instruction_the_decoder_cannot_read() {
         use std::sync::Arc;
