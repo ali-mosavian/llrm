@@ -542,9 +542,15 @@ impl Cost {
         // that does not, whatever the model counts: the registers past the
         // class are reloaded every trip. Between two that both fit, or both
         // overflow, the target's order stands.
+        // The reloads an overflow costs are about two instructions a trip: a
+        // fitting solution that spends more than that on other instructions
+        // (the bases computed into non-address registers) does not win.
         let (mine, theirs) = (self.overflows(tti), other.overflows(tti));
         if mine != theirs {
-            return theirs;
+            let (fits, over) = if mine { (&other.c, &self.c) } else { (&self.c, &other.c) };
+            if fits.insns <= over.insns.saturating_add(2) {
+                return theirs;
+            }
         }
         tti.is_lsr_cost_less(&self.c, &other.c)
     }
