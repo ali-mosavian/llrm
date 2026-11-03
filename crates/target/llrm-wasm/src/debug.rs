@@ -95,14 +95,18 @@ pub fn sections(
                     group: None,
                 },
             );
-        info.lines.extend(function.lines.iter().map(|&(offset, line)| model::Line {
-            section: 0,
-            offset: start + offset,
-            file: 0,
-            line,
-            column: 0,
-        }));
-        let Some(procedure) = debug.procedures.get(&function.name) else { continue };
+        let procedure = debug.procedures.get(&function.name);
+        // A row at the function's start for the line it is declared at, then
+        // one where the line changes.
+        let mut previous = None;
+        let declared = procedure.and_then(|one| one.scope_line).map(|line| (0, line));
+        for &(offset, line) in declared.iter().chain(&function.lines) {
+            if previous != Some(line) {
+                info.lines.push(model::Line { section: 0, offset: start + offset, file: 0, line, column: 0 });
+                previous = Some(line);
+            }
+        }
+        let Some(procedure) = procedure else { continue };
         info.functions.push(Function {
             name: procedure.name.clone(),
             symbol: id,

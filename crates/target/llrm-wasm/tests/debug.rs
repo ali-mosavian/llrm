@@ -50,12 +50,16 @@ fn a_linked_g_object_has_the_rows_of_its_source_lines() {
     let rows = run("llvm-dwarfdump-20", &[os("--debug-line"), linked.as_os_str()]);
     let lines: Vec<u32> = rows
         .lines()
-        .filter(|l| l.starts_with("0x"))
+        .filter(|l| l.starts_with("0x") && !l.contains("end_sequence"))
         .filter_map(|l| l.split_whitespace().nth(1)?.parse().ok())
         .collect();
-    for want in [11, 12, 13] {
-        assert!(lines.contains(&want), "{want} missing:\n{rows}");
-    }
+    // The scope line's row at the function's start, then one row where the
+    // line changes (`DwarfDebug::beginInstruction`); the repeats were rows too.
+    assert_eq!(lines, [1, 11, 12, 13, 14], "{rows}");
+    let verified = run("llvm-dwarfdump-20", &[os("--verify"), linked.as_os_str()]);
+    assert!(verified.contains("No errors"), "{verified}");
+    let info = run("llvm-dwarfdump-20", &[os("--debug-info"), linked.as_os_str()]);
+    assert!(info.contains("DW_AT_name\t(\"f\")"), "{info}");
     if std::env::var_os("WASM_KEEP").is_none() {
         let _ = std::fs::remove_dir_all(&dir);
     }
