@@ -196,8 +196,10 @@ fn extended(body: &str) -> Option<ConstantKind> {
 /// value no double holds is a `Float80`.
 #[test]
 fn an_x87_product_keeps_its_64_bit_significand() {
-    // The doubles 5.0e-05 and 1.0e+04, as hex: a decimal `x86_fp80` is the extended value nearest the text.
-    let Some(ConstantKind::Float80(bits)) = extended("  %r = fmul x86_fp80 0x3F0A36E2EB1C432D, 0x40C3880000000000\n") else {
+    // The doubles 5.0e-05 and 1.0e+04, as hex: a decimal `x86_fp80` is the
+    // extended value nearest the text.
+    let Some(ConstantKind::Float80(bits)) = extended("  %r = fmul x86_fp80 0x3F0A36E2EB1C432D, 0x40C3880000000000\n")
+    else {
         panic!("a value no double holds")
     };
     let half = 0x3ffe_8000_0000_0000_0000_u128;
