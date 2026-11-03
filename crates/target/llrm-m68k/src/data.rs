@@ -28,7 +28,7 @@ pub fn assembly(
 }
 
 /// `\01` marks a name to be used as written.
-fn symbol(name: &str) -> String {
+pub(crate) fn symbol(name: &str) -> String {
     name.strip_prefix('\u{1}').unwrap_or(name).to_owned()
 }
 
