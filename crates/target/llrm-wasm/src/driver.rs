@@ -70,7 +70,10 @@ fn optimized(
     let machine: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(crate::machine::WasmMachine);
     let mut program = llrm_mir::program::Program::new(vec![module], machine)?;
     let options = MidEnd { library: Vec::new(), ..level.mid_end() };
-    llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
+    // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
+    // DIR.
+    let dump = std::env::var_os("LLRM_WASM_DUMP").map(std::path::PathBuf::from);
+    llrm_transforms::pipeline::applied(&mut program, &Applied { options, dump, ..Applied::default() })?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     let module = program.modules.remove(0);
     // `LLRM_WASM_IR=1`: the module the backend gets, on standard error.

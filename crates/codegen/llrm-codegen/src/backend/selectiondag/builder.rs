@@ -1176,6 +1176,21 @@ impl Builder<'_> {
             }
             let value = self.merge(&values);
             self.node_map.insert(arg, value);
+            if calling.returns_sret_pointer()
+                && attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Type(name, _) if name == "sret"
+                    )
+                })
+            {
+                // `SRetReturnReg`: kept to be returned
+                let reg = self.info.new_reg();
+                self.info.sret_reg = Some(reg);
+                let entry = self.dag.entry_node();
+                let copy = self.dag.get_copy_to_reg(entry, reg, value);
+                self.dag.set_root(copy);
+            }
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
@@ -2344,9 +2359,6 @@ impl Builder<'_> {
         chain: SDValue,
         instruction: &llrm_mir::module::Instruction,
     ) -> Result<(), Refused> {
-        if self.info.sret_reg.is_some() {
-            return Err(Refused("sret with a target's calling hook"));
-        }
         let mut outs = Vec::new();
         if let Some(&operand) = instruction.operands.first() {
             let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("a return of no type"))?;
@@ -2373,6 +2385,20 @@ impl Builder<'_> {
                     outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false });
                 }
             }
+        }
+        if let Some(reg) = self.info.sret_reg {
+            // `LowerReturn`: the saved `sret` pointer is a result too
+            let pointer = self.target.dag.pointer;
+            let saved = self.dag.get_copy_from_reg(chain, reg, pointer);
+            outs.push(Out {
+                value: saved,
+                ext: Ext::Any,
+                pointer: false,
+                arg_vt: pointer,
+                split: false,
+                sret: false,
+                variadic: false,
+            });
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
         let node = calling.lower_return(&mut self.dag, chain, &outs);

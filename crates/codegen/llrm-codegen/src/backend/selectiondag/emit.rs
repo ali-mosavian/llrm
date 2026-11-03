@@ -3182,7 +3182,7 @@ impl Emitter<'_, '_> {
         }
         match name {
             // A jump through a table: the entry at the table plus the index.
-            "JMP32m" | "JMP16m" => {
+            "JMP32m" | "JMP16m" | "JMP64m" => {
                 let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short jump".to_owned()))?;
                 // The table is the displacement, or the base is its address.
                 let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
@@ -3197,7 +3197,11 @@ impl Emitter<'_, '_> {
                 let scale = self.constant(group[1])?;
                 let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
                 address.index = jump.id;
-                let entry = if name == "JMP16m" { 2 } else { 4 };
+                let entry = match name {
+                    "JMP16m" => 2,
+                    "JMP64m" => 8,
+                    _ => 4,
+                };
                 // At real mode a lone register is the address's base, as the
                 // old selector makes it (16-bit addressing has no scale).
                 let (base, index) =

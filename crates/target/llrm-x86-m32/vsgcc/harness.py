@@ -32,6 +32,7 @@ def source_dir(prog):
     return KERNELS / prog if (KERNELS / prog).is_dir() else BENCH / prog
 sys.path.insert(0, str(REPO / "tools"))
 import llrmbin  # noqa: E402
+import sizes  # noqa: E402
 
 LLRM = llrmbin.bin_dir() / "llrm-cc"   # where cargo put it; build.sh and ctime.py use the same
 
@@ -536,13 +537,19 @@ def data_bytes(prog, variant):
     return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
 
 
+def code_size(prog, variant):
+    """(code bytes without alignment padding, the padding) of the kernel's object: the executable sections as tools/sizes.py reads them
+    (the gate's definition: a loop aligned by nops is not growth). For gcc and clang `code_bytes` adds the runtime members they pulled in."""
+    obj = OUT / "o" / f"{prog}.{variant}.obj" if variant in OMF_VARIANTS else OUT / "b" / f"{prog}.{variant}.o"
+    size = sizes.code_size(obj)
+    return size.code, size.align
+
+
 def code_bytes(prog, variant):
-    """Size of the kernel's code: the CODE-class segments (OMF) or .text (ELF) of its object, like tools/sizes.py, and for
-    gcc and clang the runtime members they pulled in, so that a divide they send to libgcc is counted and not left out."""
-    if variant in OMF_VARIANTS:
-        return sum(s for s, c in omf_segments(prog, variant) if c.endswith("CODE"))
-    out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
-    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".text")) + archive_code(prog, variant)
+    """Size of the kernel's code without alignment padding (`code_size`), and for gcc and clang the runtime members they pulled in, so
+    that a divide they send to libgcc is counted and not left out."""
+    code = code_size(prog, variant)[0]
+    return code if variant in OMF_VARIANTS else code + archive_code(prog, variant)
 
 
 def archive_code(prog, variant):
@@ -562,7 +569,7 @@ def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":
