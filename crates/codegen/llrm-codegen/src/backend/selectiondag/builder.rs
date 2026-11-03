@@ -950,7 +950,12 @@ impl Builder<'_> {
         }
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
-            let vt = self.type_of(self.function.value(arg).ty)?;
+            let declared = self.type_of(self.function.value(arg).ty)?;
+            // No FPU: a float in registers arrives as the integer of its width.
+            let soft = self.soft_float()
+                && declared.is_floating_point()
+                && matches!(self.convention.parameters.get(at), Some(Parameter::Registers(_)));
+            let vt = if soft { EVT::integer(declared.size_in_bits()) } else { declared };
             // the registers a convention names split a value as
             // `getNumRegisters` does
             let (mut part_vt, parts) = match self.convention.parameters.get(at) {
@@ -1056,6 +1061,7 @@ impl Builder<'_> {
             } else {
                 pieces[0]
             };
+            let value = if soft { self.dag.get_node(ISD::BitCast, declared, &[value]) } else { value };
             self.node_map.insert(arg, value);
             if self.function.parameter_attrs.get(at).is_some_and(|attrs| {
                 attrs
@@ -2406,6 +2412,11 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `useSoftFloat()` of the function being built.
+    fn soft_float(&self) -> bool {
+        crate::backend::isel::soft_float(&self.function.attrs)
+    }
+
     fn visit_ret(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -2467,6 +2478,13 @@ impl Builder<'_> {
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
+            // No FPU: a float leaves as the integer of its width.
+            let (value, vt) = if self.soft_float() && vt.is_floating_point() {
+                let int = EVT::integer(vt.size_in_bits());
+                (self.dag.get_node(ISD::BitCast, int, &[value]), int)
+            } else {
+                (value, vt)
+            };
             if let (true, Some(xmm)) = (vt.is_floating_point(), self.convention.float_result) {
                 // `LowerReturn` with SSE: copied to the vector register
                 let copy = self.dag.get_copy_to_phys_reg(chain, xmm, value, glue);

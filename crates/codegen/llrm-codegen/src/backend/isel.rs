@@ -500,7 +500,7 @@ pub fn convention(
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
     let (result, _, variadic) = module.signature(function.ty);
-    convention_for(
+    convention_for_abi(
         module,
         layout,
         arch,
@@ -510,6 +510,7 @@ pub fn convention(
         variadic,
         &param_types,
         &function.parameter_attrs,
+        soft_float(&function.attrs),
     )
 }
 
@@ -527,6 +528,42 @@ pub fn convention_for(
     variadic: bool,
     param_types: &[TypeId],
     parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    convention_for_abi(
+        module,
+        layout,
+        arch,
+        first,
+        calling_convention,
+        result,
+        variadic,
+        param_types,
+        parameter_attrs,
+        false,
+    )
+}
+
+/// Whether `attrs` ask for no FPU (`"use-soft-float"="true"`, clang's
+/// `-msoft-float`): the function's floats travel as the integers of their width.
+pub fn soft_float(attrs: &[llrm_mir::Attribute]) -> bool {
+    attrs.iter().any(
+        |one| matches!(one, llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" && value == "true"),
+    )
+}
+
+/// `convention_for`, where `soft_float` makes a `float` or `double` an integer
+/// of its width for the registers and the result.
+pub fn convention_for_abi(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    result: TypeId,
+    variadic: bool,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+    soft_float: bool,
 ) -> Result<Convention, Unselected> {
     in_the_frame(parameter_attrs)?;
     let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
@@ -559,7 +596,9 @@ pub fn convention_for(
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
+            .map(|((&ty, &size), class)| {
+                entry.kind(argument_of(types, ty, size, *class, soft_float), arch.stack_slot_bytes())
+            })
             .collect();
         // A struct result's address held in a register is not one of the
         // arguments, but takes that register.
@@ -627,7 +666,7 @@ pub fn convention_for(
         .filter(|_| matches!(types.get(answer), Type::Pointer(_)))
         .and_then(|one| one.results.get("address"))
         .map(|names| names.iter().map(|name| arch.register_named(name)).collect::<Vec<_>>());
-    let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
+    let returns = if types.is_void(result) || (!soft_float && matches!(types.get(answer), Type::Float(_))) {
         Vec::new()
     } else if let Some(registers) = pointer_result {
         registers
@@ -710,17 +749,20 @@ fn argument_of(
     ty: TypeId,
     size: u32,
     class: Option<&str>,
+    soft_float: bool,
 ) -> llrm_mir::target::Argument {
+    let soft = soft_float && matches!(types.get(ty), Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80));
     llrm_mir::target::Argument {
         bytes: i64::from(size),
-        integer: types.int_bits(ty).is_some(),
+        integer: soft || types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
         // An extended real is not a vector-register float: it travels in
         // memory.
-        floating: matches!(
-            types.get(ty),
-            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
-        ),
+        floating: !soft
+            && matches!(
+                types.get(ty),
+                Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+            ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
@@ -6653,7 +6695,7 @@ impl Selector<'_, '_, '_> {
                     Some(bytes) => byval_bytes(self.module, &self.layout, self.arch, bytes)?,
                     None => self.size(ty)?,
                 };
-                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index)), self.arch.stack_slot_bytes()));
+                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index), false), self.arch.stack_slot_bytes()));
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();

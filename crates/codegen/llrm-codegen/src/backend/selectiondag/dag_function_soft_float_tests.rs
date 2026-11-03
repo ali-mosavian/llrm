@@ -52,3 +52,26 @@ fn a_soft_float_constant_and_bitcast_are_integers() {
     let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
     assert_eq!(callees, ["__mulsf3"], "{names:?}");
 }
+
+const FLOAT_ARGS_AND_RESULT: &str = "target datalayout = \"@m16-datalayout@\"
+define float @f(float %a, float %b) \"use-soft-float\"=\"true\" {
+entry:
+  %c = fadd float %a, %b
+  ret float %c
+}
+";
+
+/// A float argument and result travel as the integer of their width: the
+/// function reads its arguments from the stack, calls `__addsf3` and returns
+/// in `dx:ax`, with no x87 op.
+#[test]
+fn a_soft_float_function_takes_and_returns_integers() {
+    let module = crate::testing::module(FLOAT_ARGS_AND_RESULT).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
+    let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
+    assert_eq!(callees, ["__addsf3"], "{names:?}");
+}
