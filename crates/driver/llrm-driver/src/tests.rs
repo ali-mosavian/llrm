@@ -2514,7 +2514,8 @@ fn the_argument_move_of_a_switch_case_is_of_the_calls_line() {
     assert!(zero <= 2, "{zero} line-0 rows: {:?}", info.lines);
 }
 
-/// The record types of an OMF object, in order (type byte, 2-byte length, body).
+/// The record types of an OMF object, in order (type byte, 2-byte length,
+/// body).
 fn omf_record_types(bytes: &[u8]) -> Vec<u8> {
     let mut types = Vec::new();
     let mut at = 0;

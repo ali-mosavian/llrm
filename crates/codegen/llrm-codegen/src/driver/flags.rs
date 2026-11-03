@@ -214,8 +214,8 @@ pub struct Flags {
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
-    /// `-ffunction-sections`: on OMF each function is a COMDAT of its own, which
-    /// the linker drops where nothing refers to it.
+    /// `-ffunction-sections`: on OMF each function is a COMDAT of its own,
+    /// which the linker drops where nothing refers to it.
     pub function_sections: bool,
     pub sanitize: Sanitize,
     /// `-fwrapv`: signed arithmetic wraps, so a front end states no no-overflow
