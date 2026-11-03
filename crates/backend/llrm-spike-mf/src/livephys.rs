@@ -122,9 +122,9 @@ impl LiveLanes {
                 self.remove(info, root);
             }
         }
-        for operand in &inst.operands {
+        for (index, operand) in inst.operands.iter().enumerate() {
             if let Operand::Use(reg) = operand {
-                self.add(info, register(*reg));
+                self.add(info, T::read_part(inst, index, register(*reg)));
             }
         }
     }
