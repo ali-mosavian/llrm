@@ -264,7 +264,8 @@ pub trait CombineHooks {
     /// cancelling pairs, the constants that meet). DEVIATE: off by default.
     /// On x86 the regrouped remainder `x - (8q - q)` keeps `q` live longer and
     /// moved `div_constants_long` at x86_16 -O2 from 2062 to 2066 instructions
-    /// through a different spill. Exit: x86 rows judged with the fold.
+    /// through a different spill. Exit: 2026-11-20, the x86_16 spill is fixed
+    /// (or the fold is judged with it) and this default turns on.
     fn sub_algebra_folds(&self) -> bool {
         false
     }
