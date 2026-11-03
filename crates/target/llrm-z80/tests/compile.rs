@@ -752,14 +752,16 @@ fn a_constant_offset_from_an_external_global_is_folded_into_the_symbol() {
     assert!(out.contains("#_str+6") && !out.contains("add hl"), "{out}");
 }
 
-/// At -Oz slen was the runtime's `strlen` (`cpir`): 12 B against the loop's 10
-/// (release/next), the bytes the level is for. The size levels keep the loop.
+/// At -Oz slen was the 10 B loop: 482 T against best SDCC's 437 T and 58
+/// instructions (65). The pin forms the `strlen` call at every level: 12 B,
+/// 340 T, 25 instructions, ahead of SDCC on all three.
 #[test]
-fn a_string_loop_stays_a_loop_at_the_size_levels() {
+fn a_string_loop_is_the_runtime_strlen_at_every_level() {
     let ir = include_str!("kernels/ir/slen.ll");
-    let oz = text(ir, "slen", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
-    let o2 = text(ir, "slen", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(!oz.contains("_strlen") && o2.contains("_strlen"), "{oz}\n{o2}");
+    for level in [Level::O2, Level::Os, Level::Oz] {
+        let out = text(ir, "slen", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains("_strlen"), "{level:?}\n{out}");
+    }
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:
