@@ -5,6 +5,7 @@
 #define SF_6502_H
 /* Rounding by compare: the 32-bit add of the add-3 form costs more than the compare chain here (add -Os +6 B, +1.9% cycles). */
 #define SF_ROUND_BRANCHY 1
+#define SF_FIX_NAN_UNDEF 1 /* NaN to int is undefined in C and poison in IR: -Os fix_si 230 -> 179 asm lines, fix_usi 176 -> 122 */
 #ifndef __OPTIMIZE_SIZE__
 #define SF_SHIFT_STEPS 1
 #endif
