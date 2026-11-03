@@ -94,9 +94,13 @@ def ours(op, opt):
         p = f'{d}/r/{opt}_{f}.s'; strip_exports(p)
         sh('ca65', '-t', 'sim6502', '-U', p, '-o', p[:-2] + '.o'); objs.append(p[:-2] + '.o')
     open(f'{d}/stub.s', 'w').write('rc2 = 130\n' + ''.join('rc%d = %d\n' % (i, 128 + i) for i in range(3, 8)) + f'.export {SYM[op]}\n{SYM[op]}:\n lda #0\n ldx #0\n' + ''.join(f' sta rc{i}\n' for i in range(2, 8)) + ' rts\n')
+    bss = sum(int(m.group(1)) for o in objs for m in [re.search(r'BSS:\s+(\d+)', sh('od65', '--dump-segsize', o).stdout)] if m)
+    if bss: open(f'{d}/stub.s', 'a').write(f'.segment "BSS"\n .res {bss}\n')  # same BSS as the library build: crt0's zerobss loop is not the operation
     sh('ca65', '-t', 'sim6502', f'{d}/stub.s', '-o', f'{d}/stub.o')
     for k, libo in (('r', objs), ('s', [f'{d}/stub.o'])):
         sh('cl65', '-t', 'sim6502', '-o', f'{d}/{k}.bin', '-Ln', f'{d}/{k}.lbl', '-m', f'{d}/{k}.map', f'{d}/main.o', *libo, f'{T}/mos.o')
+    seg = lambda m: {a: int(b, 16) for a, b in re.findall(r'^(ZEROPAGE|BSS|DATA)\s+\w+\s+\w+\s+(\w+)', open(m).read(), re.M)}
+    assert seg(f'{d}/r.map')['BSS'] == seg(f'{d}/s.map')['BSS'], f'{op} {opt}: the base binary must have the library build\'s BSS: crt0 zeroes it, and the extra cycles are not the operation'
     labels = {}
     for l in open(f'{d}/r.lbl'):
         m = re.match(r'al ([0-9A-F]+) \.(\w+)', l)
@@ -145,18 +149,18 @@ def mos(op):
         c.append('  if (r.u != W[i] && !(((r.u << 1) > 0xFFE0000000000000ull) && ((W[i] << 1) > 0xFFE0000000000000ull))) fails++; (void)s; }')
         c.append(' printf("%lu %lu %lu %lu %u\\n", sum, sb, (unsigned long)mx, (unsigned long)mb, fails); return 0; }')
         return '\n'.join(c)
-    open(f'{T}/m0.c', 'w').write(prog(0))
-    sh(f'{MOS}/mos-sim-clang', '-Os', '-o', f'{T}/m0', f'{T}/m0.c')
+    open(f'{T}/m0_{op}.c', 'w').write(prog(0))
+    sh(f'{MOS}/mos-sim-clang', '-Os', '-o', f'{T}/m0_{op}', f'{T}/m0_{op}.c')
     out = []  # size: one call on volatile operands against none, independent of N
     for noop in (0, 1):
         open(f'{T}/z{noop}.c', 'w').write('#include <stdint.h>\ntypedef union { double d; uint64_t u; } U;\nvolatile U x, y, r;\nint main(void) { U a = x, b = y, c; c.d = %s; r = c; return 0; }\n' % ('a.d' if noop else e.replace('x.d', 'a.d').replace('y.d', 'b.d')))
         sh(f'{MOS}/mos-sim-clang', '-Os', '-o', f'{T}/z{noop}', f'{T}/z{noop}.c')
         out.append(int(sh(f'{MOS}/llvm-size', f'{T}/z{noop}.elf').stdout.split('\n')[1].split()[0]))
-    s, sb, mx, mb, f = map(int, sh(f'{MOS}/mos-sim', f'{T}/m0').stdout.split())
+    s, sb, mx, mb, f = map(int, sh(f'{MOS}/mos-sim', f'{T}/m0_{op}').stdout.split())
     assert f == 0, f'llvm-mos {op}: {f} wrong results'
     return (s - sb) / N, mx - mb, out[0] - out[1]
 
-print('llrm-cc md5', subprocess.run(['md5sum', CC], capture_output=True, text=True).stdout[:12], f'N={N}')
+print('llrm-cc md5', subprocess.run(['md5sum', CC], capture_output=True, text=True).stdout[:12], f'N={N} dir={T}')
 print('op   | ' + ' | '.join(f'ours -{o} mean/worst clk, B' for o in OPTS) + ' | llvm-mos mean/worst clk, B')
 for opt in OPTS: compile_libs(opt)
 for op in OPS:
