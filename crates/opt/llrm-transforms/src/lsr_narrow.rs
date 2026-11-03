@@ -437,11 +437,53 @@ impl Collection<'_, '_> {
         se: &mut ScalarEvolution,
     ) {
         self.narrow_search_space_by_detecting_supersets(se);
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_detecting_supersets",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.narrow_search_space_by_collapsing_unrolled_code();
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_collapsing_unrolled_code",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.narrow_search_space_by_refiltering_undesirable_dedicated_registers(se);
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_refiltering_undesirable_dedicated_registers",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.narrow_search_space_by_filter_formula_with_same_scaled_reg(se);
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_filter_formula_with_same_scaled_reg",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.narrow_search_space_by_filter_post_inc(se);
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_filter_post_inc",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.narrow_search_space_by_merging_uses_outside_loop();
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_merging_uses_outside_loop",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
         self.narrow_search_space_by_picking_winner_regs(se);
+        llrm_support::debug!(
+            "lsr",
+            "  after {}: {}",
+            "by_picking_winner_regs",
+            self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
+        );
     }
 }
