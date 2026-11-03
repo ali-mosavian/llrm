@@ -1445,15 +1445,15 @@ pub enum DwUnary {
 
 impl Module {
     /// The line a function's `!DISubprogram` says its body starts at
-    /// (`scopeLine`, the line of the `{`; `line` where none is given): the
-    /// line of the first row (`DwarfDebug::beginFunctionImpl`).
+    /// (`scopeLine`, the line of the `{`): the line of the first row
+    /// (`DwarfDebug::beginFunctionImpl`).
     pub fn subprogram_line(
         &self,
         function: &Function,
     ) -> Option<u32> {
         let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
         let fields = &self.special.get(node)?.fields;
-        let at = fields.iter().position(|one| one == "scopeLine").or_else(|| fields.iter().position(|one| one == "line"))?;
+        let at = fields.iter().position(|one| one == "scopeLine")?;
         match self.metadata.get(node.0 as usize)?.operands.get(at)? {
             MetadataOperand::Constant(value) => match self.context.get(*value).kind {
                 crate::context::ConstantKind::Int(number) => u32::try_from(number).ok(),

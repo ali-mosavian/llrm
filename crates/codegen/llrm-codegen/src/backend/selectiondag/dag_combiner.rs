@@ -606,9 +606,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
-            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
-                self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
-            }
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
+                .fold_extend_of_cast(node)
+                .or_else(|| self.visit_extend(node))
+                .or_else(|| self.sext_of_non_negative(node)),
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
@@ -1352,23 +1353,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (ISD::AnyExtend, ISD::Truncate) => Some(self.any_ext_or_trunc(x, vt)),
             (ISD::ZeroExtend, ISD::Truncate) => {
                 // `zext nneg (trunc x)` of an `x` with sign bits to spare is
-                // `x` ([L16459][pin]): the sext of a load a `zext nneg` shares
-                // leaves no `movzx`. DEVIATE SD448: the pin's `sext x` where
-                // `x` is narrower than the result is not taken:
-                // at m64 it left a `movslq` where the pin has
-                // `mov r32, r32` (ring, tile +1 B).
-                // Exit 2026-11-04: `visitSIGN_EXTEND`'s `sext` to `zext nneg`
-                // fold of a value with a zero sign bit
-                // ([L16279](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16279)).
+                // `x` widened by `sext`, or truncated
+                // ([L16459](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16459)).
                 let (op_bits, mid_bits) =
                     (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
                 if self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
                     && super::known_bits::num_sign_bits(self.dag, x) > op_bits - mid_bits
                 {
-                    let dest_bits = vt.size_in_bits();
-                    if op_bits == dest_bits {
-                        return Some(x);
-                    }
+                    return Some(self.dag.get_sext_or_trunc(x, vt));
                 }
                 let wide = self.any_ext_or_trunc(x, vt);
                 let narrow = self.dag.value_type(n0);
@@ -1384,6 +1376,30 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `visitSIGN_EXTEND` ([L16279][pin]): `(sext x)` is `(zext nneg x)` if the
+    /// sign bit is known zero and the target does not extend signed more
+    /// cheaply. At m64 that is `mov r32, r32`, not `movslq`.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16279
+    fn sext_of_non_negative(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::SignExtend {
+            return None;
+        }
+        let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        let from = self.dag.value_type(n0);
+        if self.tli?.is_sext_cheaper_than_zext(from, vt)
+            || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+        {
+            return None;
+        }
+        Some(self.dag.get_node_flags(ISD::ZeroExtend, vt, &[n0], super::dag::SDNodeFlags::NON_NEG))
     }
 
     /// `visitSIGN_EXTEND`, `visitZERO_EXTEND` and `visitANY_EXTEND` for a

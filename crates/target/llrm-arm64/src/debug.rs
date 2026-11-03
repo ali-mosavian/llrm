@@ -188,10 +188,20 @@ fn lines(
             at += 4;
         }
     }
-    if let Some(line) = declared
-        && out.first().is_none_or(|first| first.offset > start)
-    {
-        out.insert(0, row(start, (line, 0)));
+    if let Some(line) = declared {
+        match (out.first().copied(), body_start) {
+            // The first instruction's row moves to where the body starts.
+            (Some(first), Some(body))
+                if first.offset == start && body > 0 && out.iter().all(|one| one.offset != start + body) =>
+            {
+                out[0] = row(start, (line, 0));
+                let at = out.iter().position(|one| one.offset > start + body).unwrap_or(out.len());
+                out.insert(at, model::Line { offset: start + body, ..first });
+            }
+            // A frameless function: the scope line's row and the first
+            // statement's share the first byte, as the pin's do.
+            _ => out.insert(0, row(start, (line, 0))),
+        }
     }
     let length = at - start;
     (out, body_start.map(|first| (first, body_end.unwrap_or(length))), not_stmt)
