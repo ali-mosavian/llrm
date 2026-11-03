@@ -2474,3 +2474,15 @@ fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
     assert!(o2 <= 3, "copied at -O2, {o2} calls");
     assert!(o3 > 8, "not copied at -O3, {o3} calls");
 }
+
+/// gcc's dump sizes fib at 12 (edge growth 6; 13 and 7 here, before the
+/// pipeline merges its returns): the bar of the recursive edge
+/// is read in those units, not in `gcc_insns` (fib 8, quicksort 18 against
+/// gcc's 34, which let quicksort and bintree grow 490 -> 1218 and 449 -> 1464
+/// bytes at m32 -O2).
+#[test]
+fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
+    let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
+    let (_, _, fib) = module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
+    assert_eq!((crate::inline::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+}
