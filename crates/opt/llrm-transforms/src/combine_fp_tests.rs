@@ -162,3 +162,45 @@ fn test_a_fmuladd_with_a_zero_factor_and_a_finite_non_negative_other_folds_to_it
         "x may be infinite or NaN: the call stays: {kept}"
     );
 }
+
+fn joined_fp(op: &str) -> String {
+    let mut module = parsed(&format!(
+        "define double @f(i1 %c, double %i, double %j) {{
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %p = phi double [ 1.0, %a ], [ %i, %b ]
+  %q = phi double [ 2.0, %a ], [ %j, %b ]
+  %r = {op} double %p, %q
+  ret double %r
+}}
+"
+    ));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// `visitFAdd`, `visitFSub`, `visitFMul` and `visitFDiv` call
+/// `foldBinopWithPhiOperands`: two phis of constants on one edge fold there.
+/// Missing, nbody at -O2 kept four `phi double` and the `fadd` chain after a
+/// zero-trip loop, 96 B more than the pin's clang.
+#[test]
+fn test_a_float_binop_of_two_phis_folds_its_constant_edge() {
+    for (op, folded) in
+        [("fadd", "3.000000e+00"), ("fsub", "-1.000000e+00"), ("fmul", "2.000000e+00"), ("fdiv", "5.000000e-01")]
+    {
+        let out = joined_fp(op);
+        assert!(out.contains(&format!("[ {folded}, %a ]")), "{op}: {out}");
+        assert!(!out.contains(&format!("{op} double %p")), "{op}: {out}");
+    }
+}
