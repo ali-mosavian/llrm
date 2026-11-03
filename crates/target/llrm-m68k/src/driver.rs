@@ -187,6 +187,13 @@ pub fn object(
     level: Level,
     name: &str,
 ) -> Result<Vec<u8>, String> {
+    // The file symbol is the module's own `source_filename`, as the pin's: the
+    // path of a scratch IR file would differ between two compiles of one
+    // source.
+    let name = text
+        .lines()
+        .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
+        .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
     let module = lowered(text, level, None)?;
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), mid_end: false, ..Options::default() };
     let mut items = Vec::new();

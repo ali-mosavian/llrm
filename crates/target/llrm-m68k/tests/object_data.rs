@@ -90,3 +90,54 @@ fn the_shapes_run_from_our_object() {
         assert_eq!(code, Some(0), "{cpu}: exit code names the first failing shape (11 bss .. 16 statics)");
     }
 }
+
+fn section_alignments(bytes: &[u8]) -> Vec<(String, u32)> {
+    let word = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+    let half = |at: usize| usize::from(u16::from_be_bytes(bytes[at..at + 2].try_into().unwrap()));
+    let (table, size, count, names) = (word(0x20) as usize, half(0x2E), half(0x30), half(0x32));
+    let names_at = word(table + names * size + 16) as usize;
+    (0..count)
+        .map(|index| {
+            let header = table + index * size;
+            let at = names_at + word(header) as usize;
+            let end = bytes[at..].iter().position(|byte| *byte == 0).unwrap();
+            (String::from_utf8_lossy(&bytes[at..at + end]).into_owned(), word(header + 32))
+        })
+        .collect()
+}
+
+/// `.rodata` and `.bss` were given `sh_addralign` 4 whatever they held; the
+/// pin gives them their objects' alignment, 2 for 16-bit data.
+#[test]
+fn a_section_of_16_bit_data_is_aligned_to_2() {
+    let (path, output) = object_of("68000", "halves.ll");
+    assert!(output.status.success(), "llc failed: {}", String::from_utf8_lossy(&output.stderr));
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    let alignments = section_alignments(&bytes);
+    for name in [".rodata", ".bss"] {
+        let found = alignments.iter().find(|(one, _)| one == name).map(|(_, align)| *align);
+        assert_eq!(found, Some(2), "{name} sh_addralign in {alignments:?}");
+    }
+}
+
+/// The file symbol was the scratch IR's path, so two compiles of one source
+/// from different directories differed by their path bytes.
+#[test]
+fn the_object_does_not_depend_on_where_the_ir_file_is() {
+    let source = std::fs::read_to_string(fixture("halves.ll")).unwrap();
+    let mut objects = Vec::new();
+    for tag in ["first-dir", "second-directory-longer"] {
+        let dir = support::unique_path(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ir = dir.join("d.ll");
+        std::fs::write(&ir, &source).unwrap();
+        let out = dir.join("d.o");
+        let status =
+            Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc")).args(["-O2", "-o"]).arg(&out).arg(&ir).status().unwrap();
+        assert!(status.success());
+        objects.push(std::fs::read(&out).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    assert!(objects[0] == objects[1], "two compiles of one source differ");
+}

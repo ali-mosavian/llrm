@@ -43,6 +43,7 @@ impl Machine for M68kElf {
     const NUMBER: u16 = 4;
     const ADDEND: bool = true;
     const BIG_ENDIAN: bool = true;
+    const MIN_SECTION_ALIGN: usize = 1;
 
     fn backend() -> &'static dyn AsmBackend {
         &Backend
