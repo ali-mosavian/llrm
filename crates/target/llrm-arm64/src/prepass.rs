@@ -31,7 +31,7 @@
 //! version over the arm64 selector's operations, standing in until the core
 //! machine passes run on arm64 (docs/architecture/arm64-spike.md).
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -191,7 +191,7 @@ fn dominates(
 
 /// How many definitions each virtual register has.
 fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
-    let mut count: HashMap<Reg, usize> = HashMap::new();
+    let mut count: HashMap<Reg, usize> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             for register in op.defs_and_uses().0 {
@@ -306,7 +306,7 @@ fn narrow_extension_uses(function: &mut MFunc) {
         }
         register
     };
-    let mut extensions: HashMap<Reg, Reg> = HashMap::new();
+    let mut extensions: HashMap<Reg, Reg> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         if let Op::I(Inst::BitfieldMove {
             op: Bitfield::Sbfm | Bitfield::Ubfm,
@@ -329,7 +329,7 @@ fn narrow_extension_uses(function: &mut MFunc) {
     }
     // An extension is dropped only when every read of it, through copies, is
     // a 32-bit one.
-    let mut blocked: HashSet<Reg> = HashSet::new();
+    let mut blocked: HashSet<Reg> = HashSet::default();
     for block in &mut function.blocks {
         for op in &mut block.ops {
             let is_copy = matches!(op, Op::Copy { .. });
@@ -416,7 +416,7 @@ fn sink(function: &mut MFunc) {
         let definitions = definitions(function);
         let loops = natural_loops(function, &cfg);
         let depth = |block: usize| loops.iter().filter(|(_, body)| body.contains(&block)).count();
-        let mut readers: HashMap<Reg, Vec<usize>> = HashMap::new();
+        let mut readers: HashMap<Reg, Vec<usize>> = HashMap::default();
         for (at, block) in function.blocks.iter().enumerate() {
             for op in &block.ops {
                 for register in op.defs_and_uses().1 {
@@ -461,7 +461,7 @@ fn sink(function: &mut MFunc) {
         if moves.is_empty() {
             return;
         }
-        let mut sunk: HashMap<usize, Vec<Op>> = HashMap::new();
+        let mut sunk: HashMap<usize, Vec<Op>> = HashMap::default();
         for &(from, index, target) in &moves {
             sunk.entry(target).or_default().push(function.blocks[from].ops[index].clone());
         }
@@ -558,9 +558,9 @@ fn cse(function: &mut MFunc) {
     for &block in cfg.order.iter().skip(1) {
         children[cfg.idom[block]].push(block);
     }
-    let mut rename: HashMap<Reg, Reg> = HashMap::new();
-    let mut removed: HashSet<(usize, usize)> = HashSet::new();
-    let mut table: HashMap<String, Reg> = HashMap::new();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    let mut removed: HashSet<(usize, usize)> = HashSet::default();
+    let mut table: HashMap<String, Reg> = HashMap::default();
     let copies = single_copies(function, &definitions);
     let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
@@ -688,7 +688,7 @@ fn live_in(
     let count = function.blocks.len();
     let mut gen_kill: Vec<(HashSet<Reg>, HashSet<Reg>)> = Vec::with_capacity(count);
     for block in &function.blocks {
-        let (mut gen_set, mut kill) = (HashSet::new(), HashSet::new());
+        let (mut gen_set, mut kill) = (HashSet::default(), HashSet::default());
         for op in &block.ops {
             let (defs, uses) = op.defs_and_uses();
             gen_set.extend(uses.into_iter().filter(|used| used.is_virtual() && !kill.contains(used)));
@@ -696,7 +696,7 @@ fn live_in(
         }
         gen_kill.push((gen_set, kill));
     }
-    let mut live: Vec<HashSet<Reg>> = vec![HashSet::new(); count];
+    let mut live: Vec<HashSet<Reg>> = vec![HashSet::default(); count];
     let mut changed = true;
     while changed {
         changed = false;
@@ -760,7 +760,7 @@ fn within_pressure(
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
         candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
-    let (mut reads, mut calls) = (HashMap::<Reg, usize>::new(), false);
+    let (mut reads, mut calls) = (HashMap::<Reg, usize>::default(), false);
     for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
         calls |= matches!(op, Op::Call { .. });
         for used in op.defs_and_uses().1 {
@@ -781,7 +781,7 @@ fn within_pressure(
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
-    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::new();
+    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::default();
     for (register, count) in reads {
         let group = groups.entry(keyed(made[&register])).or_default();
         group.0.push(register);
@@ -792,7 +792,7 @@ fn within_pressure(
         registers.sort();
     }
     roots.sort_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
-    let mut chosen: HashSet<Reg> = HashSet::new();
+    let mut chosen: HashSet<Reg> = HashSet::default();
     let (mut gprs, mut fprs) = (room(true), room(false));
     for (registers, _) in roots {
         let gpr = matches!(registers[0], Reg::Gpr(_));
@@ -822,7 +822,7 @@ fn natural_loops(
     for tail in 0..function.blocks.len() {
         for &header in &cfg.successors[tail] {
             if cfg.idom[tail] != usize::MAX && dominates(cfg, header, tail) {
-                let mut body: HashSet<usize> = HashSet::from([header, tail]);
+                let mut body: HashSet<usize> = [header, tail].into_iter().collect();
                 let mut work = vec![tail];
                 while let Some(block) = work.pop() {
                     if block == header {
@@ -857,7 +857,7 @@ fn hoist(function: &mut MFunc) {
         let outside: Vec<usize> = cfg.predecessors[header].iter().copied().filter(|one| !body.contains(one)).collect();
         let [preheader] = outside[..] else { continue };
         // What the loop defines.
-        let mut inside_defs: HashSet<Reg> = HashSet::new();
+        let mut inside_defs: HashSet<Reg> = HashSet::default();
         for &block in &body {
             for op in &function.blocks[block].ops {
                 inside_defs.extend(op.defs_and_uses().0);
@@ -1117,7 +1117,7 @@ mod tests {
 /// is one move, `x0 <- v; x1 <- v` two (the register coalescer's answer, by
 /// ordering).
 pub fn order_copies(function: &mut MFunc) {
-    let mut home: HashMap<Reg, Reg> = HashMap::new();
+    let mut home: HashMap<Reg, Reg> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             if let Op::Copy { dst, src } = op
@@ -1270,7 +1270,7 @@ fn redundant_zero_extends(function: &mut MFunc) {
         .filter_map(defined)
         .filter(|register| definitions.get(register) == Some(&1))
         .collect();
-    let mut rename: HashMap<Reg, Reg> = HashMap::new();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
     for block in &mut function.blocks {
         block.ops.retain(|op| {
             let Op::I(Inst::LogicShifted {

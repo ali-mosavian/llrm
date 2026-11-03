@@ -3,7 +3,7 @@
 //! (`MachineFunction`), the frame objects it needs, and the pseudo
 //! instructions only the backend's own phases understand.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use llrm_codegen::model::lir::SrcLoc;
 
@@ -521,7 +521,7 @@ pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
         changed = false;
         for at in 0..count {
             let entering: HashSet<Reg> = if at == 0 {
-                HashSet::new()
+                HashSet::default()
             } else {
                 let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
                 match from.next() {
@@ -539,7 +539,7 @@ pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
     let mut report = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let entering: HashSet<Reg> = if at == 0 {
-            HashSet::new()
+            HashSet::default()
         } else {
             let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
             match from.next() {
