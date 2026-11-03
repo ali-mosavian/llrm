@@ -69,7 +69,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("compiler", help="NEW llrm-cc")
     parser.add_argument("--src", required=True)
-    parser.add_argument("--targets", default="m32,m64", help="ELF legs only")
+    parser.add_argument("--targets", default="m32,m64", help="ELF legs only (m32, m64, a64 = arm64 Linux)")
     parser.add_argument("--levels", default="O2,Os")
     parser.add_argument("--limit", type=int, default=40, help="the first N programs by name")
     args = parser.parse_args()
@@ -80,8 +80,9 @@ def main() -> int:
         for target in args.targets.split(","):
             for level in args.levels.split(","):
                 tag = f"{source.stem}-{target}-{level}"
-                off, _ = objsweep.compile_one(args.compiler, source, target, level, scratch / f"{tag}.off.o", "dag", None, ["-fobject-format=elf"])
-                on, _ = objsweep.compile_one(args.compiler, source, target, level, scratch / f"{tag}.on.o", "dag", None, ["-g", "-fobject-format=elf"])
+                elf = [] if target == "a64" else ["-fobject-format=elf"]
+                off, _ = objsweep.compile_one(args.compiler, source, target, level, scratch / f"{tag}.off.o", "dag", None, elf)
+                on, _ = objsweep.compile_one(args.compiler, source, target, level, scratch / f"{tag}.on.o", "dag", None, ["-g", *elf])
                 if off is None or on is None:
                     refused += 1
                     continue

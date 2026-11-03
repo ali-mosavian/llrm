@@ -42,8 +42,8 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
     return done.stdout.split() if done.returncode == 0 else None
 
 
-CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat"}  # llrm-cc's LLRM_CC_TARGET rows
-FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"]}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
+CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat", "a64": "arm64-linux"}  # llrm-cc's LLRM_CC_TARGET rows
+FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": []}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
 
 
 # The -g leg: the debug formats each target writes. An object holds its debug sections, so comparing whole objects compares them.

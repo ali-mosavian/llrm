@@ -64,3 +64,11 @@ def test_an_object_with_debug_sections_added_reads_the_same_apart_from_them(tmp_
     assert d.has_debug(on) and not d.has_debug(off)
     assert d.differences(off, on) == []
     assert any(key.startswith("<relocs") and off[key] for key in off), "the object has no relocation to compare"
+
+
+def test_every_target_the_identity_check_names_has_flags_and_a_cc_target_where_it_needs_one():
+    """a64 had neither, so `--targets a64` ran llrm-cc with no LLRM_CC_TARGET: an x86 compile compared with itself."""
+    import objsweep
+
+    assert objsweep.CC_TARGETS["a64"] == "arm64-linux"
+    assert objsweep.FLAGS["a64"] == []
