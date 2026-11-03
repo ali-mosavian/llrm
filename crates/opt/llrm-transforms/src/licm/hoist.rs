@@ -6,7 +6,7 @@ use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Outer};
 
 use super::{Flags, LoopCtx, LoopSafety, calls};
@@ -40,7 +40,7 @@ fn loop_blocks_rpo(ctx: &LoopCtx) -> Vec<BlockId> {
 /// the instructions it hoists to `preheader`. Not built (L1): the
 /// reciprocal of an `fdiv` (MIR has no `arcp`), `hoistInsertPastInsert`
 /// (no vectors), the invariant-start and guard intrinsics, and
-/// `hoistArithmetics` but `hoistGEP` and `hoistBOAssociation` (the latter only
+/// `hoistArithmetics` but `hoistMinMax`, `hoistGEP` and `hoistBOAssociation` (the latter only
 /// for integers: a float add or multiply needs `reassoc` and `nsz`, and the
 /// intersection of the two fast-math flags).
 #[allow(clippy::too_many_arguments)]
@@ -78,8 +78,11 @@ pub fn hoist_region(
                 found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
             // Try to reassociate instructions so that part of computations can
             // be done out of loop.
-            } else if let Some(one) = hoist_gep(unit, ctx, inst).or_else(|| hoist_bo_association(unit, ctx, inst)) {
-                ctx.state.gone.borrow_mut().extend([one.inst(), one.erased()]);
+            } else if let Some(one) = hoist_min_max(unit, ctx, inst)
+                .or_else(|| hoist_gep(unit, ctx, inst))
+                .or_else(|| hoist_bo_association(unit, ctx, inst))
+            {
+                ctx.state.gone.borrow_mut().extend([one.inst()].into_iter().chain(one.erased()));
                 // The preheader gets it where the visit reached it, after the
                 // hoists found so far.
                 reassociated.push((found.len(), one));
@@ -106,6 +109,18 @@ pub fn may_reassociate(
     inst: InstId,
 ) -> bool {
     let bo = function.instruction(inst);
+    // `hoistMinMax`: a logical operation of two compares.
+    if matches!(bo.opcode, Opcode::Select | Opcode::Binary(BinaryOp::And | BinaryOp::Or))
+        && bo.operands.iter().any(|&operand| {
+            let Operand::Value(value) = operand else { return false };
+            matches!(
+                function.value(value).def,
+                ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::ICmp(_))
+            )
+        })
+    {
+        return true;
+    }
     if matches!(bo.opcode, Opcode::GetElementPtr { .. }) {
         return matches!(
             bo.operands[0],
@@ -143,6 +158,23 @@ pub enum Reassociation {
     /// [`hoist_gep`]: `gep (gep ptr, inner), outer` becomes
     /// `gep (gep ptr, outer), inner`, the new inner one made in the preheader.
     Gep { gep: InstId, src: InstId, in_bounds: bool },
+    /// [`hoist_min_max`]: `x < a && x < b` becomes `x < min(a, b)`, the
+    /// `min` made in the preheader, and the two compares go.
+    MinMax {
+        /// The `and`, `or` or `select` of the two compares.
+        logic: InstId,
+        cond1: InstId,
+        cond2: InstId,
+        lhs: Operand,
+        rhs1: Operand,
+        rhs2: Operand,
+        signed: bool,
+        use_min: bool,
+        /// The predicate of the new compare (inverted for a logical or).
+        pred: IntPredicate,
+        /// A select: `rhs2` was not necessarily evaluated, so it is frozen.
+        freeze_rhs2: bool,
+    },
 }
 
 impl Reassociation {
@@ -151,16 +183,97 @@ impl Reassociation {
         match *self {
             Self::BinaryOp { bo, .. } => bo,
             Self::Gep { gep, .. } => gep,
+            Self::MinMax { logic, .. } => logic,
         }
     }
 
-    /// The instruction it also erases.
-    pub fn erased(&self) -> InstId {
+    /// The instructions it also erases.
+    pub fn erased(&self) -> Vec<InstId> {
         match *self {
-            Self::BinaryOp { bo0, .. } => bo0,
-            Self::Gep { src, .. } => src,
+            Self::BinaryOp { bo0, .. } => vec![bo0],
+            Self::Gep { src, .. } => vec![src],
+            Self::MinMax { cond1, cond2, .. } => vec![cond1, cond2],
         }
     }
+}
+
+/// [`hoistMinMax`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2256):
+/// `x < a && x < b` (or `||`, as the inverse) with `a` and `b` invariant in
+/// the loop becomes one compare against `min(a, b)`, made in the preheader.
+fn hoist_min_max(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<Reassociation> {
+    let function = &*unit.function;
+    let logic = function.instruction(inst);
+    let result = logic.result?;
+    let query = llrm_mir::valuetracking::Query {
+        context: unit.context,
+        globals: &[],
+        metadata: &[],
+        function,
+        layout: unit.layout,
+        dt: None,
+        assumptions: None,
+        dom_conditions: None,
+        cond_context: None,
+        cxt: Some(inst),
+    };
+    use llrm_mir::valuetracking::pattern;
+    let (inverse, (cond1, cond2)) = if let Some(operands) = pattern::logical_or(&query, Operand::Value(result)) {
+        (true, operands)
+    } else if let Some(operands) = pattern::logical_and(&query, Operand::Value(result)) {
+        (false, operands)
+    } else {
+        return None;
+    };
+    // `MatchICmpAgainstInvariant`: a one-use relational integer compare of a
+    // loop-variant value against an invariant one, the variant one on the left.
+    let against_invariant = |cond: Operand| -> Option<(InstId, IntPredicate, Operand, Operand)> {
+        let Operand::Value(value) = cond else { return None };
+        let ValueDef::Instruction(def) = function.value(value).def else { return None };
+        let compare = function.instruction(def);
+        let Opcode::ICmp(mut pred) = compare.opcode else { return None };
+        if !function.users(value).has_one_use() || ctx.state.gone.borrow().contains(&def) {
+            return None;
+        }
+        let [mut lhs, mut rhs] = compare.operands[..] else { return None };
+        unit.context.types.int_bits(query.type_of(lhs)?)?;
+        if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+            return None;
+        }
+        if ctx.is_loop_invariant(lhs) {
+            std::mem::swap(&mut lhs, &mut rhs);
+            pred = pred.swapped();
+        }
+        if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) {
+            return None;
+        }
+        if inverse {
+            pred = pred.inverse();
+        }
+        Some((def, pred, lhs, rhs))
+    };
+    let (def1, pred1, lhs1, rhs1) = against_invariant(cond1)?;
+    let (def2, pred2, lhs2, rhs2) = against_invariant(cond2)?;
+    if pred1 != pred2 || lhs1 != lhs2 {
+        return None;
+    }
+    let use_min = matches!(pred1, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Slt | IntPredicate::Sle);
+    let pred = if inverse { pred1.inverse() } else { pred1 };
+    Some(Reassociation::MinMax {
+        logic: inst,
+        cond1: def1,
+        cond2: def2,
+        lhs: lhs1,
+        rhs1,
+        rhs2,
+        signed: pred1.is_signed(),
+        use_min,
+        pred,
+        freeze_rhs2: logic.opcode == Opcode::Select,
+    })
 }
 
 /// [`hoistGEP`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2337):
