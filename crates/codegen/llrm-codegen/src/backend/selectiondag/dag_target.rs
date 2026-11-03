@@ -19,7 +19,7 @@ use llrm_dagisel::interp::Outcome;
 use super::SelectionDAG;
 use super::actions::TargetLowering;
 use super::dag_combiner::CombineHooks;
-use super::dag_select::{Refusal, do_instruction_selection_with, legalized_with, remove_assertions};
+use super::dag_select::{Refusal, do_instruction_selection_with, legalized_with};
 use super::dagisel_adapter::{DagisAdapter, PinRegisters};
 use super::legalize_dag;
 use super::schedule::{SchedInfo, Unit, schedule};
@@ -106,7 +106,6 @@ pub fn select_units<T: DagTarget>(
         debug_assert_eq!(made, dag.first_temporary + at as i32);
     }
     target.preprocess(dag, temporaries);
-    remove_assertions(dag);
     let (registers, select) = target.selection();
     do_instruction_selection_with(dag, registers, |adapter, node| select.select(adapter, node))?;
     target.postprocess(dag);

@@ -270,6 +270,7 @@ pub fn run(function: &mut MFunc) {
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
+    low_half_extends(function);
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -1117,6 +1118,109 @@ fn redundant_zero_extends(function: &mut MFunc) {
                 }
             });
         }
+    }
+}
+
+/// `PeepholeOptimizer::optimizeExtInstr`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L784>)
+/// with `AArch64InstrInfo::isCoalescableExtInstr`: `sxtw` of a register whose
+/// every reader takes only the low 32 bits is the register itself, so the
+/// readers (a `smull` in a later block) read it and the extension goes.
+fn low_half_extends(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let single = |register: Gpr| register.is_virtual() && definitions.get(&Reg::Gpr(register)) == Some(&1);
+    let mut sources: HashMap<Reg, Gpr> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if let Op::I(Inst::BitfieldMove { op: Bitfield::Sbfm, width: Width::X, rd, rn, immr: 0, imms: 31 }) = op
+            && single(*rd)
+            && single(*rn)
+        {
+            sources.insert(Reg::Gpr(*rd), *rn);
+        }
+    }
+    if sources.is_empty() {
+        return;
+    }
+    // A copy of the extension is the extension.
+    let copies: Vec<(Gpr, Gpr)> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(src) } if single(*dst) => Some((*dst, *src)),
+            _ => None,
+        })
+        .collect();
+    while copies.iter().any(|(dst, src)| {
+        let Some(&origin) = sources.get(&Reg::Gpr(*src)) else { return false };
+        sources.insert(Reg::Gpr(*dst), origin).is_none()
+    }) {}
+    let is_copy_of_source = |op: &Op| {
+        matches!(
+            op,
+            Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(src) } if sources.contains_key(&Reg::Gpr(*dst)) && sources.contains_key(&Reg::Gpr(*src))
+        )
+    };
+    let mut blocked: HashSet<Reg> = HashSet::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if is_copy_of_source(op) {
+            continue;
+        }
+        let mut all = op.clone();
+        all.visit(&mut |slot, role| {
+            let key = slot.key();
+            if role.reads() && sources.contains_key(&key) && !reads_low_half_only(op, key) {
+                blocked.insert(key);
+            }
+        });
+    }
+    // A copy that stays reads all 64 bits of its source.
+    while function.blocks.iter().flat_map(|block| &block.ops).any(|op| {
+        matches!(
+            op,
+            Op::Copy { dst, src } if is_copy_of_source(op) && blocked.contains(dst) && blocked.insert(*src)
+        )
+    }) {}
+    sources.retain(|register, _| !blocked.contains(register));
+    if sources.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        block.ops.retain(|op| !matches!(defined(op), Some(register) if sources.contains_key(&register)));
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(new) = sources.get(&slot.key())
+                    && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// Whether `op` reads `register` as a 32-bit value only.
+fn reads_low_half_only(
+    op: &Op,
+    register: Reg,
+) -> bool {
+    let Op::I(inst) = op else { return false };
+    match inst {
+        Inst::AddSubImm { width: Width::W, .. }
+        | Inst::AddSubShifted { width: Width::W, .. }
+        | Inst::LogicImm { width: Width::W, .. }
+        | Inst::LogicShifted { width: Width::W, .. }
+        | Inst::CondSelect { width: Width::W, .. }
+        | Inst::Divide { width: Width::W, .. }
+        | Inst::OneSource { width: Width::W, .. }
+        | Inst::Extract { width: Width::W, .. } => true,
+        Inst::ThreeSource { width: Width::W, .. } => true,
+        // `smaddl`, `umaddl` and the like multiply two 32-bit registers and add
+        // a 64-bit one.
+        Inst::ThreeSource { op: Mul3::Smaddl | Mul3::Smsubl | Mul3::Umaddl | Mul3::Umsubl, ra, .. } => {
+            Reg::Gpr(*ra) != register
+        }
+        _ => false,
     }
 }
 

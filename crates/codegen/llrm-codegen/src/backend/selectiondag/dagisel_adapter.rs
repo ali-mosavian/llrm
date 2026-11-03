@@ -103,7 +103,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // The double-width shifts are lowered before selection; no pattern
         // names them.
         ShlParts | SraParts | SrlParts => u16::MAX,
-        // dropped before matching (`remove_assertions`)
+        // dropped when selection visits them
         AssertZext | AssertSext => u16::MAX,
         FShl => pin::FSHL,
         FShr => pin::FSHR,
@@ -546,6 +546,19 @@ impl<'a> DagisAdapter<'a> {
             }
         }
         out
+    }
+
+    /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: the node's uses
+    /// read its operand and it is removed.
+    pub(super) fn drop_assertion(
+        &mut self,
+        node: u32,
+    ) {
+        let value = SDValue { node, res: 0 };
+        let operand = self.dag.operand(value, 0);
+        self.dag.replace_all_uses_with(value, operand);
+        self.enforce_node_id_invariant(operand.node);
+        self.remove(node);
     }
 
     fn remove(
