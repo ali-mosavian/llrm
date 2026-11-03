@@ -1684,18 +1684,36 @@ fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
 /// A constant materialised for a call stood under no place, so its row (and
 /// the compare's line before it) covered it: the argument of a call was listed
 /// under the line of the branch before the block (6502 -O0, c.c line 3 for
-/// the `lda #10` of line 5).
+/// the `lda #10` of line 5). One that feeds an unlocated instruction that
+/// feeds a located one takes that one's place too.
 #[test]
 fn an_unlocated_instruction_takes_the_place_of_the_one_it_feeds() {
     let mut f = MFunction::<()>::new("places");
-    let mut call = op("call", vec![]);
+    let mut call = op("call", vec![Operand::Use(v(1))]);
     call.origin = 5;
     let mut block = Block { id: 0, ..Block::default() };
-    block.insts = vec![op("const", vec![Operand::Def(v(0))]), call, op("tail", vec![])];
+    block.insts =
+        vec![op("const", vec![Operand::Def(v(0))]), op("add", vec![Operand::Def(v(1)), Operand::Use(v(0))]), call];
     f.blocks = vec![block];
     f.place_unlocated();
     let origins: Vec<u32> = f.blocks[0].insts.iter().map(|one| one.origin).collect();
     assert_eq!(origins, vec![5, 5, 5]);
+}
+
+/// Every unlocated instruction took a neighbour's place, so a bare jump at a
+/// block top and what follows the last located instruction were listed under
+/// a source line the pin gives line 0.
+#[test]
+fn an_unlocated_instruction_that_feeds_nothing_stays_unplaced() {
+    let mut f = MFunction::<()>::new("places");
+    let mut call = op("call", vec![]);
+    call.origin = 5;
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts = vec![op("jump", vec![]), op("const", vec![Operand::Def(v(0))]), call, op("tail", vec![])];
+    f.blocks = vec![block];
+    f.place_unlocated();
+    let origins: Vec<u32> = f.blocks[0].insts.iter().map(|one| one.origin).collect();
+    assert_eq!(origins, vec![0, 0, 5, 0]);
 }
 
 /// A copy the allocator adds (a tied use, a phi's incoming value) stood under
