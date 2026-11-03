@@ -419,8 +419,10 @@ impl Walk<'_> {
         (0..blocks).any(|one| one != from && one != to && forward[one] && backward[one] && self.calls[one])
     }
 
-    /// The pin reads a value an instruction needs in a particular register
-    /// through a `COPY` into it (a call's argument).
+    /// The pin reads a value a call needs in a particular register through a
+    /// `COPY` into it (a call's argument). A return or another fixed-register
+    /// reader is not one: a constant it reads is still shared (sieve m64 -O2
+    /// made a returned zero twice).
     fn pinned_read(
         &self,
         id: u64,
@@ -429,7 +431,10 @@ impl Walk<'_> {
         self.block_of
             .get(&id)
             .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
-            .is_some_and(|one| one.requires.iter().any(|(held, _)| held.value == value))
+            .is_some_and(|one| {
+                (one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call))
+                    && one.requires.iter().any(|(held, _)| held.value == value)
+            })
     }
 
     fn copies(
@@ -1041,13 +1046,13 @@ mod tests {
         let make = |at: i64, value: u32| {
             insn(at, Operation::Move, "mov", vec![wide(value)], vec![symbol()], vec![value], vec![])
         };
-        let build = |call_reads: bool| {
+        let build = |call_reads: bool, fixed_reader: bool| {
             let mut reader = if call_reads {
                 insn(3, Operation::Call, "call", vec![], vec![], vec![], vec![11])
             } else {
                 insn(3, Operation::Binary, "add", vec![wide(12)], vec![wide(11), wide(1)], vec![12], vec![11, 1])
             };
-            if call_reads {
+            if call_reads || fixed_reader {
                 Arc::get_mut(&mut reader).unwrap().requires =
                     vec![(Held { value: 11, width: 8 }, llrm_lir::registers::RegId::EAX)];
             }
@@ -1083,10 +1088,14 @@ mod tests {
                 .filter(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)])))
                 .count()
         };
-        let read = shared(&build(false), &RegisterClasses::m16());
+        let read = shared(&build(false, false), &RegisterClasses::m16());
         assert_eq!(made(&read), 1, "the premise: an address an add reads is shared");
-        let argument = shared(&build(true), &RegisterClasses::m16());
+        let argument = shared(&build(true, false), &RegisterClasses::m16());
         assert_eq!(made(&argument), 2, "{argument:?}");
+        // A reader that is not a call but needs the value in a fixed register
+        // (the return value) is not a copy: the shared constant stays shared.
+        let returned = shared(&build(false, true), &RegisterClasses::m16());
+        assert_eq!(made(&returned), 1, "{returned:?}");
     }
 
     /// `PerformSimplePRE` hoisted an expression into a block that ends in `ret`
