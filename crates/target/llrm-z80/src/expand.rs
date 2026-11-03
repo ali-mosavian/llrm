@@ -1376,7 +1376,40 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(printer.out)
+    Ok(drop_unreachable(printer.out))
+}
+
+/// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
+fn ends_flow(text: &str) -> bool {
+    text == "ret"
+        || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
+}
+
+/// `ret z` stands in for a branch to a block that is only a `ret`, which
+/// leaves the block with no reader: the code after an unconditional `ret` or
+/// jump, up to the next label something names, never runs.
+fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
+    let named: std::collections::HashSet<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut dead = false;
+    for line in &lines {
+        match line {
+            Line::Label(name) if named.contains(name.as_str()) => dead = false,
+            Line::Label(_) | Line::Loc(_) if dead => continue,
+            Line::Inst(_) if dead => continue,
+            Line::Inst(text) => dead = ends_flow(text),
+            _ => {}
+        }
+        out.push(line.clone());
+    }
+    out
 }
 
 /// The `timing/z80.csv` key of an instruction as printed here: operands by
@@ -1395,13 +1428,7 @@ fn form(text: &str) -> String {
     let kind = |one: &str, first: bool| -> String {
         match one {
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
-            "a" | "b" | "c" | "d" | "e" | "h" | "l" => {
-                if mnemonic == "ld" && one == "a" && !first {
-                    "b".to_owned()
-                } else {
-                    "b".to_owned()
-                }
-            }
+            "a" | "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
             "bc" | "de" | "af" => "bc".to_owned(),
             "hl" | "ix" | "iy" | "sp" => one.to_owned(),
             "(hl)" => "(hl)".to_owned(),
@@ -1429,7 +1456,11 @@ fn form(text: &str) -> String {
             }
         }
     };
-    let kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
+    let mut kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
+    // the table spells a register copy `ld b;c`
+    if mnemonic == "ld" && kinds == ["b", "b"] {
+        kinds[1] = "c".to_owned();
+    }
     // a conditional jump or call names its condition first
     let mut key = mnemonic.to_owned();
     if !kinds.is_empty() {
@@ -1438,6 +1469,16 @@ fn form(text: &str) -> String {
     }
     // `jp nz, L` is `jp nz;nn`; a bare condition on ret is `ret nz`
     key
+}
+
+/// The table's cost of a form as `form` writes it. Every byte register is `b`
+/// there, so a copy between two of them is `ld b;b`, which the table spells
+/// `ld b;c`.
+fn table_cost(key: &str) -> Option<crate::timing::Cost> {
+    crate::timing::cost(key)
+        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+        .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
 }
 
 /// Bytes and T-states of the lines, summed over every instruction (a loop body
@@ -1465,13 +1506,53 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     (bytes, clocks)
 }
 
+/// [`price`] with the clocks of an instruction counted eight times for each
+/// loop it is in, a loop being the lines from a label to a jump back to it:
+/// what two allocations of a loop are compared by.
+pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
+    let labels: std::collections::HashMap<&str, usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| match line {
+            Line::Label(label) => Some((label.as_str(), at)),
+            _ => None,
+        })
+        .collect();
+    // one loop per head, reaching to its farthest jump back: a loop with two
+    // jumps back to its head (a `continue`) is one loop, not two nested ones
+    let mut reach = std::collections::BTreeMap::<usize, usize>::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let mut words = text.split([' ', ',']).filter(|word| !word.is_empty());
+        if !matches!(words.next(), Some("jr" | "jp" | "djnz")) {
+            continue;
+        }
+        if let Some(&head) = words.last().and_then(|target| labels.get(target)).filter(|&&head| head <= at) {
+            let end = reach.entry(head).or_insert(at);
+            *end = (*end).max(at);
+        }
+    }
+    let mut depth = vec![0u32; lines.len()];
+    for (head, end) in reach {
+        for one in &mut depth[head..=end] {
+            *one += 1;
+        }
+    }
+    let (mut bytes, mut clocks) = (0, 0u64);
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+        bytes += cost.0;
+        clocks += u64::from(cost.1) * 8u64.pow(depth[at].min(3));
+    }
+    (bytes, clocks)
+}
+
 /// The bytes of one printed line, jumps being the three-byte form.
 fn bytes_of(line: &Line) -> u32 {
     let Line::Inst(text) = line else { return 0 };
     let key = form(text);
-    crate::timing::cost(&key)
-        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+    table_cost(&key)
         // a form the table lacks: longer than any estimate
         .map_or(4, |cost| cost.bytes)
 }
@@ -1569,4 +1650,52 @@ fn tail_calls(function: &MFunction) -> MFunction {
         }
     }
     function
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `form` spelled a register copy `ld b;b`, a key the table lacks, so
+    /// every copy was priced as an unknown form (2 B, 8 T) instead of
+    /// 1 B, 4 T, and the choice between allocations over-counted copies.
+    #[test]
+    fn a_register_copy_is_priced_from_the_table() {
+        for text in ["ld a, b", "ld h, l", "ld b, b"] {
+            assert_eq!(price(&[Line::Inst(text.to_owned())]), (1, 4), "{text}");
+        }
+        // a store of a register keeps its own key
+        assert_eq!(price(&[Line::Inst("ld (hl), b".to_owned())]), (1, 7));
+    }
+
+    /// A `ret` behind `ret z` that nothing names was printed: 1 B dead, and
+    /// the price of the variant that had it was 6 T too high.
+    #[test]
+    fn code_after_a_return_that_nothing_names_is_dropped() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let label = |name: &str| Line::Label(name.to_owned());
+        let lines = vec![
+            inst("ret z"),
+            inst("jr L1"),
+            label("L2"),
+            inst("ret"),
+            label("L3"),
+            inst("ret"),
+            label("L1"),
+            inst("ld a, b"),
+            inst("ret"),
+        ];
+        let kept = drop_unreachable(lines);
+        assert_eq!(kept, vec![inst("ret z"), inst("jr L1"), label("L1"), inst("ld a, b"), inst("ret")]);
+    }
+
+    /// A loop with two jumps back to its head was counted as two nested
+    /// loops, 8 times too heavy: lz4 -O2 priced a candidate with 40% fewer
+    /// real clocks as 40% dearer.
+    #[test]
+    fn a_loop_with_two_jumps_back_is_one_loop() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![Line::Label("L1".into()), inst("ld a, b"), inst("jr nz, L1"), inst("jr z, L1")];
+        assert_eq!(price_in_loops(&lines).1, price(&lines).1 as u64 * 8);
+    }
 }

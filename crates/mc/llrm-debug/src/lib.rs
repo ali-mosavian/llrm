@@ -503,6 +503,10 @@ pub enum Location {
     /// The value of WebAssembly local `index` (`DW_OP_WASM_location 0, index`,
     /// `DW_OP_stack_value`).
     WasmLocal(u32),
+    /// The value in WebAssembly operand-stack slot `index`
+    /// (`DW_OP_WASM_location 2, index`, `DW_OP_stack_value`): a stackified
+    /// value, which has no local.
+    WasmStack(u32),
     /// What the operations make of the arguments, which are in no place of
     /// their own: a register, a frame cell or a constant each, with the bytes
     /// of the value a cell holds, pushed by [`ExprOp::Arg`]. The value itself

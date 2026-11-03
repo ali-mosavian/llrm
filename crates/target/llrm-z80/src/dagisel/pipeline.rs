@@ -120,6 +120,18 @@ impl CombineHooks for Z80Combines {
     ) -> bool {
         matches!(vt, EVT::I8 | EVT::I16)
     }
+
+    /// A word compare against a constant is two byte compares and a branch
+    /// between them; the compare of the loaded byte is one `cp`.
+    ///
+    /// DEVIATE: the pin widens (x86 and ARM compare words as cheaply as
+    /// bytes). Exit: a cost query for the wider compare.
+    fn extend_setcc_uses(
+        &self,
+        _wide: EVT,
+    ) -> bool {
+        false
+    }
 }
 
 /// `CodeGenAndEmitDAG` up to the end of scheduling: the units, in order.

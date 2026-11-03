@@ -80,6 +80,11 @@ def md5(p):
     return hashlib.md5(open(p, "rb").read()).hexdigest()
 
 
+def level_flags(lvl, noivopts_os):
+    """-fno-ivopts only at -Os: at -O1/-O2 ivopts keeps the pointer walks that are cheaper."""
+    return [f"-{lvl}"] + (["-fno-ivopts"] if noivopts_os and lvl == "Os" else [])
+
+
 def cc1_line(path):
     """Table header line: the md5 only; a local path in a table is refused by the landing runner."""
     return f"cc1 md5 {md5(path)}"
@@ -180,10 +185,13 @@ def main():
     ap.add_argument("--cpu", default="6502", choices=["6502", "65c02"])
     ap.add_argument("--tsv", default="")
     ap.add_argument("--tsv-header", default="")
+    ap.add_argument("--noivopts-os", action="store_true", help="column gcc-noivopts-Os: -fno-ivopts at -Os")
     a = ap.parse_args()
     global SIM, TARGET, COMPILER, CFLAGS
     if a.cpu == "65c02":
         TARGET, COMPILER, CFLAGS = "sim65c02", "gcc-65c02", ["-m65c02"]
+    if a.noivopts_os:
+        COMPILER += "-noivopts-Os"
     SIM = os.path.abspath(a.sim) if os.sep in a.sim else a.sim
     kernels = [(n, ar, wd, ex, None, None) for n, ar, wd, ex in K]
     if a.hand:
@@ -213,14 +221,14 @@ def main():
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
     hdr = [cc1_line(a.cc1), f"version: {ver}",
            "assembler/linker/sim: " + sh(["sim65", "--version"], w).stderr.strip().splitlines()[0] + " (ca65/ld65 via cl65 -t " + TARGET + ")",
-           "flags: cc1 -quiet -<level> -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls plus the caller's result move"]
+           "flags: cc1 -quiet -<level>" + (" (+ -fno-ivopts at -Os)" if a.noivopts_os else "") + " -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls plus the caller's result move"]
     rows, bad, notes = {}, [], {}
     for name, args, wide, expect, ksrc, rel in kernels:
         if name not in want:
             continue
         for lvl in a.levels.split(","):
             cell = (name, lvl)
-            p = sh([a.cc1, "-quiet", f"-{lvl}"] + CFLAGS + ([] if ksrc else [f"-DK_{name}"]) + [ksrc or src, "-o", "k.s"], w)
+            p = sh([a.cc1, "-quiet"] + level_flags(lvl, a.noivopts_os) + CFLAGS + ([] if ksrc else [f"-DK_{name}"]) + [ksrc or src, "-o", "k.s"], w)
             if p.returncode:
                 bad.append((*cell, "compile: " + (p.stderr or p.stdout)[-200:].replace("\n", " "))); continue
             asm = open(f"{w}/k.s").read()

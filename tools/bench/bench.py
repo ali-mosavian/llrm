@@ -78,6 +78,9 @@ OURS_BASIC = ("bq16", "bq32")
 FLAT = "bq32"
 LOADERS: dict[Path, tuple[Path, ...]] = {}  # an exe -> the files that must sit beside it (DOS/32A)
 COUNTERS = ("instructions", "memory_operands")
+# A kernel that runs fewer instructions than this was folded to a constant (`mov eax, imm; ret` is 2): its row measures the compiler's
+# folding, not the kernel, and a column of such rows reads as an 8x-70x gap against languages that ran the work.
+FOLDED_BELOW = 8
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
 JUDGED_SIZES = ("code_bytes", "data_bytes", "static_bytes")  # bss is judged through the footprint (data + bss), not alone
@@ -344,6 +347,8 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     data, bss = sizes.data_bytes(obj)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
         return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    if result.region.instructions < FOLDED_BELOW:
+        return {"error": f"unmeasured: kernel folded away: {region} ran {result.region.instructions} instructions (a kernel that did its work runs {FOLDED_BELOW} or more)"}
     return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
 
 
