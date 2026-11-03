@@ -38,8 +38,19 @@ fn g_names_each_line_that_has_code() {
 fn g_adds_symbols_and_leaves_the_instructions_alone() {
     let kept: String = assembly(true)
         .lines()
-        .filter(|line| !line.trim_start().starts_with("C$") && !line.trim_start().starts_with(".globl"))
+        .filter(|line| !["C$", "G$", ".globl"].iter().any(|start| line.trim_start().starts_with(start)))
         .map(|line| format!("{line}\n"))
         .collect();
     assert_eq!(kept, assembly(false));
+}
+
+/// The function had no symbol of its own and no row at the line it starts at:
+/// the `.cdb` listed its first line only where its first instruction was.
+#[test]
+fn g_names_the_function_and_the_line_it_starts_at() {
+    let text = assembly(true);
+    let start = text.find("_f::").expect("the function's label");
+    let head = &text[..start];
+    assert!(head.contains("G$f$0$0"), "{text}");
+    assert!(head.contains("C$f.c$2$"), "{text}");
 }

@@ -174,8 +174,14 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 }
 
-/// The source file of the unit's `!DICompileUnit`, if `text` has one.
-pub fn source_file(text: &str) -> Option<String> {
+/// The source file of the unit's `!DICompileUnit` and the line function `name`
+/// starts at (its `!DISubprogram`'s `scopeLine`), if `text` has them.
+pub fn source_of(
+    text: &str,
+    name: &str,
+) -> Option<(String, Option<u32>)> {
     let module = llrm_mir::parse::module(&without_triple(text)).ok()?;
-    llrm_mir::dbgimport::unit_file(&module).map(|(name, _)| name)
+    let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
+    let line = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
+    Some((file, line))
 }
