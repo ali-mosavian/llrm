@@ -403,7 +403,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         let narrow = EVT::integer(small);
                         if self.hooks.narrowing_profitable(vt, narrow) && self.hooks.free_narrowing(vt, narrow) {
                             let x = self.dag.get_node(ISD::Truncate, narrow, &[op0]);
-                            let by = self.dag.get_constant(u128::from(amount), narrow);
+                            let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(narrow));
                             let shl = self.dag.get_node(ISD::Shl, narrow, &[x, by]);
                             let new = self.dag.get_node(ISD::AnyExtend, vt, &[shl]);
                             return Self::combine_to(tlo, op, new);
@@ -423,7 +423,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                             || known_bits(self.dag, op0).zero & high == high)
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
-                        let by = self.dag.get_constant(u128::from(amount), half);
+                        let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));
                         let srl = self.dag.get_node(ISD::Srl, half, &[x, by]);
                         let new = self.dag.get_node(ISD::ZeroExtend, vt, &[srl]);
                         return Self::combine_to(tlo, op, new);
@@ -442,7 +442,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                         && k.zero & (all & !mask(width / 2)) == all & !mask(width / 2)
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
-                        let by = self.dag.get_constant(u128::from(amount), half);
+                        let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));
                         let shl = self.dag.get_node(ISD::Shl, half, &[x, by]);
                         let new = self.dag.get_node(ISD::ZeroExtend, vt, &[shl]);
                         return Self::combine_to(tlo, op, new);

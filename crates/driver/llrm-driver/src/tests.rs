@@ -510,6 +510,19 @@ fn a_zero_extended_operand_is_computed_at_32_bits_at_m64() {
     assert!(listing.contains("shl edi, 3") && !listing.contains("shl r") && !listing.contains("rdi*8"), "{listing}");
 }
 
+/// The half-width shifts built their amount in the narrow type, not the
+/// target's `i8`: `(zext i8 x * 7 + y) & 255` was `CannotSelect(Shl)` (bench
+/// histo, no object at all).
+#[test]
+fn a_narrowed_shift_takes_the_targets_amount_type_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i8 %x, i64 %y) {\n  %a = zext i8 %x to i64\n  %m = mul nuw nsw i64 %a, 7\n  %b = add nuw nsw i64 %m, %y\n  %c = and i64 %b, 255\n  ret i64 %c\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sub eax, edi"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
