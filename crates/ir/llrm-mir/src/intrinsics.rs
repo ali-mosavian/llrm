@@ -515,6 +515,16 @@ const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", 
 
 static NAMES: std::sync::OnceLock<crate::hash::HashMap<&'static str, Intrinsic>> = std::sync::OnceLock::new();
 
+thread_local! {
+    static NAMED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many names this thread has looked up, for a test that a query about a
+/// call does not name its callee again.
+pub fn names_looked_up() -> usize {
+    NAMED.with(std::cell::Cell::get)
+}
+
 #[cfg(test)]
 thread_local! {
     /// Names looked up by `named`, for a test that a lookup does not scan the table.
@@ -935,6 +945,7 @@ impl Intrinsic {
 
     /// The intrinsic `name` declares, its type suffixes aside.
     pub fn named(name: &str) -> Option<Intrinsic> {
+        NAMED.with(|made| made.set(made.get() + 1));
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
