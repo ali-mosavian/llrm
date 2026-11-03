@@ -257,17 +257,17 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
 /// A byte or word add that keeps its source live was a copy and a narrow add
 /// at m64 (`mov r10d, edx; add r10b, 0xec`); the pin makes it a three-address
 /// `lea r9d, [r8 - 20]` (`convertToThreeAddressWithLEA`, `LEA64_32r`).
-/// copy_runs m64 -O2 had the extra instruction.
+/// copy_runs m64 -O2 had the extra instruction. Straight-line code: in a loop
+/// the strength reduction turned the add into an induction variable and the
+/// test lost its premise on release/next.
 #[test]
 fn a_byte_and_a_word_add_that_keep_their_source_are_leas_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                @v = external global [64 x i8]\n@w = external global [64 x i16]\n\
-                define void @f(i64 %n) {\nentry:\n  br label %loop\n\
-                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %t = trunc i64 %i to i8\n  %a = add i8 %t, -20\n\
-                  %p = getelementptr i8, ptr @v, i64 %i\n  store i8 %a, ptr %p\n  %u = trunc i64 %i to i16\n  %b = add i16 %u, 300\n\
-                  %q = getelementptr i16, ptr @w, i64 %i\n  store i16 %b, ptr %q\n  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n\
-                  br i1 %c, label %loop, label %done\ndone:\n  ret void\n}\n";
+                define void @f(i8 %t, i16 %u, ptr %p, ptr %q) {\nentry:\n  %a = add i8 %t, -20\n  store volatile i8 %a, ptr %p\n\
+                  %b = add i16 %u, 300\n  store volatile i16 %b, ptr %q\n\
+                  %pt = getelementptr i8, ptr %p, i64 1\n  store volatile i8 %t, ptr %pt\n\
+                  %qu = getelementptr i8, ptr %q, i64 2\n  store volatile i16 %u, ptr %qu\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("-20]")), "{listing}");
