@@ -77,7 +77,9 @@ pub fn program(text: &str) -> Result<Program, String> {
         kept.push('\n');
     }
     let mut module = llrm_mir::parse::module(&kept).map_err(|error| error.to_string())?;
-    module.refuse_aliases("m68k")?;
+    if let Some(alias) = module.aliases.iter().find(|alias| module.global(alias.aliasee).function().is_none()) {
+        return Err(format!("m68k cannot emit the alias @{}: its aliasee is not a function", alias.name));
+    }
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let expected = crate::kernels::DATALAYOUT;
     match module.datalayout.as_deref() {
@@ -108,6 +110,10 @@ pub fn assembly(
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         out.push_str(&text_with(module, &name, cpu, backend).map_err(|why| format!("@{name}: {why}"))?);
+    }
+    for alias in &module.aliases {
+        let aliasee = module.global(alias.aliasee).name.owned().ok_or("an unnamed aliasee")?;
+        out.push_str(&format!("\t.set\t{}, {aliasee}\n", alias.name));
     }
     Ok(out)
 }
