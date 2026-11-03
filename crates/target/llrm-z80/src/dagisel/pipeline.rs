@@ -13,7 +13,7 @@ use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
+use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
 
@@ -62,6 +62,12 @@ impl PinRegisters for Z80Pins {
     }
 }
 
+thread_local! {
+    /// Set while a function is selected the second time, under `ILP`
+    /// (DEVIATE Z80S1).
+    pub static ILP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// What the scheduler reads of the instruction descriptions.
 pub struct Z80Sched;
 
@@ -108,12 +114,20 @@ impl SchedInfo for Z80Sched {
         true
     }
 
-    // `preference` stays the default, `Source`: `ILP` (what
-    // `createDefaultScheduler` gives a target without a machine scheduler)
-    // fixed lz4's copy loops but left 6 of the 60 cells above `Source`.
-    // Pressure limits stay the pin's 0: the allocatable registers (7 bytes,
-    // 3 pairs) put 10 cells above, against 8; no limit scanned (pairs 0..3,
-    // bytes 0..7) got below 8.
+    /// DEVIATE Z80S1: the pin gives a target one DAG scheduler; the Z80 runs
+    /// two and keeps the cheaper function (`compile::lines`). `Source` is what
+    /// `createDefaultScheduler` gives a target that enables the machine
+    /// scheduler; `ILP` is what it gives one that does not (M68k), and it
+    /// fixed lz4's copy loops (`p + 1` ahead of the store through `p` kept five
+    /// pairs live) but spills minmax and others. Reason: neither wins every
+    /// function. Exit: the shared pre-RA machine scheduler runs on the Z80,
+    /// then `ILP` and the second pass go. The pressure limits stay the pin's 0:
+    /// the allocatable registers (7 bytes, 3 pairs) put 10 of the 60 cells
+    /// above the tip, against 8; no limit scanned (pairs 0..3, bytes 0..7)
+    /// got below 8.
+    fn preference(&self) -> Preference {
+        if ILP.with(std::cell::Cell::get) { Preference::Ilp } else { Preference::Source }
+    }
 }
 
 /// Why a block did not get through.

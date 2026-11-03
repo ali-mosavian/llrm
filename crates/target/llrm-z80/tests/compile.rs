@@ -1132,3 +1132,19 @@ fn a_compare_is_made_again_when_a_flag_writer_sits_between_it_and_its_branch() {
     }
     assert_eq!(compares(&selection), 2, "the compare is made again after the increment");
 }
+
+/// Neither the `Source` nor the `ILP` scheduler wins every function (DEVIATE
+/// Z80S1): `ILP` makes xs8 -O2 two bytes smaller, and spills minmax -Oz to the
+/// frame (53 B against 29). The cheaper is kept.
+#[test]
+fn a_function_is_scheduled_by_whichever_of_source_and_ilp_makes_it_cheaper() {
+    use llrm_z80::compile::lines;
+    use llrm_z80::expand::price;
+    let cost = |ir: &str, name: &str, level| {
+        price(&lines(ir, name, 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}")))
+    };
+    let xs8 = cost(include_str!("kernels/ir/xs8.ll"), "xs8", Level::O2);
+    let minmax = cost(include_str!("kernels/ir/minmax.ll"), "minmax", Level::Oz);
+    assert!(xs8.0 <= 26, "xs8 -O2 is {} B, Source alone gives 28", xs8.0);
+    assert!(minmax.0 <= 29, "minmax -Oz is {} B, ILP alone gives 53", minmax.0);
+}

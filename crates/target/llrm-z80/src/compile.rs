@@ -1160,10 +1160,25 @@ pub fn lines(
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,
     // is kept.
-    let copied = compile(true);
-    let kept = compile(false);
-    match (copied, kept) {
-        (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+    let scheduled = || {
+        let (copied, kept) = (compile(true), compile(false));
+        match (copied, kept) {
+            (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+            (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+            (Err(why), Err(_)) => Err(why),
+        }
+    };
+    // The function is scheduled by `Source` and by `ILP` (DEVIATE Z80S1, in
+    // `dagisel/pipeline.rs`); `ILP` replaces `Source` only where it is cheaper.
+    let source = scheduled();
+    crate::dagisel::pipeline::ILP.with(|one| one.set(true));
+    let ilp = scheduled();
+    crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+    match (source, ilp) {
+        (Ok(source), Ok(ilp)) => {
+            let price = |lines: &[Line]| expand::price_in_loops(lines);
+            Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
+        }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }
