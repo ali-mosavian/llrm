@@ -437,6 +437,8 @@ pub fn compiled_dumping(
         .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
         .unwrap_or(default);
     options.libcalls.extend(libm_calls(library, format.name()));
+    // The soft-float routines are C compiled under the program's own convention, not the Watcom library's.
+    options.libcalls.extend(soft_float_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -452,6 +454,39 @@ fn libm_calls(
     ["floor", "ceil", "trunc", "round", "roundeven", "nearbyint"]
         .iter()
         .flat_map(|op| ["", "f", "l"].map(|suffix| format!("{op}{suffix}")))
+        .map(|name| {
+            let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
+            (name, number, symbol)
+        })
+        .collect()
+}
+
+/// The soft-float routines, spelled as the C compiler spells a definition of
+/// them: what a function with no x87 calls for a float operation. The runtime
+/// (`runtime/compiler-rt`) is C, so its objects carry the convention's spelling.
+fn soft_float_calls(
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) -> Vec<(String, u32, String)> {
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
+    let mut names: Vec<String> = Vec::new();
+    for width in ["s", "d"] {
+        for op in ["add", "sub", "mul", "div"] {
+            names.push(format!("__{op}{width}f3"));
+        }
+        for cmp in ["eq", "ne", "lt", "le", "ge", "gt", "unord"] {
+            names.push(format!("__{cmp}{width}f2"));
+        }
+        for int in ["si", "di"] {
+            names.push(format!("__float{int}{}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__floatun{int}{}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__fix{}{int}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__fixuns{}{int}", if width == "s" { "sf" } else { "df" }));
+        }
+    }
+    names.extend(["__extendsfdf2".to_owned(), "__truncdfsf2".to_owned()]);
+    names
+        .into_iter()
         .map(|name| {
             let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
             (name, number, symbol)
@@ -651,7 +686,7 @@ mod options_tests {
     }
 }
 
-fn compile(
+pub(crate) fn compile(
     flags: &Flags,
     source: &Path,
     dump: Option<&Path>,
@@ -665,7 +700,7 @@ fn compile(
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
         let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format, objects)
+        let bytes = objbuild::written_in(&built, file, layout_of(flags, format), format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }
@@ -732,5 +767,18 @@ mod text_tests {
             "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
                 .replace("llvm.ia16", "llrm.ia16")
         );
+    }
+}
+
+/// One COMDAT per function where `-ffunction-sections` asks for it and the
+/// format has them (OMF); one segment for the module's code otherwise.
+fn layout_of(
+    flags: &Flags,
+    format: llrm_target::object::Format,
+) -> objbuild::CodeLayout {
+    if flags.function_sections && format == llrm_target::object::Format::Omf {
+        objbuild::CodeLayout::PerProcedure
+    } else {
+        objbuild::CodeLayout::OneSegment
     }
 }

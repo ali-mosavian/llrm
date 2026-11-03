@@ -64,6 +64,9 @@ pub struct Features {
     pub shld_slow: bool,
     /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
     pub sse2: bool,
+    /// `useSoftFloat()`: `f32` and `f64` have no register class; their
+    /// arithmetic is a call (m16).
+    pub soft_float: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -116,6 +119,11 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The object spelling of a routine's name where the convention decorates it (`___addsf3@3`).
+    libcall_symbols: HashMap<String, (String, u32)>,
+    /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
+    /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
+    sext_cheaper_i32_i64: bool,
 }
 
 impl TargetLowering {
@@ -134,6 +142,8 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            libcall_symbols: HashMap::default(),
+            sext_cheaper_i32_i64: false,
         }
     }
 
@@ -149,6 +159,33 @@ impl TargetLowering {
 
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
     /// one.
+    /// The routine `name` is spelled `symbol` in the object.
+    pub fn set_libcall_symbol(
+        &mut self,
+        name: &str,
+        symbol: String,
+        convention: u32,
+    ) {
+        self.libcall_symbols.insert(name.to_owned(), (symbol, convention));
+    }
+
+    /// The calling convention number the routine `name` was defined under.
+    pub fn libcall_convention(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        self.libcall_symbols.get(name).map(|(_, number)| *number)
+    }
+
+    /// How a call to the routine `name` spells it: as the C compiler spelled
+    /// the definition, else the name.
+    pub fn libcall_symbol(
+        &self,
+        name: &str,
+    ) -> String {
+        self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
+    }
+
     pub fn libcall_name(
         &self,
         op: ISD,
@@ -315,6 +352,15 @@ impl TargetLowering {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
+    /// `TargetLowering::isSExtCheaperThanZExt(FromTy, ToTy)`.
+    pub fn is_sext_cheaper_than_zext(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.sext_cheaper_i32_i64 && from == EVT::Simple(MVT::I32) && to == EVT::Simple(MVT::I64)
+    }
+
     /// `Subtarget.canUseCMOV()`.
     pub fn can_use_cmov(&self) -> bool {
         self.cmov
@@ -428,7 +474,25 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
+        if !features.soft_float {
+            return Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false);
+        }
+        use ISD::*;
+        let mut t = Self::x86(TargetLoweringInfo::x86_16().with_soft_float(), features, ptr, false);
+        // The x87 lowerings of a compare, a select and an extension have no
+        // registers to work in: the type legalizer softens them first.
+        t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
+        t.set_ops(
+            &[FpToSInt, FpToUInt, SIntToFp, UIntToFp],
+            &[MVT::I8, MVT::I16, MVT::I32, MVT::I64],
+            Action::Expand,
+        );
+        // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
+        for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
+            t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
+            t.set_libcall_name(op, MVT::F64, Box::leak(format!("__{stem}df3").into_boxed_str()));
+        }
+        t
     }
 
     /// AArch64: `initActions`, then the scalar integer arms of
@@ -443,6 +507,7 @@ impl TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.sext_cheaper_i32_i64 = true;
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).

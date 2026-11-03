@@ -106,6 +106,25 @@ fn a_saved_float_register_is_stated_with_the_extended_form() {
     );
 }
 
+/// Code laid out after the epilogue (an early exit's block that the branch
+/// skips to) runs in the frame again: its rows state the frame address and
+/// the saves anew. Without them the unwinder takes that code for a frameless
+/// one, the state the epilogue left.
+#[test]
+fn code_laid_out_after_the_epilogue_states_the_frame_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let object = object(
+        directory.path(),
+        "declare i32 @g(ptr)\ndeclare i32 @h(ptr)\ndefine i32 @f(i32 %a) {\n  %c = icmp eq i32 %a, 0\n  br i1 %c, label %early, label %late\nearly:\n  %r = call i32 @g(ptr null)\n  %q = mul i32 %r, 3\n  ret i32 %q\nlate:\n  %s = call i32 @h(ptr null)\n  %t = add i32 %s, %a\n  ret i32 %t\n}\n",
+    );
+    let rules = &rules(&object)[0];
+    let torn_down = rules.iter().rposition(|rule| rule == "DW_CFA_def_cfa_offset: 0").expect("the epilogue");
+    assert!(
+        rules[torn_down..].iter().any(|rule| rule.starts_with("DW_CFA_def_cfa: r29")),
+        "the block after the epilogue does not state the frame: {rules:?}"
+    );
+}
+
 const DARWIN_DATALAYOUT: &str = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32";
 
 /// The pinned AArch64 LLVM's `bin`, or None where it is not built (the test

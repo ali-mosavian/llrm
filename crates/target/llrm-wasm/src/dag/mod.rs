@@ -129,6 +129,7 @@ pub fn compile_function(
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
     if options.level != crate::driver::Level::O0 {
+        crate::dead_mi::dead_machine_instruction_elim(&mut f);
         crate::machine_licm::machine_licm(&mut f);
         crate::machine_cse::machine_cse(&mut f);
         crate::machine_sink::machine_sink(&mut f);

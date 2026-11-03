@@ -500,7 +500,7 @@ pub fn convention(
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
     let (result, _, variadic) = module.signature(function.ty);
-    convention_for(
+    convention_for_abi(
         module,
         layout,
         arch,
@@ -510,6 +510,7 @@ pub fn convention(
         variadic,
         &param_types,
         &function.parameter_attrs,
+        soft_float(&function.attrs),
     )
 }
 
@@ -527,6 +528,48 @@ pub fn convention_for(
     variadic: bool,
     param_types: &[TypeId],
     parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    convention_for_abi(
+        module,
+        layout,
+        arch,
+        first,
+        calling_convention,
+        result,
+        variadic,
+        param_types,
+        parameter_attrs,
+        false,
+    )
+}
+
+/// Whether `attrs` ask for no FPU: clang's `-mno-80387` states `-x87` among
+/// the target features (`X86Subtarget::hasX87`), and `"use-soft-float"="true"`
+/// or `+soft-float` is the generic spelling. The floats of such a function
+/// travel as the integers of their width.
+pub fn soft_float(attrs: &[llrm_mir::Attribute]) -> bool {
+    attrs.iter().any(|one| match one {
+        llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" => value == "true",
+        llrm_mir::Attribute::Str(key, Some(value)) if key == "target-features" => {
+            value.split(',').any(|feature| feature == "-x87" || feature == "+soft-float")
+        }
+        _ => false,
+    })
+}
+
+/// `convention_for`, where `soft_float` makes a `float` or `double` an integer
+/// of its width for the registers and the result.
+pub fn convention_for_abi(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    result: TypeId,
+    variadic: bool,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+    soft_float: bool,
 ) -> Result<Convention, Unselected> {
     in_the_frame(parameter_attrs)?;
     let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
@@ -559,7 +602,9 @@ pub fn convention_for(
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
+            .map(|((&ty, &size), class)| {
+                entry.kind(argument_of(types, ty, size, *class, soft_float), arch.stack_slot_bytes())
+            })
             .collect();
         // A struct result's address held in a register is not one of the
         // arguments, but takes that register.
@@ -627,7 +672,7 @@ pub fn convention_for(
         .filter(|_| matches!(types.get(answer), Type::Pointer(_)))
         .and_then(|one| one.results.get("address"))
         .map(|names| names.iter().map(|name| arch.register_named(name)).collect::<Vec<_>>());
-    let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
+    let returns = if types.is_void(result) || (!soft_float && matches!(types.get(answer), Type::Float(_))) {
         Vec::new()
     } else if let Some(registers) = pointer_result {
         registers
@@ -710,17 +755,20 @@ fn argument_of(
     ty: TypeId,
     size: u32,
     class: Option<&str>,
+    soft_float: bool,
 ) -> llrm_mir::target::Argument {
+    let soft = soft_float && matches!(types.get(ty), Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80));
     llrm_mir::target::Argument {
         bytes: i64::from(size),
-        integer: types.int_bits(ty).is_some(),
+        integer: soft || types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
         // An extended real is not a vector-register float: it travels in
         // memory.
-        floating: matches!(
-            types.get(ty),
-            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
-        ),
+        floating: !soft
+            && matches!(
+                types.get(ty),
+                Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+            ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
@@ -1808,17 +1856,31 @@ pub(crate) fn noted(
     // A note stands before the first instruction selected from its MIR
     // instruction, or else from the next one that was.
     let mut taken: BTreeSet<i64> = BTreeSet::new();
+    // A note of a value some instruction of the block defines stands right
+    // after that instruction, where the pin emits a `DBG_VALUE` of an SDNode's
+    // value (`InstrEmitter::EmitDbgValue`, after the node), not before the
+    // instruction selected from the record's own place: a two-address
+    // instruction in between has overwritten the register by then.
+    let mut anchored: BTreeSet<u32> = BTreeSet::new();
     let blocks = body
         .blocks
         .iter()
         .map(|block| {
+            let after_definer = after_definers(&block.insns, &before, &notes);
+            anchored.extend(after_definer.values().flatten());
             let insns = block
                 .insns
                 .iter()
-                .map(|one| {
+                .enumerate()
+                .map(|(index, one)| {
                     let ats_here: Vec<i64> =
                         before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
-                    let mut ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    let mut ahead: Vec<u32> = ats_here
+                        .iter()
+                        .flat_map(|at| before[at].iter().copied())
+                        .filter(|id| !anchored.contains(id))
+                        .collect();
+                    ahead.extend(after_definer.get(&index).into_iter().flatten());
                     if one.arrival() {
                         ahead.extend(&entry_notes);
                     }
@@ -1845,7 +1907,10 @@ pub(crate) fn noted(
                         return Arc::clone(one);
                     }
                     taken.extend(ats_here);
-                    Arc::new(Insn { debug: DebugTags { defines: defined, before: ahead }, ..(**one).clone() })
+                    Arc::new(Insn {
+                        debug: DebugTags { defines: defined, before: ahead, slot: None },
+                        ..(**one).clone()
+                    })
                 })
                 .collect();
             block.with_insns(insns)
@@ -6653,7 +6718,7 @@ impl Selector<'_, '_, '_> {
                     Some(bytes) => byval_bytes(self.module, &self.layout, self.arch, bytes)?,
                     None => self.size(ty)?,
                 };
-                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index)), self.arch.stack_slot_bytes()));
+                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index), false), self.arch.stack_slot_bytes()));
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
@@ -8467,5 +8532,55 @@ fn swapped(predicate: IntPredicate) -> IntPredicate {
         Ule => Uge,
         Ugt => Ult,
         Uge => Ule,
+    }
+}
+
+/// The notes of a value an instruction of the block defines, by the index of
+/// the instruction they stand before: the one after the definer, if the
+/// definer is not the last. `before` is each note's place (`at`).
+fn after_definers(
+    insns: &[Arc<Insn>],
+    before: &IndexMap<i64, Vec<u32>>,
+    notes: &[DebugNote],
+) -> IndexMap<usize, Vec<u32>> {
+    let mut stands: IndexMap<usize, Vec<u32>> = IndexMap::default();
+    let (Some(first), Some(last)) = (insns.first(), insns.last()) else { return stands };
+    for (&at, ids) in before {
+        if at < first.at || at > last.at {
+            continue;
+        }
+        for &id in ids {
+            let (NoteValue::Value(value) | NoteValue::Offset(value, _)) = notes[id as usize].value else { continue };
+            let definer = insns.iter().position(|one| one.at <= at && one.defines.contains(&value));
+            if let Some(next) = definer.map(|index| index + 1).filter(|&next| next < insns.len()) {
+                stands.entry(next).or_default().push(id);
+            }
+        }
+    }
+    stands
+}
+
+#[cfg(test)]
+mod anchoring_tests {
+    use super::*;
+    use crate::model::ir::{Operation, Semantics};
+
+    /// The record of `l` (gdb.c, x86 -O2) stood before the `shl`'s place, and
+    /// the note went before whatever was selected from the instruction after
+    /// it: past the `add v4, v4` that overwrites `l`, so `l` was listed from
+    /// the wrong instruction (ours 7..11 against the pin's 5..7). It stands
+    /// right after the instruction that defines it.
+    #[test]
+    fn test_a_note_of_a_defined_value_stands_after_its_definer() {
+        let insn = |at: i64, defines: Vec<u32>| {
+            Arc::new(Insn::new(at, None, Some(Semantics::new(Operation::Move)), defines, Vec::new()))
+        };
+        let insns = vec![insn(1, vec![2]), insn(2, vec![4]), insn(3, vec![5]), insn(4, vec![6])];
+        let notes = vec![DebugNote { variable: 9, piece: None, value: NoteValue::Value(4) }];
+        // the record's place is the fourth instruction's: past the one that
+        // doubles `l`
+        let before: IndexMap<i64, Vec<u32>> = [(4, vec![0])].into_iter().collect();
+        let stands = after_definers(&insns, &before, &notes);
+        assert_eq!(stands.get(&2), Some(&vec![0]), "{stands:?}");
     }
 }

@@ -323,6 +323,8 @@ pub struct Segment {
     pub fixups: Vec<Fixup>,
     /// (source line, offset) of each line's first code, in order.
     pub lines: Vec<(SrcLoc, usize)>,
+    /// Where a line row is a statement whatever the row before it says.
+    pub forced: Vec<usize>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The declared call frame information and where it stands.
@@ -349,6 +351,7 @@ impl Segment {
             spans: Vec::new(),
             fixups: Vec::new(),
             lines: Vec::new(),
+            forced: Vec::new(),
             bodies: Vec::new(),
             cfi: Vec::new(),
             seh: Vec::new(),
@@ -364,6 +367,7 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
+            masm::Mark::ForceStmt => self.forced.push(self.image.len()),
             masm::Mark::Declared => self.declared.push(self.image.len()),
             bound => self.bodies.push((bound, self.image.len())),
         }
@@ -460,7 +464,8 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     if !module.data.iter().any(|(_, items)| items.iter().any(|item| matches!(item, masm::Datum::Object(_)))) {
         return Ok(module.clone());
     }
-    let mut reached: BTreeSet<String> = module.publics.iter().cloned().collect();
+    let mut reached: BTreeSet<String> =
+        module.publics.iter().cloned().chain(module.aliases.iter().map(|alias| alias.target.clone())).collect();
     for (number, procedure) in module.procedures.iter().enumerate() {
         reached.insert(procedure.name.clone());
         for item in masm::listing(procedure, number)? {
@@ -1344,8 +1349,27 @@ pub fn object_of(
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
+            visibility: module.visibility.get(name).copied().unwrap_or_default(),
         })
         .collect();
+    // An alias is the address of what it names, under its own name.
+    for alias in &module.aliases {
+        let Some(&(section, offset)) = symbols.get(&alias.target) else {
+            return Err(Unencodable(format!(
+                "alias {} names {}, which this object does not define",
+                alias.name, alias.target
+            ))
+            .into());
+        };
+        table.push(Symbol {
+            name: alias.name.clone(),
+            binding: alias.binding,
+            definition: Definition::Defined { section, offset },
+            size: sizes.get(&alias.target).copied().unwrap_or(0),
+            group: None,
+            visibility: module.visibility.get(&alias.name).copied().unwrap_or_default(),
+        });
+    }
     // Data an object does not define is addressed in the group as its own data
     // is.
     table.extend(order.iter().map(|name| Symbol {
@@ -1354,6 +1378,7 @@ pub fn object_of(
         definition: Definition::Undefined,
         size: 0,
         group: (externs[*name] == "byte").then_some(0),
+        visibility: Default::default(),
     }));
     let index: IndexMap<String, usize> =
         table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
@@ -1361,7 +1386,7 @@ pub fn object_of(
     let debug = module
         .debug
         .as_ref()
-        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
+        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, sizes, &index))
         .transpose()
         .map_err(Unencodable)?;
     let frames = if model == CodeModel::Segmented16 {
@@ -1772,6 +1797,8 @@ mod tests {
             names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
             publics: strings(&["_get"]),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
                 "_get",
@@ -1801,6 +1828,45 @@ mod tests {
         );
     }
 
+    /// A second name and a hidden export reach the object's symbol table: the
+    /// writers dropped an alias's symbol (another unit naming it failed to
+    /// link) and wrote every export with default visibility.
+    #[test]
+    fn an_alias_is_a_symbol_at_its_targets_address_and_a_hidden_export_is_hidden() {
+        let leave = semantics(Operation::Return, "retf", vec![], vec![]);
+        let module = masm::Module {
+            debug: None,
+            registers: crate::backend::registerinfo::test_regs(),
+            code: "GET_TEXT".into(),
+            names: IndexMap::default(),
+            externs: vec![],
+            publics: strings(&["_get"]),
+            visibility: std::collections::BTreeMap::from([("_get".to_owned(), llrm_object::Visibility::Hidden)]),
+            aliases: vec![masm::Alias { name: "_other".into(), target: "_get".into(), binding: Binding::Weak }],
+            data: vec![("_DATA".into(), vec![])],
+            procedures: vec![procedure(
+                "_get",
+                true,
+                body("get", vec![lir::LirBlock::new(1, vec![insn(1, leave)]).into()]),
+                0,
+                vec![],
+            )],
+            private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
+            padding: Default::default(),
+            object: llrm_target::Target::object(&llrm_x86_m16::M16),
+            requests: BTreeSet::new(),
+            stack: 0,
+        };
+        let described =
+            built(&module, "get.c", CodeLayout::OneSegment, llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap();
+        let symbol = |name: &str| described.object.symbols.iter().find(|one| one.name == name).unwrap();
+        let (get, other) = (symbol("_get"), symbol("_other"));
+        assert_eq!((get.visibility, get.binding), (llrm_object::Visibility::Hidden, Binding::Public));
+        assert_eq!((other.definition, other.binding), (get.definition, Binding::Weak));
+    }
+
     /// `align 4` in a data segment pads to an offset, and an offset is an
     /// address only where the segment starts aligned: the segment was word
     /// aligned whatever its items asked, so a dword the data placed at 4 was
@@ -1818,6 +1884,8 @@ mod tests {
                 names: IndexMap::default(),
                 externs: vec![],
                 publics: strings(&["_a"]),
+                visibility: Default::default(),
+                aliases: Vec::new(),
                 data: vec![("_DATA".into(), items)],
                 procedures: vec![],
                 private: BTreeSet::new(),
@@ -1899,6 +1967,8 @@ mod tests {
                 ("_b".into(), "byte".into()),
             ],
             publics: strings(&["_f", "_table"]),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![
                 (
                     "_DATA".into(),
@@ -2009,6 +2079,8 @@ mod tests {
                 names: IndexMap::default(),
                 externs: vec![],
                 publics: vec![],
+                visibility: Default::default(),
+                aliases: Vec::new(),
                 data: vec![],
                 procedures: (0..3)
                     .map(|n| masm::Procedure {

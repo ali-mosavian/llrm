@@ -77,11 +77,19 @@ pub struct Request {
     pub level: Level,
     /// `-f[no-]PASS` switches, applied to the mid-end.
     pub passes: Vec<String>,
+    /// `-g`: `.dbg line` directives for ld65's debug file.
+    pub debug: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { platform: Platform::parse(SIM65).expect("sim65 parses"), cpu: Cpu::Mos6502, level, passes: Vec::new() }
+        Self {
+            platform: Platform::parse(SIM65).expect("sim65 parses"),
+            cpu: Cpu::Mos6502,
+            level,
+            passes: Vec::new(),
+            debug: false,
+        }
     }
 }
 
@@ -174,11 +182,6 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // DEVIATE (6502-5): no unrolling, where the pin's unroller reads the
-        // target's `getUnrollingPreferences`. Exit: the 6502's thresholds as a
-        // per-target override-table entry, once the unroller takes them.
-        options.unroll = false;
-        options.loop_unrolling = false;
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -258,12 +261,19 @@ pub fn assembly(
         }
         selections.push(selection);
     }
+    // Set once the selection is final: pricing the alternatives sees none.
+    let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
+    for (name, selection) in names.iter().zip(selections.iter_mut()) {
+        let scope = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
+        selection.source = file.clone().map(|file| (file, scope));
+    }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let mut text = module_text(module, &parts)?.concat();
     for (name, label) in &data.1 {
         text = text.replace(name.as_str(), label);
     }
-    Ok(equates(&request.platform) + &text + &data.0)
+    let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
+    Ok(equates(&request.platform) + &files + &text + &data.0)
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
@@ -374,6 +384,9 @@ fn data_text(
         let label = data_label(&name);
         if label != name {
             renames.push((name.clone(), label.clone()));
+        }
+        if crate::select::exported(global.linkage) && label == name {
+            out.push_str(&format!(".export {label}\n"));
         }
         out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;

@@ -360,10 +360,31 @@ pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
 /// registers come last).
 pub struct Arm64;
 
+/// Whether the target is Apple's: `x18` is the platform register there
+/// (`AArch64RegisterInfo::getReservedRegs`, `isTargetDarwin`), an ordinary
+/// caller-saved register on Linux.
+static DARWIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Sets the target the next allocations are for.
+pub fn set_darwin(darwin: bool) {
+    DARWIN.store(darwin, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn darwin() -> bool {
+    DARWIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The caller-saved general registers the allocator hands out.
+pub fn gpr_caller_saved_count() -> usize {
+    15 + 1 + usize::from(!darwin())
+}
+
 fn gpr_order() -> Vec<RegId> {
-    // The caller-saved registers first, then x19..x28. x15..x17 are the frame
-    // lowerer's and the pair folder's scratch registers.
-    (9..=14u32).chain((0..=8).rev()).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
+    // The caller-saved registers first, then x19..x28. x16 and x17 are the
+    // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
+    // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
+    let extra: Vec<u32> = if darwin() { vec![15] } else { vec![15, 18] };
+    (9..=14u32).chain((0..=8).rev()).chain(extra).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
 }
 
 fn callee_saved_fpr(id: RegId) -> bool {
@@ -414,11 +435,12 @@ impl AllocTarget for Arm64 {
     fn reserved(root: RegId) -> bool {
         // sp/xzr, the frame pointer, the link register and the platform
         // register.
-        [crate::reg::X18, crate::reg::X29, crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+        [crate::reg::X29, crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+            || (darwin() && root == crate::reg::X18)
     }
 
     fn caller_saved() -> Vec<RegId> {
-        let gprs = (0..=17u32).map(|n| id(Class::Gpr, n));
+        let gprs = (0..=18u32).map(|n| id(Class::Gpr, n));
         let fprs = (0..=7u32).chain(16..=31).map(|n| id(Class::Fpr, n));
         gprs.chain(fprs).collect()
     }
