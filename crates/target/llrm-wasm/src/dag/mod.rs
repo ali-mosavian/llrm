@@ -153,7 +153,6 @@ pub fn compile_function(
     phi_elimination(&mut f);
     frame_lowering(&mut f, if width == Width::W32 { ValType::I32 } else { ValType::I64 })?;
     remove_unreachable_blocks(&mut f);
-    fix_irreducible_control_flow(&mut f);
     late_eh_prepare(&mut f);
     // The pin turns off `RegisterCoalescer` at -O1.
     if matches!(
@@ -183,10 +182,12 @@ pub fn compile_function(
         if crate::tail_duplicate::tail_duplicate(&mut f, for_size) {
             remove_unreachable_blocks(&mut f);
         }
-        // The pin runs `FixIrreducibleControlFlow` after branch folding and
-        // tail duplication: a merge can make a loop with two entries.
-        fix_irreducible_control_flow(&mut f);
     }
+    // The pin runs `FixIrreducibleControlFlow` once, at every level, after
+    // branch folding and tail duplication (a merge can make a loop with two
+    // entries): run before the coalescer, its dispatch copies stay (x_switch
+    // -O2 668 B against the pin's 490).
+    fix_irreducible_control_flow(&mut f);
     if options.level != crate::driver::Level::O0 {
         crate::optimize_live_intervals::optimize_live_intervals(&mut f);
         crate::mem_intrinsic_results::mem_intrinsic_results(&mut f);
