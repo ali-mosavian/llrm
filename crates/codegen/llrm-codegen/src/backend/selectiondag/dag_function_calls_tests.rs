@@ -1197,6 +1197,7 @@ entry:
         enter: false,
         free: false,
         kept: false,
+        exit_cfi: true,
         wrap_split_size: false,
         slot_scratch: None,
     };

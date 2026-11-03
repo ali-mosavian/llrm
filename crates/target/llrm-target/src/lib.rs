@@ -761,6 +761,7 @@ pub trait Target {
             slot_scratch: self.frame_slot_scratch(),
             free: false,
             kept: false,
+            exit_cfi: true,
         }
     }
 
@@ -827,6 +828,10 @@ pub struct FrameRegisters {
     /// even where nothing needs it
     /// (`MachineFunction::disableFramePointerElim`).
     pub kept: bool,
+    /// The exits state the frame address as they move it
+    /// (`X86FrameLowering::emitEpilogue`'s `NeedsDwarfCFI`); an object
+    /// format whose unwinder does not read them (Mach-O, COFF) turns it off.
+    pub exit_cfi: bool,
 }
 
 impl FrameRegisters {
