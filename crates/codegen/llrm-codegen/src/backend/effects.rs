@@ -88,6 +88,28 @@ mod tests {
             assert_eq!(served(Regs(info), bits, &load).is_some(), known, "{bits} bits");
         }
     }
+    /// `or eax, -1` read `eax` as `or eax, 5` does: the verifier called the
+    /// -Os `mov eax, -1` it replaced a read of an undefined register.
+    #[test]
+    fn test_or_of_all_ones_reads_nothing_and_or_of_five_reads_the_register() {
+        use crate::model::ir::Imm;
+        let eax = Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::EAX, width: 4 });
+        let reads = |value: i64| {
+            let or = Semantics {
+                name: Some("or".into()),
+                dests: vec![eax.clone()],
+                sources: vec![eax.clone(), Loc::Imm(Imm { value, width: 4, address: None })],
+                ..Semantics::new(Operation::Binary)
+            };
+            match served(Regs(&llrm_x86_m32::REGISTER_INFO), 32, &or) {
+                Some(llrm_x86::effects::Served::Known(found)) => !found.reads.is_empty(),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(!reads(-1) && !reads(0xffff_ffff));
+        assert!(reads(5));
+    }
+
     /// `mov edi, _a+4[v*4]` before registers are chosen: the effect was
     /// unknown (the index names no register to encode), so MachineSink kept
     /// every flag-setting instruction above such a load in its block

@@ -397,7 +397,10 @@ impl Peephole {
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = zero_compares(
             self.rules,
-            &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
+            &compares_again(&tested(
+                self.rules,
+                &cleared(&narrowed_moves(self.rules, &body), self.cpu.size || self.cpu.min_size),
+            )),
         );
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
@@ -2879,6 +2882,20 @@ fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
 /// Use XOR for zero only when later integer work replaces every arithmetic
 /// flag.
 pub fn zeroes(body: &LirBody) -> LirBody {
+    cleared(body, false)
+}
+
+/// `zeroes`, and with `ones`, `mov r,-1` as `or r,-1` on the same condition.
+///
+/// DEVIATE MO1 (owner x87, 2026-11-03): the pin expands `MOV32ImmSExti8 -1` to
+/// `or r,-1` only at `minsize` (`X86InstrInfo::expandMOV32ImmSExti8`); here -Os
+/// does too: three bytes in place of five, one clock either way. Exit
+/// 2026-11-20: -Os is at or below main without it, then `ones` is
+/// `LirBody::min_size` only.
+pub fn cleared(
+    body: &LirBody,
+    ones: bool,
+) -> LirBody {
     let regs = body.regs();
     let live = _flags_live_out(body);
     let mut blocks = Vec::new();
@@ -2916,6 +2933,31 @@ pub fn zeroes(body: &LirBody) -> LirBody {
                                     "xor",
                                     vec![Loc::Reg(dest)],
                                     vec![Loc::Reg(dest), Loc::Reg(dest)],
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+            if ones && flags_dead && one.clobbers.is_empty() && one.symbol != Some(true) {
+                if let Some(what) = &one.what {
+                    if let (
+                        Operation::Move,
+                        Some("mov"),
+                        [Loc::Reg(dest)],
+                        [Loc::Imm(Imm { value, width, address: None })],
+                    ) = (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
+                    {
+                        let all_ones = *value == -1 || (*width < 8 && *value == (1i64 << (8 * *width)) - 1);
+                        if all_ones && dest.width == *width && [4, 8].contains(width) && regs.integer(dest.register) {
+                            let minus_one = Loc::Imm(Imm { value: -1, width: *width, address: None });
+                            one = Arc::new(with_what(
+                                &one,
+                                semantics(
+                                    Operation::Binary,
+                                    "or",
+                                    vec![Loc::Reg(*dest)],
+                                    vec![Loc::Reg(*dest), minus_one],
                                 ),
                             ));
                         }
