@@ -4853,6 +4853,7 @@ mod tests {
                 free: false,
                 kept: false,
                 exit_cfi: true,
+                red_zone: 0,
             };
             let procedure = Procedure {
                 name: "_get".into(),

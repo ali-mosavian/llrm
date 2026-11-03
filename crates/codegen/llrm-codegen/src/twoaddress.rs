@@ -645,7 +645,7 @@ pub fn three_address(
         made.what = Some(Semantics {
             op: Operation::Address,
             name: Some("lea".into()),
-            dests: vec![Loc::Held(Held { width: 4, ..*into })],
+            dests: vec![Loc::Held(if narrow_lea(mode, into.width) { Held { width: 4, ..*into } } else { *into })],
             sources: vec![Loc::Mem(Mem {
                 base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
                 offset,
