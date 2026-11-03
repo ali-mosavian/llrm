@@ -27,3 +27,28 @@ fn a_soft_float_add_is_a_call_to_addsf3_and_no_x87_op() {
     let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
     assert_eq!(callees, ["__addsf3"], "{names:?}");
 }
+
+const FLOAT_CONSTANT: &str = "target datalayout = \"@m16-datalayout@\"
+define void @f(ptr %p) \"use-soft-float\"=\"true\" {
+entry:
+  %a = load float, ptr %p
+  %c = fmul float %a, 1.5
+  %i = bitcast float %c to i32
+  store i32 %i, ptr %p
+  ret void
+}
+";
+
+/// A float constant is its bits and a bitcast to an integer is the softened
+/// value itself: neither needs the x87 or a call of its own.
+#[test]
+fn a_soft_float_constant_and_bitcast_are_integers() {
+    let module = crate::testing::module(FLOAT_CONSTANT).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
+    let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
+    assert_eq!(callees, ["__mulsf3"], "{names:?}");
+}

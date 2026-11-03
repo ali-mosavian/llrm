@@ -497,6 +497,15 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: load.node, res: 1 });
                 load
             }
+            ISD::ConstantFP => {
+                // `SoftenFloatRes_ConstantFP`: the constant's bits.
+                let NodeData::ConstFp { bits } = self.dag.node(value).data else { unreachable!("a float constant has bits") };
+                self.dag.get_constant(bits, int)
+            }
+            ISD::BitCast if !self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
+                // `SoftenFloatRes_BITCAST`: the integer it was cast from.
+                self.dag.operand(value, 0)
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften a float result" }),
         };
         self.set_softened_float(value, result);
@@ -520,6 +529,7 @@ impl<'a> TypeLegalizer<'a> {
                 let int = self.dag.value_type(bits);
                 self.dag.get_store(chain, bits, ptr, super::dag::MemInfo { mem_vt: int, ..info })
             }
+            ISD::BitCast => self.softened_float(self.dag.operand(node, 0)),
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,
