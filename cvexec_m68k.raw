@@ -1,0 +1,354 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.70s
+
+
+running 18 tests
+..................
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 1 test
+i
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test: the_reduced_programs_that_failed_once_agree_with_gcc, ignore_message: needs the pin's clang, m68k gcc and qemu-m68k; run with --ignored
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+a_loop_exit_reads_the_flags_of_the_compare_it_tests --- FAILED
+
+failures:
+
+---- a_loop_exit_reads_the_flags_of_the_compare_it_tests stdout ----
+
+thread 'a_loop_exit_reads_the_flags_of_the_compare_it_tests' (3117406) panicked at crates/codegen/llrm-codegen/src/coalescer/joinvals.rs:293:13:
+Bad recursion?
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_loop_exit_reads_the_flags_of_the_compare_it_tests
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p llrm-m68k --test flags_schedule`
+
+running 7 tests
+.......
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.73s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.30s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+
+running 5 tests
+ii...
+test result: ok. 3 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+
+running 12 tests
+...........test table_decodes_the_coprocessor_commands_binutils_does has been running for over 60 seconds
+.
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 213.17s
+
+
+running 20 tests
+....................
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+
+running 8 tests
+........
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 35 tests
+.................. 18/35
+a_second_select_on_the_codes_of_one_compare_is_expanded --- FAILED
+................
+failures:
+
+---- a_second_select_on_the_codes_of_one_compare_is_expanded stdout ----
+
+thread 'a_second_select_on_the_codes_of_one_compare_is_expanded' (3282780) panicked at crates/target/llrm-m68k/tests/pin_output.rs:199:5:
+f:
+	suba.l	#12, %sp
+	movem.l	%d2-%d3, (4,%sp)
+	lea	(zero,%pc), %a0
+	moveq	#-1, %d0
+	add.b	(%a0), %d0
+	suba.l	%a0, %a0
+	cmpi.b	#-2, %d0
+	scs	%d3
+	bcc	.LBB0_2
+	move.l	(%a0), %d2
+	moveq	#14, %d0
+	lsr.l	%d0, %d2
+	bra	.LBB0_3
+.LBB0_2:
+	move.l	%a0, %d2
+.LBB0_3:
+	jsr	h0
+	moveq	#0, %d0
+	move.b	%d3, %d0
+	and.w	#1, %d0
+	lsl.w	#1, %d0
+	or.w	#-15536, %d0
+	move.l	%d2, %d1
+	lsr.l	#8, %d1
+	and.l	#65535, %d0
+	eor.l	%d1, %d0
+	eor.l	%d2, %d0
+	movem.l	(4,%sp), %d2-%d3
+	adda.l	#12, %sp
+	rts
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a_second_select_on_the_codes_of_one_compare_is_expanded
+
+test result: FAILED. 34 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+error: test failed, to rerun pass `-p llrm-m68k --test pin_output`
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 29 tests
+.qemu: unhandled CPU exception 0x8 - aborting
+Failing executable: /tmp/llrm-m68k-results-3282881-8
+D0 = 00000001   A0 = 00000000   F0 = 7fff ffffffffffffffff  (         nan)
+D1 = 00000001   A1 = 00000000   F1 = 7fff ffffffffffffffff  (         nan)
+D2 = 00000000   A2 = 00000000   F2 = 7fff ffffffffffffffff  (         nan)
+D3 = 00000000   A3 = 00000000   F3 = 7fff ffffffffffffffff  (         nan)
+D4 = 00000000   A4 = 00000000   F4 = 7fff ffffffffffffffff  (         nan)
+D5 = 00000000   A5 = 00000000   F5 = 7fff ffffffffffffffff  (         nan)
+D6 = 00000000   A6 = 00000000   F6 = 7fff ffffffffffffffff  (         nan)
+D7 = 00000000   A7 = c07ffc24   F7 = 7fff ffffffffffffffff  (         nan)
+PC = 80000080   SR = 0009 T:0 I:0 UI -N--C
+FPSR = 00000000 ---- 
+                                FPCR =     0000 X RN 
+80000000-80001000 rwxp 00000000 00:2e 165410740                          /tmp/llrm-m68k-results-3282881-8
+c0000000-c0001000 ---p 00000000 00:00 0                                  
+c0001000-c0801000 rw-p 00000000 00:00 0                                  [stack]
+c0801000-c0802000 r-xp 00000000 00:00 0                                  
+...........qemu: unhandled CPU exception 0x8 - aborting
+Failing executable: /tmp/llrm-m68k-results-3282881-70
+D0 = 00000003   A0 = 00000000   F0 = 7fff ffffffffffffffff  (         nan)
+D1 = 00000003   A1 = 00000000   F1 = 7fff ffffffffffffffff  (         nan)
+D2 = 00000000   A2 = 00000000   F2 = 7fff ffffffffffffffff  (         nan)
+D3 = 00000000   A3 = 00000000   F3 = 7fff ffffffffffffffff  (         nan)
+D4 = 00000000   A4 = 00000000   F4 = 7fff ffffffffffffffff  (         nan)
+D5 = 00000000   A5 = 00000000   F5 = 7fff ffffffffffffffff  (         nan)
+D6 = 00000000   A6 = 00000000   F6 = 7fff ffffffffffffffff  (         nan)
+D7 = 00000000   A7 = c07ffc24   F7 = 7fff ffffffffffffffff  (         nan)
+PC = 80000080   SR = 0009 T:0 I:0 UI -N--C
+FPSR = 00000000 ---- 
+                                FPCR =     0000 X RN 
+80000000-80001000 rwxp 00000000 00:2e 165410822                          /tmp/llrm-m68k-results-3282881-70
+c0000000-c0001000 ---p 00000000 00:00 0                                  
+c0001000-c0801000 rw-p 00000000 00:00 0                                  [stack]
+c0801000-c0802000 r-xp 00000000 00:00 0                                  
+.....qemu: unhandled CPU exception 0x8 - aborting
+Failing executable: /tmp/llrm-m68k-results-3282881-121
+D0 = 00000005   A0 = 00000000   F0 = 7fff ffffffffffffffff  (         nan)
+D1 = 00000005   A1 = 00000000   F1 = 7fff ffffffffffffffff  (         nan)
+D2 = 00000000   A2 = 00000000   F2 = 7fff ffffffffffffffff  (         nan)
+D3 = 00000000   A3 = 00000000   F3 = 7fff ffffffffffffffff  (         nan)
+D4 = 00000000   A4 = 00000000   F4 = 7fff ffffffffffffffff  (         nan)
+D5 = 00000000   A5 = 00000000   F5 = 7fff ffffffffffffffff  (         nan)
+D6 = 00000000   A6 = 00000000   F6 = 7fff ffffffffffffffff  (         nan)
+D7 = 00000000   A7 = c07ffc14   F7 = 7fff ffffffffffffffff  (         nan)
+PC = 80000080   SR = 0000 T:0 I:0 UI -----
+FPSR = 00000000 ---- 
+                                FPCR =     0000 X RN 
+80000000-80001000 rwxp 00000000 00:2e 165410908                          /tmp/llrm-m68k-results-3282881-121
+c0000000-c0001000 ---p 00000000 00:00 0                                  
+c0001000-c0801000 rw-p 00000000 00:00 0                                  [stack]
+c0801000-c0802000 r-xp 00000000 00:00 0                                  
+.....qemu: unhandled CPU exception 0x8 - aborting
+Failing executable: /tmp/llrm-m68k-results-3282881-176
+D0 = 00000006   A0 = 00000000   F0 = 7fff ffffffffffffffff  (         nan)
+D1 = 00000096   A1 = 00000000   F1 = 7fff ffffffffffffffff  (         nan)
+D2 = 00000000   A2 = 00000000   F2 = 7fff ffffffffffffffff  (         nan)
+D3 = 00000000   A3 = 00000000   F3 = 7fff ffffffffffffffff  (         nan)
+D4 = 00000000   A4 = 00000000   F4 = 7fff ffffffffffffffff  (         nan)
+D5 = 00000000   A5 = 00000000   F5 = 7fff ffffffffffffffff  (         nan)
+D6 = 00000000   A6 = 00000000   F6 = 7fff ffffffffffffffff  (         nan)
+D7 = 00000000   A7 = c07ffc14   F7 = 7fff ffffffffffffffff  (         nan)
+PC = 80000080   SR = 0000 T:0 I:0 UI -----
+FPSR = 00000000 ---- 
+                                FPCR =     0000 X RN 
+80000000-80001000 rwxp 00000000 00:2e 165410990                          /tmp/llrm-m68k-results-3282881-176
+c0000000-c0001000 ---p 00000000 00:00 0                                  
+c0001000-c0801000 rw-p 00000000 00:00 0                                  [stack]
+c0801000-c0802000 r-xp 00000000 00:00 0                                  
+.......
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.52s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+
+running 7 tests
+.......
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.12s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 18 tests
+..................
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 40 tests
+........................................
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 2 targets failed:
+    `-p llrm-m68k --test flags_schedule`
+    `-p llrm-m68k --test pin_output`

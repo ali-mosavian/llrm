@@ -470,7 +470,7 @@ fn expand_any_extension(
 
 /// `MOVZXd32p8`, `MOVSXd16d8`..: a zero or sign extending move as
 /// `(signed, destination bits, addressing mode, source bits)`.
-fn extension(name: &str) -> Option<(bool, u32, char, u32)> {
+pub(crate) fn extension(name: &str) -> Option<(bool, u32, char, u32)> {
     let rest = name
         .strip_prefix("MOVZX")
         .map(|rest| (false, rest))

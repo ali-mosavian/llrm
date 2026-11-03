@@ -1,0 +1,6 @@
+difftest: reference /home/alim/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu-gcc (m68k-linux-gnu-gcc (Ubuntu 15.2.0-4ubuntu4) 15.2.0)
+seed 92: MISMATCH ours 62, m68k gcc -O2 30, host gcc -m32 -O0 30
+seed 93: MISMATCH ours 33, m68k gcc -O2 100, host gcc -m32 -O0 100
+seed 179: MISMATCH ours 45, m68k gcc -O2 207, host gcc -m32 -O0 207
+400 programs from seed 0: 397 ok, 3 differ, 0 hang, 0 reject, 0 no reference
+182 programs used (An)+ or -(An): {"add.b (An)+": 7, "addq.b": 1057, "addq.l": 3514, "addq.w": 539, "and.b (An)+": 1, "and.l (An)+": 7, "and.w (An)+": 2, "cmp.b (An)+": 27, "cmp.l (An)+": 53, "cmp.w (An)+": 44, "move.b (An)+": 2, "move.l (An)+": 32, "move.l (An)+,(An)+": 249, "move.w (An)+": 9, "or.l (An)+": 4, "or.w (An)+": 2, "sub.b (An)+": 8, "sub.l (An)+": 2, "sub.w (An)+": 2, "subq.b": 337, "subq.l": 284, "subq.w": 212}

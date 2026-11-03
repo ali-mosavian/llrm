@@ -11,6 +11,11 @@
 //! it exists ([`crate::cmpelim::flags_read_after`]): the word form sets N and
 //! Z from the low half only.
 //!
+//! [`drop_covered_masks`] drops an `and` of a long immediate whose register
+//! the next instruction to touch it ands again with bits the first keeps all
+//! of: `and.l #255, %d0; and.l #1, %d0` is the second alone. The pin leaves
+//! both (its `MOVZX` expansion is an `and`, the `i1` mask another).
+//!
 //! DEVIATE: the pin has no such narrowing; its DAG keeps the 32-bit constant
 //! and its `targetShrinkDemandedConstant` is only a hook. gcc's `iorsi3`/
 //! `xorsi3` output templates print the `.w` form. Reason: best of gcc and clang
@@ -60,6 +65,76 @@ pub fn narrow_logic_immediates(
             let Some(desc) = local::code_of(target).and_then(local::desc) else { continue };
             let word = i64::from(value as u32 & 0xFFFF);
             block.insts[at] = op_inst(target, desc, vec![Operand::Def(def), Operand::Use(base), Operand::Imm(word)]);
+        }
+    }
+}
+
+/// `(def, use, bits kept)` of a register-to-register `and` of a long immediate
+/// or zero extension to 32 bits: the instruction clears every bit outside the
+/// mask and keeps those inside.
+fn masks(inst: &llrm_spike_mf::Inst) -> Option<(Reg, Reg, u32)> {
+    let Kind::Op(name) = inst.kind else { return None };
+    match (name, &inst.operands[..]) {
+        ("AND32di", [Operand::Def(def), Operand::Use(base), Operand::Imm(mask)]) => Some((*def, *base, *mask as u32)),
+        (_, [Operand::Def(def), Operand::Use(source)]) => match crate::expand::extension(name)? {
+            (false, 32, 'd', 8) => Some((*def, *source, 0xFF)),
+            (false, 32, 'd', 16) => Some((*def, *source, 0xFFFF)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The root registers an instruction names.
+fn touched(
+    inst: &llrm_spike_mf::Inst,
+    register: &impl Fn(&Reg) -> Reg,
+) -> Vec<Reg> {
+    inst.operands
+        .iter()
+        .filter_map(|operand| match operand {
+            Operand::Def(reg) | Operand::Use(reg) => Some(register(reg)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Deletes each mask of `Rn` (`and.l #K1`, or a zero extension) whose next
+/// toucher of `Rn` is `and.l #K2, Rn` with `K2 & !K1 == 0`, when nothing between reads the codes the first sets.
+pub fn drop_covered_masks(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: &Reg| match reg {
+        Reg::Virt(v) => Reg::Phys(REGISTER_INFO.root(assignment.0[*v as usize])),
+        Reg::Phys(p) => Reg::Phys(REGISTER_INFO.root(*p)),
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let covered = (|| {
+                let Some((def, base, first)) = masks(&block.insts[at]) else { return false };
+                let own = register(&def);
+                if own != register(&base) || flags_read_after(&block.insts, at) != Some(0) {
+                    return false;
+                }
+                for after in &block.insts[at + 1..] {
+                    if !touched(after, &register).contains(&own) {
+                        if after.call || after.terminator || after.barrier || after.side_effects {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let Some((d, b, second)) = masks(after) else { return false };
+                    return register(&d) == own && register(&b) == own && second & !first == 0;
+                }
+                false
+            })();
+            if covered {
+                block.insts.remove(at);
+            } else {
+                at += 1;
+            }
         }
     }
 }
