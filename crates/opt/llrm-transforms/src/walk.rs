@@ -499,7 +499,11 @@ impl ProgramPass for Walk {
                                 } else {
                                     // At size the units count a call by its
                                     // parameters, not the words and address forms it
-                                    // pushes: the target's byte prices decide too.
+                                    // pushes: the target's byte prices decide too, for a
+                                    // callee that stays (the byte model misprices a
+                                    // body that goes with its last calls), by an eighth of
+                                    // the caller: the model priced a float kernel's copy
+                                    // 19 B under its 180 (+5 B built; qmove -Os).
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let gone: i64 = if credit > 0 {
@@ -537,7 +541,7 @@ impl ProgramPass for Walk {
                                         growth
                                     );
                                 }
-                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) || (rate == 0 && growth < 0) {
+                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) || (rate == 0 && credit == 0 && -growth * 8 >= function_bytes(module, &program.layout, &program.target.size_costs(), &kept)) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {

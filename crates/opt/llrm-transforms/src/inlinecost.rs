@@ -79,9 +79,10 @@
 //!   private callee that dies with its last call are tried together, its body
 //!   credited; so are the sites of a private callee called only from this
 //!   caller, whatever they pass). A trial the instruction units refuse stays
-//!   if the caller is strictly fewer bytes by the target's byte prices
-//!   (`function_bytes`) at a caller with no byte rate: the units count a call by
-//!   its parameters, not the far-pointer words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a load through
+//!   if the caller is an eighth or more smaller in bytes by the target's byte
+//!   prices (`function_bytes`), at a caller with no byte rate, the callee
+//!   staying: the units count a call by its parameters, not the far-pointer
+//!   words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a load through
 //!   a pointer argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
