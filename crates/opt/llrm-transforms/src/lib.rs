@@ -98,6 +98,7 @@ pub mod cgpmemalign;
 #[cfg(test)]
 mod cgpmemalign_tests;
 pub mod cgpretdup;
+pub mod cgpselect;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]

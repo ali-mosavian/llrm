@@ -1,0 +1,40 @@
+//! A conversion of a clamp is made on the path that takes neither limit.
+
+mod common;
+
+/// `(long)(x < -3 ? -3 : x > 4 ? 4 : x)`: one `fistp` after the clamp selects
+/// made it 2020 conversions in x_ldcmp -O2 where gcc made 1180 (249830 clocks
+/// against 204830).
+const SOURCE: &str = "int f(double x) { return (int)(x < -3 ? -3 : (x > 4 ? 4 : x)); }\n";
+
+fn assembled(source: &str) -> String {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), source).unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(scratch.path())
+        .args(["--target=x86_32-wat", "-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    std::fs::read_to_string(scratch.path().join("a.s")).unwrap()
+}
+
+#[test]
+fn test_a_clamp_converted_to_an_integer_converts_on_the_middle_path_only() {
+    let text = assembled(SOURCE);
+    assert!(text.contains("mov ecx, -3") || text.contains(", -3"), "{text}");
+    let at = text.find("fistp").expect("the middle path converts");
+    let before = &text[..at];
+    assert!(before.contains("j"), "a branch precedes the conversion: {text}");
+    assert_eq!(text.matches("fistp").count(), 1, "{text}");
+    // Neither limit's path loads the control word.
+    assert!(!text[..text.find("-3").unwrap()].contains("fldcw"), "{text}");
+}
+
+/// Control: a select of two variables has no constant to convert at compile
+/// time, and keeps its one conversion after the select.
+#[test]
+fn test_a_select_of_two_variables_keeps_one_conversion_after_it() {
+    let text = assembled("int f(double x, double y, int c) { return (int)(c ? x : y); }\n");
+    assert_eq!(text.matches("fistp").count(), 1, "{text}");
+}

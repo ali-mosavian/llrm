@@ -179,6 +179,15 @@ impl FunctionPass for CgpAddr {
             unit.function,
             analyses.outer().target().lowering().as_deref(),
         );
+        // DEVIATE CS1: a dear conversion of a select with a constant arm.
+        let costs = analyses.outer().target().costs();
+        let converted = crate::cgpselect::casts_branched(
+            unit.context,
+            unit.layout,
+            unit.function,
+            costs.float_to_int,
+            costs.branch,
+        );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
         let switches = match analyses.outer().target().lowering() {
             Some(lowering) => {
@@ -260,8 +269,8 @@ impl FunctionPass for CgpAddr {
                 ),
                 None => false,
             };
-        if merged {
-            // A block went: the blocks and edges are not as they were.
+        if merged || converted {
+            // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis
             || aligned
