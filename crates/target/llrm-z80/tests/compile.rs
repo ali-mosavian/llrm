@@ -465,6 +465,42 @@ fn a_word_compare_nothing_reads_is_not_emitted() {
     assert!(out.contains("ret"), "{out}");
 }
 
+/// `c ^= p[i] << 8` changes the high byte of a pair and keeps the low one. The
+/// high byte's copy had been given `l`, the half the low byte is kept in, so
+/// the low byte was never read in place: `ld c, l` ... `ld l, c` stayed, two
+/// instructions of crc16's outer loop. Once the high byte is read in place the
+/// low byte can be too.
+#[test]
+fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr16, Class::Gr8, Class::Gr8, Class::Gr16];
+    let reg_of = Reg::Virt;
+    function.blocks.push(Block {
+        id: 0,
+        insts: vec![
+            Inst::new(Kind::Op("LO"), vec![Operand::Def(reg_of(1)), Operand::Use(reg_of(0))]),
+            Inst::new(Kind::Op("HI"), vec![Operand::Def(reg_of(2)), Operand::Use(reg_of(0))]),
+            Inst {
+                sets_flags: true,
+                ..Inst::new(
+                    Kind::Op("XOR8r"),
+                    vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::A)), Operand::Use(reg_of(2))],
+                )
+            },
+            Inst::new(Kind::Op("PACK"), vec![Operand::Def(reg_of(3)), Operand::Use(reg_of(1)), Operand::Use(Reg::Phys(reg::A))]),
+        ],
+        phis: Vec::new(),
+    });
+    // v0 and v3 are hl; the low byte v1 got c, the high byte v2 got l
+    let assignment = Assignment(vec![reg::HL, reg::C, reg::L, reg::HL]);
+    llrm_z80::compile::use_lanes_in_place(&mut function, &assignment);
+    let kinds: Vec<_> = function.blocks[0].insts.iter().map(|inst| inst.kind).collect();
+    assert_eq!(kinds, [Kind::Op("XOR8r"), Kind::Op("PACK")], "{kinds:?}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

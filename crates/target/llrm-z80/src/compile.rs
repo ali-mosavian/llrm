@@ -558,6 +558,16 @@ pub fn use_lanes_in_place(
     function: &mut MFunction,
     assignment: &Assignment,
 ) {
+    // a byte read in place frees the half it was copied into, so another byte
+    // kept from that half may now be read in place too
+    while use_lanes_once(function, assignment) {}
+}
+
+fn use_lanes_once(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let mut removed = false;
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
@@ -604,7 +614,11 @@ pub fn use_lanes_in_place(
                     last = k;
                 }
             }
-            let clobbered = insts[at + 1..=last]
+            // a PACK that reads the byte writes the pair after reading both halves
+            // (`pack`), so its own write to the half does not clobber it: the low
+            // half of a pair kept while the high half is replaced stays where it is
+            let checked = if insts[last].kind == Kind::Op("PACK") { last } else { last + 1 };
+            let clobbered = insts[at + 1..checked]
                 .iter()
                 .any(
                     |later| later.call
@@ -627,8 +641,10 @@ pub fn use_lanes_in_place(
                 }
             }
             function.blocks[b].insts.remove(at);
+            removed = true;
         }
     }
+    removed
 }
 
 /// `function`, one instruction per line, on stderr (`LLRM_Z80_DUMP=name`).
