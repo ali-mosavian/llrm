@@ -2674,3 +2674,14 @@ fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
     let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
     assert!(why.contains("Win64 calling convention"), "{why}");
 }
+
+/// The pin's clang writes `x86_64-apple-macos11` for the OS that compact unwind
+/// needs (10.6 or later); the lookup knew only `macosx`, so the Mach-O unwind
+/// comparison had to run at the default 10.4, where the pin writes no
+/// `__compact_unwind`.
+#[test]
+fn macos_and_macosx_name_the_same_system() {
+    assert!(crate::same_system("x86_64-apple-macosx", "x86_64-apple-macos11"));
+    assert!(crate::by_triple("x86_64-apple-macos11").is_some());
+    assert!(!crate::same_system("x86_64-apple-macosx", "arm64-apple-macos11"));
+}
