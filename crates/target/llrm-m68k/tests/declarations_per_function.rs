@@ -33,3 +33,18 @@ fn declarations_are_not_listed_again_for_each_function() {
     println!("8: {eight}, 16: {sixteen}, 32: {thirty_two}");
     assert!(thirty_two <= 2 * sixteen + 64 && sixteen <= 2 * eight + 64, "8: {eight}, 16: {sixteen}, 32: {thirty_two}");
 }
+
+/// The callee summaries were worked out for every global again for every
+/// function (1204 scans at 1200 functions, 10.8G instructions of 50G): a
+/// moved declaration changes its own summary and no other.
+#[test]
+fn callee_summaries_are_not_scanned_again_for_each_function() {
+    let scans = |functions: usize| {
+        let before = llrm_mir::passes::callee_scans();
+        assembly(&module_of(functions), Cpu::M68020, Level::O2).expect("compiles");
+        llrm_mir::passes::callee_scans() - before
+    };
+    let (eight, thirty_two) = (scans(8), scans(32));
+    println!("8: {eight}, 32: {thirty_two}");
+    assert!(thirty_two <= eight + 8, "8: {eight}, 32: {thirty_two}");
+}

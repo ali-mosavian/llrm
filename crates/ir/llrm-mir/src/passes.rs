@@ -802,6 +802,16 @@ fn declared_as_before<A: 'static>(
     same
 }
 
+thread_local! {
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread's `CalleeEffects` summarized every function of
+/// a module, not just the ones whose declaration moved.
+pub fn callee_scans() -> usize {
+    SCANS.with(std::cell::Cell::get)
+}
+
 /// What each function does to memory, as its attributes state it: of its
 /// declaration alone, so it stands while the declarations do.
 pub struct CalleeEffects;
@@ -813,7 +823,37 @@ impl ModuleAnalysis for CalleeEffects {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        let then = analyses.memo::<Seen<Self>>().0;
         declared_as_before::<Self>(module, analyses, true);
+        // The last map with the summaries of the declarations that moved
+        // since put in place, when nothing else holds it, so that each
+        // function does not summarize every global again.
+        if let Some(then) = then
+            && let Some(moved) = analyses.declarations_moved_since(then)
+            && analyses.dropped.contains_key(&TypeId::of::<Self>())
+        {
+            analyses.release_outer_holders();
+            if let Some(last) = analyses.take_dropped::<Self>() {
+                match Rc::try_unwrap(last) {
+                    Ok(mut callees) => {
+                        for id in moved {
+                            let global = module.global(id);
+                            match &global.kind {
+                                GlobalKind::Function(function) => {
+                                    callees.insert(id, crate::memory::global_summary(global.name.as_deref(), function));
+                                }
+                                GlobalKind::Variable(_) => {
+                                    callees.remove(&id);
+                                }
+                            }
+                        }
+                        return callees;
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        SCANS.with(|scans| scans.set(scans.get() + 1));
         crate::memory::callees(module)
     }
 
@@ -2571,6 +2611,16 @@ impl ModuleAnalyses {
     /// Which listing `Declarations` holds: a new number for each one made.
     pub fn listing(&self) -> u64 {
         self.listing
+    }
+
+    /// The globals whose declaration moved since listing `since`, or `None`
+    /// where that is not known.
+    pub fn declarations_moved_since(
+        &self,
+        since: u64,
+    ) -> Option<Vec<GlobalId>> {
+        (since != 0 && since >= self.unknown_until)
+            .then(|| self.declaration_moves.iter().filter(|(_, at)| **at > since).map(|(id, _)| *id).collect())
     }
 
     /// Whether `id`'s declaration may differ from what it was in listing
