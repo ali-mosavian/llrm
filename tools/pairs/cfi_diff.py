@@ -14,6 +14,13 @@ from pathlib import Path
 from dwarf_loc_diff import code_of, run
 
 
+# triple, objdump, the flags of our llc after the pin's
+TARGETS = {
+    "x86_64": ("x86_64-unknown-linux-gnu", "objdump", []),
+    "aarch64": ("aarch64-unknown-linux-gnu", "aarch64-linux-gnu-objdump", ["--isel=dag"]),
+}
+
+
 def tables_of(path: str) -> dict[str, tuple]:
     """function -> the rows of its FDE: (offset, cfa register, cfa offset, saved registers), read with pyelftools."""
     from elftools.dwarf.callframe import FDE  # noqa: PLC0415
@@ -21,6 +28,9 @@ def tables_of(path: str) -> dict[str, tuple]:
 
     with open(path, "rb") as handle:
         elf = ELFFile(handle)
+        # No unwind table at all: every function is a hole, not a crash.
+        if elf.get_section_by_name(".eh_frame") is None:
+            return {}
         starts = {}
         for symbol in elf.get_section_by_name(".symtab").iter_symbols():
             if symbol["st_info"]["type"] == "STT_FUNC":
@@ -43,25 +53,32 @@ def tables_of(path: str) -> dict[str, tuple]:
     return out
 
 
+def shape(table: tuple | None) -> tuple | None:
+    """The rows without their offsets."""
+    return None if table is None else tuple(row[1:] for row in table)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sources", nargs="+")
     parser.add_argument("--pin", default=os.environ.get("LLRM_PIN_BIN"), help="the pin LLVM bin directory (default: $LLRM_PIN_BIN)")
-    parser.add_argument("--llc", required=True, help="llrm-llc")
+    parser.add_argument("--llc", required=True, help="llrm-llc (llrm-arm64-llc with --target aarch64)")
+    parser.add_argument("--target", choices=sorted(TARGETS), default="x86_64")
     args = parser.parse_args()
     if not args.pin:
         parser.error("--pin or LLRM_PIN_BIN names the pin LLVM bin directory")
+    triple, objdump, extra = TARGETS[args.target]
     work = Path(tempfile.mkdtemp(prefix="cfidiff-"))
-    same = different = refused = files = rich = 0
+    same = different = refused = files = rich = shape_same = shape_different = 0
     for source in map(Path, args.sources):
         try:
             ir, opt = work / f"{source.stem}.ll", work / f"{source.stem}.opt.ll"
-            run([f"{args.pin}/clang", "--target=x86_64-unknown-linux-gnu", "-fno-pic", "-O2", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
+            run([f"{args.pin}/clang", f"--target={triple}", "-fno-pic", "-O2", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
             run([f"{args.pin}/opt", "-O2", "-vectorize-loops=false", "-vectorize-slp=false", str(ir), "-S", "-o", str(opt)])
             pin_o, our_o = work / f"{source.stem}.pin.o", work / f"{source.stem}.our.o"
             run([f"{args.pin}/llc", "-O2", "-relocation-model=static", "-filetype=obj", str(opt), "-o", str(pin_o)])
-            run([args.llc, "-O2", "-o", str(our_o), str(opt)])
-            pin_code, our_code = (code_of(run(["objdump", "-d", "--no-show-raw-insn", str(o)])) for o in (pin_o, our_o))
+            run([args.llc, "-O2", *extra, "-o", str(our_o), str(opt)])
+            pin_code, our_code = (code_of(run([objdump, "-d", "--no-show-raw-insn", str(o)])) for o in (pin_o, our_o))
             pin_tables, our_tables = tables_of(str(pin_o)), tables_of(str(our_o))
         except (RuntimeError, KeyError) as why:
             print(f"  refused {source.name}: {why}")
@@ -70,13 +87,22 @@ def main() -> int:
         for name, table in sorted(pin_tables.items()):
             if our_code.get(name) != pin_code.get(name):
                 refused += 1
+                # Different code puts the rows at other offsets: the rules alone (frame register, offset, saved registers, in order) must still match.
+                if shape(our_tables.get(name)) == shape(table):
+                    shape_same += 1
+                else:
+                    shape_different += 1
+                    print(f"  shape different {source.name} {name}:\n    pin  {table}\n    ours {our_tables.get(name)}")
             elif our_tables.get(name) == table:
                 same += 1
                 rich += len(table) > 1
             else:
                 different += 1
                 print(f"  different {source.name} {name}:\n    pin  {table}\n    ours {our_tables.get(name)}")
-    print(f"cfi_diff: {same + different} functions compared, {refused} refused (code differs), {files} files refused: {same} same ({rich} with more than the entry row), {different} different")
+    print(
+        f"cfi_diff: {same + different} functions compared, {refused} with different code (rules only: {shape_same} same, {shape_different} different), "
+        f"{files} files refused: {same} same ({rich} with more than the entry row), {different} different"
+    )
     return 2 if same + different == 0 else (1 if different else 0)
 
 

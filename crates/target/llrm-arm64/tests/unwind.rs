@@ -53,6 +53,9 @@ fn rules(object: &Path) -> Vec<Vec<String>> {
 
 /// A function that calls and uses the result keeps a frame record; before this
 /// the object had no `.eh_frame`, and nothing could unwind through the call.
+/// The saves are stated after the frame register is set up, highest address
+/// first, as the pin does (they were stated at the `stp`, 4 bytes early, in the
+/// other order: `cfi_diff.py` showed pc 4 `{x29, x30}` against the pin's none).
 #[test]
 fn a_function_with_a_frame_record_states_where_its_caller_is() {
     let directory = tempfile::tempdir().unwrap();
@@ -64,13 +67,13 @@ fn a_function_with_a_frame_record_states_where_its_caller_is() {
         rules(&object),
         [[
             "DW_CFA_def_cfa_offset: 16",
-            "DW_CFA_offset: r29 (x29) at cfa-16",
-            "DW_CFA_offset: r30 (x30) at cfa-8",
             "DW_CFA_def_cfa_register: r29 (x29)",
+            "DW_CFA_offset: r30 (x30) at cfa-8",
+            "DW_CFA_offset: r29 (x29) at cfa-16",
             "DW_CFA_def_cfa_register: r31 (sp)",
             "DW_CFA_def_cfa_offset: 0",
-            "DW_CFA_restore: r29 (x29)",
             "DW_CFA_restore: r30 (x30)",
+            "DW_CFA_restore: r29 (x29)",
         ]
         .map(String::from)
         .to_vec()]
