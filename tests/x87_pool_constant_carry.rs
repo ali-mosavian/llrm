@@ -17,7 +17,18 @@ fn test_an_invariant_extended_constant_is_loaded_once_before_the_loop() {
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["--target=x86_32-wat", "-m32", "-mabi=sysv", "-mlong-double-80", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .args([
+            "--target=x86_32-wat",
+            "-m32",
+            "-mabi=sysv",
+            "-mlong-double-80",
+            "-march=i486",
+            "-O2",
+            "-S",
+            "-o",
+            "a.s",
+            "a.c",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -34,6 +45,9 @@ fn test_an_invariant_extended_constant_is_loaded_once_before_the_loop() {
         })
         .expect(&text);
     assert!(code[head..tail].iter().any(|line| line.starts_with("fmul")), "{text}");
-    assert!(!code[head..tail].iter().any(|line| line.starts_with("fld tbyte ptr $K")), "the constant is loaded on every trip: {text}");
+    assert!(
+        !code[head..tail].iter().any(|line| line.starts_with("fld tbyte ptr $K")),
+        "the constant is loaded on every trip: {text}"
+    );
     assert_eq!(code.iter().filter(|line| line.starts_with("fld tbyte ptr $K")).count(), 1, "{text}");
 }

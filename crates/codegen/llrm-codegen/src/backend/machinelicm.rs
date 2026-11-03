@@ -147,7 +147,10 @@ fn pool_load(one: &Insn) -> bool {
     one.what.as_ref().is_some_and(|what| {
         what.op == Operation::FloatLoad
             && what.name.as_deref() == Some("fld")
-            && matches!(what.sources.as_slice(), [Loc::Mem(cell)] if cell.selector.is_none() && !cell.stack_argument && cell.width == 10)
+            && matches!(
+                what.sources.as_slice(),
+                [Loc::Mem(cell)] if cell.selector.is_none() && !cell.stack_argument && cell.width == 10
+            )
             && matches!(what.dests.as_slice(), [Loc::Held(_)])
     }) && one.invariant()
         && one.defines.len() == 1
@@ -642,7 +645,8 @@ mod tests {
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
         let wide = |value: u32| Loc::Held(Held { value, width: 10 });
-        // `others`: floating values the loop reads from outside it, besides the accumulator.
+        // `others`: floating values the loop reads from outside it, besides the
+        // accumulator.
         let run = |others: u32, call: bool, truncating: bool, width: u32, size: bool| {
             let pool = Loc::Mem(Mem::new(None, width));
             let load = Arc::new(Insn {
@@ -653,10 +657,26 @@ mod tests {
             let mut last = 1;
             for (at, value) in (0..others).zip(100..) {
                 let sum = 200 + value;
-                inside.push(insn(20 + at as i64, Operation::Binary, "fadd", vec![wide(sum)], vec![wide(last), wide(value)], vec![sum], vec![last, value]));
+                inside.push(insn(
+                    20 + at as i64,
+                    Operation::Binary,
+                    "fadd",
+                    vec![wide(sum)],
+                    vec![wide(last), wide(value)],
+                    vec![sum],
+                    vec![last, value],
+                ));
                 last = sum;
             }
-            inside.push(insn(11, Operation::Binary, "fmul", vec![wide(11)], vec![wide(last), wide(10)], vec![11], vec![last, 10]));
+            inside.push(insn(
+                11,
+                Operation::Binary,
+                "fmul",
+                vec![wide(11)],
+                vec![wide(last), wide(10)],
+                vec![11],
+                vec![last, 10],
+            ));
             if call {
                 inside.push(insn(12, Operation::Call, "call", vec![], vec![], vec![], vec![]));
             }
@@ -687,7 +707,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(run(0, false, false, 10, false), ["fld", "jmp"]);
-        // The control word is written after the loop: `fld` does not read its rounding.
+        // The control word is written after the loop: `fld` does not read its
+        // rounding.
         assert_eq!(run(0, false, true, 10, false), ["fld", "jmp"]);
         // Four values held across the loop and the constant leave three slots.
         assert_eq!(run(3, false, false, 10, false), ["fld", "jmp"]);
@@ -697,7 +718,8 @@ mod tests {
         // A dword or qword entry folds into its reader and stays there.
         assert_eq!(run(0, false, false, 4, false), ["jmp"]);
         assert_eq!(run(0, false, false, 8, false), ["jmp"]);
-        // -Os: the `fstp` that ends the carried constant is a byte the loop did not cost.
+        // -Os: the `fstp` that ends the carried constant is a byte the loop did
+        // not cost.
         assert_eq!(run(0, false, false, 10, true), ["jmp"]);
     }
 

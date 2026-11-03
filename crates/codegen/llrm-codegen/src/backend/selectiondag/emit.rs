@@ -4022,7 +4022,8 @@ impl Emitter<'_, '_> {
             self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
             // A constant-pool entry is memory nothing writes
             // (`PseudoSourceValue::isConstant`: the pin's
-            // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE X1).
+            // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
+            // X1).
             if pooled {
                 self.mark_invariant_loads(before);
             }
