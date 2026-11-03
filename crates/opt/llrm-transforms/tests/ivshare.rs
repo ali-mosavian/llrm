@@ -19,7 +19,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use llrm_mir::target::Machine as _;
 use llrm_transforms::lsr_pass::LoopStrengthReduce;
 
 fn root() -> PathBuf {
