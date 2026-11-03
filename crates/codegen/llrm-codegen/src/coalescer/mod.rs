@@ -27,6 +27,17 @@
 //! `CP.isPhys()` have nothing to join; the environment says whether two values
 //! may share a register (`CoalescerEnv::can_share`, `getCommonSubClass`).
 //!
+//! DEVIATE C13 (no number): a pinned value is joined with, though not reserved.
+//! The pin's `canJoinPhys` (RegisterCoalescer.cpp#L1993) joins a copy with a
+//! physical register only when it is reserved; here a pinned value (an
+//! argument register) stands for the physical register and a copy to it joins,
+//! which gives the copy's value the pin's range, unsplittable to its last
+//! use. `CoalescerEnv::joins_pinned_copies` is true (the join) for every target
+//! but those whose `Target::joins_pinned_copies` says false (Z80: `id` of an
+//! `i64` through a hidden pointer held all three pairs and failed to
+//! allocate). Exit: the targets whose cells do not worsen with false move to
+//! it, then the hook goes.
+//!
 //! DEVIATE C3 (no number): no IMPLICIT_DEF, so `ErasableImplicitDef`,
 //! `removeImplicitDefs` and `eliminateUndefCopy` are not translated. Fact:
 //! phi elimination here leaves no `IMPLICIT_DEF`.
