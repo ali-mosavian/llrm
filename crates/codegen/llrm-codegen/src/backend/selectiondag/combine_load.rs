@@ -71,7 +71,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return None;
         }
-        let (mut lows, mut highs) = (Vec::new(), Vec::new());
+        let (mut lows, mut highs, mut shifts) = (Vec::new(), Vec::new(), Vec::new());
         for user in self.dag.users(value).collect::<Vec<_>>() {
             let user = SDValue { node: user, res: 0 };
             match self.dag.opcode(user) {
@@ -80,6 +80,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     if self.dag.constant(self.dag.operand(user, 1)) == Some(16)
                         && self.dag.operand(user, 0) == value =>
                 {
+                    shifts.push(user);
                     for half in self.dag.users(user).collect::<Vec<_>>() {
                         let half = SDValue { node: half, res: 0 };
                         if self.dag.opcode(half) != ISD::Truncate || self.dag.value_type(half) != EVT::I16 {
@@ -91,7 +92,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 _ => return None,
             }
         }
-        if lows.is_empty() && highs.is_empty() {
+        if lows.is_empty() || highs.is_empty() {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
@@ -107,11 +108,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let chains = [SDValue { node: low.node, res: 1 }, SDValue { node: high.node, res: 1 }];
         let joined = self.dag.get_token_factor(&chains);
         self.replace_value(SDValue { node: node.node, res: 1 }, joined);
-        for half in lows {
+        for &half in &lows {
             self.replace_value(half, low);
         }
-        for half in highs {
+        for &half in &highs {
             self.replace_value(half, high);
+        }
+        // The replaced halves stay in the arena reading the load; left so, the
+        // load would be split again.
+        for dead in lows.iter().chain(&highs).chain(&shifts) {
+            self.dag.delete_dead(dead.node);
         }
         Some(value)
     }
