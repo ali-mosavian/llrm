@@ -169,7 +169,13 @@ fn silent(
                 Some(bits) => Some(((bits & 0xFFFF) as i64, (bits & 0xFFFF) as i64)),
                 None => {
                     let assumptions = assumptions.get_or_init(|| {
-                        AssumptionCache::of(unit.context, &outer.globals, &outer.metadata, unit.function)
+                        AssumptionCache::of_declared(
+                            unit.context,
+                            &outer.globals,
+                            &outer.metadata,
+                            unit.function,
+                            unit.declared.assume_declared(&outer.globals),
+                        )
                     });
                     ranges::value_tracking_at(&memory, Some(tree), Some(assumptions), inst, port)
                         .and_then(|interval| unsigned(&interval.low, &interval.high))

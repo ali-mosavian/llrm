@@ -1360,7 +1360,8 @@ fn rerun(
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
+        .with_assume_declared(outer.assume_declared());
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }

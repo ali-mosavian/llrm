@@ -124,7 +124,13 @@ impl FunctionPass for FixedNarrow {
         if calls.is_empty() {
             return PreservedAnalyses::all();
         }
-        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&globals),
+        );
         let shared = analyses.get::<LviCache>(unit.context, unit.layout, unit.function);
         let mut lvi = shared.take();
         let mut changed = false;

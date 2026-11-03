@@ -670,7 +670,9 @@ pub(crate) fn combine_with_sinking(
 ) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
     // those visited so far.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
+    let analyses =
+        FunctionAnalyses::of_declared(context, globals, metadata, layout, function, declared.assume_declared(globals))
+            .with_lazy_dom_conditions();
     let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

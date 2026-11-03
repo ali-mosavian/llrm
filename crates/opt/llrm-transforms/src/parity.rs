@@ -640,6 +640,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
     old_analysis(
+        "assume-declared",
+        "AssumeDeclared",
+        "none",
+        "none: DEVIATE; LLVM's AssumptionCache walks the body, we skip it where no llvm.assume is declared",
+    ),
+    old_analysis(
         "global-names",
         "GlobalNames",
         "none",

@@ -229,7 +229,13 @@ impl FunctionPass for JumpThreading {
         let outer = Rc::clone(analyses.outer());
         let globals = Rc::clone(&outer.globals);
         let tti = crate::looprotate::target_tti(outer.target());
-        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&globals),
+        );
         let mut pass = State {
             unit,
             globals,

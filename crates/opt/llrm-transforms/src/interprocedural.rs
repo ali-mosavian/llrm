@@ -153,7 +153,7 @@ use llrm_mir::context::GlobalId;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{GlobalKind, Linkage, Module};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Declarations, Declared, GlobalNames, ModuleAnalyses, PreservedAnalyses};
+use llrm_mir::passes::{AssumeDeclared, Declarations, Declared, GlobalNames, ModuleAnalyses, PreservedAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
 
@@ -226,7 +226,7 @@ pub(crate) fn declared(
             "the names held by the module's analyses differ from the module's"
         );
     }
-    Declared::over_names(named, module.metadata.len())
+    Declared::over_names(named, module.metadata.len()).with_assume_declared(*modules.get::<AssumeDeclared>(module))
 }
 
 fn checking() -> bool {
