@@ -769,6 +769,8 @@ fn size_trade(cpu: &crate::backend::cpu::Profile) -> Option<SizeTrade> {
         fill_cell: costs.fill_cell,
         store: costs.store,
         prefix: costs.prefix,
+        float_load: costs.float_load,
+        float_store: costs.float_store,
     })
 }
 

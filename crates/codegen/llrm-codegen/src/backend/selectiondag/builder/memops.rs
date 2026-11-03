@@ -625,6 +625,68 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
+    /// DEVIATE SD2xx (real mode, x87): a zero memset of whole doubles is `fldz`
+    /// and a `fst` of each, where the pin stores integer zeros (`fst qword`
+    /// 3 B, a dword immediate store 8). Tuned for size the bytes decide; at
+    /// speed they are taken where the bytes saved, at the target's speed
+    /// rate, pay for the clocks the `fst`s add. Owner w2. Exit 2026-11-20: a
+    /// store-cost hook on the target description.
+    fn x87_zero_stores(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        length: u64,
+        align: u64,
+        opt_size: bool,
+        filled: bool,
+    ) -> Option<SDValue> {
+        const FLDZ: u64 = 2;
+        const FST_QWORD: u64 = 3;
+        if self.target.dag.pointer.size_in_bits() != 16
+            || self.target.tuning.x87_stack_slots.is_none()
+            || self.volatile_memory
+            || length == 0
+            || length % 8 != 0
+        {
+            return None;
+        }
+        let (dwords, cells) = (length / 4, length / 8);
+        let x87 = FLDZ + cells * FST_QWORD;
+        // The form it replaces: the fill where `fill_is_smaller` chose it (the
+        // clocks of that trade are not priced here, so only for size), else the
+        // integer stores.
+        let ints = if filled { FILL_BYTES } else { dwords * 8 };
+        if x87 >= ints || (filled && !opt_size) {
+            return None;
+        }
+        if !opt_size {
+            let trade = self.target.size_trade?;
+            let int_clocks = (dwords * (trade.store + trade.prefix) as u64) as i64;
+            let x87_clocks = trade.float_load + cells as i64 * trade.float_store;
+            if (ints - x87) as i64 * trade.milliclocks_per_byte < (x87_clocks - int_clocks) * 1000 {
+                return None;
+            }
+        }
+        let f64 = EVT::Simple(super::super::mvt::MVT::F64);
+        let zero = self.dag.get_constant_fp(0, f64);
+        let mut chains = Vec::new();
+        for cell in 0..cells {
+            let off = cell * 8;
+            let to = self.dag.get_object_ptr_offset(dst, off as i64);
+            let info = MemInfo {
+                mem_vt: f64,
+                align: common_alignment(align, off) as u32,
+                volatile: false,
+                base: MemBase::Unknown,
+                ext: None,
+                space: self.space_of(dst),
+                ordering: None,
+            };
+            chains.push(self.dag.get_store(chain, zero, to, info));
+        }
+        Some(self.dag.get_token_factor(&chains))
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -998,8 +1060,14 @@ impl Builder<'_> {
                 } else {
                     self.target.tuning.max_stores_per_memset
                 };
+                let zero = self.dag.constant(other) == Some(0);
+                let filled = constant.is_some_and(|bytes| self.fill_is_smaller(bytes, opt_size, zero));
+                let floats = constant
+                    .filter(|_| zero)
+                    .and_then(|bytes| self.x87_zero_stores(root, dst, bytes, alignment, opt_size, filled));
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
+                    _ if floats.is_some() => floats,
+                    Some(bytes) if !filled => {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
                     _ => None,

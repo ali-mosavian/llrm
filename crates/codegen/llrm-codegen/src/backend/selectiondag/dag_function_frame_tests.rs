@@ -874,9 +874,10 @@ entry:
 /// where the old selector's `rep stos` is 12: the inline limit was the pin's
 /// 8 stores, not the target's size-tuned ratio (nbody_single.nib: 96 B of
 /// `mov [bp-N],esi` for four arrays, and 610 more `mov` stores over the
-/// corpus under dag). Real mode takes four stores inline at -Os.
+/// corpus under dag). Three doubles of zeros are `fldz` and three `fst` (11 B,
+/// under the fill's 12): nbody -Os 8 B and 100 clocks under the fill.
 #[test]
-fn at_os_a_24_byte_clear_is_a_rep_string_operation() {
+fn at_os_a_24_byte_clear_is_x87_stores() {
     let module = llrm_mir::parse::module(M16_CLEAR_24).expect("parses");
     let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     cpu.size = true;
@@ -889,7 +890,7 @@ fn at_os_a_24_byte_clear_is_a_rep_string_operation() {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
-    assert_eq!((fills, stores), (1, 0), "a fill and no store");
+    assert_eq!((fills, stores), (0, 3), "no fill, three float stores");
 }
 
 const M16_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
@@ -1160,11 +1161,64 @@ fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
 #[test]
 fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
     for parity in [0, 1] {
-        let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity).collect();
+        // whole doubles are x87 stores, not a fill (`a_zero_clear_of_doubles_*`)
+        let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity && n % 8 != 0).collect();
         let first = sizes.iter().copied().find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
         assert!(first > 8, "{first}");
         assert!(sizes.iter().filter(|&&n| n >= first).all(|&n| memset_shape(n, 0).0 == 1), "parity {parity}");
     }
+}
+
+/// The ops of a zero `memset` of `length` bytes at m16: `(fills, integer
+/// stores, float stores)`.
+fn memset_ops(
+    length: u32,
+    size: bool,
+) -> Vec<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 8
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = size;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| format!("{:?}:{}", w.op, w.name.clone().unwrap_or_default())).collect()
+}
+
+/// nbody O2/Os at m16 grew 100 B: each 16-byte zero clear of two doubles was
+/// four dword immediate stores (32 B) where `fldz; fst; fst` is 8.
+#[test]
+fn a_zero_clear_of_doubles_is_x87_stores_not_dword_stores() {
+    let ops = memset_ops(16, true);
+    assert_eq!(ops[..3], ["FloatLoad:fldz", "FloatStore:fst", "FloatStore:fst"], "{ops:?}");
+    assert!(!ops.iter().any(|o| o.starts_with("Fill") || o.starts_with("Store")), "{ops:?}");
+}
+
+/// Past the break-even length the `rep stos` fill (16 B) is smaller than the
+/// `fst`s (2 + 3 a double).
+#[test]
+fn a_long_zero_clear_of_doubles_stays_rep_stos() {
+    let ops = memset_ops(64, true);
+    assert!(ops.iter().any(|o| o.starts_with("Fill")) && !ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
+}
+
+/// At -O2 the same clear is priced: the 24 bytes it saves pay, at the 486's
+/// rate, for the clocks of a `fldz` and two `fst` over four stores.
+#[test]
+fn at_speed_a_zero_clear_of_doubles_is_x87_stores() {
+    let ops = memset_ops(16, false);
+    assert!(ops.iter().filter(|o| o.starts_with("FloatStore")).count() == 2, "{ops:?}");
+    assert!(!ops.iter().any(|o| o.starts_with("Store")), "{ops:?}");
 }
 
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
