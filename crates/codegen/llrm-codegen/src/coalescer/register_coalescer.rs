@@ -189,6 +189,11 @@ pub fn join_copy(
     }
     // When possible, let DstReg be the larger interval; a kept value stays.
     let (keeps_src, keeps_dst) = (env.keeps(cp.src_reg()), env.keeps(cp.dst_reg()));
+    // `canJoinPhys`: only a reserved register is joined with; a pinned value
+    // is not one unless the target says so.
+    if keeps_src != keeps_dst && !env.joins_pinned_copies() {
+        return JoinResult::Rejected;
+    }
     if keeps_src != keeps_dst {
         if keeps_src {
             cp.flip();
