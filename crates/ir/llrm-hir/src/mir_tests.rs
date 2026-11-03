@@ -2209,3 +2209,38 @@ fn a_relocation_addend_is_as_wide_as_the_near_pointer() {
         assert!(text.contains(&format!("@payload, {index}")), "{text}");
     }
 }
+
+/// ASC answers an INTEGER (`i16`) on every target, but its meaning was held to
+/// the target's word: on the flat target the declaration was not the word's
+/// type, no body was defined for the inliner, and every `ASC(MID$(s, i, 1))`
+/// kept a call to `B$FASC` (bench/crc bq32: 943 instructions against C's 461).
+#[test]
+fn a_routine_answering_an_integer_is_defined_on_a_target_whose_word_is_wider() {
+    use crate::meaning::{Descriptor, Expr, Meaning, Parameter, Returns};
+    let asc = Meaning {
+        routine: "B$FASC".to_owned(),
+        parameters: vec![Parameter::String],
+        result: Returns::Value(Expr::Byte(Box::new(Expr::Data(0)))),
+        result_bits: Some(16),
+        releases: Vec::new(),
+        always_inline: true,
+        check: None,
+    };
+    for (description, word) in [(FLAT, 4), (REAL, 2)] {
+        let mut function = difference();
+        function.values.extend([Value { id: 4, r#type: 1 }, Value { id: 5, r#type: 2 }]);
+        let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(5)]);
+        call.callee = Some("B$FASC".to_owned());
+        function.blocks[0].instructions.push(call);
+        function.parameters.push(5);
+        let mut program = program(function);
+        program.modules[0].types.push(Type::new(2, "near", TypeKind::Pointer, word));
+        program.promises.descriptor = Some(Descriptor { length: 0, word, data: word, size: 2 * word });
+        program.promises.routines = vec![asc.clone()];
+        let emitted = crate::mir::emit(&program, &Layout::parse(description).unwrap()).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("define available_externally") && text.contains("i16 @llrm.qb.B$FASC("), "word {word}\n{text}");
+        assert!(text.contains("ret i16"), "word {word}\n{text}");
+    }
+}

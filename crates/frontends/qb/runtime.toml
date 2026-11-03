@@ -1131,7 +1131,7 @@ red_zone = 0
 like = "qb45"
 
 # `parameters`: `string` is a descriptor's address, `int` a word. `result`
-# is a word, or a `view`: a string made of a `length` and a `data` address,
+# is a word (`result_bits` states another width: ASC answers an INTEGER), or a `view`: a string made of a `length` and a `data` address,
 # which the runtime allocates a temporary descriptor for. `check` raises
 # error `raise` where `when` holds; it is emitted only where the program
 # asks for run-time checks or handles errors. `releases` lists the string
@@ -1150,6 +1150,7 @@ inline = "always"
 evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."
 parameters = ["string"]
 result = "byte(data($0))"
+result_bits = 16
 releases = [0]
 inline = "always"
 check = { when = "len($0) == 0", raise = 5 }

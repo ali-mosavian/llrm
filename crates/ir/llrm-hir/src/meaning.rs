@@ -76,6 +76,9 @@ pub struct Meaning {
     pub routine: String,
     pub parameters: Vec<Parameter>,
     pub result: Returns,
+    /// The width in bits of a `Returns::Value`, where it is not the target's
+    /// word: ASC answers an INTEGER on every target.
+    pub result_bits: Option<u32>,
     /// The string parameters the routine frees where the runtime allocated
     /// them: a copy of it stands in only where no actual is such a temporary.
     pub releases: Vec<usize>,
