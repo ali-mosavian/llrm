@@ -69,6 +69,7 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     match u16::try_from(id).ok()? {
         pin::ACCRegClassID => Some(crate::reg::A),
         pin::HLRRegClassID => Some(crate::reg::HL),
+        pin::IYRRegClassID => Some(crate::reg::IY),
         _ => None,
     }
 }
@@ -225,7 +226,7 @@ impl Emitter<'_> {
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 // C symbols take SDCC's underscore; the runtime's own routines
                 // are named as they are
-                Operand::Symbol(format!("_{name}"), offset)
+                Operand::Symbol(crate::data::symbol(name), offset)
             }
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
@@ -270,6 +271,14 @@ impl Emitter<'_> {
                 if let Some(&register) = self.arrives_in.get(&src) {
                     self.arrives_in.insert(dst, register);
                 }
+                into.push(Inst::copy(dst, src));
+            }
+            // `TargetOpcode::COPY`: what a `freeze` is selected to
+            // (`Select_FREEZE`)
+            ISD::Machine(20) => {
+                let src = self.used(n.ops[0], "COPY")?;
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
                 into.push(Inst::copy(dst, src));
             }
             ISD::Machine(code) => {
