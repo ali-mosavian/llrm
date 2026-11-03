@@ -27,6 +27,17 @@ def test_an_operand_size_prefix_costs_a_clock_on_a_486():
     assert harness.cost(ins, False, True, 0) == 1, "a cost asked with no prefixes counts none"
 
 
+def test_a_prefix_on_a_repeated_string_instruction_is_charged_once_not_each_iteration():
+    """`rep stosd` in real mode is F3 66 AB; the emulator charged the 66h on every iteration: seven dwords cost 7 clocks over the 486's
+    one, and lru c -O2 read +9 clocks for a fill that is +3 (the pass priced it right)."""
+    raw = bytes([0x66, 0xAB])
+    ins, prefixes = Decoder(16, raw).decode(), clocks.prefixes(raw)
+    assert prefixes == 1
+    cell, setup = clocks.clocks("rep_stos_cell"), clocks.clocks("rep_stos")
+    assert harness.cost(ins, False, True, 0, None, prefixes) == cell + setup + clocks.PREFIX
+    assert harness.cost(ins, False, False, 0, None, prefixes) == cell
+
+
 def test_the_forms_the_table_prices_are_read_from_it():
     """`pop reg` was 1 clock and `ret` and `leave` literals of the emulator's own; the table has 4, 5 and 5."""
     assert harness.cost(one(32, 0x58), False, True, 0) == clocks.clocks("pop_r") == 4
