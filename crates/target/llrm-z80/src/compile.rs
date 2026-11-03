@@ -170,6 +170,7 @@ fn allocate_once(
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     place_copies_where_needed(&mut function, &assignment);
+    read_copies_at_their_source(&mut function, &assignment);
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
@@ -748,11 +749,30 @@ pub fn place_copies_where_needed(
         for head in 1..function.blocks.len() {
             let entrances: Vec<usize> =
                 (0..function.blocks.len()).filter(|&from| successors[from].contains(&head)).collect();
-            let Some(first) = function.blocks[head].insts.first() else { continue };
-            let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (first.kind, &first.operands[..]) else {
+            // the head's first copy, behind nothing that touches either
+            // register (digits' call-stack marker came first)
+            let Some((at, dst, src)) = function.blocks[head].insts.iter().enumerate().find_map(|(at, inst)| {
+                let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (inst.kind, &inst.operands[..]) else {
+                    return None;
+                };
+                let (dst, src) = (register(*dst), register(*src));
+                let clear = function.blocks[head].insts[..at].iter().all(|before| {
+                    !(before.call
+                        || before.barrier
+                        || before.side_effects
+                        || before.may_store
+                        || before.may_load
+                        || before.operands.iter().any(|operand| match operand {
+                            Operand::Def(r) | Operand::Use(r) => {
+                                Z80Registers::overlaps(register(*r), dst) || Z80Registers::overlaps(register(*r), src)
+                            }
+                            _ => false,
+                        }))
+                });
+                clear.then_some((at, dst, src))
+            }) else {
                 continue;
             };
-            let (dst, src) = (register(*dst), register(*src));
             if entrances.len() < 2 || dst == src {
                 continue;
             }
@@ -781,11 +801,109 @@ pub fn place_copies_where_needed(
             if touched || end == 0 {
                 continue;
             }
-            let copy = function.blocks[head].insts.remove(0);
+            let copy = function.blocks[head].insts.remove(at);
             function.blocks[from].insts.insert(end, copy);
             changed = true;
             break;
         }
+    }
+}
+
+/// A word compared right after a copy of it reads the copy's source: digits'
+/// entry made `ld e, l` / `ld d, h` for the compare of the dividend, and the
+/// loop head wanted it back in `hl`. Only a `CP16i`, which takes any pair,
+/// is rewritten, when the copy's destination is dead after the last compare
+/// and the source is not written before it. The copy is then dropped.
+pub fn read_copies_at_their_source(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    use llrm_spike_mf::livephys::PhysLiveness;
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let pair = |r: RegId| [reg::BC, reg::DE, reg::HL].contains(&r);
+    'again: loop {
+        let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+        for b in 0..function.blocks.len() {
+            for at in 0..function.blocks[b].insts.len() {
+                let inst = &function.blocks[b].insts[at];
+                let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (inst.kind, &inst.operands[..]) else {
+                    continue;
+                };
+                let (dst, src) = (register(*dst), register(*src));
+                if dst == src || !pair(dst) || !pair(src) {
+                    continue;
+                }
+                let mut compares = Vec::new();
+                for (later, inst) in function.blocks[b].insts.iter().enumerate().skip(at + 1) {
+                    let reads = inst
+                        .operands
+                        .iter()
+                        .any(
+                            |o| matches!(
+                                o,
+                                Operand::Use(r) if Z80Registers::overlaps(register(*r), dst)
+                            ),
+                        );
+                    if reads {
+                        let exact = inst.kind == Kind::Op("CP16i")
+                            && inst.operands.iter().all(|o| match o {
+                                Operand::Use(r) if Z80Registers::overlaps(register(*r), dst) => register(*r) == dst,
+                                _ => true,
+                            });
+                        if !exact {
+                            compares.clear();
+                            break;
+                        }
+                        compares.push(later);
+                    }
+                    let writes = |to: RegId| {
+                        inst.operands
+                            .iter()
+                            .any(|o| matches!(o, Operand::Def(r) if Z80Registers::overlaps(register(*r), to)))
+                    };
+                    if inst.call || inst.barrier || writes(src) || writes(dst) {
+                        break;
+                    }
+                }
+                let Some(&last) = compares.last() else { continue };
+                // the source stays as it is to the last compare (a write in the
+                // compare's own instruction comes after its read)
+                let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, last + 1);
+                if after.is_live(&REGISTER_INFO, dst) {
+                    continue;
+                }
+                let touched = function
+                    .blocks[b]
+                    .insts[at + 1..=last]
+                    .iter()
+                    .any(
+                        |inst| inst.call
+                            || inst
+                                .operands
+                                .iter()
+                                .any(|o| matches!(
+                                    o,
+                                    Operand::Def(r) if Z80Registers::overlaps(register(*r), src) || Z80Registers::overlaps(register(*r), dst)
+                                ) ),
+                    );
+                if touched {
+                    continue;
+                }
+                for &later in &compares {
+                    for operand in &mut function.blocks[b].insts[later].operands {
+                        if matches!(operand, Operand::Use(r) if register(*r) == dst) {
+                            *operand = Operand::Use(Reg::Phys(src));
+                        }
+                    }
+                }
+                function.blocks[b].insts.remove(at);
+                continue 'again;
+            }
+        }
+        break;
     }
 }
 
