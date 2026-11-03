@@ -1587,7 +1587,56 @@ fn red_zone(
         return 0;
     }
     let total = if procedure.body.slot_dropped { rounded } else { rounded + slot };
-    procedure.registers.red_zone.min(total)
+    let zone = procedure.registers.red_zone.min(total);
+    // The zone must pay in bytes: it moves every local's displacement down by
+    // `zone`, which can cost a disp8 where there was none, against the
+    // `sub`/`add` (or `push`/`pop`) it removes, which is about a clock.
+    // DEVIATE: the pin has no such test (`has128ByteRedZone`). Exit: a
+    // frame-cost hook on the target description.
+    if zone_costs_bytes(procedure, total, zone) {
+        return 0;
+    }
+    zone
+}
+
+/// Whether the red zone adds more displacement bytes to the body's frame
+/// operands than the stack adjustment it saves: a cell's displacement is
+/// `disp + depth - slot` (`through_stack`), `depth` being the whole frame, and
+/// the zone takes `zone` off it.
+fn zone_costs_bytes(
+    procedure: &Procedure,
+    total: i64,
+    zone: i64,
+) -> bool {
+    let slot = procedure.registers.slot;
+    let frame = total + slot * saved_of(procedure).len() as i64;
+    let encoded = |disp: i64| match disp {
+        0 => 0,
+        -128..=127 => 1,
+        _ => 4,
+    };
+    // `sub`/`add` of an imm8 are 4 bytes each, of an imm32 7; one slot is a
+    // `push`/`pop` pair.
+    let adjust = |bytes: i64| match bytes {
+        0 => 0,
+        _ if bytes == slot => 2,
+        1..=127 => 8,
+        _ => 14,
+    };
+    let saved = adjust(total) - adjust(total - zone);
+    let added: i64 = procedure
+        .body
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(what.sources.iter()))
+        .filter_map(|place| place.address()?.addr.filter(|addr| addr.space == Space::Frame))
+        .map(|addr| {
+            let before = addr.disp + frame - slot;
+            encoded(before - zone) - encoded(before)
+        })
+        .sum();
+    added > saved
 }
 
 /// Where the frame an interrupt handler saved starts above its own BP: the

@@ -477,6 +477,25 @@ fn a_31_byte_copy_at_m64_os_is_two_16_byte_pieces() {
     assert!(listing.matches("movups").count() == 4 && !listing.contains("call"), "{listing}");
 }
 
+/// A 136-byte local read through an index at m64: the red zone put `-0x80` on
+/// every access (a disp8 where `[rsp+rdi*2]` had none) to save a `sub`/`add`
+/// pair (shellsort O3 +23 B over the frame it replaced).
+#[test]
+fn a_red_zone_that_costs_displacement_bytes_is_not_taken_at_m64() {
+    let accesses: String = (0..12)
+        .map(|k| format!("  %p{k} = getelementptr [68 x i16], ptr %a, i64 0, i64 %i\n  store volatile i16 {k}, ptr %p{k}, align 2\n"))
+        .collect();
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         define void @f(i64 %i) {{\n  %a = alloca [68 x i16], align 2\n{accesses}  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sub rsp") || listing.contains("push"), "{listing}");
+    assert!(!listing.contains("rsp+rdi*2-"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
