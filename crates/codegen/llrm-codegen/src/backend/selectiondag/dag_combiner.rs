@@ -192,6 +192,13 @@ pub trait CombineHooks {
         None
     }
 
+    /// DEVIATE LS1 (owner m16, exit 2026-11-17): a plain `i32` load every use of
+    /// which is a word half (`trunc i16`, or `trunc i16 (srl 16)`) is two `i16`
+    /// loads. The pin's `ReduceLoadWidth` needs a one-use load. Default off.
+    fn split_dword_loads(&self) -> bool {
+        false
+    }
+
     /// DEVIATE PAIR1: whether the after-legalize combine ends with a sweep that
     /// packs the joins of two words (`pack_words_by_shrd`). Default off.
     fn pack_word_pairs(&self) -> bool {
