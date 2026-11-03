@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] [OPT=Os] [SHOW=n] tests/run_sim65_f64.sh [n] [batch]
+# usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] [OPT=Os] [SHOW=n] [SF_EXTRA=flag] [SF_ASM='a.s ..'] tests/run_sim65_f64.sh [n] [batch]
 # binary64 on the 6502 (sim65) against the host FPU: n standard pairs, then n edge pairs (gen_vectors64_edge.c), batch records per run
 # (sim65 has 64 KB: the library takes about 40 KB). The library is compiled once; each batch relinks the driver with its slice.
 # Prints, per op and class of the expected result (zerosign, denormal, special, normal): pairs and mismatches; then compares and conversions.
@@ -24,6 +24,7 @@ for f in $LIBS; do
   sed -i '/^\.export \(__\|sf32_pack\)/!{/^\.export /d}' $T/r/$f.s
   ca65 -t sim6502 -U $T/r/$f.s -o $T/r/$f.o; OBJS="$OBJS $T/r/$f.o"
 done
+for a in $SF_ASM; do ca65 -t sim6502 -I src/6502 $a -o $T/$(basename $a).o; OBJS="$OBJS $T/$(basename $a).o"; done
 { i=0; while [ $i -lt 26 ]; do echo "rc$i = $((128 + i))"; i=$((i + 1)); done; cat $MOS_RT; echo ".export __sa, __sb"; } > $T/mos.s
 ca65 -t sim6502 $T/mos.s -o $T/mos_rt.o
 # _main: soft stack (rc0:rc1) to the top of a 1 KB buffer, run main, print outbuf, return main's exit code. It is appended to the
