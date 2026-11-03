@@ -57,6 +57,19 @@ def test_noivopts_flag_only_at_os():
     assert B.level_flags("Os", False) == ["-Os"]
 
 
+def test_sf_z80_harness_sources_exist():
+    """build.sh read runtime/softfloat/src/sf32.c after a286a52c00 moved it to compiler-rt: the harness died with
+    'No such file' on release/next and every softfloat gcc cell was unmeasurable."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+    d = os.path.join(root, "tools", "gcc-columns", "sf-z80")
+    for n in ("build.sh", "run.sh"):
+        for rel in re.findall(r"\.\./\.\./\.\./(runtime/[A-Za-z0-9_/.-]+)", open(os.path.join(d, n)).read()):
+            assert os.path.exists(os.path.join(root, rel)), f"{n}: {rel} does not exist"
+    names = re.search(r'F="([^"]+)"', open(os.path.join(d, "build.sh")).read()).group(1).split()
+    for f in names:
+        assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
+
+
 def test_gcc_leads_takes_the_lower_of_the_two_columns():
     """The bar is the lower gcc column per metric: a lead by one column only (memmove clk by gcc, B by noivopts) must show both."""
     import gcc_leads as L
