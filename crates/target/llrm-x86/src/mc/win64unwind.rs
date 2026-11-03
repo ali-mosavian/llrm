@@ -330,15 +330,23 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     for (section, offset, size, index) in functions {
         let name = object.symbols[index].name.clone();
         let code = &object.sections[section].image;
-        // A producer that declared the prologue is believed; the bytes are
-        // read only for code that declared nothing.
+        // A producer that declared the prologue is believed. A function it
+        // declared a frame for but no directive is believed to have no
+        // prologue: bytes that say otherwise are a path that forgot to
+        // declare, not something to describe from the bytes. Only code that
+        // declared nothing at all (an assembled object) is read.
         let declared = frames.iter().find(|frame| (frame.section, frame.offset) == (section, offset));
-        let info = match declared.filter(|frame| !frame.seh.is_empty()) {
-            Some(frame) => from_seh(&name, &frame.seh)?,
-            None => from_prologue(
-                &name,
-                code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?,
-            )?,
+        let body = code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?;
+        let info = match declared {
+            Some(frame) if !frame.seh.is_empty() => from_seh(&name, &frame.seh)?,
+            Some(_) => {
+                let read = from_prologue(&name, body)?;
+                if !read.codes.is_empty() {
+                    return Err(refused(&name, "its code has a prologue the compiler declared no `.seh_*` directive for"));
+                }
+                read
+            }
+            None => from_prologue(&name, body)?,
         };
 
         let at = xdata_image.len();
