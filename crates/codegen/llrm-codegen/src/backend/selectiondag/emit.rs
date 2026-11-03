@@ -1612,14 +1612,15 @@ impl Emitter<'_, '_> {
             return self.lowered_select(n, None);
         }
         // The x87 conditional moves (`fcmov`) name their condition in the
-        // opcode; with no `fcmov` in the LIR they are the same diamond.
+        // opcode: the second source replaces the first, tied to the result,
+        // when the condition holds (`handleCondMovFP` places them).
         if let Some(cc) = name.strip_prefix("CMOV").and_then(|rest| rest.strip_suffix("_Fp80")).and_then(|cc| {
             ["B", "NB", "E", "NE", "BE", "NBE", "P", "NP"]
                 .iter()
                 .position(|one| *one == cc)
                 .map(|at| [2, 3, 4, 5, 6, 7, 10, 11][at])
         }) {
-            return self.lowered_select(n, Some(cc));
+            return self.float_conditional_move(n, cc);
         }
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
@@ -1732,6 +1733,28 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        Ok(())
+    }
+
+    /// `CMOVcc_Fp80`: an `fcmov` of two x87 values, in the LIR as the `cmov`
+    /// of the same condition on stack values.
+    fn float_conditional_move(
+        &mut self,
+        n: u32,
+        cc: usize,
+    ) -> Result<(), EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
+        let (Loc::Held(when_false), Loc::Held(when_true)) = (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
+        else {
+            return Err(EmitError::Unsupported("a float select of a non-register".to_owned()));
+        };
+        let result = self
+            .exported_register(SDValue { node: n, res: 0 })
+            .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
+        self.values.insert(SDValue { node: n, res: 0 }, result.value);
+        let name = format!("cmov{}", &jump[1..]);
+        self.push(Operation::Select, &name, vec![Loc::Held(result)], vec![Loc::Held(when_false), Loc::Held(when_true)]);
         Ok(())
     }
 

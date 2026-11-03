@@ -3214,6 +3214,10 @@ pub fn _instruction(
         Operation::Binary if name == "bsf" && what.repeat => {
             vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
         }
+        // `cmovbe st(0), st(1)` is `fcmovbe`: the x87 form names the stack.
+        Operation::Select if what.dests[0].st_index().is_some() => {
+            vec![format!("f{name} {}, {}", dests[0], sources[1])]
+        }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
         // `sqrtsd xmm0, xmm0`: an xmm unary reads a source of its own, and a
         // unary that reads a place other than the one it writes names both.
