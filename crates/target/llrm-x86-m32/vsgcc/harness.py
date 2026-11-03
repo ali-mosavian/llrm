@@ -339,9 +339,15 @@ def _form_clocks(ins, taken, first_rep, multiplier):
     if m in (Mnemonic.LODSB, Mnemonic.LODSW, Mnemonic.LODSD):
         return clocks.UNTABLED["loads"]
     if m in (Mnemonic.FLD, Mnemonic.FLD1, Mnemonic.FLDZ):
-        return clocks.clocks("x87_load") if m == Mnemonic.FLD and dst_mem else clocks.UNTABLED["fld_reg"]
+        if m == Mnemonic.FLD and dst_mem:
+            return clocks.UNTABLED["fld_m80"] if ins.memory_size == MemorySize.FLOAT80 else clocks.clocks("x87_load")
+        return clocks.UNTABLED["fld_reg"]
     if m in (Mnemonic.FST, Mnemonic.FSTP):
-        return clocks.clocks("x87_store") if dst_mem else clocks.UNTABLED["fst_reg"]
+        if not dst_mem:
+            return clocks.UNTABLED["fst_reg"]
+        if ins.memory_size == MemorySize.FLOAT80:
+            return clocks.UNTABLED["fstp_m80"]
+        return clocks.UNTABLED["fst_m32"] if ins.memory_size == MemorySize.FLOAT32 else clocks.clocks("x87_store")
     if m in (Mnemonic.FADD, Mnemonic.FSUB, Mnemonic.FSUBR, Mnemonic.FADDP, Mnemonic.FSUBP, Mnemonic.FSUBRP):
         return clocks.clocks("x87_add_m" if dst_mem else "x87_add")
     if m in (Mnemonic.FMUL, Mnemonic.FMULP):
