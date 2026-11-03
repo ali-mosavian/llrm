@@ -338,7 +338,8 @@ impl Tree<'_> {
             // DW_OP_entry_value (DW_OP_GNU_entry_value before DWARF 5), the
             // length of the register's expression and the expression, then
             // DW_OP_stack_value.
-            Location::WasmLocal(index) => Ok(wasm_local(*index)),
+            Location::WasmLocal(index) => Ok(wasm_location(0, *index)),
+            Location::WasmStack(index) => Ok(wasm_location(2, *index)),
             Location::EntryValue(name) => {
                 let register = self.register(name)?;
                 let op = if self.version >= 5 { 0xa3 } else { 0xf3 };
@@ -457,6 +458,7 @@ impl Tree<'_> {
             | Location::Expression { .. }
             | Location::EntryValue(_)
             | Location::WasmLocal(_)
+            | Location::WasmStack(_)
             | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),
@@ -662,7 +664,7 @@ impl Tree<'_> {
             let base = match self.frame_base.unwrap_or(self.info.frame_base) {
                 // DW_OP_call_frame_cfa.
                 FrameBase::Cfa { .. } => vec![0x9C],
-                FrameBase::WasmLocal(index) => wasm_local(index),
+                FrameBase::WasmLocal(index) => wasm_location(0, index),
                 FrameBase::Register => {
                     let registers = self.info.registers();
                     let base = registers
@@ -918,8 +920,11 @@ pub fn tree(
     Ok((tree.dies, tree.locations.done(), tree.ranges))
 }
 
-/// `DW_OP_WASM_location 0, index`, `DW_OP_stack_value`: WebAssembly local
-/// `index`.
-fn wasm_local(index: u32) -> Vec<u8> {
-    [vec![0xED, 0x00], crate::uleb(u64::from(index)), vec![0x9F]].concat()
+/// `DW_OP_WASM_location kind, index`, `DW_OP_stack_value`: WebAssembly local
+/// (kind 0) or operand-stack slot (kind 2) `index`.
+fn wasm_location(
+    kind: u8,
+    index: u32,
+) -> Vec<u8> {
+    [vec![0xED, kind], crate::uleb(u64::from(index)), vec![0x9F]].concat()
 }
