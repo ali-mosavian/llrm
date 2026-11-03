@@ -138,6 +138,14 @@ pub trait Target {
         true
     }
 
+    /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
+    /// one (an argument register, not reserved) is joined. The pin joins only
+    /// reserved registers, so a target that states false leaves the copy to
+    /// the allocator, as the pin does. Here true, as before.
+    fn joins_pinned_copies() -> bool {
+        true
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {

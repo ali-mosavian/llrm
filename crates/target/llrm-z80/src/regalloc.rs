@@ -47,6 +47,13 @@ impl Z80Registers {
 }
 
 impl Target for Z80Registers {
+    /// The pin joins a copy with a physical register only when it is reserved
+    /// (`canJoinPhys`); an argument pair is not, so the copy stays and the
+    /// word can spill instead of holding its pair to its last use.
+    fn joins_pinned_copies() -> bool {
+        false
+    }
+
     type Class = Class;
 
     fn meet(
