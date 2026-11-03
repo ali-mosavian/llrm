@@ -4163,7 +4163,7 @@ fn test_noalias_holds_of_a_slot_made_for_the_call() {
     let counted = |calls: &str, inner: &str| {
         let directory = tempfile::TempDir::new().unwrap();
         let basic = format!(
-            "DECLARE SUB Add (a AS INTEGER, b AS INTEGER)\nDECLARE SUB Caller ()\nDECLARE SUB Outer (r AS INTEGER)\nCaller\nSUB Caller\nDIM p AS INTEGER, q AS INTEGER\n{calls}\nEND SUB\nSUB Outer (r AS INTEGER)\n{inner}\nEND SUB\nSUB Add (a AS INTEGER, b AS INTEGER)\na = a + 1\nb = 2\nEND SUB\n"
+            "DECLARE SUB Add (a AS INTEGER, b AS INTEGER)\nDECLARE SUB Caller ()\nDECLARE SUB Outer (r AS INTEGER)\nDIM SHARED g AS INTEGER\nCaller\nSUB Caller\nDIM p AS INTEGER, q AS INTEGER\n{calls}\nEND SUB\nSUB Outer (r AS INTEGER)\n{inner}\nEND SUB\nSUB Add (a AS INTEGER, b AS INTEGER)\na = a + 1\nb = 2\nEND SUB\n"
         );
         let source = written(&directory, "na.bas", basic.as_bytes());
         let frontend = qb_driver::Frontend { whole_program: true, ..qb_driver::Frontend::new("qb45", "qb45") };
@@ -4181,7 +4181,8 @@ fn test_noalias_holds_of_a_slot_made_for_the_call() {
     assert_eq!(count("Add p + 1, p"), 2, "the copy is not the variable");
     assert_eq!(count("Add p + 1, q\nAdd p, q"), 2, "a call that passes locals too");
     assert_eq!(count("Add p + 1, q\nAdd p, p"), 0, "one variable passed twice still refuses");
-    assert_eq!(counted("Outer p", "Add r + 1, r"), 1, "a copy beside a parameter the caller received");
+    assert_eq!(counted("Outer p", "Add r + 1, r"), 2, "a copy beside a parameter only a local reaches");
+    assert_eq!(counted("Outer g", "Add r + 1, r"), 1, "a copy beside a parameter a SHARED variable reaches");
 }
 
 /// The `!invariant.load` marks in `WORK` of `body`, a procedure of a program

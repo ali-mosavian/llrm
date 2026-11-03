@@ -3,9 +3,9 @@
 use super::driver as qb_driver;
 use super::test_hir::{optimized_mir, written};
 
-/// The 16-bit target's: three address registers, three segment registers, a
-/// spill of two loads and two stores at one clock each, a DIM and ERASE of 840.
-const M16: crate::semantic::Room = crate::semantic::Room { addresses: 3, segments: 3, spill: 4, dim: 840 };
+/// The 16-bit target's: six integer registers, three of them address registers,
+/// three segment registers, one kept back.
+const M16: crate::semantic::Room = crate::semantic::Room { registers: 6, addresses: 3, segments: 3, reserve: 1 };
 
 const SIEVE: &str = "DEFINT A-Z
 DECLARE FUNCTION Sieve& (limit AS INTEGER)
@@ -234,10 +234,9 @@ fn a_redimmed_arrays_descriptor_words_are_not_invariant_loads() {
 }
 
 /// bq16 quicksort ran 288K clocks with its array in the frame against 264K
-/// with the runtime's: `Sort` holds the array's base and two subscripts in
-/// the three registers an address is made of, and spills the rest. The
-/// segment registers hold a far array's base for nothing, so an array handed
-/// to a loop like that stays the runtime's.
+/// with the runtime's: `Sort` holds the array's base beside the six values the
+/// loop keeps, and spills. The segment registers hold a far array's base for
+/// nothing, so an array handed to a loop like that stays the runtime's.
 #[test]
 fn an_array_parameter_indexed_twice_in_a_hot_loop_stays_the_runtimes() {
     let source = "DEFINT A-Z
@@ -274,31 +273,30 @@ END FUNCTION
     assert!(built(source).contains("B$DDIM"), "{}", built(source));
 }
 
-/// The control: one subscript in the loop leaves a register for the base, as
-/// bq16 queens does (7% fewer clocks with the array in the frame).
+/// The control: a loop with registers to spare keeps the array in the frame,
+/// as bq16 prefix does (4% fewer clocks, 20% fewer bytes).
 #[test]
-fn an_array_parameter_indexed_once_in_a_hot_loop_stays_in_the_frame() {
+fn an_array_parameter_in_a_loop_with_registers_to_spare_stays_in_the_frame() {
     let source = "DEFINT A-Z
-DECLARE FUNCTION Safe% (q() AS INTEGER, row AS INTEGER, col AS INTEGER)
+DECLARE SUB Prefix (a() AS INTEGER, n AS INTEGER)
 DECLARE FUNCTION Drive& ()
 PRINT LTRIM$(STR$(Drive&))
 
-FUNCTION Safe% (q() AS INTEGER, row AS INTEGER, col AS INTEGER)
-    DIM r AS INTEGER, d AS INTEGER
-    FOR r = 0 TO row - 1
-        d = q(r) - col
-        IF d = 0 OR d = row - r OR d = r - row THEN
-            Safe% = 0
-            EXIT FUNCTION
-        END IF
+SUB Prefix (a() AS INTEGER, n AS INTEGER)
+    DIM i AS INTEGER
+    FOR i = 1 TO n - 1
+        a(i) = (a(i) + a(i - 1)) AND 4095
     NEXT
-    Safe% = -1
-END FUNCTION
+END SUB
 
 FUNCTION Drive&
-    DIM q(0 TO 11) AS INTEGER
-    q(0) = 1
-    Drive& = Safe%(q(), 1, 3)
+    DIM v(0 TO 31) AS INTEGER
+    DIM k AS INTEGER
+    FOR k = 0 TO 31
+        v(k) = k
+    NEXT
+    Prefix v(), 32
+    Drive& = v(5)
 END FUNCTION
 ";
     assert!(!built(source).contains("B$DDIM"), "{}", built(source));
@@ -330,6 +328,42 @@ FUNCTION Drive&
         NEXT
     NEXT
     Drive& = sum
+END FUNCTION
+";
+    assert!(built(source).contains("B$DDIM"), "{}", built(source));
+}
+
+/// bq16 bubble sort at -Os ran 5% more clocks with its array in the frame:
+/// the inner loop's counter, the outer loop's counter, the array's base and the
+/// two element addresses and values want seven of six registers, and the outer
+/// counter goes to memory. The outer loop's counter is live through the
+/// inner loop without being named in it.
+#[test]
+fn an_array_parameter_in_a_loop_nest_stays_the_runtimes() {
+    let source = "DEFINT A-Z
+DECLARE SUB Bubble (a() AS INTEGER, n AS INTEGER)
+DECLARE FUNCTION Drive& ()
+PRINT LTRIM$(STR$(Drive&))
+
+SUB Bubble (a() AS INTEGER, n AS INTEGER)
+    DIM i AS INTEGER, j AS INTEGER, t AS INTEGER
+    FOR i = n - 1 TO 1 STEP -1
+        FOR j = 0 TO i - 1
+            IF a(j) > a(j + 1) THEN
+                t = a(j): a(j) = a(j + 1): a(j + 1) = t
+            END IF
+        NEXT
+    NEXT
+END SUB
+
+FUNCTION Drive&
+    DIM v(0 TO 31) AS INTEGER
+    DIM k AS INTEGER
+    FOR k = 0 TO 31
+        v(k) = (k * 37) AND 31
+    NEXT
+    Bubble v(), 32
+    Drive& = v(5)
 END FUNCTION
 ";
     assert!(built(source).contains("B$DDIM"), "{}", built(source));

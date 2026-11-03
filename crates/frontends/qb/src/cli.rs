@@ -156,9 +156,12 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             ),
         )?
         .target();
-        let costs = priced.costs();
-        frontend.room =
-            llrm_qb_room(priced.address_registers(), priced.segment_registers(), 2 * (costs.load + costs.store));
+        frontend.room = llrm_qb_room(
+            priced.registers(),
+            priced.address_registers(),
+            priced.segment_registers(),
+            usize::from(priced.two_address()),
+        );
         if no_placement {
             frontend.room = Default::default();
         }
@@ -325,21 +328,18 @@ mod tests {
     }
 }
 
-/// The frame-array choice's view of the target: its integer and segment
-/// registers, and what one value spilled in a loop costs. A DIM and an ERASE
-/// together run `DIM_AND_ERASE` clocks: B$DDIM and B$ERAS around a
-/// small array, (873,036 - 35,033) / 1000 calls of a procedure that DIMs eight
-/// integers, with and without `--frame-arrays`, at -O2.
+/// The frame-array choice's view of the target: its integer, address and
+/// segment registers, and how many a two-address target keeps back.
 fn llrm_qb_room(
+    registers: i64,
     addresses: i64,
     segments: i64,
-    spill: i64,
+    reserve: usize,
 ) -> crate::semantic::Room {
-    const DIM_AND_ERASE: i64 = 840;
     crate::semantic::Room {
+        registers: registers.max(0) as usize,
         addresses: addresses.max(0) as usize,
+        reserve,
         segments: segments.max(0) as usize,
-        spill,
-        dim: DIM_AND_ERASE,
     }
 }

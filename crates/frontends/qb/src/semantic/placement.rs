@@ -10,44 +10,37 @@
 //! the temporary that adds two subscripts) and the loop spills where the far
 //! form would not.
 //!
-//! The model prices that on the first compile, where every candidate is a
-//! frame array. In each innermost loop (a back edge's natural loop) the
-//! variables the subscripts name are address registers, of the target's
-//! `addresses` less one kept for a temporary. A near access adds one for an
-//! array parameter (its base) and one for a subscript that reads an array or
-//! calls (`composite`: not affine in a counter, so its sum is formed by an
-//! instruction); each addition past the registers is a spill (`Room::spill`
-//! clocks a trip). Far arrays in the loop beyond the target's `segments`
-//! cost the same. A loop that spills more near than far is worth its trips
-//! (`TRIP` to the power of its depth, times how often its procedure runs) of
-//! that. The arrays of the groups in the loop (the arrays one array parameter
-//! receives, transitively) go far together where that outweighs the DIM and
-//! ERASE calls the frame saves them (`Room::dim` clocks per execution of the
-//! DIM, counted by the call graph and the loops around the call).
+//! The model reads the first compile, where every candidate is a frame
+//! array. In each innermost loop (a back edge's natural loop) the scalars live
+//! on entry to its header are held in the integer registers, and the variables
+//! its subscripts name in the address registers, each class less the target's
+//! `reserve`. A near access adds one for an array parameter (its base) and one
+//! for a subscript that reads an array or calls (`composite`: not affine in a
+//! counter, so its sum is formed by an instruction); each addition past a
+//! class is a spill. Far arrays in the loop beyond the target's `segments`
+//! cost the same. Where the frame spills more than the runtime's would, the
+//! arrays of the groups in the loop (the arrays one array parameter receives,
+//! transitively) go far together. The spill is paid on every trip and the
+//! DIM and ERASE it would save once, and the trips are not known, so the
+//! DIM's saving does not offset a predicted spill.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::tags::Tag;
-use super::{Compiler, Function};
-
-/// Each loop level runs its body this many times as often: the pin's
-/// branch-probability estimate for a loop with no other word, 124 back edges
-/// to 4 exits (`LoopBranchHeuristic`).
-const TRIP: i64 = 32;
+use super::{Compiler, Function, INTEGER, LONG, Operand};
 
 /// What the target holds and what the runtime's array calls cost.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Room {
-    /// Registers an address is formed from (`bx`, `si`, `di`); 0 leaves the
-    /// model off. One stays free for the temporary an address that no
-    /// single instruction forms needs.
+    /// Integer registers; 0 leaves the model off.
+    pub registers: usize,
+    /// Registers an address is formed from (`bx`, `si`, `di`).
     pub addresses: usize,
     /// Segment registers a far array's base is held in.
     pub segments: usize,
-    /// Clocks one value spilled in a loop costs per iteration.
-    pub spill: i64,
-    /// Clocks the DIM and the ERASE of one array cost together.
-    pub dim: i64,
+    /// Registers a two-address target keeps back for the copy an operation
+    /// makes where an operand stays live (`spill.rs`, `copied`).
+    pub reserve: usize,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -116,6 +109,7 @@ pub(super) fn subscripts(indices: &[crate::syntax::Expr]) -> (BTreeSet<String>, 
 }
 
 struct Loop {
+    header: u32,
     body: BTreeSet<u32>,
     /// No other loop lies inside it.
     innermost: bool,
@@ -173,11 +167,79 @@ fn loops(function: &Function) -> Vec<Loop> {
     }
     let all: Vec<(u32, BTreeSet<u32>)> = by_header.into_iter().collect();
     all.iter()
-        .map(|(_, body)| Loop {
+        .map(|(header, body)| Loop {
+            header: *header,
             body: body.clone(),
             innermost: !all.iter().any(|(_, other)| other.len() < body.len() && other.is_subset(body)),
         })
         .collect()
+}
+
+/// The scalar integer locals live on entry to a loop's header, whether or not
+/// the loop names them: its own counters and what the loops around it keep.
+fn live_at(
+    function: &Function,
+    header: u32,
+) -> usize {
+    let scalar = |operand: &Operand| -> Option<u32> {
+        let place = match operand {
+            Operand::Place(place) | Operand::Element(place, _) => *place,
+            Operand::Projection { place, .. } => *place,
+            _ => return None,
+        };
+        let found = function.places.iter().find(|one| one.id == place)?;
+        (matches!(found.type_id, INTEGER | LONG) && !found.name.starts_with("$forStep")).then_some(place)
+    };
+    let mut used: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    let mut defined: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    for block in &function.blocks {
+        let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
+        for instruction in &block.instructions {
+            let store = instruction.op == "store";
+            for (at, operand) in instruction.operands.iter().enumerate() {
+                if let Some(place) = scalar(operand) {
+                    if store && at == 0 {
+                        writes.insert(place);
+                    } else if !writes.contains(&place) {
+                        reads.insert(place);
+                    }
+                }
+                // A reference parameter's pointee is read from before the loop.
+                if let Operand::Indirect { base, type_id, inbounds: false, .. } = operand {
+                    if matches!(*type_id, INTEGER | LONG) && function.parameters.contains(base) && !(store && at == 0) {
+                        reads.insert(u32::MAX - *base);
+                    }
+                }
+            }
+        }
+        used.insert(block.id, reads);
+        defined.insert(block.id, writes);
+    }
+    let mut live: BTreeMap<u32, BTreeSet<u32>> =
+        function.blocks.iter().map(|block| (block.id, BTreeSet::new())).collect();
+    loop {
+        let mut changed = false;
+        for block in function.blocks.iter().rev() {
+            let mut now = used[&block.id].clone();
+            let out: BTreeSet<u32> = block
+                .terminator
+                .iter()
+                .flat_map(|terminator| terminator.targets.iter())
+                .filter_map(|target| live.get(target))
+                .flatten()
+                .copied()
+                .collect();
+            now.extend(out.difference(&defined[&block.id]));
+            if now != live[&block.id] {
+                live.insert(block.id, now);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    live.get(&header).map_or(0, |set| set.len())
 }
 
 fn find(
@@ -195,59 +257,21 @@ fn find(
 
 pub(super) fn kept_far(compiler: &Compiler) -> BTreeSet<String> {
     let room = compiler.options.room;
-    if room.addresses == 0 {
+    if room.registers == 0 {
         return BTreeSet::new();
     }
     let key = |function: &Function| {
         if function.name == "__main" { String::new() } else { super::array_key(&function.name) }
     };
     let by_key: BTreeMap<String, &Function> = compiler.functions.iter().map(|one| (key(one), one)).collect();
-    let loops_of: BTreeMap<String, Vec<Loop>> =
-        by_key.iter().map(|(name, function)| (name.clone(), loops(function))).collect();
-    let weight = |name: &str, block: u32| -> i64 {
-        let depth = loops_of[name].iter().filter(|one| one.body.contains(&block)).count().min(6) as u32;
-        TRIP.pow(depth)
-    };
-    let block_of = |function: &Function, instruction: u32| -> Option<u32> {
-        function.blocks.iter().find(|block| block.instructions.iter().any(|one| one.id == instruction)).map(|b| b.id)
-    };
-    // How often each procedure runs: once for the main code, and for the rest
-    // the weight of each call site in a caller times the caller's.
-    let by_symbol: BTreeMap<u32, String> = compiler
-        .functions
-        .iter()
-        .filter_map(|function| Some((compiler.signatures.get(super::canonical(&function.name))?.symbol, key(function))))
-        .collect();
-    let seed = || {
-        let mut runs: BTreeMap<String, i64> = by_key.keys().map(|name| (name.clone(), 0)).collect();
-        runs.insert(String::new(), 1);
-        runs
-    };
-    let mut runs = seed();
-    for _ in 0..8 {
-        let mut next = seed();
-        for (name, function) in &by_key {
-            for call in &function.calls {
-                let Some(callee) = call.callee.and_then(|symbol| by_symbol.get(&symbol)) else { continue };
-                let at = block_of(function, call.instruction).map_or(1, |block| weight(name, block));
-                let entry = next.entry(callee.clone()).or_default();
-                *entry = entry.saturating_add(runs[name].saturating_mul(at)).min(1 << 40);
-            }
-        }
-        if next == runs {
-            break;
-        }
-        runs = next;
-    }
-    // The frame arrays, with how often their DIM runs.
-    let mut frame: BTreeMap<Array, i64> = BTreeMap::new();
+    // The frame arrays.
+    let mut frame: BTreeSet<Array> = BTreeSet::new();
     for (name, function) in &by_key {
         for block in &function.blocks {
             for instruction in &block.instructions {
                 if let Some(Tag::Allocate(shape)) = &instruction.tag {
                     if shape.frame {
-                        let at = runs[name].saturating_mul(weight(name, block.id));
-                        frame.insert(Array::Local(name.clone(), shape.name.clone()), at);
+                        frame.insert(Array::Local(name.clone(), shape.name.clone()));
                     }
                 }
             }
@@ -261,10 +285,10 @@ pub(super) fn kept_far(compiler: &Compiler) -> BTreeSet<String> {
             group_of.insert(a, b);
         }
     }
-    // Per loop, who is accessed and what the loop's scalars come to.
-    let mut relief: Vec<(i64, BTreeSet<Array>)> = Vec::new();
+    let trace = std::env::var_os("LLRM_QB_PLACEMENT_TRACE").is_some();
+    let mut far_groups: BTreeSet<Array> = BTreeSet::new();
     for (name, function) in &by_key {
-        for one in loops_of[name].iter().filter(|one| one.innermost) {
+        for one in loops(function).iter().filter(|one| one.innermost) {
             let mut results: BTreeSet<u32> = BTreeSet::new();
             for block in function.blocks.iter().filter(|block| one.body.contains(&block.id)) {
                 for instruction in &block.instructions {
@@ -284,59 +308,45 @@ pub(super) fn kept_far(compiler: &Compiler) -> BTreeSet<String> {
             let formals = arrays.iter().filter(|array| matches!(array, Array::Formal(..))).count();
             let composite = touched.iter().any(|access| access.composite);
             let indices: BTreeSet<&String> = touched.iter().flat_map(|access| access.names.iter()).collect();
-            // Each index is a register; an array parameter's base is another,
-            // and a composite subscript wants the temporary that sums it.
-            let usable = room.addresses.saturating_sub(1);
-            let spills = |wanted: usize| wanted.saturating_sub(usable);
-            let near = spills(indices.len() + formals + usize::from(composite)) - spills(indices.len());
+            // Two classes of register run short. The scalars live on entry to
+            // the loop, with an array parameter's base and the temporary a
+            // composite subscript's sum wants, are held in the integer
+            // registers; the subscript variables, with the same additions, in
+            // the address registers. Each addition past what a class holds,
+            // less the reserve, is a spill. A far array's base is in a segment
+            // register instead, which holds `segments` of them.
+            let extra = formals + usize::from(composite);
+            let overflow = |wanted: usize, held: usize| wanted.saturating_sub(held.saturating_sub(room.reserve));
+            let live = live_at(function, one.header);
+            let general = overflow(live + extra, room.registers) - overflow(live, room.registers);
+            let address = overflow(indices.len() + extra, room.addresses) - overflow(indices.len(), room.addresses);
+            let near = general.max(address);
             let far = arrays.len().saturating_sub(room.segments);
-            if std::env::var_os("LLRM_QB_PLACEMENT_TRACE").is_some() {
+            if trace {
                 eprintln!(
-                    "placement: {name} loop indices {:?} formals {formals} composite {composite} arrays {} near {near} far {far} runs {}",
+                    "placement: {name} loop indices {:?} live {live} formals {formals} composite {composite} arrays {} general {general} address {address} far {far}",
                     indices,
                     arrays.len(),
-                    runs[name]
                 );
             }
-            if near <= far {
-                continue;
-            }
-            let hot = one.body.iter().map(|&block| weight(name, block)).max().unwrap_or(1);
-            let worth = runs[name].saturating_mul(hot).saturating_mul(room.spill).saturating_mul((near - far) as i64);
-            let roots: BTreeSet<Array> = arrays.iter().map(|array| find(&mut group_of, array)).collect();
-            relief.push((worth, roots));
-        }
-    }
-    // A loop's spills end only where all its arrays go far together. Take the
-    // loops dearest first: one whose spills outweigh the DIM and ERASE calls
-    // of the groups it would move sends them all.
-    let mut saved: BTreeMap<Array, i64> = BTreeMap::new();
-    for (array, at) in &frame {
-        let root = find(&mut group_of, array);
-        *saved.entry(root).or_default() += at.saturating_mul(room.dim);
-    }
-    relief.sort_by(|left, right| right.0.cmp(&left.0));
-    let mut far_groups: BTreeSet<Array> = BTreeSet::new();
-    for (worth, roots) in &relief {
-        let moving: i64 = roots
-            .iter()
-            .filter(|root| !far_groups.contains(*root))
-            .map(|root| saved.get(root).copied().unwrap_or(0))
-            .sum();
-        if *worth > moving {
-            far_groups.extend(roots.iter().cloned());
-        }
-    }
-    let mut kept = BTreeSet::new();
-    for array in frame.keys() {
-        if far_groups.contains(&find(&mut group_of, array)) {
-            if let Array::Local(procedure, name) = array {
-                kept.insert(format!("{procedure}/{name}"));
+            // A loop's trips are not known, and the spill is paid on each,
+            // the DIM and ERASE it saves once: where the frame spills more, the
+            // arrays of the loop's groups go far together.
+            if near > far {
+                far_groups.extend(arrays.iter().map(|array| find(&mut group_of, array)));
             }
         }
     }
-    if std::env::var_os("LLRM_QB_PLACEMENT_TRACE").is_some() {
-        eprintln!("placement: relief {relief:?} saved {saved:?} kept {kept:?}");
+    let kept: BTreeSet<String> = frame
+        .iter()
+        .filter(|array| far_groups.contains(&find(&mut group_of, array)))
+        .filter_map(|array| match array {
+            Array::Local(procedure, name) => Some(format!("{procedure}/{name}")),
+            Array::Formal(..) => None,
+        })
+        .collect();
+    if trace {
+        eprintln!("placement: relief {far_groups:?} kept {kept:?}");
     }
     kept
 }
