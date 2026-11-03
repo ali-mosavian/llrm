@@ -80,6 +80,12 @@ LOADERS: dict[Path, tuple[Path, ...]] = {}  # an exe -> the files that must sit 
 COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
+JUDGED_SIZES = ("code_bytes", "data_bytes", "static_bytes")  # bss is judged through the footprint (data + bss), not alone
+
+
+def with_footprint(row: dict) -> dict:
+    """The row with `static_bytes` = data + bss: a zero table moved from data to bss shrinks the image and leaves the footprint."""
+    return {**row, "static_bytes": row["data_bytes"] + row["bss_bytes"]} if "data_bytes" in row and "bss_bytes" in row else row
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace(dosbatch.CYCLES, "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
@@ -798,6 +804,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
+    got, want = with_footprint(got), with_footprint(want)
     problems = []
     priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
     if priced:
@@ -806,7 +813,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
             problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
     timed = not priced and all(one in side for one in ("clocks", "code_bytes") for side in (got, want))
     tied = timed and got["clocks"] == want["clocks"] and got["code_bytes"] == want["code_bytes"]
-    for counter in (*COUNTERS, "clocks", *SIZES):
+    for counter in (*COUNTERS, "clocks", *JUDGED_SIZES):
         if counter not in got:
             continue
         if counter not in want:
@@ -838,7 +845,8 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict,
     a waiver excuses (its row, counter and this count) is excused here too: the ratio is the count over a constant, so a waived count
     always moved it and no waiver on a row with references could pass."""
     problems = []
-    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+    got, want, ref = with_footprint(got), with_footprint(want), with_footprint(ref)
+    for counter in (*COUNTERS, *JUDGED_SIZES, "kernel_ms"):
         if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
             continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
