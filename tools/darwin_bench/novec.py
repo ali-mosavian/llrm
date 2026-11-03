@@ -5,7 +5,8 @@ Header: compiled-cell counts and md5 of every compiler binary."""
 import sys, os, subprocess, re, statistics, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from codebytes import kernel
-from cmp import regressions_vs_best
+from cmp import regressions_vs_best, clock_note
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/../hostshim")
 import host
 H = os.path.dirname(os.path.abspath(__file__)); WORK = os.environ.get("BENCH_WORK", "/tmp/darwin-bench"); os.makedirs(WORK, exist_ok=True); REPO = os.environ.get("BENCH_REPO", os.getcwd())
 PIN = os.environ["LLRM_PIN_CLANG"]; GCC = "/opt/homebrew/bin/gcc-13"; LLRM = os.environ["LLRM_CC"]
@@ -33,7 +34,8 @@ def kernel_stats(o):
         if cur in ("_orig_main", "_report") or not re.match(r"^[0-9a-f]{16}\t", l): continue
         n += 1; vec += bool(VEC.search(l))
     return n, vec
-rows = {}; cells = fails = 0
+rows = {}; cells = fails = 0; tsv = []; inputs = {}
+TSVNAME = {"pin": "clang", "gcc13": "gcc13", "llrm-cc": "ours-cc"}
 for prog in progs:
     want = None if prog == "grep" else [int(x) % 2**32 for x in open(f"{REPO}/bench/{prog}/{prog}.out").read().split()]
     src = open(f"{REPO}/bench/{prog}/{prog}.c").read()
@@ -46,7 +48,8 @@ for prog in progs:
         r = sh(cc + [f"-{level}", "-I", f"{REPO}/bench", *host.include_flags(REPO, prog), *host.FLAT, "-Dmain=orig_main", "-c", f"{d}/src.c", "-o", f"{d}/k.o"] + extra, env=env)
         if r.returncode: fails += 1; rows[(prog, name)] = "compile failed"; continue
         if sh([PIN, "-isysroot", SDK, f"{d}/k.o", drv, *HOSTOBJ] + ([shim] if prog == "grep" else []) + ["-o", f"{d}/t"]).returncode: fails += 1; rows[(prog, name)] = "link failed"; continue
-        host.write_data(REPO, prog, d)
+        got_in = host.write_data(REPO, prog, d)
+        if got_in: inputs[got_in[0] + " (" + prog + ")"] = got_in[1]
         got = [int(x) % 2**32 for x in sh([f"{d}/t", "1", "1", "once"], cwd=d).stdout.split()]
         o1 = sh([f"{d}/t", "1", "1"], cwd=d).stdout.split()
         if not o1: fails += 1; rows[(prog, name)] = "run failed"; continue
@@ -54,7 +57,12 @@ for prog in progs:
         t = sorted(host.timings(sh, f"{d}/t", d, k, REPS))
         n, vec = kernel_stats(f"{d}/k.o")
         rows[(prog, name)] = (want is None or got == want, kernel(f"{d}/k.o")[0], n, vec, statistics.median(t))
+        if name in TSVNAME:
+            note = clock_note(os.getloadavg()[0], t, rows[(prog, name)][0]) + (", flat reading" if host.flat_reading(REPO, prog) else "")
+            tsv.append(f"arm64-darwin\t{prog}\t{level}\t{TSVNAME[name]}\t{rows[(prog, name)][1]}\t{statistics.median(t):.2f}\t\t{note}")
 print(f"{level}: cells compiled {cells - fails}/{cells}  load {os.getloadavg()}")
+print("  inputs md5 " + ", ".join(f"{k} {v}" for k, v in sorted(inputs.items())))
+print("  shim flags " + " ".join(host.FLAT))
 for n, p in (("pin clang", PIN), ("gcc-13", GCC), ("llrm-cc", LLRM)): print(f"  {n} md5 {md5(p)}")
 print(f"{'prog':11}" + "".join(f"{n:>24}" for n in CC) + "  class")
 print(" " * 11 + "".join(f"{'ok B insn vec us':>24}" for _ in CC))
@@ -73,3 +81,5 @@ for prog in progs:
         cls = "vector-deferred" if vec_bad and not nv_bad else ("worse (also without vectors)" if nv_bad else "")
         if not all(v[k][0] for k in v): cls += " WRONG-OUTPUT"
     print(line + "  " + cls)
+if os.environ.get("TSV"):  # matrix rows (target prog level compiler code_bytes clocks instrs note); instrs is empty: static counts only
+    with open(os.environ["TSV"], "a") as f: f.write("\n".join(tsv) + "\n")

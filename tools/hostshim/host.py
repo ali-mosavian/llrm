@@ -1,7 +1,7 @@
-"""Host shim for the DOS-flavoured bench programs on arm64-macos, one for all of them (no per-program edit):
+"""tools/hostshim: host shim for the DOS-flavoured bench programs on arm64-macos, one for all of them (no per-program edit):
 flat spellings of far/huge, the POSIX OS layer under bench_io.h, a host buffer for the text screen, and the
 data files a "// data:" header names, written into the run directory under their DOS spelling."""
-import os, re, subprocess, sys
+import hashlib, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FLAT = ["-include", HERE + "/host_shim.h", "-Dfar=", "-Dnear=", "-Dhuge=", "-D__huge=", "-D__386__=1", "-DPHYSICAL_TEXT_SCREEN=((unsigned long)host_text_screen)"]
@@ -26,14 +26,22 @@ def objects(cc, sdk, work, repo):
 def write_data(repo, prog, rundir):
     """The program's "// data:" files (a path under bench/<prog>, or @signal) as rundir/NAME in DOS capitals."""
     m = re.search(r"^//\s*data:\s*(\S+)", open(f"{repo}/bench/{prog}/{prog}.c").read(), re.M)
-    if not m: return
+    if not m: return None
     what = m[1]
     if what == "@signal":
         sys.path.insert(0, f"{repo}/tools/dosbatch"); import signal_gen
         data, name = signal_gen.signal(), "SIGNAL"
+    elif what.startswith("@"):
+        return None  # another corpus (grep's @dickens): that program reads it through input_shim.c
     else:
         data, name = open(os.path.normpath(f"{repo}/bench/{prog}/{what}"), "rb").read(), os.path.basename(what).upper()
     open(f"{rundir}/{name}", "wb").write(data)
+    return name, hashlib.md5(data).hexdigest()
+
+FAR = re.compile(r"\b(far|huge|__huge|__far)\b")
+def flat_reading(repo, prog):
+    """True when the source uses DOS far/huge: every compiler gets the same flat source, so rows compare but are not real-mode access."""
+    return bool(FAR.search(open(f"{repo}/bench/{prog}/{prog}.c").read()))
 
 def timings(sh, exe, cwd, k, reps):
     """us/run, reps of them. A program that cannot run twice in one process (jpeg_*: "not a JPEG" on the second call, it is a

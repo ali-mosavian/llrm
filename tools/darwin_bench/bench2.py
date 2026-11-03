@@ -5,6 +5,7 @@ import sys, os, subprocess, re, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from codebytes import kernel
 from cmp import regressions
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/../hostshim")
 import host
 H = os.path.dirname(os.path.abspath(__file__)); WORK = os.environ.get("BENCH_WORK", "/tmp/darwin-bench"); os.makedirs(WORK, exist_ok=True); REPO = os.environ.get("BENCH_REPO", os.getcwd())
 SDK = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()

@@ -3,6 +3,7 @@ input files): 7 of 37 programs had no row. With host.py each builds with pin and
 (stft_single excepted: its libm twiddles differ from the x86 expected, so only both-compilers-agree is checked there)."""
 import os, re, subprocess, sys, tempfile, unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/../hostshim")
 import host
 H = os.path.dirname(os.path.abspath(__file__)); REPO = os.environ.get("BENCH_REPO", os.path.abspath(H + "/../.."))
 PIN = os.environ["LLRM_PIN_CLANG"]; GCC = "/opt/homebrew/bin/gcc-13"
@@ -30,4 +31,12 @@ class T(unittest.TestCase):
                 if prog != "stft_single":
                     want = [int(x) % 2**32 for x in open(f"{REPO}/bench/{prog}/{prog}.out").read().split()]
                     self.assertEqual([int(x) % 2**32 for x in got[PIN]], want, prog)
+    def test_other_corpora_are_left_to_their_shim(self):
+        """grep's "// data: @dickens" crashed the whole sweep (FileNotFoundError after 4 levels of work, no rows written)."""
+        with tempfile.TemporaryDirectory() as w:
+            self.assertIsNone(host.write_data(REPO, "grep", w))
+            self.assertEqual(os.listdir(w), [])
+    def test_flat_reading_marks_far_and_huge(self):
+        self.assertTrue(all(host.flat_reading(REPO, p) for p in ("huge", "lru")))
+        self.assertFalse(host.flat_reading(REPO, "crc"))
 if __name__ == "__main__": unittest.main()

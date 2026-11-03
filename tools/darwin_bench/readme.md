@@ -20,3 +20,5 @@ Cause-card instruments (static, deterministic; the µs columns are noisy while t
   bytes / insns / SIMD-arithmetic insns / µs; the header holds the compiled-cell count and the compilers' md5.
 - `sameir.py LEVEL prog...`: the pin's `-fno-vectorize` IR through `llrm-arm64-llc`. llc(pinIR) against the pin is the
   backend gap; llrm-cc against llc(pinIR) is the mid-end gap.
+
+Host shim (DOS-flavoured programs): `tools/hostshim/host.py`; flags and input md5s are printed in each novec result header.
