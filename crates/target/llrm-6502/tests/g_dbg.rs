@@ -41,3 +41,14 @@ fn g_adds_directives_and_leaves_the_instructions_alone() {
         text(true).lines().filter(|line| !line.trim_start().starts_with(".dbg")).map(|line| format!("{line}\n")).collect();
     assert_eq!(without_directives, plain);
 }
+
+/// The function's first row was its first instruction's line: the line the
+/// function starts at (the fixture's `scopeLine: 2`) was in no row, and a
+/// debugger stopping at the function's entry showed the line after it.
+#[test]
+fn g_starts_the_function_at_its_scope_line() {
+    let text = text(true);
+    let scope = text.find(".dbg line, \"f.c\", 2").expect("a row for the scope line");
+    let first = text.find(".dbg line, \"f.c\", 3").expect("a row for the first instruction's line");
+    assert!(scope < first, "{text}");
+}

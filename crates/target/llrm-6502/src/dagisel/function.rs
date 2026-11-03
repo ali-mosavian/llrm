@@ -96,8 +96,9 @@ pub struct Selection {
     pub zero_page: u8,
     /// The level's price of a byte against a clock.
     pub tuning: crate::alloc::Tuning,
-    /// The source file `-g` names the lines of; none prints no `.dbg line`.
-    pub source: Option<String>,
+    /// The source file `-g` names the lines of, and the line the function
+    /// starts at (its scope line); none prints no `.dbg line`.
+    pub source: Option<(String, Option<u32>)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.

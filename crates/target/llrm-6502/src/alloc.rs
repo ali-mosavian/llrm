@@ -2235,7 +2235,7 @@ pub fn emit(
     cmos: bool,
     zero_page: u8,
     tuning: Tuning,
-    source: Option<&str>,
+    source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
     let level = TUNING.with(|t| t.replace(tuning));
@@ -2253,7 +2253,7 @@ fn emit_on(
     labels: &[Vec<String>],
     stack: bool,
     cmos: bool,
-    source: Option<&str>,
+    source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
         if stack {
@@ -2463,7 +2463,7 @@ fn emit_with<const STACK: bool>(
     share: bool,
     _split: bool,
     place: bool,
-    source: Option<&str>,
+    source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
@@ -2998,7 +2998,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&finish(out, source.map(|file| (file, &function.places[..]))), &function.name), slots, sunk, shared, moved))
+    Ok((own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name), slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -3040,12 +3040,12 @@ fn own_labels(
 /// long.
 fn finish(
     mut code: Asm,
-    lines_of: Option<(&str, &[llrm_codegen::model::lir::SrcLoc])>,
+    lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
 ) -> String {
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
-    if let Some((file, places)) = lines_of {
-        code.lines = with_lines(code.lines, file, places);
+    if let Some((file, scope, places)) = lines_of {
+        code.lines = with_lines(code.lines, file, scope, places);
     }
     code.text()
 }
@@ -3056,14 +3056,22 @@ fn finish(
 fn with_lines(
     lines: Vec<Line>,
     file: &str,
+    scope: Option<u32>,
     places: &[llrm_codegen::model::lir::SrcLoc],
 ) -> Vec<Line> {
     let mut out = Vec::with_capacity(lines.len() * 2);
     let mut shown = None;
+    // The function's first row is the line it starts at, before any
+    // instruction's (`DwarfDebug::beginFunctionImpl`).
+    let mut scope = scope;
     for line in lines {
         match &line {
             Line::Label(_) => shown = None,
             Line::Inst(inst) => {
+                if let Some(line) = scope.take() {
+                    out.push(Line::Raw(format!("  .dbg line, \"{file}\", {line}")));
+                    shown = Some(line);
+                }
                 if let Some(place) = (inst.place != 0).then(|| places.get(inst.place as usize - 1)).flatten()
                     && shown != Some(place.line)
                 {

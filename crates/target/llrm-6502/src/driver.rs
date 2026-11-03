@@ -262,7 +262,10 @@ pub fn assembly(
     }
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
-    selections.iter_mut().for_each(|selection| selection.source = file.clone());
+    for (name, selection) in names.iter().zip(selections.iter_mut()) {
+        let scope = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
+        selection.source = file.clone().map(|file| (file, scope));
+    }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let mut text = module_text(module, &parts)?.concat();
     for (name, label) in &data.1 {
