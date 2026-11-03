@@ -803,3 +803,37 @@ fn a_row_that_is_not_a_statement_is_written_without_the_flag() {
     assert!(rows[0].contains("is_stmt"), "{rows:?}");
     assert!(rows.iter().any(|one| one.contains(" 4 ") && !one.contains("is_stmt")), "{rows:?}");
 }
+
+/// Two functions in one section got one sequence, addressed by the section's
+/// first symbol: a format with no such symbol (WebAssembly's function offsets)
+/// could not relocate it. Per function, each sequence is addressed by its own
+/// function's symbol.
+#[test]
+fn a_sequence_per_function_is_addressed_by_its_own_symbol() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let mut info = made.debug.take().unwrap();
+    let mut second = info.functions[0].clone();
+    second.name = "g".into();
+    second.symbol = 1;
+    second.ranges = vec![Range { section: 0, offset: 8, length: 8 }];
+    second.body = None;
+    info.functions[0].ranges = vec![Range { section: 0, offset: 0, length: 8 }];
+    info.functions[0].body = None;
+    info.functions.push(second);
+    let mut symbol = made.object.symbols[0].clone();
+    symbol.name = "_g".into();
+    symbol.definition = Definition::Defined { section: 0, offset: 8 };
+    made.object.symbols.push(symbol);
+    let targets = |written: &Object| -> Vec<usize> {
+        let (_, line) = named(written, ".debug_line");
+        line.relocs
+            .iter()
+            .filter_map(|one| match one.target {
+                Target::Symbol(symbol) => Some(symbol),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(targets(&expanded(&made.object, &info).unwrap()), [0]);
+    assert_eq!(targets(&expanded_per_function(&made.object, &info).unwrap()), [0, 1]);
+}
