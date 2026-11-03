@@ -2559,3 +2559,14 @@ fn function_sections_write_a_comdat_per_function_on_omf() {
 fn no_function_sections_is_the_default_object() {
     assert_eq!(omf_of(&["-fno-function-sections"]), omf_of(&[]));
 }
+
+/// Every function's COMDAT is allocated in the module's code segment
+/// (`<MODULE>_TEXT`), the segment the one-segment layout names: function
+/// sections change the grouping, not the segment. (`-mcode-segment=` is not
+/// read on this path, with or without the flag.)
+#[test]
+fn function_sections_allocate_in_the_modules_code_segment() {
+    let has = |object: &[u8]| object.windows(8).any(|window| window == b"TWO_TEXT");
+    assert!(has(&omf_of(&["-ffunction-sections"])));
+    assert!(has(&omf_of(&[])));
+}
