@@ -523,6 +523,19 @@ fn a_narrowed_shift_takes_the_targets_amount_type_at_m64() {
     assert!(listing.contains("sub eax, edi"), "{listing}");
 }
 
+/// The pin's `ShrinkDemandedOp` made `(and i16 x, 1023)` scaled by 8 a 32-bit
+/// `shl` plus `zext`, and the address stopped using `*8` (bench ring, +2 B,
+/// 40 cells above release/next): the x86 matcher widens `zext(shl nuw)`.
+#[test]
+fn a_zero_extended_shifted_index_is_a_scaled_address_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %p, i16 %i) {\n  %m = and i16 %i, 1023\n  %z = zext nneg i16 %m to i64\n  %g = getelementptr inbounds nuw [8 x i8], ptr %p, i64 %z\n  %v = load i64, ptr %g\n  ret i64 %v\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("*8]") && !listing.contains("shl"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
