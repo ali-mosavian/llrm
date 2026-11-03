@@ -624,10 +624,15 @@ impl Builder<'_> {
         &self,
         length: u64,
         opt_size: bool,
-        zero: bool,
+        fill: Option<u128>,
     ) -> bool {
-        if opt_size && zero && self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none() {
-            return self.sse_fill_is_longer(length);
+        let zero = fill == Some(0);
+        if opt_size
+            && fill.is_some()
+            && self.target.dag.pointer.size_in_bits() == 64
+            && self.target.target_nodes.is_none()
+        {
+            return self.sse_fill_is_longer(length, fill.unwrap_or(0));
         }
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
@@ -660,16 +665,18 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
-    /// DEVIATE SD541 (x86-64, tuned for size): a constant zero fill whose
-    /// `xorps` and 16-byte stores take more bytes than a `rep stosq` fill is
-    /// the fill. The pin counts stores (`MaxStoresPerMemsetOptSize`), so a
-    /// 128-byte clear is eight `movaps` there (pattern_fill -Os +50 B,
-    /// huffman_decode +12 B over the `rep stosq` this port had). The sizes are
-    /// the encodings at a `[rsp+disp8]` address: `xorps` 3, `movaps` store 5,
-    /// `mov qword [m], 0` 8, and the fill `xor eax, eax`, `lea rdi`, `mov ecx`,
-    /// `rep stosq` 15. Owner m64. Exit 2026-11-20: a store-cost hook on the
-    /// target description, as for SD223. The pin: [`getMemset`][memset] tries
-    /// the stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
+    /// DEVIATE SD541 (x86-64, tuned for size): a constant fill whose 16-byte
+    /// stores (and the `xorps`, or the pool load of the splat) take more bytes
+    /// than a `rep stosq` fill is the fill. The pin counts stores
+    /// (`MaxStoresPerMemsetOptSize`), so a 128-byte clear is eight `movaps`
+    /// there (pattern_fill -Os +50 B, huffman_decode +12 B over the `rep stosq`
+    /// this port had). The sizes are the encodings at a `[rsp+disp8]` address:
+    /// `xorps` 3, the splat's `movaps` load 7, `movaps` store 5, `mov qword
+    /// [m], 0` 8, and the fill: the value in `rax` (`xor eax, eax` 2, `mov
+    /// rax, -1` 7, `movabs` 10), `lea rdi`, `mov ecx` and `rep stosq` 13.
+    /// Owner m64. Exit 2026-11-20: a store-cost hook on the target
+    /// description, as for SD223. The pin: [`getMemset`][memset] tries the
+    /// stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
     ///
     /// [memset]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L10376
@@ -678,12 +685,22 @@ impl Builder<'_> {
     fn sse_fill_is_longer(
         &self,
         length: u64,
+        byte: u128,
     ) -> bool {
-        const FILL_BYTES_64: u64 = 2 + 5 + 5 + 3;
+        let value = match byte {
+            0 => 2,
+            0xff => 7,
+            _ => 10,
+        };
+        let fill = value + 5 + 5 + 3;
         let Some(ops) = Self::mem_ops(length, 16, usize::MAX, self.volatile_memory) else { return false };
         let wide = ops.iter().filter(|width| **width == 16).count() as u64;
-        let stored = if wide > 0 { 3 } else { 0 } + wide * 5 + (ops.len() as u64 - wide) * 8;
-        stored > FILL_BYTES_64
+        let setup = match (wide, byte) {
+            (0, _) => 0,
+            (_, 0) => 3,
+            _ => 7,
+        };
+        setup + wide * 5 + (ops.len() as u64 - wide) * 8 > fill
     }
 
     /// `getMemsetStores`: the fill value splatted to the widest operation,
@@ -1083,7 +1100,9 @@ impl Builder<'_> {
                     self.target.tuning.max_stores_per_memset
                 };
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
+                    Some(bytes)
+                        if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other).map(|byte| byte & 0xff)) =>
+                    {
                         self.inline_memset(root, dst, other, bytes, limit, alignment)?
                     }
                     _ => None,
