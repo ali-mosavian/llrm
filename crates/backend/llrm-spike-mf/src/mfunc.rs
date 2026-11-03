@@ -123,6 +123,31 @@ pub struct Block {
     pub phis: Vec<Phi>,
 }
 
+impl Block {
+    /// An instruction with no place (a constant, a materialised address) takes
+    /// the place of the next one in its block that has one, the user it was
+    /// made for (the pin emits a node with its user's `DebugLoc`); one after
+    /// the last located instruction takes the last place.
+    pub fn place_unlocated(&mut self) {
+        let mut next = 0;
+        for inst in self.insts.iter_mut().rev() {
+            if inst.origin != 0 {
+                next = inst.origin;
+            } else {
+                inst.origin = next;
+            }
+        }
+        let mut last = 0;
+        for inst in &mut self.insts {
+            if inst.origin != 0 {
+                last = inst.origin;
+            } else {
+                inst.origin = last;
+            }
+        }
+    }
+}
+
 /// `C` is the target's register class.
 #[derive(Clone, Debug)]
 pub struct MFunction<C> {
@@ -141,6 +166,11 @@ pub struct MFunction<C> {
 }
 
 impl<C> MFunction<C> {
+    /// [`Block::place_unlocated`] for every block.
+    pub fn place_unlocated(&mut self) {
+        self.blocks.iter_mut().for_each(Block::place_unlocated);
+    }
+
     pub fn new(name: &str) -> MFunction<C> {
         MFunction {
             name: name.to_owned(),

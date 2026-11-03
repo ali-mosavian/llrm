@@ -1681,6 +1681,23 @@ fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
     }
 }
 
+/// A constant materialised for a call stood under no place, so its row (and
+/// the compare's line before it) covered it: the argument of a call was listed
+/// under the line of the branch before the block (6502 -O0, c.c line 3 for
+/// the `lda #10` of line 5).
+#[test]
+fn an_unlocated_instruction_takes_the_place_of_the_one_it_feeds() {
+    let mut f = MFunction::<()>::new("places");
+    let mut call = op("call", vec![]);
+    call.origin = 5;
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts = vec![op("const", vec![Operand::Def(v(0))]), call, op("tail", vec![])];
+    f.blocks = vec![block];
+    f.place_unlocated();
+    let origins: Vec<u32> = f.blocks[0].insts.iter().map(|one| one.origin).collect();
+    assert_eq!(origins, vec![5, 5, 5]);
+}
+
 /// A copy the allocator adds (a tied use, a phi's incoming value) stood under
 /// no source place, so the line table put its row under the line before it.
 #[test]

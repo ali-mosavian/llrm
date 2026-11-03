@@ -1859,6 +1859,7 @@ pub fn build_with_places(
     }
     remove_dead(&mut b.function);
     narrow_remainder_calls(&mut b.function);
+    b.function.place_unlocated();
     Ok((b.function, labels))
 }
 
