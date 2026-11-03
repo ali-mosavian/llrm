@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_solve.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_solve.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_solve.rs sha256:4feb3565dadea22537f478e2fad7536d53451916f02f9c4717b2747a0e5a7cdb -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_solve.rs sha256:dadb5691a1b5f1f135445e61dbffc66af7336d7ccb7ba3ca7f76c53f73e924dc -->
 
 # lsr_solve
 
@@ -52,21 +52,14 @@ counter and a `cmp`, where the byte index ending at zero shares the
 counter and saves the `cmp`. Exit: none while the pin's rule picks the
 worse solution under its own cost model.
 
-DEVIATE LU7: the register budget at m32 is the registers the target allocates
-(`Machine::registers`: ebp and esp excluded), not the pin's eight
-([`getNumberOfRegisters`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173)).
-Eight let a four-register zero-test index look affordable beside two other
-values and shellsort bq32 -Os spilled it (+13 B, +125 instructions); the pin,
-with the same IR and eight, keeps the pointer walk. Exit: none, a machine fact
-(m16 states its six the same way); m64 follows when a cell needs it.
-
 DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
 values its body defines that SCEV does not make a recurrence, in registers
 of the target's width, `Tti::gpr_bits`) are taken off the budget the solver
 and the spill check count against; the pin counts none. Without it shellsort
 bas -Os spent a third formula register to save an instruction and the
 allocator spilled the `i32` chain (+6 B). No pin run can decide it: the pin
-has no m16 TTI. Where the other values leave less than a base and an index and no
-solution fits, the cut is dropped and the search runs again without it: the
-count no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model on the pin's
-MachineLICM/RegisterPressure terms, by 2026-11-20, or when the allocator's
+has no m16 TTI. Where no solution fits the registers left, the cut is
+dropped and the search runs again without it: every one spills and the count
+no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model
+on the pin's MachineLICM/RegisterPressure terms, by 2026-11-20, or when the
+allocator's spill cost is priced in the comparator.
