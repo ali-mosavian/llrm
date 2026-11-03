@@ -6,12 +6,13 @@
 set -e
 cd "$(dirname "$0")"; S=../..; T=$(mktemp -d); MOS_RT=${MOS_RT:-$HOME/scratch/handoff/mos_rt.s}
 python3 ../woz_compare/gen.py $T 64 >/dev/null
+OPT=Os
 reached() { # op flag
   case $1 in add) f=__addsf3;; mul) f=__mulsf3;; div) f=__divsf3;; esac
   printf '#include <stdint.h>\n#include "ours_%s.h"\nuint32_t %s(uint32_t, uint32_t);\nint main(void) { uint32_t acc = 0; for (unsigned i = 0; i < 64; i++) acc += %s(A[i], B[i]); return acc & 1; }\n' $1 $f $f > $T/m.c
   X=; case "$2" in *6502/config.h*) X=sf32_6502;; esac
   F32=$(cd $S && tests/fp_sources.sh f32 | sed "s#^#$S/#"); N32=$(for s in $F32; do basename $s .c; done)
-  for c in $T/m.c $F32 ${X:+$S/config/6502/$X.c}; do $LLRM_CC --target=6502-sim65 -Os -DSF_INTABI $2 -I$S/include -I$T -S $c -o $T/$(basename $c .c).s; done
+  for c in $T/m.c $F32 ${X:+$S/config/6502/$X.c}; do $LLRM_CC --target=6502-sim65 -$OPT -DSF_INTABI $2 -I$S/include -I$T -S $c -o $T/$(basename $c .c).s; done
   { grep -h '^rc[0-9]* = ' $T/m.s $(for x in $N32; do echo $T/$x.s; done) ${X:+$T/$X.s} | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; for x in m $N32 $X; do grep -v '^rc[0-9]* = ' $T/$x.s || true; done; cat $MOS_RT; } > $T/p.s
   cl65 -g -t sim6502 -Ln $T/l.txt -o $T/p.bin $T/p.s
   python3 reach65.py $T/p.s $T/l.txt $f | cut -d' ' -f1; }
@@ -21,5 +22,9 @@ for op in add mul div; do
   case $op in add) cap=3228;; mul) cap=2750;; div) cap=2707;; esac
   [ $on -le $cap ] || bad=1
 done
+# -O2 (cycles count there): the stepped shift must not grow the add, SF_SHIFT_STEPS toggled alone (2026-11-03: 3447 -> 3084 B; an earlier "+5 B" was stale).
+OPT=O2; sed '/SF_SHIFT_STEPS 1/d' $S/config/6502/config.h > $T/noshift.h
+o2off=$(reached add "-include $T/noshift.h"); o2on=$(reached add "-include $S/config/6502/config.h"); echo "add -O2 SF_SHIFT_STEPS: $o2off -> $o2on B"
+[ $o2on -le $o2off ] || bad=1
 rm -r $T
 [ $bad = 0 ] && echo "ok" || { echo "FAIL: a reached size grew"; exit 1; }
