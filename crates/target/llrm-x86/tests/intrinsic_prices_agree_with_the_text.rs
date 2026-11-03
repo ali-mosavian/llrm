@@ -56,8 +56,6 @@ fn test_every_intrinsic_the_corpus_meets_has_a_price() {
         "llvm.bitreverse.i32",
         "llvm.sadd.sat.i32",
         "llvm.usub.sat.i64",
-        "llvm.memcpy.p0.p0.i64",
-        "llvm.memset.p0.i64",
         "llvm.prefetch.p0",
         "llvm.va_start.p0",
         "llvm.abs.i128",

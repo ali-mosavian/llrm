@@ -168,7 +168,7 @@ intr("llvm.va_start.p0", "void", ["ptr"])
 intr("llvm.va_end.p0", "void", ["ptr"])
 intr("llvm.va_copy.p0", "void", ["ptr", "ptr"])
 for dst, dty in PTRS.items():
-    for ln in ["i16", "i32", "i64"]:
+    for ln in ["i16", "i32"]:
         intr(f"llvm.memset.{dst}.{ln}", "void", [dty, "i8", ln, "i1"])
         for src, sty in PTRS.items():
             intr(f"llvm.memcpy.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
