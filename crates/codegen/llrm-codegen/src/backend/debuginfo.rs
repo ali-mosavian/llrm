@@ -1291,7 +1291,13 @@ pub fn laid_out(
         // change of scope alone is not a new row.
         let mut before = None;
         let mut rows = Vec::new();
-        for &(line, offset) in &segment.lines {
+        // Line 0 says "no place" in DWARF; CodeView and Turbo Debugger have no
+        // such row.
+        let dwarf = !matches!(
+            debug.format,
+            model::Format::CodeView | model::Format::TurboDebugger
+        );
+        for &(line, offset) in segment.lines.iter().filter(|(line, _)| dwarf || line.line != 0) {
             if before.replace(line.row()) != Some(line.row()) {
                 rows.push(model::Line { section, offset, file: 0, line: line.line, column: line.column });
             }
@@ -1312,6 +1318,9 @@ pub fn laid_out(
             }
         }
         rows.sort_by_key(|row| row.offset);
+        // A line-0 row is not a statement (`DwarfDebug::beginInstruction`
+        // records it with no flags).
+        info.not_stmt.extend(rows.iter().filter(|row| row.line == 0).map(|row| (section, row.offset)));
         info.lines.extend(rows);
     }
     Ok(info)

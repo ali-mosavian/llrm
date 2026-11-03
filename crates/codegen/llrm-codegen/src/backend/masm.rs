@@ -1964,6 +1964,7 @@ fn built(
         let ends_in_jump =
             last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
         let mut closed = false;
+        let mut top = index > 0;
         for one in &block.insns {
             if let Some(pieces) =
                 closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
@@ -1989,6 +1990,16 @@ fn built(
             let Some(what) = &one.what else {
                 return Err(Unprintable(format!("{} at {}: an instruction with no semantics", procedure.name, one.at)));
             };
+            // An instruction with no place at the top of a block is line 0: it
+            // does not take the place of the block that lies before it
+            // (`DwarfDebug::beginInstruction`).
+            if std::mem::take(&mut top)
+                && one.line.is_none()
+                && let Some(before) = line.filter(|before| before.line != 0)
+            {
+                line = Some(SrcLoc { line: 0, ..before });
+                out.extend(line.map(&mut marked));
+            }
             if one.line.is_some() && one.line != line {
                 line = one.line;
                 out.extend(line.map(&mut marked));
