@@ -79,7 +79,7 @@ fn operands(
 #[test]
 fn every_quick_form_encodes_as_binutils_does() {
     let mut checked = 0;
-    for name in short::names() {
+    for name in short::names().filter(|name| *name != "EXTB32") {
         let test = name.starts_with("TST");
         for value in if test { 0..=0 } else { 1..=8 } {
             let class = if test { &name[name.len() - 1..] } else { &name[name.len() - 2..] };
@@ -92,7 +92,8 @@ fn every_quick_form_encodes_as_binutils_does() {
         }
     }
     let tests = short::names().filter(|name| name.starts_with("TST")).count();
-    assert_eq!(checked, 8 * (short::names().count() - tests) + tests);
+    let quick = short::names().filter(|name| *name != "EXTB32").count();
+    assert_eq!(checked, 8 * (quick - tests) + tests);
 }
 
 fn text(

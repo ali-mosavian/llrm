@@ -312,7 +312,7 @@ pub(super) fn clocks(
             (Mode::Dn | Mode::An, memory) => Some(plain(get(7, "MOVES Rn,EA", "%"))? + jea(memory)?),
             (memory, _) => Some(plain(get(7, "MOVES EA,Rn", "%"))? + jea(memory)?),
         },
-        ("ext", _) => plain(get(11, "EXT Dn", "")),
+        ("ext" | "extb", _) => plain(get(11, "EXT Dn", "")),
         ("swap", _) => plain(get(7, "SWAP Dn", "")),
         ("exg", _) => plain(get(7, "EXG Ry,Rx", "")),
         ("nop", _) => plain(get(16, "NOP", "")),

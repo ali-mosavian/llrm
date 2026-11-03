@@ -381,7 +381,7 @@ pub fn finish(
                 out.extend(expand_any_extension(dst, src)?);
             }
             Kind::Op(name) if extension(name).is_some() => {
-                out.extend(expand_extension(name, &operands)?);
+                out.extend(expand_extension(name, &operands, cpu)?);
             }
             Kind::Op(name) if crate::dagisel::indexed::printed_as(name).is_some() => {
                 let (opcode, def, count) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
@@ -499,6 +499,7 @@ fn inst(
 fn expand_extension(
     name: &str,
     operands: &[mc::Operand],
+    cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<mc::Inst>, String> {
     use mc::Operand::{Imm, Reg as R};
     let (signed, to, mode, from) = extension(name).ok_or("not an extension")?;
@@ -508,6 +509,12 @@ fn expand_extension(
     let mut out = Vec::new();
     let extend = |out: &mut Vec<mc::Inst>| -> Result<(), String> {
         if signed {
+            // DEVIATE: `extb.l` from the 68020 on, where the pin has `ext.w`
+            // then `ext.l`; gcc -m68020 uses it. Exit: beyond pin.
+            if from == 8 && to == 32 && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+                out.push(inst("EXTB32", vec![R(view(32)?), R(view(32)?)]));
+                return Ok(());
+            }
             if from == 8 {
                 let word = view(16)?;
                 out.push(inst("EXT16", vec![R(word), R(word)]));

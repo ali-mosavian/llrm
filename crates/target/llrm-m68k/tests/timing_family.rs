@@ -568,3 +568,14 @@ fn timing_tables_have_no_carriage_returns() {
     walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/timing"), &mut found);
     assert!(found.is_empty(), "CRLF in {found:?}");
 }
+
+/// `extb.l` is priced where `ext.l` is: the 68020 and 68030 manuals' `EXT` row
+/// is `EXT, EXTB`. It was an error on both ("unknown instruction"), so a
+/// program with the 68020 `extb.l` could not be priced.
+#[test]
+fn extb_is_priced_as_ext_from_the_68020() {
+    assert_eq!(m68020("extb.l %d0"), m68020("ext.l %d0"));
+    assert_eq!(m68030("extb.l %d0"), m68030("ext.l %d0"));
+    assert!(m68040("extb.l %d0") > 0);
+    assert!(m68060("extb.l %d0") > 0);
+}
