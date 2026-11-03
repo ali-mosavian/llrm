@@ -153,6 +153,11 @@ pub fn join_copy(
     let Some(mut cp) = CoalescerPair::set_registers(&copy_insn, env) else {
         return JoinResult::Rejected;
     };
+    // DEVIATE C13: with the joins between widths off, such a copy is as it
+    // was before they existed: no pair, nothing below touches it.
+    if cp.is_partial() && !env.joins_sub_registers() {
+        return JoinResult::Rejected;
+    }
     if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
         return JoinResult::Rejected;
     }
@@ -187,14 +192,20 @@ pub fn join_copy(
         lis.remove_instr(block, copy);
         return JoinResult::Joined;
     }
-    // When possible, let DstReg be the larger interval; a kept value stays.
+    // When possible, let DstReg be the larger interval; a kept value stays. A
+    // partial pair keeps its wide value (`!CP.isPartial()`), so a narrow value
+    // that is kept is not joined.
     let (keeps_src, keeps_dst) = (env.keeps(cp.src_reg()), env.keeps(cp.dst_reg()));
     // `canJoinPhys`: only a reserved register is joined with; a pinned value
     // is not one unless the target says so.
     if keeps_src != keeps_dst && !env.joins_pinned_copies() {
         return JoinResult::Rejected;
     }
-    if keeps_src != keeps_dst {
+    if cp.is_partial() {
+        if keeps_src {
+            return JoinResult::Rejected;
+        }
+    } else if keeps_src != keeps_dst {
         if keeps_src {
             cp.flip();
         }
@@ -215,6 +226,11 @@ pub fn join_copy(
         // if it is cheap.
         if re_materialize_def(lis, env, state, copy) {
             return JoinResult::Joined;
+        }
+        // The rest are for a copy between values of one width
+        // (`!CP.isPartial()`).
+        if cp.is_partial() {
+            return result;
         }
         // If we can eliminate the copy without merging the live segments, do
         // so now.
@@ -238,7 +254,11 @@ pub fn join_copy(
     // other. Make sure the resulting register is set to the right register
     // class.
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2244-L2247
-    env.narrow(cp.dst_reg(), cp.src_reg());
+    if cp.is_partial() {
+        env.narrow_sub(cp.dst_reg(), cp.src_reg());
+    } else {
+        env.narrow(cp.dst_reg(), cp.src_reg());
+    }
     // CopyMI has been erased by joinVirtRegs at this point. Remove it from
     // ErasedInstrs since the work list does not add a successful join back.
     // This keeps ErasedInstrs from growing needlessly.
@@ -247,7 +267,7 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg());
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial());
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
@@ -307,12 +327,17 @@ fn join_virt_regs(
     JoinResult::Joined
 }
 
-/// `updateRegDefsUses`: every instruction that names `src` names `dst`.
+/// `updateRegDefsUses`: every instruction that names `src` names `dst`. For a
+/// partial pair (`src` is a sub-register of `dst`) a def of `src` becomes a
+/// def that reads `dst` where the instruction reads `src` or `dst` is live
+/// into it, and a def that starts the value where not
+/// (`MO.setIsUndef(!Reads)`).
 fn update_reg_defs_uses(
     lis: &mut LiveIntervals,
     state: &mut State,
     src: u32,
     dst: u32,
+    partial: bool,
 ) {
     lis.rename_input(src, dst);
     state.renames.push((src, dst));
@@ -321,7 +346,17 @@ fn update_reg_defs_uses(
     keys.dedup();
     for key in keys {
         let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
-        let renamed = Arc::clone(lis.instr(key)).renamed(&|value| if value == src { dst } else { value });
+        let old = Arc::clone(lis.instr(key));
+        let mut renamed = old.renamed(&|value| if value == src { dst } else { value });
+        if partial && old.defines.contains(&src) {
+            let at = lis.indexes.get_instruction_index(key);
+            let reads = old.uses.contains(&src) || lis.interval(dst).live_at(&at);
+            if reads && !renamed.partial_defs.contains(&dst) {
+                let mut made = (*renamed).clone();
+                made.partial_defs.push(dst);
+                renamed = Arc::new(made);
+            }
+        }
         let new = renamed.id();
         lis.rewrite_instr(block, key, renamed);
         state.moved.insert(key, new);
