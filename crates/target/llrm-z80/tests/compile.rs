@@ -714,6 +714,19 @@ fn a_diamonds_join_copy_moves_into_the_side_that_lacks_it() {
     assert_eq!(counts, [0, 1, 1, 0], "{:?}", function.blocks);
 }
 
+/// A `long long` compared and returned held its four argument registers for
+/// the whole of its range, and the allocator found no room to split it:
+/// "greedy could not allocate", the function refused. It is allocated again
+/// with the argument copies left unjoined.
+#[test]
+fn a_long_long_in_the_argument_registers_is_allocated() {
+    let out = compiled(
+        "define i64 @f(i64 %a) {\n  %c = icmp ult i64 %a, 4294967297\n  %z = zext i1 %c to i64\n  ret i64 %z\n}",
+        "f",
+    );
+    assert!(out.contains("ret"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

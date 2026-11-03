@@ -46,12 +46,21 @@ impl Z80Registers {
     }
 }
 
+thread_local! {
+    /// Set while a function is allocated again after the first allocation
+    /// failed: the copies from the argument registers are left unjoined
+    /// (`Target::joins_pinned_copies`).
+    pub static UNJOINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Target for Z80Registers {
     /// The pin joins a copy with a physical register only when it is reserved
     /// (`canJoinPhys`); an argument pair is not, so the copy stays and the
-    /// word can spill instead of holding its pair to its last use.
+    /// word can spill instead of holding its pair to its last use. The
+    /// convention states whether the z80 leaves them
+    /// (`pinned_copies_unjoined`).
     fn joins_pinned_copies() -> bool {
-        false
+        !(crate::abi::z80().pinned_copies_unjoined || UNJOINED.with(std::cell::Cell::get))
     }
 
     type Class = Class;

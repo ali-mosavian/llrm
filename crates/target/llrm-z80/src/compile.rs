@@ -130,7 +130,27 @@ fn allocated_with(
     }
 }
 
+/// Allocates `function`; where the first allocation fails, once more with the
+/// copies from the argument registers left unjoined. A joined copy pins the
+/// argument's pair for the whole of the value's range: a `long long` held in
+/// four argument registers has no room left to split (`greedy could not
+/// allocate`). The pin does not join them either (`canJoinPhys`).
 fn allocate(
+    function: MFunction,
+    name: &str,
+) -> Result<Allocated, String> {
+    match allocate_once(function.clone(), name) {
+        Ok(done) => Ok(done),
+        Err(first) => {
+            crate::regalloc::UNJOINED.with(|one| one.set(true));
+            let again = allocate_once(function, name);
+            crate::regalloc::UNJOINED.with(|one| one.set(false));
+            again.map_err(|_| first)
+        }
+    }
+}
+
+fn allocate_once(
     mut function: MFunction,
     name: &str,
 ) -> Result<Allocated, String> {
