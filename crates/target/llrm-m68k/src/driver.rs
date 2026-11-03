@@ -139,8 +139,11 @@ pub fn assembly_with(
     // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
     // expansion
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
-    let module = &program.modules[0];
-    let backend = Options { size: matches!(level, Level::Os | Level::Oz), debug, ..Options::default() };
+    // The mid-end is the module's, run once: `text_with` runs it over the whole
+    // module for each function it is given.
+    let optimized = crate::compile::mid_end(&program.modules[0])?;
+    let module = &optimized;
+    let backend = Options { size: matches!(level, Level::Os | Level::Oz), debug, mid_end: false, ..Options::default() };
     let mut out = String::new();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
