@@ -64,6 +64,9 @@ pub struct Features {
     pub shld_slow: bool,
     /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
     pub sse2: bool,
+    /// `useSoftFloat()`: `f32` and `f64` have no register class; their
+    /// arithmetic is a call (m16).
+    pub soft_float: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -441,7 +444,17 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
+        if !features.soft_float {
+            return Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false);
+        }
+        use ISD::*;
+        let mut t = Self::x86(TargetLoweringInfo::x86_16().with_soft_float(), features, ptr, false);
+        // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
+        for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
+            t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
+            t.set_libcall_name(op, MVT::F64, Box::leak(format!("__{stem}df3").into_boxed_str()));
+        }
+        t
     }
 
     /// AArch64: `initActions`, then the scalar integer arms of

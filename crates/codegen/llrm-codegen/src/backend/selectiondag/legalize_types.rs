@@ -74,6 +74,9 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// A float value and the integer of its width that stands for it
+    /// (`SoftenedFloats`).
+    softened: HashMap<SDValue, SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -116,6 +119,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            softened: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -237,8 +241,8 @@ impl<'a> TypeLegalizer<'a> {
                     return Ok(true);
                 }
                 TypeAction::SoftenFloat => {
-                    let op = self.dag.node(value).opcode;
-                    return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften a float result" });
+                    self.soften_float_result(value)?;
+                    return Ok(true);
                 }
             }
         }
@@ -262,10 +266,7 @@ impl<'a> TypeLegalizer<'a> {
                 _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
-                TypeAction::SoftenFloat => {
-                    let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
-                    return Err(LegalizeError::Unsupported { op, ty: operand_vt, what: "soften a float operand" });
-                }
+                TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);
@@ -447,6 +448,88 @@ impl<'a> TypeLegalizer<'a> {
         count: u32,
     ) -> SDValue {
         self.shift_const(u128::from(count), shifted)
+    }
+
+    /// `GetSoftenedFloat`.
+    fn softened_float(
+        &self,
+        value: SDValue,
+    ) -> SDValue {
+        let value = self.remap(value);
+        *self.softened.get(&value).expect("operand softened before its user")
+    }
+
+    /// `SetSoftenedFloat`.
+    fn set_softened_float(
+        &mut self,
+        value: SDValue,
+        result: SDValue,
+    ) {
+        let value = self.remap(value);
+        let result = self.analyze_new_value(result);
+        self.softened.insert(value, result);
+    }
+
+    /// `SoftenFloatResult`: a float result becomes the integer of its width,
+    /// the operation a call to the routine the target names for it.
+    fn soften_float_result(
+        &mut self,
+        value: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let vt = self.dag.value_type(value);
+        let (_, int) = self.tli.types.type_conversion(vt);
+        let result = match self.dag.opcode(value) {
+            op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv) => {
+                // `SoftenFloatRes_Binary`: `makeLibCall` of the softened operands.
+                let args = [self.softened_float(self.dag.operand(value, 0)), self.softened_float(self.dag.operand(value, 1))];
+                let call = self.tli.libcall_name(op, vt).and_then(|name| {
+                    let arch = self.target?;
+                    let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+                    super::libcall::c_lib_call(self.dag, &env, name, &args, int)
+                });
+                call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
+            }
+            ISD::Load => {
+                // `SoftenFloatRes_LOAD`: the same load as an integer.
+                let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+                let load = self.dag.get_load(int, chain, ptr, super::dag::MemInfo { mem_vt: int, ..info });
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: load.node, res: 1 });
+                load
+            }
+            op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften a float result" }),
+        };
+        self.set_softened_float(value, result);
+        Ok(())
+    }
+
+    /// `SoftenFloatOperand`: a float operand read as the integer that
+    /// stands for it. True if `n` is to be looked at again.
+    fn soften_float_operand(
+        &mut self,
+        n: u32,
+        at: usize,
+    ) -> Result<bool, LegalizeError> {
+        let node = SDValue { node: n, res: 0 };
+        let result = match self.dag.opcode(node) {
+            ISD::Store if at == 1 => {
+                // `SoftenFloatOp_STORE`: the integer stored in its place.
+                let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else { unreachable!("a store has a memory operand") };
+                let bits = self.softened_float(value);
+                let int = self.dag.value_type(bits);
+                self.dag.get_store(chain, bits, ptr, super::dag::MemInfo { mem_vt: int, ..info })
+            }
+            op => {
+                return Err(LegalizeError::Unsupported {
+                    op,
+                    ty: self.dag.value_type(self.dag.operand(node, at)),
+                    what: "soften operand",
+                });
+            }
+        };
+        self.replace_value_with(node, result);
+        Ok(false)
     }
 
     /// `GetPromotedInteger`.

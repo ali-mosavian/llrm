@@ -132,3 +132,57 @@ pub fn lib_call(
     }
     (chain, results)
 }
+
+/// `makeLibCall` for a C routine: `name` called with `args`, each placed where
+/// the target's native convention puts an integer of its width, and a result
+/// of type `ret` read from where that convention leaves it (a pair of
+/// registers, low first, is a `BuildPair`). `None` where an argument needs
+/// several registers.
+pub fn c_lib_call(
+    dag: &mut SelectionDAG,
+    env: &CallEnv<'_>,
+    name: &'static str,
+    args: &[SDValue],
+    ret: EVT,
+) -> Option<SDValue> {
+    use llrm_target::calling::Place as Where;
+    let native = env.arch.calling().native();
+    let slot = env.arch.stack_slot_bytes();
+    let kinds: Vec<_> = args
+        .iter()
+        .map(|&arg| {
+            let bytes = i64::from(dag.value_type(arg).size_in_bits() / 8);
+            native.kind(llrm_mir::target::Argument { bytes, integer: true, pointer: false, floating: false, memory: false }, slot)
+        })
+        .collect();
+    let placement = native.place(&kinds);
+    let mut places = Vec::new();
+    for (&arg, place) in args.iter().zip(&placement.places) {
+        places.push((
+            arg,
+            match place {
+                Where::Stack(offset) => Place::Stack(*offset),
+                Where::Registers(names) if names.len() == 1 => Place::Register(env.arch.register_named(&names[0])),
+                Where::Registers(_) => return None,
+            },
+        ));
+    }
+    let result_bytes = i64::from(ret.size_in_bits() / 8);
+    let result = native.result_registers(result_bytes)?;
+    let part = match result.len() {
+        1 => ret,
+        2 => EVT::integer(ret.size_in_bits() / 2),
+        _ => return None,
+    };
+    let returns: Vec<Returned> =
+        result.iter().map(|register| Returned { reg: env.arch.register_named(register), vt: part }).collect();
+    let callee = dag.get_target_external_symbol(env.pointer, name);
+    let root = dag.entry_node();
+    let stack = placement.stack_bytes as u64;
+    let (_chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns);
+    Some(match values[..] {
+        [one] => one,
+        [low, high] => dag.get_node(ISD::BuildPair, ret, &[low, high]),
+        _ => return None,
+    })
+}
