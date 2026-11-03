@@ -190,3 +190,20 @@ fn a_compare_of_a_nuw_or_nsw_trunc_with_a_constant_is_the_wide_compare() {
     // nuw alone cannot widen a signed compare.
     on_i386("  %t = trunc nuw i32 %x to i16\n  %r = icmp slt i16 %t, 32\n", &["icmp slt i16 %t, 32"]);
 }
+
+/// volatile_bitfield: `icmp ugt (lshr i32 %x, 18), 300` stayed a shift and a
+/// compare (+33 B at m16 -Os); the pin compares `%x` with `((300 + 1) << 18) -
+/// 1`. `foldICmpShrConstant` was not translated.
+#[test]
+fn a_compare_of_a_shift_right_with_a_constant_is_the_compare_of_the_value() {
+    let shr = |op: &str, pred: &str, amount: u32, c: i32| {
+        format!("  %s = {op} i32 %x, {amount}\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&shr("lshr", "ugt", 18, 300), &["icmp ugt i32 %x, 78905343"]);
+    on_i386(&shr("lshr", "ult", 3, 100), &["icmp ult i32 %x, 800"]);
+    on_i386(&shr("ashr", "slt", 3, 5), &["icmp slt i32 %x, 40"]);
+    on_i386(&shr("ashr", "ugt", 3, 5), &["icmp ugt i32 %x, 47"]);
+    on_i386(&shr("ashr", "sgt", 3, 5), &["icmp sgt i32 %x, 47"]);
+    // Equality: the shift becomes a mask of the high bits.
+    on_i386(&shr("lshr", "eq", 3, 5), &["and i32 %x, -8", "icmp eq i32 %0, 40"]);
+}

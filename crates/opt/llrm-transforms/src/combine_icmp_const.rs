@@ -15,7 +15,7 @@
 //!
 //! OWED, each at its place as a `// OWED:` comment: the other opcodes of
 //! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
-//! `foldICmpShlConstant`, `foldICmpShrConstant`,
+//! `foldICmpShlConstant`,
 //! `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
 //! ),
 //! the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
@@ -147,6 +147,17 @@ pub fn fold_icmp_inst_with_constant(
     };
     if let Some((flags, x, y)) = mul {
         return fold_icmp_mul_constant(c, inst, pred, flags, (x, y), value, width);
+    }
+    let shr = {
+        let q = query(c, None);
+        [BinaryOp::LShr, BinaryOp::AShr]
+            .into_iter()
+            .find_map(|op| pattern::binary(&q, op0, op).map(|(_, shr, x, amount)| (op, shr.flags, x, amount)))
+    };
+    if let Some((op, flags, x, amount)) = shr
+        && let Some(visit) = fold_icmp_shr_constant(c, inst, pred, op0, (op, flags), (x, amount), value, width)
+    {
+        return Some(visit);
     }
     let sub = {
         let q = query(c, None);
@@ -429,6 +440,171 @@ fn fold_icmp_trunc_constant(
     };
     let bound = c.int(src, wide);
     Some(new_icmp(c, inst, pred, x, bound))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2588
+/// `foldICmpShrConstant`: `icmp (lshr/ashr X, Y), C`.
+///
+/// OWED: `foldICmpShrConstConst`, the equality of a constant shifted by a
+/// variable amount.
+#[allow(clippy::too_many_arguments)]
+fn fold_icmp_shr_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    shr: Operand,
+    (op, flags): (BinaryOp, Flags),
+    (x, amount): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let ty = c.type_of(x);
+    let m = mask(width);
+    let exact = flags.contains(Flags::EXACT);
+    let is_ashr = op == BinaryOp::AShr;
+    // An exact shr only shifts out zero bits.
+    if is_equality(pred) && exact && value == 0 {
+        let zero = c.int(ty, 0);
+        return Some(new_icmp(c, inst, pred, x, zero));
+    }
+
+    if let Some((shifted, _)) = query(c, None).int_constant(x) {
+        if is_equality(pred) {
+            // OWED: foldICmpShrConstConst.
+            return None;
+        }
+        // (ShiftValC >> Y) >s -1 --> Y != 0 with ShiftValC < 0
+        // (ShiftValC >> Y) <s  0 --> Y == 0 with ShiftValC < 0
+        if !is_ashr
+            && is_negative(shifted, width)
+            && let Some(true_if_signed) = is_sign_bit_check(pred, value, width)
+        {
+            let zero = c.int(ty, 0);
+            let pred = if true_if_signed { IntPredicate::Eq } else { IntPredicate::Ne };
+            return Some(new_icmp(c, inst, pred, amount, zero));
+        }
+        // If the shifted constant is a power-of-2, test the shift amount
+        // directly: (ShiftValC >> Y) >u C --> X <u (LZ(C) -
+        // LZ(ShiftValC)) (ShiftValC >> Y) <u C --> X >=u (LZ(C-1) -
+        // LZ(ShiftValC))
+        if !is_ashr && shifted.is_power_of_two() && matches!(pred, IntPredicate::Ugt | IntPredicate::Ult) {
+            let is_ugt = pred == IntPredicate::Ugt;
+            let leading_zeros = |v: u128| v.leading_zeros() - (128 - width);
+            let cmp_lz = if is_ugt { leading_zeros(value) } else { leading_zeros(value.wrapping_sub(1) & m) };
+            let bound = c.int(ty, u128::from(cmp_lz - leading_zeros(shifted)));
+            let pred = if is_ugt { IntPredicate::Ult } else { IntPredicate::Uge };
+            return Some(new_icmp(c, inst, pred, amount, bound));
+        }
+    }
+
+    let (amount_c, _) = query(c, None).int_constant(amount)?;
+    // An out-of-range shift is left to the shift's own simplification.
+    if amount_c >= u128::from(width) || amount_c == 0 {
+        return None;
+    }
+    let sh = amount_c as u32;
+    let shl = |v: u128| v.wrapping_shl(sh) & m;
+    let lshr = |v: u128| v >> sh;
+    let ashr = |v: u128| (llrm_mir::context::signed(v, width) >> sh) as u128 & m;
+    let min_signed = 1u128 << (width - 1);
+    let plus_one = value.wrapping_add(1) & m;
+
+    if is_ashr && has_one_use(c, shr) {
+        if exact && matches!(pred, IntPredicate::Slt | IntPredicate::Ult) {
+            let less_one = value.wrapping_sub(1) & m;
+            if less_one.is_power_of_two() && value.leading_zeros() - (128 - width) > sh {
+                // When C - 1 is a power of two and the transform can be legally
+                // performed, prefer this form so the produced
+                // constant is close to a power of two.
+                let bound = c.int(ty, shl(less_one).wrapping_add(1) & m);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if exact || matches!(pred, IntPredicate::Slt | IntPredicate::Ult) {
+            // When ShAmtC can be shifted losslessly.
+            let shifted = shl(value);
+            if ashr(shifted) == value {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if pred == IntPredicate::Sgt {
+            let shifted = shl(plus_one).wrapping_sub(1) & m;
+            if value != min_signed.wrapping_sub(1) & m
+                && shl(plus_one) != min_signed
+                && ashr(shifted.wrapping_add(1) & m) == plus_one
+            {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if pred == IntPredicate::Ugt {
+            // `C + 1 << ShAmtC` can overflow as a signed number, so the second
+            // clause accounts for that pattern.
+            let shifted = shl(plus_one).wrapping_sub(1) & m;
+            if ashr(shifted.wrapping_add(1) & m) == plus_one || shl(plus_one) == min_signed {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        // If the compare constant has significant bits above the lowest
+        // sign-bit, then convert an unsigned cmp to a test of the
+        // sign-bit.
+        if width > 2 && num_sign_bits(value, width) <= sh {
+            if pred == IntPredicate::Ugt {
+                let zero = c.int(ty, 0);
+                return Some(new_icmp(c, inst, IntPredicate::Slt, x, zero));
+            }
+            if pred == IntPredicate::Ult {
+                let all_ones = c.int(ty, m);
+                return Some(new_icmp(c, inst, IntPredicate::Sgt, x, all_ones));
+            }
+        }
+    } else if !is_ashr {
+        if pred == IntPredicate::Ult || (pred == IntPredicate::Ugt && exact) {
+            let shifted = shl(value);
+            if lshr(shifted) == value {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if pred == IntPredicate::Ugt {
+            let shifted = shl(plus_one).wrapping_sub(1) & m;
+            if lshr(shifted.wrapping_add(1) & m) == plus_one {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+    }
+
+    if !is_equality(pred) {
+        return None;
+    }
+    // If the bits shifted out are known zero, compare the unshifted value.
+    if exact {
+        let bound = c.int(ty, shl(value));
+        return Some(new_icmp(c, inst, pred, x, bound));
+    }
+    if has_one_use(c, shr) {
+        // Canonicalize the shift into an 'and':
+        // icmp eq/ne (shr X, ShAmt), C --> icmp eq/ne (and X, HiMask), (C <<
+        // ShAmt)
+        let high_mask = c.int(ty, !mask(sh) & m);
+        let masked = c.create_binop(inst, BinaryOp::And, x, high_mask, Flags::default());
+        let bound = c.int(ty, shl(value));
+        return Some(new_icmp(c, inst, pred, masked, bound));
+    }
+    None
+}
+
+/// `APInt::getNumSignBits`.
+fn num_sign_bits(
+    value: u128,
+    width: u32,
+) -> u32 {
+    let sign = value >> (width - 1) & 1;
+    let run = if sign == 1 { !value & mask(width) } else { value };
+    run.leading_zeros() - (128 - width)
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2231
