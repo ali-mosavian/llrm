@@ -744,6 +744,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
+            ISD::CtTzZeroPoison | ISD::CtLzZeroPoison => self.expand_zero_poison_count(node).map(|result| vec![result]),
             ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
@@ -948,18 +949,108 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(value)
     }
 
-    /// `TargetLowering::expandBSWAP`, for `i16` (a rotate by 8). Other widths
-    /// are legal on the targets here or not yet translated.
+    /// `TargetLowering::expandCTTZ` and `expandCTLZ`, the first step: "if the
+    /// non-ZERO_UNDEF version is supported we can use that instead". wasm has
+    /// `ctz` and `clz` (stft_single, stft_fixed stopped the compile at
+    /// `CTTZ_ZERO_UNDEF`).
+    fn expand_zero_poison_count(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let plain = if self.dag.opcode(node) == ISD::CtTzZeroPoison { ISD::CtTz } else { ISD::CtLz };
+        if !self.tli.is_operation_legal_or_custom(plain, vt) {
+            return None;
+        }
+        Some(self.dag.get_node(plain, vt, &[self.dag.operand(node, 0)]))
+    }
+
+    /// `TargetLowering::expandBSWAP`
+    /// ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L11533)):
+    /// `i16` is a rotate by 8, `i32` and `i64` a shift, mask and or of each
+    /// byte; `i32` with a legal `ROTR` is the xor form.
     fn expand_bswap(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
-        if vt != EVT::I16 {
-            return None;
+        let op = self.dag.operand(node, 0);
+        let amount = |this: &mut Self, bits: u64| this.dag.get_constant(u128::from(bits), EVT::I8);
+        let mask = |this: &mut Self, bits: u64| this.dag.get_constant(u128::from(bits), vt);
+        let binary =
+            |this: &mut Self, opcode: ISD, lhs: SDValue, rhs: SDValue| this.dag.get_node(opcode, vt, &[lhs, rhs]);
+        match vt {
+            EVT::I16 => {
+                let by = amount(self, 8);
+                Some(binary(self, ISD::Rotl, op, by))
+            }
+            EVT::I32 if self.tli.is_operation_legal_or_custom(ISD::Rotr, vt) => {
+                let by = amount(self, 16);
+                let rotr16 = binary(self, ISD::Rotr, op, by);
+                let tmp = binary(self, ISD::Xor, op, rotr16);
+                let keep = mask(self, 0xFF00_FFFF);
+                let tmp = binary(self, ISD::And, tmp, keep);
+                let by = amount(self, 8);
+                let tmp = binary(self, ISD::Srl, tmp, by);
+                let by = amount(self, 8);
+                let rotr8 = binary(self, ISD::Rotr, op, by);
+                Some(binary(self, ISD::Xor, tmp, rotr8))
+            }
+            EVT::I32 => {
+                let by = amount(self, 24);
+                let tmp4 = binary(self, ISD::Shl, op, by);
+                let low = mask(self, 0xFF00);
+                let tmp3 = binary(self, ISD::And, op, low);
+                let by = amount(self, 8);
+                let tmp3 = binary(self, ISD::Shl, tmp3, by);
+                let by = amount(self, 8);
+                let tmp2 = binary(self, ISD::Srl, op, by);
+                let low = mask(self, 0xFF00);
+                let tmp2 = binary(self, ISD::And, tmp2, low);
+                let by = amount(self, 24);
+                let tmp1 = binary(self, ISD::Srl, op, by);
+                let tmp4 = binary(self, ISD::Or, tmp4, tmp3);
+                let tmp2 = binary(self, ISD::Or, tmp2, tmp1);
+                Some(binary(self, ISD::Or, tmp4, tmp2))
+            }
+            EVT::I64 => {
+                // Byte `k` from the bottom goes to byte `7 - k`: the outer
+                // two by a shift alone, the six inner ones masked first.
+                let by = amount(self, 56);
+                let mut tmp8 = binary(self, ISD::Shl, op, by);
+                let shifted = |this: &mut Self, byte: u32, opcode: ISD, by: u64| {
+                    let keep = mask(this, 255u64 << (8 * byte));
+                    let lhs = if opcode == ISD::Shl {
+                        binary(this, ISD::And, op, keep)
+                    } else {
+                        let shift = amount(this, by);
+                        binary(this, ISD::Srl, op, shift)
+                    };
+                    if opcode == ISD::Shl {
+                        let shift = amount(this, by);
+                        binary(this, ISD::Shl, lhs, shift)
+                    } else {
+                        binary(this, ISD::And, lhs, keep)
+                    }
+                };
+                let tmp7 = shifted(self, 1, ISD::Shl, 40);
+                let tmp6 = shifted(self, 2, ISD::Shl, 24);
+                let tmp5 = shifted(self, 3, ISD::Shl, 8);
+                let tmp4 = shifted(self, 3, ISD::Srl, 8);
+                let tmp3 = shifted(self, 2, ISD::Srl, 24);
+                let tmp2 = shifted(self, 1, ISD::Srl, 40);
+                let by = amount(self, 56);
+                let tmp1 = binary(self, ISD::Srl, op, by);
+                tmp8 = binary(self, ISD::Or, tmp8, tmp7);
+                let tmp6 = binary(self, ISD::Or, tmp6, tmp5);
+                let tmp4 = binary(self, ISD::Or, tmp4, tmp3);
+                let tmp2 = binary(self, ISD::Or, tmp2, tmp1);
+                let tmp8 = binary(self, ISD::Or, tmp8, tmp6);
+                let tmp4 = binary(self, ISD::Or, tmp4, tmp2);
+                Some(binary(self, ISD::Or, tmp8, tmp4))
+            }
+            _ => None,
         }
-        let amount = self.dag.get_constant(8, EVT::I8);
-        Some(self.dag.get_node(ISD::Rotl, vt, &[self.dag.operand(node, 0), amount]))
     }
 
     /// `LegalizeOp` for a float constant: left if the target makes it
