@@ -513,6 +513,14 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
+static NAMES: std::sync::OnceLock<crate::hash::HashMap<&'static str, Intrinsic>> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    /// Names looked up by `named`, for a test that a lookup does not scan the table.
+    static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 const TABLE: [Spec; 76] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
@@ -933,11 +941,17 @@ impl Intrinsic {
         if name.starts_with(ASM) {
             return Some(Intrinsic::Asm);
         }
-        TABLE
-            .iter()
-            .filter(|spec| name.strip_prefix(spec.name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-            .max_by_key(|spec| spec.name.len())
-            .map(|spec| spec.intrinsic)
+        // The longest table name that is `name` or a `.`-cut prefix of it.
+        let names = NAMES.get_or_init(|| TABLE.iter().map(|spec| (spec.name, spec.intrinsic)).collect());
+        let mut cut = name;
+        loop {
+            #[cfg(test)]
+            PROBES.with(|probes| probes.set(probes.get() + 1));
+            if let Some(&found) = names.get(cut) {
+                return Some(found);
+            }
+            cut = &cut[..cut.rfind('.')?];
+        }
     }
 
     /// The function's attributes and each parameter's, where MIR states them;
@@ -1071,6 +1085,30 @@ impl Intrinsic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `named` compared the name with every one of the 76 table entries on each
+    /// call (2465 Ir a call, 211 M Ir in DSE of 600 memcpy/memset/store triples):
+    /// a lookup probes a name per `.`-cut, however long the table.
+    #[test]
+    fn naming_an_intrinsic_does_not_scan_the_table() {
+        let before = PROBES.with(std::cell::Cell::get);
+        assert_eq!(Intrinsic::named("llvm.memcpy.p0.p0.i32"), Some(Intrinsic::MemCpy));
+        assert_eq!(Intrinsic::named("llvm.memset"), Some(Intrinsic::MemSet));
+        assert_eq!(Intrinsic::named("foo"), None);
+        let probes = PROBES.with(std::cell::Cell::get) - before;
+        assert!(probes <= 10, "{probes} names probed for 3 lookups");
+    }
+
+    /// Every table name, bare and with type suffixes, names its own intrinsic;
+    /// a name that only shares a prefix without a `.` names none.
+    #[test]
+    fn every_table_name_names_its_intrinsic_with_or_without_suffixes() {
+        for spec in TABLE.iter() {
+            assert_eq!(Intrinsic::named(spec.name), Some(spec.intrinsic), "{}", spec.name);
+            assert_eq!(Intrinsic::named(&format!("{}.p0.i32", spec.name)), Some(spec.intrinsic), "{}", spec.name);
+            assert!(Intrinsic::named(&format!("{}x", spec.name)).is_none_or(|got| got != spec.intrinsic), "{}", spec.name);
+        }
+    }
 
     /// An enumerated `llvm.*` intrinsic with no entry would have no
     /// attributes at all; only the ones MIR states itself have none.
