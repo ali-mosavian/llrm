@@ -2656,7 +2656,13 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => {
                     let jump = tail_call(block, i, pending);
-                    writeln!(out, "  {} {callee}", if jump { "jmp" } else { "jsr" }).unwrap()
+                    // the speed variants of the variable long shifts move whole
+                    // bytes first: 45 bytes more each, linked once, for 200
+                    // clocks fewer per 8 bits
+                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
+                        && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
+                        .unwrap()
                 }
                 // return address, then target-1, then rts into the callee; its
                 // own rts lands on the label
