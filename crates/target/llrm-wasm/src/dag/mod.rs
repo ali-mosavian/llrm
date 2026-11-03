@@ -182,9 +182,10 @@ pub fn compile_function(
     if options.level != crate::driver::Level::O0 {
         if crate::tail_duplicate::tail_duplicate(&mut f, for_size) {
             remove_unreachable_blocks(&mut f);
-            // The pin runs `FixIrreducibleControlFlow` after it.
-            fix_irreducible_control_flow(&mut f);
         }
+        // The pin runs `FixIrreducibleControlFlow` after branch folding and
+        // tail duplication: a merge can make a loop with two entries.
+        fix_irreducible_control_flow(&mut f);
     }
     if options.level != crate::driver::Level::O0 {
         crate::optimize_live_intervals::optimize_live_intervals(&mut f);
