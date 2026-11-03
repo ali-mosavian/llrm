@@ -2379,8 +2379,12 @@ impl Builder<'_> {
                             continue;
                         }
                         // A byte or word is promoted to `i32`, a dword goes
-                        // in the dword register (`EDI`, not `RDI`)
-                        let promoted = width.min(vt.size_in_bits().max(32));
+                        // in the dword register (`EDI`, not `RDI`); an
+                        // integer between a dword and the register is
+                        // promoted to the register (`i40` to `i64`, as
+                        // `getCopyToParts` does).
+                        let bits = vt.size_in_bits();
+                        let promoted = if bits > 32 && bits < width { width } else { width.min(bits.max(32)) };
                         let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(promoted), &[piece])
