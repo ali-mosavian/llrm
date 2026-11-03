@@ -100,8 +100,20 @@ impl Tracker {
         var: Var,
         at: i64,
     ) {
+        self.close_keeping(var, at, false);
+    }
+
+    /// `close`, keeping a range that has no length when `clobbered`: a note
+    /// before an instruction that writes the register is still a location the
+    /// writer reads (the instruction, which clobbers it, is the range's end).
+    fn close_keeping(
+        &mut self,
+        var: Var,
+        at: i64,
+        clobbered: bool,
+    ) {
         if let Some((place, start, _)) = self.open.remove(&var)
-            && start < at
+            && (start < at || (clobbered && start == at))
         {
             self.closed.push(Located { variable: var.variable, piece: var.piece, start, end: at, at: place });
         }
@@ -176,7 +188,7 @@ impl Tracker {
             .map(|(var, _)| *var)
             .collect();
         for var in killed {
-            self.close(var, at);
+            self.close_keeping(var, at, true);
             // A parameter that lost its register is its entry value from here
             // (`emitEntryValues`).
             if let Some(&register) = self.backup.get(&var) {
@@ -444,9 +456,12 @@ pub struct FlowTarget<'a> {
 /// The blocks of `body` as `extend` takes them, in reverse post-order, from
 /// what the allocator decided: a register an instruction defines (through
 /// `placed`), clobbers or delivers is written there, and a located range
-/// starts a note at its first position. A write at a position goes before
-/// the note that starts there: the note's register holds its value after the
-/// instruction.
+/// starts a note at its first position. A note that stands before an
+/// instruction goes before the instruction's writes (the pin's `DBG_VALUE`
+/// precedes the instruction that clobbers it); a range that starts where its
+/// value is defined starts after the definition's slot, so after its writes.
+/// The entry's arrival is the exception: its registers are written before
+/// anything.
 ///
 /// DEVIATE: the pin reads the final instructions' operands; this reads the
 /// allocator's body and its decisions, which agree.
@@ -487,7 +502,7 @@ pub fn flow_of(
             written.extend(one.clobbers.iter().copied());
             written.extend(one.delivers.iter().map(|(_, register)| *register));
             if !written.is_empty() {
-                events.push((here, 0, Event::Def { written, mask: None, livein: one.arrival() }));
+                events.push((here, if one.arrival() { 0 } else { 2 }, Event::Def { written, mask: None, livein: one.arrival() }));
             }
             let root = |value: u32| target.parents.get(&value).copied().unwrap_or(value);
             let register = |value: &u32| placed.get(value).copied();
@@ -496,12 +511,12 @@ pub fn flow_of(
                 // value back.
                 (_, [stored]) if one.spill_store => {
                     if let (Some(from), Some(slot)) = (register(stored), (target.home)(root(*stored))) {
-                        events.push((here, 2, Event::Spill { from, slot }));
+                        events.push((here, 4, Event::Spill { from, slot }));
                     }
                 }
                 ([loaded], _) if one.spill_reload => {
                     if let (Some(into), Some(slot)) = (register(loaded), (target.home)(root(*loaded))) {
-                        events.push((here, 2, Event::Reload { slot, into }));
+                        events.push((here, 4, Event::Reload { slot, into }));
                     }
                 }
                 ([dest], [src])
@@ -516,7 +531,7 @@ pub fn flow_of(
                         });
                         events.push((
                             here,
-                            1,
+                            3,
                             Event::Copy {
                                 dest,
                                 src: from,
@@ -532,7 +547,7 @@ pub fn flow_of(
         let (low, high) = (i64::from(start.get_index()), i64::from(end.get_index()));
         for one in located.iter().filter(|one| (low..high).contains(&one.start)) {
             let place = (one.at != Where::Undef).then_some(one.at);
-            events.push((one.start, 3, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
+            events.push((one.start, 1, Event::Note(Var { variable: one.variable, piece: one.piece }, place)));
         }
         events.sort_by_key(|(here, phase, _)| (*here, *phase));
         blocks.push(FlowBlock {
@@ -756,7 +771,7 @@ mod tests {
         let (first, second) = (slot(&lis, &define), slot(&lis, &copy));
         let placed: IndexMap<u32, RegId> =
             [(1, reg(3)), (2, reg(5))].into_iter().map(|(v, p)| (v, as_reg(p))).collect();
-        let located = [Located { variable: 9, piece: None, start: first, end: second + 100, at: at(3) }];
+        let located = [Located { variable: 9, piece: None, start: first + 2, end: second + 100, at: at(3) }];
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|register| register == reg(5) };
         let blocks = flow_of(&body, &mut lis, &placed, &located, &target);
@@ -788,7 +803,7 @@ mod tests {
         let mut lis = LiveIntervals::new(&body);
         let first = i64::from(lis.indexes.get_instruction_index(define.id()).get_index());
         let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(3))].into_iter().collect();
-        let located = [Located { variable: 9, piece: None, start: first, end: first + 100, at: at(3) }];
+        let located = [Located { variable: 9, piece: None, start: first + 2, end: first + 100, at: at(3) }];
         let parents = HashMap::default();
         let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|_| false };
         let found = extend(
@@ -797,8 +812,42 @@ mod tests {
         );
         assert_eq!(found.len(), 1, "{found:?}");
         let end = i64::from(lis.indexes.get_mbb_range(0).1.get_index());
-        assert_eq!((found[0].start, found[0].end, found[0].at), (first, end, at(3)));
+        assert_eq!((found[0].start, found[0].end, found[0].at), (first + 2, end, at(3)));
     }
+    /// A note before an instruction that writes the register it names: the
+    /// variable is there up to that instruction and the writer reads it as the
+    /// instruction's own bytes (`l = a + x` noted before `l * 2` in the
+    /// register `l * 2` writes, 5..7 in the pin). It started after the write,
+    /// at the next instruction, and ran to the one after that.
+    #[test]
+    fn a_note_before_the_instruction_that_writes_its_register_is_a_range_the_writer_reads() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Block, Insn, LirBlock};
+
+        let define = Arc::new(Insn::new(0, None, None, vec![1], vec![]));
+        let rewrite = Arc::new(Insn::new(0, None, None, vec![2], vec![1]));
+        let last = Arc::new(Insn::new(0, None, None, vec![], vec![2]));
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![define, Arc::clone(&rewrite), last]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        let at_rewrite = i64::from(lis.indexes.get_instruction_index(rewrite.id()).get_index());
+        let placed: IndexMap<u32, RegId> = [(1, reg(3)), (2, reg(3))].into_iter().collect();
+        let located = [Located { variable: 9, piece: None, start: at_rewrite, end: at_rewrite + 100, at: at(3) }];
+        let parents = HashMap::default();
+        let target = FlowTarget { parents: &parents, home: &|_| None, callee_saved: &|_| false };
+        let found = extend(
+            &flow_of(&body, &mut lis, &placed, &located, &target),
+            &Flow { stack_pointer: reg(9), params: &BTreeSet::new() },
+        );
+        assert_eq!(ranges(&found), [(9, at_rewrite, at_rewrite, at(3))], "{found:?}");
+    }
+
     fn entry_tracker(params: &[u32]) -> Tracker {
         Tracker::entering(0, &Locs::default(), &params.iter().copied().collect(), true)
     }
