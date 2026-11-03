@@ -656,7 +656,15 @@ impl Builder<'_> {
         // that neighbouring fills share, and fpbench/nbody_single -Os grew 2 B
         // taking the `fst`s over two adjacent ones.
         let ints = dwords * 8;
-        if filled || x87 >= ints {
+        // Nor over a `rep stos`: it takes the clear past the backend's inline
+        // stores, and its clocks per byte are the `fst`s' (ring nib -O2: 2 KB
+        // of `fst`, +2017 B for -17 clocks).
+        let inline = if opt_size {
+            self.target.tuning.max_stores_per_memset_opt_size
+        } else {
+            self.target.tuning.max_stores_per_memset
+        } as u64;
+        if filled || x87 >= ints || dwords > inline {
             return None;
         }
         if !opt_size {

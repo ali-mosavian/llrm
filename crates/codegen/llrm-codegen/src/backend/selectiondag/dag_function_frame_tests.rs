@@ -1227,6 +1227,16 @@ fn at_speed_a_zero_clear_of_doubles_is_x87_stores() {
     assert!(!ops.iter().any(|o| o.starts_with("Store")), "{ops:?}");
 }
 
+/// ring nib -O2: a 2 KB zero clear was 256 `fst`s, +2017 B over the `rep stosd`
+/// for -17 clocks. Only a clear the backend would store inline is `fst`s.
+#[test]
+fn at_speed_a_clear_past_the_inline_stores_stays_rep_stos() {
+    let ops = memset_ops(2048, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
+    let ops = memset_ops(32, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "8 dwords are past the 4 stores: {ops:?}");
+}
+
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
 #[test]
 fn at_os_a_14_byte_zero_fill_stays_rep_stos() {
