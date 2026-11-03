@@ -6,5 +6,6 @@
 #define SF_DIV_HW32 1
 #ifndef __OPTIMIZE_SIZE__
 #define SF_PACK_INLINE 1 /* bytes first at -Os: the call stays */
+#define SF_SPECIALS_MUL 1 /* -O2 mul -4.7% clk for +1 B; with the division too +8 B and slower */
 #endif
 #endif

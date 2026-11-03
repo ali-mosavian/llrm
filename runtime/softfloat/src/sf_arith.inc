@@ -44,9 +44,16 @@ static SF_T SF_N(sub_bits)(SF_T a, SF_T b) { return SF_N(add_bits)(a, b ^ SF_SIG
 
 #ifndef SF_EXT_MULDIV /* a target that supplies multiplication and division elsewhere defines it */
 #ifdef SF_SPECIALS_ONCE
+#define SF_SPECIALS_MUL
+#define SF_SPECIALS_DIV
+#endif
+#if defined(SF_SPECIALS_MUL) || defined(SF_SPECIALS_DIV)
 /* One range test per operand finds zero, infinity and NaN together; the cases themselves are out of the common path. */
 #define SF_FINITE(x) ((SF_T)((x) << 1) - 2 < (SF_INF << 1) - 2)
 
+#endif
+
+#ifdef SF_SPECIALS_MUL
 static SF_T SF_N(mul_special)(SF_T a, SF_T b)
 {
     SF_T sign = (a ^ b) & SF_SIGN;
@@ -54,17 +61,6 @@ static SF_T SF_N(mul_special)(SF_T a, SF_T b)
     if (SF_N(is_nan)(b)) return b | SF_QUIET;
     if ((a << 1) == 0 || (b << 1) == 0) return ((a << 1) == (SF_INF << 1) || (b << 1) == (SF_INF << 1)) ? SF_QNAN : sign;
     return sign | SF_INF;
-}
-
-static SF_T SF_N(div_special)(SF_T a, SF_T b)
-{
-    SF_T sign = (a ^ b) & SF_SIGN;
-    if (SF_N(is_nan)(a)) return a | SF_QUIET;
-    if (SF_N(is_nan)(b)) return b | SF_QUIET;
-    if ((a << 1) == (SF_INF << 1)) return (b << 1) == (SF_INF << 1) ? SF_QNAN : sign | SF_INF;
-    if ((b << 1) == (SF_INF << 1)) return sign;
-    if ((b << 1) == 0) return (a << 1) == 0 ? SF_QNAN : sign | SF_INF;
-    return sign;
 }
 
 static SF_T SF_N(mul_bits)(SF_T a, SF_T b)
@@ -78,16 +74,6 @@ static SF_T SF_N(mul_bits)(SF_T a, SF_T b)
     return mul_core(sign, ea, eb, ma, mb);
 }
 
-static SF_T SF_N(div_bits)(SF_T a, SF_T b)
-{
-    if (!(SF_FINITE(a) & SF_FINITE(b))) return SF_N(div_special)(a, b);
-    SF_T sign = (a ^ b) & SF_SIGN;
-    int ea, eb;
-    SF_T ma = SF_N(unpack)(a, &ea), mb = SF_N(unpack)(b, &eb);
-    if (!(ma & SF_HID)) { int s = sf_clz(ma) - SF_CLZ_UNPACKED; SF_NORM_APPLY(ma, ea, s); }
-    if (!(mb & SF_HID)) { int s = sf_clz(mb) - SF_CLZ_UNPACKED; SF_NORM_APPLY(mb, eb, s); }
-    return div_core(sign, ea, eb, ma, mb);
-}
 #else
 static SF_T SF_N(mul_bits)(SF_T a, SF_T b)
 {
@@ -106,6 +92,31 @@ static SF_T SF_N(mul_bits)(SF_T a, SF_T b)
     return mul_core(sign, ea, eb, ma, mb);
 }
 
+#endif
+
+#ifdef SF_SPECIALS_DIV
+static SF_T SF_N(div_special)(SF_T a, SF_T b)
+{
+    SF_T sign = (a ^ b) & SF_SIGN;
+    if (SF_N(is_nan)(a)) return a | SF_QUIET;
+    if (SF_N(is_nan)(b)) return b | SF_QUIET;
+    if ((a << 1) == (SF_INF << 1)) return (b << 1) == (SF_INF << 1) ? SF_QNAN : sign | SF_INF;
+    if ((b << 1) == (SF_INF << 1)) return sign;
+    if ((b << 1) == 0) return (a << 1) == 0 ? SF_QNAN : sign | SF_INF;
+    return sign;
+}
+
+static SF_T SF_N(div_bits)(SF_T a, SF_T b)
+{
+    if (!(SF_FINITE(a) & SF_FINITE(b))) return SF_N(div_special)(a, b);
+    SF_T sign = (a ^ b) & SF_SIGN;
+    int ea, eb;
+    SF_T ma = SF_N(unpack)(a, &ea), mb = SF_N(unpack)(b, &eb);
+    if (!(ma & SF_HID)) { int s = sf_clz(ma) - SF_CLZ_UNPACKED; SF_NORM_APPLY(ma, ea, s); }
+    if (!(mb & SF_HID)) { int s = sf_clz(mb) - SF_CLZ_UNPACKED; SF_NORM_APPLY(mb, eb, s); }
+    return div_core(sign, ea, eb, ma, mb);
+}
+#else
 static SF_T SF_N(div_bits)(SF_T a, SF_T b)
 {
     SF_T sign = (a ^ b) & SF_SIGN;

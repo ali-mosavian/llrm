@@ -16,3 +16,6 @@
 #undef SF_QUIET
 #undef SF_CLZ_UNPACKED
 #undef SF_NORM_APPLY
+#undef SF_FINITE
+#undef SF_SPECIALS_MUL
+#undef SF_SPECIALS_DIV
