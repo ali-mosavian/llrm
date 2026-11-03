@@ -97,8 +97,9 @@ pub fn in_code(
         if slot >= end {
             return Some(code_len);
         }
+        // An instruction a later pass removed has no code: the next one's.
         let at = insns.partition_point(|&(one, _)| one < slot);
-        insns.get(at).and_then(|&(_, id)| offset(id))
+        insns[at..].iter().find_map(|&(_, id)| offset(id)).or(Some(code_len))
     };
     // The instruction after the one at `slot`: where it stops being read.
     let after = |slot: i64| insns.iter().map(|&(one, _)| one).find(|&one| one > slot).unwrap_or(end);
@@ -214,5 +215,16 @@ mod tests {
         assert_eq!(clobbered[&var(1)], [(0, 7, place)]);
         let open = in_code(&[range(2, 4, 100, 5)], &insns, &offsets, 10);
         assert_eq!(open[&var(2)], [(3, 10, place)]);
+    }
+
+    /// A later pass removed the instruction a range starts at: it starts at
+    /// the code of the next one that is left, not nowhere.
+    #[test]
+    fn a_range_at_a_removed_instruction_starts_at_the_next_one_left() {
+        let insns = [(0, 100), (4, 101), (8, 102)];
+        let offsets = |id: u64| [(100, 0usize), (102, 7)].into_iter().find(|&(one, _)| one == id).map(|(_, at)| at);
+        let place = Where::Place(Place::Register(RegId::from_raw(5)));
+        let found = in_code(&[range(1, 4, 100, 5)], &insns, &offsets, 10);
+        assert_eq!(found[&var(1)], [(7, 10, place)]);
     }
 }

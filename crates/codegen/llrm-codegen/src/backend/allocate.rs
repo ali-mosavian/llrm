@@ -338,7 +338,7 @@ pub fn greedy_rewritten(
     let Some(decided) = decided.filter(|decided| decided.report.stats.failed == 0 && !decided.spill_failed) else {
         return Err(Error::Value(format!("{}: the greedy allocator could not place every range", body.name)));
     };
-    let Some(edited) = decided.edited else {
+    let Some(mut edited) = decided.edited else {
         return Err(Error::Value(format!("{}: the greedy allocator wrote no body", body.name)));
     };
     if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
@@ -369,6 +369,18 @@ pub fn greedy_rewritten(
             frame,
             saved,
         );
+    }
+    if llrm_support::env_flag!("LLRM_LDV_EMIT") {
+        let found = crate::backend::livedebugvariables::ranges_of(
+            &edited,
+            &decided.placed,
+            &decided.spilled,
+            &decided.parents,
+            &|value| crate::backend::frame::FrameInfo::home(&*frame, value),
+            &frame.stacks,
+            saved,
+        );
+        edited.placed = Arc::new(crate::backend::livedebugvariables::Placed { ranges: found.flow, insns: found.insns });
     }
     let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
     Ok((

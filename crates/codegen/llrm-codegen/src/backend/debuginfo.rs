@@ -83,7 +83,7 @@
 //! # See also
 //! The model, the writers and what each can say: `docs/formats/debug-info.md`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 use llrm_lir::registers::RegId;
@@ -677,6 +677,48 @@ fn located(at: super::valuetrack::Where) -> Location {
     }
 }
 
+/// The result of `valuetrack::tracked`, read from the ranges the allocator
+/// left for the writer (`LLRM_LDV_EMIT`): entries, then the ranges the writer
+/// makes of them, as offsets into the function. `marks` are the offsets the
+/// instructions start at.
+fn flowed(
+    placed: &super::livedebugvariables::Placed,
+    marks: &[(usize, masm::Mark)],
+    length: usize,
+) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Vec<super::valuetrack::Where>)>> {
+    use super::livedebugvariables::{Place, Where};
+    use super::valuetrack::Where as Held;
+
+    let starts: BTreeMap<u64, usize> = marks
+        .iter()
+        .rev()
+        .filter_map(|&(at, mark)| if let masm::Mark::Insn(id) = mark { Some((id, at)) } else { None })
+        .collect();
+    let place = |place: Place| match place {
+        Place::Register(register) => masm::Place::Register(register),
+        Place::Cell(disp) => masm::Place::Cell { disp, bytes: 0 },
+    };
+    super::livedebugvalues::history::in_code(&placed.ranges, &placed.insns, &|id| starts.get(&id).copied(), length)
+        .into_iter()
+        .map(|(var, ranges)| {
+            let ranges = ranges
+                .into_iter()
+                .filter_map(|(from, to, at)| {
+                    let held = match at {
+                        Where::Place(one) => Held::Place(place(one)),
+                        Where::Offset(one, add) => Held::Offset(place(one), add),
+                        Where::Constant(value) => Held::Constant(value),
+                        Where::Entry(register) => Held::Entry(register),
+                        Where::Undef => return None,
+                    };
+                    Some((from, to, vec![held]))
+                })
+                .collect();
+            ((var.variable, var.piece), ranges)
+        })
+        .collect()
+}
+
 /// The one place that holds a value in every range of `ranges`, which must run
 /// on from the first without a gap to the code `until`: the place, and the
 /// offset the first range starts at.
@@ -983,6 +1025,8 @@ pub fn laid_out(
                         .any(|(note, said)| said.variable == node && !emitted.contains(&(note as u32)));
                     let found = if lost {
                         Default::default()
+                    } else if llrm_support::env_flag!("LLRM_LDV_EMIT") && !procedure.body.placed.ranges.is_empty() {
+                        flowed(&procedure.body.placed, &marks, end - start)
                     } else {
                         super::valuetrack::tracked(
                             &code.image[start..end],

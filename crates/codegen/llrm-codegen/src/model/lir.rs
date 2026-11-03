@@ -1267,6 +1267,9 @@ pub struct LirBody {
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
+    /// Where each variable is over the code (`LiveDebugValues`), when the
+    /// allocator worked it out for the writer.
+    pub placed: Arc<crate::backend::livedebugvariables::Placed>,
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
@@ -1465,6 +1468,7 @@ impl LirBody {
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
+            placed: Arc::default(),
             arguments_in_cells: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
@@ -1536,6 +1540,7 @@ impl LirBody {
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
+            placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),

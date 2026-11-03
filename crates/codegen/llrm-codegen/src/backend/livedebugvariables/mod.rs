@@ -289,6 +289,14 @@ pub fn by_note_value(
     out
 }
 
+/// What the writer reads of `Ranges`: the ranges `LiveDebugValues` leaves
+/// and every instruction's slot and id.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Placed {
+    pub ranges: Vec<Located>,
+    pub insns: Vec<(i64, u64)>,
+}
+
 /// The ranges `LiveDebugVariables` places (`location`, with entry values) and
 /// those `LiveDebugValues` leaves after them (`flow`), over the body the
 /// allocator wrote; the notes' slot positions as (note number, position).
