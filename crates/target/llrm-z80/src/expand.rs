@@ -22,6 +22,8 @@ use crate::{REGISTER_INFO, reg};
 pub enum Line {
     Label(String),
     Inst(String),
+    /// The source line of the instructions that follow (`-g`); no code.
+    Loc(u32),
 }
 
 /// The label of block `id` of the function numbered `number`.
@@ -87,6 +89,14 @@ pub(crate) fn lanes(pair: RegId) -> Result<(RegId, RegId), String> {
         Ok((reg::L, reg::H))
     } else {
         Err(format!("{} has no byte halves", name(pair)))
+    }
+}
+
+/// SDCC's register list of a value held in `register`: `[l,h]` for a pair.
+pub(crate) fn register_list(register: RegId) -> String {
+    match lanes(register) {
+        Ok((low, high)) => format!("[{},{}]", name(low), name(high)),
+        Err(_) => format!("[{}]", name(register)),
     }
 }
 
@@ -694,7 +704,7 @@ impl Printer<'_> {
                 self.push(format!("sbc a, {bh}"));
             }
             Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") => {
-                let skip = format!("{}$", self.out.len());
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {bl}"));
                 self.push(format!("jr nz, {skip}"));
@@ -955,11 +965,18 @@ pub fn finish(
     }
     for (at, block) in function.blocks.iter().enumerate() {
         printer.out.push(Line::Label(label(number, block.id)));
+        let mut shown = 0;
         let next = function.blocks.get(at + 1).map(|block| block.id);
         for (index, inst) in block.insts.iter().enumerate() {
             if printer.skip > 0 {
                 printer.skip -= 1;
                 continue;
+            }
+            if inst.origin != 0 && inst.origin != shown {
+                shown = inst.origin;
+                if let Some(place) = function.places.get(inst.origin as usize - 1) {
+                    printer.out.push(Line::Loc(place.line));
+                }
             }
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
@@ -1110,9 +1127,12 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         match relaxed {
             Some((cc, label)) => {
                 // `dec b; jr nz, L` is `djnz L`
-                let counted = cc == Some("nz") && matches!(out.last(), Some(Line::Inst(last)) if last == "dec b");
+                // a row between the two does not part them
+                let before = out.iter().rposition(|line| !matches!(line, Line::Loc(_)));
+                let counted = cc == Some("nz")
+                    && before.is_some_and(|at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
                 if counted {
-                    out.pop();
+                    out.remove(before.expect("a dec b"));
                     out.push(Line::Inst(format!("djnz {label}")));
                 } else {
                     out.push(Line::Inst(match cc {

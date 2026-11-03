@@ -368,7 +368,10 @@ pub fn eliminate_phis_with<C: Copy>(
                 let insts = &mut function.blocks[pred].insts;
                 let point = copy_point(insts, incoming);
                 let point = if hoist { hoisted_point(insts, incoming, point) } else { point };
-                insts.insert(point, Inst::copy(temporary, incoming));
+                // The copy stands under the instruction it is placed before.
+                let mut copy = Inst::copy(temporary, incoming);
+                copy.origin = insts.get(point).or(insts.last()).map_or(0, |beside| beside.origin);
+                insts.insert(point, copy);
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
@@ -419,7 +422,9 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
                 if destination == source {
                     continue;
                 }
-                out.push(Inst::copy(destination, source));
+                let mut copy = Inst::copy(destination, source);
+                copy.origin = inst.origin;
+                out.push(copy);
                 inst.operands[used] = Operand::Use(destination);
             }
             out.push(inst);
