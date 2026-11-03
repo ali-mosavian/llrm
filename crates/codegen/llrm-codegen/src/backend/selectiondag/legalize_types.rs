@@ -519,7 +519,10 @@ impl<'a> TypeLegalizer<'a> {
                         (true, true, false) => "__floatsidf",
                         (false, true, true) => "__floatunsisf",
                         (false, true, false) => "__floatunsidf",
-                        _ => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften an i64 conversion" }),
+                        (true, false, true) => "__floatdisf",
+                        (true, false, false) => "__floatdidf",
+                        (false, false, true) => "__floatundisf",
+                        (false, false, false) => "__floatundidf",
                     })
                 };
                 self.soft_c_call(name, &[arg], int, op, vt)?
@@ -577,16 +580,10 @@ impl<'a> TypeLegalizer<'a> {
                 // `SoftenFloatOp_FP_TO_XINT`: the routine over the integer
                 // that stands for the float.
                 let to = self.dag.value_type(node);
-                let from_single = self.dag.value_type(self.dag.operand(node, 0)) == EVT::Simple(MVT::F32);
                 let arg = self.softened_float(self.dag.operand(node, 0));
-                let name = match (op == ISD::FpToSInt, to.size_in_bits() <= 32, from_single) {
-                    (true, true, true) => "__fixsfsi",
-                    (true, true, false) => "__fixdfsi",
-                    (false, true, true) => "__fixunssfsi",
-                    (false, true, false) => "__fixunsdfsi",
-                    _ => return Err(LegalizeError::Unsupported { op, ty: to, what: "soften an i64 conversion" }),
-                };
-                let call = self.soft_c_call(name, &[arg], EVT::I32, op, to)?;
+                let name = self.fp_to_xint_name(op == ISD::FpToSInt, to.size_in_bits() > 32, self.dag.value_type(self.dag.operand(node, 0)));
+                let wide = to.size_in_bits() > 32;
+                let call = self.soft_c_call(name, &[arg], if wide { to } else { EVT::I32 }, op, to)?;
                 if to.size_in_bits() < 32 { self.dag.get_node(ISD::Truncate, to, &[call]) } else { call }
             }
             ISD::CopyToReg if at == 2 => {
@@ -606,6 +603,25 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.replace_value_with(node, result);
         Ok(false)
+    }
+
+    /// compiler-rt's float-to-integer routine (`RTLIB::getFPTOSINT`).
+    fn fp_to_xint_name(
+        &self,
+        signed: bool,
+        wide: bool,
+        from: EVT,
+    ) -> &'static str {
+        match (signed, wide, from == EVT::Simple(MVT::F32)) {
+            (true, false, true) => "__fixsfsi",
+            (true, false, false) => "__fixdfsi",
+            (false, false, true) => "__fixunssfsi",
+            (false, false, false) => "__fixunsdfsi",
+            (true, true, true) => "__fixsfdi",
+            (true, true, false) => "__fixdfdi",
+            (false, true, true) => "__fixunssfdi",
+            (false, true, false) => "__fixunsdfdi",
+        }
     }
 
     /// `makeLibCall` of the C routine `name` over `args`, its result of type
@@ -1614,6 +1630,16 @@ impl<'a> TypeLegalizer<'a> {
                 (self.dag.get_select(half, equal, min_max, winner), hi)
             }
             ISD::Mul => self.expand_mul(value, half)?,
+            op @ (ISD::FpToSInt | ISD::FpToUInt)
+                if self.tli.types.type_action(self.dag.value_type(self.dag.operand(value, 0))) == TypeAction::SoftenFloat =>
+            {
+                // `ExpandIntRes_FP_TO_XINT` over a softened operand: the `di`
+                // routine, its two registers the halves.
+                let name = self.fp_to_xint_name(op == ISD::FpToSInt, true, self.dag.value_type(self.dag.operand(value, 0)));
+                let arg = self.softened_float(self.dag.operand(value, 0));
+                let call = self.soft_c_call(name, &[arg], vt, op, vt)?;
+                self.split_integer(call, half)
+            }
             op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => {
                 let by_constant = (matches!(op, ISD::UDiv | ISD::URem)
                     && self.dag.constant(self.dag.operand(value, 1)).is_some())

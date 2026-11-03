@@ -182,3 +182,12 @@ fn a_soft_double_is_two_registers_and_calls_the_df3_routines() {
     assert_eq!(calls_of("%r = fpext float %a to double\nret double %r", "float %a", "double"), ["__extendsfdf2"]);
     assert_eq!(calls_of("%r = fptrunc double %a to float\nret float %r", "double %a", "float"), ["__truncdfsf2"]);
 }
+
+/// An `i64` converts through the `di` routines, its value in two registers.
+#[test]
+fn a_soft_float_i64_conversion_calls_the_di_routines() {
+    assert_eq!(calls_of("%r = sitofp i64 %a to float\nret float %r", "i64 %a", "float"), ["__floatdisf"]);
+    assert_eq!(calls_of("%r = uitofp i64 %a to double\nret double %r", "i64 %a", "double"), ["__floatundidf"]);
+    assert_eq!(calls_of("%r = fptosi float %a to i64\nret i64 %r", "float %a", "i64"), ["__fixsfdi"]);
+    assert_eq!(calls_of("%r = fptoui double %a to i64\nret i64 %r", "double %a", "i64"), ["__fixunsdfdi"]);
+}

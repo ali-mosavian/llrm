@@ -452,6 +452,11 @@ impl TargetLowering {
         // The x87 lowerings of a compare, a select and an extension have no
         // registers to work in: the type legalizer softens them first.
         t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
+        t.set_ops(
+            &[FpToSInt, FpToUInt, SIntToFp, UIntToFp],
+            &[MVT::I8, MVT::I16, MVT::I32, MVT::I64],
+            Action::Expand,
+        );
         // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
         for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
             t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
