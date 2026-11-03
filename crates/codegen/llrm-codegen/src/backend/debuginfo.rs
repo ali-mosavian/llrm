@@ -1275,7 +1275,13 @@ pub fn laid_out(
         // The scopes a place is in are the blocks', not the line table's: a
         // change of scope alone is not a new row.
         let mut before = None;
-        for &(line, offset) in &segment.lines {
+        // Line 0 says "no place" in DWARF; CodeView and Turbo Debugger have no
+        // such row.
+        let dwarf = !matches!(
+            debug.format,
+            model::Format::CodeView | model::Format::TurboDebugger
+        );
+        for &(line, offset) in segment.lines.iter().filter(|(line, _)| dwarf || line.line != 0) {
             if before.replace(line.row()) != Some(line.row()) {
                 info.lines.push(model::Line { section, offset, file: 0, line: line.line, column: line.column });
             }
