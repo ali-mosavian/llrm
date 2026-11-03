@@ -324,6 +324,46 @@ fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
     assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
 }
 
+/// A row-by-row clear (8 rows of 16 bytes): the inner loop becomes a memset,
+/// and the outer loop, which then holds a call to an intrinsic the pass has
+/// just declared, becomes one memset of 128 bytes. The call read as one that
+/// may throw and not return until the declaration reached the pass's later
+/// loops, so the nest stayed 8 memsets of 16 (matmul nib -Os: three row loops
+/// of `rep stosb`, +11 B and +721 clocks over the bar).
+#[test]
+fn test_a_nest_of_row_clears_becomes_one_memset() {
+    let text = "define void @f(ptr %p) {
+entry:
+  br label %outer
+
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i2, %latch ]
+  %row = mul nuw nsw i32 %i, 16
+  %rp = getelementptr inbounds i8, ptr %p, i32 %row
+  br label %inner
+
+inner:
+  %j = phi i32 [ 0, %outer ], [ %j2, %inner ]
+  %q = getelementptr inbounds i16, ptr %rp, i32 %j
+  store i16 0, ptr %q
+  %j2 = add nuw nsw i32 %j, 1
+  %jc = icmp eq i32 %j2, 8
+  br i1 %jc, label %latch, label %inner
+
+latch:
+  %i2 = add nuw nsw i32 %i, 1
+  %ic = icmp eq i32 %i2, 8
+  br i1 %ic, label %exit, label %outer
+
+exit:
+  ret void
+}
+";
+    let after = pass_output(text);
+    assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");
+    assert!(after.contains("i8 0, i64 128, i1 false)"), "{after}");
+}
+
 /// A function with `"no-builtins"` has every library function disabled in the
 /// pin's `TargetLibraryInfo`: x_radix (Open Watcom, `-fno-builtin`) had its
 /// zeroing loop made a memset, which the pin leaves a loop, and the unroll
