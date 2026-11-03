@@ -3,6 +3,13 @@
  *   mul_core(sign, ea, eb, ma, mb) and div_core(sign, ea, eb, ma, mb): ma, mb normalised (implicit one set), ea, eb their biased exponents;
  * each returns the packed result. */
 #define SF_QUIET (SF_HID >> 1)
+/* Normalising a denormal: shift the mantissa left by s and take s off the exponent. A target whose shift count must sit in one register (x86: cl)
+ * defines SF_NORM_SUB_FIRST, so the count is read last and need not outlive the other use of s. */
+#ifdef SF_NORM_SUB_FIRST
+#define SF_NORM_APPLY(m, e, s) do { (e) -= (s); (m) <<= (s); } while (0)
+#else
+#define SF_NORM_APPLY(m, e, s) do { (m) <<= (s); (e) -= (s); } while (0)
+#endif
 #define SF_CLZ_UNPACKED (SF_W - 1 - SF_MB) /* leading zeros of a mantissa with its implicit one set */
 
 static SF_T SF_N(add_bits)(SF_T a, SF_T b)
@@ -48,8 +55,8 @@ static SF_T SF_N(mul_bits)(SF_T a, SF_T b)
     if ((a << 1) == 0 || (b << 1) == 0) return sign;
     int ea, eb;
     SF_T ma = SF_N(unpack)(a, &ea), mb = SF_N(unpack)(b, &eb);
-    if (!(ma & SF_HID)) { int s = sf_clz(ma) - SF_CLZ_UNPACKED; ma <<= s; ea -= s; }
-    if (!(mb & SF_HID)) { int s = sf_clz(mb) - SF_CLZ_UNPACKED; mb <<= s; eb -= s; }
+    if (!(ma & SF_HID)) { int s = sf_clz(ma) - SF_CLZ_UNPACKED; SF_NORM_APPLY(ma, ea, s); }
+    if (!(mb & SF_HID)) { int s = sf_clz(mb) - SF_CLZ_UNPACKED; SF_NORM_APPLY(mb, eb, s); }
     return mul_core(sign, ea, eb, ma, mb);
 }
 
@@ -66,8 +73,8 @@ static SF_T SF_N(div_bits)(SF_T a, SF_T b)
     if ((a << 1) == 0) return sign;
     int ea, eb;
     SF_T ma = SF_N(unpack)(a, &ea), mb = SF_N(unpack)(b, &eb);
-    if (!(ma & SF_HID)) { int s = sf_clz(ma) - SF_CLZ_UNPACKED; ma <<= s; ea -= s; }
-    if (!(mb & SF_HID)) { int s = sf_clz(mb) - SF_CLZ_UNPACKED; mb <<= s; eb -= s; }
+    if (!(ma & SF_HID)) { int s = sf_clz(ma) - SF_CLZ_UNPACKED; SF_NORM_APPLY(ma, ea, s); }
+    if (!(mb & SF_HID)) { int s = sf_clz(mb) - SF_CLZ_UNPACKED; SF_NORM_APPLY(mb, eb, s); }
     return div_core(sign, ea, eb, ma, mb);
 }
 #endif

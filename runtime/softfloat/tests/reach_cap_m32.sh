@@ -11,7 +11,7 @@ ld -m elf_i386 -e _start -o $T/l.elf $T/l_sf32.o $T/l_sf32_conv.o $T/s.o
 for f in sf32 sf32_conv; do gcc -m32 -Os -ffreestanding -fno-pic -fno-builtin -w $F -c src/$f.c -o $T/g_$f.o; done
 ld -m elf_i386 -e _start -o $T/g.elf $T/g_sf32.o $T/g_sf32_conv.o $T/s.o
 bad=0
-for rc in __addsf3:450 __divsf3:501; do
+for rc in __addsf3:450 __divsf3:480; do
   n=$(python3 tests/reach32.py $T/l.elf ${rc%:*} | cut -d' ' -f1); g=$(python3 tests/reach32.py $T/g.elf ${rc%:*} | cut -d' ' -f1)
   echo "${rc%:*}: llrm $n B (cap ${rc#*:}); gcc-built $g B (information)"
   [ "$n" -le "${rc#*:}" ] || bad=1

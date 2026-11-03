@@ -15,3 +15,4 @@
 #undef SF_INF
 #undef SF_QUIET
 #undef SF_CLZ_UNPACKED
+#undef SF_NORM_APPLY
