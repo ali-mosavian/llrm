@@ -2231,3 +2231,212 @@ fn an_srem_loop_with_a_constant_trip_count_compiles_in_a_debug_build() {
         define i32 @main() {\n  %v = call i64 @f(i32 2000)\n  call void @report(i64 %v)\n  ret i32 0\n}\n";
     let _ = compiled(&flags(&["-O2"]), text, "main");
 }
+
+/// A dense switch at m64 is a table of 4-byte offsets in the read-only data.
+/// It was a `.data` section (writable) of `R_X86_64_PLT32` entries, the call
+/// kind: a PIE linked with `-z text` refused the one and the linker put a PLT
+/// stub behind the other. The pin's are `R_X86_64_PC32` in `.rodata`, each
+/// resolving to its slot's `block - table`.
+#[test]
+fn a_dense_switch_at_m64_is_a_read_only_table_of_pc_relative_entries() {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text += "d:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    let table = object.sections.iter().find(|one| one.role == llrm_object::Role::ROData).expect("a read-only section");
+    assert_eq!(table.image.len(), 8 * 4);
+    assert_eq!(table.relocs.len(), 8);
+    assert!(
+        table.relocs.iter().all(|one| one.pc_rel && one.kind == llrm_object::FixupKind::DATA_4),
+        "{:?}",
+        table.relocs
+    );
+    // `S + A - P` is `block - table`: the field holds `slot - table`.
+    for (k, reloc) in table.relocs.iter().enumerate() {
+        assert_eq!(reloc.at, 4 * k);
+        assert_eq!(reloc.addend, 4 * k as i64);
+    }
+}
+
+/// The same table through the Mach-O and COFF writers: each takes it (the
+/// entries are `S + A - P` against the code, as in ELF), and COFF's fields are
+/// the `slot + 4 - table` its `REL32` adds the code's address to.
+#[test]
+fn a_dense_switch_table_is_written_in_mach_o_and_coff_too() {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text += "d:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let write = |format| {
+        llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m64::M64),
+        )
+        .unwrap()
+    };
+    assert!(write(llrm_target::object::Format::MachO).windows(6).any(|window| window == b"__text"));
+    let coff = write(llrm_target::object::Format::Coff);
+    let fields: Vec<u8> = (1..=8u32).flat_map(|k| (4 * k).to_le_bytes()).collect();
+    assert!(coff.windows(fields.len()).any(|window| window == fields.as_slice()), "the .rdata fields");
+}
+
+/// The pin keeps an x86-64 Mach-O jump table in `__text`, after the code, its
+/// entries `block - table` resolved by the assembler; ours was a `__const`
+/// section with a relocation per entry.
+#[test]
+fn a_dense_switch_table_at_m64_is_in_text_without_relocations_in_mach_o() {
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &dense_switch_ir(), "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built_for(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::MachO,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    assert!(object.sections.iter().all(|one| one.role != llrm_object::Role::ROData), "no read-only section");
+    let text = &object.sections[0];
+    // The code's own relocations are the calls; the table adds none.
+    assert!(text.relocs.iter().all(|one| one.at < text.image.len() - 32), "{:?}", text.relocs);
+    let table = text.image.len() - 32;
+    for k in 0..8 {
+        let entry = i32::from_le_bytes(text.image[table + 4 * k..table + 4 * k + 4].try_into().unwrap());
+        // `block - table`: the block is inside the function, before the table.
+        assert!(entry < 0 && table as i64 + i64::from(entry) >= 0, "entry {k}: {entry}");
+    }
+}
+
+/// Eight cases to eight calls: a jump table at m64.
+fn dense_switch_ir() -> String {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text + "d:\n  ret void\n}\n"
+}
+
+/// A switch table at m16 with the DAG selector lost its index (m32 never did;
+/// its scaled form is checked too):
+/// folding the table into the address mode (for the 64-bit table) left the
+/// index register as the address's base, which the jump ignored, so
+/// `add ax, ax; jmp word ptr $J26` jumped to the table's first entry whatever
+/// the case.
+#[test]
+fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
+    for (mode, layout, int, jump, tail) in [
+        ("-m16", "@m16-datalayout@-ni:2:3", "i16", "jmp word ptr $J", "]"),
+        ("-m32", "@m32-datalayout@", "i32", "jmp dword ptr $J", "*4]"),
+    ] {
+        let mut text = format!("target datalayout = \"{layout}\"\n");
+        for i in 0..8 {
+            text += &format!("declare void @g{i}()\n");
+        }
+        text += &format!("define void @f({int} %x) {{\n  switch {int} %x, label %d [\n");
+        for i in 0..8 {
+            text += &format!("    {int} {i}, label %l{i}\n");
+        }
+        text += "  ]\n";
+        for i in 0..8 {
+            text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+        }
+        text += "d:\n  ret void\n}\n";
+        let (built, _) = compiled(&flags(&[mode, "-O2", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let line = listing.lines().map(str::trim).find(|line| line.starts_with(jump)).expect(&listing);
+        assert!(line.ends_with(tail), "{mode}: the jump names no index: {line}\n{listing}");
+    }
+}
+
+/// A function whose `{` is on the line after its name: the pin's first row is
+/// `scopeLine` (2), then the first statement (3) where the body starts. Ours
+/// began at the first statement, so the line table had no row for the `{`.
+#[test]
+fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O0", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_scope_line_m32.ll"),
+        );
+        let rows: Vec<(usize, u32)> = info.lines.iter().map(|row| (row.offset, row.line)).collect();
+        let body = info.functions[0].body.expect("a body").0;
+        assert_eq!(rows[0], (0, 2), "{isel}: {rows:?}");
+        assert_eq!(rows[1], (body, 3), "{isel}: {rows:?}");
+    }
+}
+
+/// An instruction with no place at the top of a block is line 0 in the pin,
+/// and not a statement; ours left the place of the block before it on every
+/// instruction, so a loop's `-O2` table had no line-0 row at all.
+#[test]
+fn a_block_that_starts_with_no_place_has_a_line_0_row_that_is_not_a_statement() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O2", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_phi_m32_o2.ll"),
+        );
+        let zero: Vec<usize> = info.lines.iter().filter(|row| row.line == 0).map(|row| row.offset).collect();
+        assert!(!zero.is_empty(), "{isel}: {:?}", info.lines);
+        assert!(zero.iter().all(|&at| info.not_stmt.contains(&(0, at))), "{isel}: {:?}", info.not_stmt);
+    }
+}
+
+/// The debug information of `text` (function `f`) at m32.
+fn debug_info(
+    arguments: &[&str],
+    text: &str,
+) -> llrm_debug::Info {
+    let (built, _) = compiled(&flags(arguments), text, "f").unwrap();
+    llrm_codegen::backend::objbuild::built_for(
+        &built,
+        "phi.c",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::Elf,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+    .debug
+    .expect("debug information")
+}

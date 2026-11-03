@@ -324,7 +324,7 @@ nested_calls:
 	.type	globals,@function
 globals:
 	.functype	globals (i32) -> (i32)
-	.local  	i32, i32, i32, i32, i32, i32, i32
+	.local  	i32, i32, i32
 	global.get	__stack_pointer
 	i32.const	16
 	i32.sub
@@ -341,25 +341,17 @@ globals:
 	local.get	2
 	i32.store	g1
 	local.get	3
+	local.get	3
 	i32.load	g1
 	i32.const	1
 	i32.add
-	local.set	4
-	i32.const	12
-	local.set	5
-	local.get	5
-	local.get	4
-	i32.store	garr
-	local.get	5
-	i32.load	garr
-	local.set	6
-	i32.const	4
-	local.set	7
-	local.get	7
-	local.get	6
-	i32.store	gp
-	local.get	7
-	i32.load	gp
+	i32.store	garr+12
+	local.get	3
+	local.get	3
+	i32.load	garr+12
+	i32.store	gp+4
+	local.get	3
+	i32.load	gp+4
 	local.get	3
 	i32.load	g1
 	i32.add

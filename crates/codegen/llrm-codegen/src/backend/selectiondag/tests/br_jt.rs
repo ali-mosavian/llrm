@@ -37,3 +37,41 @@ fn a_jump_table_branch_loads_the_entry_and_branches_to_it() {
     assert_eq!((dag.opcode(scaled), dag.constant(dag.operand(scaled, 1))), (ISD::Shl, Some(2)));
     assert_eq!(dag.operand(scaled, 0), index);
 }
+
+/// m64 position-independent code (the pin's clang default) has a jump table
+/// of 32-bit offsets from the table: the pin loads the entry sign-extended,
+/// adds the table's address and branches (`EK_LabelDifference32`). The
+/// absolute form, an `i64` load at `table + index << 3`, needs a 32-bit
+/// absolute relocation a PIE refuses.
+#[test]
+fn an_i64_jump_table_branch_adds_the_sign_extended_offset_to_the_table() {
+    let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
+    let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+    let chain = dag.entry_node();
+    let table = dag.get_jump_table(EVT::I64, 3);
+    let index = dag.get_register(EVT::I64, 7);
+    let branch = dag.get_node(ISD::BrJT, EVT::OTHER, &[chain, table, index]);
+    dag.set_root(branch);
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+    )
+    .run()
+    .unwrap();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::BrInd);
+    let target = dag.operand(root, 1);
+    assert_eq!(dag.opcode(target), ISD::Add);
+    let (entry, base) = (dag.operand(target, 0), dag.operand(target, 1));
+    assert_eq!(dag.opcode(entry), ISD::Load);
+    let NodeData::Mem(info) = dag.node(entry).data else { panic!("a load") };
+    assert_eq!(
+        (info.mem_vt, info.ext, info.base),
+        (EVT::I32, Some(crate::backend::selectiondag::actions::LoadExt::SExtLoad), MemBase::JumpTable)
+    );
+    assert_eq!((dag.opcode(base), dag.opcode(dag.operand(base, 0))), (x86isd::WRAPPER_RIP, ISD::TargetJumpTable));
+    let address = dag.operand(entry, 1);
+    let scaled = dag.operand(address, 1);
+    assert_eq!((dag.opcode(scaled), dag.constant(dag.operand(scaled, 1))), (ISD::Shl, Some(2)));
+}

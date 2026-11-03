@@ -107,6 +107,8 @@ pub struct Procedure {
     pub parameters: Vec<String>,
     /// The frontend described every call it makes.
     pub all_calls: bool,
+    /// The line its first byte is at (`DISubprogram`'s `scopeLine`).
+    pub scope_line: Option<u32>,
 }
 
 /// A function the unit calls and does not define, by its symbol.
@@ -336,6 +338,7 @@ pub fn described(
                 module: function.module,
                 parameters: function.parameters.iter().map(|(_, name, _)| name.clone()).collect(),
                 all_calls: function.all_calls,
+                scope_line: function.scope_line,
             },
         );
     }
@@ -1271,15 +1274,54 @@ pub fn laid_out(
         let first = starts.iter().find(|&&(at, _)| at == section).map_or(0, |&(_, one)| one);
         info.code.push(model::Range { section, offset: first, length: segments[section].image.len() - first });
     }
+    // The function's first byte is a row of the line its body starts at, as the
+    // pin's `DwarfDebug::beginFunctionImpl` records it before any instruction.
+    let first_rows: Vec<(usize, usize, usize, u32)> = info
+        .functions
+        .iter()
+        .filter_map(|function| {
+            let range = function.ranges.first()?;
+            let name = ids.iter().find(|(_, id)| **id == function.symbol).map(|(name, _)| name)?;
+            let body = range.offset + function.body?.0;
+            Some((range.section, range.offset, body, debug.procedures.get(name)?.scope_line?))
+        })
+        .collect();
     for (section, segment) in segments.iter().enumerate() {
         // The scopes a place is in are the blocks', not the line table's: a
         // change of scope alone is not a new row.
         let mut before = None;
-        for &(line, offset) in &segment.lines {
+        let mut rows = Vec::new();
+        // Line 0 says "no place" in DWARF; CodeView and Turbo Debugger have no
+        // such row.
+        let dwarf = !matches!(
+            debug.format,
+            model::Format::CodeView | model::Format::TurboDebugger
+        );
+        for &(line, offset) in segment.lines.iter().filter(|(line, _)| dwarf || line.line != 0) {
             if before.replace(line.row()) != Some(line.row()) {
-                info.lines.push(model::Line { section, offset, file: 0, line: line.line, column: line.column });
+                rows.push(model::Line { section, offset, file: 0, line: line.line, column: line.column });
             }
         }
+        for &(_, start, body, line) in first_rows.iter().filter(|one| one.0 == section) {
+            // The first instruction's row moves to where the body starts.
+            match rows.iter().position(|row| row.offset == start) {
+                Some(at) if body > start && !rows.iter().any(|row| row.offset == body) => {
+                    rows.push(model::Line { offset: body, ..rows[at] });
+                    rows[at] = model::Line { section, offset: start, file: 0, line, column: 0 };
+                }
+                // A frameless function: the scope line's row and the first
+                // statement's share the first byte, as the pin's do.
+                _ => {
+                    let at = rows.iter().position(|row| row.offset >= start).unwrap_or(rows.len());
+                    rows.insert(at, model::Line { section, offset: start, file: 0, line, column: 0 });
+                }
+            }
+        }
+        rows.sort_by_key(|row| row.offset);
+        // A line-0 row is not a statement (`DwarfDebug::beginInstruction`
+        // records it with no flags).
+        info.not_stmt.extend(rows.iter().filter(|row| row.line == 0).map(|row| (section, row.offset)));
+        info.lines.extend(rows);
     }
     Ok(info)
 }

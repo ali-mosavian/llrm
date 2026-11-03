@@ -158,12 +158,13 @@ pub struct TargetNodes {
     pub calling: Option<&'static dyn TargetCalling>,
 }
 
-/// The clock side of a size-only pick (`fill_is_smaller`): the longer form
-/// is taken only while the bytes it saves, at `milliclocks_per_byte` each,
-/// pay for the clocks it adds. All prices come from the target description.
+/// The clock side of a fill at speed (`fill_is_smaller`): the longer form is
+/// taken only while the bytes it saves, at the target's speed rate, pay for
+/// the clocks it adds. Tuned for size the bytes decide and no price is read.
+/// All prices come from the target description.
 #[derive(Clone, Copy, Debug)]
 pub struct SizeTrade {
-    /// Clocks a byte of code is worth, in thousandths.
+    /// Clocks a byte of code is worth at speed, in thousandths.
     pub milliclocks_per_byte: i64,
     /// A `rep stos` fill: its fixed clocks, and each byte it stores.
     pub fill: i64,
@@ -507,6 +508,17 @@ fn dag_name(
 /// An attribute that moves an argument out of the place its type gives it
 /// (`sret` to `x8`, `byval` to memory, `inreg`, `nest`, the Swift ones): a
 /// target's calling hook that does not place them refuses.
+fn has_sret(attrs: &[llrm_mir::opcode::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Type(name, _) if name == "sret"
+            ),
+        )
+}
+
 fn relocating_attribute(attrs: &[llrm_mir::opcode::Attribute]) -> Option<&'static str> {
     use llrm_mir::opcode::Attribute;
     const TYPED: [&str; 5] = ["sret", "byval", "byref", "inalloca", "preallocated"];
@@ -621,6 +633,7 @@ impl<'a> Builder<'a> {
             sibcall: false,
             variadic_call: false,
             call_attrs_move_arguments: false,
+            call_sret: Vec::new(),
             call_result_assert: None,
             fixed_args: 0,
             had_tail_call: false,
@@ -666,6 +679,8 @@ struct Builder<'a> {
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
+    /// The arguments of the call being lowered that carry `sret`.
+    call_sret: Vec<bool>,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -1135,19 +1150,37 @@ impl Builder<'_> {
         let mut shapes = Vec::new();
         for &arg in &parameters {
             let ty = self.function.value(arg).ty;
-            if self.is_aggregate(ty) {
-                return Err(Refused("an aggregate argument with a target's calling hook"));
+            // An aggregate is passed leaf by leaf (`ComputeValueVTs`).
+            let leaf_types: Vec<TypeId> = if self.is_aggregate(ty) {
+                self.leaves(ty)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![ty]
+            };
+            let at = parameters.iter().position(|one| *one == arg).unwrap_or(0);
+            let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
+            let sret = has_sret(attrs);
+            let ext = if llrm_mir::memory::has(attrs, "signext") {
+                Ext::Sign
+            } else if llrm_mir::memory::has(attrs, "zeroext") {
+                Ext::Zero
+            } else {
+                Ext::Any
+            };
+            let mut leaves = Vec::new();
+            for leaf in leaf_types {
+                let vt = self.type_of(leaf)?;
+                let pointer = self.is_pointer_type(leaf);
+                let parts = self.calling_parts(vt)?;
+                leaves.push((vt, parts.len(), pointer));
+                let split = parts.len() > 1;
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret, ext }));
             }
-            let vt = self.type_of(ty)?;
-            let pointer = self.is_pointer_type(ty);
-            let parts = self.calling_parts(vt)?;
-            shapes.push((vt, parts.len(), pointer));
-            let split = parts.len() > 1;
-            ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
+            shapes.push(leaves);
         }
         calling.accepts(&self.dag, Site::Arguments, &[], &ins).map_err(Refused)?;
         let entry = self.dag.entry_node();
         let mut offsets = Vec::new();
+        let first_object = self.info.next_stack_object();
         let mut live_in = |reg: RegId| {
             let vreg = self.info.new_reg();
             self.live_ins.push((reg, vreg));
@@ -1158,21 +1191,60 @@ impl Builder<'_> {
             -(offsets.len() as i32)
         };
         let parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        // `SaveVarArgRegisters`: the save areas are stack objects made after
+        // the allocas', numbered from the next frame index.
+        let mut requests: Vec<(u32, u32)> = Vec::new();
+        let area = if self.module.signature(self.function.ty).2 {
+            let mut stack = |size: u32, align: u32| {
+                requests.push((size, align));
+                first_object + requests.len() as i32 - 1
+            };
+            calling.variadic_area(&mut self.dag, entry, &ins, &mut make_object, &mut stack, &mut live_in)
+        } else {
+            None
+        };
+        for (size, align) in requests {
+            self.info.new_stack_object(size, align);
+        }
+        if let Some(area) = &area {
+            self.dag.set_root(area.chain);
+        }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
         let mut next = 0;
-        for (at, (&arg, (vt, count, pointer))) in parameters.iter().zip(shapes).enumerate() {
+        for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
-            let value = self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs), pointer);
-            next += count;
+            let mut values = Vec::new();
+            for (vt, count, pointer) in leaves {
+                values.push(self.join_from_calling(&parts[next..next + count], vt, extension_assert(attrs), pointer));
+                next += count;
+            }
+            let value = self.merge(&values);
             self.node_map.insert(arg, value);
+            if calling.returns_sret_pointer()
+                && attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Type(name, _) if name == "sret"
+                    )
+                })
+            {
+                // `SRetReturnReg`: kept to be returned
+                let reg = self.info.new_reg();
+                self.info.sret_reg = Some(reg);
+                let entry = self.dag.entry_node();
+                let copy = self.dag.get_copy_to_reg(entry, reg, value);
+                self.dag.set_root(copy);
+            }
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
             }
         }
-        if self.module.signature(self.function.ty).2 {
+        if let Some(area) = area {
+            self.info.variadic_area = Some(area);
+        } else if self.module.signature(self.function.ty).2 {
             if let Some(buffer) = calling.variadic_buffer(&mut self.dag, ins.len()) {
                 let reg = self.info.new_reg();
                 let root = self.root();
@@ -1514,6 +1586,11 @@ impl Builder<'_> {
         {
             return self.visit_target_intrinsic(instruction, info, found);
         }
+        if let Some(calling) = self.calling()
+            && !calling.supports_convention(info.calling_convention)
+        {
+            return Err(Refused("a calling convention the target's hook does not place"));
+        }
         let mut flags_answer = false;
         if let Some(verdicts) = &self.target.runtime_calls
             && direct
@@ -1667,6 +1744,7 @@ impl Builder<'_> {
         self.variadic_call = variadic;
         self.call_result_assert = extension_assert(&info.return_attrs);
         self.fixed_args = named;
+        self.call_sret = info.argument_attrs.iter().map(|attrs| has_sret(attrs)).collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -1899,6 +1977,7 @@ impl Builder<'_> {
         }
         let mut outs = Vec::new();
         let variadic = std::mem::take(&mut self.variadic_call);
+        let sret_args = std::mem::take(&mut self.call_sret);
         let variadic_from = if variadic { self.fixed_args } else { usize::MAX };
         for (at, value) in values.iter().enumerate() {
             let ext = match extends.get(at) {
@@ -1910,7 +1989,15 @@ impl Builder<'_> {
             let pieces = self.split_for_calling(*value, ext)?;
             let split = pieces.len() > 1;
             for piece in pieces {
-                outs.push(Out { value: piece, ext, pointer: false, arg_vt, split, variadic: at >= variadic_from });
+                outs.push(Out {
+                    value: piece,
+                    ext,
+                    pointer: false,
+                    arg_vt,
+                    split,
+                    variadic: at >= variadic_from,
+                    sret: sret_args.get(at).copied().unwrap_or(false),
+                });
             }
         }
         let void = self.module.context.types.is_void(result_type);
@@ -1931,7 +2018,14 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 let split = parts.len() > 1;
                 layout.push((vt, parts.len(), pointer));
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split }));
+                ins.extend(parts.into_iter().map(|part| In {
+                    vt: part,
+                    pointer,
+                    arg_vt: vt,
+                    split,
+                    sret: false,
+                    ext: Ext::Any,
+                }));
             }
         }
         let vt = layout.first().map_or(EVT::OTHER, |(vt, _, _)| *vt);
@@ -2307,16 +2401,15 @@ impl Builder<'_> {
         chain: SDValue,
         instruction: &llrm_mir::module::Instruction,
     ) -> Result<(), Refused> {
-        if self.info.sret_reg.is_some() {
-            return Err(Refused("sret with a target's calling hook"));
-        }
         let mut outs = Vec::new();
         if let Some(&operand) = instruction.operands.first() {
             let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("a return of no type"))?;
-            if self.is_aggregate(ty) {
-                return Err(Refused("an aggregate result with a target's calling hook"));
-            }
-            let value = self.get_value(operand)?;
+            let values = self.value_parts(operand)?;
+            let leaf_types: Vec<TypeId> = if self.is_aggregate(ty) {
+                self.leaves(ty)?.into_iter().map(|(leaf, _)| leaf).collect()
+            } else {
+                vec![ty]
+            };
             let attrs = &self.function.return_attrs;
             let ext = if llrm_mir::memory::has(attrs, "signext") {
                 Ext::Sign
@@ -2325,13 +2418,29 @@ impl Builder<'_> {
             } else {
                 Ext::Any
             };
-            let pointer = self.is_pointer_type(ty);
-            let arg_vt = self.dag.value_type(value);
-            let pieces = self.split_for_calling(value, ext)?;
-            let split = pieces.len() > 1;
-            for piece in pieces {
-                outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false });
+            for (value, leaf) in values.into_iter().zip(leaf_types) {
+                let pointer = self.is_pointer_type(leaf);
+                let arg_vt = self.dag.value_type(value);
+                let pieces = self.split_for_calling(value, ext)?;
+                let split = pieces.len() > 1;
+                for piece in pieces {
+                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false });
+                }
             }
+        }
+        if let Some(reg) = self.info.sret_reg {
+            // `LowerReturn`: the saved `sret` pointer is a result too
+            let pointer = self.target.dag.pointer;
+            let saved = self.dag.get_copy_from_reg(chain, reg, pointer);
+            outs.push(Out {
+                value: saved,
+                ext: Ext::Any,
+                pointer: false,
+                arg_vt: pointer,
+                split: false,
+                sret: false,
+                variadic: false,
+            });
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
         let node = calling.lower_return(&mut self.dag, chain, &outs);

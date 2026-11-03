@@ -104,7 +104,9 @@ pub struct TargetLowering {
     legal_fp_immediates: Vec<(MVT, u128)>,
     /// `isFPImmLegal` as a function of the value, for a target whose answer is
     /// not a short list.
-    fp_imm_predicate: Option<fn(MVT, u128) -> bool>,
+    fp_imm_predicate: Option<fn(MVT, u128, bool) -> bool>,
+    /// The function is optimized for size (`ForCodeSize` of `isFPImmLegal`).
+    opt_for_size: bool,
     /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
     /// more than a straight `movsd`.
     keeps_f64_constants: bool,
@@ -114,6 +116,9 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
+    /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
+    sext_cheaper_i32_i64: bool,
 }
 
 impl TargetLowering {
@@ -128,9 +133,11 @@ impl TargetLowering {
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
             fp_imm_predicate: None,
+            opt_for_size: false,
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            sext_cheaper_i32_i64: false,
         };
         table.set_default_integer_libcalls();
         table
@@ -262,14 +269,23 @@ impl TargetLowering {
         vt: MVT,
         bits: u128,
     ) -> bool {
-        self.legal_fp_immediates.contains(&(vt, bits)) || self.fp_imm_predicate.is_some_and(|legal| legal(vt, bits))
+        self.legal_fp_immediates.contains(&(vt, bits))
+            || self.fp_imm_predicate.is_some_and(|legal| legal(vt, bits, self.opt_for_size))
     }
 
     pub fn set_fp_imm_predicate(
         &mut self,
-        predicate: fn(MVT, u128) -> bool,
+        predicate: fn(MVT, u128, bool) -> bool,
     ) {
         self.fp_imm_predicate = Some(predicate);
+    }
+
+    /// `DAG.shouldOptForSize()` for the function selected next.
+    pub fn set_opt_for_size(
+        &mut self,
+        size: bool,
+    ) {
+        self.opt_for_size = size;
     }
 
     /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
@@ -325,6 +341,15 @@ impl TargetLowering {
         vt: MVT,
     ) -> Action {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
+    }
+
+    /// `TargetLowering::isSExtCheaperThanZExt(FromTy, ToTy)`.
+    pub fn is_sext_cheaper_than_zext(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.sext_cheaper_i32_i64 && from == EVT::Simple(MVT::I32) && to == EVT::Simple(MVT::I64)
     }
 
     /// `Subtarget.canUseCMOV()`.
@@ -455,6 +480,7 @@ impl TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.sext_cheaper_i32_i64 = true;
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).
@@ -468,6 +494,9 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
+        // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
+        // type is asked.
+        t.set_ops(&[StackSave], &[MVT::I64], Expand);
         t.set_ops(&[FShr, FShl], &words, Custom);
         t.set_ops(&[Rotl], &words, Expand);
         t.set_ops(&[MulHU, MulHS], &[MVT::I32], Expand);

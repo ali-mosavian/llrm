@@ -5,7 +5,7 @@
 //!
 //! DEVIATE W9: `fixBrTableIndex` (the `i64` index of wasm64) is not translated;
 //! a `BR_TABLE_I64` is left alone. Reason: wasm64 does not reach it. Exit:
-//! wasm64.
+//! wasm64 (undated, none planned).
 //!
 //! # See also
 //! `WebAssemblyFixBrTableDefaults.cpp` (`fixBrTableDefault` L87), pin
