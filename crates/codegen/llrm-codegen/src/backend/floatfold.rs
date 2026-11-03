@@ -284,6 +284,20 @@ fn _sunk(
                 at += 1;
                 continue;
             };
+            // Two loads of one reader pass each other for ever: a load moves
+            // over what is not a sibling of it, loads of the same reader.
+            let sibling = |between: &Arc<Insn>| {
+                _loads_memory(between.what.as_ref())
+                    && between.defines.first().is_some_and(|other| {
+                        insns[reader].what.as_ref().is_some_and(|made| {
+                            made.sources.iter().any(|arg| matches!(arg, Loc::Held(held) if held.value == *other))
+                        })
+                    })
+            };
+            if insns[at + 1..reader].iter().all(sibling) {
+                at += 1;
+                continue;
+            }
             let cell = cell_of(&load);
             if insns[at + 1..reader].iter().any(|between| {
                 between.defines.iter().any(|defined| load.uses.contains(defined))
@@ -1179,6 +1193,26 @@ mod tests {
             fstp(5, 5, frame(-4)),
         ]);
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld", "fmul", "fld", "fmul", "fadd", "fstp"]);
+    }
+
+    /// Two loads read by one instruction passed each other for ever: llrm-llc
+    /// never finished `x > 100.0 ? 100.0 : 0.0` at any level (the test of a
+    /// compare of a load and a constant, `fld; fld; fcom`).
+    #[test]
+    fn test_two_loads_of_one_reader_do_not_pass_each_other_for_ever() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let cpu = crate::backend::cpu::profile("486").expect("a profile");
+            let body = one_block(vec![
+                fld(0, 1, global(0, 0)),
+                fld(1, 2, global(0, 8)),
+                arith(2, "fmul", 3, 1, 2),
+                fstp(3, 3, frame(-4)),
+            ]);
+            let _ = sender.send(names(&folded(&body, cpu, REGISTERS)));
+        });
+        let done = receiver.recv_timeout(std::time::Duration::from_secs(20)).expect("floatfold finished");
+        assert!(done.contains(&"fstp".to_owned()), "{done:?}");
     }
 
     /// A store to the load's cell between the load and its reader keeps the
