@@ -141,6 +141,19 @@ pub fn fold(
     // The entry is never forwarded away.
     let entry = blocks[0].label.clone();
     let mut forward = forwards(&blocks);
+    // Blocks that only return the same way are one block a conditional branch
+    // can reach (`BranchFolder`).
+    let mut first_return: Vec<(&Inst, &str)> = Vec::new();
+    for block in &blocks {
+        if let [ret @ Inst::Ret { .. }] = block.insts.as_slice() {
+            match first_return.iter().find(|(known, _)| *known == ret) {
+                Some((_, kept)) => {
+                    forward.insert(block.label.clone(), (*kept).to_owned());
+                }
+                None => first_return.push((ret, block.label.as_str())),
+            }
+        }
+    }
     forward.remove(&entry);
     for block in &mut blocks {
         for inst in &mut block.insts {
@@ -224,4 +237,53 @@ pub fn fold(
         }
     }
     ordered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mc::inst::{Gpr, Width};
+
+    fn block(
+        label: &str,
+        insts: Vec<Inst>,
+    ) -> Lowered {
+        let locs = vec![None; insts.len()];
+        Lowered { label: label.into(), insts, locs }
+    }
+
+    fn cbz(
+        reg: u32,
+        label: &str,
+    ) -> Inst {
+        Inst::CompareBranch { nonzero: false, width: Width::W, rt: Gpr(reg), target: Target::Label(label.into()) }
+    }
+
+    /// Two early exits each went to a `ret` block of their own, three `ret`s
+    /// where the pin has one (`rectwo`: +8 B).
+    #[test]
+    fn conditional_branches_to_identical_return_blocks_reach_one() {
+        let ret = || Inst::Ret { rn: Gpr(30) };
+        let blocks = vec![
+            block("entry", vec![cbz(0, "a")]),
+            block("mid", vec![cbz(1, "b")]),
+            block("body", vec![Inst::Branch { link: false, target: Target::Label("c".into()) }]),
+            block("a", vec![ret()]),
+            block("b", vec![ret()]),
+            block("c", vec![ret()]),
+        ];
+        let out = fold(blocks, &mut []);
+        let rets = out.iter().flat_map(|block| &block.insts).filter(|inst| matches!(inst, Inst::Ret { .. })).count();
+        let targets: Vec<_> = out
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match inst {
+                Inst::CompareBranch { target, .. } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(targets.len(), 2, "{out:?}");
+        assert_eq!(targets[0], targets[1], "{out:?}");
+        assert!(rets <= 2, "{rets} returns: {out:?}");
+    }
 }

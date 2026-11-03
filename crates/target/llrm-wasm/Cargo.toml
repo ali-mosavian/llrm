@@ -14,6 +14,7 @@ llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }
 llrm-spike-mf = { workspace = true }
+llrm-debug = { workspace = true }
 
 [build-dependencies]
 llrm-target = { workspace = true }

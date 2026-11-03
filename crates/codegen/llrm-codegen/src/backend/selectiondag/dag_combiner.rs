@@ -103,6 +103,18 @@ pub trait CombineHooks {
         false
     }
 
+    /// `mergeStoresAfterLegalization`: stores of `mem` are also merged once
+    /// types are legal, to catch the stores legalization made (a promoted
+    /// `i16` store is a truncating `i32` one). The pin's default is true and
+    /// x86's is `!mem.is_vector()`. DEVIATE: off by default, as above. Exit:
+    /// x86 judged.
+    fn merge_stores_after_legalization(
+        &self,
+        _mem: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its
     /// load, and puts the freeze back on the narrowed load. Default false
     /// until x86 is judged.
@@ -178,6 +190,18 @@ pub trait CombineHooks {
         _store: SDValue,
     ) -> Option<SDValue> {
         None
+    }
+
+    /// DEVIATE LS1 (owner m16, exit 2026-11-17): a plain `i32` load every use
+    /// of which is a word half (`trunc i16`, or `trunc i16 (srl 16)`) is
+    /// two `i16` loads. The pin's `ReduceLoadWidth`
+    /// ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095))
+    /// narrows a load only when nothing else reads it, so the pin keeps
+    /// one `mov eax,[m]` and a `shld`. m16 only: its halves are the registers
+    /// a `long` is returned and passed in (DX:AX), and a 16-bit register file
+    /// has no dword half to extract for free. Default off.
+    fn split_dword_loads(&self) -> bool {
+        false
     }
 
     /// DEVIATE PAIR1: whether the after-legalize combine ends with a sweep that
@@ -257,6 +281,21 @@ pub trait CombineHooks {
         _base_offs: i64,
         _scale: i64,
     ) -> bool {
+        false
+    }
+
+    /// The type `BuildUDIV` widens `vt` to for an uncooperative divisor
+    /// ([L7031]: `i32` to `i64`), or `None` where the target does not.
+    fn widened_unsigned_divide_type(
+        &self,
+        _vt: EVT,
+    ) -> Option<EVT> {
+        None
+    }
+
+    /// `isZExtFree(i32, i64)`, which keeps the even-divisor rewrite of
+    /// `BuildUDIV` out of the way of the widened multiply (x86-64 and AArch64).
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
         false
     }
 

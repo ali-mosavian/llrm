@@ -1305,6 +1305,52 @@ fn every_function_of_an_m32_object_has_an_eh_frame_entry_from_and_back_to_the_ca
     }
 }
 
+/// An x86-64 function that keeps its frame (`push rbp; mov rbp, rsp` at -O0,
+/// `push rbx` and a stack adjustment at -O2) declares it: one FDE, from and
+/// back to `CFA=RSP+8`, with the saved register at `CFA-16` and the frame
+/// register taking the address over at -O0. Asserted on the call frame
+/// instructions, not on the section's presence.
+#[test]
+fn a_plain_m64_frame_declares_its_call_frame_instructions() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("frame64.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/frame64.c");
+    for (level, expected) in [
+        (
+            "-O0",
+            &[
+                "DW_CFA_def_cfa_offset: +16",
+                "DW_CFA_offset: RBP -16",
+                "DW_CFA_def_cfa_register: RBP",
+                "DW_CFA_def_cfa: RSP +8",
+            ][..],
+        ),
+        ("-O2", &["DW_CFA_def_cfa_offset: +32", "DW_CFA_offset: RBX -16", "DW_CFA_def_cfa_offset: +8"][..]),
+    ] {
+        let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .args(["-m64", level, "-c", "-o"])
+            .arg(&object)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let dumped = Command::new(&dwarfdump).arg("--eh-frame").arg(&object).output().unwrap();
+        let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+        let frames: Vec<&str> = dump.split(" FDE ").skip(1).collect();
+        assert_eq!(frames.len(), 1, "{level}: {dump}");
+        for op in expected {
+            assert!(frames[0].contains(op), "{level}: no {op}:\n{dump}");
+        }
+        let rows: Vec<&str> = frames[0].lines().filter(|line| line.contains(": CFA=")).collect();
+        let (first, last) = (rows.first().unwrap(), rows.last().unwrap());
+        assert!(first.contains("CFA=RSP+8:") && last.contains("CFA=RSP+8:"), "{level}: {dump}");
+    }
+}
+
 /// x86-64 functions that set their frame up past an early return
 /// (shrink-wrapped at -Os) declare it: 3 FDEs, each from and back to
 /// `CFA=RSP+8`, and the registers pushed in the body are restored

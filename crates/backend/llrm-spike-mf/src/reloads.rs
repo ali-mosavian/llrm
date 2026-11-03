@@ -97,7 +97,9 @@ pub fn forward_reloads<T: Target>(
                     .copied()
                     && edit
                 {
+                    let origin = inst.origin;
                     inst = Inst::copy(reg, held.reg);
+                    inst.origin = origin;
                 }
                 // what the reload (or the copy) writes
                 state.retain(|held| !T::overlaps(target, held.root));
