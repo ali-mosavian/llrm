@@ -159,6 +159,8 @@ impl<T: Target> Converted<T> {
         let limit = T::candidates(T::any()).len();
         let known = function.classes.len() as u32;
         let pins = self.body.pins.clone();
+        // The lanes of the file are the ones read while the scheduler runs.
+        let _lanes = llrm_codegen::backend::lanes::enter(registers);
         // The scheduler reads the register file off the body; allocation does
         // not.
         let before = self.body.registers.replace(registers);
@@ -204,10 +206,9 @@ impl<T: Target> Converted<T> {
         registers: Regs,
     ) -> LirBody {
         use llrm_codegen::backend::lanes::Lanes;
-        let _ = registers;
         let bits = self.body.bits;
         let flags = Lanes::flags(1);
-        let memory = Lanes::flags(1 << 30);
+        let memory = Lanes::flags(Lanes::MEMORY);
         let blocks = self
             .body
             .blocks
@@ -219,18 +220,14 @@ impl<T: Target> Converted<T> {
                     .map(|one| {
                         let Some(&(from, at)) = self.origin.get((one.at / 2) as usize) else { return Arc::clone(one) };
                         let inst = &function.blocks[from].insts[at];
-                        // POC: `Lanes` is the x86 register file's; a pinned
-                        // register takes one of 28 flag-lane bits by its
-                        // index, so two registers may share one (more
-                        // dependences, never fewer).
                         let named = |values: &[u32]| -> Lanes {
                             values
                                 .iter()
                                 .filter_map(|value| self.body.pins.get(value))
-                                .flat_map(|register| {
-                                    Lanes::flags(1 << (1 + register.index() % 28)).iter().copied().collect::<Vec<_>>()
-                                })
-                                .collect()
+                                // the zero register is no lane: nothing writes it
+                                .filter(|register| registers.known(**register))
+                                .map(|register| Lanes::span(*register, 0, 1))
+                                .fold(Lanes::new(), |all, one| all.or(&one))
                         };
                         let (mut reads, mut writes) = (named(&one.uses), named(&one.defines));
                         let bundle = one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE));
