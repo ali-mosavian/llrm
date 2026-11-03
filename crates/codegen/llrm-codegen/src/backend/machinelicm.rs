@@ -55,6 +55,7 @@
 //! A machine phase before `precse` (`flow::machine_with`), at every -O level
 //! but -O0.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -246,37 +247,59 @@ impl licm::Inst for Wrapped {
 }
 
 /// Whether hoisting a rematerializable `value` out of a loop whose calls take
-/// every caller-saved register pays: some use in the loop reads it.
+/// every caller-saved register pays: the uses that read it save more executed
+/// instructions than its register costs.
 ///
 /// DEVIATE LICM2 (pin: `IsProfitableToHoist` always hoists a trivially
 /// rematerializable instruction, "providing the register allocator can just
 /// pull them down again",
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1304):
 /// across such calls the value lives in a callee-saved register, which costs
-/// its push and pop, and a use that needs it in a fixed register (a call
-/// argument) is a copy (`mov rdi, rbx`) of the same one instruction the remat
-/// is. Only a use that reads the register saves the remat. Exit 2026-11-20:
-/// the greedy allocator splits a hoisted constant around the call and drops
-/// the copy; re-measure and drop.
+/// its push and pop (`getCSRFirstUseCost`, 2) once per entry, and a use that
+/// needs it in a fixed register (a call argument) is a copy (`mov rdi, rbx`)
+/// of the same one instruction the remat is. A use that reads the register
+/// saves the remat at its block's frequency (`MachineBlockFrequencyInfo`,
+/// relative to the entry); the preheader makes it once. Exit 2026-11-20: the
+/// greedy allocator splits a hoisted constant around the call and drops the
+/// copy; re-measure and drop.
 fn pays(
     facts: &licm::Facts<'_, Wrapped>,
     def: &Insn,
     value: u32,
+    freq: &HashMap<i64, f64>,
 ) -> bool {
-    let inside = || facts.blocks.iter().filter(|block| facts.inside.contains(&block.at)).flat_map(|block| &block.insns);
+    const SAVE_RESTORE: f64 = 2.0;
+    let inside = || facts.blocks.iter().filter(|block| facts.inside.contains(&block.at));
     // The loop's identical remats are one value once hoisted (`EliminateCSE`).
     let template = Wrapped(Arc::new(def.clone()));
     let mut values = vec![value];
     values.extend(
         inside()
+            .flat_map(|block| &block.insns)
             .filter(|one| one.0.uses.is_empty() && licm::Inst::identical(&template, one))
             .filter_map(|one| one.0.defines.first().copied())
             .filter(|other| *other != value),
     );
-    inside().any(|one| {
-        values.iter().any(|value| one.0.uses.contains(value))
-            && !one.0.requires.iter().any(|(held, _)| values.contains(&held.value))
-    })
+    let saved: f64 = inside()
+        .map(|block| {
+            let reads = block
+                .insns
+                .iter()
+                .filter(|one| {
+                    values.iter().any(|value| one.0.uses.contains(value))
+                        && !one.0.requires.iter().any(|(held, _)| values.contains(&held.value))
+                })
+                .count();
+            reads as f64 * freq.get(&block.at).copied().unwrap_or(1.0)
+        })
+        .sum();
+    let preheader = facts
+        .blocks
+        .iter()
+        .filter(|block| !facts.inside.contains(&block.at) && block.succ.iter().any(|to| facts.inside.contains(to)))
+        .map(|block| freq.get(&block.at).copied().unwrap_or(1.0))
+        .fold(1.0, f64::max);
+    saved > preheader + SAVE_RESTORE
 }
 
 /// The x86 half of the pass: which instructions move (`IsLICMCandidate`,
@@ -292,6 +315,8 @@ struct X86<'a> {
     /// A value held across the loop's calls takes a callee-saved register: no
     /// other allocatable one survives them all.
     needs_csr: bool,
+    /// Each block's frequency relative to the entry, by `at`.
+    freq: HashMap<i64, f64>,
     saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     floats_named: usize,
     named: usize,
@@ -364,7 +389,7 @@ impl licm::Policy<Wrapped> for X86<'_> {
                 && one.delivers.is_empty()
                 && crate::greedy::remat::is_trivially_re_materializable(one, false)
         });
-        if constant && self.needs_csr && value.is_some_and(|value| !pays(facts, one, value)) {
+        if constant && self.needs_csr && value.is_some_and(|value| !pays(facts, one, value, &self.freq)) {
             return false;
         }
         if constant && !movable {
@@ -448,6 +473,14 @@ pub fn hoisted(
         control_word_written,
         calls: false,
         needs_csr: false,
+        freq: {
+            let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+            body.blocks
+                .iter()
+                .enumerate()
+                .map(|(index, block)| (block.at, mbfi.get_block_freq_relative_to_entry_block(index)))
+                .collect()
+        },
         saved,
         floats_named: 0,
         named: 0,

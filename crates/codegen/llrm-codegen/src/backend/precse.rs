@@ -234,6 +234,10 @@ struct Walk<'a> {
     regs: llrm_lir::registers::Regs,
     /// Each block's predecessors, as block numbers.
     preds: Vec<Vec<usize>>,
+    /// Each block's frequency relative to the entry.
+    freq: Vec<f64>,
+    /// Whether each block holds a call.
+    calls: Vec<bool>,
 }
 
 impl Walk<'_> {
@@ -314,6 +318,7 @@ impl Walk<'_> {
         shared_block: usize,
         one: &Insn,
         block: usize,
+        index: usize,
     ) -> bool {
         let none = HashSet::default();
         let shared_readers = self.readers.get(&shared).unwrap_or(&none);
@@ -341,6 +346,16 @@ impl Walk<'_> {
         {
             return false;
         }
+        // DEVIATE CSE4: a constant with no register operand that a call
+        // separates from its definition lives on in a callee-saved register
+        // if shared, and its push and pop (2 executed per entry) cost more
+        // than the one instruction sharing removes unless that runs often
+        // enough. The pin shares it (heuristic 2 asks only for a register use
+        // or a non-copy reader). The same price as LICM2's, in
+        // `machinelicm::pays`. Exit 2026-11-20 with it.
+        if !reads_value && self.freq[block] <= 2.0 && self.crosses_call(shared, shared_block, block, index) {
+            return false;
+        }
         // Heuristic 3: a value a phi reads is not shared unless the block
         // reads it already.
         let phi = shared_readers.iter().any(|reader| matches!(reader, Reader::Phi(_)));
@@ -353,6 +368,55 @@ impl Walk<'_> {
                 },
             );
         local || !phi
+    }
+
+    /// Whether a call lies on a path from the definition of `shared` in
+    /// block `from` to the instruction `index` of block `to`: after the
+    /// definition, before the use, or in a block that `from` reaches and that
+    /// reaches `to`.
+    fn crosses_call(
+        &self,
+        shared: u32,
+        from: usize,
+        to: usize,
+        index: usize,
+    ) -> bool {
+        let is_call = |one: &Arc<Insn>| {
+            one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call)
+        };
+        let defined = self.body.blocks[from].insns.iter().position(|one| one.defines.contains(&shared)).unwrap_or(0);
+        if from == to {
+            return self.body.blocks[from].insns[defined..index.max(defined)].iter().any(is_call);
+        }
+        if self.body.blocks[from].insns[defined..].iter().any(is_call) || self.body.blocks[to].insns[..index].iter().any(is_call) {
+            return true;
+        }
+        let blocks = self.body.blocks.len();
+        let mut forward = vec![false; blocks];
+        let mut stack = vec![from];
+        forward[from] = true;
+        while let Some(one) = stack.pop() {
+            for at in &self.body.blocks[one].succ {
+                if let Some(&next) = self.by_at.get(at)
+                    && !forward[next]
+                {
+                    forward[next] = true;
+                    stack.push(next);
+                }
+            }
+        }
+        let mut backward = vec![false; blocks];
+        let mut stack = vec![to];
+        backward[to] = true;
+        while let Some(one) = stack.pop() {
+            for &before in &self.preds[one] {
+                if !backward[before] {
+                    backward[before] = true;
+                    stack.push(before);
+                }
+            }
+        }
+        (0..blocks).any(|one| one != from && one != to && forward[one] && backward[one] && self.calls[one])
     }
 
     /// The pin reads a value an instruction needs in a particular register
@@ -775,6 +839,19 @@ pub fn shared(
         moved: HashMap::default(),
         table: HashMap::default(),
         regs,
+        freq: {
+            let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
+            (0..body.blocks.len()).map(|index| mbfi.get_block_freq_relative_to_entry_block(index)).collect()
+        },
+        calls: body
+            .blocks
+            .iter()
+            .map(|block| {
+                block.insns.iter().any(|one| {
+                    one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call)
+                })
+            })
+            .collect(),
     };
     // Depth first over the dominator tree; an entry is `(block, keys to drop)`
     // once its subtree is done.
@@ -828,7 +905,7 @@ pub fn shared(
                 continue;
             }
             let old = one.defines[0];
-            if !walk.profitable(shared_value, old, shared_block, one, number) {
+            if !walk.profitable(shared_value, old, shared_block, one, number, index) {
                 walk.table.insert(key.clone(), (old, number));
                 mine.push(key);
                 continue;

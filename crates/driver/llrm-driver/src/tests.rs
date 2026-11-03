@@ -254,13 +254,12 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
-/// A symbol's address kept in a callee-saved register across a call was made
-/// again in the argument register (`mov rdi, offset g`, 7 bytes) where the pin
-/// copies it (`mov rdi, rbx`, 3 bytes): `LEA64r` is `isReMaterializable` but
-/// not `isAsCheapAsAMove`, so `defFromParent` copies. memcpy_libcall m64 -O2
-/// was 3 bytes over the pin.
+/// A symbol's address made before a call, once more after it ahead of a loop,
+/// is made again there (`DEVIATE CSE4`): sharing keeps it in a callee-saved
+/// register across the call, a push and pop for the one instruction saved
+/// (memcpy_libcall m64 -O2 shares it in the pin, three bytes smaller).
 #[test]
-fn a_symbol_address_kept_across_a_call_is_copied_to_the_argument_at_m64() {
+fn a_symbol_address_before_a_loop_is_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @g = global [64 x i8] zeroinitializer\n\
@@ -272,10 +271,9 @@ fn a_symbol_address_kept_across_a_call_is_copied_to_the_argument_at_m64() {
                 done:\n  call void @h(ptr @g)\n  ret i32 %t\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    // The loop's address and the second call's argument; the first call
-    // takes the loop's register.
+    // Each call's argument and the loop's address.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
-    assert_eq!(made, 2, "{listing}");
+    assert_eq!(made, 3, "{listing}");
 }
 
 /// The same symbol address hoisted twice out of a loop stayed two registers
@@ -348,6 +346,53 @@ fn a_constant_across_a_call_that_keeps_a_caller_saved_register_is_made_before_th
     let loop_start = listing.find("L1_2:").expect("the loop");
     let made = listing[loop_start..].lines().filter(|line| line.trim_end().ends_with(", 3")).count();
     assert_eq!(made, 0, "{listing}");
+}
+
+/// A symbol address read directly only in a block that runs a quarter of the
+/// loop's iterations was hoisted into a callee-saved register across the
+/// loop's call: the push and pop cost more executed instructions than the
+/// remat saved (histo and scroll m64 -O2 were one to five instructions over
+/// release/next). The frequency-weighted price keeps it in the loop.
+#[test]
+fn a_symbol_address_read_only_in_a_cold_block_of_a_loop_is_made_there_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h()\n\
+                define i32 @f(i64 %n, i1 %p, ptr %kp) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %latch ]\n  %s = phi i32 [ 0, %entry ], [ %t, %latch ]\n\
+                  call void @h()\n  br i1 %p, label %cold, label %latch, !prof !0\n\
+                cold:\n  %k = load volatile i64, ptr %kp\n  %ptr = getelementptr i8, ptr @a, i64 %k\n\
+                  %v = load volatile i8, ptr %ptr\n  %w = zext i8 %v to i32\n  br label %latch\n\
+                latch:\n  %u = phi i32 [ 0, %loop ], [ %w, %cold ]\n  %t = add i32 %s, %u\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i32 %t\n}\n\
+                !0 = !{!\"branch_weights\", i32 1, i32 15}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.lines().any(|line| line.trim().starts_with("push r12")), "{listing}");
+    let made = listing.lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 1, "{listing}");
+}
+
+/// A symbol address made before a call and again after it, once each, was
+/// made once and kept in a callee-saved register across the call: the push and
+/// pop (two executed instructions) cost more than the one made again
+/// (histo m64 -O2 was two instructions over release/next).
+#[test]
+fn a_symbol_address_made_again_after_a_call_once_is_made_again_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h()\n\
+                define void @f(i64 %k, i1 %c) {\nentry:\n  %p = getelementptr i8, ptr @a, i64 %k\n  store volatile i8 0, ptr %p\n\
+                  call void @h()\n  br i1 %c, label %then, label %done\n\
+                then:\n  %q = getelementptr i8, ptr @a, i64 %k\n  store volatile i8 1, ptr %q\n  br label %done\n\
+                done:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let made = listing.lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 2, "{listing}");
 }
 
 /// A byte or word add that keeps its source live was a copy and a narrow add
