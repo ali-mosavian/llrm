@@ -72,3 +72,104 @@ fn a_value_read_on_both_paths_does_not_move() {
     assert!(!machine_sink::<Two>(&mut function));
     assert_eq!(names(&function.blocks[0]), ["arg", "add", "branch"]);
 }
+
+/// A target with room for every register, so no sink is refused for pressure.
+struct Wide;
+
+impl llrm_spike_mf::Target for Wide {
+    type Class = ();
+
+    fn meet(
+        _: (),
+        _: (),
+    ) -> Option<()> {
+        Some(())
+    }
+
+    fn any() {}
+
+    fn candidates(_: ()) -> Vec<llrm_lir::registers::RegId> {
+        (0..250u8).map(llrm_lir::registers::RegId::from_raw).collect()
+    }
+
+    fn view(
+        root: llrm_lir::registers::RegId,
+        _: (),
+    ) -> llrm_lir::registers::RegId {
+        root
+    }
+
+    fn root(register: llrm_lir::registers::RegId) -> llrm_lir::registers::RegId {
+        register
+    }
+
+    fn reserved(_: llrm_lir::registers::RegId) -> bool {
+        false
+    }
+
+    fn caller_saved() -> Vec<llrm_lir::registers::RegId> {
+        vec![]
+    }
+
+    fn copy_sets_flags(
+        _: llrm_lir::registers::RegId,
+        _: llrm_lir::registers::RegId,
+    ) -> bool {
+        false
+    }
+}
+
+impl llrm_spike_mf::Jump for Wide {
+    fn jump(block: u32) -> Inst {
+        <Two as llrm_spike_mf::Jump>::jump(block)
+    }
+
+    fn reverse(branch: &Inst) -> Option<Inst> {
+        <Two as llrm_spike_mf::Jump>::reverse(branch)
+    }
+}
+
+/// `count` diamonds in one loop. Each head defines a value its join alone
+/// reads (so it sinks, and the liveness is solved again), and the last join
+/// reads every head's other value, so hundreds of registers are live. Liveness
+/// was a hash set per block: 200 diamonds took 350 ms, 20 ms now
+/// (div_constants_long at m68k: 8% of its instructions in `pressure_exceeds`).
+fn loop_of_diamonds(count: u32) -> MFunction<()> {
+    let mut function = MFunction::new("f");
+    function.classes = vec![(); 2 * count as usize];
+    for g in 0..count {
+        let (head, mid, join) = (3 * g, 3 * g + 1, 3 * g + 2);
+        let (p, x) = (2 * g, 2 * g + 1);
+        function
+            .blocks
+            .push(
+                Block {
+                    id: head,
+                    insts: vec![
+                        op("def", vec![Operand::Def(v(p))]),
+                        op("add", vec![Operand::Def(v(x)), Operand::Use(v(p)), Operand::Use(v(p))]),
+                        branch(join),
+                    ],
+                    phis: vec![],
+                },
+            );
+        function.blocks.push(Block { id: mid, insts: vec![], phis: vec![] });
+        let mut insts = vec![op("use", vec![Operand::Use(v(x))])];
+        if g + 1 == count {
+            insts.extend((0..count).map(|n| op("use", vec![Operand::Use(v(2 * n))])));
+            insts.push(branch(0));
+        }
+        function.blocks.push(Block { id: join, insts, phis: vec![] });
+    }
+    function.blocks.push(Block { id: 3 * count, insts: vec![op("ret", vec![])], phis: vec![] });
+    function
+}
+
+#[test]
+fn sinking_in_a_loop_of_many_blocks_solves_liveness_with_bit_sets() {
+    let mut function = loop_of_diamonds(200);
+    let start = std::time::Instant::now();
+    assert!(machine_sink::<Wide>(&mut function), "nothing sank: the test measures nothing");
+    let took = start.elapsed();
+    assert!(took.as_millis() < 150, "{} blocks took {took:?}", function.blocks.len());
+}
