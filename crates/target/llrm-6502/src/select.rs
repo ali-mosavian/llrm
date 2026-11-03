@@ -133,7 +133,7 @@ pub fn function_text(
     let (items, _, places) = function_items_with_places(module, name, selection)?;
     let (function, labels) = alloc::build_with_places(name, &items, places).map_err(|why| format!("{name}: {}", why.0))?;
     let (code, slots) =
-        alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page, selection.tuning)?;
+        alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page, selection.tuning, selection.source.as_deref())?;
     let export = module.named(name).is_none_or(|id| exported(module.global(id).linkage));
     let mut body = format!("{}{code}", if export { format!(".export {name}\n") } else { String::new() });
     body.push_str(".segment \"BSS\"\n");

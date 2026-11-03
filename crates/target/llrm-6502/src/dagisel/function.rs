@@ -96,6 +96,8 @@ pub struct Selection {
     pub zero_page: u8,
     /// The level's price of a byte against a clock.
     pub tuning: crate::alloc::Tuning,
+    /// The source file `-g` names the lines of; none prints no `.dbg line`.
+    pub source: Option<String>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -145,7 +147,7 @@ pub fn select_function(
     for (reg, parts) in wide {
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16, tuning: crate::alloc::Tuning::SPEED })
+    Ok(Selection { blocks: selected, locals, cpu, widths, zero_page: 16, tuning: crate::alloc::Tuning::SPEED, source: None })
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`

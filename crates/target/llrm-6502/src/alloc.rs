@@ -2235,10 +2235,11 @@ pub fn emit(
     cmos: bool,
     zero_page: u8,
     tuning: Tuning,
+    source: Option<&str>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
     let level = TUNING.with(|t| t.replace(tuning));
-    let result = emit_on(function, labels, stack, cmos);
+    let result = emit_on(function, labels, stack, cmos, source);
     IMAGINARY.with(|n| n.set(before));
     TUNING.with(|t| t.set(level));
     result
@@ -2252,17 +2253,18 @@ fn emit_on(
     labels: &[Vec<String>],
     stack: bool,
     cmos: bool,
+    source: Option<&str>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share, split, place)
+            emit_with::<true>(function, labels, cmos, sink, share, split, place, source)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share, split, place)
+            emit_with::<false>(function, labels, cmos, sink, share, split, place, source)
         }
     };
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
     let price = |code: &str, slots: &[(String, usize)]| {
-        crate::timing::estimate(cpu, code)
+        crate::timing::estimate(cpu, &without_lines(code))
             .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
     let (mut code, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
@@ -2461,6 +2463,7 @@ fn emit_with<const STACK: bool>(
     share: bool,
     _split: bool,
     place: bool,
+    source: Option<&str>,
 ) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
@@ -2995,7 +2998,7 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&finish(out), &function.name), slots, sunk, shared, moved))
+    Ok((own_labels(&finish(out, source.map(|file| (file, &function.places[..]))), &function.name), slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -3035,10 +3038,44 @@ fn own_labels(
 
 /// The function's text: the peepholes, then the branches out of reach made
 /// long.
-fn finish(mut code: Asm) -> String {
+fn finish(
+    mut code: Asm,
+    lines_of: Option<(&str, &[llrm_codegen::model::lir::SrcLoc])>,
+) -> String {
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
+    if let Some((file, places)) = lines_of {
+        code.lines = with_lines(code.lines, file, places);
+    }
     code.text()
+}
+
+/// `.dbg line` ahead of each instruction whose line is not the one before it
+/// (ca65 writes them to the debug file); a label starts a line again. They go
+/// in after every pass, so no pass sees them.
+fn with_lines(
+    lines: Vec<Line>,
+    file: &str,
+    places: &[llrm_codegen::model::lir::SrcLoc],
+) -> Vec<Line> {
+    let mut out = Vec::with_capacity(lines.len() * 2);
+    let mut shown = None;
+    for line in lines {
+        match &line {
+            Line::Label(_) => shown = None,
+            Line::Inst(inst) => {
+                if let Some(place) = (inst.place != 0).then(|| places.get(inst.place as usize - 1)).flatten()
+                    && shown != Some(place.line)
+                {
+                    out.push(Line::Raw(format!("  .dbg line, \"{file}\", {}", place.line)));
+                    shown = Some(place.line);
+                }
+            }
+            Line::Raw(_) => {}
+        }
+        out.push(line);
+    }
+    out
 }
 
 /// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
@@ -3114,4 +3151,9 @@ fn allocate_greedy<T: Target<Class = Class>>(
         llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &assignment)?;
     }
     Ok((assignment, slots))
+}
+
+/// `code` without its `.dbg line` directives, which cost nothing.
+fn without_lines(code: &str) -> String {
+    code.lines().filter(|line| !line.trim_start().starts_with(".dbg")).map(|line| format!("{line}\n")).collect()
 }
