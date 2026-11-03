@@ -194,7 +194,11 @@ pub trait CombineHooks {
 
     /// DEVIATE LS1 (owner m16, exit 2026-11-17): a plain `i32` load every use of
     /// which is a word half (`trunc i16`, or `trunc i16 (srl 16)`) is two `i16`
-    /// loads. The pin's `ReduceLoadWidth` needs a one-use load. Default off.
+    /// loads. The pin's `ReduceLoadWidth` ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095)) narrows a load only when
+    /// nothing else reads it, so the pin keeps one `mov eax,[m]` and a `shld`.
+    /// m16 only: its halves are the registers a `long` is returned and passed
+    /// in (DX:AX), and a 16-bit register file has no dword half to extract
+    /// for free. Default off.
     fn split_dword_loads(&self) -> bool {
         false
     }
