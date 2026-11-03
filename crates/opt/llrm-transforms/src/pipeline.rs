@@ -822,7 +822,12 @@ pub(crate) fn llvm_order(
                 Box::new(loopunrollandjam::LoopUnrollAndJam {
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
-                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows

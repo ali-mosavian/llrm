@@ -42,6 +42,12 @@
 //!   pragma asks (`enable-unroll-and-jam` is false) and the targets leave
 //!   `UP.Partial` and `UP.Runtime` off; the `particle` row at -O3 is the
 //!   reason. The pragma and `-allow-unroll-and-jam` ask as they do at the pin.
+//! - D8: a function that was jammed runs `IndVarSimplify`, `GVN` and `DSE` once
+//!   after the jam. The pin has no pass after the jam that merges the copies'
+//!   counters (`movePHIs` leaves one phi per copy), so each copy keeps its own
+//!   load and store of a cell the others touch; gcc folds them. The pin never
+//!   forms the shape (`-O3` leaves the jam off), so no pin output shows it.
+//!   Exit: none.
 //! - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
 //!   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
 //!   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or
@@ -1114,6 +1120,12 @@ pub struct JamOptions {
     /// D1: unroll and jam without being asked (-O3), with `Partial` and
     /// `Runtime` on.
     pub on: bool,
+    /// D8: clean the jammed function once (the pipeline's; the pin's own
+    /// tests run without).
+    pub clean: bool,
+    /// D8: whether the `GVN` after the jam inserts for partial redundancies,
+    /// as the pipeline's does.
+    pub pre: bool,
     /// `-allow-unroll-and-jam`.
     pub allow: Option<bool>,
     /// `-unroll-and-jam-count`.
@@ -1580,6 +1592,19 @@ impl FunctionPass for LoopUnrollAndJam {
         if !changed {
             *unit.function = saved;
             return PreservedAnalyses::all();
+        }
+        // D8: the jammed copies are cleaned once.
+        if self.options.clean {
+            let mut passes: [Box<dyn FunctionPass>; 3] = [
+                Box::new(crate::indvars::IndVars { lftr: crate::indvars::lftr_default(), size: self.opt_size }),
+                Box::new(crate::gvn::Gvn { pre: self.options.pre }),
+                Box::new(crate::deadstore::DeadStoreElimination),
+            ];
+            let mut preserved = PreservedAnalyses::none();
+            for pass in &mut passes {
+                analyses.invalidate(unit.function, &preserved);
+                preserved = llrm_mir::passes::run_checked(pass.as_mut(), unit, analyses);
+            }
         }
         PreservedAnalyses::none()
     }
