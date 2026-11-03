@@ -97,6 +97,12 @@ impl SchedInfo for Z80Sched {
     fn source_order(&self) -> bool {
         true
     }
+
+    // `preference` stays the default, `Source`: `ILP` (what `createDefaultScheduler`
+    // gives a target without a machine scheduler) fixed lz4's copy loops but left
+    // 6 of the 60 cells above `Source`. Pressure limits stay the pin's 0: the
+    // allocatable registers (7 bytes, 3 pairs) put 10 cells above, against 8;
+    // no limit scanned (pairs 0..3, bytes 0..7) got below 8.
 }
 
 /// Why a block did not get through.

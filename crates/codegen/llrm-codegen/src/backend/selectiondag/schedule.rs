@@ -37,10 +37,13 @@
 //! that the units of one call sequence stay together: without them two calls'
 //! stack arguments interleave.
 //!
-//! DEVIATE SD406: the register pressure per class is not kept. Reason: the
-//! pressure functions compare it with `getRegPressureLimit`, 0 for M68k, the
-//! only target on the ILP queue. Exit: a target with a limit asks for
-//! [`Preference::Ilp`]. Owner: m68k-spike.
+//! DEVIATE SD406: the register-pressure bookkeeping skips the subregister
+//! and `REG_SEQUENCE` special cases of `unscheduledNode`. Reason: those
+//! opcodes are target machine nodes here (SD30). Exit: with SD30. The
+//! classes, costs and limits come from the target
+//! ([`SchedInfo::rep_reg_class`], [`SchedInfo::rep_reg_class_cost`],
+//! [`SchedInfo::reg_pressure_limit`]); the defaults are the pin's
+//! (`getRegPressureLimit` 0), where every class is always at its limit.
 //!
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
@@ -142,6 +145,29 @@ pub trait SchedInfo {
     /// None: copies clobber nothing.
     fn copy_clobbers(&self) -> Option<u16> {
         None
+    }
+    /// `TLI->getRepRegClassFor(VT)->getID()`: the class a value of `vt` is
+    /// counted in. One class by default.
+    fn rep_reg_class(
+        &self,
+        _vt: EVT,
+    ) -> u16 {
+        0
+    }
+    /// `TLI->getRepRegClassCostFor(VT)`.
+    fn rep_reg_class_cost(
+        &self,
+        _vt: EVT,
+    ) -> u32 {
+        1
+    }
+    /// `TRI->getRegPressureLimit(RC, MF)`: 0 as the pin's default, which keeps
+    /// every class at its limit.
+    fn reg_pressure_limit(
+        &self,
+        _class: u16,
+    ) -> u32 {
+        0
     }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
@@ -337,6 +363,8 @@ struct Graph<'a> {
     interferences: Vec<(usize, Vec<u16>)>,
     /// `Sequence`: the units scheduled so far, bottom first.
     sequence: Vec<usize>,
+    /// `RegPressure`: the live values per class (`RegReductionPQBase`).
+    reg_pressure: HashMap<u16, u32>,
     /// The work stack of the depth and height walks, kept between calls.
     walk: Vec<usize>,
 }
@@ -457,6 +485,7 @@ impl<'a> Graph<'a> {
             call_seq_end_for_start: HashMap::default(),
             interferences: Vec::new(),
             sequence: Vec::new(),
+            reg_pressure: HashMap::default(),
             walk: Vec::new(),
         };
         graph.build_sched_units(root);
@@ -538,22 +567,35 @@ impl<'a> Graph<'a> {
         }
     }
 
-    /// `InitNumRegDefsLeft`: the values `RegDefIter` visits in a unit's nodes,
-    /// the bottom node first: the results a machine node defines (the first
-    /// `getNumDefs`) and a `CopyFromReg`'s, that have a user.
-    fn count_reg_defs(
+    /// `RegDefIter` over `nodes`, the bottom node first: the values a
+    /// machine node defines (the first `getNumDefs`) and a `CopyFromReg`'s,
+    /// that have a user.
+    fn each_def(
         &self,
         nodes: &[u32],
-    ) -> usize {
-        let mut count = 0;
+        mut f: impl FnMut(usize, EVT),
+    ) {
+        let mut at = 0;
         for &n in nodes {
             let defs = match self.machine(n) {
                 Some(op) => self.values(n).len().min(self.info.num_defs(op)),
                 None if self.opcode(n) == ISD::CopyFromReg => 1,
                 None => 0,
             };
-            count += (0..defs).filter(|&i| self.has_any_use_of_value(n, i)).count();
+            for i in (0..defs).filter(|&i| self.has_any_use_of_value(n, i)) {
+                f(at, self.values(n)[i]);
+                at += 1;
+            }
         }
+    }
+
+    /// `InitNumRegDefsLeft`.
+    fn count_reg_defs(
+        &self,
+        nodes: &[u32],
+    ) -> usize {
+        let mut count = 0;
+        self.each_def(nodes, |_, _| count += 1);
         count
     }
 
@@ -1110,6 +1152,9 @@ impl<'a> Graph<'a> {
                 queue.push(&mut self.sus, su);
             }
         }
+        if preference(self.info) == Preference::Ilp {
+            self.unscheduled_node(su);
+        }
     }
 
     /// `DelayForLiveRegsBottomUp`: the live physical registers `su` would
@@ -1366,15 +1411,18 @@ impl<'a> Graph<'a> {
         }
     }
 
+    /// Whether the class of `vt` is at its limit.
+    fn at_limit(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        let class = self.info.rep_reg_class(vt);
+        self.reg_pressure.get(&class).copied().unwrap_or(0) >= self.info.reg_pressure_limit(class)
+    }
+
     /// `RegPressureDiff` without the live-use count (that priority is off):
     /// the definitions of the predecessors that are not all used yet, less
     /// this unit's own, in the register classes at their limit.
-    ///
-    /// DEVIATE SD32: the pressure per register class is not tracked. Reason:
-    /// the one target on the ILP scheduler, M68k, keeps the default
-    /// `getRegPressureLimit` of 0, so every class is always at its limit and
-    /// only the counts of definitions matter. Exit: a target that sets a
-    /// limit and asks for `Preference::Ilp`. Owner: m68k-spike.
     fn reg_pressure_diff(
         &self,
         su: usize,
@@ -1383,9 +1431,8 @@ impl<'a> Graph<'a> {
         for pred in self.sus[su].preds.iter().filter(|p| !p.is_ctrl()) {
             // zero when enough uses of the node are scheduled to cover its
             // definitions: they are all live
-            let left = self.sus[pred.su].num_reg_defs_left;
-            if left != 0 {
-                diff += self.sus[pred.su].reg_defs as i32;
+            if self.sus[pred.su].num_reg_defs_left != 0 {
+                self.each_def(&self.sus[pred.su].nodes, |_, vt| diff += i32::from(self.at_limit(vt)));
             }
         }
         let unit = &self.sus[su];
@@ -1394,21 +1441,109 @@ impl<'a> Graph<'a> {
             && unit.num_succs != 0
         {
             let defs = self.values(node).len().min(self.info.num_defs(op));
-            diff -= (0..defs).filter(|&i| self.has_any_use_of_value(node, i)).count() as i32;
+            for i in (0..defs).filter(|&i| self.has_any_use_of_value(node, i)) {
+                diff -= i32::from(self.at_limit(self.values(node)[i]));
+            }
         }
         diff
     }
 
-    /// `scheduledNode` of the register-pressure queue: the uses of the
-    /// predecessors' definitions one fewer. (The pressure per class is not
-    /// kept: see [`Graph::reg_pressure_diff`].)
+    fn add_pressure(
+        &mut self,
+        vt: EVT,
+    ) {
+        let class = self.info.rep_reg_class(vt);
+        *self.reg_pressure.entry(class).or_insert(0) += self.info.rep_reg_class_cost(vt);
+    }
+
+    /// The pin clamps at zero: "register pressure tracking is imprecise".
+    fn sub_pressure(
+        &mut self,
+        vt: EVT,
+    ) {
+        let (class, cost) = (self.info.rep_reg_class(vt), self.info.rep_reg_class_cost(vt));
+        let live = self.reg_pressure.entry(class).or_insert(0);
+        *live = live.saturating_sub(cost);
+    }
+
+    /// `RegReductionPQBase::scheduledNode`: the predecessors' definitions this
+    /// unit uses become live, its own die.
     fn scheduled_node(
         &mut self,
         su: usize,
     ) {
         for pred in self.sus[su].preds.clone().iter().filter(|p| !p.is_ctrl()) {
-            let left = &mut self.sus[pred.su].num_reg_defs_left;
-            *left = left.saturating_sub(1);
+            let left = self.sus[pred.su].num_reg_defs_left;
+            if left == 0 {
+                continue;
+            }
+            self.sus[pred.su].num_reg_defs_left = left - 1;
+            // the dependence does not say which value it takes: the pin
+            // pressurizes the one at the index of the uses left
+            let mut live = None;
+            self.each_def(&self.sus[pred.su].nodes, |at, vt| {
+                if at == (left - 1) as usize {
+                    live = Some(vt);
+                }
+            });
+            if let Some(vt) = live {
+                self.add_pressure(vt);
+            }
+        }
+        let skip = self.sus[su].num_reg_defs_left as usize;
+        let mut dying = Vec::new();
+        self.each_def(&self.sus[su].nodes, |at, vt| {
+            if at >= skip {
+                dying.push(vt);
+            }
+        });
+        for vt in dying {
+            self.sub_pressure(vt);
+        }
+    }
+
+    /// `RegReductionPQBase::unscheduledNode`: the pressure of a unit taken
+    /// back out of the sequence.
+    fn unscheduled_node(
+        &mut self,
+        su: usize,
+    ) {
+        let node = self.sus[su].node();
+        let machine = self.machine(node).is_some();
+        if !machine && self.opcode(node) != ISD::CopyToReg {
+            return;
+        }
+        for pred in self.sus[su].preds.clone().iter().filter(|p| !p.is_ctrl()) {
+            // a predecessor with a user left scheduled is live still
+            if self.sus[pred.su].num_succs_left as usize != self.sus[pred.su].succs.len() {
+                continue;
+            }
+            let pn = self.sus[pred.su].node();
+            let Some(op) = self.machine(pn) else {
+                if self.opcode(pn) == ISD::CopyFromReg {
+                    self.add_pressure(self.values(pn)[0]);
+                }
+                continue;
+            };
+            let defs = self.values(pn).len().min(self.info.num_defs(op));
+            let dying: Vec<EVT> =
+                (0..defs).filter(|&i| self.has_any_use_of_value(pn, i)).map(|i| self.values(pn)[i]).collect();
+            for vt in dying {
+                self.sub_pressure(vt);
+            }
+        }
+        if self.sus[su].num_succs != 0
+            && let Some(op) = self.machine(node)
+        {
+            let values = self.values(node).to_vec();
+            for i in self.info.num_defs(op)..values.len() {
+                if matches!(values[i], EVT::GLUE | EVT::OTHER) {
+                    continue;
+                }
+                if self.has_any_use_of_value(node, i) {
+                    self.add_pressure(values[i]);
+                }
+            }
         }
     }
 

@@ -342,3 +342,150 @@ fn a_cycle_among_the_units_stops_the_scheduler_with_a_message() {
     let root = store(&mut dag, r, 4, chain_of(a));
     schedule(&dag, root, &Info);
 }
+
+struct PressureInfo {
+    limit: u32,
+}
+
+impl SchedInfo for PressureInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | LOAD | MUL))
+    }
+
+    fn implicit_defs(
+        &self,
+        _opcode: u32,
+    ) -> &[u16] {
+        &[]
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+
+    fn preference(&self) -> super::schedule::Preference {
+        super::schedule::Preference::Ilp
+    }
+
+    fn reg_pressure_limit(
+        &self,
+        _class: u16,
+    ) -> u32 {
+        self.limit
+    }
+}
+
+fn random_dag(seed: u64) -> (SelectionDAG, SDValue, Vec<SDValue>) {
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut next = move |n: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((state >> 33) as usize) % n
+    };
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let mut values = Vec::new();
+    for i in 0..3 + next(3) {
+        values.push(load(&mut dag, 10 + i as u32, entry));
+    }
+    for _ in 0..2 + next(4) {
+        let (x, y) = (values[next(values.len())], values[next(values.len())]);
+        values.push(machine(&mut dag, ADD, &[EVT::I32], &[x, y]));
+    }
+    let mut stores = Vec::new();
+    for i in 0..2 + next(2) {
+        let v = values[values.len() - 1 - next(3.min(values.len()))];
+        stores.push(store(&mut dag, v, 40 + i as u32, entry));
+    }
+    let root = dag.get_token_factor(&stores);
+    (dag, root, values)
+}
+
+/// The most values live at once when the units run in `order`: a value is
+/// live from its unit until the last unit that reads it.
+fn peak_live(
+    dag: &SelectionDAG,
+    order: &[Unit],
+) -> usize {
+    let at = |node: u32| order.iter().position(|unit| unit.nodes.contains(&node));
+    let mut peak = 0;
+    for step in 0..order.len() {
+        let live = order[..=step]
+            .iter()
+            .flat_map(|unit| unit.nodes.iter().copied())
+            .filter(|&node| {
+                matches!(
+                    dag.node(SDValue { node, res: 0 }).opcode,
+                    ISD::Machine(op) if matches!(op, ADD | LOAD)
+                ) && dag.users(SDValue { node, res: 0 }).any(|user| at(user).is_some_and(|when| when > step))
+            })
+            .count();
+        peak = peak.max(live);
+    }
+    peak
+}
+
+fn peak_with_limit(
+    seed: u64,
+    limit: u32,
+) -> usize {
+    let (dag, root, _) = random_dag(seed);
+    peak_live(&dag, &schedule(&dag, root, &PressureInfo { limit }))
+}
+
+/// The ILP queue put the unit that adds the least pressure first in every
+/// class, as the pin does with `getRegPressureLimit` 0, whatever the target
+/// said: values were kept live to no end on a target with registers to spare
+/// (the Z80's lz4 copy loop held five pairs). A class under its limit does not
+/// count; one at it does. Seed 134: two values live at most at limit 0, four
+/// when the class is never at its limit, two again once the limit is 2.
+#[test]
+fn a_class_under_its_pressure_limit_does_not_steer_the_ilp_queue() {
+    assert_eq!(peak_with_limit(134, 0), 2);
+    assert_eq!(peak_with_limit(134, 100), 4, "the limit is read");
+    assert_eq!(peak_with_limit(134, 2), 2, "the pressure reaches the limit");
+}
+
+/// A target that sets no limit gets the pin's 0: m68k's schedules must not
+/// move.
+#[test]
+fn a_target_without_a_pressure_limit_schedules_as_a_limit_of_zero() {
+    struct Default;
+    impl SchedInfo for Default {
+        fn num_defs(
+            &self,
+            opcode: u32,
+        ) -> usize {
+            usize::from(matches!(opcode, ADD | LOAD | MUL))
+        }
+        fn implicit_defs(
+            &self,
+            _opcode: u32,
+        ) -> &[u16] {
+            &[]
+        }
+        fn is_call(
+            &self,
+            _opcode: u32,
+        ) -> bool {
+            false
+        }
+        fn preference(&self) -> super::schedule::Preference {
+            super::schedule::Preference::Ilp
+        }
+    }
+    for seed in 0..200 {
+        let (dag, root, _) = random_dag(seed);
+        let (zero_dag, zero_root, _) = random_dag(seed);
+        assert_eq!(
+            schedule(&dag, root, &Default),
+            schedule(&zero_dag, zero_root, &PressureInfo { limit: 0 }),
+            "seed {seed}"
+        );
+    }
+}
