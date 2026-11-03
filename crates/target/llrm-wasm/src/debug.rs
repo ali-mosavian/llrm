@@ -108,6 +108,20 @@ pub fn sections(
             }
         }
         let Some(procedure) = procedure else { continue };
+        let mut variables = Vec::new();
+        for &(record, disp) in &function.variables {
+            let Some(one) = llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(record)) else { continue };
+            let Some(&r#type) = debug.nodes.get(&one.r#type) else { continue };
+            variables.push(model::Variable {
+                name: one.name,
+                r#type,
+                kind: if one.parameter { model::Kind::Parameter } else { model::Kind::Local },
+                location: model::Location::Frame { disp: disp + one.offset },
+            });
+        }
+        // Parameters first, in the order the source declares them.
+        let order = |name: &str| procedure.parameters.iter().position(|one| one == name).unwrap_or(usize::MAX);
+        variables.sort_by_key(|one| (one.kind != model::Kind::Parameter, order(&one.name)));
         info.functions.push(Function {
             name: procedure.name.clone(),
             symbol: id,
@@ -116,12 +130,16 @@ pub fn sections(
             body: None,
             far: false,
             module: procedure.module,
-            variables: Vec::new(),
+            variables,
             blocks: Vec::new(),
             frame: Vec::new(),
             all_calls: false,
             calls: Vec::new(),
         });
+    }
+    // One frame base for the unit, until a function can state its own.
+    if let Some(local) = functions.iter().find_map(|one| one.frame_base) {
+        info.frame_base = FrameBase::WasmLocal(local);
     }
     info.code = vec![Range { section: 0, offset: 0, length: at }];
     object

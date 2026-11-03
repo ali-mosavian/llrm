@@ -259,8 +259,21 @@ pub struct Function {
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,
+    /// `-g`: the variables whose home is a stack object.
+    pub variables: Vec<Variable>,
     pub(crate) vregs: Vec<ValType>,
     stackified: Vec<bool>,
+}
+
+/// A source variable kept in a stack object.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Variable {
+    /// Its record in the module's metadata.
+    pub record: u32,
+    /// The frame index of the object.
+    pub frame: i32,
+    /// Its offset from the stack pointer once the frame is lowered.
+    pub disp: i64,
 }
 
 impl Function {

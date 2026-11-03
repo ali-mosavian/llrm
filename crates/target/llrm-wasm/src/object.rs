@@ -322,6 +322,11 @@ pub struct Encoded {
     pub personality: bool,
     /// The body offset and source line of each instruction that has one.
     pub lines: Vec<(usize, u32)>,
+    /// `-g`: the metadata record and the stack-pointer displacement of each
+    /// variable that lives in a stack object.
+    pub variables: Vec<(u32, i64)>,
+    /// The local that holds the stack pointer after the prologue.
+    pub frame_base: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -402,6 +407,23 @@ pub fn encode_function(f: &Function) -> Encoded {
         hidden: f.hidden,
         personality: f.personality,
         lines,
+        variables: f.variables.iter().map(|one| (one.record, one.disp)).collect(),
+        frame_base: frame_base_local(f),
+    }
+}
+
+/// The local the prologue stores the lowered stack pointer in: the `local.set`
+/// after `global.get __stack_pointer; const N; sub`. None where the function
+/// has no frame of its own, or keeps the value on the stack.
+fn frame_base_local(f: &Function) -> Option<u32> {
+    use crate::dagisel::generated::ids::opcode as op;
+    let insts: Vec<&crate::mir::Inst> = f.blocks.iter().flatten().collect();
+    let at = insts.iter().position(|one| matches!(one.opcode, op::SUB_I32 | op::SUB_I64))?;
+    insts.get(at.checked_sub(2)?).filter(|one| matches!(one.opcode, op::GLOBAL_GET_I32 | op::GLOBAL_GET_I64))?;
+    let set = insts.get(at + 1).filter(|one| matches!(one.opcode, op::LOCAL_SET_I32 | op::LOCAL_SET_I64))?;
+    match set.operands.first().copied() {
+        Some(Operand::Imm(local)) => u32::try_from(local).ok(),
+        _ => None,
     }
 }
 

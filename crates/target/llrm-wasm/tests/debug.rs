@@ -18,15 +18,15 @@ fn the_line_program_addresses_its_function_by_a_relocation() {
     assert!(line.relocs.iter().any(|r| r.target == DebugTarget::Function("f".into())), "{:?}", line.relocs);
 }
 
-/// A linked `-g` object put every row at the code section's start, or none: the
-/// line table is read back by `llvm-dwarfdump` against the code `wasm-objdump`
-/// lists.
-#[test]
-fn a_linked_g_object_has_the_rows_of_its_source_lines() {
+/// The object of `fixture` (`-g`), linked, and what `tool` says of it.
+fn linked(
+    fixture: &str,
+    tool: &[&str],
+) -> String {
     let source =
-        std::fs::read_to_string(format!("{}/tests/ir/debug_lines.ll", env!("CARGO_MANIFEST_DIR"))).expect("fixture");
+        std::fs::read_to_string(format!("{}/tests/ir/{fixture}", env!("CARGO_MANIFEST_DIR"))).expect("fixture");
     let bytes = llrm_wasm::driver::object_g(&source, Width::W32, Options::default(), "d.c").expect("object");
-    let dir = std::env::temp_dir().join(format!("wasm-g-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("wasm-g-{}-{}", std::process::id(), fixture));
     std::fs::create_dir_all(&dir).unwrap();
     let (object, linked) = (dir.join("d.o"), dir.join("l.wasm"));
     std::fs::write(&object, &bytes).unwrap();
@@ -35,7 +35,7 @@ fn a_linked_g_object_has_the_rows_of_its_source_lines() {
         assert!(out.status.success(), "{program}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap()
     };
-    let os = |s: &'static str| std::ffi::OsStr::new(s);
+    let os = std::ffi::OsStr::new;
     run(
         "wasm-ld",
         &[
@@ -47,7 +47,21 @@ fn a_linked_g_object_has_the_rows_of_its_source_lines() {
             object.as_os_str(),
         ],
     );
-    let rows = run("llvm-dwarfdump-20", &[os("--debug-line"), linked.as_os_str()]);
+    let mut args: Vec<&std::ffi::OsStr> = tool.iter().map(|one| os(one)).collect();
+    args.push(linked.as_os_str());
+    let said = run("llvm-dwarfdump-20", &args);
+    if std::env::var_os("WASM_KEEP").is_none() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    said
+}
+
+/// A linked `-g` object put every row at the code section's start, or none: the
+/// line table is read back by `llvm-dwarfdump` against the code `wasm-objdump`
+/// lists.
+#[test]
+fn a_linked_g_object_has_the_rows_of_its_source_lines() {
+    let rows = linked("debug_lines.ll", &["--debug-line"]);
     let lines: Vec<u32> = rows
         .lines()
         .filter(|l| l.starts_with("0x") && !l.contains("end_sequence"))
@@ -56,11 +70,21 @@ fn a_linked_g_object_has_the_rows_of_its_source_lines() {
     // The scope line's row at the function's start, then one row where the
     // line changes (`DwarfDebug::beginInstruction`); the repeats were rows too.
     assert_eq!(lines, [1, 11, 12, 13, 14], "{rows}");
-    let verified = run("llvm-dwarfdump-20", &[os("--verify"), linked.as_os_str()]);
+    let verified = linked("debug_lines.ll", &["--verify"]);
     assert!(verified.contains("No errors"), "{verified}");
-    let info = run("llvm-dwarfdump-20", &[os("--debug-info"), linked.as_os_str()]);
+    let info = linked("debug_lines.ll", &["--debug-info"]);
     assert!(info.contains("DW_AT_name\t(\"f\")"), "{info}");
-    if std::env::var_os("WASM_KEEP").is_none() {
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+}
+
+/// `-O0` variables had no location: `x` and `y` were in the frame and the
+/// debugger could not read them. Clang 20 writes them `DW_OP_fbreg +12` and
+/// `+8` from a frame base that is a wasm local.
+#[test]
+fn an_o0_frame_variable_is_an_fbreg_from_a_wasm_local_frame_base() {
+    let info = linked("debug_vars_o0.ll", &["--debug-info"]);
+    assert!(info.contains("DW_AT_frame_base\t(DW_OP_WASM_location 0x0 "), "{info}");
+    assert!(info.contains("DW_OP_fbreg +12"), "{info}");
+    assert!(info.contains("DW_OP_fbreg +8"), "{info}");
+    let verified = linked("debug_vars_o0.ll", &["--verify"]);
+    assert!(verified.contains("No errors"), "{verified}");
 }

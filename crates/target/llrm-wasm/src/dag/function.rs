@@ -173,6 +173,10 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// `-g`: the metadata id of each variable declared by a `#dbg_declare` of
+    /// a static alloca, and the frame index of that alloca. The same on every
+    /// block.
+    pub declared: Vec<(u32, i32)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -285,14 +289,26 @@ pub fn select_function(
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                declared: Vec::new(),
             });
         }
     }
     let mut frame = static_frame(module, function, &layout, &info)?;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
+    let declared: Vec<(u32, i32)> = function
+        .debug_records()
+        .iter()
+        .filter_map(|record| {
+            let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+            let variable = llrm_mir::debuginfo::read_variable(module, record.variable)?;
+            let index = *info.static_allocas.get(&address)?;
+            (variable.scope == name).then_some((record.variable.0, index))
+        })
+        .collect();
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.declared.clone_from(&declared);
     }
     Ok(selected)
 }
