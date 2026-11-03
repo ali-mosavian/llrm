@@ -784,12 +784,6 @@ pub trait Tti {
         self.number_of_gpr_registers()
     }
 
-    /// The registers one of the two of a base-plus-index address must be (m16:
-    /// bx alone, bp being the frame's); the general registers where any serves.
-    fn address_base_registers(&self) -> u32 {
-        self.number_of_gpr_registers()
-    }
-
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {

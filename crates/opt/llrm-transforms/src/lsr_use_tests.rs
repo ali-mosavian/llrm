@@ -74,7 +74,6 @@ fn rated(
         hardware_loop_profitable: false,
         as_written: false,
         other_register_units: 0,
-        fixed_pairs: &[],
     };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
@@ -170,7 +169,6 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
             hardware_loop_profitable: false,
             as_written: false,
             other_register_units: 0,
-            fixed_pairs: &[],
         };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -360,7 +358,6 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
             scaled_index_insns: 2,
             huge_space: None,
             address_registers: None,
-            address_bases: None,
             inline_size_guard: false,
             float_code_size_percent: 100,
             unroll_size_few_trips: (0, 0),
@@ -391,7 +388,6 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
                 hardware_loop_profitable: false,
                 as_written: false,
                 other_register_units: 0,
-                fixed_pairs: &[],
             };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
@@ -537,7 +533,6 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
                 hardware_loop_profitable: false,
                 as_written: false,
                 other_register_units: 0,
-                fixed_pairs: &[],
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -565,7 +560,6 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
                 hardware_loop_profitable: false,
                 as_written: false,
                 other_register_units: 0,
-                fixed_pairs: &[],
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);

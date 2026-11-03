@@ -186,7 +186,6 @@ impl Machine for Dos {
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
             address_registers: native_address_registers(&self.address_forms),
-            address_bases: native_address_bases(&self.address_forms),
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
@@ -428,11 +427,6 @@ pub fn address_forms(
 /// The registers the cheapest address form names: its base class and its
 /// index class (the frame's register is in neither); none where the form has
 /// no classes.
-fn native_address_bases(forms: &[AddressForm]) -> Option<u32> {
-    let native = forms.iter().filter(|form| !form.secondary).min_by_key(|form| form.use_cost)?;
-    native.bases.map(|bases| bases as u32)
-}
-
 fn native_address_registers(forms: &[AddressForm]) -> Option<u32> {
     let native = forms.iter().filter(|form| !form.secondary).min_by_key(|form| form.use_cost)?;
     Some((native.bases? + native.indices?) as u32)
