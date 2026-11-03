@@ -1655,6 +1655,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // left that was not there before, the unrolled loop's own first iteration
     // among them: they are new to the loop passes after it.
     let mut revisited: Vec<BlockId> = Vec::new();
+    let mut parents: Vec<BlockId> = Vec::new();
     let mut changed = simplified || closed;
     if changed {
         run.scev = ScalarEvolution::new();
@@ -1687,6 +1688,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let peeled = result == Unrolled::Peeled;
         changed = true;
         run.scev = ScalarEvolution::new();
+        // The pin's loop pass manager runs LPM2's whole list on a loop,
+        // children before parents ([`L270`][pop]): a parent's IndVars
+        // sees its child already unrolled. Here each pass runs over
+        // every loop in turn, so the parent is queued for IndVars
+        // again.
+        //
+        // [pop]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L270
+        if let Some(parent) = parent_header {
+            parents.push(parent);
+        }
         if peeled {
             // `PartiallyUnrolled`: its analyses and its nest are made again
             // (the cloned iterations are loops' blocks of its parent).
@@ -1774,6 +1786,13 @@ pub fn unroll_loops(run: &mut Run) -> bool {
                 created.push(one.get_header());
             }
             nest.extend(one.get_sub_loops());
+        }
+    }
+    for header in parents {
+        if analyzed.loops.get_loop_for(header).is_some_and(|one| one.get_header() == header)
+            && !created.contains(&header)
+        {
+            created.push(header);
         }
     }
     run.created = created;

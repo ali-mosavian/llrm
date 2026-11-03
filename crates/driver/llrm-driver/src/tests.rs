@@ -445,6 +445,24 @@ fn a_signed_bit_field_read_is_one_byte_sextload_at_m32() {
     assert!(!listing.contains("movsx eax, al"), "{listing}");
 }
 
+/// A nest whose inner loop the O3 unroll removes: the parent's IndVars sees the
+/// unrolled body and writes the sum as a constant, the loop goes (byte_multiply
+/// O3 1636 B against the pin's 18 instructions).
+#[test]
+fn a_parent_of_an_unrolled_loop_is_folded_by_indvars_at_m64_o3() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @report(i64)\n\
+                define void @f() {\nentry:\n  br label %outer\n\
+                outer:\n  %a = phi i32 [ 0, %entry ], [ %an, %latch ]\n  %s = phi i64 [ 0, %entry ], [ %p2, %latch ]\n  %t = trunc i32 %a to i8\n  br label %inner\n\
+                inner:\n  %b = phi i32 [ 0, %outer ], [ %bn, %inner ]\n  %p = phi i64 [ %s, %outer ], [ %p2, %inner ]\n  %tb = trunc i32 %b to i8\n  %m = mul i8 %tb, %t\n  %z = zext i8 %m to i64\n  %p2 = add i64 %p, %z\n  %bn = add i32 %b, 7\n  %c = icmp ult i32 %bn, 256\n  br i1 %c, label %inner, label %latch\n\
+                latch:\n  %an = add i32 %a, 5\n  %c2 = icmp ult i32 %an, 256\n  br i1 %c2, label %outer, label %exit\n\
+                exit:\n  call void @report(i64 %p2)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov rdi, 229508"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
