@@ -862,6 +862,20 @@ fn a_wasm_local_is_a_wasm_location_and_a_frame_base() {
     assert!(has(&[0x91, 8]), "x");
 }
 
+/// A stackified wasm value has no local; the writer refused it, so `-O2` locals
+/// in the operand stack had no description.
+#[test]
+fn a_wasm_stack_slot_is_a_wasm_location_of_kind_two() {
+    let made = object(
+        vec![Variable { name: "t".into(), r#type: 0, kind: Kind::Local, location: Location::WasmStack(4) }],
+        vec![int()],
+        Format::Default,
+    );
+    let written = expanded(&made.object, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    assert!(info.image.windows(4).any(|window| window == [0xED, 0x02, 4, 0x9F]), "t, stack slot 4");
+}
+
 /// WebAssembly's frame pointer is a local of its own in each function:
 /// `Info::frame_base` alone gave every subprogram the same one.
 #[test]
