@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{Two, op, v};
+use common::{Two, branch, op, v};
 use llrm_spike_mf::regalloc::{eliminate_phis_with, successors};
 use llrm_spike_mf::{Block, Inst, Kind, MFunction, Operand, Phi, commute_tied};
 
@@ -99,4 +99,27 @@ fn a_phi_copy_goes_before_the_last_read_of_its_source() {
     };
     assert_eq!(position(false), 3);
     assert_eq!(position(true), 1);
+}
+
+/// `Facts::of` solved liveness over a boolean per (block, register) with a
+/// scan of every register per block per round: 3000 blocks and 30000
+/// registers took 450 ms (div_constants_long at m68k spent 16% of its
+/// instructions there). Bit sets take milliseconds.
+#[test]
+fn liveness_of_many_blocks_and_registers_is_cheap() {
+    let blocks = 3000u32;
+    let mut function: MFunction<()> = MFunction::new("f");
+    for b in 0..blocks {
+        let mut insts =
+            vec![op("work", vec![Operand::Def(v(10 * b)), Operand::Use(v(10 * ((b + blocks - 1) % blocks)))])];
+        if b + 1 == blocks {
+            insts.push(branch(0));
+        }
+        function.blocks.push(Block { id: b, insts, phis: vec![] });
+    }
+    function.classes = vec![(); 10 * blocks as usize];
+    let start = std::time::Instant::now();
+    commute_tied::<Two>(&mut function);
+    let took = start.elapsed();
+    assert!(took.as_millis() < 100, "{blocks} blocks took {took:?}");
 }
