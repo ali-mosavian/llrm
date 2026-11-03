@@ -738,7 +738,7 @@ pub fn place_copies_where_needed(
             let lacking: Vec<usize> = entrances.iter().copied().filter(|&from| !made(from)).collect();
             // one entrance lacks it, by a block that only leads here
             let [from] = lacking[..] else { continue };
-            if successors[from] != [head] || from <= head || entrances.iter().any(|&one| one != from && one > head) {
+            if successors[from] != [head] {
                 continue;
             }
             let block = &function.blocks[from];

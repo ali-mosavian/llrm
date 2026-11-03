@@ -616,6 +616,7 @@ fn the_sign_tested_beside_a_shift_left_is_the_shifts_carry() {
     let mut other = build(2);
     llrm_z80::compile::use_the_shift_carry(&mut other);
     assert_eq!(kinds(&other), [Kind::Copy, Kind::Op("SHL16"), Kind::Copy, Kind::Op("BIT7_16"), Kind::Op("JPNZ")]);
+}
 
 /// sum_arr -Oz kept `ld a, b` at the head of a loop, where the entry
 /// has just made it: it ran on every trip and once more at the exit, +4 T.
