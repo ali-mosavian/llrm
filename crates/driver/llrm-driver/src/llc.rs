@@ -393,6 +393,9 @@ pub fn compiled_dumping(
     // The system the module's triple names writes its own object format unless
     // `-fobject-format=` says otherwise.
     let system = bound.target.layout().platforms.into_iter().find(|one| Some(&one.triple) == triple.as_ref());
+    if let Some(why) = system.as_ref().and_then(|one| one.pending.as_ref()).filter(|_| !flags.allow_pending_abi) {
+        return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
+    }
     let mut flags = flags.clone();
     if let (None, Some(system)) = (flags.object_format, system) {
         flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);

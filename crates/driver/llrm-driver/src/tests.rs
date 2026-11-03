@@ -2606,8 +2606,11 @@ fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format
             "target datalayout = \"e-m:{mangling}-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
              target triple = \"{triple}\"\ndeclare void @g()\ndefine void @f() {{\n  call void @g()\n  ret void\n}}\n"
         );
+        // Windows is refused until its ABI rows land; the flag takes the object
+        // anyway, for the unwind comparison.
+        let asked = if mangling == "w" { &["-fallow-pending-abi"][..] } else { &[] };
         let (built, chosen) =
-            crate::llc::compiled(&flags(&[]), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
+            crate::llc::compiled(&flags(asked), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
         assert_eq!(chosen, format, "{triple}");
         let object = llrm_codegen::backend::objbuild::written_in(
             &built,
@@ -2619,4 +2622,15 @@ fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format
         .unwrap();
         assert!(object.starts_with(magic), "{triple}: {:02x?}", &object[..8]);
     }
+}
+
+/// Windows x86-64 IR compiled with System V argument registers and a red zone:
+/// wrong code, written without a word. The target states what is pending and
+/// the driver refuses until the Win64 rows land.
+#[test]
+fn a_windows_module_is_refused_while_the_target_lacks_its_abi() {
+    let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-pc-windows-msvc\"\ndefine void @f() {\n  ret void\n}\n";
+    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
+    assert!(why.contains("Win64 calling convention"), "{why}");
 }

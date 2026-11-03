@@ -39,6 +39,9 @@ pub struct Platform {
     pub datalayout: String,
     /// The object format the system links, by its `object.toml` name.
     pub format: String,
+    /// What of the system's ABI the target does not carry yet; the driver
+    /// refuses the system while this is set.
+    pub pending: Option<String>,
 }
 
 /// A target's data layout.
@@ -252,6 +255,7 @@ impl Layout {
                 triple: field("triple")?,
                 datalayout: field("datalayout")?,
                 format: field("format")?,
+                pending: field("pending").ok(),
             });
         }
         Ok(Self {
@@ -291,11 +295,12 @@ mod tests {
     #[test]
     fn a_layout_reads_its_platforms() {
         let text = format!(
-            "{FLAT}\n[[platform]]\ntriple = \"x86_64-pc-windows-msvc\"\ndatalayout = \"e-m:w\"\nformat = \"coff\"\n"
+            "{FLAT}\n[[platform]]\ntriple = \"x86_64-pc-windows-msvc\"\ndatalayout = \"e-m:w\"\nformat = \"coff\"\npending = \"abi\"\n"
         );
         let platforms = Layout::parse(&text).unwrap().platforms;
         assert_eq!(platforms.len(), 1);
         assert_eq!((platforms[0].triple.as_str(), platforms[0].format.as_str()), ("x86_64-pc-windows-msvc", "coff"));
+        assert_eq!(platforms[0].pending.as_deref(), Some("abi"));
         assert!(Layout::parse(FLAT).unwrap().platforms.is_empty());
     }
 
