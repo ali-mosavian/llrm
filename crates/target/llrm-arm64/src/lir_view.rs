@@ -350,6 +350,9 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
 pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
     let mut lir = view(function);
     crate::licm::hoist(&mut lir);
+    if !llrm_support::env_flag!("LLRM_ARM64_NO_SCHED") {
+        crate::sched::schedule(&mut lir);
+    }
     let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), false)?;
     rebuild(function, &lir, &assignment, &slots);
     Ok(written_callee_saved(function))
