@@ -1,6 +1,7 @@
-//! `llrm-m68k-llc -S [-mcpu=68000|68020] [-O<n>] [--dump DIR] [-o OUT] FILE.ll`: LLVM IR
-//! from clang's front end alone through the mid-end and the m68k backend to
-//! assembly text. Stops at `-S`: there is no object writer behind this driver.
+//! `llrm-m68k-llc -S [-mcpu=68000|68020] [-O<n>] [--dump DIR] [-o OUT]
+//! FILE.ll`: LLVM IR from clang's front end alone through the mid-end and the
+//! m68k backend to assembly text. Stops at `-S`: there is no object writer
+//! behind this driver.
 
 use llrm_m68k::driver::{self, Level};
 
@@ -40,7 +41,9 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input.filter(|_| assembly) else {
-        eprintln!("usage: llrm-m68k-llc -S [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll");
+        eprintln!(
+            "usage: llrm-m68k-llc -S [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
+        );
         return 2;
     };
     let text = match std::fs::read_to_string(&input) {
@@ -51,7 +54,8 @@ fn run() -> i32 {
         }
     };
     let env = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
-    let result = driver::cpu_of(&cpu).and_then(|cpu| driver::assembly_dumping(&text, cpu, level, dump.as_deref().or(env.as_deref())));
+    let result = driver::cpu_of(&cpu)
+        .and_then(|cpu| driver::assembly_dumping(&text, cpu, level, dump.as_deref().or(env.as_deref())));
     match result {
         Ok(text) => {
             let path = output
