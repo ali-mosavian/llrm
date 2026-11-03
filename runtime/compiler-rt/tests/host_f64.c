@@ -1,5 +1,5 @@
 /* Bit-exact oracle: soft f64 vs the host FPU on edge classes and random sweeps (NaN compared as a class).
- * cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/sf64.c [n] */
+ * cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/f64/*.c [n] */
 #define SF_NAME(n) sfb_##n
 #include "softfloat.h"
 #include <stdio.h>

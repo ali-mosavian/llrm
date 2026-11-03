@@ -6,10 +6,11 @@ set -e
 cd "$(dirname "$0")/.."; D=${LLRM_CC_DIR:?set LLRM_CC_DIR to the dir holding llrm-cc}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 F="-Iinclude -DSF_INTABI=1 -include stdint.h -include config/x86_m32/config.h"
 echo 'void _start(void){}' > $T/s.c; gcc -m32 -c $T/s.c -o $T/s.o
-for f in sf32 sf32_conv; do LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -Os -c $F $(ls lib/*/$f.c) -o $T/l_$f.o; done
-ld -m elf_i386 -e _start -o $T/l.elf $T/l_sf32.o $T/l_sf32_conv.o $T/s.o
-for f in sf32 sf32_conv; do gcc -m32 -Os -ffreestanding -fno-pic -fno-builtin -w $F -c $(ls lib/*/$f.c) -o $T/g_$f.o; done
-ld -m elf_i386 -e _start -o $T/g.elf $T/g_sf32.o $T/g_sf32_conv.o $T/s.o
+SRC=$(tests/fp_sources.sh f32); L=; G=
+for f in $SRC; do b=$(basename $f .c); LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -Os -c $F $f -o $T/l_$b.o; L="$L $T/l_$b.o"
+  gcc -m32 -Os -ffreestanding -fno-pic -fno-builtin -w $F -c $f -o $T/g_$b.o; G="$G $T/g_$b.o"; done
+ld -m elf_i386 -e _start -o $T/l.elf $L $T/s.o
+ld -m elf_i386 -e _start -o $T/g.elf $G $T/s.o
 bad=0
 for rc in __addsf3:450 __divsf3:480; do
   n=$(python3 tests/reach32.py $T/l.elf ${rc%:*} | cut -d' ' -f1); g=$(python3 tests/reach32.py $T/g.elf ${rc%:*} | cut -d' ' -f1)

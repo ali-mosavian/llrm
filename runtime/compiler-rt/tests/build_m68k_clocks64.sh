@@ -8,12 +8,11 @@ B=$HOME/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu; D=${LLRM_CC_DIR:?set LLRM_
 O=$HOME/scratch/handoff/m68k-clocks; mkdir -p $O; T=$(mktemp -d)
 cc -O2 -ffp-contract=off tests/gen_vectors64.c -o $T/gen && $T/gen 3000 > $T/vectors64.h
 for c in 68000 68020; do
-  for f in sf64 sf32_conv64 sf32_conv sf32 int64 int32; do
-    LLRM_CC_TARGET=m68k-$c $D/llrm-cc -Os -S -Iinclude $(ls lib/*/$f.c) -o $T/$f.s
+  OBJS=; for src in $(tests/fp_sources.sh f64 f32_64 f32 int); do f=$(basename $(dirname $src))_$(basename $src .c)
+    LLRM_CC_TARGET=m68k-$c $D/llrm-cc -Os -S -Iinclude $src -o $T/$f.s
     awk 'BEGIN{print ".text"} /^(__|sf)[A-Za-z0-9_]*:$/ {l=$0; sub(/:$/,"",l); print ".globl " l} {print}' $T/$f.s > $T/$f.g.s
-    $B-as -m$c -o $T/${f}_$c.o $T/$f.g.s
+    $B-as -m$c -o $T/${f}_$c.o $T/$f.g.s; OBJS="$OBJS $T/${f}_$c.o"
   done
-  OBJS="$T/sf64_$c.o $T/sf32_conv64_$c.o $T/sf32_conv_$c.o $T/sf32_$c.o $T/int64_$c.o $T/int32_$c.o"
   INTS=; [ $c = 68000 ] && INTS="/tmp/sfl/${c}_divsi3.o /tmp/sfl/${c}_modsi3.o /tmp/sfl/${c}_udivsi3.o /tmp/sfl/${c}_umodsi3.o /tmp/sfl/${c}_mulsi3.o"
   for op in 0 1 2 3; do
     $B-gcc -msoft-float -m$c -O1 -nostdlib -static -ffreestanding -DF64 -DOP=$op -I$T tests/m68k_clocks.c $OBJS -o $O/ours64_${c}_Os_op$op

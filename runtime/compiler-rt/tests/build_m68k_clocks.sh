@@ -7,13 +7,13 @@ B=$HOME/scratch/gcc-m68k/root/usr/bin/m68k-linux-gnu; D=${LLRM_CC_DIR:?set LLRM_
 O=$HOME/scratch/handoff/m68k-clocks; mkdir -p $O; T=$(mktemp -d)
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen 3000 > $T/vectors.h
 for c in 68000 68020; do for opt in Os O2; do
-  for f in sf32 sf32_conv int32; do
-    LLRM_CC_TARGET=m68k-$c $D/llrm-cc -$opt -S -Iinclude $(ls lib/*/$f.c) -o $T/$f.s
+  OBJS=; for src in $(tests/fp_sources.sh f32 int | grep -v int64); do f=$(basename $src .c)
+    LLRM_CC_TARGET=m68k-$c $D/llrm-cc -$opt -S -Iinclude $src -o $T/$f.s
     awk 'BEGIN{print ".text"} /^[A-Za-z_][A-Za-z0-9_]*:$/ {l=$0; sub(/:$/,"",l); print ".globl " l} {print}' $T/$f.s > $T/$f.g.s
-    $B-as -m$c -o $T/${f}_$c$opt.o $T/$f.g.s
+    $B-as -m$c -o $T/${f}_$c$opt.o $T/$f.g.s; OBJS="$OBJS $T/${f}_$c$opt.o"
   done
   for op in 0 1 2 3 4; do
-    $B-gcc -msoft-float -m$c -O1 -nostdlib -static -ffreestanding -DOP=$op -I$T tests/m68k_clocks.c $T/sf32_$c$opt.o $T/sf32_conv_$c$opt.o $T/int32_$c$opt.o -o $O/ours_${c}_${opt}_op$op
+    $B-gcc -msoft-float -m$c -O1 -nostdlib -static -ffreestanding -DOP=$op -I$T tests/m68k_clocks.c $OBJS -o $O/ours_${c}_${opt}_op$op
   done
 done
   INTS=; [ $c = 68000 ] && INTS="/tmp/sfl/${c}_divsi3.o /tmp/sfl/${c}_modsi3.o /tmp/sfl/${c}_udivsi3.o /tmp/sfl/${c}_umodsi3.o /tmp/sfl/${c}_mulsi3.o"

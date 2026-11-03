@@ -8,8 +8,8 @@ S=${LIBGCC_SRC:-$HOME/scratch/sf-libgcc-src/libgcc}; T=$(mktemp -d); trap 'rm -r
 cc1() { LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -march=i486 -$OPT -c "$@" 2>$T/err || { echo "  compile failed: $(head -c 100 $T/err)"; return 1; }; }
 t() { size "$1" | awk 'NR==2{print $1}'; }
 echo "== x86_32-linux -march=i486 -$OPT, text bytes"
-for f in sf32 sf32_conv; do cc1 -Iinclude $(ls lib/*/$f.c) -o $T/$f.o && echo "ours $f $(t $T/$f.o)"; done
-echo "ours exports: $(nm -g --defined-only $T/sf32.o $T/sf32_conv.o | awk 'NF==3{printf "%s ", $3}')"
+for p in $(tests/fp_sources.sh f32); do f=$(basename $p .c); cc1 -Iinclude $p -o $T/$f.o && echo "ours $f $(t $T/$f.o)"; done
+echo "ours exports: $(nm -g --defined-only $(ls $T/*.o | grep -v /c_) | awk 'NF==3{printf "%s ", $3}')"
 tot=0; for n in addsf3 subsf3 mulsf3 divsf3 negsf2 fixsfsi fixunssfsi floatsisf floatunsisf comparesf2; do
   if cc1 -I$CRT $CRT/$n.c -o $T/c_$n.o; then s=$(t $T/c_$n.o); echo "compiler-rt $n $s"; fi; done
 for n in addsf3 subsf3 mulsf3 divsf3 negsf2 eqsf2 gesf2 lesf2 unordsf2 fixsfsi fixunssfsi floatsisf floatunsisf; do

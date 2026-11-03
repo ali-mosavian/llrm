@@ -1,8 +1,8 @@
 # Tests
 
 Host oracle (run from `runtime/compiler-rt`, each prints `fails=0` or its totals):
-- `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/sf32.c lib/fp/sf32_conv.c lib/fp/sf32_conv64.c -lm && ./a.out`
-- `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/sf64.c && ./a.out`
+- `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/f32/*.c -lm && ./a.out`
+- `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/f64/*.c && ./a.out`
 - `cc -O2 -fno-builtin -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_int.c lib/int/int32.c lib/int/int64.c && ./a.out`
 - `cc -O2 -Iinclude tests/host_fast32.c lib/fast/fast32.c -lm`; `tests/host_mathf.c` and `tests/host_fp8.c`: the build line is in their header
 - `tests/host_div_newton.sh` (SF_DIV_NEWTON, two multiplies); `tests/host_add_far.c` (far-exponent add/sub; build line in its header)

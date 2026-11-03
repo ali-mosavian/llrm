@@ -4,7 +4,8 @@ Compiler runtime for targets that lack hardware for an operation: soft-float (bi
 
 ```
 include/            softfloat.h (entry points), sf_helpers.h (width helpers; a target overrides one by defining its macro first)
-lib/fp/             binary32/64/8: sf32.c sf32_conv.c sf32_conv64.c sf64.c sf8.c over the width-generic codec.inc, arith.inc, core_end.inc
+lib/fp/             f32/ f64/ f8/: one file per operation family (add_sub mul div cmp neg pack, float_si fix_si float_di fix_di extend trunc), over the
+                    width-generic macros.inc codec.inc add.inc mul.inc div.inc cmp.inc core_end.inc; f32.h and f64.h are the width headers
 lib/int/            int32.c int64.c: __mulsi3 .. __moddi3, no 64-bit operation in any body
 lib/math/           mathf.c and its coefficients (sf_coef.h, from tools/gen_coef.py)
 lib/fast/           fast32*.c: the non-IEEE fast float (spike)
@@ -19,7 +20,7 @@ Add a target: a `config/<target>/` with a `config.h` that defines the knobs belo
 - `tests/host_f32.c`: bit-exact oracle against the host FPU (NaN compared as a class):
 
 ```
-cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/sf32.c lib/fp/sf32_conv.c lib/fp/sf32_conv64.c -o host_f32 && ./host_f32 [n]
+cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/f32/*.c -o host_f32 && ./host_f32 [n]
 ```
 
 Vector classes: edge list (zeros, denormal limits, min/max normal, one, inf, NaN payloads, powers of two near 2^24..2^32, pi); random mix of uniform bits, denormals, near-equal exponents (cancellation), edge values plus or minus 3 ulp; every 251st f32 pattern for conversions; i32/u32/i64/u64 powers of two plus or minus 4, 0..70000 and its negation, random widths, and exact round-to-nearest ties and half-plus-minus-one neighbours at every bit position; f64 to f32 random with exponents spanning the denormal range and half-way ties; f32 to f64 to f32 round trip.
@@ -84,5 +85,5 @@ Both compiled by llrm-cc (keep/llrm-cc_soft + llc_soft_merged, 2026-11-02), text
 
 ## binary64 (C)
 
-`lib/fp/sf64.c`: `__adddf3 __subdf3 __muldf3 __divdf3 __negdf2`, the compares (`__cmpdf2 __eqdf2 __nedf2 __ltdf2 __ledf2 __gedf2 __gtdf2 __unorddf2`), `__floatsidf __floatunsidf __floatdidf __floatundidf` and `__fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi`; `__extendsfdf2` and `__truncdfsf2` are in `sf32_conv64.c`. The binary32 core at 56-bit working width.
-Host oracle: `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/sf64.c lib/fp/sf32_conv.c && ./a.out [n]`; edges, random classes, rounding ties, int conversions. Each of: wrong product shift, tie rule, divide step count, sticky bit fails it (10^4..10^5 mismatches).
+`lib/fp/f64/*.c`: `__adddf3 __subdf3 __muldf3 __divdf3 __negdf2`, the compares (`__cmpdf2 __eqdf2 __nedf2 __ltdf2 __ledf2 __gedf2 __gtdf2 __unorddf2`), `__floatsidf __floatunsidf __floatdidf __floatundidf` and `__fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi`; `__extendsfdf2` and `__truncdfsf2` are in `sf32_conv64.c`. The binary32 core at 56-bit working width.
+Host oracle: `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/f64/*.c && ./a.out [n]`; edges, random classes, rounding ties, int conversions. Each of: wrong product shift, tie rule, divide step count, sticky bit fails it (10^4..10^5 mismatches).

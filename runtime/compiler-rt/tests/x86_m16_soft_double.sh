@@ -10,16 +10,14 @@ TERM=${TERM_ONLY:-all}; n=sfm16_double${TERM_ONLY:+_$TERM_ONLY}; mkdir -p $B/$n
 cc -O2 -ffp-contract=off tests/gen_vectors64.c -o $T/gen && $T/gen $NV | sed 's/uint32_t/unsigned long/' > $T/vectors.h
 printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $T/rep.c
 python3 - "$T" <<'P'
-import re, sys
+import re, subprocess, sys
+sys.path.insert(0, "tests")
+from flatten import flatten
 T = sys.argv[1]
 def prep(path, suffix=''):
-    s = open(path).read()
-    s = re.sub(r'#include "((?:codec|arith|core_end)\.inc)"\n', lambda m: open('lib/fp/' + m.group(1)).read(), s)
+    s = flatten(path, suffix)
     s = re.sub(r'#include <(stdint|stddef|limits)\.h>\n', '', s)
     s = re.sub(r'#include "(softfloat|sf_helpers|sf_int)\.h"\n', '', s)
-    if suffix:
-        for name in set(re.findall(r'^static (?:inline )?[\w\s\*]*?\b(\w+)\(', s, re.M)):
-            s = re.sub(r'\b%s\b' % name, name + suffix, s)
     for a, b in (('uint8_t', 'sfu8'), ('int8_t', 'sfi8'), ('uint16_t', 'sfu16'), ('int16_t', 'sfi16'), ('uint32_t', 'sfu32'), ('int32_t', 'sfi32'), ('uint64_t', 'sfu64'), ('int64_t', 'sfi64')):
         s = re.sub(r'\b%s\b' % a, b, s)
     return s
@@ -27,10 +25,12 @@ out = ['#define SF_INTABI 1']
 out.append(prep('config/x86_m16/config.h'))
 for f in ('include/softfloat.h', 'include/sf_helpers.h'):
     out.append(prep(f))
-out.append(prep('lib/fp/sf32.c'))
-out.append(prep('lib/fp/sf32_conv.c'))
-out.append(prep('lib/fp/sf64.c', '_d'))
-out.append(prep('lib/fp/sf32_conv64.c', '_e'))
+for f in subprocess.check_output(['tests/fp_sources.sh', 'f32'], text=True).split():
+    out.append(prep(f))
+for f in subprocess.check_output(['tests/fp_sources.sh', 'f64'], text=True).split():
+    out.append(prep(f, '_d'))
+for f in subprocess.check_output(['tests/fp_sources.sh', 'f32_64'], text=True).split():
+    out.append(prep(f, '_e'))
 open(T + '/lib.c', 'w').write('\n'.join(out))
 P
 { echo 'extern void report(long value);'

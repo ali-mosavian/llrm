@@ -16,7 +16,7 @@ bytes() {   # file, extra flags
   printf '%s %s\n' "$n" "$($R/usr/bin/m68k-linux-gnu-size $T/$n.o | awk 'NR==2{print $1}')"
 }
 echo "== ours (include/, SF_INTABI off), m68k-$CPU -$OPT"
-for f in lib/fp/sf32.c lib/fp/sf32_conv.c; do bytes $f "-Iinclude"; done
+for f in $(tests/fp_sources.sh f32); do bytes $f "-Iinclude"; done
 echo "== compiler-rt"
 for f in addsf3 subsf3 mulsf3 divsf3 floatsisf fixsfsi comparesf2; do bytes $CRT/$f.c "-I$CRT"; done
 rm -r $T

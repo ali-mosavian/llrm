@@ -10,7 +10,7 @@ export LLRM_CC_DIR=$D
 for c in ${CPUS:-68000 68020}; do for opt in Os O2; do
   echo "== int64 $c $opt"; (cd tests/m68k_int64 && python3 gen.py > $T/v.h && CFLAGS_EXTRA="-I$T -I. -I../../include" sh $RUN $c $opt main.c ops64.c ../../lib/int/int64.c ../../lib/int/int32.c)
   echo "== f64 classes $c $opt"; cc -O2 -ffp-contract=off tests/gen_vectors64.c -o $T/gen64 && $T/gen64 60000 > $T/vectors64.h
-  CFLAGS_EXTRA="-I$T -Iinclude" sh $RUN $c $opt tests/m68k_classes64.c lib/fp/sf64.c lib/fp/sf32_conv64.c lib/int/int64.c lib/int/int32.c
+  CFLAGS_EXTRA="-I$T -Iinclude" sh $RUN $c $opt tests/m68k_classes64.c $(tests/fp_sources.sh f64 f32_64) lib/int/int64.c lib/int/int32.c
 done; done
 echo "== pricing executables"; tests/build_m68k_clocks64.sh
 echo "price with: cycles --exe ~/scratch/handoff/m68k-clocks/{ours,libgcc}64_*"
