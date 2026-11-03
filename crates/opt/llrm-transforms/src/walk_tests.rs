@@ -2442,7 +2442,8 @@ fn m32_tree_calls(
     extra: usize,
     options: crate::pipeline::Options,
 ) -> usize {
-    let mut module = parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    let mut module =
+        parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
     llrm_mir::program::Program::lend(
         &mut module,
         crate::indvars::tests::m32(),
@@ -2465,9 +2466,9 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
-/// gcc rejects the recursive edge of quicksort and bintree at -O2 ("max-inline-insns-auto
-/// limit reached", growth 25-28 and 15-22 against 15) and takes it at -O3
-/// (30): a body that grows past 15 is copied at -O3 only.
+/// gcc rejects the recursive edge of quicksort and bintree at -O2
+/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
+/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
 #[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
@@ -2486,7 +2487,8 @@ fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
 #[test]
 fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
     let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
-    let (_, _, fib) = module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
+    let (_, _, fib) =
+        module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
     assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
 }
 
@@ -2550,13 +2552,18 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
     let root = here.join("../../..");
     let transforms = std::fs::read_to_string(here.join("Cargo.toml")).unwrap();
     let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    let dependency = transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
+    let dependency =
+        transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
     assert!(dependency.contains("optional = true"), "llrm-gpl-gcc is a plain dependency: {dependency}");
     for (name, text) in [("llrm-transforms", &transforms), ("the workspace root", &workspace)] {
         let default = text.lines().find(|line| line.trim_start().starts_with("default = ")).unwrap_or("");
         assert!(!default.contains("gcc-gpl"), "{name} enables gcc-gpl by default: {default}");
     }
-    for entry in std::fs::read_dir(root.join("crates")).unwrap().flatten().flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten()) {
+    for entry in std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .flatten()
+        .flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten())
+    {
         let manifest = entry.path().join("Cargo.toml");
         let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
         let owner = entry.file_name();

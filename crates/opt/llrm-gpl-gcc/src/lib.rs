@@ -24,15 +24,19 @@ pub fn gcc_size(body: &Function) -> i64 {
             let instruction = body.instruction(inst);
             match &instruction.opcode {
                 Opcode::Phi | Opcode::Alloca { .. } | Opcode::Freeze | Opcode::Unreachable | Opcode::Cast(_) => 0,
-                Opcode::Br => if instruction.operands.len() == 1 { 0 } else { 2 },
+                Opcode::Br => {
+                    if instruction.operands.len() == 1 {
+                        0
+                    } else {
+                        2
+                    }
+                }
                 Opcode::Ret => 1,
                 Opcode::Load { .. } | Opcode::Store { .. } => 2,
-                Opcode::ICmp(_) => {
-                    i64::from(!used_by(inst, &|body, one| {
-                        let user = body.instruction(one.user);
-                        user.opcode == Opcode::Br && user.operands.len() == 3 && one.index == 0
-                    }))
-                }
+                Opcode::ICmp(_) => i64::from(!used_by(inst, &|body, one| {
+                    let user = body.instruction(one.user);
+                    user.opcode == Opcode::Br && user.operands.len() == 3 && one.index == 0
+                })),
                 Opcode::GetElementPtr { .. } => {
                     i64::from(!used_by(inst, &|body, one| match body.instruction(one.user).opcode {
                         Opcode::Load { .. } => one.index == 0,

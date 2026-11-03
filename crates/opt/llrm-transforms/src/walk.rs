@@ -359,11 +359,11 @@ impl ProgramPass for Walk {
                                 module
                                     .global(id)
                                     .function()
-                                    .is_some_and(|body| {
-                                        crate::inline::gcc_work(body) <= one.callee
+                                    .is_some_and(
+                                        |body| crate::inline::gcc_work(body) <= one.callee
                                             && crate::inline::recursive_edge_growth(body)
-                                                <= edge_growth_bar(tti.as_deref(), self.inline.limit >= 250)
-                                    })
+                                                <= edge_growth_bar(tti.as_deref(), self.inline.limit >= 250),
+                                    )
                             }),
                         };
                         if fits && recursion.is_some() && tree.is_some() {
