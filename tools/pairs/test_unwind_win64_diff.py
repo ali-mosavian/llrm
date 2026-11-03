@@ -92,3 +92,9 @@ def test_the_instructions_of_a_function_are_read_not_an_empty_list_that_equals_e
     """`code_of` matched no instruction line (spaces before the tab), so every function had no code and all compared as the same code: the harness 'compared' functions it had not looked at."""
     text = "0000000000000020 <bench_hanoi>:\n      20:      \tmovl\t$0x1, %edx\n      25:      \tjmp\t0x2a <bench_hanoi+0xa>\n"
     assert d.code_of(text) == {0x20: ["0 movl $0x1, %edx", "5 jmp 0x2a"]}
+
+
+def test_fewer_functions_compared_than_the_least_is_a_failed_run_not_a_pass():
+    """One function compared out of a corpus read as ok: an almost empty run proves nothing."""
+    assert d.verdict(2, 0, ours_emit=True, strip=False, least=3) == 2
+    assert d.verdict(3, 0, ours_emit=True, strip=False, least=3) == 0

@@ -66,10 +66,10 @@ FIXTURES = [str(Path(__file__).resolve().parent / "win64/unwind_fixtures.c")] + 
 SKIPPED = 77  # the gate's SKIPPED verdict
 
 
-def verdict(same: int, different: int, ours_emit: bool, strip: bool) -> int:
+def verdict(same: int, different: int, ours_emit: bool, strip: bool, least: int = 1) -> int:
     """0 equal, 1 different, 2 nothing compared, 77 where our object has no unwind data at all (Win64 rows not landed): not a result, never an ok.
     The stripped control is the same absence made on purpose, so it reads as every function different."""
-    if same + different == 0:
+    if same + different < least:
         return 2
     if not ours_emit and not strip:
         return SKIPPED
@@ -83,6 +83,7 @@ def main() -> int:
     parser.add_argument("--tools", default=str(Path.home() / "scratch/llvm-build-aarch64/bin"), help="the directory of llvm-objdump")
     parser.add_argument("--llc", required=True, help="llrm-llc")
     parser.add_argument("--allow-pending", action="store_true", help="pass -fallow-pending-abi: a preview of what the Win64 rows would give before they land")
+    parser.add_argument("--least", type=int, default=3, help="fewer functions compared than this is a failed run (2), not a pass: an empty comparison reads as ok")
     parser.add_argument("--strip", action="store_true", help="control: ours stripped of its unwind data")
     args = parser.parse_args()
     if not args.pin:
@@ -124,7 +125,7 @@ def main() -> int:
     if pending and pending == files == len(args.sources):
         print("SKIPPED: llrm-llc refuses the windows platform as pending (the Win64 rows have not landed)")
         return SKIPPED
-    code = verdict(same, different, ours_emit, args.strip)
+    code = verdict(same, different, ours_emit, args.strip, args.least)
     if code == SKIPPED:
         print("SKIPPED: our object has no .pdata/.xdata (the Win64 unwind rows have not landed)")
     return code
