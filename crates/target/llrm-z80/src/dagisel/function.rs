@@ -26,6 +26,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_spike_mf::{Variable, VariablePlace};
 
 use super::call::{CALL, RET_GLUE, Z80Calling};
 use super::hooks::Cpu;
@@ -91,6 +92,8 @@ pub struct Selection {
     /// input is read on an edge laid out before any block that names it (a
     /// loop's back edge).
     pub widths: HashMap<u32, u32>,
+    /// `-g`: the variables the debug info names and where each is (the `.adb`).
+    pub variables: Vec<Variable>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -140,7 +143,54 @@ pub fn select_function(
     for (reg, parts) in wide {
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths })
+    let variables = variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+}
+
+/// The variables of `function` (after the debug import): parameters in the
+/// register their position arrives in, declared locals in their frame object.
+/// A parameter that does not arrive in a register, and a variable the debug
+/// info cannot spell, are left out.
+fn variable_sites(
+    module: &Module,
+    function: &Function,
+    name: &str,
+    info: &FunctionLoweringInfo,
+    live_ins: &[(RegId, u32)],
+) -> Vec<Variable> {
+    let mut sites = Vec::new();
+    let Some(described) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else {
+        return sites;
+    };
+    for (index, parameter, ty) in &described.parameters {
+        let Some(&(register, _)) = usize::try_from(*index).ok().and_then(|at| live_ins.get(at)) else { continue };
+        sites.push(Variable {
+            name: parameter.clone(),
+            r#type: *ty,
+            expr: Vec::new(),
+            parameter: true,
+            place: VariablePlace::Register(register),
+        });
+    }
+    for record in function.debug_records() {
+        let (llrm_mir::DebugWhat::Declare(Operand::Value(address)), Some(variable)) =
+            (record.what, llrm_mir::debuginfo::read_variable(module, record.variable))
+        else {
+            continue;
+        };
+        let Some(&index) = info.static_allocas.get(&address) else { continue };
+        if variable.scope != name || variable.parameter {
+            continue;
+        }
+        sites.push(Variable {
+            name: variable.name,
+            r#type: variable.r#type,
+            expr: record.expression.and_then(|node| module.expression(node)).unwrap_or_default(),
+            parameter: false,
+            place: VariablePlace::Frame { index: index as i32, offset: variable.offset },
+        });
+    }
+    sites
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`

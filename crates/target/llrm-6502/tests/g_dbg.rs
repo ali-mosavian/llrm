@@ -1,0 +1,88 @@
+//! `-g` on the 6502 (`g-for-all-targets-card.md` steps 2-3): `.dbg line`
+//! directives, which ca65 turns into the lines of ld65's debug file.
+
+use llrm_6502::driver::{Level, Request, assembly};
+
+const LOCATED: &str = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8\"
+define i8 @f(i8 %a) !dbg !5 {
+  %b = add i8 %a, 1, !dbg !7
+  %c = xor i8 %b, 2, !dbg !8
+  ret i8 %c, !dbg !8
+}
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2}
+!0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: \"t\", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug)
+!1 = !DIFile(filename: \"f.c\", directory: \"/d\")
+!2 = !{i32 2, !\"Debug Info Version\", i32 3}
+!5 = distinct !DISubprogram(name: \"f\", scope: !1, file: !1, line: 1, type: !6, scopeLine: 2, spFlags: DISPFlagDefinition, unit: !0)
+!6 = !DISubroutineType(types: !{null})
+!7 = !DILocation(line: 3, column: 5, scope: !5)
+!8 = !DILocation(line: 4, column: 3, scope: !5)
+";
+
+fn text(debug: bool) -> String {
+    assembly(LOCATED, &Request { debug, ..Request::new(Level::O2) }).expect("compiles")
+}
+
+/// `-g` printed nothing: no line of the source reached the debug file.
+#[test]
+fn g_names_the_file_and_the_lines_that_have_code() {
+    let text = text(true);
+    assert!(text.contains(".dbg file, \"f.c\""), "{text}");
+    assert!(text.contains(".dbg line, \"f.c\", 3"), "{text}");
+    assert!(text.contains(".dbg line, \"f.c\", 4"), "{text}");
+}
+
+/// A debug directive that changed an instruction or its order.
+#[test]
+fn g_adds_directives_and_leaves_the_instructions_alone() {
+    let plain = text(false);
+    let without_directives: String =
+        text(true).lines().filter(|line| !line.trim_start().starts_with(".dbg")).map(|line| format!("{line}\n")).collect();
+    assert_eq!(without_directives, plain);
+}
+
+/// The function's first row was its first instruction's line: the line the
+/// function starts at (the fixture's `scopeLine: 2`) was in no row, and a
+/// debugger stopping at the function's entry showed the line after it.
+#[test]
+fn g_starts_the_function_at_its_scope_line() {
+    let text = text(true);
+    let scope = text.find(".dbg line, \"f.c\", 2").expect("a row for the scope line");
+    let first = text.find(".dbg line, \"f.c\", 3").expect("a row for the first instruction's line");
+    assert!(scope < first, "{text}");
+}
+
+const CALLS: &str = r#"target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+declare i8 @g(i8)
+define i8 @f(i8 %a, i8 %c) !dbg !5 {
+  %t = icmp eq i8 %c, 0, !dbg !7
+  br i1 %t, label %x, label %y, !dbg !7
+x:
+  %r = call i8 @g(i8 10), !dbg !8
+  ret i8 %r, !dbg !8
+y:
+  %s = call i8 @g(i8 %a), !dbg !9
+  ret i8 %s, !dbg !9
+}
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2}
+!0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "t", isOptimized: true, runtimeVersion: 0, emissionKind: FullDebug)
+!1 = !DIFile(filename: "c.c", directory: "/d")
+!2 = !{i32 2, !"Debug Info Version", i32 3}
+!5 = distinct !DISubprogram(name: "f", scope: !1, file: !1, line: 1, type: !6, scopeLine: 2, spFlags: DISPFlagDefinition, unit: !0)
+!6 = !DISubroutineType(types: !{null})
+!7 = !DILocation(line: 3, column: 5, scope: !5)
+!8 = !DILocation(line: 5, column: 3, scope: !5)
+!9 = !DILocation(line: 7, column: 3, scope: !5)
+"#;
+
+/// The argument of a call (`lda #10; sta rc2`) stood under the compare's line,
+/// so a debugger stepping into the block showed line 3 for line 5's work.
+#[test]
+fn g_puts_a_calls_argument_under_the_calls_line() {
+    let text = assembly(CALLS, &Request { debug: true, ..Request::new(Level::O0) }).expect("compiles");
+    let five = text.find(".dbg line, \"c.c\", 5").expect("a row for line 5");
+    let argument = text.find("lda #10").expect("the argument");
+    assert!(five < argument, "{text}");
+}

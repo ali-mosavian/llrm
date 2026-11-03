@@ -54,7 +54,7 @@ fn not_and_swap_encode_as_binutils_does() {
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
 const SOURCE_ORDER: Options =
-    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, short: false };
+    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, short: false, debug: false };
 
 fn compiled(
     ir: &str,

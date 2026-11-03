@@ -502,6 +502,7 @@ pub fn emit(
         saved: HashMap::new(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
+    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::new();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
@@ -512,11 +513,29 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers.entry(place).or_insert_with(|| {
+                        places.push(place);
+                        places.len()
+                    });
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
-        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+        let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
+        block.place_unlocated();
+        emitter.function.blocks.push(block);
     }
     // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
     // the block the phi is in, from every block made for the exporting IR

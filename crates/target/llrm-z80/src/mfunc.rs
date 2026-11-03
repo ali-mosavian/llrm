@@ -621,6 +621,7 @@ pub fn emit(
     // the frame objects the selector made; the allocas came first, at their
     // index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
+    let mut place_numbers = HashMap::new();
     let width_class = |bits: u32| if bits > 8 { Class::Gr16 } else { Class::Gr8 };
     for one in &selection.blocks {
         emitter.dag = &one.dag;
@@ -645,11 +646,29 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers.entry(place).or_insert_with(|| {
+                        places.push(place);
+                        places.len()
+                    });
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
-        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+        let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
+        block.place_unlocated();
+        emitter.function.blocks.push(block);
     }
     phis(&mut emitter, selection, width_class)?;
     Ok(emitter.function)

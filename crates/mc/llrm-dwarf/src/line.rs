@@ -161,7 +161,17 @@ pub fn program(
         }
     }
     let address = usize::from(out.address);
+    // A sequence per section, or per function with a range in it.
+    let mut units: Vec<(usize, Option<&llrm_debug::Function>)> = Vec::new();
     for section in sections {
+        if out.sequence_per_function {
+            let own = info.functions.iter().filter(|one| one.ranges.first().is_some_and(|range| range.section == section));
+            units.extend(own.map(|function| (section, Some(function))));
+        } else {
+            units.push((section, None));
+        }
+    }
+    for (section, only) in units {
         let mut rows: Vec<Row> = info
             .lines
             .iter()
@@ -203,7 +213,20 @@ pub fn program(
                 }
             }
         }
-        let (symbol, base) = crate::anchor(object, section)?;
+        let (symbol, base) = match only {
+            Some(function) => {
+                let range = function.ranges[0];
+                rows.retain(|one| (range.offset..range.offset + range.length).contains(&one.offset));
+                let llrm_object::Definition::Defined { offset, .. } = object.symbols[function.symbol].definition else {
+                    return refused(format!("function {} has no defined symbol", function.name));
+                };
+                (function.symbol, offset)
+            }
+            None => crate::anchor(object, section)?,
+        };
+        if rows.is_empty() {
+            continue;
+        }
         let start = rows[0].offset;
         if address == 2 {
             // Open Watcom's extended opcode 4: the segment the addresses are
@@ -255,7 +278,7 @@ pub fn program(
         let end = info
             .code
             .iter()
-            .filter(|range| range.section == section)
+            .filter(|range| range.section == section && only.is_none_or(|one| one.ranges[0].offset == range.offset))
             .map(|range| range.offset + range.length)
             .max()
             .unwrap_or(object.sections[section].image.len());

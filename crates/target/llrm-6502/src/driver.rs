@@ -77,11 +77,13 @@ pub struct Request {
     pub level: Level,
     /// `-f[no-]PASS` switches, applied to the mid-end.
     pub passes: Vec<String>,
+    /// `-g`: `.dbg line` directives for ld65's debug file.
+    pub debug: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { platform: Platform::parse(SIM65).expect("sim65 parses"), cpu: Cpu::Mos6502, level, passes: Vec::new() }
+        Self { platform: Platform::parse(SIM65).expect("sim65 parses"), cpu: Cpu::Mos6502, level, passes: Vec::new(), debug: false }
     }
 }
 
@@ -253,12 +255,19 @@ pub fn assembly(
         }
         selections.push(selection);
     }
+    // Set once the selection is final: pricing the alternatives sees none.
+    let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
+    for (name, selection) in names.iter().zip(selections.iter_mut()) {
+        let scope = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
+        selection.source = file.clone().map(|file| (file, scope));
+    }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let mut text = module_text(module, &parts)?.concat();
     for (name, label) in &data.1 {
         text = text.replace(name.as_str(), label);
     }
-    Ok(equates(&request.platform) + &text + &data.0)
+    let files = file.map_or_else(String::new, |name| format!(".dbg file, \"{name}\", 0, 0\n"));
+    Ok(equates(&request.platform) + &files + &text + &data.0)
 }
 
 /// Whether `name` as the loops in `alt` costs less than the calls in
