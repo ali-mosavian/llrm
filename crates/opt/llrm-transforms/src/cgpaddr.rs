@@ -617,6 +617,13 @@ fn matched(
             Some((instruction.operands[1 + at], scale))
         }
         (Some(_), Some(_)) => return plain(),
+        // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`: the first
+        // register is the base register, not an index, when the base is a
+        // global (else it is the base register and this one the index).
+        (Some(&(at, 1)), None) if reg.is_none() && is_global(unit.context, inner.base) => {
+            reg = Some(instruction.operands[1 + at]);
+            None
+        }
         (Some(&(at, scale)), None) => {
             let operand = instruction.operands[1 + at];
             // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
