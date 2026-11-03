@@ -48,3 +48,23 @@ def test_the_header_counts_compiled_cells_per_leg(tmp_path):
     assert out.returncode == 0
     assert out.stdout.startswith("base: 2 of 2 ours cells compiled; new: 2 of 2")
 
+
+def test_legs_built_from_one_binary_fail_and_differing_binaries_pass(tmp_path):
+    """llrm-cc is the same file in every leg (it calls the llc): only the llc tells the legs apart."""
+    cell = "| gcd | 47 B, 239 cy |\n"
+    (tmp_path / "a").write_bytes(b"one")
+    (tmp_path / "b").write_bytes(b"two")
+    (tmp_path / "base.txt").write_text(HEADER + cell)
+    (tmp_path / "new.txt").write_text(HEADER + cell)
+
+    def go(*pairs):
+        flags = [x for pair in pairs for x in ("--bin", str(tmp_path / pair[0]), str(tmp_path / pair[1]))]
+        return subprocess.run(
+            [sys.executable, str(HERE / "bench6502_cells.py"), str(tmp_path / "base.txt"), str(tmp_path / "new.txt"), *flags],
+            capture_output=True,
+            text=True,
+        )
+
+    assert go(("a", "a")).returncode == 1
+    assert go(("a", "a"), ("a", "b")).returncode == 0
+
