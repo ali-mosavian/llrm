@@ -272,11 +272,16 @@ fn a_byte_read_by_an_alu_op_is_read_from_memory() {
 
 /// A loaded byte that is widened went to a byte register and was copied to the
 /// pair's low half (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte
-/// and 4 T-states more per widened load.
+/// and 4 T-states more per widened load. (A word minus the widened byte: with
+/// the byte on both sides it is `SUBZX8`.)
 #[test]
 fn a_widened_load_goes_to_the_pairs_low_half() {
-    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
+    let out = compiled(
+        "define i16 @w(ptr %p, i16 %x) {\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i16\n  %r = sub i16 %x, %z\n  ret i16 %r\n}",
+        "w",
+    );
+    let direct = ["ld c, (hl)\n\tld b, #0", "ld e, (hl)\n\tld d, #0"].iter().any(|pair| out.contains(pair));
+    assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
 /// `digits` kept its counter across the divide call in a frame slot (`ld
@@ -1048,10 +1053,85 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
 }
 
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
-/// 8 programs of tests/run/c): it is refused by name.
+/// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
+/// passing one through is register moves and a return, no routine.
 #[test]
-fn a_float_argument_is_refused_not_a_panic() {
+fn a_float_argument_passes_as_two_words() {
     let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine float @f(float %x) {{\n  ret float %x\n}}");
-    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses a float");
-    assert!(why.contains("not a byte or a word"), "{why}");
+    let asm = text(&ir, "f", 0, &Request::new(Level::O2)).expect("a float compiles");
+    assert!(asm.trim_end().ends_with("ret") && !asm.contains("call") && !asm.contains("jp "), "{asm}");
+}
+
+/// A frame object out of ix's reach is addressed through `ld iy, #n; add iy,
+/// sp`, and the sum sets the carry: a reload between a compare and its `jp c`
+/// changed what the branch saw (divshift's `smod(-c, -d)` returned garbage once
+/// its frame passed 128 bytes). The flags are kept across the sum, and the
+/// stack pointer's two bytes of `push af` are in its offset. Hand-built, in the
+/// order the source gives: compare, reload, branch.
+#[test]
+fn a_far_frame_access_between_a_compare_and_its_branch_keeps_the_carry() {
+    use llrm_spike_mf::regalloc::Assignment;
+    use llrm_z80::expand::{Line, finish, reads};
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::regalloc::Class;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8, Class::Gr8, Class::Gr8];
+    let compare = Inst {
+        sets_flags: true,
+        ..Inst::new(
+            Kind::Op("CP8r"),
+            vec![Operand::Def(Reg::Phys(llrm_z80::reg::FLAGS)), Operand::Use(Reg::Virt(0)), Operand::Use(Reg::Virt(1))],
+        )
+    };
+    let reload = Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Virt(2)), Operand::Frame(100)]);
+    let branch = Inst {
+        reads_flags: true,
+        terminator: true,
+        ..Inst::new(Kind::Op("JPC"), vec![Operand::Block(1), Operand::Use(Reg::Phys(llrm_z80::reg::FLAGS))])
+    };
+    function.blocks.push(Block { id: 0, insts: vec![compare, reload, branch], phis: Vec::new() });
+    function.blocks.push(Block { id: 1, insts: vec![Inst::new(Kind::Op("RET"), vec![])], phis: Vec::new() });
+    let assignment = Assignment(vec![llrm_z80::reg::A, llrm_z80::reg::B, llrm_z80::reg::C]);
+    // object 100 sits below 100 words of other objects: out of ix's reach
+    let slots: Vec<(i32, usize)> = (0..101).map(|at| (at, 2)).collect();
+    let lines = finish(&function, &assignment, 0, &slots, reads(&function)).unwrap_or_else(|why| panic!("{why}"));
+    let insts: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let cp = insts.iter().position(|text| *text == "cp a, b").expect("the compare");
+    let sum = cp
+        + insts[cp..]
+            .iter()
+            .position(|text| *text == "add iy, sp")
+            .unwrap_or_else(|| panic!("premise: via iy {insts:?}"));
+    assert_eq!(insts[sum - 2], "push af", "{insts:?}");
+    assert_eq!(insts[sum + 1], "pop af", "{insts:?}");
+    assert!(insts[sum - 1].starts_with("ld iy, #"), "{insts:?}");
+}
+
+/// `br i1 %c, label %r, label %r` (left by -O0 and by x_switch's mid-end)
+/// made a `jp c` and a `jp` to one `ret` block: the block was copied into
+/// the predecessor in place of the `jp` and deleted, leaving the `jp c`
+/// without a target, and the compiler panicked in tail merging.
+#[test]
+fn a_conditional_branch_to_the_same_return_block_as_the_jump_keeps_that_block() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine i16 @f(i16 %x) {{\n  %c = icmp sgt i16 %x, 0\n  br i1 %c, label %r, label %r\nr:\n  ret i16 0\n}}"
+    );
+    let out = text(&ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}
+
+/// A word that joins a byte and a constant (`*a`, or 0 where the string
+/// ended) was not known to have a zero high byte, so strcmp's `*a - *b` was a
+/// 16-bit `sbc hl, de` with both bytes widened by hand: scmp -O2 took 36 B and
+/// 183 clocks. The difference is `sub a, b` and the borrow as the high byte.
+#[test]
+fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
 }
