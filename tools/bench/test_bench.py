@@ -969,11 +969,23 @@ def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     assert done.returncode != 0 and "defines no function of that name" in done.stderr
 
 
+def test_a_nib_helper_called_once_inlines_as_it_does_in_c(tmp_path):
+    """Nib was built with -fno-inline-functions and -fno-inline-functions-called-once, so dot's helper stayed a call that C inlines: 269 bytes at -Os against 153 for C,
+    a gap of the harness's flags. Only the kernel is kept a call: dot has no object segment of its own, `bench_dot` and `main` have."""
+    import subprocess
+
+    dot = next(v for v in bench.variants(bench.BENCH / "dot") if v.language == "nib")
+    _, arguments, obj = bench.compiles(dot, "Os", tmp_path, "dot")[0]
+    done = subprocess.run([str(bench.BIN / "llrm-nib"), *arguments], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert len([one for one in bench.sizes.segments(obj) if one.name.endswith("_TEXT")]) == 2
+
+
 def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
     """ed700f10ce built float Nib rows with -fexcess-precision=standard: against main's rows (compiled fast; the flag recorded in them did nothing there) fpbench read 203869 clocks against 156348,
     a "regression" of the flag. The rows are measured fast, like main's."""
     float_nib = next(v for v in bench.variants(bench.BENCH / "nbody_single") if v.language == "nib")
-    assert not any("excess-precision" in one for one in bench.nib_flags())
+    assert not any("excess-precision" in one for one in bench.nib_flags(float_nib))
     assert not any("excess-precision" in one for one in bench.compiles(float_nib, "Os", Path("w"), "nbody_single")[0][1])
 
 

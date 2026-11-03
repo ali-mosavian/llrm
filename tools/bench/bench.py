@@ -217,9 +217,9 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     return flags
 
 
-def nib_flags() -> list[str]:
-    """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+def nib_flags(variant: Variant) -> list[str]:
+    """What nib-build.sh is given for a Nib benchmark's compile: only the kernel stays a call, helpers inline as they do in the C twin."""
+    return [f"-fno-inline={variant.region}", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -228,7 +228,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -262,7 +262,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
