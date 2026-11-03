@@ -39,6 +39,7 @@ fn object(
         blocks: Vec::new(),
         frame: Vec::new(),
         all_calls: false,
+        frame_base: None,
         calls: Vec::new(),
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
@@ -859,4 +860,31 @@ fn a_wasm_local_is_a_wasm_location_and_a_frame_base() {
     assert!(has(&[0xED, 0x00, 5, 0x9F]), "y, local 5");
     // x is still an offset from the frame base: DW_OP_fbreg 8.
     assert!(has(&[0x91, 8]), "x");
+}
+
+/// WebAssembly's frame pointer is a local of its own in each function:
+/// `Info::frame_base` alone gave every subprogram the same one.
+#[test]
+fn a_function_states_its_own_frame_base() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let mut info = made.debug.take().unwrap();
+    let mut second = info.functions[0].clone();
+    second.name = "g".into();
+    second.symbol = 1;
+    second.ranges = vec![Range { section: 0, offset: 8, length: 8 }];
+    second.body = None;
+    info.functions[0].ranges = vec![Range { section: 0, offset: 0, length: 8 }];
+    info.functions[0].body = None;
+    info.functions[0].frame_base = Some(llrm_debug::FrameBase::WasmLocal(1));
+    second.frame_base = Some(llrm_debug::FrameBase::WasmLocal(3));
+    info.functions.push(second);
+    let mut symbol = made.object.symbols[0].clone();
+    symbol.name = "_g".into();
+    symbol.definition = Definition::Defined { section: 0, offset: 8 };
+    made.object.symbols.push(symbol);
+    let written = expanded(&made.object, &info).unwrap();
+    let (_, debug) = named(&written, ".debug_info");
+    let has = |needle: &[u8]| debug.image.windows(needle.len()).any(|window| window == needle);
+    assert!(has(&[0xED, 0x00, 1, 0x9F]), "f's frame base, local 1");
+    assert!(has(&[0xED, 0x00, 3, 0x9F]), "g's frame base, local 3");
 }
