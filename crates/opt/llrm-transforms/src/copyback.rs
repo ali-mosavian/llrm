@@ -17,6 +17,7 @@
 //! call, so the element is what the load read and the store writes it back
 //! unchanged: the result is BC's own, whatever the callee does.
 //!
+//! # Example
 //! ```text
 //!  %v = load i16, ptr addrspace(1) %e        %v = load i16, ptr addrspace(1) %e
 //!  store i16 %v, ptr %slot                   store i16 %v, ptr %slot
