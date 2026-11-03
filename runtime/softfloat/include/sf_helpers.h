@@ -71,7 +71,7 @@ static inline void sf_mul24x24_loop(uint32_t a, uint32_t b, uint32_t *hi, uint32
 #endif
 
 /* Round to nearest even and pack for 1 <= e <= 254 (no overflow, no denormal): sf32_pack without its two range paths. */
-static inline sf32 pack_round(uint32_t sign, int e, uint32_t m)
+static inline uint32_t pack_round(uint32_t sign, int e, uint32_t m)
 {
     uint32_t r = m & 7;
     m >>= 3;
@@ -79,9 +79,11 @@ static inline sf32 pack_round(uint32_t sign, int e, uint32_t m)
     return sign + ((uint32_t)(e - 1) << 23) + m;
 }
 
+uint32_t sf32_pack(uint32_t sign, int e, uint32_t m); /* softfloat.h declares it too; files that include only this header need it */
+
 #ifdef SF_PACK_INLINE
 /* sf32_pack with that common case in the caller: saves a call and the callee's saved registers. */
-static inline sf32 pack_near(uint32_t sign, int e, uint32_t m)
+static inline uint32_t pack_near(uint32_t sign, int e, uint32_t m)
 {
     if ((unsigned)(e - 1) < 254u) return pack_round(sign, e, m);
     return sf32_pack(sign, e, m);
