@@ -530,6 +530,7 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_store(chain, bits, ptr, super::dag::MemInfo { mem_vt: int, ..info })
             }
             ISD::BitCast => self.softened_float(self.dag.operand(node, 0)),
+            ISD::SetCC if at < 2 => self.soften_setcc(node)?,
             ISD::CopyToReg if at == 2 => {
                 // `SoftenFloatOp_COPY_TO_REG`'s effect: the integer is copied.
                 let mut ops = self.dag.node(node).ops.clone();
@@ -547,6 +548,74 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.replace_value_with(node, result);
         Ok(false)
+    }
+
+    /// `SoftenFloatOp_SETCC` over `softenSetCCOperands`: the compare as
+    /// compiler-rt's three-way routine and a compare of its result with zero.
+    /// An unordered-or-less code is the inverse of an ordered one; the two that
+    /// no routine answers alone (`one`, `ueq`) are two calls joined.
+    fn soften_setcc(
+        &mut self,
+        node: SDValue,
+    ) -> Result<SDValue, LegalizeError> {
+        let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let float_vt = self.dag.value_type(lhs);
+        let unsupported = |what| LegalizeError::Unsupported { op: ISD::SetCC, ty: float_vt, what };
+        let Some(code) = self.setcc_code(node) else { return Err(unsupported("soften a compare with no code")) };
+        let (a, b) = (self.softened_float(lhs), self.softened_float(rhs));
+        let vt = self.dag.value_type(node);
+        let single = float_vt == EVT::Simple(MVT::F32);
+        let pick = |stem: &'static str| -> &'static str {
+            match (stem, single) {
+                ("eq", true) => "__eqsf2",
+                ("eq", false) => "__eqdf2",
+                ("ne", true) => "__nesf2",
+                ("ne", false) => "__nedf2",
+                ("ge", true) => "__gesf2",
+                ("ge", false) => "__gedf2",
+                ("lt", true) => "__ltsf2",
+                ("lt", false) => "__ltdf2",
+                ("le", true) => "__lesf2",
+                ("le", false) => "__ledf2",
+                ("gt", true) => "__gtsf2",
+                ("gt", false) => "__gtdf2",
+                (_, true) => "__unordsf2",
+                (_, false) => "__unorddf2",
+            }
+        };
+        let mut compare = |this: &mut Self, stem: &'static str, cc: CondCode| -> Result<SDValue, LegalizeError> {
+            let arch = this.target.ok_or_else(|| unsupported("soften a compare without a target"))?;
+            let env = super::libcall::CallEnv { arch, pointer: this.dag.config().pointer };
+            let result = super::libcall::c_lib_call(this.dag, &env, pick(stem), &[a, b], EVT::I32)
+                .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let zero = this.dag.get_constant(0, EVT::I32);
+            Ok(this.dag.get_setcc(vt, result, zero, cc))
+        };
+        use CondCode::*;
+        Ok(match code {
+            SetOEq | SetEq => compare(self, "eq", SetEq)?,
+            SetUNe | SetNe => compare(self, "ne", SetNe)?,
+            SetOGe | SetGe => compare(self, "ge", SetGe)?,
+            SetOLt | SetLt => compare(self, "lt", SetLt)?,
+            SetOLe | SetLe => compare(self, "le", SetLe)?,
+            SetOGt | SetGt => compare(self, "gt", SetGt)?,
+            SetO => compare(self, "unord", SetEq)?,
+            SetUo => compare(self, "unord", SetNe)?,
+            // unordered or less: not (ordered and greater or equal)
+            SetULt => compare(self, "ge", SetLt)?,
+            SetULe => compare(self, "gt", SetLe)?,
+            SetUGt => compare(self, "le", SetGt)?,
+            SetUGe => compare(self, "lt", SetGe)?,
+            SetONe => {
+                let (lt, gt) = (compare(self, "lt", SetLt)?, compare(self, "gt", SetGt)?);
+                self.dag.get_node(ISD::Or, vt, &[lt, gt])
+            }
+            SetUEq => {
+                let (unord, eq) = (compare(self, "unord", SetNe)?, compare(self, "eq", SetEq)?);
+                self.dag.get_node(ISD::Or, vt, &[unord, eq])
+            }
+            _ => return Err(unsupported("soften a compare with a constant or integer code")),
+        })
     }
 
     /// `GetPromotedInteger`.

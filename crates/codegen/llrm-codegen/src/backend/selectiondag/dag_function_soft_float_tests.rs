@@ -98,3 +98,37 @@ fn a_soft_float_call_passes_and_takes_integers() {
     assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
     assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["__addsf3", "g"], "{names:?}");
 }
+
+fn compare_calls(code: &str) -> Vec<String> {
+    let text = format!(
+        "target datalayout = \"@m16-datalayout@\"
+define i32 @f(float %a, float %b) \"use-soft-float\"=\"true\" {{
+entry:
+  %c = fcmp {code} float %a, %b
+  %r = zext i1 %c to i32
+  ret i32 %r
+}}
+"
+    );
+    let module = crate::testing::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{code}: {}", e.0));
+    let mut calls: Vec<String> = done.calls.values().cloned().collect();
+    calls.sort();
+    calls
+}
+
+/// An ordered compare is compiler-rt's routine for it; an unordered-or-less
+/// one is the routine of the opposite ordered compare (unordered answers the
+/// way that makes it true); `one` and `ueq` take two.
+#[test]
+fn a_soft_float_compare_calls_the_routine_that_answers_it() {
+    assert_eq!(compare_calls("olt"), ["__ltsf2"]);
+    assert_eq!(compare_calls("oeq"), ["__eqsf2"]);
+    assert_eq!(compare_calls("une"), ["__nesf2"]);
+    assert_eq!(compare_calls("uno"), ["__unordsf2"]);
+    assert_eq!(compare_calls("ult"), ["__gesf2"]);
+    assert_eq!(compare_calls("ugt"), ["__lesf2"]);
+    assert_eq!(compare_calls("one"), ["__gtsf2", "__ltsf2"]);
+    assert_eq!(compare_calls("ueq"), ["__eqsf2", "__unordsf2"]);
+}

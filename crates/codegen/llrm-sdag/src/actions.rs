@@ -449,6 +449,9 @@ impl TargetLowering {
         }
         use ISD::*;
         let mut t = Self::x86(TargetLoweringInfo::x86_16().with_soft_float(), features, ptr, false);
+        // The x87 lowerings of a compare, a select and an extension have no
+        // registers to work in: the type legalizer softens them first.
+        t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
         // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
         for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
             t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
