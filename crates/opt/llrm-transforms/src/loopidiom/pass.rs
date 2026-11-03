@@ -61,6 +61,8 @@ pub struct LoopIdiom {
     pub routines: Vec<llrm_mir::libfunc::Routine>,
     /// -Os or -Oz.
     pub for_size: bool,
+    /// -O2 and -O3: the target's byte price at speed counts.
+    pub speed_rate: bool,
 }
 
 impl LoopIdiom {
@@ -78,6 +80,7 @@ impl LoopIdiom {
             library: Library { memset: true, memset_pattern16: false, memcpy: true },
             routines,
             for_size: false,
+            speed_rate: true,
         }
     }
 }
@@ -150,7 +153,7 @@ impl FunctionPass for LoopIdiom {
         // DEVIATE: a target that weighs bytes against clocks at speed (m16:
         // 1 clock = 2 B) prices a fill by the bytes it adds as `-Os` does, and
         // its clocks at that rate. Exit: none.
-        let rate = tti.as_deref().map_or(0, |tti| tti.speed_milliclocks_per_byte());
+        let rate = tti.as_deref().filter(|_| self.speed_rate).map_or(0, |tti| tti.speed_milliclocks_per_byte());
         // A target that prices its fills weighs them at every level: by the
         // rate where it has one, strictly (neither metric may grow) where not.
         let tuning = outer.target().tuning();

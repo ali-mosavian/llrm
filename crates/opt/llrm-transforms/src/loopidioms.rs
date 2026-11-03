@@ -778,14 +778,43 @@ fn trip_cost<'a>(
     costs: &OperationCosts,
     size: bool,
 ) -> i64 {
+    trip_total(context, layout, function, callees, blocks, costs, size, true)
+}
+
+/// `trip_cost` in clocks: a jump to the next block is the layout's and runs
+/// nothing, so a trip pays for its one conditional branch (matmul nib -O2: the
+/// row-zeroing nest has two `br`s and one `jne`).
+fn trip_clocks<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+) -> i64 {
+    trip_total(context, layout, function, callees, blocks, costs, true, false)
+}
+
+fn trip_total<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+    size: bool,
+    jumps: bool,
+) -> i64 {
     blocks
         .flat_map(|&block| operations(function, block))
         .filter(|&inst| {
-            !size
-                || !matches!(
-                    function.instruction(inst).opcode,
+            let one = function.instruction(inst);
+            let jump = one.opcode == Opcode::Br && one.operands.len() == 1;
+            (jumps || !jump)
+                && (!size || !matches!(
+                    one.opcode,
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
-                )
+                ))
         })
         .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
         .sum()
@@ -853,7 +882,7 @@ pub(crate) fn fills_pay(
             // backend prices a memset's fill against its stores. The loop
             // stays when its extra bytes buy fewer clocks than that.
             let (Some(trips), Some(cells)) = (trips, width) else { return true };
-            let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
+            let each = trip_clocks(context, layout, function, callees, blocks.iter(), clocks);
             // At speed the backend stores a small constant fill inline
             // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
             let (fill, fill_bytes) = match inline.filter(|inline| at_speed && inline.stores() <= inline.max_stores) {

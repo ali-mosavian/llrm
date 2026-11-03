@@ -349,7 +349,7 @@ fn _refolded(
         let pays = if cpu.size || cpu.min_size {
             bytes > 0 || (bytes == 0 && saved > 0)
         } else {
-            let rate = cpu.target().tuning().speed_milliclocks_per_byte;
+            let rate = cpu.speed_milliclocks_per_byte();
             if rate == 0 {
                 saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
             } else {

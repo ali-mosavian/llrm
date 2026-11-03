@@ -103,6 +103,8 @@ pub struct State {
     /// `MachineInstr*` survives its operands being rewritten; a key here is
     /// the instruction's identity, so the lists of copies follow the moves.
     moved: HashMap<InstrKey, InstrKey>,
+    /// `(absorbed, survivor)` of each join, in order.
+    pub renames: Vec<(u32, u32)>,
 }
 
 impl State {
@@ -308,6 +310,7 @@ fn update_reg_defs_uses(
     dst: u32,
 ) {
     lis.rename_input(src, dst);
+    state.renames.push((src, dst));
     let mut keys: Vec<InstrKey> = lis.operands(src).iter().map(|operand| operand.instr).collect();
     keys.sort_unstable();
     keys.dedup();
