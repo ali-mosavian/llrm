@@ -151,12 +151,19 @@ pub fn compile_function(
     ) {
         crate::spike_coalesce::coalesce(&mut f);
     }
-    if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
-        remove_unreachable_blocks(&mut f);
-    }
-    if options.level != crate::driver::Level::O0 {
-        if crate::branch_fold::fold_branches(&mut f) {
+    // `BranchFolder::OptimizeBranches` repeats until nothing changes: a block
+    // the hoisting leaves with only a `br` is forwarded on the next round.
+    while options.level != crate::driver::Level::O0 {
+        let forwarded = crate::branch_fold::forward_branch_only_blocks(&mut f);
+        if forwarded {
             remove_unreachable_blocks(&mut f);
+        }
+        let folded = crate::branch_fold::fold_branches(&mut f);
+        if folded {
+            remove_unreachable_blocks(&mut f);
+        }
+        if !(forwarded || folded) {
+            break;
         }
     }
     if options.level != crate::driver::Level::O0 {
