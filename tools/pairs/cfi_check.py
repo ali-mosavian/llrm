@@ -15,7 +15,7 @@ from pathlib import Path
 
 from dwarf_loc_diff import run
 
-SP, FP = 31, 29
+DESCRIPTION = Path(__file__).resolve().parents[2] / "crates/target/llrm-arm64/src"
 
 
 def code_of(disassembly: str) -> dict[str, list[str]]:
@@ -31,19 +31,61 @@ def code_of(disassembly: str) -> dict[str, list[str]]:
     return out
 
 
+class Machine:
+    """The facts of the target the rules are checked on, read from its description (`registers.regs`, `machines/calling.toml`), not copied here:
+    the stack and frame registers, the DWARF number of every register, and which registers a function must leave as it found them."""
+
+    def __init__(self, directory: Path = DESCRIPTION):
+        import tomllib  # noqa: PLC0415
+
+        self.number: dict[str, int] = {}
+        self.sp_name = self.fp_name = ""
+        floats: set[int] = set()
+        for line in (directory / "registers.regs").read_text().splitlines():
+            fields = line.split()
+            if not fields or fields[0].startswith(("#", "@")) or len(fields) < 7:
+                continue
+            name, classes, dwarf = fields[0], fields[4].split(","), fields[5]
+            if not dwarf.isdigit() or "-" in classes:
+                continue
+            self.number[name] = int(dwarf)
+            if "stack" in classes:
+                self.sp_name = name
+            if "frame" in classes:
+                self.fp_name = name
+            if "fpr" in classes:
+                floats.add(int(dwarf))
+        # The mnemonics that leave the function or enter another: the first of them ends the prologue.
+        self.exits = {
+            fields[0]
+            for line in (directory / "instructions/arm64.instr").read_text().splitlines()
+            if len(fields := line.split()) > 1 and not line.startswith("#") and fields[1] in {"call", "ret"}
+        }
+        self.sp, self.fp = self.number[self.sp_name], self.number[self.fp_name]
+        abi = tomllib.loads((directory / "machines/calling.toml").read_text())["aapcs64"]
+        # Integer registers the callee may change or receive arguments in are a function's own; the rest are kept for the caller
+        # (the frame record included: the link register is neither written by the callee's convention nor an argument).
+        own = {self.number[name] for name in abi["clobbered"] + abi["argument_registers"] if name in self.number}
+        self.kept = {n for name, n in self.number.items() if name[0] == self.fp_name[0] and n not in own and n not in floats and n != self.sp}
+
+    def register(self, name: str) -> int | None:
+        return self.number.get(name)
+
+    def callee_saved(self, register: int) -> bool:
+        """What an unwinder must find; a spilled temporary is not its business."""
+        return register in self.kept
+
+
+MACHINE = Machine()
+SP, FP = MACHINE.sp, MACHINE.fp
+
+
 def reg_number(name: str) -> int | None:
-    if name == "sp":
-        return SP
-    if name[0] == "x" and name[1:].isdigit():
-        return int(name[1:])
-    if name[0] == "d" and name[1:].isdigit():
-        return 64 + int(name[1:])
-    return None
+    return MACHINE.register(name)
 
 
 def callee_saved(register: int) -> bool:
-    """x19..x28, the frame record and d8..d15: what an unwinder must find; a spilled temporary is not its business."""
-    return 19 <= register <= 30 or 72 <= register <= 79
+    return MACHINE.callee_saved(register)
 
 
 def _imm(text: str) -> int:
@@ -74,16 +116,16 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
         pc = int(pc_text, 16) - base
         mnemonic, _, rest = text.partition("\t")
         operands = _operands(rest)
-        if verdict_at is None and mnemonic in {"bl", "blr", "ret"}:
+        if verdict_at is None and mnemonic in MACHINE.exits:
             verdict_at = pc
         if pc in by_pc:
             current = by_pc[pc]
         if current is not None:
             _, cfa_reg, cfa_off, saved = current
             if cfa_reg == SP and cfa_off != -sp:
-                problems.append(f"pc {pc}: frame address sp+{cfa_off}, but sp is {sp} from the entry")
+                problems.append(f"pc {pc}: frame address {MACHINE.sp_name}+{cfa_off}, but {MACHINE.sp_name} is {sp} from the entry")
             if cfa_reg == FP and (fp is None or cfa_off != -fp):
-                problems.append(f"pc {pc}: frame address x29+{cfa_off}, but x29 is {fp} from the entry")
+                problems.append(f"pc {pc}: frame address {MACHINE.fp_name}+{cfa_off}, but {MACHINE.fp_name} is {fp} from the entry")
             for register, offset in saved.items():
                 if stored.get(register) != offset:
                     problems.append(f"pc {pc}: register {register} said saved at cfa{offset:+}, stored at {stored.get(register)}")
@@ -97,7 +139,7 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
         pre = bool(memory) and memory.endswith("]!")
         post = bool(memory) and memory.endswith("]") and len(operands) >= 2 and operands[-1].startswith("#") and operands[-2] == memory
         base_register = memory.strip("[]!").split(",")[0].strip() if memory else ""
-        on_sp = base_register == "sp" or base_register in alias
+        on_sp = base_register == MACHINE.sp_name or base_register in alias
         parts = memory.strip("[]!").split(",") if memory else []
         # `[sp, x10]` or `[x0, x1, lsl #2]`: no immediate to follow.
         offset = _imm(parts[1]) if len(parts) > 1 and parts[1].strip().startswith("#") else 0
@@ -107,7 +149,7 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
             if pre:
                 sp += offset
                 offset = 0
-            at = (sp if base_register == "sp" else alias[base_register]) + offset
+            at = (sp if base_register == MACHINE.sp_name else alias[base_register]) + offset
             for index, register in enumerate(registers):
                 if register is not None:
                     stored[register] = at + 8 * index
@@ -122,26 +164,26 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
                 sp += offset
         elif mnemonic == "mov" and len(operands) == 2 and operands[1].startswith("#"):
             constant[operands[0]] = _imm(operands[1])
-        elif mnemonic in {"sub", "add"} and operands[:2] == ["sp", "sp"] and operands[2] in constant:
+        elif mnemonic in {"sub", "add"} and operands[:2] == [MACHINE.sp_name] * 2 and operands[2] in constant:
             sp += (-1 if mnemonic == "sub" else 1) * constant[operands[2]]
-        elif mnemonic == "add" and operands[1:2] == ["sp"] and operands[0] not in {"sp", "x29"} and operands[2] in constant:
+        elif mnemonic == "add" and operands[1:2] == [MACHINE.sp_name] and operands[0] not in {MACHINE.sp_name, MACHINE.fp_name} and operands[2] in constant:
             alias[operands[0]] = sp + constant[operands[2]]
-        elif mnemonic == "add" and operands[:2] == ["x29", "sp"] and operands[2] in constant:
+        elif mnemonic == "add" and operands[:2] == [MACHINE.fp_name, MACHINE.sp_name] and operands[2] in constant:
             fp = sp + constant[operands[2]]
-        elif mnemonic == "add" and operands[1:2] == ["sp"] and operands[0] not in {"sp", "x29"} and operands[2].startswith("#"):
+        elif mnemonic == "add" and operands[1:2] == [MACHINE.sp_name] and operands[0] not in {MACHINE.sp_name, MACHINE.fp_name} and operands[2].startswith("#"):
             shift = _imm(operands[3].split("#")[1]) if len(operands) > 3 and operands[3].startswith("lsl") else 0
             alias[operands[0]] = sp + (_imm(operands[2]) << shift)
-        elif mnemonic in {"sub", "add"} and operands[:2] == ["sp", "sp"] and operands[2].startswith("#"):
+        elif mnemonic in {"sub", "add"} and operands[:2] == [MACHINE.sp_name] * 2 and operands[2].startswith("#"):
             # `#1, lsl #12` is 4096.
             shift = _imm(operands[3].split("#")[1]) if len(operands) > 3 and operands[3].startswith("lsl") else 0
             sp += (-1 if mnemonic == "sub" else 1) * (_imm(operands[2]) << shift)
-        elif mnemonic == "add" and operands[:2] == ["x29", "sp"] and operands[2].startswith("#"):
+        elif mnemonic == "add" and operands[:2] == [MACHINE.fp_name, MACHINE.sp_name] and operands[2].startswith("#"):
             fp = sp + _imm(operands[2])
-        elif mnemonic == "mov" and operands[:2] == ["x29", "sp"]:
+        elif mnemonic == "mov" and operands[:2] == [MACHINE.fp_name, MACHINE.sp_name]:
             fp = sp
-        elif mnemonic == "mov" and operands[:2] == ["sp", "x29"] and fp is not None:
+        elif mnemonic == "mov" and operands[:2] == [MACHINE.sp_name, MACHINE.fp_name] and fp is not None:
             sp = fp
-        elif mnemonic == "sub" and operands[:2] == ["sp", "x29"] and fp is not None:
+        elif mnemonic == "sub" and operands[:2] == [MACHINE.sp_name, MACHINE.fp_name] and fp is not None:
             sp = fp - _imm(operands[2])
     return problems
 
