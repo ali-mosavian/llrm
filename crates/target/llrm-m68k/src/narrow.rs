@@ -100,7 +100,8 @@ fn touched(
 }
 
 /// Deletes each mask of `Rn` (`and.l #K1`, or a zero extension) whose next
-/// toucher of `Rn` is `and.l #K2, Rn` with `K2 & !K1 == 0`, when nothing between reads the codes the first sets.
+/// toucher of `Rn` is `and.l #K2, Rn` with `K2 & !K1 == 0`, when nothing
+/// between reads the codes the first sets.
 pub fn drop_covered_masks(
     function: &mut MFunction,
     assignment: &Assignment,
