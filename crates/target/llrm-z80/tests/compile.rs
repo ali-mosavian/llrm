@@ -111,16 +111,37 @@ fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
     assert!(test < xor, "{out}");
 }
 
-/// The arguments crc16 keeps in its frame were stored with `ld -1(ix), a` /
-/// `ld -3(ix), l` / `ld -2(ix), h` after a pair of `push af`: 9 B more than the
-/// prologue's `push af` / `push hl`.
+/// The arguments a function keeps in its frame were stored with `ld -1(ix), a`
+/// / `ld -4(ix), l` / `ld -3(ix), h` after a pair of `push af` (crc16): 9 B more
+/// than the prologue's `push af` / `push hl`. Hand-built, so the allocation of
+/// the kernel does not decide it.
 #[test]
 fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
-    let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    let lines: Vec<&str> = out.lines().map(str::trim).collect();
-    assert!(lines.windows(2).any(|pair| pair == ["push af", "push hl"]), "{out}");
-    assert!(!lines.iter().any(|line| line.starts_with("ld -") && line.contains("(ix), ")), "{out}");
+    use llrm_spike_mf::regalloc::Assignment;
+    use llrm_z80::expand::{Line, finish, reads};
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::regalloc::Class;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr16, Class::Gr8, Class::Gr8];
+    let insts = vec![
+        Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(0), Operand::Use(Reg::Virt(0))]),
+        Inst::new(Kind::Op("SPILL8"), vec![Operand::Frame(1), Operand::Use(Reg::Virt(1))]),
+        Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Virt(2)), Operand::Frame(1)]),
+        Inst::new(Kind::Op("RET"), vec![]),
+    ];
+    function.blocks.push(Block { id: 0, insts, phis: Vec::new() });
+    let assignment = Assignment(vec![llrm_z80::reg::HL, llrm_z80::reg::A, llrm_z80::reg::B]);
+    let lines = finish(&function, &assignment, 0, &[(0, 2), (1, 1)], reads(&function))
+        .unwrap_or_else(|why| panic!("{why}"));
+    let insts: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(insts.windows(2).any(|pair| pair == ["push af", "push hl"]), "{insts:?}");
+    assert!(!insts.iter().any(|line| line.starts_with("ld -") && line.contains("(ix), ")), "{insts:?}");
 }
 
 /// crc16 reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
