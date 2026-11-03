@@ -82,7 +82,7 @@ pub fn is_trivially_re_materializable(
                 })
         }
         // A load from a cell: `mayLoad` and invariant.
-        (Operation::Move, Some("mov"), [Loc::Mem(cell)]) => {
+        (Operation::Move, Some("mov" | "movss_x" | "movsd_x"), [Loc::Mem(cell)]) => {
             invariant
                 && into.width == cell.width
                 && cell.addr.is_some()
@@ -309,6 +309,21 @@ mod tests {
         let load = def(vec![Loc::Mem(cell)], Operation::Move, "mov");
         assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
         assert!(is_trivially_re_materializable(&load, true));
+    }
+
+    /// double_to_uint64 x86_64 -O2: the 2^63 constant (`movsd_x` from the pool)
+    /// was stored to the stack and reloaded after each of eight calls (250
+    /// insns against the pin's 225); only a `mov` load was made again. The pin
+    /// takes `MOVSDrm`/`MOVSSrm` (`isReMaterializable`) like any invariant
+    /// load.
+    #[test]
+    fn test_an_sse_constant_load_is_made_again_when_invariant() {
+        let cell = Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 4);
+        for name in ["movss_x", "movsd_x"] {
+            let load = def(vec![Loc::Mem(cell.clone())], Operation::Move, name);
+            assert!(!is_trivially_re_materializable(&load, false), "{name}: nothing proves it invariant");
+            assert!(is_trivially_re_materializable(&load, true), "{name}");
+        }
     }
 
     /// nbody_single -Os: a hoisted `fld1` with the x87 stack full was stored

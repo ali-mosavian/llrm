@@ -939,6 +939,40 @@ entry:
     assert!(names.iter().all(|n| !n.contains("comis") && !n.starts_with("cmov") && !n.starts_with("set")), "{names:?}");
 }
 
+/// A float constant read from the constant pool was not marked an invariant
+/// load, so the spiller saved it to the stack and reloaded it after every call
+/// (double_to_uint64 x86_64 -O2: 250 insns against the pin's 225). The pin's
+/// `isLoadFromInvariantOrConstantMemory` takes a constant pool entry, and
+/// the spiller remakes it (or folds it into its user) where it is needed.
+#[test]
+fn an_m64_constant_pool_load_is_invariant() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f() {
+entry:
+  ret double 1.5
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let pool = insns
+        .iter()
+        .find(|i| {
+            i.what
+                .as_ref()
+                .is_some_and(
+                    |w| matches!(
+                        w.op,
+                        crate::model::ir::Operation::Move | crate::model::ir::Operation::FloatLoad
+                    )
+                        && matches!(w.sources.as_slice(), [crate::model::ir::Loc::Mem(_)]),
+                )
+        })
+        .unwrap_or_else(|| panic!("{insns:?}"));
+    assert!(pool.invariant(), "{pool:?}");
+}
+
 /// Two `long double` arguments at m64 were required in XMM0 and XMM1 (the
 /// float argument registers), so the allocator could not place an x87 value in
 /// them: "the greedy allocator could not place every range"

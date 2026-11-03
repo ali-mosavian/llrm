@@ -1031,6 +1031,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         } else {
             self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, index, info)
         };
+        // `isLoadFromInvariantOrConstantMemory`: a constant pool entry never
+        // changes.
+        self.dag.invariant_loads.insert(loaded.node);
         self.replace_node(node, loaded);
         Ok(())
     }
