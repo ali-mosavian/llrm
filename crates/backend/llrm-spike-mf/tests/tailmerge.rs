@@ -195,3 +195,27 @@ fn a_jump_the_pass_takes_off_comes_back_as_the_opcode_it_was() {
     let last = function.blocks[1].insts.last().expect("a block");
     assert_eq!(last.kind, Kind::Op("short_jump"), "the jump became {:?}", last.kind);
 }
+
+/// A loop's latch `compare; branch_not top` shared its `compare` with the
+/// entry block's, which left the latch a `jump` to the header: one executed
+/// jump per iteration for two bytes saved (m68k gcd, +20 clk at 68000). Blocks
+/// of different loops never merge.
+#[test]
+fn a_loop_latch_is_not_merged_with_a_block_outside_the_loop() {
+    let mut function = layout(vec![
+        vec![work("load_a"), work("load_b"), compare(), cond("branch", 5, true)],
+        vec![work("top"), cond("branch_not", 3, true)],
+        vec![work("take_b"), jump(4)],
+        vec![work("take_a"), work("shift")],
+        vec![work("sub_x"), work("sub_y"), compare(), cond("branch_not", 1, true)],
+        vec![work("restore"), ret()],
+    ]);
+    branch_fold::<Two>(&mut function);
+    let latch = function
+        .blocks
+        .iter()
+        .find(|block| block.insts.iter().any(|inst| matches!(inst.kind, Kind::Op("sub_y"))))
+        .expect("the latch");
+    let last = latch.insts.last().expect("a terminator");
+    assert!(matches!(last.kind, Kind::Op("branch_not")), "the latch ends in {:?}", last.kind);
+}

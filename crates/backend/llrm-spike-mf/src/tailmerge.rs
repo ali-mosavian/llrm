@@ -11,6 +11,19 @@
 //! block placement (`AfterBlockPlacement` false). A function with phis is left
 //! alone: the pass runs after allocation, where there are none. Exit: the
 //! neutral machine function carries them (neutral-lir-need.md).
+//!
+//! DEVIATE: blocks of different loops are never merged ([`TailMergeFunction::
+//! loop_header`], checked first in `profitable` where the pin checks EH
+//! scopes). The pin merges them and relies on `MachineBlockPlacement::
+//! rotateLoop`
+//! ([MachineBlockPlacement.cpp#L2423](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L2423))
+//! to put the loop's test back at the bottom; for a loop with one entry and
+//! one exit its `FallThrough2Top >= ExitFreq` ties and nothing rotates, so a
+//! latch merged into the entry's compare stays a `jump` per trip (m68k gcd,
+//! +20 clk at 68000). Reason: with the odds carried and the 6502's counted
+//! rotation instead, gcd was 248 -> 256 clk and 75 seed cells were worse (the
+//! entry jump costs more than the short loops save). Exit: 2026-11-14, when
+//! odds and rotation price the entry jump against the trips.
 
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -135,6 +148,14 @@ pub trait TailMergeFunction {
         at: usize,
         dest: Self::Block,
     );
+    /// The header of the innermost loop `block` is in, `None` outside every
+    /// loop.
+    fn loop_header(
+        &self,
+        _block: Self::Block,
+    ) -> Option<Self::Block> {
+        None
+    }
     /// `getTailMergeSize`.
     fn tail_merge_size(&self) -> usize {
         3
@@ -272,6 +293,9 @@ impl<F: TailMergeFunction> Merger<'_, F> {
         succ: Option<F::Block>,
         pred: Option<F::Block>,
     ) -> Option<(usize, usize, usize)> {
+        if self.function.loop_header(one) != self.function.loop_header(other) {
+            return None;
+        }
         let (length, start1, start2) = self.common_tail(one, other);
         if length == 0 {
             return None;
@@ -571,6 +595,9 @@ struct Mf<'a, C, J> {
     /// The unconditional jump `remove_branch` took off a block, to put back as
     /// it was: the target's own opcode for it (the 65C02's `bra`), not `J`'s.
     removed: std::collections::HashMap<u32, Inst>,
+    /// Block to the header of its innermost loop, from the blocks at the start;
+    /// a split block takes its origin's.
+    loops: std::collections::HashMap<u32, u32>,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -773,6 +800,13 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         fold::insert_branch::<C, J>(self.function, at, taken, other, cond);
     }
 
+    fn loop_header(
+        &self,
+        block: u32,
+    ) -> Option<u32> {
+        self.loops.get(&block).copied()
+    }
+
     fn split_block_at(
         &mut self,
         block: u32,
@@ -780,6 +814,9 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
     ) -> Option<u32> {
         let position = self.at(block);
         let id = self.function.fresh_block_id();
+        if let Some(header) = self.loops.get(&block).copied() {
+            self.loops.insert(id, header);
+        }
         let tail = self.function.blocks[position].insts.split_off(at);
         self.function.insert_block(position + 1, Block { id, insts: tail, phis: Vec::new() });
         Some(id)
@@ -808,10 +845,73 @@ pub fn merge_tails<J: Jump, C>(
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
     }
-    tail_merge_blocks(&mut Mf::<C, J> {
+    let mut mf = Mf::<C, J> {
         function,
         assignment,
         removed: std::collections::HashMap::new(),
+        loops: std::collections::HashMap::new(),
         jump: std::marker::PhantomData,
-    })
+    };
+    mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
+    tail_merge_blocks(&mut mf)
+}
+
+/// The header of the innermost natural loop each block is in: a retreating edge
+/// of a depth-first walk from the first block closes a loop, whose body is
+/// what reaches the edge's source without passing the header.
+fn innermost_loops(
+    blocks: &[u32],
+    successors: impl Fn(u32) -> Vec<u32>,
+) -> std::collections::HashMap<u32, u32> {
+    use std::collections::{HashMap, HashSet};
+    let Some(&entry) = blocks.first() else { return HashMap::new() };
+    let succ: HashMap<u32, Vec<u32>> = blocks.iter().map(|&b| (b, successors(b))).collect();
+    let mut preds: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (&b, out) in &succ {
+        for &s in out {
+            preds.entry(s).or_default().push(b);
+        }
+    }
+    let mut back_edges: Vec<(u32, u32)> = Vec::new();
+    // true while on the stack
+    let mut state: HashMap<u32, bool> = HashMap::new();
+    let mut stack: Vec<(u32, usize)> = vec![(entry, 0)];
+    state.insert(entry, true);
+    while let Some(&mut (b, ref mut next)) = stack.last_mut() {
+        if let Some(&s) = succ[&b].get(*next) {
+            *next += 1;
+            match state.get(&s) {
+                None => {
+                    state.insert(s, true);
+                    stack.push((s, 0));
+                }
+                Some(true) => back_edges.push((b, s)),
+                Some(false) => {}
+            }
+        } else {
+            state.insert(b, false);
+            stack.pop();
+        }
+    }
+    let mut bodies: HashMap<u32, HashSet<u32>> = HashMap::new();
+    for (latch, header) in back_edges {
+        let body = bodies.entry(header).or_default();
+        body.insert(header);
+        let mut work = vec![latch];
+        while let Some(b) = work.pop() {
+            if body.insert(b) {
+                work.extend(preds.get(&b).into_iter().flatten().copied());
+            }
+        }
+    }
+    let mut innermost: HashMap<u32, u32> = HashMap::new();
+    for (&header, body) in &bodies {
+        for &b in body {
+            let smaller = innermost.get(&b).is_none_or(|current| body.len() < bodies[current].len());
+            if smaller {
+                innermost.insert(b, header);
+            }
+        }
+    }
+    innermost
 }
