@@ -1,5 +1,4 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
-// targets: dos
 /* The OS layer's directory search: a pattern finds the files made, in some order, with their sizes and names; no
    match is an error; the current directory and the free space are there. */
 #include "llrm_os.h"

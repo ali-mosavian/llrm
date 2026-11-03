@@ -1,5 +1,4 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
-// targets: dos
 /* The OS layer's file calls: create, write, close, open, read, close; a missing file and a bad handle are
    the interface's negative codes, and close is 0 on success (DOS leaves AX undefined there). */
 #include "llrm_os.h"

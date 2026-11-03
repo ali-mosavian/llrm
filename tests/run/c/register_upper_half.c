@@ -1,5 +1,4 @@
 // flags: -O2 -fno-inline-functions -mabi=watcom | -O2 -fno-inline-functions -m32 -mabi=watcom
-// targets: dos
 /* A callee that keeps CX and SI by pushing their 16-bit halves leaves the upper halves of ECX and ESI as it used them: a caller holding a
    long in ECX across a call read -65527 (the high word -1) for 9. */
 extern void report(long value);
