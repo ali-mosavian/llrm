@@ -879,6 +879,12 @@ pub(crate) fn check_old_slots(
 #[cfg(test)]
 const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constraintelimination")];
 
+/// Missing entries whose source file is the IR-level stand-in, not the MIR
+/// pass: `stack-coloring` groups the allocas before the DAG is built
+/// (`backend/stackcoloring.rs`, DEVIATE SC1; exit: the MIR pass).
+#[cfg(test)]
+const IR_LEVEL_STAND_IN: &[&str] = &["stack-coloring"];
+
 /// A Missing entry whose pass has a source file (`shrinkwrap.rs` for
 /// `shrink-wrap`): the row undercounts. `stems` are the file stems of every
 /// `.rs` under `crates`; names compare by their letters and digits, without a
@@ -895,7 +901,7 @@ pub(crate) fn check_missing_has_no_file(
     };
     let lying: Vec<String> = registry
         .iter()
-        .filter(|one| one.kind == Missing)
+        .filter(|one| one.kind == Missing && !IR_LEVEL_STAND_IN.contains(&one.slot))
         .filter(|one| {
             stems
                 .iter()
