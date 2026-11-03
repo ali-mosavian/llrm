@@ -42,7 +42,7 @@ _main:
 '''
 LIBS = ('sf64', 'int64')
 def compile_libs(opt):
-    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *([os.environ['SF_EXTRA']] if os.environ.get('SF_EXTRA') else []), '-Iinclude', f'src/{f}.c', '-o', f'{T}/{opt}_{f}.s')
+    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *os.environ.get('SF_EXTRA', '').split(), '-Iinclude', f'src/{f}.c', '-o', f'{T}/{opt}_{f}.s')
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
