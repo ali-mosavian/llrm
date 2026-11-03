@@ -19,7 +19,9 @@ static int64_t to_i64_bits(sf32 a)
 {
     int big;
     uint64_t m = magnitude(a, &big);
+#ifndef SF_FIX_NAN_UNDEF
     if ((a << 1) > 0xFF000000u) return 0;
+#endif
     if (a & SIGN) return (big || m > 0x8000000000000000ull) ? INT64_MIN : (int64_t)(0ull - m);
     return (big || m > 0x7FFFFFFFFFFFFFFFull) ? INT64_MAX : (int64_t)m;
 }
@@ -28,7 +30,11 @@ static uint64_t to_u64_bits(sf32 a)
 {
     int big;
     uint64_t m = magnitude(a, &big);
+#ifdef SF_FIX_NAN_UNDEF
+    if (a & SIGN) return 0;
+#else
     if (((a << 1) > 0xFF000000u) || (a & SIGN)) return 0;
+#endif
     return big ? UINT64_MAX : m;
 }
 

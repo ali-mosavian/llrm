@@ -4,7 +4,7 @@
 cd "$(dirname "$0")/.." || exit 1
 out=$(bash tests/m16_split_padding.sh Os) || { echo "$out"; exit 2; }
 rc=0
-for c in __fixsfsi:95 __fixunssfsi:83 __floatsisf:276 __floatunsisf:216; do
+for c in __fixsfsi:95 __fixunssfsi:83 __floatsisf:247 __floatunsisf:216; do
   n=${c%:*}; cap=${c#*:}; got=$(echo "$out" | awk -v n=$n '$1==n{print $2}')
   echo "$n reach ${got:-none} (cap $cap)"; [ -n "$got" ] && [ "$got" -le "$cap" ] || rc=1
 done
