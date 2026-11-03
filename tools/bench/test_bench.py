@@ -935,6 +935,29 @@ def test_a_function_marked_by_name_stays_a_call_while_the_runtime_helpers_inline
     assert calls(crc, "BENCHCRC") == 1 and calls(kernel, r"B\$FMID") + calls(kernel, r"B\$FASC") == 0
 
 
+def test_a_basic_row_is_built_as_the_whole_program_with_only_its_kernel_public():
+    """Every BASIC SUB was public, so fib's recursion stayed far, by reference and in memory: 2.55x the C clocks (908,496 against 356,059), hanoi 4,487x.
+    The harness builds the program as one module (C's helpers are `static`) and exports the kernel, which the map is searched for."""
+    import subprocess
+    import tempfile
+
+    fib = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq16")
+    with tempfile.TemporaryDirectory() as where:
+        out = Path(where) / "p.s"
+        done = subprocess.run(
+            [str(bench.BIN / "llrm-qb"), str(fib.source), "--dialect", "qb45", "-fqb-runtime=llrm", *bench.compile_flags(fib, "O2"), "-S", "-o", str(out)],
+            capture_output=True,
+            text=True,
+        )
+        assert done.returncode == 0, done.stderr
+        text = out.read_text()
+    assert "public BENCHFIB" in text and "public FIB" not in text
+    assert "FIB proc near" in text and "call far ptr FIB" not in text
+    # The flat target's calls are near already: queens read +6% instructions and four more cells worse with the flag.
+    flat = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq32")
+    assert "--whole-program" not in bench.compile_flags(flat, "O2")
+
+
 def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     import subprocess
 
