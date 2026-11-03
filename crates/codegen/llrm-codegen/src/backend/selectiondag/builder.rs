@@ -806,10 +806,13 @@ impl Builder<'_> {
             Ok(reg_vt) => Ok((reg_vt, 1)),
             Err(_) => {
                 let widest = EVT::integer(*self.target.legal_ints.last().expect("a legal integer"));
-                if vt.is_integer() && vt.size_in_bits() == 2 * widest.size_in_bits() {
-                    Ok((widest, 2))
+                // `getNumRegisters`: an integer wider than a register is
+                // that many registers when the width is a power of two of them
+                let count = vt.size_in_bits() / widest.size_in_bits();
+                if vt.is_integer() && vt.size_in_bits() % widest.size_in_bits() == 0 && count.is_power_of_two() {
+                    Ok((widest, count as usize))
                 } else {
-                    Err(Refused("integer wider than two registers"))
+                    Err(Refused("integer wider than a power-of-two count of registers"))
                 }
             }
         }
@@ -857,6 +860,45 @@ impl Builder<'_> {
         let high = self.dag.get_node(ISD::ExtractElement, part, &[value, one]);
         let low = self.dag.get_node(ISD::ExtractElement, part, &[value, zero]);
         [low, high]
+    }
+
+    /// `getCopyToParts` for `count` equal parts, a power of two: halves, then
+    /// the halves' halves, the low part first.
+    fn split_parts(
+        &mut self,
+        value: SDValue,
+        part: EVT,
+        count: usize,
+    ) -> Vec<SDValue> {
+        if count == 2 {
+            return self.split_value(value, part).to_vec();
+        }
+        let half = EVT::integer(self.dag.value_type(value).size_in_bits() / 2);
+        let [low, high] = self.split_value(value, half);
+        let mut all = self.split_parts(low, part, count / 2);
+        all.extend(self.split_parts(high, part, count / 2));
+        all
+    }
+
+    /// `getCopyFromParts` for equal parts: the halves are paired, then the pairs.
+    fn join_parts(
+        &mut self,
+        vt: EVT,
+        pieces: &[SDValue],
+        pointer: bool,
+    ) -> SDValue {
+        if pieces.len() == 2 {
+            return self.dag.get_node_flags(ISD::BuildPair, vt, pieces, pair_kind(vt, pointer));
+        }
+        let half = EVT::integer(vt.size_in_bits() / 2);
+        let (low, high) = pieces.split_at(pieces.len() / 2);
+        let pair = [self.join_parts(half, low, false), self.join_parts(half, high, false)];
+        self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
+    }
+
+    /// The path of the plan-based conventions carries one register or two.
+    fn at_most_two(parts: usize) -> Result<(), Refused> {
+        if parts > 2 { Err(Refused("integer wider than two registers")) } else { Ok(()) }
     }
 
     fn operand_type(
@@ -957,6 +999,7 @@ impl Builder<'_> {
                 Some(Parameter::Registers(regs)) => self.parts_in(vt, regs.len())?,
                 _ => self.parts(vt)?,
             };
+            Self::at_most_two(parts)?;
             // `CCPromoteToType<i32>`: a byte or word in a register is the
             // dword, whose high bits `zeroext`/`signext` assert
             if matches!(
@@ -2072,6 +2115,7 @@ impl Builder<'_> {
                 Parameter::Registers(regs) => self.parts_in(vt, regs.len())?,
                 _ => self.parts(vt)?,
             };
+            Self::at_most_two(parts)?;
             let pieces = if parts == 2 { self.split_value(*value, part_vt).to_vec() } else { vec![*value] };
             match parameter {
                 Parameter::Cell(_) | Parameter::Bytes(_) if sibling => {}
@@ -2281,6 +2325,7 @@ impl Builder<'_> {
             return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
+        Self::at_most_two(parts)?;
         if plan.returns.len() != parts {
             return Err(Refused("result in registers the value does not fill"));
         }
@@ -2453,6 +2498,7 @@ impl Builder<'_> {
                 ops.push(value);
             } else {
                 let (part_vt, parts) = self.parts_in(vt, self.convention.returns.len())?;
+                Self::at_most_two(parts)?;
                 // a narrow integer fills its register (`getCopyToParts`, by the
                 // return's `zeroext`/`signext`)
                 let value = if parts == 1 && vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
@@ -2649,12 +2695,15 @@ impl Builder<'_> {
     ) -> Result<SDValue, Refused> {
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
-        if parts == 2 {
-            // each part's copy chained to the one before; the halves paired
-            let regs = self.info.part_regs(reg, 2);
-            let low = self.dag.get_copy_from_reg(entry, regs[0], reg_vt);
-            let high = self.dag.get_copy_from_reg(SDValue { node: low.node, res: 1 }, regs[1], reg_vt);
-            return Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[low, high], pair_kind(vt, pointer)));
+        if parts > 1 {
+            // each part's copy chained to the one before; the parts paired
+            let regs = self.info.part_regs(reg, parts);
+            let mut pieces: Vec<SDValue> = Vec::new();
+            for reg in regs {
+                let after = pieces.last().map_or(entry, |last| SDValue { node: last.node, res: 1 });
+                pieces.push(self.dag.get_copy_from_reg(after, reg, reg_vt));
+            }
+            return Ok(self.join_parts(vt, &pieces, pointer));
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
@@ -2684,9 +2733,9 @@ impl Builder<'_> {
         let vt = self.dag.value_type(value);
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
-        if parts == 2 {
-            let regs = self.info.part_regs(reg, 2);
-            let halves = self.split_value(value, reg_vt);
+        if parts > 1 {
+            let regs = self.info.part_regs(reg, parts);
+            let halves = self.split_parts(value, reg_vt, parts);
             let copies: Vec<SDValue> =
                 halves.iter().zip(&regs).map(|(half, reg)| self.dag.get_copy_to_reg(entry, *reg, *half)).collect();
             let chain = self.dag.get_token_factor(&copies);
