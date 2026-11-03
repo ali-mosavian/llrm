@@ -76,3 +76,15 @@ fn a_switch_leaf_sets_its_constant_on_its_own_path() {
     let out = assembly(text, Width::W32, Options { level: Level::O2, ..Options::default() }).unwrap();
     assert_eq!(out.matches("i32.eqz").count(), 0, "{out}");
 }
+
+/// The `br_table` of a range switch takes the guard's place (the pin's
+/// `FixBrTableDefaults`), and the guard's check, read by nothing, goes with it
+/// (`DeadMachineInstructionElim`). Ours kept `i32.gt_u` and a `drop`: 7
+/// instructions per switch.
+#[test]
+fn a_br_table_leaves_no_dead_range_check() {
+    let text = include_str!("ir/switch_range_table_o2.ll");
+    let out = assembly(text, Width::W32, Options { level: Level::O2, ..Options::default() }).unwrap();
+    assert_eq!(out.matches("br_table").count(), 1, "{out}");
+    assert_eq!(out.matches("drop").count(), 0, "{out}");
+}
