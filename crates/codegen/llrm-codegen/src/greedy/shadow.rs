@@ -1156,33 +1156,6 @@ pub fn decide_with(
     decide_with_split(inputs, mode, !llrm_support::env_flag!("LLRM_NO_SPLIT"))
 }
 
-/// `decide_with`, with live range splitting (`trySplit`) chosen.
-/// The blocks an x87 value is live into and out of, as (in, out) by block.
-fn float_live_blocks(
-    lis: &mut LiveIntervals,
-    floats: &crate::support::hash::HashSet<u32>,
-    count: usize,
-) -> (Vec<bool>, Vec<bool>) {
-    let mut live_in = vec![false; count];
-    let mut live_out = vec![false; count];
-    if floats.is_empty() {
-        return (live_in, live_out);
-    }
-    let starts: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_start_idx(at)).collect();
-    let ends: Vec<SlotIndex> = (0..count).map(|at| lis.indexes.get_mbb_end_idx(at)).collect();
-    for &reg in floats {
-        for segment in &lis.interval(reg).segments {
-            let mut at = starts.partition_point(|start| *start <= segment.start).saturating_sub(1);
-            while at < count && starts[at] < segment.end {
-                live_in[at] |= segment.start <= starts[at];
-                live_out[at] |= segment.end >= ends[at];
-                at += 1;
-            }
-        }
-    }
-    (live_in, live_out)
-}
-
 /// The intervals the allocator starts from: the coalescer's, edited to `body`,
 /// else new ones.
 ///
@@ -1198,6 +1171,7 @@ fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
     lis
 }
 
+/// `decide_with`, with live range splitting (`trySplit`) chosen.
 pub fn decide_with_split(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
@@ -1228,7 +1202,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let mut lis = intervals_to_allocate(body);
+    let lis = intervals_to_allocate(body);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -1358,22 +1332,15 @@ pub fn decide_with_split(
     // The calls.
     let mut calls = Vec::new();
     let mut blocks = Vec::with_capacity(body.blocks.len());
-    let (float_in, float_out) = float_live_blocks(&mut lis, &floats, body.blocks.len());
     for (at, block) in body.blocks.iter().enumerate() {
         let first = calls.len();
-        let last = block.insns.len().saturating_sub(1);
-        for (n, one) in block.insns.iter().enumerate() {
-            // DEVIATE D-DS1 (exit: a spill or split tells the masks): the
-            // masks are made once, before allocation. A split or a spill of an
-            // x87 value that lives through a block stores or reloads it
-            // (`fstp`, `fld`) at the block's ends, where no instruction of the
-            // body names it; those need the data group (`needs_data_group`),
-            // and `datagroup` then loads `ds` from `ss` there. A selector
-            // placed in `ds` over such an end is lost.
-            let at_edge = (n == 0 && float_in[at]) || (n == last && float_out[at]);
+        for one in block.insns.iter() {
+            // `needs_data_group` is what a selector in `ds` cannot cross: x87
+            // spills are frame cells (`ss`), so no block edge needs the data
+            // group, only an instruction that reads `ds` by default.
             let read: RegSet = inputs
                 .data
-                .filter(|_| at_edge || inputs.tii.needs_data_group(one))
+                .filter(|_| inputs.tii.needs_data_group(one))
                 .map(|one| inputs.registers.root(one))
                 .into_iter()
                 .collect();
@@ -1879,13 +1846,16 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
     }
 
-    /// A selector placed in `ds` over a block an x87 value lives through was
-    /// clobbered: a split or spill stores the value (`fstp`) at the block's
-    /// edge, an instruction that needs the data group, and `datagroup` put
-    /// `mov ds, ss` there. nbody.bas at -O2 (m16) wrote an array through the
-    /// stack segment and printed 4849201 for 4774160.
+    /// A selector was kept out of `ds` over every block an x87 value lives
+    /// through, on the ground that a spill's `fstp` at the block's edge needs
+    /// the data group and `datagroup` puts `mov ds, ss` there (nbody.bas at
+    /// -O2 (m16) wrote an array through the stack segment and printed 4849201
+    /// for 4774160). A spill is a frame cell, read through `ss`, so it needs
+    /// no data group; fpbench -Os (m16) then had three selector registers for
+    /// four far arrays and 21 segment loads, 14 without the rule. Only an x87
+    /// instruction whose operand takes its segment from `ds` reads it.
     #[test]
-    fn test_a_selector_is_not_placed_in_ds_across_a_block_an_x87_value_lives_through() {
+    fn test_a_selector_is_placed_in_ds_across_a_block_an_x87_value_lives_through() {
         use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
             name: Some(name.into()),
@@ -1899,6 +1869,7 @@ mod tests {
         let float = Loc::Held(Held { value: 1, width: 10 });
         let selector = Loc::Held(Held { value: 2, width: 2 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
+        let data = |_: i64| Loc::Mem(Mem { through: RegId::SI, ..Mem::new(None, 8) });
         let load = || insn(1, what(Operation::FloatLoad, "fld", vec![float.clone()], vec![cell(-8)]), &[1], &[]);
         let store = || insn(2, what(Operation::FloatStore, "fstp", vec![cell(-16)], vec![float.clone()]), &[], &[1]);
         let make = || {
@@ -1962,9 +1933,14 @@ mod tests {
         // `ds`.
         let apart = body(vec![vec![make(), jump(5)], vec![jump(6)], vec![read(), load(), store()]]);
         assert!(placed_in_ds(&apart), "premise: the selector is placed in ds");
-        // The x87 value lives through the middle block.
+        // The x87 value lives through the middle block: its spill is a frame
+        // cell, which reads `ss`.
         let through = body(vec![vec![load(), make(), jump(5)], vec![jump(6)], vec![read(), store()]]);
-        assert!(!placed_in_ds(&through), "the selector was placed in ds over a block the x87 value lives through");
+        assert!(placed_in_ds(&through), "the selector was kept out of ds over a block the x87 value lives through");
+        // An x87 store to a cell with no address (`[si]`) reads `ds`.
+        let to_data = || insn(7, what(Operation::FloatStore, "fstp", vec![data(8)], vec![float.clone()]), &[], &[1]);
+        let reads_ds = body(vec![vec![load(), make(), jump(5)], vec![to_data(), jump(6)], vec![read()]]);
+        assert!(!placed_in_ds(&reads_ds), "the selector was placed in ds across an x87 store that reads ds");
     }
 
     /// A local range may take the register of a cheaper local one when that one

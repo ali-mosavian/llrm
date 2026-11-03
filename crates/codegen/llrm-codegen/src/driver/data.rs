@@ -450,6 +450,8 @@ mod tests {
             names: IndexMap::default(),
             externs: Vec::new(),
             publics: Vec::new(),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![("_DATA".into(), Vec::new())],
             procedures: Vec::new(),
             private: Default::default(),
