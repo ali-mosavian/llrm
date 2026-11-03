@@ -272,6 +272,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// The type `BuildUDIV` widens `vt` to for an uncooperative divisor
+    /// ([L7031]: `i32` to `i64`), or `None` where the target does not.
+    fn widened_unsigned_divide_type(
+        &self,
+        _vt: EVT,
+    ) -> Option<EVT> {
+        None
+    }
+
     /// `isZExtFree(i32, i64)`, which keeps the even-divisor rewrite of
     /// `BuildUDIV` out of the way of the widened multiply (x86-64 and AArch64).
     fn zero_extend_i32_to_i64_free(&self) -> bool {

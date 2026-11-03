@@ -402,9 +402,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L7031
-        let wide = EVT::I64;
-        let has_wide_mulhu = bits == 32 && self.can_do(ISD::MulHU, wide);
-        let has_wide_lohi = bits == 32 && self.can_do(ISD::UMulLoHi, wide);
+        let widened = self.hooks.widened_unsigned_divide_type(vt);
+        let wide = widened.unwrap_or(vt);
+        let has_wide_mulhu = widened.is_some() && self.can_do(ISD::MulHU, wide);
+        let has_wide_lohi = widened.is_some() && self.can_do(ISD::UMulLoHi, wide);
         let allow_widen = has_wide_mulhu || has_wide_lohi;
         let allow_even = !(allow_widen && self.hooks.zero_extend_i32_to_i64_free());
         let found = unsigned_magic(d, bits, leading, allow_even, allow_widen);

@@ -125,6 +125,13 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn widened_unsigned_divide_type(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (vt == EVT::I32).then_some(EVT::I64)
+    }
+
     fn zero_extend_i32_to_i64_free(&self) -> bool {
         true
     }
