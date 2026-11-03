@@ -180,6 +180,28 @@ pub fn object_with_debug(
     debug: &[crate::object::DebugSection],
 ) -> Result<Vec<u8>, String> {
     let module = prepared(text, width, options)?;
+    object_of(&module, width, options, |_| Ok(debug.to_vec()))
+}
+
+/// [`object`] with DWARF (`-g`) from the module's `!DI*` nodes; `source` names
+/// the unit where the module names none.
+pub fn object_g(
+    text: &str,
+    width: Width,
+    options: Options,
+    source: &str,
+) -> Result<Vec<u8>, String> {
+    let mut module = prepared(text, width, options)?;
+    llrm_mir::dbgimport::types_and_globals(&mut module);
+    object_of(&module, width, options, |functions| crate::debug::sections(&module, width, functions, source))
+}
+
+fn object_of(
+    module: &llrm_mir::module::Module,
+    width: Width,
+    options: Options,
+    debug: impl FnOnce(&[crate::object::Encoded]) -> Result<Vec<crate::object::DebugSection>, String>,
+) -> Result<Vec<u8>, String> {
     let mut functions = Vec::new();
     // `EmitTargetFeatures` reads the subtarget of the last function compiled.
     let mut features = crate::features::Features::default();
@@ -189,13 +211,14 @@ pub fn object_with_debug(
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
-        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f = compile_function(module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
         features = features.with("exception-handling", true)?;
     }
-    Ok(crate::object::write_with_debug(&functions, &data(&module, width)?, features, debug))
+    let debug = debug(&functions)?;
+    Ok(crate::object::write_with_debug(&functions, &data(module, width)?, features, &debug))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`

@@ -19,6 +19,7 @@ fn run() -> i32 {
     let mut triple = "wasm32".to_owned();
     let mut options = Options::default();
     let mut handling = false;
+    let mut debug = false;
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
@@ -28,6 +29,7 @@ fn run() -> i32 {
             "-filetype=obj" => object = true,
             "-o" => output = arguments.next(),
             "-no-stackify" => options.stackify = false,
+            "-g" => debug = true,
             other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
                 Ok(level) => options.level = level,
                 Err(why) => {
@@ -48,7 +50,7 @@ fn run() -> i32 {
     }
     let Some(input) = input.filter(|_| assembly || object) else {
         eprintln!(
-            "usage: llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-no-stackify] [-exception-model=wasm -mattr=+exception-handling] [-o OUT] FILE.ll"
+            "usage: llrm-wasm-llc (-S | -filetype=obj) [-mtriple=wasm32|wasm64] [-no-stackify] [-g] [-exception-model=wasm -mattr=+exception-handling] [-o OUT] FILE.ll"
         );
         return 2;
     };
@@ -65,7 +67,9 @@ fn run() -> i32 {
         }
     };
     let built = driver::width_of(&triple).and_then(|width| {
-        if object {
+        if object && debug {
+            driver::object_g(&text, width, options, &input)
+        } else if object {
             driver::object(&text, width, options)
         } else {
             driver::assembly(&text, width, options).map(String::into_bytes)
