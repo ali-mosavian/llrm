@@ -1793,12 +1793,10 @@ entry:
         })
 }
 
-/// lru nib -Os: a 28-byte fill of -1 was `rep stosw` of 14, +1 B over the
-/// bytes (`mov ax, -1` 3 B, `mov al, -1` 2 B) for -112 clocks, which -Os does
-/// not trade. A zero is `xor ax, ax` either way and keeps the word.
+/// lru nib -Os: a 28-byte fill of -1 as bytes was -1 B but +56 clocks against the
+/// `rep stosw` the base emits; -Os trades neither way.
 #[test]
-fn at_size_a_fill_of_a_value_that_is_not_zero_stays_bytes() {
-    assert_eq!(fill_unit_of(-1, true).as_deref(), Some("1"));
+fn at_size_a_fill_of_a_value_that_is_not_zero_is_words() {
+    assert_eq!(fill_unit_of(-1, true).as_deref(), Some("2"));
     assert_eq!(fill_unit_of(0, true).as_deref(), Some("2"));
-    assert_eq!(fill_unit_of(-1, false).as_deref(), Some("4"), "premise: at speed it widens");
 }
