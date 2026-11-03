@@ -138,6 +138,10 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        true
+    }
+
     /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
     /// target.
     fn simplify_demanded_add_sub_mul(&self) -> bool {
