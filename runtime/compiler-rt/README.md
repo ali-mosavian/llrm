@@ -4,7 +4,7 @@ Compiler runtime for targets that lack hardware for an operation: soft-float (bi
 
 ```
 include/            softfloat.h (entry points), sf_helpers.h (width helpers; a target overrides one by defining its macro first)
-lib/fp/             f32/ f64/ f8/: one file per operation family (add_sub mul div cmp neg pack, float_si float_usi fix_si fix_usi float_di fix_di extend trunc), over the
+lib/fp/             f32/ f64/ f8/: one file per operation family (add_sub mul div cmp unord neg pack, float_si float_usi fix_si fix_usi float_di fix_di extend trunc), over the
                     width-generic macros.inc codec.inc add.inc mul.inc div.inc cmp.inc core_end.inc; f32.h and f64.h are the width headers
 lib/int/            int32.c int64.c: __mulsi3 .. __moddi3, no 64-bit operation in any body
 lib/math/           mathf.c and its coefficients (sf_coef.h, from tools/gen_coef.py)
