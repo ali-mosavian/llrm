@@ -73,6 +73,8 @@ struct Tree<'a> {
     /// The function being described is called far: its return address, and
     /// so the frame address of its cells, is longer.
     far: bool,
+    /// The base the function being described states for itself, if it does.
+    frame_base: Option<FrameBase>,
     /// The location lists, in `.debug_loclists` (a header first) or
     /// `.debug_loc`.
     locations: crate::buffer::Buf,
@@ -326,7 +328,7 @@ impl Tree<'_> {
     ) -> Result<Vec<u8>, Unsupported> {
         match location {
             Location::Frame { disp } => {
-                let from_frame_base = match self.info.frame_base {
+                let from_frame_base = match self.frame_base.unwrap_or(self.info.frame_base) {
                     FrameBase::Register | FrameBase::WasmLocal(_) => *disp,
                     FrameBase::Cfa { bias, far_bias } => disp - if self.far { far_bias } else { bias },
                 };
@@ -628,6 +630,7 @@ impl Tree<'_> {
             return refused(format!("function {} has no code range", one.name));
         };
         self.far = one.far;
+        self.frame_base = one.frame_base;
         let mut die = Die::new(TAG_SUBPROGRAM);
         if !one.name.is_empty() {
             die.attrs.push((AT_NAME, Value::Str(one.name.clone())));
@@ -656,7 +659,7 @@ impl Tree<'_> {
                 },
             );
         if framed {
-            let base = match self.info.frame_base {
+            let base = match self.frame_base.unwrap_or(self.info.frame_base) {
                 // DW_OP_call_frame_cfa.
                 FrameBase::Cfa { .. } => vec![0x9C],
                 FrameBase::WasmLocal(index) => wasm_local(index),
@@ -830,6 +833,7 @@ pub fn tree(
         version,
         address,
         far: false,
+        frame_base: None,
         locations: crate::buffer::Buf::default(),
         ranges: Vec::new(),
         origins: Vec::new(),

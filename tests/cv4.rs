@@ -169,6 +169,7 @@ fn synthetic() -> (llrm_debug::Described, String) {
         }],
         frame: Vec::new(),
         all_calls: false,
+        frame_base: None,
         calls: Vec::new(),
     };
     let info = Info {
