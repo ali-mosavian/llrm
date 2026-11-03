@@ -2,7 +2,7 @@
 # usage: tests/asm6502/runm.sh [n]  (n <= 4500): config/6502/sf32_explog.s expf/logf vs the C reference bit for bit on sim65
 set -e
 cd "$(dirname "$0")"; N=${1:-1500}; T=$(mktemp -d); I=../../config/6502; S=../..
-cc -O2 -ffp-contract=off -fno-builtin -I$S/include '-DSF_NAME(n)=sfb_##n' '-DSFM_NAME(n)=sfb_##n' genm.c $S/lib/math/mathf.c $S/lib/fp/sf32_conv.c $S/lib/fp/sf32.c $S/lib/fp/sf32_conv64.c -lm -o $T/genm
+cc -O2 -ffp-contract=off -fno-builtin -I$S/include '-DSF_NAME(n)=sfb_##n' '-DSFM_NAME(n)=sfb_##n' genm.c $S/lib/math/mathf.c $S/lib/fp/f32/*.c -lm -o $T/genm
 for f in sf32 sf32_muldiv sf32_conv sf32_explog sf32_abi; do ca65 -t sim6502 -I $I $I/$f.s -o $T/$f.o; done
 for op in exp log; do
   $T/genm $op $N > $T/vec.inc

@@ -5,6 +5,11 @@
 
 #include <stdint.h>
 
+#if !defined(SF_CLZ32) && defined(SF_CLZ_CALL)
+int __clzsi2(uint32_t x); /* lib/int/clzsi2.c: one copy shared by every operation */
+#define SF_CLZ32(x) __clzsi2(x)
+#endif
+
 #ifndef SF_CLZ32
 static inline int sf_clz32(uint32_t x)
 {

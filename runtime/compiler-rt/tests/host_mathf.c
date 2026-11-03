@@ -1,6 +1,6 @@
 /* f32 libm subset vs the host's double libm rounded to float, in ulps (sqrtf must be exact).
  * cc -O2 -ffp-contract=off -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' '-DSFM_NAME(n)=sfb_##n' \
- *    tests/host_mathf.c lib/math/mathf.c lib/fp/sf32_conv.c lib/fp/sf32.c lib/fp/sf32_conv64.c -lm */
+ *    tests/host_mathf.c lib/math/mathf.c lib/fp/f32/*.c -lm */
 #define SF_NAME(n) sfb_##n
 #include "softfloat.h"
 #include <math.h>

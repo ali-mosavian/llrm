@@ -1,11 +1,6 @@
-/* Width-generic decode and encode of the soft-float core, included by sf32.c, sf32_conv.c and sf64.c.
- * The includer defines: SF_T (bit-pattern type), SF_W (its width), SF_MB (stored mantissa bits), SF_EXPMAX (all-ones exponent),
- * sf_clz, sf_shr_sticky and SF_ROUND3 for that width, and SF_N(name), the name of a static function (the same name for binary32, a suffixed one for the
- * wider type so that both fit one translation unit). A translation unit includes this once per width and ends with core_end.inc. */
-#define SF_SIGN ((SF_T)1 << (SF_W - 1))
-#define SF_HID ((SF_T)1 << SF_MB)
-#define SF_INF ((SF_T)SF_EXPMAX << SF_MB)
-
+/* Width-generic decode and encode of the soft-float core: is_nan, unpack, pack_any. Needs the macros of macros.inc and, from the includer,
+ * sf_clz, sf_shr_sticky, SF_ROUND3 and SF_N(name), the name of a function (the same for binary32, a suffixed one for the wider type so that both fit
+ * one translation unit). A translation unit includes this once per width. */
 static inline int SF_N(is_nan)(SF_T a) { return (a << 1) > (SF_INF << 1); }
 
 /* Mantissa and exponent; denormals get e = 1, no implicit bit. */

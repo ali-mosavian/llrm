@@ -1,5 +1,5 @@
 /* Bit-exact oracle: soft f32 vs the host FPU on edge classes and random sweeps.
- * cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/sf32.c lib/fp/sf32_conv.c lib/fp/sf32_conv64.c */
+ * cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/f32/*.c */
 #define SF_NAME(n) sfb_##n
 #include "softfloat.h"
 float sfb_addsf3(float, float), sfb_subsf3(float, float), sfb_mulsf3(float, float), sfb_divsf3(float, float);

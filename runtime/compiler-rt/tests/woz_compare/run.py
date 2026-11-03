@@ -86,7 +86,7 @@ for op, i in zip(OPS, range(6)):
     res[op] = {'woz_cyc': (out['call'][0] - out['nocall'][0]) / N, 'woz_err': worst, 'woz_len': len(raw)}
 
 # ---- IEEE variants: the generic C and the 6502-shaped one
-IEEE = {'ours': ['lib/fp/sf32.c', 'lib/fp/sf32_conv.c'], 'tight': ['config/6502/sf32_6502.c']}
+IEEE = {'ours': subprocess.check_output([f'{SF}/tests/fp_sources.sh', 'f32'], text=True).split(), 'tight': ['config/6502/sf32_6502.c']}
 rtlines = open(MOS_RT).read()
 for var, srcs in IEEE.items():
     for f in srcs:

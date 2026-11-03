@@ -4,13 +4,13 @@
 cd "$(dirname "$0")/.." || exit 1
 T=$(mktemp -d); trap 'rm -r $T' EXIT
 run() {
-  cc -O2 -fno-builtin -ffp-contract=off -DSF_DIV_NEWTON "$@" -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/sf32.c lib/fp/sf32_conv.c lib/fp/sf32_conv64.c -lm -o $T/h || exit 1
+  cc -O2 -fno-builtin -ffp-contract=off -DSF_DIV_NEWTON "$@" -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/f32/*.c -lm -o $T/h || exit 1
   $T/h | tail -1 | grep -qx 'fails=0' || { echo "SF_DIV_NEWTON $*: mismatches"; exit 1; }
 }
 run
 run '-DSF_MUL32X32(a,b,h,l)=do{unsigned long long p_=(unsigned long long)(a)*(b);*(h)=(uint32_t)(p_>>32);*(l)=(uint32_t)p_;}while(0)'
 run64() {
-  cc -O2 -fno-builtin -ffp-contract=off -DSF_DIV_NEWTON "$@" -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/sf64.c -o $T/h64 || exit 1
+  cc -O2 -fno-builtin -ffp-contract=off -DSF_DIV_NEWTON "$@" -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c lib/fp/f64/*.c -o $T/h64 || exit 1
   $T/h64 | tail -1 | grep -qx 'fails=0' || { echo "f64 SF_DIV_NEWTON $*: mismatches"; exit 1; }
 }
 run64

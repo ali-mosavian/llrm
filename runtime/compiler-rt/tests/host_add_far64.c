@@ -1,5 +1,5 @@
 /* f64 twin of host_add_far.c: exponents differ by 48..70, a = 2^k against 2^-d, 1.5 * 2^-d, all-ones mantissa, random; both signs, add and sub.
- * cc -O2 -ffp-contract=off -fno-builtin -DSF_INTABI -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_add_far64.c lib/fp/sf64.c lib/fp/sf32_conv.c */
+ * cc -O2 -ffp-contract=off -fno-builtin -DSF_INTABI -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_add_far64.c lib/fp/f64/*.c */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -5,5 +5,5 @@ cd "$(dirname "$0")/.."
 CPU=$1; OPT=$2; N=${3:-3000}
 T=$(mktemp -d)
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen $N > $T/vectors.h
-CFLAGS_EXTRA="-I$PWD/include -I$T" ${M68K_RUN_C:-$HOME/scratch/handoff/m68k-run-c.sh} $CPU $OPT tests/m68k_main.c lib/fp/sf32.c lib/fp/sf32_conv.c lib/int/int32.c
+CFLAGS_EXTRA="-I$PWD/include -I$T" ${M68K_RUN_C:-$HOME/scratch/handoff/m68k-run-c.sh} $CPU $OPT tests/m68k_main.c $(tests/fp_sources.sh f32) lib/int/int32.c
 md5sum $T/vectors.h | cut -c1-12
