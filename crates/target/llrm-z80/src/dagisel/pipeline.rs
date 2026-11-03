@@ -13,7 +13,7 @@ use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
+use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
 
@@ -96,6 +96,15 @@ impl SchedInfo for Z80Sched {
 
     fn source_order(&self) -> bool {
         true
+    }
+
+    /// `createDefaultScheduler` gives `Source` to a target that enables the
+    /// machine scheduler (X86, AArch64) and `ILP` to one that does not
+    /// (M68k): the Z80 runs no pre-RA machine scheduler, and on three pairs
+    /// the pressure-aware order matters (`p + 1` ahead of the store through
+    /// `p` kept five pairs live in lz4's copy loops).
+    fn preference(&self) -> Preference {
+        Preference::Ilp
     }
 }
 

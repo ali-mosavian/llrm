@@ -887,6 +887,20 @@ fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
     assert!(bytes <= 435, "{bytes} B");
 }
 
+/// lz4's copy loops made `p + 1` before the store through `p` (IR order), so
+/// the source and destination pointers, their increments and the count were
+/// live together: five pairs on three, the destination reloaded from the frame
+/// every trip. The pressure-aware order the pin gives a target without a
+/// machine scheduler stores first: the loop-weighted clocks of lz4 -O2 fell
+/// from 548952 to 245094 (170569 T to 103942 T in the simulator).
+#[test]
+fn the_copy_loops_store_through_a_pointer_before_stepping_it() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    let out = lines(ir, "lz4", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let (_, clocks) = llrm_z80::expand::price_in_loops(&out);
+    assert!(clocks < 300_000, "{clocks}");
+}
+
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
 /// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
