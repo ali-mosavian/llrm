@@ -599,6 +599,32 @@ fn a_product_summed_into_an_add_keeps_the_lea_chain_at_m64() {
     assert!(listing.contains("lea") && !listing.contains("imul"), "{listing}");
 }
 
+/// `mov rdi, rbx` (3 B) of a value a dword write zeroed above bit 31 is `mov
+/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io, os_files,
+/// os_find +1 B over release/next).
+#[test]
+fn a_copy_of_a_zero_extended_dword_is_a_dword_copy_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @h()\ndeclare void @g(i64)\n\
+                define i64 @f() {\n  %r = call i32 @h()\n  %z = zext i32 %r to i64\n  call void @g(i64 %z)\n  ret i64 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov edi, ebx") && !listing.contains("mov rdi, rbx"), "{listing}");
+}
+
+/// A copy of a register nothing proved zero above bit 31 stays 64 bits wide.
+#[test]
+fn a_copy_of_a_full_width_value_stays_a_qword_copy_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @g(i64)\n\
+                define i64 @f(i64 %x) {\n  call void @g(i64 %x)\n  ret i64 %x\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov rbx, rdi") && !listing.contains("mov ebx, edi"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
