@@ -241,3 +241,13 @@ fn a_gnu_pc_relative_target_address_is_a_displacement() {
     assert_eq!(clocks(Cpu::M68020, &gnu("lea %pc@(80010000),%a0")), clocks(Cpu::M68020, "lea (0x20,%pc), %a0"));
     assert_eq!(clocks(Cpu::M68000, &gnu("lea %pc@(80010000),%a0")), clocks(Cpu::M68000, "lea (0x20,%pc), %a0"));
 }
+
+/// objdump annotates an operand with its symbol in mid-line,
+/// `lea %pc@(80000062) <a>,%a0`; the text from `<` on was dropped, destination
+/// included, and the `lea` stayed unpriced.
+#[test]
+fn a_symbol_annotation_inside_the_operands_keeps_the_rest() {
+    assert_eq!(gnu("lea %pc@(80000062) <a>,%a0"), "lea (0,%pc), %a0");
+    assert_eq!(gnu("jsr 80004064 <kmain>"), "jsr 0x80004064:l");
+    assert_eq!(clocks(Cpu::M68020, &gnu("lea %pc@(80000062) <a>,%a0")), clocks(Cpu::M68020, "lea (0x20,%pc), %a0"));
+}
