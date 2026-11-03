@@ -415,6 +415,38 @@ fn a_copy_repeated_in_the_only_block_that_follows_is_dropped() {
     assert_eq!(copies, [1, 0, 1, 1], "{:?}", function.blocks);
 }
 
+/// sum_arr kept `ld b, a` ahead of `or a, a`. The `ld a, #0` both successors
+/// begin with could not be hoisted past a compare that reads `a`, so the
+/// function lost its `ret z`: 16 B, not 14. A copy the compare reads stays.
+#[test]
+fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy = |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let compare = |of: u32| {
+        Inst {
+            sets_flags: true,
+            ..Inst::new(Kind::Op("CP8i"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Virt(of)), Operand::Imm(0)])
+        }
+    };
+    let branch = Inst {
+        terminator: true,
+        reads_flags: true,
+        ..Inst::new(Kind::Op("JPNZ"), vec![Operand::Block(0), Operand::Use(Reg::Phys(reg::FLAGS))])
+    };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 3];
+    // v0 a, v1 b, v2 c: `ld b, a` can follow the compare of a; `ld c, b` cannot follow the compare of c
+    function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), compare(0), branch.clone()], phis: Vec::new() });
+    function.blocks.push(Block { id: 1, insts: vec![copy(2, 1), compare(2), branch], phis: Vec::new() });
+    let assignment = Assignment(vec![reg::A, reg::B, reg::C]);
+    llrm_z80::compile::sink_copies_to_the_branch(&mut function, &assignment);
+    let kinds: Vec<Vec<Kind>> = function.blocks.iter().map(|b| b.insts.iter().map(|inst| inst.kind).collect()).collect();
+    let (cp, jp) = (Kind::Op("CP8i"), Kind::Op("JPNZ"));
+    assert_eq!(kinds, [vec![cp, Kind::Copy, jp], vec![Kind::Copy, cp, jp]]);
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

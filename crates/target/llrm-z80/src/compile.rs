@@ -145,6 +145,7 @@ fn allocate(
         dump(&function);
     }
     remove_identity_copies(&mut function, &assignment);
+    sink_copies_to_the_branch(&mut function, &assignment);
     remove_copies_back(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
@@ -428,6 +429,55 @@ pub fn remove_identity_copies(
                     _ => true,
                 },
             );
+    }
+}
+
+/// Moves a copy down to the block's branches when nothing after it reads or
+/// writes either register, so the compare before it stays last among the
+/// instructions a branch hoist must move over: sum_arr's `ld b, a` sat ahead
+/// of `or a, a`, and the `ld a, #0` both successors begin with could not be
+/// hoisted past a compare that reads `a`.
+pub fn sink_copies_to_the_branch(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    for block in &mut function.blocks {
+        let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+        let mut at = 0;
+        while at + 1 < end {
+            let inst = &block.insts[at];
+            let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (inst.kind, &inst.operands[..]) else {
+                at += 1;
+                continue;
+            };
+            let (dst, src) = (register(*dst), register(*src));
+            let blocked = |later: &Inst| {
+                later.call
+                    || later.barrier
+                    || later.may_store
+                    || later.side_effects
+                    || later.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => {
+                            let r = register(*r);
+                            Z80Registers::overlaps(r, dst) || (matches!(operand, Operand::Def(_)) && Z80Registers::overlaps(r, src))
+                        }
+                        Operand::Frame(_) => false,
+                        _ => false,
+                    })
+            };
+            // only all the way: a copy stopped short sits between a reload and the
+            // compare it folds into
+            if (at + 1..end).any(|later| blocked(&block.insts[later])) {
+                at += 1;
+                continue;
+            }
+            let moved = block.insts.remove(at);
+            block.insts.insert(end - 1, moved);
+        }
     }
 }
 
