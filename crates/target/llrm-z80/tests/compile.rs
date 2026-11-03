@@ -366,6 +366,55 @@ fn a_byte_made_in_a_register_that_a_later_instruction_reads_is_still_made() {
     assert!(function.blocks[0].insts.iter().any(|inst| inst.kind == Kind::Op("LO")), "{:?}", function.blocks[0].insts);
 }
 
+/// A copy back into the register another copy read from stayed: gcd's argument
+/// went `ld b, a` / `ld a, b` before its compare, one instruction more than
+/// the entry copy joined into `a`. `ld a, c` after `ld b, a` is no copy back:
+/// `b` and `c` are lanes of one pair, not one register.
+#[test]
+fn a_copy_back_into_the_register_just_copied_from_is_dropped_between_bytes_only() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy = |to: u32, from: u32| {
+        Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))])
+    };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 3];
+    function.blocks.push(Block {
+        id: 0,
+        insts: vec![copy(1, 0), copy(0, 1), copy(0, 2)],
+        phis: Vec::new(),
+    });
+    // v0 a, v1 b, v2 c: the second copy is a copy back, the third is not
+    let assignment = Assignment(vec![reg::A, reg::B, reg::C]);
+    llrm_z80::compile::remove_copies_back(&mut function, &assignment);
+    assert_eq!(function.blocks[0].insts.len(), 2, "{:?}", function.blocks[0].insts);
+}
+
+/// popcount -Oz copied its loop value into `a` at the loop head and again at
+/// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
+/// trip. A block two blocks enter starts with nothing known.
+#[test]
+fn a_copy_repeated_in_the_only_block_that_follows_is_dropped() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy = || Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(0)), Operand::Use(Reg::Virt(1))]);
+    let jump = |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 2];
+    let block = |id, insts| Block { id, insts, phis: Vec::new() };
+    // 0 enters 1, which has no other entrance; 1 and 2 enter 3
+    function.blocks.push(block(0, vec![copy(), jump(1)]));
+    function.blocks.push(block(1, vec![copy(), jump(3)]));
+    function.blocks.push(block(2, vec![copy(), jump(3)]));
+    function.blocks.push(block(3, vec![copy(), jump(3)]));
+    let assignment = Assignment(vec![reg::A, reg::C]);
+    llrm_z80::compile::remove_copies_back(&mut function, &assignment);
+    let copies: Vec<usize> = function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    assert_eq!(copies, [1, 0, 1, 1], "{:?}", function.blocks);
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

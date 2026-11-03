@@ -1,9 +1,9 @@
 //! A function from IR to sdasz80 text: the shared DAG stages, then the Z80
 //! machine function, allocation, expansion and printing.
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::cfg::Cfg;
-use llrm_spike_mf::regalloc::{Assignment, eliminate_phis_with, two_address};
+use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_address};
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::{Request, selections};
@@ -145,6 +145,7 @@ fn allocate(
         dump(&function);
     }
     remove_identity_copies(&mut function, &assignment);
+    remove_copies_back(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
     return_conditionally(&mut function);
@@ -427,6 +428,64 @@ pub fn remove_identity_copies(
                     _ => true,
                 },
             );
+    }
+}
+
+/// Drops a copy of what the register already holds: a copy back into the
+/// register another copy read from (`ld b, a` ... `ld a, b`), or the same copy
+/// again, while neither register is written in between. A block only one
+/// earlier block enters starts from the copies that block ended with.
+///
+/// DEVIATE from `llrm_spike_mf::remove_redundant_copies`, which compares
+/// roots (`ld a, c` after `ld b, a` is no copy back), stays in one block and
+/// misses the repeat. Reason: `b` and `c` are lanes of one root. Exit: the
+/// shared helper compares lanes.
+pub fn remove_copies_back(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let successors = llrm_spike_mf::regalloc::successors(function);
+    let mut entered = vec![0usize; function.blocks.len()];
+    for to in successors.iter().flatten() {
+        entered[*to] += 1;
+    }
+    // `(destination, source)` of the copies in force at the end of each block
+    let mut ended: Vec<Vec<(RegId, RegId)>> = vec![Vec::new(); function.blocks.len()];
+    for at in 0..function.blocks.len() {
+        // the block's one entrance, if it came earlier in the layout
+        let mut held = match successors.iter().position(|next| next.contains(&at)) {
+            Some(from) if entered[at] == 1 && from < at => ended[from].clone(),
+            _ => Vec::new(),
+        };
+        let mut keep = Vec::with_capacity(function.blocks[at].insts.len());
+        for inst in std::mem::take(&mut function.blocks[at].insts) {
+            let copy = match (inst.kind, &inst.operands[..]) {
+                (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => Some((register(*dst), register(*src))),
+                _ => None,
+            };
+            if copy.is_some_and(|(dst, src)| held.contains(&(src, dst)) || held.contains(&(dst, src))) {
+                continue;
+            }
+            if inst.call {
+                held.clear();
+            }
+            let written: Vec<RegId> = inst
+                .operands
+                .iter()
+                .filter_map(|o| if let Operand::Def(r) = o { Some(register(*r)) } else { None })
+                .collect();
+            held.retain(|&(to, from)| {
+                !written.iter().any(|&w| Z80Registers::overlaps(w, to) || Z80Registers::overlaps(w, from))
+            });
+            held.extend(copy);
+            keep.push(inst);
+        }
+        function.blocks[at].insts = keep;
+        ended[at] = held;
     }
 }
 
