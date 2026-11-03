@@ -54,6 +54,7 @@ llrm-lir = { path = "crates/ir/llrm-lir" }
 llrm-spike-mf = { path = "crates/backend/llrm-spike-mf" }
 llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
+llrm-gpl-gcc = { path = "crates/opt/llrm-gpl-gcc" }
 llrm-codegen = { path = "crates/codegen/llrm-codegen" }
 llrm-driver = { path = "crates/driver/llrm-driver" }
 llrm-cc = { path = "crates/driver/llrm-cc" }
@@ -90,6 +91,8 @@ tempfile = { workspace = true }
 
 [features]
 default = ["toolchain"]
+# gcc-derived estimates (GPL-3.0-or-later): REC-2 recursion copies. Off by default.
+gcc-gpl = ["llrm-transforms/gcc-gpl"]
 # What the build scripts bootstrap: Open Watcom's wccq (llrm-c), jwasm and jwlink, and DOSBox-X.
 # The lib tests need only wccq.
 toolchain = ["jw", "dosrun"]

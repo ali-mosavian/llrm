@@ -1146,6 +1146,7 @@ pub fn recorded(
             speed_rate: applied.options.prices_bytes(),
             inlining: applied.options.inline.limit != 0,
             flag: applied.options.inline.recursive,
+            o3: applied.options.inline.limit >= 250,
         }
     });
     manager.add_program(Interprocedural {

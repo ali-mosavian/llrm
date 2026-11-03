@@ -802,6 +802,18 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
     }
 }
 
+/// minmax -Oz loaded a byte into `a` that its max compare also reads from a
+/// register, so the byte was copied out of `a` again and the pointer lost its
+/// pair: spilled and reloaded by `pop de; push de` every trip, 60 B / 2938 T
+/// became 64 B / 3557 T. A byte a non-copy reads as a register is not loaded
+/// through `a`.
+#[test]
+fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
+}
+
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
 /// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
