@@ -1,9 +1,9 @@
 #!/bin/bash
-# usage: tests/x86_kernels.sh [NV] -> kernels x_sf_add x_sf_sub x_sf_mul x_sf_div (ours, SF_INTABI, flattened to one freestanding file) in
+# usage: [SF_CFG=sf_x86_m32.h] tests/x86_kernels.sh [NV] -> kernels x_sf_add x_sf_sub x_sf_mul x_sf_div (ours, SF_INTABI, flattened to one freestanding file) in
 # crates/target/llrm-x86-m32/vsgcc/kernels/, for harness.py (486-table clocks, llrm/gcc/clang variants). NV vectors from tests/gen_vectors.c.
 set -e
 cd "$(dirname "$0")/.."
-NV=${1:-400}; K=$(cd ../../crates/target/llrm-x86-m32/vsgcc/kernels && pwd); T=$(mktemp -d); trap 'rm -r $T' EXIT
+NV=${1:-400}; SF_CFG=${SF_CFG-}; [ -n "$SF_CFG" ] && SF_CFG=$(sed -E 's/\buint(32|64)_t\b/sfu\1/g' include/$SF_CFG); export SF_CFG; K=$(cd ../../crates/target/llrm-x86-m32/vsgcc/kernels && pwd); T=$(mktemp -d); trap 'rm -r $T' EXIT
 cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen $NV > $T/vectors.h
 for op in add sub mul div; do
   n=x_sf_$op; mkdir -p $K/$n
@@ -14,7 +14,7 @@ for op in add sub mul div; do
     # flatten: our headers and sf32.c, without libc (the types above stand in for <stdint.h>)
     for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
       sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
-    done | awk 'BEGIN{print "#define SF_INTABI 1"} {print}'
+    done | awk 'BEGIN{print "#define SF_INTABI 1"; if (ENVIRON["SF_CFG"]) print ENVIRON["SF_CFG"]} {print}'
     cat $T/vectors.h | sed 's/uint32_t/sfu32/'
     echo "sfu32 __${op}sf3(sfu32, sfu32);"
     echo "long bench_$n(long n) { long i; sfu32 acc = 0; for (i = 0; i < n; ++i) acc += __${op}sf3(V[i % NV][0], V[i % NV][1]); return (long)acc; }"
