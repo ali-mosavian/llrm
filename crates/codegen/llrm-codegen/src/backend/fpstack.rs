@@ -542,6 +542,8 @@ impl Fps<'_> {
         } else if what.op == Operation::FloatUnary && operands.len() == 1 && !results.is_empty() {
             let what = Semantics { dests: vec![st(0)], sources: vec![st(0)], ..what };
             self.handle_one_arg_fprw(step, operands[0], what, results[0])?;
+        } else if what.op == Operation::Select && operands.len() == 2 && results.len() == 1 {
+            self.handle_cond_mov_fp(step, &what, operands[0], operands[1], results[0])?;
         } else if what.op == Operation::FloatArith
             && !operands.is_empty()
             && _floating(&what.sources[0])
@@ -794,6 +796,37 @@ impl Fps<'_> {
         // The converted instruction stands for the pseudo: it carries its
         // bookkeeping.
         self.emit(what);
+    }
+
+    /// `handleCondMovFP`: `result := cc ? yes : no` as `fcmovCC st(0), st(i)`.
+    /// The instruction is two-address: `no` is brought to the top and takes
+    /// the result (a copy when it stays), and `yes` is popped after it where
+    /// it dies.
+    fn handle_cond_mov_fp(
+        &mut self,
+        step: &Step,
+        what: &Semantics,
+        no: u32,
+        yes: u32,
+        dest: u32,
+    ) -> Result<(), Raised> {
+        self.slot(no)?;
+        self.slot(yes)?;
+        if no == yes {
+            return Err(unlowered("a float select of one value"));
+        }
+        if step.kills(no) {
+            self.move_to_top(no)?;
+            self.values[0] = dest;
+        } else {
+            self.duplicate_to_top(no, dest)?;
+        }
+        let other = self.slot(yes)?;
+        self.emit(Semantics { dests: vec![st(0)], sources: vec![st(0), st(other)], ..what.clone() });
+        if step.kills(yes) {
+            self.free_stack_slot_after(yes)?;
+        }
+        Ok(())
     }
 
     /// `handleCompareFP`: `left` against `right` where it lies, the answer

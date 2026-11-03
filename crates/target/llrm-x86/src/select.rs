@@ -1861,6 +1861,26 @@ pub fn float_stack(
         let code = if name == "fcom" { Code::Fcom_st0_sti } else { Code::Fcomp_st0_sti };
         return _assemble(&raised(create_reg_reg(code, RegId::ST0, stack_register(index))), at, true);
     }
+    // SELECT, "cmovCC", (St(0),), (St(0), St(index)): `fcmovCC`, which reads
+    // CF, ZF and PF, so only the conditions those three make.
+    if what.op == Operation::Select && dests.len() == 1 && sources.len() == 2 && st_index(&dests[0]) == Some(0) {
+        let code = match name?.strip_prefix("cmov")? {
+            "b" => Code::Fcmovb_st0_sti,
+            "ae" => Code::Fcmovnb_st0_sti,
+            "e" => Code::Fcmove_st0_sti,
+            "ne" => Code::Fcmovne_st0_sti,
+            "be" => Code::Fcmovbe_st0_sti,
+            "a" => Code::Fcmovnbe_st0_sti,
+            "p" => Code::Fcmovu_st0_sti,
+            "np" => Code::Fcmovnu_st0_sti,
+            _ => return None,
+        };
+        if sources[0] != dests[0] {
+            return None;
+        }
+        let index = st_index(&sources[1])?;
+        return _assemble(&raised(create_reg_reg(code, RegId::ST0, stack_register(index))), at, true);
+    }
     // FLOAT_ARITH, name, (St(dest),), (left, St(source)) if left == dests[0]
     let arith = (what.op == Operation::FloatArith && dests.len() == 1 && sources.len() == 2 && sources[0] == dests[0])
         .then(|| st_index(&dests[0]).zip(st_index(&sources[1])))
@@ -2378,7 +2398,7 @@ pub fn emit_in(
     let name = what.name.as_deref().unwrap_or("");
     if matches!(
         what.op,
-        Operation::FloatLoad | Operation::FloatArith | Operation::Exchange
+        Operation::FloatLoad | Operation::FloatArith | Operation::Exchange | Operation::Select
     )
         && !sources.is_empty()
         && all().all(|operand| operand.st_index().is_some())

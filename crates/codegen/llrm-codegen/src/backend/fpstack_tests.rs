@@ -379,3 +379,23 @@ fn test_the_order_a_header_wants_is_taken_through_any_number_of_renaming_blocks(
         "exchanges on the two latches' paths, by chain 2, 3, 6, 9: {costs:?}"
     );
 }
+
+/// `handleCondMovFP`: a select of two floats is `fcmovCC st(0), st(i)` with
+/// the value for a false condition on top, the other popped where it dies. A
+/// branch diamond (two exits, a phi) costs a jump and a pop on one arm.
+#[test]
+fn test_a_float_select_is_a_conditional_move_on_the_top_of_the_stack() {
+    let cells = [frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8)];
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        _load(2, &cells[1]),
+        crate::backend::floatalloc::tests::sem(Operation::Select, "cmovbe", vec![fl(3)], vec![fl(1), fl(2)]),
+        _store(&cells[2], 3),
+    ]);
+    let result = fps(&body);
+    assert_eq!(count(&result, "cmovbe"), 1, "{:?}", names(&result));
+    let select = result.insns().iter().find(|one| name(one) == "cmovbe").cloned().expect("the select");
+    let what = select.what.as_ref().unwrap();
+    assert_eq!(what.dests, vec![crate::backend::floatalloc::tests::st(0)]);
+    assert_eq!(count(&result, "fstp"), 2, "the store, and the popped arm: {:?}", names(&result));
+}

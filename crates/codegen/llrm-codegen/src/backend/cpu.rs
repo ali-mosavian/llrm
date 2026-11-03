@@ -170,8 +170,8 @@ pub struct Profile {
     pub speed_rate: bool,
     /// A spill of an x87 value keeps the register's 80 bits (`fstp tbyte`),
     /// as real BC keeps a temporary (BASIC). DEVIATE D-RFP5, exit: none, the
-    /// pin rounds; QB follows real BC text. Per language: BASIC keeps 80 bits, C
-    /// spills at the value's width (`fst m32`/`m64`), as the pin does.
+    /// pin rounds; QB follows real BC text. Per language: BASIC keeps 80 bits,
+    /// C spills at the value's width (`fst m32`/`m64`), as the pin does.
     pub spills_extended: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.

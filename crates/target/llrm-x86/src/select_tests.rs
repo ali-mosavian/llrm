@@ -707,6 +707,24 @@ fn test_stack_duplicate_and_exchange() {
     }
 }
 
+/// `cmovCC` on the stack is `fcmovCC st(0), st(i)` (DA /0../7 +i), the P6
+/// conditional move of a float.
+#[test]
+fn test_a_conditional_move_on_the_stack_is_fcmov() {
+    for (name, base) in [("cmovb", 0xc0), ("cmove", 0xc8), ("cmovbe", 0xd0), ("cmovp", 0xd8)] {
+        for index in [1_u8, 7] {
+            let both = vec![st(0), st(u32::from(index))];
+            let what = sem(Operation::Select, Some(name), vec![st(0)], both, None, false);
+            assert_eq!(made(emitted(&what)).code, [0xda, base + index], "{name} st(0), st({index})");
+        }
+    }
+    for (name, base) in [("cmovae", 0xc0), ("cmovne", 0xc8), ("cmova", 0xd0), ("cmovnp", 0xd8)] {
+        let both = vec![st(0), st(2)];
+        let what = sem(Operation::Select, Some(name), vec![st(0)], both, None, false);
+        assert_eq!(made(emitted(&what)).code, [0xdb, base + 2], "{name}");
+    }
+}
+
 #[test]
 fn test_unencodable_stack_arithmetic_is_refused() {
     // Python's (-1, 0) has no u32 St to say it with.
