@@ -9,9 +9,7 @@ sf32 sf32_pack(uint32_t sign, int e, uint32_t m)
 {
     if (e >= 255) return sign | 0x7F800000u;
     if (e <= 0) { m = sf_shr_sticky32(m, 1 - e); e = 1; }
-    uint32_t r = m & 7;
-    m >>= 3;
-    if (r > 4 || (r == 4 && (m & 1))) m++;
+    m = sf_round3(m);
     return sign + ((uint32_t)(e - 1) << 23) + m;
 }
 

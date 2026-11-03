@@ -70,12 +70,24 @@ static inline void sf_mul24x24_loop(uint32_t a, uint32_t b, uint32_t *hi, uint32
 
 #endif
 
-/* Round to nearest even and pack for 1 <= e <= 254 (no overflow, no denormal): sf32_pack without its two range paths. */
-static inline uint32_t pack_round(uint32_t sign, int e, uint32_t m)
+/* m >> 3 rounded to nearest even (the three dropped bits are the guard bits). Adding 3 plus the kept bit carries exactly when the dropped bits are over a half,
+ * or a half and the kept bit is odd: one add and one shift. A target whose 32-bit add is dearer than a compare (6502) defines SF_ROUND_BRANCHY. */
+static inline uint32_t sf_round3(uint32_t m)
 {
+#ifdef SF_ROUND_BRANCHY
     uint32_t r = m & 7;
     m >>= 3;
     if (r > 4 || (r == 4 && (m & 1))) m++;
+    return m;
+#else
+    return (m + 3 + ((m >> 3) & 1)) >> 3;
+#endif
+}
+
+/* Round to nearest even and pack for 1 <= e <= 254 (no overflow, no denormal): sf32_pack without its two range paths. */
+static inline uint32_t pack_round(uint32_t sign, int e, uint32_t m)
+{
+    m = sf_round3(m);
     return sign + ((uint32_t)(e - 1) << 23) + m;
 }
 
