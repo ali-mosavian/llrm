@@ -1,6 +1,6 @@
 #!/bin/sh
 # usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] shift_steps_bytes.sh -> reached bytes (reach65.py, -Os, 6502-sim65) of f32 add/mul/div with the library defaults and with include/sf_6502.h.
-# Fails if any grows: -Os is bytes strict. Absolute caps (the 6502 sizes before sf_round3 existed: add 3103, mul 3679, div 2911) catch a default that got
+# Fails if any grows: -Os is bytes strict. Absolute caps (the 6502 sizes before sf_round3 existed: add 3103 (2775 since the add preamble), mul 3679, div 2911) catch a default that got
 # worse for the 6502 (the add-3 rounding form: add 3109, so sf_6502.h defines SF_ROUND_BRANCHY). (Stepping every variable shift grew mul +13 B; stepping the addition's alone grows add +18 B, so sf_6502.h keeps it off at -Os.)
 set -e
 cd "$(dirname "$0")"; S=../..; T=$(mktemp -d); MOS_RT=${MOS_RT:-$HOME/scratch/handoff/mos_rt.s}
@@ -15,7 +15,7 @@ reached() { # op flag
 bad=0
 for op in add mul div; do
   off=$(reached $op ""); on=$(reached $op "-include $S/include/sf_6502.h"); echo "$op: $off -> $on B"
-  case $op in add) cap=3103;; mul) cap=3679;; div) cap=2911;; esac
+  case $op in add) cap=2775;; mul) cap=3679;; div) cap=2911;; esac
   [ $on -le $cap ] || bad=1
 done
 rm -r $T
