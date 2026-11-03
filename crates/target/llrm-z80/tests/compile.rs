@@ -453,6 +453,18 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
     assert_eq!(kinds, [vec![cp, Kind::Copy, jp], vec![Kind::Copy, cp, jp], vec![cp, Kind::Copy, jp]]);
 }
 
+/// `icmp ult i64 %a, 4294967297` leaves a word compare whose flags nothing
+/// reads (the next compare sets them again). It was refused, "CP16 read by
+/// None", which refused every 64-bit divide by a constant in the C corpus.
+#[test]
+fn a_word_compare_nothing_reads_is_not_emitted() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              @g = external global i64\n\
+              define i1 @f() {\n  %a = load i64, ptr @g\n  %c = icmp ult i64 %a, 4294967297\n  ret i1 %c\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

@@ -820,8 +820,12 @@ impl Printer<'_> {
                 }
             }
         }
-        if other.is_some() || !(carry || zero) {
+        if other.is_some() {
             return Err(format!("CP16 read by {other:?}"));
+        }
+        // no reader: a wide compare whose later word compare decides on its own
+        if !(carry || zero) {
+            return Ok(());
         }
         let skip = format!("{}$", self.out.len());
         match (carry, zero) {
