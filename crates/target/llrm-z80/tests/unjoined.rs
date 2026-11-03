@@ -1,17 +1,11 @@
-//! The z80 with `pinned_copies_unjoined` stated in its convention: the
-//! allocator leaves the copies from the argument registers to itself, as the
-//! pin does. A file of its own, so that the convention is stated before
-//! anything parses it.
+//! The z80's default convention leaves the copies from the argument registers
+//! to the allocator (`pinned_copies_unjoined`), as the pin does.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
 
 fn unjoined() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let stated = llrm_z80::CALLING.replacen("[z80]\n", "[z80]\npinned_copies_unjoined = true\n", 1);
-        llrm_z80::abi::use_calling(&stated).expect("stated before the first use");
-    });
+    assert!(llrm_z80::abi::z80().pinned_copies_unjoined);
 }
 
 /// The placement of a copy into the entrance that lacks it ran before branch
@@ -61,4 +55,13 @@ fn a_spill_of_a_copy_reads_the_copys_source() {
     assert!(!out.contains("(ix), b"), "{out}");
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     assert!(lines.windows(2).any(|pair| pair == ["push af", "push hl"]), "{out}");
+}
+
+/// Joined, the copies pinned an argument's pair to its last use: crc16 -O2 took
+/// 64 B where 60 are enough, a `long long` could not be allocated. The default
+/// convention states the other.
+#[test]
+fn the_default_convention_leaves_the_argument_copies_unjoined() {
+    assert!(llrm_z80::abi::z80().pinned_copies_unjoined);
+    assert!(llrm_z80::CALLING.contains("pinned_copies_unjoined = true"));
 }
