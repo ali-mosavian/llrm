@@ -55,3 +55,11 @@ def test_noivopts_flag_only_at_os():
     assert B.level_flags("Os", True) == ["-Os", "-fno-ivopts"]
     assert B.level_flags("O2", True) == ["-O2"]
     assert B.level_flags("Os", False) == ["-Os"]
+
+
+def test_z80_16bit_result_is_charged_the_de_store():
+    """gcc's driver stored a 16-bit result with ld (nn),hl (16 T), the DE columns with ld (nn),de (20 T): every 16-bit gcc
+    cell was 4 T optimistic (add16 read 78, by hand 82). 16-bit = ex de,hl 4 T + store 4 T; 8-bit in A for both."""
+    assert Z.result_charge(Z.U16) == (1, 8, 1)
+    assert Z.result_charge("int") == (1, 8, 1)
+    assert Z.result_charge(Z.U8) == (0, 0, 0)
