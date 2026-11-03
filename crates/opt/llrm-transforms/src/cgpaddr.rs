@@ -622,8 +622,18 @@ fn matched(
         // L4604](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L4604)):
         // the first register is the base register, not an index. Only over a
         // global: over a register base it is the second register, the index
-        // (wasm has none, so the pin's mode fails and nothing sinks).
-        (Some(&(at, 1)), None) if reg.is_none() && is_global(unit.context, inner.base) => {
+        // (wasm has none, so the pin's mode fails and nothing sinks). A mode
+        // the target refuses is read as an index again (`matchAddr`'s scale-1
+        // fallback).
+        (Some(&(at, 1)), None)
+            if reg.is_none()
+                && is_global(unit.context, inner.base)
+                && shifted(unit, tti, space, block, bytes, instruction.operands[1 + at], 1, offset + inner.offset)
+                    .is_none()
+                && i64::try_from(offset + inner.offset).is_ok_and(|displacement| {
+                    tti.is_legal_addressing_mode_at(space, bytes, true, displacement, true, 0)
+                }) =>
+        {
             reg = Some(instruction.operands[1 + at]);
             None
         }
