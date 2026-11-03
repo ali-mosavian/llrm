@@ -129,6 +129,23 @@ impl Tti for Wasm {
         base_offset >= 0 && scale == 0
     }
 
+    /// `BasicTTIImplBase::isLegalAddImmediate` forwards to the lowering, whose
+    /// default (WebAssembly does not override it) accepts every immediate.
+    fn is_legal_add_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
+    /// `BasicTTIImplBase::isLegalICmpImmediate`: as above.
+    fn is_legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `WebAssemblyTTIImpl::getUnrollingPreferences`: partial and runtime
     /// unrolling to 30, unless the loop calls something lowered to a call.
     fn get_unrolling_preferences(
