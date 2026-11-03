@@ -393,6 +393,8 @@ fn a_symbol_address_made_again_after_a_call_once_is_made_again_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let made = listing.lines().filter(|line| line.contains("offset a")).count();
     assert_eq!(made, 2, "{listing}");
+}
+
 /// A `zeroext` argument compared for (in)equality with a constant is compared
 /// in the register it arrived in: the pin's `combineSetCC` turns
 /// `cmpeq(trunc(x), C)` into `cmpeq(x, C)` where the upper bits of `x` are zero.
