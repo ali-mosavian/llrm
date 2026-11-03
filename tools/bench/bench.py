@@ -316,9 +316,10 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
 
 def code_fields(obj: Path) -> dict:
     """The object's code bytes without alignment padding, the padding apart (`align_bytes`, reported not gated), and why the padding could
-    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`)."""
+    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`). `lib_bytes`, reported not gated, is the
+    standard library's functions in the object, which `code_bytes` leaves out; absent where the object has none (C's I/O is extern)."""
     size = sizes.code_size(obj)
-    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {})}
+    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {}), **({"lib_bytes": size.library} if size.library else {})}
 
 
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
