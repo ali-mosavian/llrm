@@ -83,6 +83,14 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
         x87_stack_slots: Some(8),
+        // flat `[reg+disp8]` forms: DD /2 and D9 EE; C7 /0 disp8 imm32 has no 66h
+        x87_zero_store: Some(llrm_mir::target::X87ZeroStore {
+            fldz: 2,
+            fst_qword: 3,
+            fstp: 2,
+            store_imm32: 7,
+            dword_prefixed: false,
+        }),
         speed_milliclocks_per_byte: per_byte,
         inline_size_guard_at_size: true,
         price_fills: true,

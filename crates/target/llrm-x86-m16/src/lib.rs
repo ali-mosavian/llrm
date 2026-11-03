@@ -621,6 +621,7 @@ mod tuning_tests {
                 unroll_max_percent_threshold_boost: None,
                 unroll_partial_threshold: None,
                 x87_stack_slots: None,
+                x87_zero_store: None,
                 unswitch_threshold: None,
                 inline_threshold: None,
                 split_merged_conditions: false,

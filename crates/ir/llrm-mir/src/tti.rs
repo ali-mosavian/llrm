@@ -481,6 +481,12 @@ pub trait Tti {
         None
     }
 
+    /// The bytes of the two ways to clear a double where floats live on the x87
+    /// stack; none: it is not a way.
+    fn x87_zero_store(&self) -> Option<crate::target::X87ZeroStore> {
+        None
+    }
+
     /// The target's `PartialThreshold` (its tuning table); none: the pass's
     /// own.
     fn unroll_partial_threshold_override(&self) -> Option<u32> {

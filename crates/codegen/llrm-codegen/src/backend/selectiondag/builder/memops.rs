@@ -640,11 +640,11 @@ impl Builder<'_> {
         opt_size: bool,
         filled: bool,
     ) -> Option<SDValue> {
-        const FLDZ: u64 = 2;
-        const FST_QWORD: u64 = 3;
-        const FSTP: u64 = 2;
-        if self.target.dag.pointer.size_in_bits() != 16
-            || self.target.tuning.x87_stack_slots.is_none()
+        let Some(bytes) = self.target.tuning.x87_zero_store.or_else(|| self.target.tti.as_ref().and_then(|tti| tti.0.x87_zero_store())) else {
+            return None;
+        };
+        // Floats live on the x87 stack (no SSE2 in the function's features).
+        if !self.target.tti.as_ref().is_some_and(|tti| tti.0.x87_stack_slots().is_some())
             || self.volatile_memory
             || length == 0
             || length % 8 != 0
@@ -652,11 +652,11 @@ impl Builder<'_> {
             return None;
         }
         let (dwords, cells) = (length / 4, length / 8);
-        let x87 = FLDZ + cells * FST_QWORD + FSTP;
+        let x87 = bytes.fldz + cells * bytes.fst_qword + bytes.fstp;
         // Never over a fill: its price here (`FILL_BYTES`) cannot see the setup
         // that neighbouring fills share, and fpbench/nbody_single -Os grew 2 B
         // taking the `fst`s over two adjacent ones.
-        let ints = dwords * 8;
+        let ints = dwords * bytes.store_imm32;
         // Nor over a `rep stos`: it takes the clear past the backend's inline
         // stores, and its clocks per byte are the `fst`s' (ring nib -O2: 2 KB
         // of `fst`, +2017 B for -17 clocks).
@@ -670,7 +670,8 @@ impl Builder<'_> {
         }
         if !opt_size {
             let trade = self.target.size_trade?;
-            let int_clocks = (dwords * (trade.store + trade.prefix) as u64) as i64;
+            let prefix = if bytes.dword_prefixed { trade.prefix } else { 0 };
+            let int_clocks = (dwords * (trade.store + prefix) as u64) as i64;
             let x87_clocks = trade.float_load + cells as i64 * trade.float_store + trade.float_release;
             if (ints - x87) as i64 * trade.milliclocks_per_byte < (x87_clocks - int_clocks) * 1000 {
                 return None;

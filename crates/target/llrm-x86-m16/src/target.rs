@@ -304,6 +304,13 @@ impl Machine for Dos {
             unroll_threshold: Some(0),
             unroll_max_percent_threshold_boost: Some(100),
             x87_stack_slots: Some(8),
+            x87_zero_store: Some(llrm_mir::target::X87ZeroStore {
+                fldz: 2,
+                fst_qword: 3,
+                fstp: 2,
+                store_imm32: 8,
+                dword_prefixed: true,
+            }),
             // DEVIATE: the same bar for a partial unroll: the O3 unroll-and-jam
             // (partial and runtime on) copied matmul's outer body, 455 code
             // bytes against 297, past Borland C's 298.

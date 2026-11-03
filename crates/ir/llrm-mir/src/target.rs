@@ -6,6 +6,20 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// The bytes of the two ways to clear a double: dword immediates and
+/// `fldz` with `fst`s (flat `[reg+disp8]`; real mode adds the 66h prefix to the
+/// dword store and its immediate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct X87ZeroStore {
+    pub fldz: u64,
+    pub fst_qword: u64,
+    pub fstp: u64,
+    /// `mov dword ptr [m], imm32`.
+    pub store_imm32: u64,
+    /// The dword store carries the operand-size prefix (its clocks add `prefix`).
+    pub dword_prefixed: bool,
+}
+
 /// The tuning limits of a target: one default (the pin's value, which every
 /// target without an entry takes) and the overrides a target description
 /// states. The names are the pin's `TargetLoweringBase` fields.
@@ -49,6 +63,9 @@ pub struct Tuning {
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
     pub x87_stack_slots: Option<u32>,
+    /// Where floats live on the x87 stack, how a zero fill may be stored as
+    /// `fldz` and `fst`s; none: it is not.
+    pub x87_zero_store: Option<X87ZeroStore>,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -87,6 +104,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
         x87_stack_slots: None,
+        x87_zero_store: None,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,

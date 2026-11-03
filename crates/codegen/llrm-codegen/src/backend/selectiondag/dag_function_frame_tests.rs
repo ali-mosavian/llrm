@@ -1200,6 +1200,54 @@ entry:
         .collect()
 }
 
+/// The ops of a zero `memset` of `length` bytes at m32 (flat, i486).
+fn memset_ops_m32(
+    length: u32,
+    size: bool,
+) -> Vec<String> {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 8
+  call void @llvm.memset.p0.i32(ptr %a, i8 0, i32 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = size;
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| format!("{:?}:{}", w.op, w.name.clone().unwrap_or_default()))
+        .collect()
+}
+
+/// nbody -Os at m32: a 16-byte zero clear of two doubles was four dword
+/// immediate stores (28 B, nothing on the x87 stack to say it was cheaper)
+/// where `fldz; fst; fstp` is 10; the m16 rule did not reach flat code.
+#[test]
+fn at_m32_os_a_zero_clear_of_doubles_is_x87_stores_not_dword_stores() {
+    let ops = memset_ops_m32(16, true);
+    assert_eq!(ops[..2], ["FloatLoad:fldz", "FloatStore:fst"], "{ops:?}");
+    assert!(!ops.iter().any(|o| o.starts_with("Fill") || o.starts_with("Store")), "{ops:?}");
+}
+
+/// At speed the four `mov [m], 0` (4 clocks) keep their place over `fldz`,
+/// two stores and the release (20 B saved are 6 clocks at 0.312 a byte).
+#[test]
+fn at_m32_speed_a_zero_clear_of_doubles_stays_dword_stores() {
+    let ops = memset_ops_m32(16, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
+}
+
 /// nbody O2/Os at m16 grew 100 B: each 16-byte zero clear of two doubles was
 /// four dword immediate stores (32 B) where `fldz; fst; fst` is 8.
 #[test]

@@ -576,6 +576,10 @@ impl Tti for X86 {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
 
+    fn x87_zero_store(&self) -> Option<llrm_mir::target::X87ZeroStore> {
+        self.tuning.x87_zero_store.filter(|_| !self.sse2)
+    }
+
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
     }
