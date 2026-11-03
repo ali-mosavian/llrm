@@ -727,6 +727,17 @@ fn a_long_long_in_the_argument_registers_is_allocated() {
     assert!(out.contains("ret"), "{out}");
 }
 
+/// digits moved the quotient from `de` to `hl` for the next trip with
+/// `ld l, e` / `ld h, d` at the end of a block: the copy's source was dead (the
+/// loop head loads `de` first), but the block ended before anything said so.
+/// `ex de, hl` is one byte for two.
+#[test]
+fn a_pair_copy_at_a_blocks_end_is_an_exchange_when_the_source_is_dead_past_it() {
+    let ir = include_str!("kernels/ir/digits.ll");
+    let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ex de, hl") && !out.contains("ld l, e"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
