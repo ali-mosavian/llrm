@@ -585,7 +585,14 @@ impl Tti for X86 {
     }
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        self.real_mode.as_ref()?.recursive_inlining
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
+    }
+
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_edge_growth
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
@@ -1014,9 +1021,13 @@ impl Tti for X86 {
         if self.quad { 64 } else { 32 }
     }
 
-    /// `lea` forms `base + index + displacement` in one instruction.
-    fn address_form_adds_offsets(&self) -> bool {
-        true
+    /// `lea` forms `base + index + displacement` in one instruction, from 16
+    /// bits up: there is no 8-bit `lea`.
+    fn address_form_adds_offsets(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits >= 16
     }
 
     /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model

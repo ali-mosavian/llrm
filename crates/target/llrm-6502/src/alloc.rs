@@ -274,6 +274,14 @@ impl<const STACK: bool> Target for Mos<STACK> {
         inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
     }
 
+    fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        match inst.kind {
+            Kind::Op("PACK") => Some((0, vec![(1, 0, 1), (2, 1, 1)])),
+            Kind::Op("UNPACK") => Some((2, vec![(0, 0, 1), (1, 1, 1)])),
+            _ => None,
+        }
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
@@ -2456,6 +2464,23 @@ fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
     odds
 }
 
+/// `labels` with a label for each block the folding added, numbered past the
+/// source's.
+fn labels_with_new_blocks(
+    labels: &[Vec<String>],
+    function: &MFunction<Class>,
+) -> Vec<Vec<String>> {
+    let mut all = labels.to_vec();
+    for block in &function.blocks {
+        let id = block.id as usize;
+        if id >= all.len() {
+            all.resize(id + 1, Vec::new());
+            all[id].push(format!("{}__tm{id}", function.name));
+        }
+    }
+    all
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
@@ -2516,6 +2541,8 @@ fn emit_with<const STACK: bool>(
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
+    // tail merging splits blocks: a block it makes has no label of the source's
+    let labels = &labels_with_new_blocks(labels, &function);
     let moved = place && {
         let odds = loop_odds(&function);
         llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)

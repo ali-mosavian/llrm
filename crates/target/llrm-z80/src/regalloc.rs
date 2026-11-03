@@ -47,10 +47,11 @@ impl Z80Registers {
 }
 
 thread_local! {
-    /// Set while a function is allocated again after the first allocation
-    /// failed: the copies from the argument registers are left unjoined
-    /// (`Target::joins_pinned_copies`).
-    pub static UNJOINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function is allocated a second time, after the first
+    /// allocation failed or to price the other choice: whether the copies from
+    /// the argument registers are left unjoined, instead of what the
+    /// convention says (`Target::joins_pinned_copies`).
+    pub static UNJOINED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 impl Target for Z80Registers {
@@ -60,7 +61,7 @@ impl Target for Z80Registers {
     /// convention states whether the z80 leaves them
     /// (`pinned_copies_unjoined`).
     fn joins_pinned_copies() -> bool {
-        !(crate::abi::z80().pinned_copies_unjoined || UNJOINED.with(std::cell::Cell::get))
+        !UNJOINED.with(std::cell::Cell::get).unwrap_or(crate::abi::z80().pinned_copies_unjoined)
     }
 
     type Class = Class;
@@ -114,6 +115,10 @@ impl Target for Z80Registers {
         index: usize,
     ) -> Option<Class> {
         crate::mfunc::operand_class(name, index)
+    }
+
+    fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
     fn read_part(

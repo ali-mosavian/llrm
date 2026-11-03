@@ -59,3 +59,16 @@ fn defined_variables_are_written_as_data() {
         assert!(text.contains(line), "{line}: {text}");
     }
 }
+
+/// fletcher -O2 packed its sum bytes into a register that was not the return
+/// pair, then moved them there: 25 instructions, a `ld e, c` before `ret`.
+#[test]
+fn a_pair_built_from_two_bytes_and_returned_has_its_bytes_in_the_return_pair() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let out = std::env::temp_dir().join("llrm-z80-llc-fletcher.s");
+    let done = llc(&["-S", "-O2", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/fletcher.ll")]);
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let text = std::fs::read_to_string(&out).expect("the output file");
+    let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
+    assert!(instructions <= 24, "{instructions} instructions:\n{text}");
+}

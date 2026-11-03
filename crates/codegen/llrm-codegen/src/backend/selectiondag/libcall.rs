@@ -134,10 +134,10 @@ pub fn lib_call(
 }
 
 /// `makeLibCall` for a C routine: `name` called with `args`, each placed where
-/// `convention` (the routine's own, else the target's native one) puts an integer of its width, and a result
-/// of type `ret` read from where that convention leaves it (a pair of
-/// registers, low first, is a `BuildPair`). `None` where an argument needs
-/// several registers.
+/// `convention` (the routine's own, else the target's native one) puts an
+/// integer of its width, and a result of type `ret` read from where that
+/// convention leaves it (a pair of registers, low first, is a `BuildPair`).
+/// `None` where an argument needs several registers.
 pub fn c_lib_call(
     dag: &mut SelectionDAG,
     env: &CallEnv<'_>,
@@ -154,7 +154,10 @@ pub fn c_lib_call(
         .iter()
         .map(|&arg| {
             let bytes = i64::from(dag.value_type(arg).size_in_bits() / 8);
-            native.kind(llrm_mir::target::Argument { bytes, integer: true, pointer: false, floating: false, memory: false }, slot)
+            native.kind(
+                llrm_mir::target::Argument { bytes, integer: true, pointer: false, floating: false, memory: false },
+                slot,
+            )
         })
         .collect();
     let placement = native.place(&kinds);
@@ -166,11 +169,13 @@ pub fn c_lib_call(
                 places.push((arg, Place::Register(env.arch.register_named(&names[0]))))
             }
             Where::Registers(names) if names.len() == 2 => {
-                // `getCopyToParts`: the low half, then the high, each in its register.
+                // `getCopyToParts`: the low half, then the high, each in its
+                // register.
                 let half = EVT::integer(dag.value_type(arg).size_in_bits() / 2);
                 let amount = dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
                 let high = dag.get_node(ISD::Srl, dag.value_type(arg), &[arg, amount]);
-                let (low, high) = (dag.get_node(ISD::Truncate, half, &[arg]), dag.get_node(ISD::Truncate, half, &[high]));
+                let (low, high) =
+                    (dag.get_node(ISD::Truncate, half, &[arg]), dag.get_node(ISD::Truncate, half, &[high]));
                 places.push((low, Place::Register(env.arch.register_named(&names[0]))));
                 places.push((high, Place::Register(env.arch.register_named(&names[1]))));
             }

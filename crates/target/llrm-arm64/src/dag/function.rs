@@ -173,7 +173,23 @@ pub fn select_function_in(
     };
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
+    // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
+    // than the multiply-high sequence. DEVIATE SD534 (exit: none, arm64 is
+    // strict on bytes): the pin answers `minsize` only
+    // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
+    // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions
+    // against 7).
+    let opt_for_size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
     let target = builder_target(platform)
+        .with_int_div_cheap(opt_for_size)
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
@@ -192,15 +208,6 @@ pub fn select_function_in(
     // reads what the blocks before it knew of a register. The blocks a
     // lowering makes (the case blocks of a split `br (or a, b)`) follow the
     // block that made them in the layout.
-    let opt_for_size = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
     let mut work = Vec::new();
     for &block in function.layout() {
         let mut built = build_block(module, function, layout, &target, &Aarch64Arch, &convention, &mut info, block)

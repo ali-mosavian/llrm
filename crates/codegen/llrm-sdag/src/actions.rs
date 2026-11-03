@@ -119,7 +119,8 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
-    /// The object spelling of a routine's name where the convention decorates it (`___addsf3@3`).
+    /// The object spelling of a routine's name where the convention decorates
+    /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
@@ -482,11 +483,7 @@ impl TargetLowering {
         // The x87 lowerings of a compare, a select and an extension have no
         // registers to work in: the type legalizer softens them first.
         t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
-        t.set_ops(
-            &[FpToSInt, FpToUInt, SIntToFp, UIntToFp],
-            &[MVT::I8, MVT::I16, MVT::I32, MVT::I64],
-            Action::Expand,
-        );
+        t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
         // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
         for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
             t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
@@ -533,7 +530,13 @@ impl TargetLowering {
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Expand);
             t.set_ops(&[CtTz], &[MVT::I128], Expand);
         } else {
-            t.set_ops(&[CtPop, Abs], &words, Custom);
+            // DEVIATE SD533 (exit: NEON `cnt` + `addv` when vector MIR lands):
+            // the pin's `LowerCTPOP` is `Custom` (v8i8 `cnt`, `uaddlv`); with
+            // no vector MIR the population count is the scalar
+            // bit-twiddle (`expandCTPOP`), so that the node is
+            // expanded, not refused.
+            t.set_ops(&[CtPop], &words, Expand);
+            t.set_ops(&[Abs], &words, Custom);
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Custom);
             t.set_ops(&[Parity], &[MVT::I64], Custom);
         }

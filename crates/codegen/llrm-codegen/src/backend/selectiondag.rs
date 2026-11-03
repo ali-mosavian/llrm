@@ -144,11 +144,13 @@ pub mod libcall;
 pub mod live_out;
 pub mod logic_setcc;
 mod match_rotate;
+pub mod narrow_divrem;
 pub mod opcodes;
 mod reassociate;
 pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
+pub mod setcc_extreme;
 pub mod switchcg;
 pub mod target_calling;
 pub mod x86_carry;
@@ -182,13 +184,13 @@ mod dag_function_flags_tests;
 #[cfg(test)]
 mod dag_function_float_tests;
 #[cfg(test)]
-mod dag_function_soft_float_tests;
-#[cfg(test)]
 mod dag_function_frame_tests;
 #[cfg(test)]
 mod dag_function_m64_tests;
 #[cfg(test)]
 mod dag_function_odds_tests;
+#[cfg(test)]
+mod dag_function_soft_float_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]

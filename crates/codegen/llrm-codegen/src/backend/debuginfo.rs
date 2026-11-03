@@ -1277,6 +1277,7 @@ pub fn laid_out(
             ranges: vec![model::Range { section, offset: start, length: end - start }],
             body: Some(body),
             far: procedure.far,
+            frame_base: None,
             module: described.module,
             variables,
             blocks,

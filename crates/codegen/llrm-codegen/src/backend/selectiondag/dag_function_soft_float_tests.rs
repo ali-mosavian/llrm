@@ -21,8 +21,13 @@ fn a_soft_float_add_is_a_call_to_addsf3_and_no_x87_op() {
     let module = crate::testing::module(FLOAT_ADD).expect("parses");
     let cpu = crate::backend::cpu::profile("386").expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
     assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
     let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
     assert_eq!(callees, ["__addsf3"], "{names:?}");
@@ -46,8 +51,13 @@ fn a_soft_float_constant_and_bitcast_are_integers() {
     let module = crate::testing::module(FLOAT_CONSTANT).expect("parses");
     let cpu = crate::backend::cpu::profile("386").expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
     assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
     let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
     assert_eq!(callees, ["__mulsf3"], "{names:?}");
@@ -69,8 +79,13 @@ fn a_soft_float_function_takes_and_returns_integers() {
     let module = crate::testing::module(FLOAT_ARGS_AND_RESULT).expect("parses");
     let cpu = crate::backend::cpu::profile("386").expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
     assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
     let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
     assert_eq!(callees, ["__addsf3"], "{names:?}");
@@ -93,8 +108,13 @@ fn a_soft_float_call_passes_and_takes_integers() {
     let module = crate::testing::module(FLOAT_CALL).expect("parses");
     let cpu = crate::backend::cpu::profile("386").expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
     assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
     assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["__addsf3", "g"], "{names:?}");
 }
@@ -133,11 +153,20 @@ fn a_soft_float_compare_calls_the_routine_that_answers_it() {
     assert_eq!(compare_calls("ueq"), ["__eqsf2", "__unordsf2"]);
 }
 
-fn calls_of(body: &str, params: &str, ret: &str) -> Vec<String> {
+fn calls_of(
+    body: &str,
+    params: &str,
+    ret: &str,
+) -> Vec<String> {
     calls_of_cc("", body, params, ret)
 }
 
-fn calls_of_cc(cc: &str, body: &str, params: &str, ret: &str) -> Vec<String> {
+fn calls_of_cc(
+    cc: &str,
+    body: &str,
+    params: &str,
+    ret: &str,
+) -> Vec<String> {
     let declare = if body.contains("llvm.fabs") { "declare float @llvm.fabs.f32(float)\n" } else { "" };
     let text = format!(
         "target datalayout = \"@m16-datalayout@\"
@@ -150,8 +179,13 @@ entry:
     let module = crate::testing::module(&text).expect("parses");
     let cpu = crate::backend::cpu::profile("386").expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{body}: {}", e.0));
-    let names: Vec<String> =
-        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
     assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "{body}: an x87 op: {names:?}");
     done.calls.values().cloned().collect()
 }
@@ -168,17 +202,17 @@ fn a_soft_float_conversion_calls_its_routine_and_the_rest_call_nothing() {
     assert_eq!(calls_of("%r = fptoui float %a to i32\nret i32 %r", "float %a", "i32"), ["__fixunssfsi"]);
     assert!(calls_of("%r = fneg float %a\nret float %r", "float %a", "float").is_empty());
     assert!(calls_of("%r = call float @llvm.fabs.f32(float %a)\nret float %r", "float %a", "float").is_empty());
-    assert!(calls_of("%r = select i1 %c, float %a, float %b\nret float %r", "i1 %c, float %a, float %b", "float").is_empty());
+    assert!(
+        calls_of("%r = select i1 %c, float %a, float %b\nret float %r", "i1 %c, float %a, float %b", "float")
+            .is_empty()
+    );
 }
 
 /// A `double` is an `i64` of the same bits: it takes two registers in a call,
 /// and arithmetic on it calls the `df3` routines.
 #[test]
 fn a_soft_double_is_two_registers_and_calls_the_df3_routines() {
-    assert_eq!(
-        calls_of("%r = fadd double %a, %b\nret double %r", "double %a, double %b", "double"),
-        ["__adddf3"]
-    );
+    assert_eq!(calls_of("%r = fadd double %a, %b\nret double %r", "double %a, double %b", "double"), ["__adddf3"]);
     assert_eq!(
         calls_of("%c = fcmp olt double %a, %b\n%r = zext i1 %c to i32\nret i32 %r", "double %a, double %b", "i32"),
         ["__ltdf2"]
@@ -247,7 +281,8 @@ entry:
     let cpu = crate::backend::cpu::profile("386").expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call"))).expect("a call");
+    let call =
+        insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call"))).expect("a call");
     assert_eq!(call.delivers.iter().map(|(held, _)| format!("{held:?}")).collect::<Vec<_>>().len(), 1);
     assert!(format!("{:?}", call.delivers).contains("width: 2"), "{:?}", call.delivers);
 }
@@ -263,7 +298,12 @@ fn a_soft_float_call_places_arguments_by_the_routines_convention() {
     let required = |libcalls: &[(String, u32, String)]| -> usize {
         let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, libcalls).unwrap_or_else(|e| panic!("{}", e.0));
         let insns = done.body.insns();
-        insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call"))).expect("a call").requires.len()
+        insns
+            .iter()
+            .find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call")))
+            .expect("a call")
+            .requires
+            .len()
     };
     let native = required(&[]);
     let stack = required(&[("__addsf3".to_owned(), 0, "_x".to_owned())]);
