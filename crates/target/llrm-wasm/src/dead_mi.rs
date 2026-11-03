@@ -1,11 +1,16 @@
 //! `DeadMachineInstructionElim`
-//! ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/DeadMachineInstructionElim.cpp)):
+//! ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/DeadMachineInstructionElim.cpp)):
 //! an instruction nothing reads and that has no other effect is removed,
 //! bottom up so a chain of them goes in one sweep.
 //!
 //! The pin runs it before `MachineLICM` and again after the peephole. Here the
 //! first run follows `fix_br_table_defaults`, which leaves the guard's check
 //! with no reader; it was kept as an `i32.gt_u` and a `drop`.
+//!
+//! DEVIATE W24: a copy for the wasm MIR. `backend/deadmi.rs` of llrm-codegen
+//! is the shared translation, on `LirBody`; the wasm passes (`machine_sink`,
+//! `machine_cse`, `machine_licm`) work on their own MIR as well. Exit: with
+//! them, when wasm takes the shared body (S4), no later than 2026-11-20.
 //!
 //! # See also
 //! `DeadMachineInstructionElimImpl::{isDead, eliminateDeadMI}`, pin
