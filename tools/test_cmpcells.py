@@ -6,9 +6,9 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import cmpcells  # noqa: E402
 
-BASE = {"c O2": [100.0, 1000.0, 50.0]}
-NEW = {"c O2": [100.0, 1100.0, 50.0]}
-CLK = {"c O2": [100.0, 1000.0, 60.0]}
+BASE = {"c O2": [100.0, 100000.0, 500.0]}
+NEW = {"c O2": [100.0, 110000.0, 500.0]}
+CLK = {"c O2": [100.0, 100000.0, 600.0]}
 
 
 def old_awk(base, new):
@@ -27,5 +27,11 @@ def test_clocks_only_regression_is_flagged():
 
 
 def test_equal_and_better_are_not_flagged():
-    assert cmpcells.worse(BASE, {"c O2": [99.0, 900.0, 49.0]}) == []
+    assert cmpcells.worse(BASE, {"c O2": [99.0, 90000.0, 490.0]}) == []
     assert cmpcells.worse(BASE, BASE) == []
+
+
+def test_estimator_noise_is_not_flagged():
+    # +30 instructions of 100000 and a 40 ms run that doubles: both are noise
+    assert cmpcells.worse(BASE, {"c O2": [100.0, 100030.0, 500.0]}) == []
+    assert cmpcells.worse({"c": [10.0, 9000.0, 1.0]}, {"c": [10.0, 9000.0, 43.0]}) == []
