@@ -220,6 +220,16 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with a signed divide or remainder of operands that fit the
+    /// legal type `narrow` made at that type ([`super::narrow_divrem`]).
+    pub fn with_narrow_divrem(
+        mut self,
+        narrow: EVT,
+    ) -> BuilderTarget {
+        self.dag.narrow_divrem = Some(narrow);
+        self
+    }
+
     /// This target with divides by constants kept as divides (`isIntDivCheap`).
     pub fn with_int_div_cheap(
         mut self,

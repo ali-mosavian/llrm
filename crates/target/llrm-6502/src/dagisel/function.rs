@@ -57,6 +57,7 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         ..BuilderTarget::m16()
     }
+    .with_narrow_divrem(EVT::I16)
 }
 
 /// One block, selected and scheduled.

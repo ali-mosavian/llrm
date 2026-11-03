@@ -131,6 +131,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
             return Some(self.dag.get_node(ISD::UDiv, vt, &[n0, n1]));
         }
+        if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
+        }
         self.visit_sdiv_like(n0, n1, node)
     }
 
@@ -434,6 +439,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if signed {
             if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
                 return Some(self.dag.get_node(ISD::URem, vt, &[n0, n1]));
+            }
+            if let Some(narrow) = self.dag.config().narrow_divrem
+                && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+            {
+                return Some(narrowed);
             }
         } else if self.dag.constant(n1).is_some_and(|c| c.is_power_of_two()) {
             let ones = self.dag.get_all_ones_constant(vt);
