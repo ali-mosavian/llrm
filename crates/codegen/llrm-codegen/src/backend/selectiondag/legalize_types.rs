@@ -1726,10 +1726,14 @@ impl<'a> TypeLegalizer<'a> {
                 if self.tli.types.type_action(self.dag.value_type(self.dag.operand(value, 0)))
                     == TypeAction::SoftenFloat =>
             {
-                // `ExpandIntRes_FP_TO_XINT` over a softened operand: the `di`
-                // routine, its two registers the halves.
-                let name =
-                    self.fp_to_xint_name(op == ISD::FpToSInt, true, self.dag.value_type(self.dag.operand(value, 0)));
+                // `ExpandIntRes_FP_TO_XINT` over a softened operand: the
+                // routine of the original result type, its registers the
+                // halves.
+                let name = self.fp_to_xint_name(
+                    op == ISD::FpToSInt,
+                    vt.size_in_bits() > 32,
+                    self.dag.value_type(self.dag.operand(value, 0)),
+                );
                 let arg = self.softened_float(self.dag.operand(value, 0));
                 let call = self.soft_c_call(name, &[arg], vt, op, vt)?;
                 self.split_integer(call, half)
