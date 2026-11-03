@@ -342,10 +342,13 @@ pub(crate) struct Accessed {
 /// constant-length `memset`/`memcpy`/`memmove`; None (the whole pointee) for
 /// any other use, an interposable definition or a parameter that is not used.
 ///
-/// DEVIATE I3 (no exit): LLVM states only the must-write bytes
-/// (`inferInitializes`, FunctionAttrs.cpp:1118); the may-access ranges give
-/// `Summary` the field-level footprint of a call that the attribute summaries
-/// (`memory(argmem)`) lose.
+/// DEVIATE I3 (exit 2026-11-30: ask upstream or drop): LLVM states only the
+/// must-write bytes (`inferInitializes`, FunctionAttrs.cpp:1118), and its
+/// `BasicAAResult::getModRefInfo(Call, Loc)` takes a pointer argument as
+/// `getForArgument`, the whole object when the callee is not sized
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp>,
+/// the "Refine the modref info for argument memory" loop). The may-access
+/// ranges narrow that loop to the bytes the callee body touches.
 pub(crate) fn accessed(
     module: &Module,
     layout: &DataLayout,
