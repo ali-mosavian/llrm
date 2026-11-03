@@ -281,9 +281,36 @@ fn a_symbol_address_kept_across_a_call_is_copied_to_the_argument_at_m64() {
 /// The same symbol address hoisted twice out of a loop stayed two registers
 /// (`mov r14, offset a+32; mov r15, offset a+32`), both callee-saved across the
 /// calls: the pin's MachineLICM makes it once (`EliminateCSE`). scroll m64 -O2
-/// was 56 bytes over the pin with five pushes instead of three.
+/// was 56 bytes over the pin with five pushes instead of three. Here the loop
+/// reads through the address, so hoisting it pays.
 #[test]
 fn a_symbol_address_hoisted_twice_out_of_a_loop_is_made_once_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h()\n\
+                define i32 @f(i64 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %s = phi i32 [ 0, %entry ], [ %t, %loop ]\n\
+                  %b1 = getelementptr i8, ptr @a, i64 160\n  %p1 = getelementptr i8, ptr %b1, i64 %i\n\
+                  %v1 = load volatile i8, ptr %p1\n  call void @h()\n\
+                  %b2 = getelementptr i8, ptr @a, i64 160\n  %p2 = getelementptr i8, ptr %b2, i64 %i\n\
+                  %v2 = load volatile i8, ptr %p2\n  %w1 = zext i8 %v1 to i32\n  %w2 = zext i8 %v2 to i32\n\
+                  %u = add i32 %w1, %w2\n  %t = add i32 %s, %u\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i32 %t\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let made = listing.lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 1, "{listing}");
+}
+
+/// A symbol address that every use in a call-bearing loop copies into an
+/// argument register was hoisted into a callee-saved register: its push and pop
+/// and a copy per use for the one instruction the address is made with in the
+/// loop. os_find m64 -O2 was 12 bytes over release/next, memory_expansion -Os 11,
+/// histo two instructions more.
+#[test]
+fn a_symbol_address_only_passed_to_calls_in_a_loop_is_made_in_the_loop_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @a = global [4096 x i8] zeroinitializer\n\
@@ -295,8 +322,32 @@ fn a_symbol_address_hoisted_twice_out_of_a_loop_is_made_once_at_m64() {
                 done:\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let made = listing.lines().filter(|line| line.contains("offset a")).count();
-    assert_eq!(made, 2, "{listing}");
+    assert!(!listing.lines().any(|line| line.trim().starts_with("push r1")), "{listing}");
+    let loop_start = listing.find("L0_2:").expect("the loop");
+    let made = listing[loop_start..].lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 4, "{listing}");
+}
+
+/// A constant used in a loop whose call keeps the caller-saved registers
+/// (a local function's known clobbers) is held in one of them: no callee-saved
+/// register, so hoisting costs nothing. div_constants_ulong m64 -Os made the
+/// divisor in the loop, 32 bytes over release/next.
+#[test]
+fn a_constant_across_a_call_that_keeps_a_caller_saved_register_is_made_before_the_loop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @s = internal global i64 1\n\
+                define internal i64 @next() noinline {\n  %v = load i64, ptr @s\n  %w = add i64 %v, 7\n  store i64 %w, ptr @s\n  ret i64 %w\n}\n\
+                define i64 @f(i64 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %acc = phi i64 [ 0, %entry ], [ %t, %loop ]\n\
+                  %x = call i64 @next()\n  %q = udiv i64 %x, %n\n  %r = urem i64 %x, 3\n  %t0 = add i64 %acc, %q\n  %t = add i64 %t0, %r\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i64 %t\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let loop_start = listing.find("L1_2:").expect("the loop");
+    let made = listing[loop_start..].lines().filter(|line| line.trim_end().ends_with(", 3")).count();
+    assert_eq!(made, 0, "{listing}");
 }
 
 /// A byte or word add that keeps its source live was a copy and a narrow add
