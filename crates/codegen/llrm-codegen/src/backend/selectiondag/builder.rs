@@ -90,6 +90,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The target description has no floating-point registers: the same as
+    /// `use-soft-float` on every function (`TypeSoftenFloat`).
+    pub soft_float: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
@@ -334,6 +337,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -358,6 +362,7 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
             legal_ints: vec![8, 16, 32, 64],
+            soft_float: false,
             ..BuilderTarget::m32()
         }
     }
@@ -373,6 +378,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -1951,6 +1957,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // Without floating-point registers a float is the integer of its width.
+        let vt = self.soft_float_integer(vt).unwrap_or(vt);
         // A float is one part, in a register of its own class: the target's
         // `accepts` says which.
         if vt.is_floating_point() {
@@ -1977,7 +1985,13 @@ impl Builder<'_> {
         value: SDValue,
         ext: Ext,
     ) -> Result<Vec<SDValue>, Refused> {
-        let vt = self.dag.value_type(value);
+        let mut value = value;
+        let mut vt = self.dag.value_type(value);
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyToParts` of a softened float: its bits as an integer.
+            vt = int;
+            value = self.dag.get_node(ISD::BitCast, vt, &[value]);
+        }
         let parts = self.calling_parts(vt)?;
         if parts.len() == 1 {
             let narrow = vt.size_in_bits() < parts[0].size_in_bits();
@@ -2000,6 +2014,11 @@ impl Builder<'_> {
         assert: Option<ISD>,
         pointer: bool,
     ) -> SDValue {
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyFromParts` of a softened float: the integer, bitcast.
+            let bits = self.join_from_calling(parts, int, None, false);
+            return self.dag.get_node(ISD::BitCast, vt, &[bits]);
+        }
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
                 return *one;
@@ -2642,7 +2661,7 @@ impl Builder<'_> {
 
     /// `useSoftFloat()` of the function being built.
     fn soft_float(&self) -> bool {
-        crate::backend::isel::soft_float(&self.function.attrs)
+        self.target.soft_float || crate::backend::isel::soft_float(&self.function.attrs)
     }
 
     fn visit_ret(
@@ -4098,6 +4117,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4223,6 +4243,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4329,6 +4350,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
