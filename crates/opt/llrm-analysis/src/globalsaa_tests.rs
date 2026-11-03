@@ -810,3 +810,17 @@ b0:
 ";
     assert!(forged_over_a("-18432", runtime).tracked(GlobalId(0)));
 }
+
+/// `read_by` hashed the tracked set, the named globals and the entries of the
+/// whole module on every call, one per body asking (2.4G of 28G instructions at
+/// 1200 functions): once per result.
+#[test]
+fn read_by_hashes_the_whole_result_once() {
+    let globals = super::Globals::default();
+    let before = super::base_hashes();
+    let first = globals.read_by(&std::collections::BTreeSet::new());
+    for _ in 0..5 {
+        assert_eq!(globals.read_by(&std::collections::BTreeSet::new()), first);
+    }
+    assert_eq!(super::base_hashes() - before, 1);
+}

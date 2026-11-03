@@ -92,6 +92,31 @@ use llrm_support::hash::IndexMap;
 
 use crate::memory::Unit;
 
+/// What `read_by` hashes of the whole result, made once: it reads the tracked
+/// set, the named ones and the entries, which grow with the module.
+#[derive(Clone, Debug, Default)]
+struct Base(std::cell::OnceCell<u64>);
+
+impl PartialEq for Base {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Base {}
+
+thread_local! {
+    static BASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed a whole `Globals` for `read_by`.
+pub fn base_hashes() -> usize {
+    BASES.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {
     tracked: BTreeSet<GlobalId>,
@@ -115,6 +140,7 @@ pub struct Globals {
     /// How many globals the module had: a function at or past it was added
     /// since (an ipa-cp copy), a body as LLVM's absent `FunctionInfo` is.
     known: u32,
+    base: Base,
 }
 
 impl Globals {
@@ -189,7 +215,15 @@ impl Globals {
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = llrm_mir::hash::Fx::default();
-        (&self.tracked, &self.named, &self.entries).hash(&mut hasher);
+        self.base
+            .0
+            .get_or_init(|| {
+                BASES.with(|made| made.set(made.get() + 1));
+                let mut whole = llrm_mir::hash::Fx::default();
+                (&self.tracked, &self.named, &self.entries).hash(&mut whole);
+                whole.finish()
+            })
+            .hash(&mut hasher);
         // By what each is, not by its id: a copy of a body is the body.
         let mut each: Vec<(bool, Option<&BTreeSet<GlobalId>>)> =
             ids.iter().map(|id| (self.bodies.contains(id), self.writes.get(id))).collect();
@@ -514,7 +548,7 @@ fn found_with(
         .map(|(id, _, _)| *id)
         .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
         .collect();
-    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries, known: module.globals.len() as u32 })
+    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries, known: module.globals.len() as u32, base: Base::default() })
 }
 
 /// The globals `module`'s initializers hold the address of. An initializer
