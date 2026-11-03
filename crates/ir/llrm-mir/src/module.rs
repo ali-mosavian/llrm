@@ -823,6 +823,14 @@ impl Function {
         self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
+    /// The operand slots naming the interned `constant`.
+    pub fn constant_users(
+        &self,
+        constant: crate::context::ConstantId,
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::Constant(constant.index() as u32))
+    }
+
     /// The operand slots naming `block`: terminators'.
     pub fn block_users(
         &self,

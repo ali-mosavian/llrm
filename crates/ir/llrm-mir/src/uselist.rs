@@ -50,6 +50,8 @@ pub struct UseLists {
     heads: Vec<u32>,
     block_heads: Vec<u32>,
     phi_heads: Vec<u32>,
+    /// Per interned constant, grown when a use of a later one is linked.
+    constant_heads: Vec<u32>,
     nodes: Vec<Node>,
     base: Vec<u32>,
     cap: Vec<u32>,
@@ -63,11 +65,12 @@ pub enum Held {
     /// The phis naming a block, kept apart as LLVM keeps a phi's incoming
     /// blocks apart from the block's uses.
     PhiBlock(u32),
+    /// The uses of an interned constant, as LLVM's `Constant` has a use list.
+    Constant(u32),
 }
 
 impl Held {
-    /// What `operand` of a phi (`phi`) or of another instruction names, none
-    /// for a constant.
+    /// What `operand` of a phi (`phi`) or of another instruction names.
     pub fn of(
         operand: crate::module::Operand,
         phi: bool,
@@ -76,7 +79,7 @@ impl Held {
             crate::module::Operand::Value(value) => Some(Held::Value(value.0)),
             crate::module::Operand::Block(block) if phi => Some(Held::PhiBlock(block.0)),
             crate::module::Operand::Block(block) => Some(Held::Block(block.0)),
-            crate::module::Operand::Constant(_) => None,
+            crate::module::Operand::Constant(constant) => Some(Held::Constant(constant.index() as u32)),
         }
     }
 }
@@ -199,6 +202,7 @@ impl UseLists {
             Held::Value(value) => self.heads[value as usize],
             Held::Block(block) => self.block_heads[block as usize],
             Held::PhiBlock(block) => self.phi_heads[block as usize],
+            Held::Constant(constant) => self.constant_heads.get(constant as usize).copied().unwrap_or(NIL),
         }
     }
 
@@ -210,6 +214,12 @@ impl UseLists {
             Held::Value(value) => &mut self.heads[value as usize],
             Held::Block(block) => &mut self.block_heads[block as usize],
             Held::PhiBlock(block) => &mut self.phi_heads[block as usize],
+            Held::Constant(constant) => {
+                if self.constant_heads.len() <= constant as usize {
+                    self.constant_heads.resize(constant as usize + 1, NIL);
+                }
+                &mut self.constant_heads[constant as usize]
+            }
         }
     }
 
