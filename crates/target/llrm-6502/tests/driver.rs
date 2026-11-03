@@ -1069,6 +1069,16 @@ fn a_double_crosses_a_block_as_four_words() {
     assembly(&module(body), &Request::new(Level::O2)).unwrap();
 }
 
+/// A float or double global initializer is its bits, little-endian: it stopped
+/// at "a global initializer that is not an integer, pointer, array or struct"
+/// (five corpus cells, e.g. int_compared_with_float).
+#[test]
+fn a_float_global_is_emitted_as_its_bits() {
+    let text = "@d = global double 1.5\n@f = global float 2.0\ndefine ptr @p() {\n  ret ptr @d\n}\ndefine ptr @q() {\n  ret ptr @f\n}";
+    let asm = assembly(&module(text), &Request::new(Level::O2)).unwrap();
+    assert!(asm.contains(".byte 0,0,0,0,0,0,248,63") && asm.contains(".byte 0,0,0,64"), "the bits of 1.5 and 2.0:\n{asm}");
+}
+
 /// A float add, a multiply, an int-to-float and a compare are calls of the
 /// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
 /// each stopped at "the target names no routine" or, for the compare, at a
