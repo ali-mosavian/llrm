@@ -149,44 +149,59 @@ fn cheaper(
 /// argument's pair for the whole of the value's range: a `long long` held in
 /// four argument registers has no room left to split (`greedy could not
 /// allocate`). The pin does not join them either (`canJoinPhys`).
+///
+/// Where the choice can allocate better, the other choices are allocated too
+/// and the cheaper by the loop's weighted clocks stays, bytes first at the
+/// size levels and clocks first otherwise: the argument copies joined or not
+/// (a constant kept in a register of its own, or not), and a byte wanted both
+/// in `a` and in a register of its own loaded through `a` or through `hl`.
 fn allocate(
     function: MFunction,
     name: &str,
     level: Level,
 ) -> Result<Allocated, String> {
     let has_loop = !Cfg::new(&function).loops().is_empty();
-    let with = |unjoined: Option<bool>, function: MFunction| {
+    let with = |unjoined: Option<bool>, strict: bool, function: MFunction| {
         crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
-        let done = allocate_once(function, name);
+        let done = allocate_once(function, name, strict);
         crate::regalloc::UNJOINED.with(|one| one.set(None));
         done
     };
-    match allocate_once(function.clone(), name) {
-        Ok(first) if has_loop => {
-            // the other choice for the argument copies can allocate a loop
-            // better (a constant kept in a register of its own, or not);
-            // the cheaper by the loop's weighted clocks stays, bytes first at
-            // the size levels and clocks first otherwise
-            let other = with(Some(!crate::abi::z80().pinned_copies_unjoined), function);
-            match (other, priced_in_loops(&first)) {
-                (Ok(other), Some(one)) => match priced_in_loops(&other) {
-                    Some(two) if cheaper(level, two, one) => Ok(other),
-                    _ => Ok(first),
-                },
-                _ => Ok(first),
+    match with(None, true, function.clone()) {
+        Ok((mut best, held)) => {
+            let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
+            let mut others = Vec::new();
+            if has_loop {
+                others.push((other_join, true));
             }
+            if held {
+                others.push((None, false));
+                if has_loop {
+                    others.push((other_join, false));
+                }
+            }
+            for (unjoined, strict) in others {
+                let Ok((other, _)) = with(unjoined, strict, function.clone()) else { continue };
+                if let (Some(now), Some(then)) = (priced_in_loops(&best), priced_in_loops(&other)) {
+                    if cheaper(level, then, now) {
+                        best = other;
+                    }
+                }
+            }
+            Ok(best)
         }
-        Ok(first) => Ok(first),
-        Err(first) => with(Some(true), function).map_err(|_| first),
+        Err(first) => with(Some(true), true, function).map(|(done, _)| done).map_err(|_| first),
     }
 }
 
+/// One allocation, and whether `strict` held a byte back from `a`.
 fn allocate_once(
     mut function: MFunction,
     name: &str,
-) -> Result<Allocated, String> {
+    strict: bool,
+) -> Result<(Allocated, bool), String> {
     two_address(&mut function);
-    read_bytes_through_their_pairs(&mut function);
+    let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
@@ -211,7 +226,7 @@ fn allocate_once(
     } else {
         spills_first(&mut function, &assignment);
     }
-    Ok((function, assignment, slots, reads))
+    Ok(((function, assignment, slots, reads), held))
 }
 
 /// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. :
@@ -307,7 +322,10 @@ pub fn use_the_shift_carry(function: &mut MFunction) {
 /// `hl` stays free for a pointer that has no other form (`cp (hl)`): scmp
 /// copied both its pointers into `hl` on every trip. The use in `a` is
 /// followed through copies, around loops.
-fn read_bytes_through_their_pairs(function: &mut MFunction) {
+fn read_bytes_through_their_pairs(
+    function: &mut MFunction,
+    strict: bool,
+) -> bool {
     let copy_of = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
         (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) => Some((*to, *from)),
         _ => None,
@@ -329,7 +347,10 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
         }
     }
     // a byte some instruction other than a copy reads from its own register
-    // is wanted there too: loaded in `a` it would be copied out again
+    // is wanted there too: loaded in `a` it would be copied out again. Which of
+    // the two is cheaper depends on the pressure on `hl`, so `strict` holds
+    // such a byte back and the caller tries both
+    let mut held = false;
     let read_elsewhere: std::collections::HashSet<u32> = function
         .blocks
         .iter()
@@ -352,7 +373,11 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
             else {
                 continue;
             };
-            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) || read_elsewhere.contains(byte) {
+            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) {
+                continue;
+            }
+            if strict && read_elsewhere.contains(byte) {
+                held = true;
                 continue;
             }
             let (Operand::Use(from), Operand::Def(to)) = (copy.operands[1].clone(), load.operands[0].clone()) else {
@@ -367,6 +392,7 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
             block.insts[at + 1] = out;
         }
     }
+    held
 }
 
 /// The pair `register` is, or is half of, if `push` and `pop` can move it: not

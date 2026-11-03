@@ -1,6 +1,6 @@
 //! IR to sdasz80 text through allocation and expansion.
 
-use llrm_z80::compile::{allocated, machine_function, text};
+use llrm_z80::compile::{allocated, lines, machine_function, text};
 use llrm_z80::driver::{Level, Request};
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
@@ -873,6 +873,18 @@ fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
     let ir = include_str!("kernels/ir/minmax.ll");
     let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
+}
+
+/// A byte wanted in `a` and in a register of its own was loaded through `hl`
+/// by a fixed rule, which lz4c -O2 paid for in pressure on `hl`: 443 B against
+/// 428 B when it is loaded through its pair. Both are allocated and the
+/// cheaper by weighted clocks stays.
+#[test]
+fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
+    let ir = include_str!("kernels/ir/lz4c.ll");
+    let out = lines(ir, "lz4c", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let (bytes, _) = llrm_z80::expand::price(&out);
+    assert!(bytes <= 435, "{bytes} B");
 }
 
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
