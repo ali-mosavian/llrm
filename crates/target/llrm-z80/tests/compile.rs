@@ -466,6 +466,18 @@ fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() 
     );
 }
 
+/// xs8's `x << 3` was `sla a` x3 (2 B / 8 T a bit) and its `x >> 5` `srl a` x5:
+/// 35 B / 737 T against SDCC's 26 B / 546 T. A byte shifted left in `a` is
+/// `add a, a`; a logical right shift by two or more, with the flags dead, is
+/// `rlca`/`rrca` the short way round and an `and` of the surviving bits.
+#[test]
+fn a_byte_shifted_in_a_is_doublings_and_a_rotate_with_a_mask() {
+    let ir = include_str!("kernels/ir/xs8.ll");
+    let out = text(ir, "xs8", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add a, a").count() >= 4 && out.matches("rlca").count() == 3, "{out}");
+    assert!(out.contains("and a, #7") && !out.contains("sla a") && !out.contains("srl a"), "{out}");
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.
