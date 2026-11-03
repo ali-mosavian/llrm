@@ -567,13 +567,40 @@ pub fn graph(
             succs[earlier].push(later);
         }
     }
-    Graph {
-        preds,
-        succs,
-        latencies,
-        weak_preds: vec![Vec::new(); n],
-        weak_succs: vec![Vec::new(); n],
-        topo: Topo::new(n),
+    Graph::new(preds, succs, latencies)
+}
+
+impl Graph {
+    /// A graph of `preds` (for each instruction, the earlier ones that must stay
+    /// before it, with `succs` their inverse and `latencies` the edge
+    /// latencies), no edge weak.
+    pub fn new(
+        preds: Vec<Vec<usize>>,
+        succs: Vec<Vec<usize>>,
+        latencies: Vec<Vec<u32>>,
+    ) -> Graph {
+        let n = preds.len();
+        Graph {
+            preds,
+            succs,
+            latencies,
+            weak_preds: vec![Vec::new(); n],
+            weak_succs: vec![Vec::new(); n],
+            topo: Topo::new(n),
+        }
+    }
+
+    /// A graph from the edges `preds` alone: no latency, no weak edge.
+    pub fn from_preds(preds: Vec<Vec<usize>>) -> Graph {
+        let n = preds.len();
+        let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (later, before) in preds.iter().enumerate() {
+            for &earlier in before {
+                succs[earlier].push(later);
+            }
+        }
+        let latencies = preds.iter().map(|before| vec![0; before.len()]).collect();
+        Graph::new(preds, succs, latencies)
     }
 }
 
@@ -854,7 +881,18 @@ pub fn bottom_up(
     graph: &Graph,
     tracking: Option<&Tracking>,
 ) -> Vec<usize> {
-    let n = insns.len();
+    let region = tracking.map(|_| Region::of(insns));
+    bottom_up_region(insns.len(), graph, tracking.zip(region.as_ref()), |node| format!("{:?}", insns[node].defines))
+}
+
+/// [`bottom_up`] over nodes known by their [`Region`] alone: what a target
+/// whose instructions are not `Insn` calls. `name` says a node in a trace.
+pub fn bottom_up_region(
+    n: usize,
+    graph: &Graph,
+    tracking: Option<(&Tracking, &Region)>,
+    name: impl Fn(usize) -> String,
+) -> Vec<usize> {
     let mut waiting: Vec<usize> = graph.succs.iter().map(Vec::len).collect();
     let mut available: Vec<usize> = (0..n).filter(|&node| waiting[node] == 0).collect();
     let mut placed = Vec::with_capacity(n);
@@ -862,9 +900,7 @@ pub fn bottom_up(
     // `RegionPressure` (program order) and `RegionCriticalPSets`.
     let mut region_max: Vec<u32> = Vec::new();
     let mut critical: Vec<PressureChange> = Vec::new();
-    let region = tracking.map(|_| Region::of(insns));
     let mut tracker = tracking
-        .zip(region.as_ref())
         .map(
             |(tracking, region)| {
                 let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
@@ -909,7 +945,7 @@ pub fn bottom_up(
         }
         let node = available.swap_remove(best);
         if trace() {
-            eprintln!("machinesched pick {node} {:?} {why} tracked={}", insns[node].defines, tracker.is_some());
+            eprintln!("machinesched pick {node} {} {why} tracked={}", name(node), tracker.is_some());
         }
         if let Some(tracker) = &mut tracker {
             tracker.place(node);

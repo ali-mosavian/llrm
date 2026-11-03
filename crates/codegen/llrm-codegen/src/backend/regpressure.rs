@@ -196,15 +196,22 @@ pub struct Region {
 
 impl Region {
     pub fn of(insns: &[Arc<Insn>]) -> Self {
+        Self::from_nodes(insns.iter().map(|one| (one.uses.as_slice(), one.defines.as_slice())))
+    }
+
+    /// A region of nodes given as the (values read, values written) of each,
+    /// in program order: the part of [`Region::of`] that does not depend on
+    /// the instruction type.
+    pub fn from_nodes<'a>(nodes: impl ExactSizeIterator<Item = (&'a [u32], &'a [u32])>) -> Self {
         let mut current: HashMap<u32, u32> = HashMap::default();
-        let (mut reads, mut writes) = (Vec::with_capacity(insns.len()), Vec::with_capacity(insns.len()));
-        for (node, one) in insns.iter().enumerate() {
-            let mut read: Vec<u32> = one.uses.clone();
+        let (mut reads, mut writes) = (Vec::with_capacity(nodes.len()), Vec::with_capacity(nodes.len()));
+        for (node, (uses, defines)) in nodes.enumerate() {
+            let mut read: Vec<u32> = uses.to_vec();
             read.sort_unstable();
             read.dedup();
             reads
                 .push(read.into_iter().map(|value| (value, current.get(&value).copied().unwrap_or(LIVE_IN))).collect());
-            let mut write: Vec<u32> = one.defines.clone();
+            let mut write: Vec<u32> = defines.to_vec();
             write.sort_unstable();
             write.dedup();
             for &value in &write {
