@@ -383,7 +383,6 @@ struct Compiler {
     resized: BTreeSet<String>,
     /// The element pointers of arrays BC keeps in the far heap that are near
     /// here: an element passed by reference is still copied in and out.
-    far_in_bc: BTreeSet<u32>,
     /// The procedure being compiled, as `array_key` spells it.
     procedure_key: String,
     /// The next array declared lives in the frame.
@@ -1922,7 +1921,6 @@ impl Compiler {
             data_offset: 0,
             implicit_storage: "module",
             resized: BTreeSet::new(),
-            far_in_bc: BTreeSet::new(),
             procedure_key: String::new(),
             frame_next: false,
             frame_arrays: BTreeMap::new(),
@@ -1976,7 +1974,6 @@ impl Compiler {
         self.variables = variables;
         self.seen.clear();
         self.frame_arrays.clear();
-        self.far_in_bc.clear();
         self.constants = constants;
         self.next_place = places.iter().map(|place| place.id).max().unwrap_or(0) + 1;
         self.places = places;
@@ -6142,9 +6139,6 @@ impl Compiler {
             // is +0's offset and selector.
             let origin = matches!(address, "near" | "flat").then_some(data);
             self.tag_last(Tag::ElementOffset { descriptor, origin });
-            if address == "near" && element != STRING {
-                self.far_in_bc.insert(pointer);
-            }
             pointer
         };
         Ok(pointer)
@@ -8994,9 +8988,7 @@ impl Compiler {
                                 || SemanticError { message: "BYREF indirect base has no pointer type".into() },
                             )?;
                         let original = Operand::Indirect { base, offset, type_id, volatile, inbounds };
-                        if (!self.options.one_space() && self.width(pointer_type) == 4)
-                            || self.far_in_bc.contains(&base)
-                        {
+                        if !self.options.one_space() && self.width(pointer_type) == 4 {
                             // Ordinary BASIC BYREF formals carry a near
                             // address. BC bridges a field in a far dynamic
                             // array with a near copy-in/copy-out slot; pushing

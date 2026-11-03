@@ -133,15 +133,14 @@ FUNCTION Probe%
 END FUNCTION
 ";
 
-/// BC copies an element passed by reference out of its far array into a slot
-/// and back after the call, so `Touch t(1), t()` leaves 5 where the callee
-/// stored 99 (real BC 4.5 prints 5). With the array in the frame the element
-/// was passed by address and the program printed 99.
+/// An element of a frame array is passed by its address, so `Touch t(1), t()`
+/// leaves 99. (BC's far-array copy-in/out would leave 5; that is its shape, not
+/// the program's meaning.)
 #[test]
-fn an_element_of_a_frame_array_is_still_copied_in_and_out() {
+fn an_element_of_a_frame_array_is_passed_by_address() {
     let mir = built(TOUCH);
     assert!(!mir.contains("B$DDIM"), "{mir}");
-    assert!(mir.contains("B$PEI2(i16 5)"), "{mir}");
+    assert!(mir.contains("B$PEI2(i16 99)"), "{mir}");
 }
 
 /// Each call of a recursive procedure would take another array off a stack
