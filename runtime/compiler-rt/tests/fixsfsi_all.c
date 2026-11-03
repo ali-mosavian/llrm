@@ -1,5 +1,5 @@
 /* __fixsfsi and __fixunssfsi over all 2^32 inputs against the host: truncation in range, saturation outside, 0 for NaN (and for negatives, unsigned).
- * cc -O2 -Iinclude tests/fixsfsi_all.c lib/fp/sf32_conv.c -o /tmp/fixsfsi_all && /tmp/fixsfsi_all */
+ * cc -O2 -Iinclude tests/fixsfsi_all.c lib/fp/sf32_conv.c -o fixsfsi_all && ./fixsfsi_all */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
