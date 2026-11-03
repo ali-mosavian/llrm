@@ -303,6 +303,13 @@ pub fn filled_with(
         ..if size { outer.target().size_costs() } else { outer.target().costs() }
     };
     let bytes = OperationCosts { memset_stores: stores, wide_fill: !size, ..outer.target().size_costs() };
+    // At -Os the bytes decide a loop of several fills, as far as the clocks it
+    // gives up are worth them at the target's rate (lru c -Os: 5 B for 84
+    // clocks, 17 a byte against 10).
+    let clock_costs = size
+        .then(|| outer.target().size_milliclocks_per_byte())
+        .filter(|rate| *rate > 0)
+        .map(|rate| (OperationCosts { memset_stores: stores, ..outer.target().costs() }, rate));
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
@@ -310,7 +317,7 @@ pub fn filled_with(
             let found = {
                 let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
-                _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
+                _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size, clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)))
             };
             if let Some(found) = found {
                 _filled(context, layout, declared, function, &found);
@@ -410,6 +417,7 @@ fn _fill(
     costs: &OperationCosts,
     bytes_costs: &OperationCosts,
     size: bool,
+    clocks: Option<(&OperationCosts, i64)>,
 ) -> Option<_Found> {
     let function = unit.function;
     let header = cfg::block(loop_.header);
@@ -579,6 +587,27 @@ fn _fill(
     // -O2, 408 -> 486).
     if (fills > 1 || merged) && !_pays(unit, callees, body, header, &proof, bytes_costs, true, moved, fills, filled) {
         return None;
+    }
+    // At -Os the fill's bytes must also be worth its clocks.
+    if let (true, Some((clk, rate)), Some((length, zero)), Some(count)) =
+        (size && (fills > 1 || merged), clocks, filled, proof.count.as_ref().and_then(ToPrimitive::to_i64))
+    {
+        let each = trip_clocks(unit.context, unit.layout, unit.function, callees, std::iter::once(&header).chain(body), clk);
+        let loop_bytes = trip_cost(
+            unit.context,
+            unit.layout,
+            unit.function,
+            callees,
+            std::iter::once(&header).chain(body),
+            bytes_costs,
+            true,
+        );
+        let extra_bytes: i64 = extras.iter().filter_map(|one| one.bytes.to_i64()).sum();
+        let cells = length + count * extra_bytes;
+        let fill = fills * clk.fill + cells * clk.fill_cell;
+        if !clocks_pay(loop_bytes - fills * bytes_costs.fill_with(zero), rate, fill, count * each) {
+            return None;
+        }
     }
     // Trips of a byte never wrap the index; wider cells need a promise.
     let modulus = BigInt::from(1) << width;

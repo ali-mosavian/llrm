@@ -1246,6 +1246,18 @@ fn a_fill_the_backend_makes_a_rep_stos_is_priced_with_its_value_load_and_prefixe
     assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
 }
 
+/// lru c -Os: the same loop was a `rep stosb` of 28, 5 B smaller and 84 clocks
+/// slower (17 a byte; the -Os rate is 10).
+#[test]
+fn at_os_a_fill_that_costs_more_clocks_than_its_bytes_are_worth_stays_a_loop() {
+    let mut module = parsed(&format!("{DOS}{ONE_OBJECT_TWO_STORES}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopIdioms { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
 const ZEROED_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer
 define void @f() {
 b0:
