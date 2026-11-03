@@ -169,6 +169,19 @@ pub trait SchedInfo {
     ) -> u32 {
         0
     }
+    /// The physical register an explicit result of `opcode` is, when its
+    /// register class holds only that one (the Z80's `outs Flags:$f`). The pin
+    /// writes such a result as an implicit def (`Defs = [EFLAGS]`), which
+    /// `CheckForPhysRegDependency` follows; an explicit one is a value, and a
+    /// flag writer scheduled between the compare and its branch went
+    /// unnoticed. None: every explicit result is a virtual register.
+    fn fixed_register_def(
+        &self,
+        _opcode: u32,
+        _result: usize,
+    ) -> Option<u16> {
+        None
+    }
     /// `TRI->regsOverlap`.
     fn regs_overlap(
         &self,
@@ -640,6 +653,12 @@ impl<'a> Graph<'a> {
                         self.sus[su].has_phys_reg_defs = true;
                     }
                 }
+                if let Some(op) = self.machine(n)
+                    && (0..self.info.num_defs(op).min(self.values(n).len()))
+                        .any(|i| self.info.fixed_register_def(op, i).is_some() && self.has_any_use_of_value(n, i))
+                {
+                    self.sus[su].has_phys_reg_defs = true;
+                }
                 for (at, operand) in self.ops(n).to_vec().into_iter().enumerate() {
                     let op_node = operand.node;
                     if is_passive(self.opcode(op_node)) {
@@ -656,7 +675,11 @@ impl<'a> Graph<'a> {
                     if is_chain && self.opcode(op_node) == ISD::TokenFactor {
                         latency = 0;
                     }
-                    let reg = if is_chain { None } else { self.phys_reg_dependency(operand, n, at) };
+                    let reg = if is_chain {
+                        None
+                    } else {
+                        self.phys_reg_dependency(operand, n, at).or_else(|| self.fixed_result_register(operand))
+                    };
                     let dep = Dep { su: op_su, kind: if is_chain { Kind::Barrier } else { Kind::Data }, latency, reg };
                     // Several register uses in one unit count as one: the
                     // definitions left are reduced to match.
@@ -666,6 +689,15 @@ impl<'a> Graph<'a> {
                 }
             }
         }
+    }
+
+    /// The register `def` is, when the target's class for it is one register
+    /// ([`SchedInfo::fixed_register_def`]).
+    fn fixed_result_register(
+        &self,
+        def: SDValue,
+    ) -> Option<u16> {
+        self.info.fixed_register_def(self.machine(def.node)?, usize::from(def.res))
     }
 
     /// `CheckForPhysRegDependency`: the physical register `user` takes from
@@ -1197,6 +1229,11 @@ impl<'a> Graph<'a> {
             }
             for &reg in self.info.implicit_defs(op) {
                 self.check_for_live_reg_def(su, reg, &mut live);
+            }
+            for i in 0..self.info.num_defs(op).min(self.values(node).len()) {
+                if let Some(reg) = self.info.fixed_register_def(op, i) {
+                    self.check_for_live_reg_def(su, reg, &mut live);
+                }
             }
         }
         live

@@ -489,3 +489,97 @@ fn a_target_without_a_pressure_limit_schedules_as_a_limit_of_zero() {
         );
     }
 }
+
+struct FlagValue {
+    fixed: bool,
+    pref: super::schedule::Preference,
+}
+
+impl SchedInfo for FlagValue {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | LOAD | CMP))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if matches!(opcode, ADD) { &[FLAGS] } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+
+    fn fixed_register_def(
+        &self,
+        opcode: u32,
+        _result: usize,
+    ) -> Option<u16> {
+        (self.fixed && opcode == CMP).then_some(FLAGS)
+    }
+
+    fn source_order(&self) -> bool {
+        self.pref == super::schedule::Preference::Source
+    }
+
+    fn preference(&self) -> super::schedule::Preference {
+        self.pref
+    }
+}
+
+/// `cmp` and an `add` (which writes the flags) both feed `br`.
+fn flag_dag(seed: u64) -> (SelectionDAG, SDValue, SDValue, SDValue) {
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut next = move |n: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((state >> 33) as usize) % n
+    };
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let mut vals: Vec<SDValue> = (0..2 + next(3)).map(|i| load(&mut dag, 1 + i as u32, entry)).collect();
+    let order_cmp_first = next(2) == 0;
+    let mut make_cmp = |dag: &mut SelectionDAG, vals: &[SDValue], next: &mut dyn FnMut(usize) -> usize| {
+        machine(dag, CMP, &[EVT::I8], &[vals[next(vals.len())], vals[next(vals.len())]])
+    };
+    let mut cmp = None;
+    if order_cmp_first {
+        cmp = Some(make_cmp(&mut dag, &vals, &mut next));
+    }
+    for _ in 0..1 + next(3) {
+        let (x, y) = (vals[next(vals.len())], vals[next(vals.len())]);
+        vals.push(machine(&mut dag, ADD, &[EVT::I32], &[x, y]));
+    }
+    let cmp = cmp.unwrap_or_else(|| make_cmp(&mut dag, &vals, &mut next));
+    let sum = *vals.last().unwrap();
+    let keep = dag.get_copy_to_reg(entry, 100, sum);
+    let branch = machine(&mut dag, BR, &[EVT::OTHER], &[cmp, keep]);
+    (dag, branch, cmp, sum)
+}
+
+/// A compare whose result is the flags register itself (the Z80's `cp`, `outs
+/// Flags:$f`) was a value to the scheduler, so an `add`, which writes the
+/// flags, went between the compare and the branch that reads it, and the
+/// compare was issued again (`find` under the ILP queue: 17 bytes, 379
+/// T-states, against 16 and 337). A target that says the result is the register
+/// gets the compare next to its branch.
+#[test]
+fn a_flag_writer_is_not_scheduled_between_a_compare_and_the_branch_that_reads_it() {
+    let pref = super::schedule::Preference::Source;
+    let between = |fixed: bool| {
+        let (dag, branch, cmp, sum) = flag_dag(2);
+        let order = schedule(&dag, branch, &FlagValue { fixed, pref });
+        let (c, s, b) = (position(&order, cmp), position(&order, sum), position(&order, branch));
+        (c < s && s < b, format!("cmp {c} add {s} br {b}"))
+    };
+    let (split, order) = between(false);
+    assert!(split, "premise: a target that says nothing gets the add between: {order}");
+    let (split, order) = between(true);
+    assert!(!split, "{order}");
+}

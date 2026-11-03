@@ -230,12 +230,30 @@ fn a_xor_with_a_byte_in_the_high_half_changes_only_the_high_half() {
 
 /// Two selects on one compare with a `sub` between them: the second `jr c`
 /// read the carry of that `sub`, not of the compare, so gcd returned 4 where
-/// the answer is 6. The compare is made again before the second reader.
+/// the answer is 6. Whichever way it is avoided (the `sub` moved clear, the
+/// compare made again), the last flag writer before a `jr` is a `cp`.
 #[test]
-fn a_flag_reader_after_a_clobber_compares_again() {
+fn a_flag_reader_after_a_clobber_reads_the_flags_of_its_compare() {
     let ir = "define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %x = select i1 %c, i8 %b, i8 0\n  %d = sub i8 %a, %x\n  %y = select i1 %c, i8 0, i8 %a\n  %e = sub i8 %b, %y\n  %r = xor i8 %d, %e\n  ret i8 %r\n}";
     let out = compiled(ir, "f");
-    assert_eq!(out.lines().filter(|line| line.trim().starts_with("cp a,")).count(), 2, "{out}");
+    let writes_flags = |line: &str| {
+        let op = line.trim().split_whitespace().next().unwrap_or("");
+        matches!(
+            op,
+            "cp" | "sub" | "sbc" | "add" | "adc" | "inc" | "dec" | "and" | "or" | "xor" | "neg"
+        )
+    };
+    let body: Vec<&str> = out.lines().collect();
+    let mut readers = 0;
+    for (at, line) in body.iter().enumerate().filter(|(_, line)| line.trim().starts_with("jr ")) {
+        if line.trim().starts_with("jr L") {
+            continue;
+        }
+        readers += 1;
+        let writer = body[..at].iter().rev().find(|line| writes_flags(line)).expect("a flag writer");
+        assert!(writer.trim().starts_with("cp"), "{writer} feeds {line}\n{out}");
+    }
+    assert!(readers >= 1, "{out}");
 }
 
 /// A byte loaded into `a` and stored through a pair other than `hl` went
