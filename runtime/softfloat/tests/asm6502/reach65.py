@@ -10,7 +10,18 @@ for line in src:
     m=re.match(r'^([A-Za-z_][\w$@]*):',line)
     if m and not m.group(1).startswith('.L'): cur=m.group(1); blocks[cur]=[]
     if cur: blocks[cur].append(line)
-names=set(blocks)
+names=set(blocks); order=list(blocks)
+# a block that does not end in rts/rti/jmp falls through into the next label
+after={a:b for a,b in zip(order,order[1:])}
+def data(n):
+    return any(re.search(r'\.(res|byte|word|addr|dword|byt|lobytes|hibytes)\b',l.split(';')[0]) for l in blocks[n])
+def bss(n):
+    return any(re.search(r'\.res\b',l.split(';')[0]) for l in blocks[n])
+def falls(n):
+    if data(n): return False
+    code=[re.sub(r'^[A-Za-z_][\w$@]*:','',l.split(';')[0]).split() for l in blocks[n]]
+    code=[c for c in code if c and not c[0].startswith('.')]
+    return not code or code[-1][0].lower() not in ('rts','rti','jmp')
 addr=sorted(set(lab[n] for n in names if n in lab))
 def size(n):
     a=lab.get(n)
@@ -22,7 +33,10 @@ while work:
     n=work.pop()
     if n in seen or n not in blocks: continue
     seen.add(n)
+    if n in after and falls(n): work.append(after[n])
     for line in blocks[n]:
-        for w in re.findall(r'[A-Za-z_][\w$@]*',line.split(';')[0]):
+        text=re.sub(r'^[A-Za-z_][\w$@]*:','',line.split(';')[0]).strip()
+        if text.startswith('.'): continue  # directives (.export, .segment) name labels without reaching them
+        for w in re.findall(r'[A-Za-z_][\w$@]*',text):
             if w in names and w not in seen: work.append(w)
-print(sum(size(n) for n in seen), " ".join(sorted(seen)))
+print(sum(size(n) for n in seen if not bss(n)), " ".join(sorted(seen)))
