@@ -4,7 +4,7 @@
 # (sim65 has 64 KB: the library takes about 40 KB). The library is compiled once; each batch relinks the driver with its slice.
 # Prints, per op and class of the expected result (zerosign, denormal, special, normal): pairs and mismatches; then compares and conversions.
 # llrm-cc gaps worked around here, not in the library: the driver is always -O2 (-Os: "greedy refused" on main); static functions are
-# exported, so only __* and sf32_pack stay exported; global data is not exported, so the wrapper is appended to the driver's .s;
+# exported, so only __*, sf32_pack and sf64_pack stay exported; global data is not exported, so the wrapper is appended to the driver's .s;
 # mos_rt.s keeps its __sa/__sb cells private, so they are exported here. int32.c is not linked: the compiler calls __mulsi3 and the
 # other 32-bit helpers with operands in mos_rt.s's __sa/__sb, not the C convention.
 set -e
@@ -13,15 +13,19 @@ N=${1:-3000}; B=${2:-110}; T=$(mktemp -d); OPT=${OPT:-Os}; SHOW=${SHOW:-0}
 MOS_RT=${MOS_RT:?set MOS_RT to the mos_rt.s runtime}
 for g in gen_vectors64 gen_vectors64_edge; do cc -O2 -ffp-contract=off -DEXT tests/$g.c -o $T/$g; done
 driver() { $LLRM_CC --target=6502-sim65 -O2 -S -DSF_INTABI -DSHOW=$SHOW -Iinclude -I$T tests/sim65_main64.c -o $T/main.s; }
-LIBS="sf64 sf32_conv64 sf32_conv sf32 int64"
-for f in $LIBS; do $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI -Iinclude src/$f.c -o $T/$f.s; done
+# one object per source file (fp_sources.sh); names are the path with / as _, so f32/mul.c and f64/mul.c stay apart
+SRCS="$(tests/fp_sources.sh f32 f32_64 f64) lib/int/int64.c"
+LIBS=; for s in $SRCS; do n=$(echo ${s#lib/} | sed 's,[/.],_,g'); LIBS="$LIBS $n"; done
+set -- $LIBS; for s in $SRCS; do
+  $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI -Iinclude $s -o $T/$1.s; shift
+done
 # ld65 links whole objects: keep only what the driver reaches (int64.c would bring its divide for a shift).
 $T/gen_vectors64 1 > $T/vectors64.h; driver
 mkdir $T/r
 python3 tests/sim65_reach.py $T/r main $T/main.s $(for f in $LIBS; do echo $T/$f.s; done) > /dev/null
 OBJS=
 for f in $LIBS; do
-  sed -i '/^\.export \(__\|sf32_pack\)/!{/^\.export /d}' $T/r/$f.s
+  sed -i '/^\.export \(__\|sf32_pack\|sf64_pack\)/!{/^\.export /d}' $T/r/$f.s
   ca65 -t sim6502 -U $T/r/$f.s -o $T/r/$f.o; OBJS="$OBJS $T/r/$f.o"
 done
 { i=0; while [ $i -lt 26 ]; do echo "rc$i = $((128 + i))"; i=$((i + 1)); done; cat $MOS_RT; echo ".export __sa, __sb"; } > $T/mos.s

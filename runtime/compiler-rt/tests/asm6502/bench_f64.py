@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""bench_f64.py [N] [OPS] [OPTS]: mean and worst cycles per call and code bytes of the 6502 binary64 add/sub/mul/div, ours (src/sf64.c and
-src/int64.c through $LLRM_CC at each of OPTS, default "Os O2", on sim65: one run per record with the driver's start index and count patched
+"""bench_f64.py [N] [OPS] [OPTS]: mean and worst cycles per call and code bytes of the 6502 binary64 add/sub/mul/div, ours (lib/fp/f64/*.c and
+lib/int/int64.c through $LLRM_CC at each of OPTS, default "Os O2", on sim65: one run per record with the driver's start index and count patched
 into the binary) and llvm-mos (compiler-rt soft double, mos-sim, the clock read around each call). The N operand pairs (default 300)
 are the first N of tests/gen_vectors64.c's stream: random bits, denormals, edge values, one pair in eight special. Cycles are the call
 minus a stub that returns zero (A, X, rc2..rc7: eight stores, about 20 cycles, and a base record that must pass) for ours, minus a copy of the operand for llvm-mos. Bytes are the code reachable
 from the entry point: the library functions it calls (sim65_reach.py) plus the mos_rt.s routines they use; llvm-mos: text of the program
 with the operation minus the program without it. SDCC and cc65 have a 32-bit double: no f64 column for them."""
-import os, re, subprocess, sys, tempfile
+import glob, os, re, subprocess, sys, tempfile
 here = os.path.dirname(os.path.abspath(__file__)); SF = os.path.join(here, '../..'); TESTS = os.path.join(here, '..')
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 OPS = sys.argv[2].split() if len(sys.argv) > 2 and sys.argv[2] else ['add', 'sub', 'mul', 'div']
@@ -40,13 +40,14 @@ _main:
   jsr main
   rts
 '''
-LIBS = ('sf64', 'int64')
+SRCS = sorted(glob.glob('lib/fp/f64/*.c')) + ['lib/int/int64.c', 'lib/fp/f32/pack.c']
+LIBS = [re.sub(r'[/.]', '_', x[4:]) for x in SRCS]
 def compile_libs(opt):
-    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', '-Iinclude', f'src/{f}.c', '-o', f'{T}/{opt}_{f}.s')
+    for f, src in zip(LIBS, SRCS): sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', '-Iinclude', src, '-o', f'{T}/{opt}_{f}.s')
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
-    open(path, 'w').write(re.sub(r'^\.export (?!__|sf32_pack)\S+\n', '', s, flags=re.M))
+    open(path, 'w').write(re.sub(r'^\.export (?!__|sf32_pack|sf64_pack)\S+\n', '', s, flags=re.M))
 
 def code_size(obj):
     return int(re.search(r'CODE:\s+(\d+)', sh('od65', '--dump-segsize', obj).stdout).group(1))

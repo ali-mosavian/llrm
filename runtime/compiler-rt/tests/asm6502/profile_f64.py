@@ -4,8 +4,9 @@ it prints). Each of the N records (default 100) is one sim65 run with start_idx/
 profiled with profile6502.py and its cycle total and exit code must equal sim65's own (a difference is a bug in the profiler: exit 1).
 Env: BLOCKS=1 profiles per label instead of per function; ANNOTATE=name prints that function's listing with counts summed over the records.
 Prints per op the top functions by exclusive cycles per record, and the opcode-class histogram."""
-import os, subprocess, sys
+import glob, os, re, subprocess, sys
 import profile6502 as P
+LIBS = [re.sub(r'[/.]', '_', x[4:]) for x in sorted(glob.glob('lib/fp/f64/*.c')) + ['lib/int/int64.c', 'lib/fp/f32/pack.c']]
 
 DIR = sys.argv[1] if len(sys.argv) > 1 else '.'; N = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 OPS = sys.argv[3].split() if len(sys.argv) > 3 else ['add', 'sub', 'mul', 'div']
@@ -20,7 +21,7 @@ def sh(*a):
 def relink_with_debug(d):
     """The bench's link again with ca65 -g and --dbgfile (names of the unexported labels); the image must not change."""
     objs = []
-    for src in [f'{d}/full.s'] + [f'{d}/r/{OPT}_{f}.s' for f in ('sf64', 'int64')] + [f'{DIR}/mos.s']:
+    for src in [f'{d}/full.s'] + [f'{d}/r/{OPT}_{f}.s' for f in LIBS] + [f'{DIR}/mos.s']:
         o = f'{d}/g_{os.path.basename(src)[:-2]}.o'; sh('ca65', '-g', '-t', 'sim6502', '-U', src, '-o', o); objs.append(o)
     sh('cl65', '-t', 'sim6502', '-o', f'{d}/g.bin', '-Ln', f'{d}/g.lbl', '-Wl', f'--dbgfile,{d}/g.dbg', *objs)
     assert open(f'{d}/g.bin', 'rb').read() == open(f'{d}/r.bin', 'rb').read(), 'the -g link differs from the bench image'
