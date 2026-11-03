@@ -13,7 +13,14 @@ fn legalized(
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
@@ -69,7 +76,14 @@ fn equal_constants_share_a_pool_entry() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
@@ -90,7 +104,14 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
         DagLegalizer::new(
             &mut graph,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+            &mut X86Lowering {
+                cmov: false,
+                sse2: false,
+                min_size: false,
+                i16_mul_chains: false,
+                sext_load: false,
+                profile: None,
+            },
         )
         .run()
         .unwrap();

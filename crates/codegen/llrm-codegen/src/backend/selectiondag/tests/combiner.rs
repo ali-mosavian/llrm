@@ -42,7 +42,14 @@ fn x86(
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     DagCombiner::new(
         dag,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            profile: None,
+        },
         level,
     )
     .with_tli(&tli)
@@ -149,7 +156,8 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
-        let mut lowering = X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains, profile: None };
+        let mut lowering =
+            X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains, sext_load: false, profile: None };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         dag.opcode(dag.get_root())
     };
@@ -161,8 +169,14 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
-        let mut lowering =
-            X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: true, profile: None };
+        let mut lowering = X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: true,
+            sext_load: false,
+            profile: None,
+        };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         let mut todo = vec![dag.get_root()];
         while let Some(value) = todo.pop() {
@@ -206,6 +220,7 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
             sse2: false,
             min_size,
             i16_mul_chains: false,
+            sext_load: false,
             profile: priced.then_some(pricing),
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
@@ -239,6 +254,7 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
             sse2: false,
             min_size: false,
             i16_mul_chains: !promotes_i16(&tli),
+            sext_load: false,
             profile: None,
         };
         assert_eq!(promotes_i16(&tli), promotes);
@@ -371,7 +387,14 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
     dag.set_root(branch);
     DagCombiner::new(
         &mut dag,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            profile: None,
+        },
         CombineLevel::AfterLegalizeDag,
     )
     .with_tli(&tli)

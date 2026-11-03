@@ -2,9 +2,9 @@
 //! read through an `and 255` is a byte load at `p + 1`, `and (load p), 255` a
 //! byte `zextload`.
 //!
-//! DEVIATE SD249: only the `srl`, `sra` and `and` openings (the `truncate`
-//! one is [`DagCombiner::reduce_load_width`] in `dag_combiner.rs`); no
-//! look-through `freeze`, no `shl` left shift, and `isLegalNarrowLdSt` takes
+//! DEVIATE SD249: only the `srl`, `sra`, `sext_inreg` and `and` openings (the
+//! `truncate` one is [`DagCombiner::reduce_load_width`] in `dag_combiner.rs`);
+//! no look-through `freeze`, no `shl` left shift, and `isLegalNarrowLdSt` takes
 //! every x86 access as allowed (unaligned loads are legal there). Owner
 //! sdag-b.
 //!
@@ -71,6 +71,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if matches!(info.ext, Some(LoadExt::SExtLoad | LoadExt::ZExtLoad)) && info.ext != ext_type {
                     return None;
                 }
+            }
+            ISD::SignExtendInReg => {
+                let super::dag::NodeData::ValueType(narrow) = self.dag.node(self.dag.operand(node, 1)).data else {
+                    return None;
+                };
+                self.load_info(n0)?;
+                ext_type = Some(LoadExt::SExtLoad);
+                ext_vt = narrow;
             }
             ISD::And => {
                 let mask = self

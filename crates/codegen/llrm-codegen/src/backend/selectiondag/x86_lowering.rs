@@ -145,6 +145,10 @@ pub struct X86Lowering<'a> {
     /// [promote]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
     pub i16_mul_chains: bool,
+    /// `visitSIGN_EXTEND_INREG`'s `(sext_inreg (extload x))` is `(sextload x)`
+    /// (`movsx r, [m]`, not a load, `movsx`, `movsxd`). DEVIATE: on for m64
+    /// only; the 16 and 32-bit x86 targets are judged by their owners.
+    pub sext_load: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
@@ -166,6 +170,10 @@ pub struct MulPricing<'a> {
 impl CombineHooks for X86Lowering<'_> {
     fn pack_word_pairs(&self) -> bool {
         true
+    }
+
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        self.sext_load
     }
 
     fn is_compare_with_flags(

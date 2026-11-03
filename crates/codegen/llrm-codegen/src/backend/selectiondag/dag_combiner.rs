@@ -2569,6 +2569,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let mask = self.dag.get_constant(super::fold::mask(ext_bits), vt);
             return Some(self.dag.get_node(ISD::And, vt, &[n0, mask]));
         }
+        if self.hooks.fold_sext_in_reg_of_load() {
+            if let Some(narrow) = self.reduce_load_width_of(node) {
+                return Some(narrow);
+            }
+        }
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }

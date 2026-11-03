@@ -15,7 +15,14 @@ fn legalized(
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
@@ -90,7 +97,14 @@ fn branching(
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
