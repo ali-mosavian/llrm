@@ -397,7 +397,7 @@ fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
     let start = out.find("L0_2:").expect("the loop label");
-    let end = out[start..].find("jr nz, L0_2").expect("the back edge") + start;
+    let end = out[start..].find("nz, L0_2").expect("the back edge") + start;
     assert!(!out[start..end].contains("ld l,"), "{out}");
 }
 
@@ -1271,4 +1271,26 @@ fn two_modules_compiled_in_turn_do_not_share_the_cache() {
     assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
     let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
     assert_eq!(first, again);
+}
+
+/// gcd -O2 ended its subtract arm with `jr` (12 T taken, always taken): 275
+/// clocks against gcc's `jp` at 274. Where speed comes first an always-taken
+/// jump stays a `jp`; at -Oz it is a `jr`, a byte less.
+#[test]
+fn an_always_taken_jump_is_jp_when_speed_comes_first_and_jr_when_size_does() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let fast = text(ir, "gcd", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "gcd", 0, &Request::new(Level::Oz)).expect("compiles");
+    let unconditional = |asm: &str, op: &str| asm.lines().any(|line| line.trim_start().starts_with(&format!("{op} L")));
+    assert!(unconditional(&fast, "jp") && !unconditional(&fast, "jr"), "{fast}");
+    assert!(unconditional(&small, "jr") && !unconditional(&small, "jp"), "{small}");
+}
+
+/// An always-taken jump outside every loop ran once: scmp -O2's empty-string
+/// exit was a `jp` for 1 B and no clocks saved on any input. Only a jump inside
+/// a loop stays a `jp` where speed comes first.
+#[test]
+fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!out.lines().any(|line| line.trim_start().starts_with("jp ")), "{out}");
 }
