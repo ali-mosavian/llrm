@@ -744,6 +744,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
+            ISD::CtTzZeroPoison | ISD::CtLzZeroPoison => self.expand_zero_poison_count(node).map(|result| vec![result]),
             ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
@@ -946,6 +947,22 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             value = self.dag.get_node(ISD::Or, vt, &[high, low]);
         }
         Some(value)
+    }
+
+    /// `TargetLowering::expandCTTZ` and `expandCTLZ`, the first step: "if the
+    /// non-ZERO_UNDEF version is supported we can use that instead". wasm has
+    /// `ctz` and `clz` (stft_single, stft_fixed stopped the compile at
+    /// `CTTZ_ZERO_UNDEF`).
+    fn expand_zero_poison_count(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        let plain = if self.dag.opcode(node) == ISD::CtTzZeroPoison { ISD::CtTz } else { ISD::CtLz };
+        if !self.tli.is_operation_legal_or_custom(plain, vt) {
+            return None;
+        }
+        Some(self.dag.get_node(plain, vt, &[self.dag.operand(node, 0)]))
     }
 
     /// `TargetLowering::expandBSWAP`

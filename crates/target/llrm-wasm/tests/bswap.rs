@@ -33,3 +33,25 @@ fn byte_swaps_of_words_expand_instead_of_stopping_the_compile() {
         assert!(body("swap64").contains("i64.shl") && body("swap64").contains("i64.shr_u"), "{text}");
     }
 }
+
+/// `cttz` and `ctlz` of a word that may be zero reached the legalizer as
+/// `CTTZ_ZERO_UNDEF`, which wasm expands to `ctz` (the pin's `expandCTTZ`);
+/// ours stopped at "convert node to libcall".
+#[test]
+fn count_zeros_with_a_poison_zero_expand_to_the_plain_count() {
+    let ir = "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+target triple = \"wasm32-unknown-unknown\"
+declare i32 @llvm.cttz.i32(i32, i1)
+declare i32 @llvm.ctlz.i32(i32, i1)
+define i32 @tz(i32 %x) {
+  %r = call i32 @llvm.cttz.i32(i32 %x, i1 true)
+  ret i32 %r
+}
+define i32 @lz(i32 %x) {
+  %r = call i32 @llvm.ctlz.i32(i32 %x, i1 true)
+  ret i32 %r
+}
+";
+    let text = assembly(ir, Width::W32, Options { level: Level::O0, ..Options::default() }).unwrap();
+    assert!(text.contains("i32.ctz") && text.contains("i32.clz"), "{text}");
+}
