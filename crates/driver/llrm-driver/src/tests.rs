@@ -548,6 +548,20 @@ fn a_zero_extended_32_bit_definition_costs_no_instruction_at_m64() {
     assert!(!listing.contains("movzx") && !listing.contains("mov eax, eax"), "{listing}");
 }
 
+/// A node the address matcher made (the widened shift) was selected before
+/// the `add` that uses it, so the `add` saw a machine node and lost its scaled
+/// `lea`: `b + 2*(x != 0) + (y != 3)` was `add rcx, rcx` and two `add`s
+/// (bench logical_value, +7 B).
+#[test]
+fn a_node_made_by_the_address_matcher_is_selected_after_its_user_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i64 %b, i32 %x, i32 %y) optsize {\n  %c = icmp eq i32 %x, 0\n  %s = select i1 %c, i64 0, i64 2\n  %a = add nsw i64 %s, %b\n  %d = icmp ne i32 %y, 3\n  %z = zext i1 %d to i64\n  %r = add nsw i64 %a, %z\n  ret i64 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("*2]"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each

@@ -484,6 +484,18 @@ impl<'a> DagisAdapter<'a> {
         })
     }
 
+    /// Whether a live user of `node` is still to be selected: not a machine
+    /// node and not marked selected.
+    pub(super) fn has_pending_user(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.live_user_nodes(node).into_iter().any(|user| {
+            !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
+                && self.node_id.get(user as usize).is_none_or(|id| *id != -1)
+        })
+    }
+
     /// The live nodes that read a result of `node`, in creation order, once
     /// each: the use list, not a scan of the arena.
     fn live_user_nodes(
