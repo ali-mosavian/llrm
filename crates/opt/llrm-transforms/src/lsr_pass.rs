@@ -266,8 +266,13 @@ fn plan_loop(
     }
     // The formulae for each use, and the search space made small enough.
     lsr.generate_all_reuse_formulae(se);
+    let counts =
+        |lsr: &Collection| lsr.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ");
+    llrm_support::debug!("lsr", "  formulae per use: {}", counts(&lsr));
     lsr.filter_out_undesirable_dedicated_registers(se);
+    llrm_support::debug!("lsr", "  after filtering: {}", counts(&lsr));
     lsr.narrow_search_space_using_heuristics(se);
+    llrm_support::debug!("lsr", "  after narrowing: {}", counts(&lsr));
     let solution = lsr.solve(se);
     if solution.is_empty() {
         return planned(None);
