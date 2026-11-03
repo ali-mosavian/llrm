@@ -1,4 +1,4 @@
-# z80 gcc matrix, fork spike/backends 9a96eadb5 (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 ef95b73b10439c23694a3124ce1af2e6, ucsim_z80 0.8.15, sdasz80/sdldz80 SDCC 4.5.0; levels are gcc -O1/-O2/-Os as run (no Oz); clocks=T-states, call minus empty run; bytes=linked code minus crt0 and driver, incl. hand-written helpers; CONVENTION: 16-bit results are returned in HL by gcc and DE by ours, so gcc is charged the caller's ex de,hl (+1 B +4 T +1 insn); 8-bit results in A for both; notes mark cells that call hand helpers (hand helper, not codegen)
+# z80 gcc matrix, fork spike/backends 9a96eadb5 (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 ef95b73b10439c23694a3124ce1af2e6, ucsim_z80 0.8.15, sdasz80/sdldz80 SDCC 4.5.0; levels are gcc -O1/-O2/-Os as run (no Oz); clocks=T-states, call minus empty run; bytes=linked code minus crt0 and driver, incl. hand-written helpers; bytes also count kernel _DATA tables (crc16 -O2 table, 512 B, was uncounted until 2026-11-03 04:10); CONVENTION: 16-bit results are returned in HL by gcc and DE by ours, so gcc is charged the caller's ex de,hl (+1 B +4 T +1 insn); 8-bit results in A for both; notes mark cells that call hand helpers (hand helper, not codegen)
 target	prog	level	compiler	code_bytes	clocks	instrs	note
 z80	zero	O1	gcc	2	44	4	8-bit result in A, no move
 z80	zero	O2	gcc	2	44	4	8-bit result in A, no move
@@ -49,7 +49,7 @@ z80	mcopy	O1	gcc	71	786	98	8-bit result in A, no move
 z80	mcopy	O2	gcc	103	840	97	8-bit result in A, no move
 z80	mcopy	Os	gcc	55	1354	129	8-bit result in A, no move
 z80	crc16	O1	gcc	147	12536	1800	incl. result move +1 B +4 T +1 insn
-z80	crc16	O2	gcc	121	5130	520	incl. result move +1 B +4 T +1 insn
+z80	crc16	O2	gcc	633	5130	520	table, not codegen; 512 B table counted; incl. result move +1 B +4 T +1 insn
 z80	crc16	Os	gcc	101	13768	1583	incl. result move +1 B +4 T +1 insn
 z80	mul16	O1	gcc	24	1012	111	hand helper, not codegen; incl. result move +1 B +4 T +1 insn
 z80	mul16	O2	gcc	24	1012	111	hand helper, not codegen; incl. result move +1 B +4 T +1 insn

@@ -54,6 +54,12 @@ def code_size(rel):
                if m and m.group(1) in ("_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"))
 
 
+def data_size(rel):
+    """Kernel-owned initialised data (lookup tables): gcc puts them in _DATA, which code_size skips."""
+    return sum(int(m.group(2), 16) for m in (re.match(r"A (\S+) size ([0-9A-Fa-f]+) flags", l) for l in open(rel))
+               if m and m.group(1) in ("_DATA", "_CONST"))
+
+
 def linked_code(mapf):
     return sum(int(m.group(2), 16) for m in (re.match(r"(\S+)\s+[0-9A-F]{8}\s+([0-9A-F]{8}) =", l) for l in open(mapf))
                if m and m.group(1) in ("_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"))
@@ -148,10 +154,14 @@ def main():
             # Result convention: ours returns 16-bit values in DE, gcc in HL, so the caller's
             # ex de,hl is charged to gcc: +1 B +4 T +1 insn for 16-bit results (8-bit: A in both).
             mv = (1, 4, 1) if ret != U8 else (0, 0, 0)
+            tab = data_size(f"{w}/k.rel")
+            b += tab
             rows[cell] = (b + mv[0], t - bt + mv[1], i - bi + mv[2])
             note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn" if mv[0] else "8-bit result in A, no move"
             if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl)\b", open(f"{w}/k.s").read()):
                 note = "hand helper, not codegen; " + note
+            if tab >= 64:
+                note = f"table, not codegen; {tab} B table counted; " + note
             cnotes[cell] = note
     lv = a.levels.split(",")
     out = ["# gcc z80 spike column", ""] + hdr + ["", "| kernel | " + " | ".join(f"{l} B/T/insn" for l in lv) + " | best B | best T |", "|---|" + "---|" * (len(lv) + 2)]
@@ -179,4 +189,5 @@ def main():
     print(text)
 
 
-main()
+if __name__ == "__main__":
+    main()
