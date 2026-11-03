@@ -870,6 +870,34 @@ impl<'a> TypeLegalizer<'a> {
                     &[converted, ty],
                 )
             }
+            op @ (ISD::CtPop | ISD::CtLz | ISD::CtLzZeroPoison) => {
+                // `PromoteIntRes_CTLZ` and `PromoteIntRes_CTPOP`: the count of
+                // the zero-extended value in the wider type, less the bits
+                // added above the narrow one (none for a population count).
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let mask = self.dag.get_constant(super::fold::mask(vt.size_in_bits()), to);
+                let extended = self.dag.get_node(ISD::And, to, &[promoted, mask]);
+                let count = self.dag.get_node(op, to, &[extended]);
+                if op == ISD::CtPop {
+                    count
+                } else {
+                    let added = self.dag.get_constant(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
+                    self.dag.get_node(ISD::Sub, to, &[count, added])
+                }
+            }
+            op @ (ISD::CtTz | ISD::CtTzZeroPoison) => {
+                // `PromoteIntRes_CTTZ`: the count is the same in the wider
+                // type except for zero, which setting the bit just above the
+                // narrow type makes the narrow width.
+                let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                let wide = if op == ISD::CtTz {
+                    let top = self.dag.get_constant(1u128 << vt.size_in_bits(), to);
+                    self.dag.get_node(ISD::Or, to, &[promoted, top])
+                } else {
+                    promoted
+                };
+                self.dag.get_node(op, to, &[wide])
+            }
             op @ (ISD::BitReverse | ISD::BSwap) => {
                 // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
                 // wider reversal, shifted down by the bits added.
