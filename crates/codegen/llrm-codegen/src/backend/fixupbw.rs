@@ -31,6 +31,9 @@
 //! 32-bit user of the loaded word reads the upper lanes, which `dead_after`
 //! counts as live though nothing ever defined them.
 //!
+//! DEVIATE FB1 (see `Profile::widens_load`): a load is widened only where the
+//! target prices the extension no higher than the load.
+//!
 //! DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 //! prefix, so the pin's claim that the size is the same is false there; the
 //! rewrite is made only if it is no longer. Exit: none (a fact of the
@@ -80,6 +83,10 @@ const WIDENING_LOAD: u32 = WIDENING & !field::REQUIRES;
 pub struct FixupBw {
     /// The code is for size (`shouldOptimizeForSize`).
     pub size: bool,
+    /// The target prices the extending load no higher than the byte and the
+    /// word load (`Profile::widens_load`).
+    pub widens_byte: bool,
+    pub widens_word: bool,
 }
 
 impl LIRTransform for FixupBw {
@@ -146,9 +153,9 @@ impl FixupBw {
         let ([Loc::Reg(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
         match (name, dest.width, source) {
             // MOV8rm: not for size, the extending form takes a byte more.
-            ("mov", 1, Loc::Mem(_)) if !self.size => self.try_replace_load(regs, bits, one, *dest, dead),
+            ("mov", 1, Loc::Mem(_)) if !self.size && self.widens_byte => self.try_replace_load(regs, bits, one, *dest, dead),
             // MOV16rm
-            ("mov", 2, Loc::Mem(_)) => self.try_replace_load(regs, bits, one, *dest, dead),
+            ("mov", 2, Loc::Mem(_)) if self.widens_word => self.try_replace_load(regs, bits, one, *dest, dead),
             // MOV8rr, MOV16rr
             ("mov", 1 | 2, Loc::Reg(src)) if src.width == dest.width => {
                 self.try_replace_copy(regs, bits, one, *dest, *src, dead)
@@ -311,7 +318,7 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true }.fixed(&body);
         let one = &done.blocks[0].insns[0];
         let what = one.what.as_ref().expect("semantics");
         (what.name.as_deref().expect("a name").to_owned(), what.dests[0].clone())
@@ -349,7 +356,7 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true }.fixed(&body);
         done.blocks[0].insns[0].what.as_ref().expect("semantics").name.clone().expect("a name").to_string()
     }
 
