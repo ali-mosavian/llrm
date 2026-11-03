@@ -152,7 +152,7 @@ def main():
                 t, i, got = run("x.ihx", w)
             except RuntimeError as e:
                 bad.append((*cell, str(e))); continue
-            mask = 0xFFFF if ret != U8 else 0xFF
+            mask = (1 << 8 * (1 if ret == U8 else 2)) - 1  # result width in bytes, from the kernel's C type
             if got & mask != want_v & mask:
                 bad.append((*cell, f"WRONG result {got & mask:#x}, hand-derived {want_v & mask:#x}")); continue
             b = linked_code(f"{w}/x.map") - code_size(f"{w}/crt0.rel") - code_size(f"{w}/d.rel")
