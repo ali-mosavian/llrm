@@ -47,3 +47,11 @@ if __name__ == "__main__":
     test_table_in_data_is_counted()
     test_driver_style_object_without_data_counts_zero()
     print("ok")
+
+
+def test_noivopts_flag_only_at_os():
+    """gcc-noivopts-Os must not switch ivopts off at -O1/-O2: lz4 -O2 went 28 to 46 k clocks without it."""
+    import gcc_6502_bench as B
+    assert B.level_flags("Os", True) == ["-Os", "-fno-ivopts"]
+    assert B.level_flags("O2", True) == ["-O2"]
+    assert B.level_flags("Os", False) == ["-Os"]

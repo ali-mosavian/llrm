@@ -1,6 +1,6 @@
 //! IR to sdasz80 text through allocation and expansion.
 
-use llrm_z80::compile::{allocated, machine_function, text};
+use llrm_z80::compile::{allocated, lines, machine_function, text};
 use llrm_z80::driver::{Level, Request};
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
@@ -440,6 +440,70 @@ fn a_copy_back_into_the_register_just_copied_from_is_dropped_between_bytes_only(
     assert_eq!(function.blocks[0].insts.len(), 2, "{:?}", function.blocks[0].insts);
 }
 
+/// fletcher -Oz never finished compiling: two copies that touch neither
+/// register each other's, with nothing between them and the branch, took turns
+/// moving to the end of the block for ever. Run on a thread, so a hang fails.
+#[test]
+fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let jump = Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(0)]) };
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8; 4];
+    function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), copy(3, 2), jump], phis: Vec::new() });
+    let assignment = Assignment(vec![reg::A, reg::B, reg::C, reg::D]);
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        llrm_z80::compile::sink_copies_to_the_branch(&mut function, &assignment);
+        let _ = done.send(());
+    });
+    assert!(
+        finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(),
+        "sink_copies_to_the_branch did not return"
+    );
+}
+
+/// xs8's `x << 3` was `sla a` x3 (2 B / 8 T a bit) and its `x >> 5` `srl a` x5:
+/// 35 B / 737 T against SDCC's 26 B / 546 T. A byte shifted left in `a` is
+/// `add a, a`; a logical right shift by two or more, with the flags dead, is
+/// `rlca`/`rrca` the short way round and an `and` of the surviving bits.
+#[test]
+fn a_byte_shifted_in_a_is_doublings_and_a_rotate_with_a_mask() {
+    let ir = include_str!("kernels/ir/xs8.ll");
+    let out = text(ir, "xs8", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add a, a").count() >= 4 && out.matches("rlca").count() == 3, "{out}");
+    assert!(out.contains("and a, #7") && !out.contains("sla a") && !out.contains("srl a"), "{out}");
+}
+
+/// minmax's `lo`, merged by a branch, was copied in ahead of the compare that
+/// decides the branch, so it lived beside the value it replaces and needed a
+/// register of its own: both extremes spilled to the frame, 66 B / 2675 T
+/// against SDCC's 56 B / 2351 T. Sunk below the compare, `lo` and `hi` stay in
+/// registers.
+#[test]
+fn a_merged_value_is_not_copied_in_ahead_of_the_compare_that_decides_it() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    for level in [Level::O2, Level::Oz] {
+        let out = text(ir, "minmax", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("(ix)"), "{level:?}\n{out}");
+    }
+}
+
+/// fletcher -Oz made its zero in the loop (`ld e, #0; ld c, e`, 11 T a trip)
+/// where the other allocation of the argument copies keeps it in a register
+/// of its own: 1811 T against 1706. The cheaper by the loop's weighted clocks
+/// stays.
+#[test]
+fn the_allocation_of_a_loop_with_the_cheaper_weighted_clocks_is_kept() {
+    let ir = include_str!("kernels/ir/fletcher.ll");
+    let out = text(ir, "fletcher", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    let (zero, head) = (out.find("ld e, #0"), out.find("L0_1:"));
+    assert!(zero.is_some() && zero < head, "{out}");
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.
@@ -762,6 +826,85 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
         let out = text(ir, "slen", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
         assert!(out.contains("_strlen"), "{level:?}\n{out}");
     }
+}
+
+/// A branch to a block that is only a `ret` prints as `ret z`; the block was
+/// printed anyway, a dead `ret` behind the live one: gcd -O2 was 20 B with
+/// two, 19 B with one.
+#[test]
+fn a_return_block_only_conditional_returns_reach_is_not_printed() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let out = text(ir, "gcd", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let rets = out.lines().filter(|line| line.trim() == "ret").count();
+    assert_eq!(rets, 1, "{out}");
+    assert!(out.contains("ret z"), "{out}");
+}
+
+/// lz4's `tmp == 255` was widened to a word compare of the zero-extended load
+/// (`ExtendSetCCUses`, as the pin does where a word compare costs the same as a
+/// byte one): `ld a, l; sub a, #255; jr nz; ld a, h; sub a, #0`, and the extra
+/// pressure spilled more. The compare stays on the byte: `cp a, #255`.
+#[test]
+fn a_byte_compared_with_a_constant_is_not_widened_to_a_word_compare() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    let out = text(ir, "lz4", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("cp a, #255") && !out.contains("sub a, #255"), "{out}");
+}
+
+/// fletcher -O2 made its zero in the loop (`ld e, #0` then `ld c, e`, every
+/// trip) once the plain allocation was chosen over the hoisted one by static
+/// size alone: 35 B / 1456 T became 35 B / 1561 T. The two are chosen by the
+/// loop's weighted clocks.
+#[test]
+fn a_zero_a_loop_needs_is_made_before_the_loop_when_that_is_faster() {
+    let ir = include_str!("kernels/ir/fletcher.ll");
+    let out = text(ir, "fletcher", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let body = out.split("L0_2:").nth(1).and_then(|rest| rest.split("L0_12:").next()).expect("the loop");
+    assert!(!body.contains("#0"), "{out}");
+}
+
+/// minmax -Oz loaded a byte into `a` that its max compare also reads from a
+/// register, so the byte was copied out of `a` again and the pointer lost its
+/// pair: spilled and reloaded by `pop de; push de` every trip, 60 B / 2938 T
+/// became 64 B / 3557 T. A byte a non-copy reads as a register is not loaded
+/// through `a`.
+#[test]
+fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
+}
+
+/// A byte wanted in `a` and in a register of its own was loaded through `hl`
+/// by a fixed rule, which lz4c -O2 paid for in pressure on `hl`: 443 B against
+/// 428 B when it is loaded through its pair. Both are allocated and the
+/// cheaper by weighted clocks stays.
+#[test]
+fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
+    let ir = include_str!("kernels/ir/lz4c.ll");
+    let out = lines(ir, "lz4c", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let (bytes, _) = llrm_z80::expand::price(&out);
+    assert!(bytes <= 435, "{bytes} B");
+}
+
+/// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
+/// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
+/// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
+#[test]
+fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("mulhi3"), "{out}");
+}
+
+/// A word shifted left by a constant in `hl` was `sla l; rl h` a bit (4 B / 16
+/// T) where `add hl, hl` is 1 B / 11 T; hash16's `<< 5` paid 10 instructions.
+#[test]
+fn a_word_shifted_left_in_hl_is_doublings() {
+    let ir = include_str!("kernels/ir/hash16.ll");
+    let out = text(ir, "hash16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add hl, hl").count() >= 5 && !out.contains("rl h"), "{out}");
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:

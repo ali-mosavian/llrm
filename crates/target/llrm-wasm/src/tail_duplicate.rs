@@ -129,7 +129,6 @@ pub fn tail_duplicate(
             && preds.contains(&prev)
             && f.succs[prev] == [tail]
             && can_fall_through(f, prev)
-            && f.blocks[prev].last().is_none_or(|last| last.opcode == op::BR)
             && f.succs.iter().enumerate().filter(|(_, to)| to.contains(&tail)).count() == 1
         {
             if f.blocks[prev].last().is_some_and(|last| last.opcode == op::BR) {

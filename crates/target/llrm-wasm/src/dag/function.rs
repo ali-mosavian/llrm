@@ -7,6 +7,7 @@ use llrm_codegen::backend::isel::Convention;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig, MemInfo, SelectionDAG};
@@ -80,6 +81,7 @@ pub fn builder_target(
             // level: `isIntDivCheap`.
             int_div_cheap: true,
             sdiv_pow2_stays: true,
+            add_to_or_disjoint: true,
             ..DagConfig::default()
         },
         shift_amount: pointer(width),
@@ -173,6 +175,16 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// `-g`: the metadata id of each variable declared by a `#dbg_declare` of
+    /// a static alloca, and the frame index of that alloca. The same on every
+    /// block.
+    pub declared: Vec<(u32, i32)>,
+    /// `-g` at `-O1` and up: the metadata id of each variable that one
+    /// `#dbg_value` says is an argument, and the argument's number.
+    pub argument_variables: Vec<(u32, u32)>,
+    /// StackColoring: the frame object each of the function's allocas moves to
+    /// once selection is done (`frame`'s first entries are the allocas').
+    pub stack_colors: Vec<i32>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -229,9 +241,30 @@ pub fn select_function(
         function,
     );
     let mut info = FunctionLoweringInfo::new(function);
+    let (statics, stack_colors) = static_frame(module, function, &layout, &info)?;
+    let alignments: Vec<u64> = statics.iter().map(|&(_, align)| align).collect();
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     for &block in function.layout() {
+        if optimize {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values
+            // do once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| visited.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| (bits <= 64 && bits != 0).then(|| if bits <= 32 { 32 } else { 64 });
+                    live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+            visited.insert(block);
+        }
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
@@ -254,6 +287,7 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            one.dag.frame_alignments.clone_from(&alignments);
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
@@ -285,14 +319,43 @@ pub fn select_function(
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                declared: Vec::new(),
+                argument_variables: Vec::new(),
+                stack_colors: Vec::new(),
             });
         }
     }
-    let mut frame = static_frame(module, function, &layout, &info)?;
+    let mut frame = statics;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
+    let declared: Vec<(u32, i32)> = function
+        .debug_records()
+        .iter()
+        .filter_map(|record| {
+            let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+            let variable = llrm_mir::debuginfo::read_variable(module, record.variable)?;
+            let index = *info.static_allocas.get(&address)?;
+            (variable.scope == name).then_some((record.variable.0, index))
+        })
+        .collect();
+    // A variable said once, to an argument: its home is the argument's local
+    // for as long as the code leaves it there.
+    let mut argument_variables: Vec<(u32, u32)> = Vec::new();
+    let mut said: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    for record in function.debug_records() {
+        *said.entry(record.variable.0).or_default() += 1;
+        let llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(value)) = record.what else { continue };
+        let llrm_mir::module::ValueDef::Argument(number) = function.value(value).def else { continue };
+        if llrm_mir::debuginfo::read_variable(module, record.variable).is_some_and(|one| one.scope == name) {
+            argument_variables.push((record.variable.0, number));
+        }
+    }
+    argument_variables.retain(|(variable, _)| said[variable] == 1);
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.declared.clone_from(&declared);
+        block.argument_variables.clone_from(&argument_variables);
+        block.stack_colors.clone_from(&stack_colors);
     }
     Ok(selected)
 }
@@ -329,19 +392,20 @@ fn starts_with_landing_pad(
 
 /// The (size, alignment) of each static alloca, by the frame index
 /// `FunctionLoweringInfo` gave it: the type's size times a constant count, at
-/// its alignment (`FunctionLoweringInfo::set`).
+/// its alignment (`FunctionLoweringInfo::set`); and what StackColoring makes of
+/// them.
 fn static_frame(
     module: &Module,
     function: &llrm_mir::module::Function,
     layout: &DataLayout,
     info: &FunctionLoweringInfo,
-) -> Result<Vec<(u64, u64)>, String> {
+) -> Result<(Vec<(u64, u64)>, Vec<i32>), String> {
     use llrm_mir::context::ConstantKind;
     use llrm_mir::module::{Operand, ValueDef};
     use llrm_mir::opcode::Opcode;
 
-    let mut objects = vec![(0, 1); info.static_allocas.iter().map(|(_, &index)| index as usize + 1).max().unwrap_or(0)];
-    for (value, &index) in info.static_allocas.iter() {
+    let mut sizes = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return Err("an alloca that is no instruction".into());
         };
@@ -362,7 +426,9 @@ fn static_frame(
         // `AI->getAlign()`; an alloca that states none has the type's preferred
         // one (the IR reader's default).
         let align = align.map_or_else(|| layout.pref_align(types, allocated), u64::from);
-        objects[index as usize] = (size, align);
+        sizes.push((value, size as i64, align as i64));
     }
-    Ok(objects)
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    let colors = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
+    Ok((sizes.iter().map(|&(_, size, align)| (size as u64, align as u64)).collect(), colors.colors))
 }

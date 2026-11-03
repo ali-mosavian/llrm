@@ -649,6 +649,21 @@ fn stack_probed(
     module
 }
 
+/// The pin states no frame address at an exit on Darwin or Windows
+/// (`X86FrameLowering::emitEpilogue`: `NeedsDwarfCFI` is off for them); the
+/// format decides, as the triple does.
+fn exits_unstated(
+    mut module: masm::Module,
+    format: Format,
+) -> masm::Module {
+    if matches!(format, Format::MachO | Format::Coff) {
+        for procedure in &mut module.procedures {
+            procedure.registers.exit_cfi = false;
+        }
+    }
+    module
+}
+
 /// [`built`] for the writer of `format`: what that format's object holds.
 pub fn built_for(
     module: &masm::Module,
@@ -667,7 +682,7 @@ fn built_inner(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<Described, Error> {
-    let module = &stack_probed(live(module)?, format);
+    let module = &exits_unstated(stack_probed(live(module)?, format), format);
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
