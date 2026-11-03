@@ -1293,9 +1293,20 @@ pub struct GlobalValue {
     pub kind: GlobalKind,
 }
 
+thread_local! {
+    static DECLARATIONS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many global declarations this thread has made, for a test that a
+/// pipeline does not list every global's for each function.
+pub fn declarations_made() -> usize {
+    DECLARATIONS_MADE.with(std::cell::Cell::get)
+}
+
 impl GlobalValue {
     /// This global as its declaration: a function without its body.
     pub fn declaration(&self) -> GlobalValue {
+        DECLARATIONS_MADE.with(|made| made.set(made.get() + 1));
         GlobalValue {
             name: self.name.clone(),
             linkage: self.linkage,
