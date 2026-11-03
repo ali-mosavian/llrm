@@ -1,7 +1,7 @@
 /* Width-generic add and subtract on bit patterns; included after the width header (f32.h, f64.h). */
-/* Decode for add_bits, which calls it twice. At -Os it is a function of its own: inlined into both call sites it costs 21 B more at m32 (mul.inc and div.inc
- * inline theirs, the smaller choice there). */
-#ifdef __OPTIMIZE_SIZE__
+/* Decode for add_bits, which calls it twice. A target that finds the call smaller defines SF_UNPACK_OUTLINE (x86 m32 -Os: inlined into both call sites
+ * the decode costs 21 B more; mul.inc and div.inc inline theirs, the smaller choice there). */
+#ifdef SF_UNPACK_OUTLINE
 static __attribute__((noinline)) SF_T SF_N(unpack_out)(SF_T a, int *e) { return SF_UNPACK(a, e); }
 #define SF_UNPACK_ADD SF_N(unpack_out)
 #else

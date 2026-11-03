@@ -8,6 +8,9 @@
 #ifndef __OPTIMIZE_SIZE__
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
 #endif
+#ifdef __OPTIMIZE_SIZE__
+#define SF_UNPACK_OUTLINE 1 /* -Os add reach 471 -> 450 B */
+#endif
 #define SF_NORM_SUB_FIRST 1 /* the shift count lives in cl: m32 mul -Os 102727 -> 101059 clk, -55 B in the -Os image */
 #define SF_CLZ32(x) ((int)__builtin_clz(x))
 #endif
