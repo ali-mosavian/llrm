@@ -178,6 +178,28 @@ fn on_i386(
     }
 }
 
+/// `foldICmpShrConstConst`: a constant shifted right by a variable amount and
+/// compared for equality was left as a shift and a compare; the pin tests the
+/// amount directly (`(lshr 40, %x) == 5` is `%x == 3`).
+#[test]
+fn an_equality_of_a_constant_shifted_by_a_variable_tests_the_amount() {
+    let eq = |op: &str, pred: &str, shifted: i32, c: i32| {
+        format!("  %s = {op} i32 {shifted}, %x\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&eq("lshr", "eq", 40, 5), &["icmp eq i32 %x, 3"]);
+    on_i386(&eq("lshr", "ne", 40, 5), &["icmp ne i32 %x, 3"]);
+    // Zero: the amount must shift out the highest set bit (log2 40 = 5).
+    on_i386(&eq("lshr", "eq", 40, 0), &["icmp ugt i32 %x, 5"]);
+    on_i386(&eq("lshr", "ne", 40, 0), &["icmp ult i32 %x, 6"]);
+    on_i386(&eq("lshr", "eq", 40, 40), &["icmp eq i32 %x, 0"]);
+    // 40 >> 3 = 5, never 7.
+    on_i386(&eq("lshr", "eq", 40, 7), &["ret i1 false"]);
+    on_i386(&eq("lshr", "ne", 40, 7), &["ret i1 true"]);
+    // Several solutions when comparing against -1: any amount of 4 or more.
+    on_i386(&eq("ashr", "eq", -16, -1), &["icmp ugt i32 %x, 3"]);
+    on_i386(&eq("ashr", "eq", -16, -4), &["icmp eq i32 %x, 2"]);
+}
+
 /// shellsort's gap-32 copy kept `icmp ult (trunc nuw i32 %x to i16), 32`: the
 /// compare stayed narrow, SCEV found no exit count and the one-trip inner loop
 /// stayed (3 blocks the pin deletes). `foldICmpTruncConstant`'s nuw/nsw arm was

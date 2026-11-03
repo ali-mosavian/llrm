@@ -442,11 +442,74 @@ fn fold_icmp_trunc_constant(
     Some(new_icmp(c, inst, pred, x, bound))
 }
 
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L984
+/// `foldICmpShrConstConst`: `icmp eq/ne (lshr/ashr AP2, A), AP1` is
+/// `icmp eq/ne A, log2(AP2) - log2(AP1)`.
+fn fold_icmp_shr_const_const(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    a: Operand,
+    (ap1, ap2): (u128, u128),
+    width: u32,
+    is_ashr: bool,
+) -> Option<Visit> {
+    let m = mask(width);
+    let ty = c.type_of(a);
+    let ne = pred == IntPredicate::Ne;
+    // `getICmp`: the inverse predicate for `ne`.
+    let get_icmp = |c: &mut Combiner, pred: IntPredicate, rhs: u128| {
+        let pred = if ne { pred.inverse() } else { pred };
+        let rhs = c.int(ty, rhs);
+        new_icmp(c, inst, pred, a, rhs)
+    };
+    // Don't bother doing any work for cases which InstSimplify handles.
+    if ap2 == 0 {
+        return None;
+    }
+    if is_ashr {
+        if ap2 == m || is_negative(ap2, width) != is_negative(ap1, width) {
+            return None;
+        }
+        if llrm_mir::context::signed(ap2, width) > llrm_mir::context::signed(ap1, width) {
+            return None;
+        }
+    }
+    let leading_zeros = |v: u128| v.leading_zeros() - (128 - width);
+    let leading_ones = |v: u128| leading_zeros(!v & m);
+    if ap1 == 0 {
+        // 'A' must be large enough to shift out the highest set bit.
+        return Some(get_icmp(c, IntPredicate::Ugt, u128::from(width - 1 - leading_zeros(ap2))));
+    }
+    if ap1 == ap2 {
+        return Some(get_icmp(c, IntPredicate::Eq, 0));
+    }
+    let shift = if is_ashr && is_negative(ap1, width) {
+        leading_ones(ap1) as i32 - leading_ones(ap2) as i32
+    } else {
+        leading_zeros(ap1) as i32 - leading_zeros(ap2) as i32
+    };
+    if shift > 0 {
+        let sh = shift as u32;
+        let ashr = |v: u128| (llrm_mir::context::signed(v, width) >> sh) as u128 & m;
+        if is_ashr && ap1 == ashr(ap2) {
+            // There are multiple solutions if we are comparing against -1 and
+            // the LHS of the ashr is not a power of two.
+            if ap1 == m && !ap2.is_power_of_two() {
+                return Some(get_icmp(c, IntPredicate::Uge, u128::from(sh)));
+            }
+            return Some(get_icmp(c, IntPredicate::Eq, u128::from(sh)));
+        } else if ap1 == ap2 >> sh {
+            return Some(get_icmp(c, IntPredicate::Eq, u128::from(sh)));
+        }
+    }
+    // Shifting const2 will never be equal to const1.
+    let i1 = c.context.types.int(1);
+    Some(Visit::Replace(c.int(i1, u128::from(ne))))
+}
+
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2588
 /// `foldICmpShrConstant`: `icmp (lshr/ashr X, Y), C`.
-///
-/// OWED: `foldICmpShrConstConst`, the equality of a constant shifted by a
-/// variable amount.
 #[allow(clippy::too_many_arguments)]
 fn fold_icmp_shr_constant(
     c: &mut Combiner,
@@ -470,8 +533,7 @@ fn fold_icmp_shr_constant(
 
     if let Some((shifted, _)) = query(c, None).int_constant(x) {
         if is_equality(pred) {
-            // OWED: foldICmpShrConstConst.
-            return None;
+            return fold_icmp_shr_const_const(c, inst, pred, amount, (value, shifted), width, is_ashr);
         }
         // (ShiftValC >> Y) >s -1 --> Y != 0 with ShiftValC < 0
         // (ShiftValC >> Y) <s  0 --> Y == 0 with ShiftValC < 0
