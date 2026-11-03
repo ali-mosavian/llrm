@@ -24,7 +24,18 @@ def test_driver_style_object_without_data_counts_zero():
     assert Z.data_size(rel("A _CODE size 5 flags 0 addr 0\n")) == 0
 
 
+
+def test_header_names_no_local_path():
+    """The z80 table header carried the cc1 path, which the landing runner refuses."""
+    import gcc_6502_bench as S
+    f = tempfile.NamedTemporaryFile(delete=False, suffix="-cc1"); f.write(b"x"); f.close()
+    for m in (Z, S):
+        line = m.cc1_line(f.name)
+        assert f.name not in line and "/" not in line and line.startswith("cc1 md5 ")
+
+
 if __name__ == "__main__":
+    test_header_names_no_local_path()
     test_table_in_data_is_counted()
     test_driver_style_object_without_data_counts_zero()
     print("ok")

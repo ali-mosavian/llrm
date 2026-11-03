@@ -80,6 +80,11 @@ def md5(p):
     return hashlib.md5(open(p, "rb").read()).hexdigest()
 
 
+def cc1_line(path):
+    """Table header line: the md5 only; a local path in a table is refused by the landing runner."""
+    return f"cc1 md5 {md5(path)}"
+
+
 def driver(args, wide, expect, calls, rel=None):
     s = [".export _main", ".export _buf, _str, _tab, _lz, _lzout, _mix, _mix2, _num, _pat, _set, _dst"]
     s += [f".exportzp rc{i}" for i in range(ZP)]
@@ -206,7 +211,7 @@ def main():
     open(f"{w}/empty.c", "w").write("")
     r = sh([a.cc1, "-version", "-quiet", "empty.c", "-o", "/dev/null"], w)
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
-    hdr = [f"cc1: {a.cc1} md5 {md5(a.cc1)}", f"version: {ver}",
+    hdr = [cc1_line(a.cc1), f"version: {ver}",
            "assembler/linker/sim: " + sh(["sim65", "--version"], w).stderr.strip().splitlines()[0] + " (ca65/ld65 via cl65 -t " + TARGET + ")",
            "flags: cc1 -quiet -<level> -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls plus the caller's result move"]
     rows, bad, notes = {}, [], {}

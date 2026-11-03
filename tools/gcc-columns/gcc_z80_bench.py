@@ -49,6 +49,11 @@ def md5(path):
     return hashlib.md5(open(path, "rb").read()).hexdigest()
 
 
+def cc1_line(path):
+    """Table header line: the md5 only; a local path in a table is refused by the landing runner."""
+    return f"cc1 md5 {md5(path)}"
+
+
 def code_size(rel):
     return sum(int(m.group(2), 16) for m in (re.match(r"A (\S+) size ([0-9A-Fa-f]+) flags", l) for l in open(rel))
                if m and m.group(1) in ("_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"))
@@ -112,7 +117,7 @@ def main():
     open(f"{w}/empty.c", "w").write("")
     r = sh([a.cc1, "-version", "-quiet", "empty.c", "-o", "/dev/null"], w)
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
-    hdr = [f"cc1: {a.cc1} md5 {md5(a.cc1)}", f"version: {ver}",
+    hdr = [cc1_line(a.cc1), f"version: {ver}",
            "assembler/linker: sdasz80/sdldz80 (SDCC 4.5.0), ucsim_z80",
            "flags: cc1 -quiet -<level> -DK_<name> kernels.c; driver cc1 -quiet -O1"]
     base_flags = ["-quiet"]
