@@ -851,6 +851,18 @@ fn a_byte_compared_with_a_constant_is_not_widened_to_a_word_compare() {
     assert!(out.contains("cp a, #255") && !out.contains("sub a, #255"), "{out}");
 }
 
+/// fletcher -O2 made its zero in the loop (`ld e, #0` then `ld c, e`, every
+/// trip) once the plain allocation was chosen over the hoisted one by static
+/// size alone: 35 B / 1456 T became 35 B / 1561 T. The two are chosen by the
+/// loop's weighted clocks.
+#[test]
+fn a_zero_a_loop_needs_is_made_before_the_loop_when_that_is_faster() {
+    let ir = include_str!("kernels/ir/fletcher.ll");
+    let out = text(ir, "fletcher", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let body = out.split("L0_2:").nth(1).and_then(|rest| rest.split("L0_12:").next()).expect("the loop");
+    assert!(!body.contains("#0"), "{out}");
+}
+
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
 /// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.

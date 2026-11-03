@@ -114,21 +114,34 @@ fn allocated_with(
         return allocate(function, name, request.level);
     }
     // the allocator does not see that a byte of a pair is read in place, so a
-    // constant kept across a loop can cost more than making it there: the
-    // hoisted loop stays only if it is no bigger and no slower
+    // constant kept across a loop can cost more than making it there, or less:
+    // the hoisted loop stays unless the plain one is cheaper by the loop's
+    // weighted cost
     let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
-    let price = |one: &Allocated| {
-        let (function, assignment, slots, reads) = one;
-        finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price(&lines))
-    };
     match (plain, with) {
-        (Ok(plain), Ok(with)) => match (price(&plain), price(&with)) {
-            (Some((pb, pt)), Some((wb, wt))) if wb > pb || wt > pt => Ok(plain),
+        (Ok(plain), Ok(with)) => match (priced_in_loops(&plain), priced_in_loops(&with)) {
+            (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
             _ => Ok(with),
         },
         (_, Ok(with)) => Ok(with),
         (plain, Err(_)) => plain,
     }
+}
+
+/// Bytes and the clocks weighted by loop depth of an allocated function.
+fn priced_in_loops(one: &Allocated) -> Option<(u32, u64)> {
+    let (function, assignment, slots, reads) = one;
+    finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
+}
+
+/// Whether the price `one` beats `other`: bytes first at the size levels,
+/// weighted clocks first otherwise.
+fn cheaper(
+    level: Level,
+    one: (u32, u64),
+    other: (u32, u64),
+) -> bool {
+    if matches!(level, Level::Os | Level::Oz) { one < other } else { (one.1, one.0) < (other.1, other.0) }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -155,21 +168,9 @@ fn allocate(
             // the cheaper by the loop's weighted clocks stays, bytes first at
             // the size levels and clocks first otherwise
             let other = with(Some(!crate::abi::z80().pinned_copies_unjoined), function);
-            let price = |one: &Allocated| {
-                let (function, assignment, slots, reads) = one;
-                finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
-            };
-            match (other, price(&first)) {
-                (Ok(other), Some((bytes, clocks))) => match price(&other) {
-                    Some((other_bytes, other_clocks))
-                        if if matches!(level, Level::Os | Level::Oz) {
-                            (other_bytes, other_clocks) < (bytes, clocks)
-                        } else {
-                            (other_clocks, other_bytes) < (clocks, bytes)
-                        } =>
-                    {
-                        Ok(other)
-                    }
+            match (other, priced_in_loops(&first)) {
+                (Ok(other), Some(one)) => match priced_in_loops(&other) {
+                    Some(two) if cheaper(level, two, one) => Ok(other),
                     _ => Ok(first),
                 },
                 _ => Ok(first),
