@@ -6,7 +6,7 @@ hand-written runtime helpers and the measured tables are here.
 
     gcc_z80_bench.py  --cc1 PATH   # 23 kernels x O1/O2/Os, ucsim_z80; --tsv writes matrix rows
     gcc_6502_bench.py --cc1 PATH [--cpu 65c02]   # 30 C kernels + 51 hand-corpus kernels x O1/O2/Os, sim65
-    vs_6502.py MATRIX_DIR OUT.md DATE
+    vs_6502.py MATRIX_DIR OUT.md DATE [65c02]   # MATRIX_DIR holds 6502.tsv (the other columns) and 6502-gcc.tsv
 
 `PATH` is the fork's `cc1` (`make all-gcc`, target `z80-unknown-elf` or `mos6502-unknown-elf`). Methods are
 the benches' own: cycles per call from a 1- and 101-call run, bytes from the linked code. Every cell is

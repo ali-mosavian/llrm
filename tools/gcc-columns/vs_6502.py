@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """gcc column vs the other NMOS columns of matrix/6502.tsv -> markdown. usage: vs_6502.py MATRIX_DIR OUT.md DATE"""
-import collections, sys
+import collections, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gcc_6502_bench as G
 d, out, date = sys.argv[1:4]
 cmos = len(sys.argv) > 4 and sys.argv[4] == "65c02"
 GCC = "gcc-65c02" if cmos else "gcc"
@@ -36,4 +38,18 @@ for p in g:
         n += 1; a = gb < ob; b = gc < oc; wb += a; wc += b; w = ("bytes " if a else "") + ("clk" if b else "") or "none"
     L.append(f"| {p} | {gb} | {gc} | {gi if gi is not None else '-'} | {cell('ours')} | {cell('llvm-mos')} | {cell('sdcc')} | {cell('cc65')} | {w} |")
 L += ["", f"Of {n} programs, gcc strictly beats the best other column in bytes on {wb} and in clocks on {wc}."]
+# ABI bias: gcc returns in rc2:rc3, the others in A:X; the bench does not charge the caller's load of the result.
+HAND = os.environ.get("HAND_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "crates/target/llrm-6502/tests/bench/hand")
+wide = {n: wd for n, ar, wd, ex in G.K}
+wide.update({n: wd for n, ar, wd, ex, src, rel in G.load_hand(HAND)})
+ours = collections.defaultdict(dict)
+for t, p, l, c, b, k, i, n in rows(f'{d}/6502.tsv'):
+    if c == NAMES["ours"] and b and k:
+        ours[p][l] = int(k)
+w0 = w1 = 0
+for p in g:
+    if p in ours:
+        gk = min(x[1] for x in g[p]); ok = min(ours[p].values())
+        w0 += gk < ok; w1 += gk + (6 if wide.get(p) else 3) < ok
+L += ["", f"ABI caveat: gcc returns in rc2:rc3, ours/llvm-mos/cc65 in A:X, and the bench charges only the callee. Against ours, gcc is faster on {w0} programs; adding the caller's load of the result (3 clk, 16-bit 6 clk) to every gcc cell leaves {w1}."]
 open(out, 'w').write("\n".join(L) + "\n"); print(L[-1])
