@@ -466,6 +466,18 @@ fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() 
     );
 }
 
+/// xs8's `x << 3` was `sla a` x3 (2 B / 8 T a bit) and its `x >> 5` `srl a` x5:
+/// 35 B / 737 T against SDCC's 26 B / 546 T. A byte shifted left in `a` is
+/// `add a, a`; a logical right shift by two or more, with the flags dead, is
+/// `rlca`/`rrca` the short way round and an `and` of the surviving bits.
+#[test]
+fn a_byte_shifted_in_a_is_doublings_and_a_rotate_with_a_mask() {
+    let ir = include_str!("kernels/ir/xs8.ll");
+    let out = text(ir, "xs8", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add a, a").count() >= 4 && out.matches("rlca").count() == 3, "{out}");
+    assert!(out.contains("and a, #7") && !out.contains("sla a") && !out.contains("srl a"), "{out}");
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.
@@ -788,6 +800,18 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
         let out = text(ir, "slen", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
         assert!(out.contains("_strlen"), "{level:?}\n{out}");
     }
+}
+
+/// minmax -Oz loaded a byte into `a` that its max compare also reads from a
+/// register, so the byte was copied out of `a` again and the pointer lost its
+/// pair: spilled and reloaded by `pop de; push de` every trip, 60 B / 2938 T
+/// became 64 B / 3557 T. A byte a non-copy reads as a register is not loaded
+/// through `a`.
+#[test]
+fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
 }
 
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:

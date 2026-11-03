@@ -359,6 +359,23 @@ impl Printer<'_> {
                 self.push("or a, a");
                 self.push(format!("sbc hl, {source}"));
             }
+            // in `a` a left shift is `add a, a` (1 B / 4 T a bit against `sla
+            // a`'s 2 B / 8 T), and a logical right shift by two or more, where
+            // nothing reads the flags, rotates the bits round (the shorter way)
+            // and masks: `rlca` x3, `and #7` for `>> 5`
+            "SHL8" if name_of(self, 0)? == "a" => {
+                for _ in 0..shift_count(inst)? {
+                    self.push("add a, a");
+                }
+            }
+            "SRL8" if name_of(self, 0)? == "a" && (2..8).contains(&shift_count(inst)?) && self.flags_dead(rest) => {
+                let count = shift_count(inst)?;
+                let (rotate, turns) = if count <= 4 { ("rrca", count) } else { ("rlca", 8 - count) };
+                for _ in 0..turns {
+                    self.push(rotate);
+                }
+                self.push(format!("and a, #{}", 0xFFu32 >> count));
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
