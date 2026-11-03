@@ -814,6 +814,17 @@ fn a_return_block_only_conditional_returns_reach_is_not_printed() {
     assert!(out.contains("ret z"), "{out}");
 }
 
+/// lz4's `tmp == 255` was widened to a word compare of the zero-extended load
+/// (`ExtendSetCCUses`, as the pin does where a word compare costs the same as a
+/// byte one): `ld a, l; sub a, #255; jr nz; ld a, h; sub a, #0`, and the extra
+/// pressure spilled more. The compare stays on the byte: `cp a, #255`.
+#[test]
+fn a_byte_compared_with_a_constant_is_not_widened_to_a_word_compare() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    let out = text(ir, "lz4", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("cp a, #255") && !out.contains("sub a, #255"), "{out}");
+}
+
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
 /// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.

@@ -214,6 +214,12 @@ pub struct Options {
     /// `llc`, whose own CodeGenPrepare runs inside it, take the module
     /// before this one (`-fllrm-cgpaddr`).
     pub cgpaddr: bool,
+    /// `extload`, DAGCombiner's `ExtendUsesToFormExtLoad` and
+    /// `ExtendSetCCUses`: the compares of a loaded value compare its
+    /// extension. The pin forms the extending load only where the target
+    /// has it (`isLoadExtLegal`); off for a target that has not, where the
+    /// wider compare costs more than the extension saved.
+    pub extload: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
     pub typepromotion: bool,
@@ -310,6 +316,7 @@ impl Default for Options {
             promote: true,
             strength: true,
             cgpaddr: true,
+            extload: true,
             typepromotion: true,
             lsr: true,
             unroll: true,
@@ -485,6 +492,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" => self.strength && self.cgpaddr,
+            "extload" => self.extload,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,

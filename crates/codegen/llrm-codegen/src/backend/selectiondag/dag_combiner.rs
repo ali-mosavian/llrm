@@ -141,6 +141,20 @@ pub trait CombineHooks {
         false
     }
 
+    /// `ExtendSetCCUses`: the compares of a load against a constant, which
+    /// `ExtendUsesToFormExtLoad` widens to compare its extension, of the type
+    /// `wide`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15421>).
+    /// The pin always does; a target where the wider compare costs
+    /// more than the narrow one (the Z80's word compare against a constant is
+    /// two byte compares) leaves them on `trunc` of the extending load.
+    fn extend_setcc_uses(
+        &self,
+        _wide: EVT,
+    ) -> bool {
+        true
+    }
+
     /// `TargetLowering::isMulAddWithConstProfitable` for a single-use add, on
     /// the constants `c1` and `c2` of the type `vt`.
     fn is_mul_add_with_const_profitable(
@@ -1528,6 +1542,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         for &user in others {
             let user_value = SDValue { node: user, res: 0 };
             if op != ISD::AnyExtend && self.dag.opcode(user_value) == ISD::SetCC {
+                if !self.hooks.extend_setcc_uses(self.dag.value_type(node)) {
+                    continue;
+                }
                 let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(user_value, 2)).data else { return false };
                 if op == ISD::ZeroExtend && cc.is_signed_int() {
                     return false;
