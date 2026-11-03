@@ -136,6 +136,7 @@ fn allocate(
 ) -> Result<Allocated, String> {
     two_address(&mut function);
     read_bytes_through_their_pairs(&mut function);
+    use_the_shift_carry(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
@@ -155,6 +156,73 @@ fn allocate(
         slots.clear();
     }
     Ok((function, assignment, slots, reads))
+}
+
+/// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. : ..`
+/// beside `c << 1`) is the carry the shift left behind: `jr c` after `sla e; rl d`
+/// (or `add hl, hl`). The test copied the high byte before the shift and read its
+/// bit after (`ld h, d` ... `bit 7, h`), 5 B and 12 T on each of crc16's 8 trips.
+///
+/// Only a test whose value is the one the shift read (the copy the shift is tied
+/// to, unchanged since), read by branches in the block, with no flags set
+/// between the shift and the test.
+pub fn use_the_shift_carry(function: &mut MFunction) {
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let found = (|| {
+                let shift = &block.insts[at];
+                let (Kind::Op("SHL16"), [Operand::Def(Reg::Virt(shifted)), Operand::Use(Reg::Virt(tied)), Operand::Imm(1)]) =
+                    (shift.kind, &shift.operands[..])
+                else {
+                    return None;
+                };
+                if shifted != tied {
+                    return None;
+                }
+                // the copy the shift's operand was made by, and the value it copies
+                let copy = block.insts[..at].iter().rposition(|inst| {
+                    matches!(&inst.operands[..], [Operand::Def(Reg::Virt(d)), ..] if d == shifted)
+                })?;
+                let [Operand::Def(_), Operand::Use(Reg::Virt(old))] = block.insts[copy].operands[..] else { return None };
+                if block.insts[copy].kind != Kind::Copy {
+                    return None;
+                }
+                let writes = |inst: &Inst, v: u32| inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == v));
+                if block.insts[copy + 1..at].iter().any(|inst| writes(inst, old) || inst.call) {
+                    return None;
+                }
+                // the test of the old value, after the shift with no flag set between
+                let mut test = None;
+                for (k, inst) in block.insts.iter().enumerate().skip(at + 1) {
+                    if inst.kind == Kind::Op("BIT7_16") && matches!(&inst.operands[..], [_, Operand::Use(Reg::Virt(v))] if *v == old) {
+                        test = Some(k);
+                        break;
+                    }
+                    if inst.sets_flags || inst.call || writes(inst, old) {
+                        return None;
+                    }
+                }
+                let test = test?;
+                // every reader is a branch of this block
+                let readers: Vec<usize> = (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags).collect();
+                let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags);
+                let ends_here = block.insts.last().is_some_and(|inst| inst.terminator);
+                let branches = readers.iter().all(|&k| matches!(block.insts[k].kind, Kind::Op("JPZ" | "JPNZ")));
+                (!readers.is_empty() && branches && !flags_set_later && ends_here).then_some((test, readers))
+            })();
+            if let Some((test, readers)) = found {
+                for k in readers {
+                    block.insts[k].kind = match block.insts[k].kind {
+                        Kind::Op("JPNZ") => Kind::Op("JPC"),
+                        _ => Kind::Op("JPNC"),
+                    };
+                }
+                block.insts.remove(test);
+            }
+            at += 1;
+        }
+    }
 }
 
 /// A byte loaded through `hl` that is wanted in `a` is loaded through

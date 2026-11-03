@@ -105,7 +105,7 @@ fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
     let ir = include_str!("kernels/ir/crc16.ll");
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     let (test, xor) =
-        (out.find("bit 7, ").expect("tests the top bit"), out.find("xor a, #33").expect("xors the low byte"));
+        (out.find("jr nc, ").expect("branches on the top bit (the shift's carry)"), out.find("xor a, #33").expect("xors the low byte"));
     assert!(test < xor, "{out}");
 }
 
@@ -274,7 +274,7 @@ fn a_loop_over_a_string_is_the_runtimes_strlen() {
 fn a_pair_copy_moves_only_the_halves_that_are_read() {
     let ir = include_str!("kernels/ir/crc16.ll");
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("ld h, d") && !out.contains("ld l, e"), "{out}");
+    assert!(!out.contains("ld l, e") && !out.contains("bit 7, h"), "{out}");
 }
 
 /// crc16: the pointer and the length fit in `hl` and `a` through the loops,
@@ -511,6 +511,51 @@ fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borro
               define i16 @f(i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  %d = sub i16 %x, %y\n  ret i16 %d\n}\n";
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl"), "{out}");
+}
+
+/// `c & 0x8000 ? .. : ..` beside `c << 1` tested the sign of a copy of the high
+/// byte after the shift (`ld h, d` ... `bit 7, h`): the carry of the shift has
+/// that bit. 3 B and 12 T on each of crc16's 8 trips. A test of some other
+/// value stays.
+#[test]
+fn the_sign_tested_beside_a_shift_left_is_the_shifts_carry() {
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::reg;
+    let copy = |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let shift = |v: u32| {
+        Inst {
+            sets_flags: true,
+            ..Inst::new(Kind::Op("SHL16"), vec![Operand::Def(Reg::Virt(v)), Operand::Use(Reg::Virt(v)), Operand::Imm(1)])
+        }
+    };
+    let bit = |of: u32| {
+        Inst {
+            sets_flags: true,
+            ..Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Virt(of))])
+        }
+    };
+    let branch = Inst {
+        terminator: true,
+        reads_flags: true,
+        ..Inst::new(Kind::Op("JPNZ"), vec![Operand::Block(0), Operand::Use(Reg::Phys(reg::FLAGS))])
+    };
+    let kinds = |function: &MFunction| -> Vec<Kind> { function.blocks[0].insts.iter().map(|inst| inst.kind).collect() };
+    let build = |tested: u32| {
+        let mut function = MFunction::new("f");
+        function.classes = vec![llrm_z80::regalloc::Class::Gr16; 3];
+        function.blocks.push(Block {
+            id: 0,
+            insts: vec![copy(1, 0), shift(1), copy(2, 1), bit(tested), branch.clone()],
+            phis: Vec::new(),
+        });
+        function
+    };
+    let mut same = build(0);
+    llrm_z80::compile::use_the_shift_carry(&mut same);
+    assert_eq!(kinds(&same), [Kind::Copy, Kind::Op("SHL16"), Kind::Copy, Kind::Op("JPC")], "{:?}", kinds(&same));
+    let mut other = build(2);
+    llrm_z80::compile::use_the_shift_carry(&mut other);
+    assert_eq!(kinds(&other), [Kind::Copy, Kind::Op("SHL16"), Kind::Copy, Kind::Op("BIT7_16"), Kind::Op("JPNZ")]);
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:
