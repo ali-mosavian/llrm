@@ -45,3 +45,23 @@ fn test_an_extended_intrinsic_has_a_price() {
         }
     }
 }
+
+/// The corpus scan (every target, O1 to Os) met these `Invalid`: a loop that
+/// held one was never sized, so it was never unrolled, on any x86 target.
+#[test]
+fn test_every_intrinsic_the_corpus_meets_has_a_price() {
+    let x86 = X86::of_cpu("i486").unwrap();
+    for name in [
+        "llvm.ctlz.i32",
+        "llvm.bitreverse.i32",
+        "llvm.sadd.sat.i32",
+        "llvm.usub.sat.i64",
+        "llvm.memcpy.p0.p0.i64",
+        "llvm.memset.p0.i64",
+        "llvm.prefetch.p0",
+        "llvm.va_start.p0",
+        "llvm.abs.i128",
+    ] {
+        assert!(x86.intrinsic_cost(name, None, &[], CostKind::SizeAndLatency) != Cost::INVALID, "{name}");
+    }
+}

@@ -137,7 +137,7 @@ define internal i32 @in(i32 %x) {
 INTRINSICS = []
 def intr(name, ret, args):
     INTRINSICS.append((name, ret, args))
-INTS = ["i8", "i16", "i32", "i64"]
+INTS = ["i8", "i16", "i32", "i64", "i128"]
 FLOATS = [("f64", "double"), ("f32", "float"), ("f80", "x86_fp80")]
 PTRS = {"p0": "ptr", "p1": "ptr addrspace(1)", "p2": "ptr addrspace(2)"}
 for ty in INTS:
@@ -148,6 +148,10 @@ for ty in INTS:
     intr(f"llvm.ctpop.{ty}", ty, [ty]); intr(f"llvm.bswap.{ty}", ty, [ty]) if ty != "i8" else None
     intr(f"llvm.abs.{ty}", ty, [ty, "i1"])
     intr(f"llvm.cttz.{ty}", ty, [ty, "i1"])
+    intr(f"llvm.ctlz.{ty}", ty, [ty, "i1"])
+    intr(f"llvm.bitreverse.{ty}", ty, [ty])
+    for m in ["sadd", "uadd", "ssub", "usub"]:
+        intr(f"llvm.{m}.sat.{ty}", ty, [ty, ty])
     intr(f"llvm.smul.fix.{ty}", ty, [ty, ty, "i32"])
     intr(f"llvm.fshl.{ty}", ty, [ty, ty, ty]); intr(f"llvm.fshr.{ty}", ty, [ty, ty, ty])
 for f, t in FLOATS:
@@ -158,23 +162,29 @@ for f, t in FLOATS:
         intr(f"llvm.lrint.{r}.{f}", r, [t])
 # The cost model prints no price for `llvm.lifetime.*`: test_lifetime_and_assume_are_free covers them.
 intr("llvm.assume", "void", ["i1"])
+intr("llvm.prefetch.p0", "void", ["ptr", "i32", "i32", "i32"])
+intr("llvm.ptrmask.p0.i32", "ptr", ["ptr", "i32"])
+intr("llvm.va_start.p0", "void", ["ptr"])
+intr("llvm.va_end.p0", "void", ["ptr"])
+intr("llvm.va_copy.p0", "void", ["ptr", "ptr"])
 for dst, dty in PTRS.items():
-    for ln in ["i16", "i32"]:
+    for ln in ["i16", "i32", "i64"]:
         intr(f"llvm.memset.{dst}.{ln}", "void", [dty, "i8", ln, "i1"])
         for src, sty in PTRS.items():
             intr(f"llvm.memcpy.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
             intr(f"llvm.memmove.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
 body = []; decls = []
 for n, (name, ret, args) in enumerate(INTRINSICS):
-    vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "x86_fp80": "%e", "i1": "false",
+    vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "x86_fp80": "%e", "i128": "%o", "i1": "false",
             "ptr": "%p", "ptr addrspace(1)": "%p1", "ptr addrspace(2)": "%p2"}
     cargs = ", ".join(f"{t} {vals[t]}" for t in args)
     # SimplifyCFG's switch-of-powers-of-two prices `cttz(x, true)`.
     if name.startswith("llvm.cttz."): cargs = f"{args[0]} {vals[args[0]]}, i1 true"
+    if name == "llvm.prefetch.p0": cargs = "ptr %p, i32 0, i32 3, i32 1"
     if ".fix." in name: cargs = f"{args[0]} {vals[args[0]]}, {args[1]} {vals[args[1]]}, i32 3"
     body.append(f"  {'' if ret == 'void' else f'%v{n} = '}call {ret} @{name}({cargs})")
     decls.append(f"declare {ret} @{name}({', '.join(args)})")
-fn("intrinsics", "i8 %b, i16 %a, i32 %w, i64 %q, double %d, float %f, x86_fp80 %e, ptr %p, ptr addrspace(1) %p1, ptr addrspace(2) %p2", "\n".join(body), "\n".join(decls) + "\n")
+fn("intrinsics", "i8 %b, i16 %a, i32 %w, i64 %q, i128 %o, double %d, float %f, x86_fp80 %e, ptr %p, ptr addrspace(1) %p1, ptr addrspace(2) %p2, ...", "\n".join(body), "\n".join(decls) + "\n")
 
 corpus = HEAD + G + "".join(FUNCS.values())
 open(os.path.join(HERE, "instructioncost_corpus.ll"), "w").write(corpus)
