@@ -537,7 +537,25 @@ impl Cost {
         tti: &dyn Tti,
         other: &Cost,
     ) -> bool {
+        // DEVIATE LU8: where the address forms name fewer registers than the
+        // target has (m16: bx, si, di), a solution that fits them beats one
+        // that does not, whatever the model counts: the registers past the
+        // class are reloaded every trip. Between two that both fit, or both
+        // overflow, the target's order stands.
+        let (mine, theirs) = (self.overflows(tti), other.overflows(tti));
+        if mine != theirs {
+            return theirs;
+        }
         tti.is_lsr_cost_less(&self.c, &other.c)
+    }
+
+    /// Whether the address registers rated exceed the target's address class.
+    fn overflows(
+        &self,
+        tti: &dyn Tti,
+    ) -> bool {
+        let class = tti.address_registers();
+        class < tti.number_of_gpr_registers() && self.addressed.len() > class as usize && !self.is_loser()
     }
 
     /// `RateFormula`: the cost of `f` for `lu`, `regs` the registers already
@@ -568,34 +586,14 @@ impl Cost {
             }
         }
 
-        // DEVIATE LU8: where the target's address forms name fewer registers
-        // than it has (m16: bx, si, di), the address registers past them are
-        // reloaded every trip, as the general registers past the budget are
-        // below.
-        let class = r.tti.address_registers();
-        if lu.kind == Kind::Address && class < r.tti.number_of_gpr_registers() {
-            let scaled = f.scaled_reg.filter(|_| f.scale > 1);
-            for reg in scaled.into_iter().chain(f.base_regs.iter().copied()) {
-                // A counter stepped in place is one of the loop's own
-                // recurrences, not a register held for the address.
-                if r.se.addrec_header(reg) == Some(r.l) && scaled != Some(reg) {
-                    continue;
-                }
+        // DEVIATE LU8: tally the registers the address forms hold, for
+        // `overflows`.
+        if lu.kind == Kind::Address {
+            for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
                 // A constant or a global folds into the displacement; a far
                 // pointer cast from a segment alone has no offset to hold.
-                if holds_no_offset(r, reg) {
-                    continue;
-                }
-                if !self.addressed.contains(&reg) {
+                if !holds_no_offset(r, reg) && !self.addressed.contains(&reg) {
                     self.addressed.push(reg);
-                    // One past the class shares a slot with another, and each
-                    // use of the two reloads it: two instructions; each more,
-                    // one.
-                    match self.addressed.len().checked_sub(class as usize) {
-                        Some(1) => self.c.insns += 2,
-                        Some(_) => self.c.insns += 1,
-                        _ => {}
-                    }
                 }
             }
         }
