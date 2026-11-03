@@ -144,6 +144,15 @@ static sf64 div_bits(sf64 a, sf64 b)
     while ((int64_t)r < 0) { q--; r += mb; }
     while (r >= mb) { q++; r -= mb; }
     inexact = r != 0;
+#elif defined(SF_DIV64_6502)
+    /* The restoring loop below as a 6502 routine over fixed cells (src/6502/div64.s). */
+    extern uint64_t sf_d64_ma, sf_d64_mb, sf_d64_q, sf_d64_r;
+    extern void __sf_div64(void);
+    sf_d64_ma = ma;
+    sf_d64_mb = mb;
+    __sf_div64();
+    q = sf_d64_q, r = sf_d64_r;
+    inexact = r != 0;
 #else
     /* One quotient bit per step. */
     q = 0, r = ma;
