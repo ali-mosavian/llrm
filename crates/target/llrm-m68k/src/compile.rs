@@ -135,6 +135,7 @@ pub fn items_with(
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
+        crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
         crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
