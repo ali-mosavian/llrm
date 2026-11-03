@@ -715,6 +715,7 @@ name = "llrm-transforms"
 version = "0.1.0"
 dependencies = [
  "llrm-analysis",
+ "llrm-arm64",
  "llrm-gpl-gcc",
  "llrm-mir",
  "llrm-support",

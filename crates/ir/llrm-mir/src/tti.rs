@@ -354,6 +354,14 @@ pub trait Tti {
         false
     }
 
+    /// What a byte of growth is worth, in thousandths of a clock, to a speed
+    /// caller's inline (D11 at speed): the growth is refused when it costs
+    /// more than the call's latency saves, weighted by the site's frequency.
+    /// 0: the pin's threshold alone.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around

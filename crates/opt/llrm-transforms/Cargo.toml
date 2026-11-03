@@ -19,6 +19,7 @@ gcc-gpl = ["dep:llrm-gpl-gcc"]
 
 [dev-dependencies]
 regex = { workspace = true }
+llrm-arm64 = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }

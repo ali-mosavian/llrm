@@ -284,6 +284,13 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
+    /// clocks. The median of the -O2/-O3 cells where inlining grew the code
+    /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        250_000
+    }
+
     /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
     /// when the loaded type is a byte, half or word and both types are one
     /// register (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1297).
