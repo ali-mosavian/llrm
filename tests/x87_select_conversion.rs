@@ -55,3 +55,15 @@ fn test_a_cheap_conversion_on_x86_64_keeps_the_clamp_a_select() {
     assert_eq!(text.matches("cvttsd2si").count(), 1, "{text}");
     assert!(!text.contains(", -3\n"), "{text}");
 }
+
+/// `a < b ? -1 : (a > b)`: the second compare (`fcom; fnstsw; sahf`, 9 clocks
+/// at 486) was made before the branch on the first, on every call
+/// (x_ldcmp -O2: 213070 clocks against gcc's 204830).
+#[test]
+fn test_the_second_compare_of_a_three_way_compare_follows_the_branch_on_the_first() {
+    let text = assembled("int f(double a, double b) { return a < b ? -1 : (a > b); }\n");
+    let first = text.find("fnstsw").expect("a compare");
+    let second = text[first + 1..].find("fnstsw").map(|at| at + first + 1).expect("a second compare");
+    let between = &text[first..second];
+    assert!(between.contains("\n    j"), "a branch separates the compares: {text}");
+}

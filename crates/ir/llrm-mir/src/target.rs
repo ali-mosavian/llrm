@@ -390,6 +390,9 @@ pub struct OperationCosts {
     /// truncates, and the word back); 0 where the target converts in one cheap
     /// instruction.
     pub float_to_int: i64,
+    /// A float compare whose answer is in a register (x87 `fcom`, `fnstsw`,
+    /// `sahf`); 0 where the target states none.
+    pub float_compare: i64,
     pub extend: i64,
     /// A comparison held as a value (`setcc`), before it is extended.
     pub set: i64,
@@ -525,6 +528,7 @@ impl Default for OperationCosts {
             float_store: 1,
             float_release: 0,
             float_to_int: 0,
+            float_compare: 0,
             extend: 1,
             set: 1,
             fill: 1,

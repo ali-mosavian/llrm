@@ -75,7 +75,7 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 40] = [
+const OPERATIONS: [&str; 41] = [
     "add",
     "multiply",
     "divide",
@@ -107,6 +107,7 @@ const OPERATIONS: [&str; 40] = [
     "float_store",
     "float_release",
     "float_to_int",
+    "float_compare",
     "extend",
     "set",
     "fill",
@@ -248,6 +249,7 @@ impl Description {
                 "float_store" => out.float_store = value,
                 "float_release" => out.float_release = value,
                 "float_to_int" => out.float_to_int = value,
+                "float_compare" => out.float_compare = value,
                 "extend" => out.extend = value,
                 "set" => out.set = value,
                 "fill" => out.fill = value,
@@ -268,7 +270,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nfloat_to_int = fi\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nfloat_to_int = fi\nfloat_compare = fcp\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {
@@ -296,7 +298,7 @@ mod tests {
             "{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n",
             [
                 "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd",
-                "fl", "flf", "fs", "fr", "fi", "f", "fc", "cp", "cc", "cv"
+                "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"
             ]
             .iter()
             .map(|one| format!("{one} = 4"))

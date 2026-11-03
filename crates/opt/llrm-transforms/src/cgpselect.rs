@@ -1,5 +1,5 @@
-//! A float-to-integer conversion of a select with a constant arm, made on the
-//! other arm's path only.
+//! A float-to-integer conversion, or a float compare, that only one arm of a
+//! select with a constant arm needs, made on that arm's path only.
 //!
 //! # How it works
 //! `%r = fptosi (select c, K, x)`, where the select has no other user, is
@@ -16,6 +16,12 @@
 //!  %r = fptosi %s                 other: %f = fptosi %x ; br %join
 //!                                 join:  %r = phi [-3, %b], [%f, %other]
 //! ```
+//!
+//! The same for a compare: `select c1, K, (zext (fcmp ..))` is `br c1, join,
+//! other` with the compare and its extension in `other` (`a < b ? -1 : a > b`:
+//! the second `fcom; fnstsw; sahf` runs on the path that needs it, 9 clocks at
+//! 486, against the branch). Applied where `float_compare` is more than twice
+//! a branch.
 //!
 //! A clamp is a select of a select; the diamond made for the outer one holds
 //! `fptosi (select ..)` again and is taken in the next round.
@@ -47,34 +53,55 @@ pub fn casts_branched(
     layout: &DataLayout,
     function: &mut Function,
     conversion: i64,
+    compare: i64,
     branch: i64,
 ) -> bool {
-    if conversion <= 2 * branch {
+    let (convert, compared) = (conversion > 2 * branch, compare > 2 * branch);
+    if !convert && !compared {
         return false;
     }
     let mut changed = false;
-    while let Some(site) = find(context, function) {
-        branched(context, layout, function, site);
+    while let Some(site) = find(context, function, convert, compared) {
+        match site {
+            Site::Convert { .. } => branched(context, layout, function, site),
+            Site::Compare { .. } => compare_branched(function, site),
+        }
         changed = true;
     }
     changed
 }
 
-struct Site {
-    cast: InstId,
-    select: InstId,
-    /// The arm that is a constant: the true one or the false one.
-    constant_is_true: bool,
+enum Site {
+    Convert {
+        cast: InstId,
+        select: InstId,
+        /// The arm that is a constant: the true one or the false one.
+        constant_is_true: bool,
+    },
+    Compare {
+        select: InstId,
+        constant_is_true: bool,
+        /// The compare and the extension of it only the select reads, in order.
+        chain: Vec<InstId>,
+    },
 }
 
 fn find(
     context: &Context,
     function: &Function,
+    convert: bool,
+    compared: bool,
 ) -> Option<Site> {
     for &block in function.layout() {
         for cast in function.iter_block(block) {
             let instruction = function.instruction(cast);
-            if !matches!(
+            if compared
+                && instruction.opcode == Opcode::Select
+                && let Some(site) = compare_site(context, function, block, cast)
+            {
+                return Some(site);
+            }
+            if !convert || !matches!(
                 instruction.opcode,
                 Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI)
             ) {
@@ -100,13 +127,103 @@ fn find(
             };
             // Two constant arms are a select of two integers: no branch.
             match (float_constant(yes), float_constant(no)) {
-                (true, false) => return Some(Site { cast, select, constant_is_true: true }),
-                (false, true) => return Some(Site { cast, select, constant_is_true: false }),
+                (true, false) => return Some(Site::Convert { cast, select, constant_is_true: true }),
+                (false, true) => return Some(Site::Convert { cast, select, constant_is_true: false }),
                 _ => {}
             }
         }
     }
     None
+}
+
+/// `select c, K, V` (either way round) where `V` is a float compare, or the
+/// extension of one, that nothing else reads and that sits in the select's
+/// block.
+fn compare_site(
+    context: &Context,
+    function: &Function,
+    block: llrm_mir::module::BlockId,
+    select: InstId,
+) -> Option<Site> {
+    let [Operand::Value(condition), yes, no] = function.instruction(select).operands[..] else { return None };
+    if context.types.int_bits(function.value(condition).ty) != Some(1) {
+        return None;
+    }
+    let constant = |arm: Operand| {
+        matches!(
+            arm,
+            Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(_))
+        )
+    };
+    let (constant_is_true, other) = match (constant(yes), constant(no)) {
+        (true, false) => (true, no),
+        (false, true) => (false, yes),
+        _ => return None,
+    };
+    let Operand::Value(mut value) = other else { return None };
+    let mut chain = Vec::new();
+    loop {
+        let ValueDef::Instruction(inst) = function.value(value).def else { return None };
+        if function.parent(inst) != Some(block) || !function.users(value).has_one_use() {
+            return None;
+        }
+        chain.push(inst);
+        match function.instruction(inst).opcode {
+            Opcode::FCmp(_) => break,
+            Opcode::Cast(CastOp::ZExt | CastOp::SExt) => {
+                let [Operand::Value(inner)] = function.instruction(inst).operands[..] else { return None };
+                value = inner;
+            }
+            _ => return None,
+        }
+    }
+    chain.reverse();
+    Some(Site::Compare { select, constant_is_true, chain })
+}
+
+/// The compare chain moves to a block of its own, taken when the constant is
+/// not; the select becomes a phi of the constant and the chain's value.
+fn compare_branched(
+    function: &mut Function,
+    site: Site,
+) {
+    let Site::Compare { select, constant_is_true, chain } = site else { unreachable!("a compare site") };
+    let [condition, yes, no] = function.instruction(select).operands[..] else { unreachable!("a select") };
+    let (constant, other) = if constant_is_true { (yes, no) } else { (no, yes) };
+    let ty = function.instruction(select).ty;
+    let result = function.instruction(select).result.expect("a select's value");
+    let home = function.parent(select).expect("a placed select");
+    let join = split_block_at(function, home, select);
+    let jump = function.terminator(home).expect("the jump the split made");
+    let void = function.instruction(jump).ty;
+    function.erase(jump).expect("nothing reads a jump");
+    let side = function.create_block(None);
+    function.insert_block(side, Some(home)).expect("a new block");
+    for &inst in &chain {
+        function.move_to(inst, Position::End(side)).expect("a placed instruction");
+    }
+    let back = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
+    function.insert(back, Position::End(side)).expect("an unplaced instruction");
+    let (on_true, on_false) = if constant_is_true { (join, side) } else { (side, join) };
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![condition, Operand::Block(on_true), Operand::Block(on_false)],
+        Flags::default(),
+        None,
+    );
+    function.insert(branch, Position::End(home)).expect("an unplaced instruction");
+    let phi = function.create_instruction(
+        Opcode::Phi,
+        ty,
+        vec![constant, Operand::Block(home), other, Operand::Block(side)],
+        Flags::default(),
+        None,
+    );
+    function.insert(phi, Position::Before(select)).expect("an unplaced instruction");
+    let value = function.instruction(phi).result.expect("a phi's value");
+    function.replace_all_uses_with(result, Operand::Value(value));
+    function.erase(select).expect("nothing reads it now");
 }
 
 fn branched(
@@ -115,7 +232,7 @@ fn branched(
     function: &mut Function,
     site: Site,
 ) {
-    let Site { cast, select, constant_is_true } = site;
+    let Site::Convert { cast, select, constant_is_true } = site else { unreachable!("a conversion site") };
     let Opcode::Cast(op) = function.instruction(cast).opcode else { unreachable!("a cast") };
     let ty = function.instruction(cast).ty;
     let result = function.instruction(cast).result.expect("a conversion's value");

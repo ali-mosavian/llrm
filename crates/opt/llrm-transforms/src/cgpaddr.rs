@@ -186,6 +186,7 @@ impl FunctionPass for CgpAddr {
             unit.layout,
             unit.function,
             costs.float_to_int,
+            costs.float_compare,
             costs.branch,
         );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
