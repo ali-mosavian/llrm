@@ -232,9 +232,9 @@ impl Printer<'_> {
         if self.register(next, 0)? != reg::A || self.register(next, 1)? != reg::HL {
             return Ok(false);
         }
-        let after =
-            self.liveness
-                .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 2);
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 2);
         if after.is_live(&REGISTER_INFO, reg::HL) {
             return Ok(false);
         }
@@ -706,6 +706,17 @@ impl Printer<'_> {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
+                if op == "RELOAD16"
+                    && self.call_bytes == 0
+                    && self.frame.offsets.get(&index) == Some(&-self.frame.below_ix())
+                {
+                    // the slot at SP: `pop` then `push` is 2 B where two loads
+                    // are 6
+                    let pair = name(self.register(inst, register)?);
+                    self.push(format!("pop {pair}"));
+                    self.push(format!("push {pair}"));
+                    return Ok(());
+                }
                 let slots = self.frame_slots(index, 0, 2)?;
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
@@ -818,12 +829,10 @@ impl Printer<'_> {
         for one in &self.flag_readers(rest) {
             {
                 match (one.kind, one.operands.get(1)) {
-                    (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3))) | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC"), _) => {
-                        carry = true
-                    }
-                    (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1))) | (Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ"), _) => {
-                        zero = true
-                    }
+                    (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3)))
+                    | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC"), _) => carry = true,
+                    (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1)))
+                    | (Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ"), _) => zero = true,
                     (Kind::Op(name), _) => other = Some(name),
                     (Kind::Copy, _) => {}
                 }
@@ -839,7 +848,8 @@ impl Printer<'_> {
         let skip = format!("{}$", self.out.len());
         match (carry, zero) {
             // both flags of the word: the high bytes decide unless they are
-            // equal, then the low bytes do (a borrow chain gives only the carry)
+            // equal, then the low bytes do (a borrow chain gives only the
+            // carry)
             (true, true) => {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("cp a, {bh}"));
@@ -1144,7 +1154,17 @@ fn layout(
         frame.size += size;
         frame.offsets.insert(index, -frame.size);
     }
-    for &(index, size) in slots {
+    // Slots alone: bytes first, then the words, so the last word lies at SP and
+    // each word is one `push`.
+    let aligned = function.locals.is_empty() && slots.iter().all(|&(_, size)| size == 1 || size == 2);
+    let mut ordered = slots.to_vec();
+    if aligned {
+        ordered.sort_by_key(|&(_, size)| size);
+    }
+    for (index, size) in ordered {
+        if aligned && size == 2 && frame.size % 2 == 1 {
+            frame.size += 1;
+        }
         frame.size += size as i64;
         frame.offsets.insert(index, -frame.size);
     }
@@ -1166,14 +1186,20 @@ fn layout(
     frame
 }
 
-/// `push ix; ld ix, 0; add ix, sp`, then room for the frame: a `push af` per
-/// two bytes, or `iy` as the scratch for a large frame. Nothing here touches
-/// the registers that arguments arrive in.
-fn prologue(frame: &Frame) -> Vec<String> {
+/// `push ix; ld ix, 0; add ix, sp`, then room for the frame: a `push` per two
+/// bytes (`pushed` names the pair a word of the frame, from the top, is made
+/// by, `af` for the rest), or `iy` as the scratch for a large frame. Nothing
+/// here touches the registers that arguments arrive in.
+fn prologue(
+    frame: &Frame,
+    pushed: &[Option<&'static str>],
+) -> Vec<String> {
     let mut lines = vec!["push ix".to_owned(), "ld ix, #0".to_owned(), "add ix, sp".to_owned()];
     let pushes = (frame.size + 1) / 2;
     if pushes <= 3 {
-        lines.extend((0..pushes).map(|_| "push af".to_owned()));
+        lines.extend(
+            (0..pushes as usize).map(|word| format!("push {}", pushed.get(word).copied().flatten().unwrap_or("af"))),
+        );
     } else {
         lines.extend([
             "ld iy, #".to_owned() + &format!("{}", -frame.size),
@@ -1182,6 +1208,52 @@ fn prologue(frame: &Frame) -> Vec<String> {
         ]);
     }
     lines
+}
+
+/// The entry block's leading spills a `push` of the prologue makes, taken out
+/// of the block: a pair into the word it fills, `a` or the high half of a pair
+/// into the high byte of a word (`push af` stores `a` there, and flags that
+/// nothing holds in the low byte). By word from the top of the frame.
+fn entry_pushes(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    frame: &Frame,
+) -> Vec<Option<&'static str>> {
+    let mut pushed: Vec<Option<&'static str>> = vec![None; (frame.size as usize + 1) / 2];
+    if !frame.active || frame.size > 6 || !function.locals.is_empty() {
+        return pushed;
+    }
+    let mut at = 0;
+    while at < function.blocks[0].insts.len() {
+        let inst = &function.blocks[0].insts[at];
+        let (op, [Operand::Frame(slot), Operand::Use(source)]) = (inst.kind, &inst.operands[..]) else { break };
+        let register = match source {
+            Reg::Virt(v) => assignment.0[*v as usize],
+            Reg::Phys(id) => *id,
+        };
+        let Some(&offset) = frame.offsets.get(slot) else { break };
+        let word = ((-offset - 1) / 2) as usize;
+        let pair = [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair);
+        let by = match (op, pair) {
+            (Kind::Op("SPILL16"), Some(pair)) if offset == -2 * word as i64 - 2 && register == pair => Some(name(pair)),
+            (Kind::Op("SPILL8"), _) if offset == -2 * word as i64 - 1 && register == reg::A => Some("af"),
+            (Kind::Op("SPILL8"), Some(pair))
+                if offset == -2 * word as i64 - 1 && lanes(pair).is_ok_and(|(_, hi)| hi == register) =>
+            {
+                Some(name(pair))
+            }
+            (Kind::Op("SPILL8" | "SPILL16"), _) => None,
+            _ => break,
+        };
+        match by {
+            Some(by) if pushed[word].is_none() => {
+                pushed[word] = Some(by);
+                function.blocks[0].insts.remove(at);
+            }
+            _ => at += 1,
+        }
+    }
+    pushed
 }
 
 /// The instructions of `function` with the registers `assignment` gave them.
@@ -1208,8 +1280,10 @@ pub fn finish(
     slots: &[(i32, usize)],
     reads: std::collections::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
-    let function = &tail_calls(function);
-    let frame = layout(function, slots);
+    let mut function = tail_calls(function);
+    let frame = layout(&function, slots);
+    let pushed = entry_pushes(&mut function, assignment, &frame);
+    let function = &function;
     let returns_bare = function
         .blocks
         .iter()
@@ -1232,7 +1306,7 @@ pub fn finish(
         at: (0, 0),
     };
     if printer.frame.active {
-        for line in prologue(&printer.frame) {
+        for line in prologue(&printer.frame, &pushed) {
             printer.push(line);
         }
     }

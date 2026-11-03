@@ -154,17 +154,20 @@ fn allocate(
     let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
     if slots_are_a_stack(&mut function, &assignment) {
         slots.clear();
+    } else {
+        spills_first(&mut function, &assignment);
     }
     Ok((function, assignment, slots, reads))
 }
 
-/// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. : ..`
-/// beside `c << 1`) is the carry the shift left behind: `jr c` after `sla e; rl d`
-/// (or `add hl, hl`). The test copied the high byte before the shift and read its
-/// bit after (`ld h, d` ... `bit 7, h`), 5 B and 12 T on each of crc16's 8 trips.
+/// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. :
+/// ..` beside `c << 1`) is the carry the shift left behind: `jr c` after `sla
+/// e; rl d` (or `add hl, hl`). The test copied the high byte before the shift
+/// and read its bit after (`ld h, d` ... `bit 7, h`), 5 B and 12 T on each of
+/// crc16's 8 trips.
 ///
-/// Only a test whose value is the one the shift read (the copy the shift is tied
-/// to, unchanged since), read by branches in the block, with no flags set
+/// Only a test whose value is the one the shift read (the copy the shift is
+/// tied to, unchanged since), read by branches in the block, with no flags set
 /// between the shift and the test.
 pub fn use_the_shift_carry(function: &mut MFunction) {
     for block in &mut function.blocks {
@@ -172,30 +175,49 @@ pub fn use_the_shift_carry(function: &mut MFunction) {
         while at < block.insts.len() {
             let found = (|| {
                 let shift = &block.insts[at];
-                let (Kind::Op("SHL16"), [Operand::Def(Reg::Virt(shifted)), Operand::Use(Reg::Virt(tied)), Operand::Imm(1)]) =
-                    (shift.kind, &shift.operands[..])
+                let (
+                    Kind::Op("SHL16"),
+                    [Operand::Def(Reg::Virt(shifted)), Operand::Use(Reg::Virt(tied)), Operand::Imm(1)],
+                ) = (shift.kind, &shift.operands[..])
                 else {
                     return None;
                 };
                 if shifted != tied {
                     return None;
                 }
-                // the copy the shift's operand was made by, and the value it copies
-                let copy = block.insts[..at].iter().rposition(|inst| {
-                    matches!(&inst.operands[..], [Operand::Def(Reg::Virt(d)), ..] if d == shifted)
-                })?;
-                let [Operand::Def(_), Operand::Use(Reg::Virt(old))] = block.insts[copy].operands[..] else { return None };
+                // the copy the shift's operand was made by, and the value it
+                // copies
+                let copy = block
+                    .insts[..at]
+                    .iter()
+                    .rposition(
+                        |inst| matches!(
+                            &inst.operands[..],
+                            [Operand::Def(Reg::Virt(d)), ..] if d == shifted
+                        ),
+                    )?;
+                let [Operand::Def(_), Operand::Use(Reg::Virt(old))] = block.insts[copy].operands[..] else {
+                    return None;
+                };
                 if block.insts[copy].kind != Kind::Copy {
                     return None;
                 }
-                let writes = |inst: &Inst, v: u32| inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == v));
+                let writes = |inst: &Inst, v: u32| {
+                    inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == v))
+                };
                 if block.insts[copy + 1..at].iter().any(|inst| writes(inst, old) || inst.call) {
                     return None;
                 }
-                // the test of the old value, after the shift with no flag set between
+                // the test of the old value, after the shift with no flag set
+                // between
                 let mut test = None;
                 for (k, inst) in block.insts.iter().enumerate().skip(at + 1) {
-                    if inst.kind == Kind::Op("BIT7_16") && matches!(&inst.operands[..], [_, Operand::Use(Reg::Virt(v))] if *v == old) {
+                    if inst.kind == Kind::Op("BIT7_16")
+                        && matches!(
+                            &inst.operands[..],
+                            [_, Operand::Use(Reg::Virt(v))] if *v == old
+                        )
+                    {
                         test = Some(k);
                         break;
                     }
@@ -205,7 +227,8 @@ pub fn use_the_shift_carry(function: &mut MFunction) {
                 }
                 let test = test?;
                 // every reader is a branch of this block
-                let readers: Vec<usize> = (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags).collect();
+                let readers: Vec<usize> =
+                    (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags).collect();
                 let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags);
                 let ends_here = block.insts.last().is_some_and(|inst| inst.terminator);
                 let branches = readers.iter().all(|&k| matches!(block.insts[k].kind, Kind::Op("JPZ" | "JPNZ")));
@@ -235,7 +258,8 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
         (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) => Some((*to, *from)),
         _ => None,
     };
-    // the values wanted in `a`: some use is a copy into `a` or into such a value
+    // the values wanted in `a`: some use is a copy into `a` or into such a
+    // value
     let mut in_a = std::collections::HashSet::<u32>::new();
     loop {
         let before = in_a.len();
@@ -392,6 +416,51 @@ pub fn slots_are_a_stack(
     true
 }
 
+/// Moves the entry block's spills of argument registers up to its start while
+/// nothing before them writes the register or touches the slot, so the
+/// prologue can `push` them: crc16 stored `n` and `p` with `ld -1(ix), a` /
+/// `ld -3(ix), l` / `ld -2(ix), h` after a pair of `push af`, 9 B more than
+/// `push af` / `push hl`.
+pub fn spills_first(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    if llrm_spike_mf::regalloc::successors(function).iter().any(|next| next.contains(&0)) {
+        return;
+    }
+    let insts = &mut function.blocks[0].insts;
+    let mut first = 0;
+    for at in 0..insts.len() {
+        let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(source)]) =
+            (insts[at].kind, &insts[at].operands[..])
+        else {
+            continue;
+        };
+        let (slot, source) = (*slot, register(*source));
+        let blocked = insts[first..at]
+            .iter()
+            .any(
+                |before| before.call
+                    || before.barrier
+                    || before.terminator
+                    || before.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) => Z80Registers::overlaps(register(*r), source),
+                        Operand::Frame(other) => *other == slot,
+                        _ => false,
+                    }),
+            );
+        if !blocked {
+            let moved = insts.remove(at);
+            insts.insert(first, moved);
+            first += 1;
+        }
+    }
+}
+
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting
 /// of a trivially rematerializable instruction): `find` made `ld hl, #buf` on
 /// every trip. Where the registers run out the allocator makes the constant
@@ -540,14 +609,15 @@ pub fn sink_copies_to_the_branch(
                     || later.operands.iter().any(|operand| match operand {
                         Operand::Def(r) | Operand::Use(r) => {
                             let r = register(*r);
-                            Z80Registers::overlaps(r, dst) || (matches!(operand, Operand::Def(_)) && Z80Registers::overlaps(r, src))
+                            Z80Registers::overlaps(r, dst)
+                                || (matches!(operand, Operand::Def(_)) && Z80Registers::overlaps(r, src))
                         }
                         Operand::Frame(_) => false,
                         _ => false,
                     })
             };
-            // only all the way: a copy stopped short sits between a reload and the
-            // compare it folds into
+            // only all the way: a copy stopped short sits between a reload and
+            // the compare it folds into
             if (at + 1..end).any(|later| blocked(&block.insts[later])) {
                 at += 1;
                 continue;
@@ -671,7 +741,10 @@ fn use_lanes_once(
             // a byte nothing virtual reads is read through its register by an
             // instruction that names it (a copy into `a` that allocation made
             // the identity is gone): it is still made
-            if defs[byte as usize] != 1 || uses[byte as usize].is_empty() || uses[byte as usize].iter().any(|one| *one != b) {
+            if defs[byte as usize] != 1
+                || uses[byte as usize].is_empty()
+                || uses[byte as usize].iter().any(|one| *one != b)
+            {
                 at += 1;
                 continue;
             }
@@ -682,9 +755,10 @@ fn use_lanes_once(
                     last = k;
                 }
             }
-            // a PACK that reads the byte writes the pair after reading both halves
-            // (`pack`), so its own write to the half does not clobber it: the low
-            // half of a pair kept while the high half is replaced stays where it is
+            // a PACK that reads the byte writes the pair after reading both
+            // halves (`pack`), so its own write to the half does
+            // not clobber it: the low half of a pair kept while the
+            // high half is replaced stays where it is
             let checked = if insts[last].kind == Kind::Op("PACK") { last } else { last + 1 };
             let clobbered = insts[at + 1..checked]
                 .iter()

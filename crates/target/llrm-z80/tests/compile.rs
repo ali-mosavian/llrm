@@ -104,9 +104,34 @@ fn a_value_made_for_a_fixed_register_is_made_there() {
 fn a_value_only_one_side_of_a_select_needs_is_made_on_that_side() {
     let ir = include_str!("kernels/ir/crc16.ll");
     let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    let (test, xor) =
-        (out.find("jr nc, ").expect("branches on the top bit (the shift's carry)"), out.find("xor a, #33").expect("xors the low byte"));
+    let (test, xor) = (
+        out.find("jr nc, ").expect("branches on the top bit (the shift's carry)"),
+        out.find("xor a, #33").expect("xors the low byte"),
+    );
     assert!(test < xor, "{out}");
+}
+
+/// The arguments crc16 keeps in its frame were stored with `ld -1(ix), a` /
+/// `ld -3(ix), l` / `ld -2(ix), h` after a pair of `push af`: 9 B more than the
+/// prologue's `push af` / `push hl`.
+#[test]
+fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    assert!(lines.windows(2).any(|pair| pair == ["push af", "push hl"]), "{out}");
+    assert!(!lines.iter().any(|line| line.starts_with("ld -") && line.contains("(ix), ")), "{out}");
+}
+
+/// crc16 reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
+/// -2(ix)`, 6 B and 38 T-states on each of its trips; `pop bc` / `push bc` is 2
+/// B and 21.
+#[test]
+fn the_slot_at_sp_is_reloaded_by_pop_and_push() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    assert!(lines.windows(2).any(|pair| pair == ["pop bc", "push bc"]), "{out}");
 }
 
 /// A spilled byte was reloaded into a register just to be compared
@@ -348,18 +373,26 @@ fn a_byte_made_in_a_register_that_a_later_instruction_reads_is_still_made() {
     use llrm_z80::{reg, regalloc::Class};
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Gr16, Class::Gr8];
-    function.blocks.push(Block {
-        id: 0,
-        insts: vec![
-            Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(0)), Operand::Imm(0)]),
-            Inst::new(Kind::Op("LO"), vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(0))]),
-            Inst::new(
-                Kind::Op("CP8r"),
-                vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::B))],
-            ),
-        ],
-        phis: Vec::new(),
-    });
+    function
+        .blocks
+        .push(
+            Block {
+                id: 0,
+                insts: vec![
+                    Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(0)), Operand::Imm(0)]),
+                    Inst::new(Kind::Op("LO"), vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(0))]),
+                    Inst::new(
+                        Kind::Op("CP8r"),
+                        vec![
+                            Operand::Def(Reg::Phys(reg::FLAGS)),
+                            Operand::Use(Reg::Phys(reg::A)),
+                            Operand::Use(Reg::Phys(reg::B)),
+                        ],
+                    ),
+                ],
+                phis: Vec::new(),
+            },
+        );
     // v0 in hl, its low byte given a
     let assignment = Assignment(vec![reg::HL, reg::A]);
     llrm_z80::compile::use_lanes_in_place(&mut function, &assignment);
@@ -375,16 +408,11 @@ fn a_copy_back_into_the_register_just_copied_from_is_dropped_between_bytes_only(
     use llrm_spike_mf::Assignment;
     use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
     use llrm_z80::{reg, regalloc::Class};
-    let copy = |to: u32, from: u32| {
-        Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))])
-    };
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Gr8; 3];
-    function.blocks.push(Block {
-        id: 0,
-        insts: vec![copy(1, 0), copy(0, 1), copy(0, 2)],
-        phis: Vec::new(),
-    });
+    function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), copy(0, 1), copy(0, 2)], phis: Vec::new() });
     // v0 a, v1 b, v2 c: the second copy is a copy back, the third is not
     let assignment = Assignment(vec![reg::A, reg::B, reg::C]);
     llrm_z80::compile::remove_copies_back(&mut function, &assignment);
@@ -400,7 +428,8 @@ fn a_copy_repeated_in_the_only_block_that_follows_is_dropped() {
     use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
     use llrm_z80::{reg, regalloc::Class};
     let copy = || Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(0)), Operand::Use(Reg::Virt(1))]);
-    let jump = |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
+    let jump =
+        |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Gr8; 2];
     let block = |id, insts| Block { id, insts, phis: Vec::new() };
@@ -411,7 +440,8 @@ fn a_copy_repeated_in_the_only_block_that_follows_is_dropped() {
     function.blocks.push(block(3, vec![copy(), jump(3)]));
     let assignment = Assignment(vec![reg::A, reg::C]);
     llrm_z80::compile::remove_copies_back(&mut function, &assignment);
-    let copies: Vec<usize> = function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    let copies: Vec<usize> =
+        function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
     assert_eq!(copies, [1, 0, 1, 1], "{:?}", function.blocks);
 }
 
@@ -423,12 +453,14 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
     use llrm_spike_mf::Assignment;
     use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
     use llrm_z80::{reg, regalloc::Class};
-    let copy = |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
-    let compare = |of: u32| {
-        Inst {
-            sets_flags: true,
-            ..Inst::new(Kind::Op("CP8i"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Virt(of)), Operand::Imm(0)])
-        }
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let compare = |of: u32| Inst {
+        sets_flags: true,
+        ..Inst::new(
+            Kind::Op("CP8i"),
+            vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Virt(of)), Operand::Imm(0)],
+        )
     };
     let branch = Inst {
         terminator: true,
@@ -437,18 +469,21 @@ fn a_copy_nothing_after_it_touches_moves_down_to_the_branch() {
     };
     let mut function = MFunction::new("f");
     function.classes = vec![Class::Gr8; 3];
-    // v0 a, v1 b, v2 c: `ld b, a` can follow the compare of a; `ld c, b` cannot follow the compare of c
+    // v0 a, v1 b, v2 c: `ld b, a` can follow the compare of a; `ld c, b` cannot
+    // follow the compare of c
     function.blocks.push(Block { id: 0, insts: vec![copy(1, 0), compare(0), branch.clone()], phis: Vec::new() });
     function.blocks.push(Block { id: 1, insts: vec![copy(2, 1), compare(2), branch.clone()], phis: Vec::new() });
     let assignment = Assignment(vec![reg::A, reg::B, reg::C]);
     llrm_z80::compile::tidy_copies(&mut function, &assignment);
-    // v3 is a again: the copy back into a is dropped first, then the copy ahead of it follows the compare
+    // v3 is a again: the copy back into a is dropped first, then the copy ahead
+    // of it follows the compare
     let mut back = MFunction::new("g");
     back.classes = vec![Class::Gr8; 4];
     back.blocks.push(Block { id: 0, insts: vec![copy(1, 0), copy(3, 1), compare(3), branch], phis: Vec::new() });
     llrm_z80::compile::tidy_copies(&mut back, &Assignment(vec![reg::A, reg::B, reg::C, reg::A]));
     function.blocks.extend(back.blocks);
-    let kinds: Vec<Vec<Kind>> = function.blocks.iter().map(|b| b.insts.iter().map(|inst| inst.kind).collect()).collect();
+    let kinds: Vec<Vec<Kind>> =
+        function.blocks.iter().map(|b| b.insts.iter().map(|inst| inst.kind).collect()).collect();
     let (cp, jp) = (Kind::Op("CP8i"), Kind::Op("JPNZ"));
     assert_eq!(kinds, [vec![cp, Kind::Copy, jp], vec![Kind::Copy, cp, jp], vec![cp, Kind::Copy, jp]]);
 }
@@ -490,7 +525,10 @@ fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
                     vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::A)), Operand::Use(reg_of(2))],
                 )
             },
-            Inst::new(Kind::Op("PACK"), vec![Operand::Def(reg_of(3)), Operand::Use(reg_of(1)), Operand::Use(Reg::Phys(reg::A))]),
+            Inst::new(
+                Kind::Op("PACK"),
+                vec![Operand::Def(reg_of(3)), Operand::Use(reg_of(1)), Operand::Use(Reg::Phys(reg::A))],
+            ),
         ],
         phis: Vec::new(),
     });
@@ -503,8 +541,8 @@ fn a_pair_with_its_high_byte_replaced_keeps_its_low_byte_where_it_is() {
 
 /// `*a - *b` of two bytes widened to int went `ld l, a; ld h, #0; ld c, d;
 /// ld b, #0; or a, a; sbc hl, bc; ex de, hl`: 11 B and 45 T for what is a byte
-/// subtraction and its borrow (`sub a, d; ld e, a; sbc a, a; ld d, a`). scmp lost
-/// to SDCC on bytes, clocks and instructions with it.
+/// subtraction and its borrow (`sub a, d; ld e, a; sbc a, a; ld d, a`). scmp
+/// lost to SDCC on bytes, clocks and instructions with it.
 #[test]
 fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borrow() {
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
@@ -521,18 +559,15 @@ fn the_difference_of_two_zero_extended_bytes_is_a_byte_subtraction_and_its_borro
 fn the_sign_tested_beside_a_shift_left_is_the_shifts_carry() {
     use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
     use llrm_z80::reg;
-    let copy = |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
-    let shift = |v: u32| {
-        Inst {
-            sets_flags: true,
-            ..Inst::new(Kind::Op("SHL16"), vec![Operand::Def(Reg::Virt(v)), Operand::Use(Reg::Virt(v)), Operand::Imm(1)])
-        }
+    let copy =
+        |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let shift = |v: u32| Inst {
+        sets_flags: true,
+        ..Inst::new(Kind::Op("SHL16"), vec![Operand::Def(Reg::Virt(v)), Operand::Use(Reg::Virt(v)), Operand::Imm(1)])
     };
-    let bit = |of: u32| {
-        Inst {
-            sets_flags: true,
-            ..Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Virt(of))])
-        }
+    let bit = |of: u32| Inst {
+        sets_flags: true,
+        ..Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Use(Reg::Virt(of))])
     };
     let branch = Inst {
         terminator: true,
@@ -543,11 +578,15 @@ fn the_sign_tested_beside_a_shift_left_is_the_shifts_carry() {
     let build = |tested: u32| {
         let mut function = MFunction::new("f");
         function.classes = vec![llrm_z80::regalloc::Class::Gr16; 3];
-        function.blocks.push(Block {
-            id: 0,
-            insts: vec![copy(1, 0), shift(1), copy(2, 1), bit(tested), branch.clone()],
-            phis: Vec::new(),
-        });
+        function
+            .blocks
+            .push(
+                Block {
+                    id: 0,
+                    insts: vec![copy(1, 0), shift(1), copy(2, 1), bit(tested), branch.clone()],
+                    phis: Vec::new(),
+                },
+            );
         function
     };
     let mut same = build(0);
