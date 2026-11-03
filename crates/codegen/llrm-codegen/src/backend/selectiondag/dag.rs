@@ -245,6 +245,11 @@ pub struct DagConfig {
     pub big_endian: bool,
     /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
     pub fma_faster: bool,
+    /// `visitADD`'s `(add a, b)` -> `(or disjoint a, b)` where the operands
+    /// share no bits. DEVIATE: off by default so x86's rows stay as they are
+    /// until the judge has seen them. Exit: x86 judged, no later than
+    /// 2026-11-20.
+    pub add_to_or_disjoint: bool,
     /// A signed divide or remainder whose operands fit this narrower legal
     /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
     /// wide divide. Set by the targets whose narrow routine is the cheaper.
@@ -277,6 +282,7 @@ impl Default for DagConfig {
             known_bits_for_target_node: None,
             big_endian: false,
             fma_faster: false,
+            add_to_or_disjoint: false,
             narrow_divrem: None,
             narrow_srem_overflow_defined: false,
         }
@@ -373,6 +379,10 @@ pub struct SelectionDAG {
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
+    /// The alignment of each static alloca's frame object, by frame index
+    /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
+    /// address say. Empty where the layout may place an object lower.
+    pub frame_alignments: Vec<u64>,
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
@@ -455,6 +465,7 @@ impl SelectionDAG {
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
+            frame_alignments: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
             temporaries: Vec::new(),
