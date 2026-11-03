@@ -20,17 +20,13 @@ static inline uint32_t unpack(sf32 a, int *e)
 
 static sf32 add_bits(sf32 a, sf32 b)
 {
-    if (((a << 1) >= (INF << 1)) | ((b << 1) >= (INF << 1))) {
-        if (is_nan(a)) return a | 0x400000u;
-        if (is_nan(b)) return b | 0x400000u;
-        if ((a << 1) == (INF << 1) && (b << 1) == (INF << 1) && ((a ^ b) & SIGN)) return SF32_QNAN;
-        return (a << 1) == (INF << 1) ? a : b;
-    }
-    if ((a << 1) == 0 || (b << 1) == 0) {
-        if ((a << 1) == 0 && (b << 1) == 0) return a & b;
-        return (a << 1) == 0 ? b : a;
-    }
     if ((a & ~SIGN) < (b & ~SIGN)) { sf32 t = a; a = b; b = t; }
+    /* From here |a| >= |b|: a NaN operand is a, and an infinite a with a NaN b cannot occur. */
+    if ((a << 1) >= (INF << 1)) {
+        if (is_nan(a)) return a | 0x400000u;
+        return ((a ^ b) & SIGN) && (b << 1) == (INF << 1) ? SF32_QNAN : a;
+    }
+    if ((b << 1) == 0) return (a << 1) ? a : a & b;
     int ea, eb;
     uint32_t ma = unpack(a, &ea) << 3, mb = unpack(b, &eb) << 3;
     if (ea - eb > 25) return a; /* ed > 25: b is under a quarter of a's last place; 25 is not enough (2^k - 1.5 * 2^(k-25) rounds down) */
