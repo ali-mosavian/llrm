@@ -64,6 +64,9 @@ impl CombineHooks for Asks {
     fn store_fp_constant_as_i64(&self) -> bool {
         true
     }
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -761,4 +764,31 @@ fn a_target_that_declines_keeps_a_select_of_two_constants() {
     select_of_constants(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Shl, "the default is x86's");
+}
+
+fn sub_of_a_difference(dag: &mut SelectionDAG) {
+    let (a, b, c) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let difference = dag.get_node(ISD::Sub, EVT::I32, &[b, c]);
+    let root = dag.get_node(ISD::Sub, EVT::I32, &[a, difference]);
+    dag.set_root(root);
+}
+
+/// `a - (b - c)` stayed two subtractions; the pin makes it `a + (c - b)`,
+/// which AArch64 folds into a shifted operand (`x - (8q - q)`).
+#[test]
+fn a_value_minus_a_difference_is_the_sum_with_the_flipped_difference() {
+    let mut dag = dag();
+    sub_of_a_difference(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Add);
+}
+
+/// The same fold on x86 moved `div_constants_long` at x86_16 -O2 from 2062 to
+/// 2066 instructions (a different spill): off until its rows are judged.
+#[test]
+fn a_target_that_does_not_ask_keeps_the_value_minus_a_difference() {
+    let mut dag = dag();
+    sub_of_a_difference(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Sub);
 }

@@ -125,6 +125,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }

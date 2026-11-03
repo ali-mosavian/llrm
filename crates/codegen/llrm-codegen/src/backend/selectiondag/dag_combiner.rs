@@ -260,6 +260,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitSUB`'s algebraic folds (`a - (b - c)` is `a + (c - b)`, the
+    /// cancelling pairs, the constants that meet). DEVIATE: off by default.
+    /// On x86 the regrouped remainder `x - (8q - q)` keeps `q` live longer and
+    /// moved `div_constants_long` at x86_16 -O2 from 2062 to 2066 instructions
+    /// through a different spill. Exit: x86 rows judged with the fold.
+    fn sub_algebra_folds(&self) -> bool {
+        false
+    }
+
     /// `BuildSDIV`/`BuildUDIV`'s "a legal multiply of the wide type" for any
     /// width, not only `i16` and below. DEVIATE: off by default, as above.
     /// Exit: x86 judged.
@@ -2174,7 +2183,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(saturated) = self.fold_sub_to_usub_sat(vt, node) {
             return Some(saturated);
         }
-        if let Some(folded) = self.fold_sub_algebra(vt, n0, n1) {
+        if self.hooks.sub_algebra_folds()
+            && let Some(folded) = self.fold_sub_algebra(vt, n0, n1)
+        {
             return Some(folded);
         }
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
