@@ -29,6 +29,6 @@ P
   )
 }
 printf "%-14s %14s %14s\n" entry "split reach/span" "flat reach/span"
-for e in __addsf3 __subsf3 __mulsf3 __divsf3 __negsf2 __ltsf2 __fixsfsi __floatsisf; do
+for e in __addsf3 __subsf3 __mulsf3 __divsf3 __negsf2 __ltsf2 __fixsfsi __fixunssfsi __floatsisf __floatunsisf; do
   printf "%-14s %14s %14s\n" $e "$(link split ___${e#__}@3 2>&1 | tr '\n' ' ')" "$(link flat ___${e#__}@3 2>&1 | tr '\n' ' ')"
 done
