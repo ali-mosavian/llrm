@@ -135,6 +135,8 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The function is built for size (`shouldOptimizeForSize`).
+    pub optimize_for_size: bool,
 }
 
 impl<C> MFunction<C> {
@@ -145,6 +147,7 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            optimize_for_size: false,
         }
     }
 
