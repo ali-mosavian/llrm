@@ -80,6 +80,9 @@ pub fn frame_lowering(
         offsets.push(-(size as i64));
     }
     let stack_size = align_to(size, STACK_ALIGN);
+    for variable in &mut f.variables {
+        variable.disp = stack_size as i64 + offsets[variable.frame as usize];
+    }
     // The joined `CALL` is a pseudo of this crate, outside the generated
     // descriptions.
     let has_calls = f

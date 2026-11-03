@@ -109,6 +109,13 @@ pub fn compile_function(
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);
+    f.variables = blocks
+        .first()
+        .map(|first| {
+            first.declared.iter().map(|&(record, frame)| crate::mir::Variable { record, frame, disp: 0 }).collect()
+        })
+        .unwrap_or_default();
+    f.argument_variables = blocks.first().map(|first| first.argument_variables.clone()).unwrap_or_default();
     f.nothrow = non_throwing(module);
     f.callee_memory = callee_memory(module);
     f.personality = unwinding
@@ -129,6 +136,9 @@ pub fn compile_function(
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
     if options.level != crate::driver::Level::O0 {
+        if crate::early_tail_duplicate::early_tail_duplicate(&mut f) {
+            remove_unreachable_blocks(&mut f);
+        }
         crate::stack_coloring::stack_coloring(&mut f, blocks.first().map_or(&[], |block| &block.stack_colors));
         crate::dead_mi::dead_machine_instruction_elim(&mut f);
         crate::machine_licm::machine_licm(&mut f);
@@ -151,12 +161,19 @@ pub fn compile_function(
     ) {
         crate::spike_coalesce::coalesce(&mut f);
     }
-    if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
-        remove_unreachable_blocks(&mut f);
-    }
-    if options.level != crate::driver::Level::O0 {
-        if crate::branch_fold::fold_branches(&mut f) {
+    // `BranchFolder::OptimizeBranches` repeats until nothing changes: a block
+    // the hoisting leaves with only a `br` is forwarded on the next round.
+    while options.level != crate::driver::Level::O0 {
+        let forwarded = crate::branch_fold::forward_branch_only_blocks(&mut f);
+        if forwarded {
             remove_unreachable_blocks(&mut f);
+        }
+        let folded = crate::branch_fold::fold_branches(&mut f);
+        if folded {
+            remove_unreachable_blocks(&mut f);
+        }
+        if !(forwarded || folded) {
+            break;
         }
     }
     if options.level != crate::driver::Level::O0 {

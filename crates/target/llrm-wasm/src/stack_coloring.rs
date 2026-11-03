@@ -36,6 +36,9 @@ pub fn stack_coloring(
             }
         }
     }
+    for variable in &mut f.variables {
+        variable.frame = moved(variable.frame);
+    }
 }
 
 #[cfg(test)]
@@ -47,6 +50,19 @@ mod tests {
     /// Two allocas never live together kept an object each: jpeg's frame was
     /// 400 B where the pin's is 336, and every offset past the first took a
     /// second LEB byte.
+    /// A `-g` variable kept its alloca's old frame index after the coloring
+    /// moved it: past the merged objects its offset was another object's (or
+    /// out of range).
+    #[test]
+    fn a_variable_follows_its_allocas_object() {
+        let mut f = Function::default();
+        f.frame = vec![(64, 4), (48, 8), (16, 4)];
+        f.variables = vec![crate::mir::Variable { record: 0, frame: 2, disp: 0 }];
+        f.blocks = vec![vec![Inst::new(op::BR, &[Operand::Frame(0)])]];
+        stack_coloring(&mut f, &[0, 0]);
+        assert_eq!(f.variables[0].frame, 1);
+    }
+
     #[test]
     fn allocas_in_one_group_are_one_object() {
         let mut f = Function::default();

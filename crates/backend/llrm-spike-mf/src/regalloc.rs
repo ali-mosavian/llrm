@@ -99,6 +99,17 @@ pub trait Target {
         false
     }
 
+    /// Where `inst` builds or splits a register from its lanes (a
+    /// `REG_SEQUENCE`, the z80's `PACK`, the 6502's `PACK` and `UNPACK`):
+    /// `(whole, [(part, byte offset, bytes)])`, as operand positions.
+    /// DEVIATE: the pin places the lanes by coalescing the copies
+    /// `eliminateRegSequence` makes; until the lane model lands (exit
+    /// 2026-11-30) each part is hinted the lane of the register its whole is
+    /// copied to or from.
+    fn lane_moves(_inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        None
+    }
+
     /// The part of `register` that `inst` reads through its use operand
     /// `operand`, where it reads less than the whole (the Z80's sign test of a
     /// pair reads the high byte). The pin writes the part as a subregister
