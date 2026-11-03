@@ -38,6 +38,7 @@ fn new_cache() -> Cache:
     unsafe:
         return Cache(bord=&mut bord, bprev=&mut bprev, bnext=&mut bnext, bstamp=&mut bstamp, clock=7, lhead=[0] * 7, ltail=[0] * 7)
 
+@export("cdecl16", name="bench_lru")
 fn bench_lru(block: i16) -> i32:
     let mut cache = new_cache()
     for index in 0..3:

@@ -952,6 +952,16 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     return lines
 
 
+def fold_lines(measured: dict) -> list[str]:
+    """Warnings, not failures: a Nib cell that executed under half of its C twin's instructions. Same algorithm, so the kernel's work folded away
+    (lru read 39 against C's 133 once its helpers inlined: an internal kernel, constant argument, local cache)."""
+    return [
+        f"SUSPECT-FOLD {name} nib -{opt}: {got['instructions']} instructions against C's {twin['instructions']}"
+        for (name, language, opt), got in sorted(measured.items())
+        if language == "nib" and (twin := measured.get((name, "c", opt))) and got.get("instructions") is not None and twin.get("instructions") and got["instructions"] * 2 < twin["instructions"]
+    ]
+
+
 def align_lines(measured: dict) -> list[str]:
     """Warnings, not failures: how many cells count some code bytes whole because those did not decode to their end, naming the cells where most of the
     code is so (the padding there is not told), and padding in a size-optimised cell (no loop alignment is expected at -Os or -Oz)."""
@@ -1217,6 +1227,7 @@ def main() -> int:
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
     print(*align_lines(measured), sep="\n")
+    print(*fold_lines(measured), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused

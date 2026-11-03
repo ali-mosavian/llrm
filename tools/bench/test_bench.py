@@ -1150,6 +1150,32 @@ def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_paddin
     ]
 
 
+def test_a_nib_cell_that_ran_under_half_of_its_c_twins_instructions_is_named():
+    """lru's Nib kernel read 39 instructions against C's 133 once its helpers inlined, and only reading the table showed it."""
+    got = {
+        ("lru", "c", "O2"): {"instructions": 133},
+        ("lru", "nib", "O2"): {"instructions": 39},
+        ("dot", "c", "O2"): {"instructions": 100},
+        ("dot", "nib", "O2"): {"instructions": 50},
+        ("fib", "nib", "O2"): {"instructions": 1},
+    }
+    assert bench.fold_lines(got) == ["SUSPECT-FOLD lru nib -O2: 39 instructions against C's 133"]
+
+
+def test_the_lru_nib_kernel_keeps_the_stores_its_c_twin_makes(tmp_path):
+    """lru's kernel was an internal function with a constant argument and a local cache, so with its helpers inlined every store to bord, bstamp, bprev
+    and bnext folded away: 39 instructions against C's 133, a row that measured nothing. It is exported, as C's is extern."""
+    import subprocess
+
+    lru = next(v for v in bench.variants(bench.BENCH / "lru") if v.language == "nib")
+    _, arguments, _ = bench.compiles(lru, "O2", tmp_path, "lru")[0]
+    out = tmp_path / "lru.s"
+    done = subprocess.run([str(bench.BIN / "llrm-nib"), *arguments, "-S", "-o", str(out)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    kernel = out.read_text().split("bench_lru proc")[1].split("bench_lru endp")[0]
+    assert all(name in kernel for name in ("$var_bord", "$var_bstamp", "$var_bprev", "$var_bnext"))
+
+
 def test_native_sources_exist_when_only_the_x86_64_language_is_selected(tmp_path, monkeypatch):
     """`--lang c64` left no C variant, so no c64 row got the call-keeping pair: crc read 21 instructions, and -fno-inline-functions crashed llc on parity/qmove -Os."""
     monkeypatch.setattr(bench, "ONLY", ["c64"])
