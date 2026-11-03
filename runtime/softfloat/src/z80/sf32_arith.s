@@ -3,8 +3,9 @@
 ; address, popped by the caller; result low word in DE... as a long: HL low, DE high is the argument layout, and the
 ; result comes back as a long: low word in DE, high word in HL. Changes A BC DE HL IY and the flags; keeps IX and SP.
 ; Every NaN result is the quiet NaN 0x7fc00000. The work is done in a 24-byte frame addressed through IY:
-;   0..3 a, then the mantissa result   4..7 b   8 ea  9 eb  10 sign of a / of the result  11 sign of b  12 b's sign mask / na
-;   13 sticky  14..19 product or remainder  20 nb  22..23 spare
+;   0..3 a   4..7 b   8 ea  9 eb  10 sign of a / of the result  11 sign of b  12 b's sign mask / na
+;   13 quotient group count  14..15 product low bytes  20 nb  21 operation  22..23 mul/div exponent
+; Results are rounded from a 32-bit block in d:e:h:l (pack32): leading one at bit 31, l the guard byte, sticky in its bit 0.
 	.module sf32_arith
 	.area _CODE
 
@@ -23,20 +24,9 @@ __divsf3:
 	.globl __addsf3
 __addsf3:
 	xor	a,a
-fas:	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	ld	iy,#0
+fas:	ld	iy,#-24
 	add	iy,sp
+	ld	sp,iy
 	ld	12(iy),a
 	ld	0(iy),l
 	ld	1(iy),h
@@ -116,215 +106,215 @@ swap:	ld	a,0(iy)
 	ld	8(iy),c
 	ld	9(iy),a
 noswap:
-	ld	a,3(iy)		; sign and mantissa of a, hidden one, three guard bits
+	ld	a,3(iy)		; signs: a's is the result's
 	and	a,#0x80
 	ld	10(iy),a
-	ld	a,2(iy)
-	and	a,#0x7f
-	ld	2(iy),a
-	ld	a,8(iy)
-	or	a,a
-	jr	nz,4$
-	ld	8(iy),#1
-	jr	5$
-4$:	set	7,2(iy)
-5$:	ld	3(iy),#0
 	ld	a,7(iy)
 	and	a,#0x80
 	ld	11(iy),a
-	ld	a,6(iy)
-	and	a,#0x7f
-	ld	6(iy),a
+	ld	c,8(iy)		; ea in c; a's block 2(iy):1(iy):0(iy) with the hidden one, guard byte 0
+	ld	a,c
+	or	a,a
+	jr	nz,4$
+	inc	c
+	jr	5$
+4$:	set	7,2(iy)
+5$:	ld	d,6(iy)		; b's block in d:e:h:l
+	ld	e,5(iy)
+	ld	h,4(iy)
+	ld	l,#0
 	ld	a,9(iy)
 	or	a,a
 	jr	nz,6$
-	ld	9(iy),#1
+	inc	a
 	jr	7$
-6$:	set	7,6(iy)
-7$:	ld	7(iy),#0
-	ld	b,#3
-8$:	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
-	sla	4(iy)
-	rl	5(iy)
-	rl	6(iy)
-	rl	7(iy)
-	djnz	8$
-	ld	a,8(iy)		; align b: shift right by ea - eb, lost bits folded into bit 0
-	sub	a,9(iy)
+6$:	set	7,d
+7$:	neg			; align b: shift right by ea - eb, lost bits folded into bit 0
+	add	a,c
 	jr	z,aligned
-	ld	b,a
-	ld	13(iy),#0
-	cp	a,#32
-	jr	c,9$
-	ld	b,#32
+	cp	a,#26
+	jr	c,8$
+	ld	de,#0		; b is all sticky
+	ld	hl,#1
+	jr	aligned
+8$:	ld	b,a
 9$:	ld	a,b
 	cp	a,#8
 	jr	c,11$
-	ld	a,13(iy)
-	or	a,4(iy)
-	ld	13(iy),a
-	ld	a,5(iy)
-	ld	4(iy),a
-	ld	a,6(iy)
-	ld	5(iy),a
-	ld	a,7(iy)
-	ld	6(iy),a
-	ld	7(iy),#0
+	ld	a,l
+	or	a,a
+	ld	l,h
+	jr	z,10$
+	set	0,l
+10$:	ld	h,e
+	ld	e,d
+	ld	d,#0
 	ld	a,b
 	sub	a,#8
 	ld	b,a
 	jr	9$
-11$:	ld	a,b
-	or	a,a
-	jr	z,13$
-12$:	srl	7(iy)
-	rr	6(iy)
-	rr	5(iy)
-	rr	4(iy)
-	jr	nc,14$
-	set	0,13(iy)
-14$:	djnz	12$
-13$:	ld	a,13(iy)		; the byte moves left whole bytes in it
-	or	a,a
+11$:	or	a,a
 	jr	z,aligned
-	set	0,4(iy)
+12$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,13$
+	set	0,l
+13$:	djnz	12$
 aligned:
 	ld	a,10(iy)
 	xor	a,11(iy)
 	jr	nz,dosub
-	ld	a,0(iy)
-	add	a,4(iy)
-	ld	0(iy),a
-	ld	a,1(iy)
-	adc	a,5(iy)
-	ld	1(iy),a
-	ld	a,2(iy)
-	adc	a,6(iy)
-	ld	2(iy),a
-	ld	a,3(iy)
-	adc	a,7(iy)
-	ld	3(iy),a
-	bit	3,3(iy)
-	jr	z,pk
-	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,15$
-	set	0,0(iy)
-15$:	inc	8(iy)
+	ld	a,h
+	add	a,0(iy)
+	ld	h,a
+	ld	a,e
+	adc	a,1(iy)
+	ld	e,a
+	ld	a,d
+	adc	a,2(iy)
+	ld	d,a
+	jr	nc,pk
+	rr	d		; carry out: one right, the lost bit joins the sticky bit
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,14$
+	set	0,l
+14$:	inc	c
 	jr	pk
-dosub:	ld	a,0(iy)
-	sub	a,4(iy)
-	ld	0(iy),a
+dosub:	xor	a,a		; a's block minus b's: |a| >= |b|
+	sub	a,l
+	ld	l,a
+	ld	a,0(iy)
+	sbc	a,h
+	ld	h,a
 	ld	a,1(iy)
-	sbc	a,5(iy)
-	ld	1(iy),a
+	sbc	a,e
+	ld	e,a
 	ld	a,2(iy)
-	sbc	a,6(iy)
-	ld	2(iy),a
-	ld	a,3(iy)
-	sbc	a,7(iy)
-	ld	3(iy),a
-	or	a,2(iy)
-	or	a,1(iy)
-	or	a,0(iy)
+	sbc	a,d
+	ld	d,a
+	or	a,e
+	or	a,h
+	or	a,l
 	jr	nz,16$
-	ld	hl,#0		; exact cancellation is +0
-	ld	d,h
-	ld	e,l
+	ld	h,a		; exact cancellation is +0
+	ld	l,a
 	jp	done
-16$:	bit	2,3(iy)		; normalize: the leading one back to bit 26, unless the exponent runs out
+16$:	ld	a,d		; normalize: whole bytes, then bits, while the exponent allows
+	or	a,a
+	jr	nz,17$
+	ld	a,c
+	cp	a,#9
+	jr	c,17$
+	sub	a,#8
+	ld	c,a
+	ld	d,e
+	ld	e,h
+	ld	h,l
+	ld	l,#0
+	jr	16$
+17$:	bit	7,d
 	jr	nz,pk
-	ld	a,8(iy)
+	ld	a,c
 	cp	a,#2
 	jr	c,pk
-	dec	8(iy)
-	sla	0(iy)
-	rl	1(iy)
-	rl	2(iy)
-	rl	3(iy)
-	jr	16$
+	dec	c
+	add	hl,hl
+	rl	e
+	rl	d
+	jr	17$
 pk:	ld	b,#0
-	ld	c,8(iy)
-; round and pack: bc = exponent (signed), 0..3(iy) the 27-bit mantissa, 10(iy) the sign
-packbc:	bit	7,b
-	jr	nz,low
+	jp	pack32
+; round and pack: bc = exponent (signed) of bit 31 of the block d:e:h:l (l the guard byte, sticky in its bit 0), 10(iy) the sign
+pack32:	bit	7,b
+	jr	nz,low32
 	ld	a,b
 	or	a,a
 	jp	nz,inf
 	ld	a,c
-	cp	a,#255
-	jp	nc,inf
-	or	a,a
-	jr	nz,roundp
-low:	ld	hl,#1		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
-	or	a,a
-	sbc	hl,bc
-	ld	a,h
-	or	a,a
-	ld	b,#32
-	jr	nz,17$
-	ld	a,l
-	cp	a,#32
-	jr	nc,17$
-	ld	b,a
-17$:	ld	13(iy),#0
-18$:	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,19$
-	set	0,13(iy)
-19$:	djnz	18$
-	bit	0,13(iy)
-	jr	z,20$
-	set	0,0(iy)
-20$:	ld	bc,#1
-roundp:	ld	l,0(iy)		; the mantissa in de:hl
-	ld	h,1(iy)
-	ld	e,2(iy)
-	ld	d,3(iy)
-	ld	a,l
-	and	a,#7
-	ld	13(iy),a	; the three guard bits
-	srl	d
-	rr	e
-	rr	h
-	rr	l
-	srl	d
-	rr	e
-	rr	h
-	rr	l
-	srl	d
-	rr	e
-	rr	h
-	rr	l
-	ld	a,13(iy)
-	cp	a,#5
-	jr	nc,up
-	cp	a,#4
-	jr	nz,noup
-	bit	0,l
-	jr	z,noup
-up:	inc	hl
-	ld	a,h
-	or	a,l
-	jr	nz,noup
-	inc	de
-noup:	ld	a,c		; add (e - 1) << 23 and the sign
+	inc	a
+	jp	z,inf
 	dec	a
-	ld	b,a
-	srl	b
-	and	a,#1
-	rrca
-	add	a,e
-	ld	e,a
+	jr	nz,rnd32
+low32:	ld	a,b		; e <= 0: shift right by 1 - e, folding the lost bits into bit 0
+	or	a,a
+	jr	z,11$
+	inc	a
+	jr	nz,1$		; far below: everything is sticky
+	ld	a,c
+	cp	a,#2
+	jr	c,1$
+11$:	ld	a,#1
+	sub	a,c
+	cp	a,#32
+	jr	c,2$
+1$:	ld	a,d
+	or	a,e
+	or	a,h
+	or	a,l
+	ld	de,#0
+	ld	h,d
+	ld	l,d
+	jr	z,5$
+	inc	l
+	jr	5$
+2$:	ld	b,a
+	ld	c,#0		; c: lost bits
+3$:	ld	a,b
+	cp	a,#8
+	jr	c,4$
+	ld	a,c
+	or	a,l
+	ld	c,a
+	ld	l,h
+	ld	h,e
+	ld	e,d
+	ld	d,#0
 	ld	a,b
-	adc	a,d
+	sub	a,#8
+	ld	b,a
+	jr	3$
+4$:	or	a,a
+	jr	z,6$
+7$:	srl	d
+	rr	e
+	rr	h
+	rr	l
+	jr	nc,8$
+	set	0,c
+8$:	djnz	7$
+6$:	ld	a,c
+	or	a,a
+	jr	z,5$
+	set	0,l
+5$:	ld	c,#1
+rnd32:	ld	a,l
+	cp	a,#0x80
+	jr	c,nou32
+	jr	nz,9$
+	bit	0,h
+	jr	z,nou32
+9$:	inc	h
+	jr	nz,nou32
+	inc	e
+	jr	nz,nou32
+	inc	d
+	jr	nz,nou32
+	ld	d,#0x80		; the mantissa wrapped: 1.0 at the next exponent (255 packs as inf)
+	inc	c
+nou32:	ld	l,h
+	ld	h,e
+	ld	a,d
+	add	a,a		; carry: the leading one (normal)
+	ld	e,a
+	ld	a,c
+	jr	c,10$
+	xor	a,a		; denormal: exponent field 0
+10$:	srl	a
+	rr	e
 	or	a,10(iy)
 	ld	d,a
 	jp	done
@@ -401,18 +391,9 @@ retb:	ld	l,4(iy)
 retnan:	ld	hl,#0
 	ld	de,#0x7fc0
 done:	ex	de,hl		; the long result: low word in de, high word in hl
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
-	pop	af
+	ld	iy,#24
+	add	iy,sp
+	ld	sp,iy
 	ret
 
 ; ---- multiply and divide: the operation (1 or 2) is in A, the frame holds a and b as for add
@@ -421,7 +402,24 @@ md:	ld	21(iy),a
 	xor	a,7(iy)
 	and	a,#0x80
 	ld	10(iy),a
-	ld	a,8(iy)		; a NaN operand
+	ld	a,8(iy)		; both normal: no special case, nothing to normalize
+	inc	a
+	cp	a,#2
+	jr	c,mdsp
+	ld	a,9(iy)
+	inc	a
+	cp	a,#2
+	jr	c,mdsp
+	set	7,2(iy)
+	set	7,6(iy)
+	xor	a,a
+	ld	12(iy),a
+	ld	20(iy),a
+	ld	a,21(iy)
+	dec	a
+	jp	z,mulnrm
+	jp	divnrm
+mdsp:	ld	a,8(iy)		; a NaN operand
 	inc	a
 	jr	nz,1$
 	ld	a,2(iy)
@@ -550,6 +548,7 @@ unp:	ld	a,2(iy)
 	jr	5$
 
 mulgo:	call	unp
+mulnrm:
 	ld	a,8(iy)		; e = ea + eb - 127 - na - nb
 	add	a,9(iy)
 	ld	c,a
@@ -567,70 +566,463 @@ mulgo:	call	unp
 	sbc	hl,de
 	ld	22(iy),l
 	ld	23(iy),h
-	ld	a,4(iy)		; product 14..19: the multiplier in the low half, the sum in the high half
-	ld	14(iy),a
-	ld	a,5(iy)
-	ld	15(iy),a
-	ld	a,6(iy)
-	ld	16(iy),a
-	ld	c,0(iy)		; the sum in d:h:l, the multiplicand's low half in bc, its top byte at 2(iy)
-	ld	b,1(iy)
-	ld	hl,#0
+.ifdef SF_MUL_NIB
+; nibble products: x*y = nibt[x << 4 | y]; n*c = lo + 16*hi per byte, so each term lands byte aligned in E (weight 1) or
+; O (weight 16), P = E + 16*O; E, O and the multiplier nibbles are static cells (not reentrant)
+	ld	hl,#nbE		; clear E and O
+	ld	b,#12
+	xor	a,a
+1$:	ld	(hl),a
+	inc	hl
+	djnz	1$
+	ld	a,4(iy)	; multiplier byte 0: a, a << 4, h << 4, h
+	ld	c,a
+	and	a,#0x0f
+	ld	(nbA+0),a
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	(nbAS+0),a
+	ld	a,c
+	and	a,#0xf0
+	ld	(nbHS+0),a
+	rrca
+	rrca
+	rrca
+	rrca
+	ld	(nbH+0),a
+	ld	a,5(iy)	; multiplier byte 1: a, a << 4, h << 4, h
+	ld	c,a
+	and	a,#0x0f
+	ld	(nbA+1),a
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	(nbAS+1),a
+	ld	a,c
+	and	a,#0xf0
+	ld	(nbHS+1),a
+	rrca
+	rrca
+	rrca
+	rrca
+	ld	(nbH+1),a
+	ld	a,6(iy)	; multiplier byte 2: a, a << 4, h << 4, h
+	ld	c,a
+	and	a,#0x0f
+	ld	(nbA+2),a
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	(nbAS+2),a
+	ld	a,c
+	and	a,#0xf0
+	ld	(nbHS+2),a
+	rrca
+	rrca
+	rrca
+	rrca
+	ld	(nbH+2),a
+	ld	h,#>nibt
+	ld	a,0(iy)		; multiplicand byte 0: b low nibble, c high nibble << 4
+	ld	c,a
+	and	a,#0x0f
+	ld	b,a
+	ld	a,c
+	and	a,#0xf0
+	ld	c,a
+	ld	a,(nbAS+0)
+	or	a,b
+	ld	de,#nbE+0
+	call	nadd
+	ld	a,(nbA+0)
+	or	a,c
+	ld	de,#nbO+0
+	call	nadd
+	ld	a,(nbHS+0)
+	or	a,b
+	ld	de,#nbO+0
+	call	nadd
+	ld	a,(nbH+0)
+	or	a,c
+	ld	de,#nbE+1
+	call	nadd
+	ld	a,(nbAS+1)
+	or	a,b
+	ld	de,#nbE+1
+	call	nadd
+	ld	a,(nbA+1)
+	or	a,c
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbHS+1)
+	or	a,b
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbH+1)
+	or	a,c
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbAS+2)
+	or	a,b
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbA+2)
+	or	a,c
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbHS+2)
+	or	a,b
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbH+2)
+	or	a,c
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,1(iy)		; multiplicand byte 1: b low nibble, c high nibble << 4
+	ld	c,a
+	and	a,#0x0f
+	ld	b,a
+	ld	a,c
+	and	a,#0xf0
+	ld	c,a
+	ld	a,(nbAS+0)
+	or	a,b
+	ld	de,#nbE+1
+	call	nadd
+	ld	a,(nbA+0)
+	or	a,c
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbHS+0)
+	or	a,b
+	ld	de,#nbO+1
+	call	nadd
+	ld	a,(nbH+0)
+	or	a,c
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbAS+1)
+	or	a,b
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbA+1)
+	or	a,c
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbHS+1)
+	or	a,b
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbH+1)
+	or	a,c
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbAS+2)
+	or	a,b
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbA+2)
+	or	a,c
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbHS+2)
+	or	a,b
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbH+2)
+	or	a,c
+	ld	de,#nbE+4
+	call	nadd
+	ld	a,2(iy)		; multiplicand byte 2: b low nibble, c high nibble << 4
+	ld	c,a
+	and	a,#0x0f
+	ld	b,a
+	ld	a,c
+	and	a,#0xf0
+	ld	c,a
+	ld	a,(nbAS+0)
+	or	a,b
+	ld	de,#nbE+2
+	call	nadd
+	ld	a,(nbA+0)
+	or	a,c
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbHS+0)
+	or	a,b
+	ld	de,#nbO+2
+	call	nadd
+	ld	a,(nbH+0)
+	or	a,c
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbAS+1)
+	or	a,b
+	ld	de,#nbE+3
+	call	nadd
+	ld	a,(nbA+1)
+	or	a,c
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbHS+1)
+	or	a,b
+	ld	de,#nbO+3
+	call	nadd
+	ld	a,(nbH+1)
+	or	a,c
+	ld	de,#nbE+4
+	call	nadd
+	ld	a,(nbAS+2)
+	or	a,b
+	ld	de,#nbE+4
+	call	nadd
+	ld	a,(nbA+2)
+	or	a,c
+	ld	de,#nbO+4
+	call	nadd
+	ld	a,(nbHS+2)
+	or	a,b
+	ld	de,#nbO+4
+	call	nadd
+	ld	a,(nbH+2)
+	or	a,c
+	ld	de,#nbE+5
+	call	nadd
+	ld	b,#4		; E += 16 * O
+2$:	ld	hl,#nbO
+	or	a,a
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	inc	hl
+	rl	(hl)
+	djnz	2$
+	ld	hl,#nbE
+	ld	de,#nbO
+	ld	b,#6
+	or	a,a
+3$:	ld	a,(de)
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	3$
+	ld	c,22(iy)
+	ld	b,23(iy)
+	ld	hl,(nbE+4)	; block P5..P2 in d:e:h:l, sticky P1 | P0
 	ld	d,h
-	ld	e,#24
-1$:	bit	0,14(iy)
-	jr	z,2$
-	add	hl,bc
+	ld	e,l
+	ld	hl,(nbE+2)
+	bit	7,d
+	jr	z,4$
+	inc	bc		; product >= 2: exponent up
+	ld	a,(nbE+1)
+	jr	5$
+4$:	ld	a,(nbE+1)	; else one place left
+	add	a,a
+	adc	hl,hl
+	rl	e
+	rl	d
+5$:	push	hl
+	ld	hl,#nbE
+	or	a,(hl)
+	pop	hl
+	jp	z,pack32
+	set	0,l
+	jp	pack32
+; adds nibt[a] into the byte at de, the carry rippling up; h = >nibt
+nadd:	ld	l,a
+	ld	a,(hl)
+	ex	de,hl
+	add	a,(hl)
+	ld	(hl),a
+	jr	nc,7$
+6$:	inc	hl
+	inc	(hl)
+	jr	z,6$
+7$:	ld	h,#>nibt
+	ret
+.else
+.ifdef SF_MUL_LUT
+	xor	a,a		; quarter squares (measured slower than m8): x*y = q1[x+y] - q2[255-x+y], nine products into 14..19(iy)
+	ld	14(iy),a
+	ld	15(iy),a
+	ld	16(iy),a
+	ld	17(iy),a
+	ld	18(iy),a
+	ld	19(iy),a
+	ld	b,0(iy)
+	ld	a,b
+	cpl
+	ld	c,a
+	ld	a,4(iy)
+	call	qm
+	ld	l,#14
+	call	qadd
+	ld	a,5(iy)
+	call	qm
+	ld	l,#15
+	call	qadd
+	ld	a,6(iy)
+	call	qm
+	ld	l,#16
+	call	qadd
+	ld	b,1(iy)
+	ld	a,b
+	cpl
+	ld	c,a
+	ld	a,4(iy)
+	call	qm
+	ld	l,#15
+	call	qadd
+	ld	a,5(iy)
+	call	qm
+	ld	l,#16
+	call	qadd
+	ld	a,6(iy)
+	call	qm
+	ld	l,#17
+	call	qadd
+	ld	b,2(iy)
+	ld	a,b
+	cpl
+	ld	c,a
+	ld	a,4(iy)
+	call	qm
+	ld	l,#16
+	call	qadd
+	ld	a,5(iy)
+	call	qm
+	ld	l,#17
+	call	qadd
+	ld	a,6(iy)
+	call	qm
+	ld	l,#18
+	call	qadd
+	ld	c,22(iy)
+	ld	b,23(iy)
+	ld	d,19(iy)
+	ld	e,18(iy)
+	ld	h,17(iy)
+	ld	l,16(iy)
+	bit	7,d
+	jr	z,1$
+	inc	bc		; product >= 2: exponent up
+	ld	a,15(iy)
+	jr	2$
+1$:	ld	a,15(iy)		; else one place left
+	add	a,a
+	adc	hl,hl
+	rl	e
+	rl	d
+2$:	or	a,14(iy)
+	jp	z,pack32
+	set	0,l
+	jp	pack32
+; de = b * a, c = ~b (tables page aligned)
+qm:	ld	e,a
+	add	a,b
+	ld	l,a
+	ld	a,#>q1lo
+	adc	a,#0
+	ld	h,a
+	ld	a,e
+	add	a,c
+	ld	e,(hl)
+	inc	h
+	inc	h
+	ld	d,(hl)
+	ld	l,a
+	ld	a,#>q2lo
+	adc	a,#0
+	ld	h,a
+	ld	a,e
+	sub	a,(hl)
+	ld	e,a
+	inc	h
+	inc	h
 	ld	a,d
-	adc	a,2(iy)
+	sbc	a,(hl)
 	ld	d,a
-	jr	3$
-2$:	or	a,a
-3$:	rr	d
+	ret
+; adds de into the sum at offset l in the caller's frame (sp + 2 here), the carry rippling up
+qadd:	ld	h,#0
+	add	hl,sp
+	inc	hl
+	inc	hl
+	ld	a,(hl)
+	add	a,e
+	ld	(hl),a
+	inc	hl
+	ld	a,(hl)
+	adc	a,d
+	ld	(hl),a
+	ret	nc
+3$:	inc	hl
+	inc	(hl)
+	jr	z,3$
+	ret
+.else
+	ld	c,0(iy)		; multiplicand a in e:bc, sum in a:hl, multiplier byte in d: one rr chain per bit
+	ld	b,1(iy)
+	ld	e,2(iy)
+	xor	a,a
+	ld	h,a
+	ld	l,a
+	ld	d,4(iy)
+	call	m8
+	ld	14(iy),d
+	ld	d,5(iy)
+	call	m8
+	ld	15(iy),d
+	ld	d,6(iy)
+	call	m8
+	ld	c,22(iy)
+	ld	b,23(iy)
+	jr	nc,1$		; the adds came one place early: a:h:l:d is twice the product's top 32 bits
+	rra			; product >= 2: once more right, exponent up
 	rr	h
 	rr	l
-	rr	16(iy)
-	rr	15(iy)
-	rr	14(iy)
-	dec	e
-	jr	nz,1$
-	ld	17(iy),l
-	ld	18(iy),h
-	ld	19(iy),d
-	ld	c,22(iy)	; the product has its top bit at 47 or 46: keep 27 bits, fold the rest into bit 0
-	ld	b,23(iy)
-	ld	e,#4
-	bit	7,19(iy)
-	jr	z,4$
+	rr	d
 	inc	bc
-	inc	e
-4$:	ld	13(iy),#0
+	jr	nc,1$
+	set	0,14(iy)
+1$:	ld	e,a		; block a:h:l:d -> d:e:h:l, the low bytes into the sticky bit
 	ld	a,14(iy)
 	or	a,15(iy)
-	jr	z,5$
-	set	0,13(iy)
-5$:	ld	a,16(iy)
-	ld	0(iy),a
-	ld	a,17(iy)
-	ld	1(iy),a
-	ld	a,18(iy)
-	ld	2(iy),a
-	ld	a,19(iy)
-	ld	3(iy),a
-6$:	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,7$
-	set	0,13(iy)
-7$:	dec	e
-	jr	nz,6$
-	bit	0,13(iy)
-	jp	z,packbc
-	set	0,0(iy)
-	jp	packbc
+	ld	a,d
+	ld	d,e
+	ld	e,h
+	ld	h,l
+	ld	l,a
+	jp	z,pack32
+	set	0,l
+	jp	pack32
+m8:	.rept	8		; eight multiplier bits from d; the add carry enters the next rr chain
+	rra
+	rr	h
+	rr	l
+	rr	d
+	jr	nc,.+4
+	add	hl,bc
+	adc	a,e
+	.endm
+	ret
+.endif
+.endif
 
 divgo:	call	unp
+divnrm:
 	ld	a,8(iy)		; e = ea - eb + 126 + nb - na
 	sub	a,9(iy)
 	ld	c,a
@@ -648,68 +1040,77 @@ divgo:	call	unp
 	add	hl,bc
 	ld	22(iy),l
 	ld	23(iy),h
-	ld	l,0(iy)		; remainder in d:hl starts as ma; the divisor's low half in bc, its top byte at 6(iy)
+	ld	l,0(iy)		; remainder in a:hl starts as ma; the divisor in e:bc
 	ld	h,1(iy)
-	ld	d,2(iy)
+	ld	a,2(iy)
 	ld	c,4(iy)
 	ld	b,5(iy)
-	ld	13(iy),#4	; 28 quotient bits: a group of 4, then three of 8, each collected in e behind a sentinel
-	ld	e,#0x10
+	ld	e,6(iy)
+	ld	d,#1		; 24 quotient bits, complemented, in three groups collected in d behind a sentinel
+	ld	13(iy),#3
+	or	a,a		; ratio < 1: one step down, so the first quotient bit is always 1
+	sbc	hl,bc
+	sbc	a,e
+	jr	nc,16$
+	add	hl,bc
+	adc	a,e
+	jr	14$
+16$:	inc	22(iy)
+	jr	nz,12$
+	inc	23(iy)
+	or	a,a
+	jr	12$
 11$:	or	a,a
 	sbc	hl,bc
-	ld	a,d
-	sbc	a,6(iy)
-	ld	d,a
-	jr	c,12$
-	scf
-	rl	e
-	jr	13$
-12$:	add	hl,bc		; too far: put it back, the bit is 0
-	ld	a,d
-	adc	a,6(iy)
-	ld	d,a
-	or	a,a
-	rl	e
-13$:	jr	c,15$		; the sentinel fell out: a group is complete
+	sbc	a,e
+	jr	nc,12$
+	add	hl,bc		; too far: put it back; the carry (1) is the complemented bit 0
+	adc	a,e
+12$:	rl	d
+	jr	c,15$		; the sentinel fell out: a group is complete
 14$:	add	hl,hl
-	rl	d
+	adc	a,a
 	jr	nc,11$
 	or	a,a		; the remainder reached bit 24: above the divisor, the bit is 1
 	sbc	hl,bc
-	ld	a,d
-	sbc	a,6(iy)
-	ld	d,a
-	scf
-	rl	e
-	jr	13$
-15$:	ld	a,2(iy)		; the group joins the quotient from below
-	ld	3(iy),a
-	ld	a,1(iy)
-	ld	2(iy),a
-	ld	a,0(iy)
-	ld	1(iy),a
-	ld	0(iy),e
+	sbc	a,e
+	or	a,a
+	jr	12$
+15$:	push	de		; groups wait on the stack
+	ld	d,#1
 	dec	13(iy)
-	jr	z,16$
-	ld	e,#1
-	jr	14$
-16$:	ld	a,h		; a remainder left over sets the sticky bit
+	jr	nz,14$
+	ld	d,a		; guard byte: 0 when R = 0, else 1 below half, 0x81 above (2R = D cannot happen)
+	or	a,h
 	or	a,l
-	or	a,d
-	jr	z,3$
-	set	0,0(iy)
-3$:	ld	c,22(iy)
+	jr	z,17$
+	ld	a,d
+	add	hl,hl
+	adc	a,a
+	jr	c,18$
+	sbc	hl,bc
+	sbc	a,e
+	ld	l,#1
+	jr	c,19$
+18$:	ld	l,#0x81
+	jr	19$
+17$:	ld	l,a
+19$:	pop	de
+	ld	a,d
+	cpl
+	ld	h,a
+	pop	de
+	ld	a,d
+	cpl
+	ld	c,a
+	pop	de
+	ld	a,d
+	cpl
+	ld	d,a
+	ld	e,c
+	ld	c,22(iy)
 	ld	b,23(iy)
-	bit	3,3(iy)
-	jp	z,packbc
-	srl	3(iy)
-	rr	2(iy)
-	rr	1(iy)
-	rr	0(iy)
-	jr	nc,4$
-	set	0,0(iy)
-4$:	inc	bc
-	jp	packbc
+	jp	pack32
 
 ; ---- conversions with 32-bit integers: the integer is in HL (low) and DE (high), the float likewise -------------------
 
@@ -720,54 +1121,33 @@ __floatsisf:
 	.globl __floatunsisf
 __floatunsisf:
 	xor	a,a
-flent:	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	ld	iy,#0
+flent:	ld	iy,#-24
 	add	iy,sp
-	ld	21(iy),a
-	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
+	ld	sp,iy
 	ld	10(iy),#0
 	or	a,a
 	jr	z,1$
-	bit	7,3(iy)		; signed and negative: keep the sign, work on the magnitude
+	bit	7,d		; signed and negative: keep the sign, work on the magnitude
 	jr	z,1$
 	ld	10(iy),#0x80
 	xor	a,a
-	sub	a,0(iy)
-	ld	0(iy),a
+	sub	a,l
+	ld	l,a
 	ld	a,#0
-	sbc	a,1(iy)
-	ld	1(iy),a
+	sbc	a,h
+	ld	h,a
 	ld	a,#0
-	sbc	a,2(iy)
-	ld	2(iy),a
+	sbc	a,e
+	ld	e,a
 	ld	a,#0
-	sbc	a,3(iy)
-	ld	3(iy),a
-1$:	ld	l,0(iy)		; the magnitude in de:hl
-	ld	h,1(iy)
-	ld	e,2(iy)
-	ld	d,3(iy)
-	ld	a,d
+	sbc	a,d
+	ld	d,a
+1$:	ld	a,d
 	or	a,e
 	or	a,h
 	or	a,l
 	jp	z,retzero32
-	ld	bc,#153		; 127 + 26: the exponent when the leading one is at bit 26
-	ld	13(iy),#0
+	ld	bc,#158		; 127 + 31: the exponent when the leading one is at bit 31
 2$:	ld	a,d		; a zero top byte moves up whole
 	or	a,a
 	jr	nz,3$
@@ -778,177 +1158,152 @@ flent:	push	hl
 	ld	a,c
 	sub	a,#8
 	ld	c,a
-	jr	nc,2$
-	dec	b
 	jr	2$
-3$:	ld	a,d		; above bit 26: shift right, the lost bits folded into bit 0 at the end
-	and	a,#0xf8
-	jr	z,5$
-4$:	srl	d
-	rr	e
-	rr	h
-	rr	l
-	jr	nc,6$
-	set	0,13(iy)
-6$:	inc	bc
-	ld	a,d
-	and	a,#0xf8
-	jr	nz,4$
-	jr	7$
-5$:	bit	2,d		; below: shift left
-	jr	nz,7$
+3$:	bit	7,d
+	jp	nz,pack32
 	add	hl,hl
 	rl	e
 	rl	d
-	dec	bc
-	jr	5$
-7$:	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
-	bit	0,13(iy)
-	jp	z,packbc
-	set	0,0(iy)
-	jp	packbc
+	dec	c
+	jr	3$
 
 	.globl __fixsfsi
 __fixsfsi:
-	ld	a,#1
+	ld	c,#1
 	jr	fixent
 	.globl __fixunssfsi
 __fixunssfsi:
-	xor	a,a
-fixent:	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	push	hl
-	ld	iy,#0
-	add	iy,sp
-	ld	21(iy),a
-	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
-	ld	a,3(iy)
+	ld	c,#0
+fixent:	ld	a,d		; c: bit 7 the sign, bit 0 signed; no frame
 	and	a,#0x80
-	ld	10(iy),a
-	ld	a,2(iy)
+	or	a,c
+	ld	c,a
+	ld	a,e
 	add	a,a
-	ld	a,3(iy)
+	ld	a,d
 	adc	a,a
-	ld	8(iy),a
-	inc	a
-	jr	nz,1$
-	ld	a,2(iy)		; NaN gives 0
-	and	a,#0x7f
-	or	a,1(iy)
-	or	a,0(iy)
-	jp	nz,retzero32
-1$:	ld	a,8(iy)
 	cp	a,#127		; |x| < 1
-	jp	c,retzero32
-	cp	a,#159		; |x| >= 2^32
-	jp	nc,big
-	ld	a,2(iy)
-	and	a,#0x7f
-	or	a,#0x80
-	ld	2(iy),a
-	ld	3(iy),#0
-	ld	l,0(iy)		; shift in registers
-	ld	h,1(iy)
-	ld	e,2(iy)
+	jr	c,fzero
+	cp	a,#159		; |x| >= 2^32, inf, NaN
+	jr	nc,fbig
+	set	7,e
 	ld	d,#0
-	ld	a,8(iy)
-	sub	a,#150		; by e - 23
-	jr	z,22$
-	jr	c,55$
+	sub	a,#150		; shift by e - 23
+	jr	z,fsign
+	jr	c,frt
 	ld	b,a
-11$:	add	hl,hl
+1$:	add	hl,hl
 	rl	e
 	rl	d
-	djnz	11$
-	jr	22$
-55$:	neg
-	ld	b,a
-	cp	a,#8
-	jr	c,33$
-44$:	ld	l,h		; whole bytes first
+	djnz	1$
+	jr	fsign
+frt:	neg
+2$:	cp	a,#8		; whole bytes first
+	jr	c,3$
+	ld	l,h
 	ld	h,e
 	ld	e,d
-	ld	d,#0
-	ld	a,b
 	sub	a,#8
+	jr	2$
+3$:	or	a,a
+	jr	z,fsign
 	ld	b,a
-	cp	a,#8
-	jr	nc,44$
-	or	a,a
-	jr	z,22$
-33$:	srl	d
-	rr	e
+4$:	srl	e
 	rr	h
 	rr	l
-	djnz	33$
-22$:	ld	0(iy),l
-	ld	1(iy),h
-	ld	2(iy),e
-	ld	3(iy),d
-mdone:	ld	a,21(iy)
-	or	a,a
-	jr	z,uns
-	bit	7,10(iy)
-	jr	nz,sneg
-	bit	7,3(iy)
-	jr	nz,imax
-	jr	retm
-sneg:	bit	7,3(iy)
-	jr	nz,imin
+	djnz	4$
+fsign:	bit	0,c
+	jr	z,funs
+	bit	7,d		; 2^31 or more
+	jr	nz,fsat
+	bit	7,c
+	jr	z,fret
 	xor	a,a
-	sub	a,0(iy)
-	ld	0(iy),a
+	sub	a,l
+	ld	l,a
 	ld	a,#0
-	sbc	a,1(iy)
-	ld	1(iy),a
+	sbc	a,h
+	ld	h,a
 	ld	a,#0
-	sbc	a,2(iy)
-	ld	2(iy),a
+	sbc	a,e
+	ld	e,a
 	ld	a,#0
-	sbc	a,3(iy)
-	ld	3(iy),a
-	jr	retm
-uns:	bit	7,10(iy)
-	jr	nz,retzero32
-	jr	retm
-big:	ld	a,21(iy)
-	or	a,a
-	jr	z,ubig
-	bit	7,10(iy)
-	jr	nz,imin
-imax:	ld	hl,#0xffff
-	ld	de,#0x7fff
-	jp	done
-imin:	ld	hl,#0
-	ld	de,#0x8000
-	jp	done
-ubig:	bit	7,10(iy)
-	jr	nz,retzero32
-	ld	hl,#0xffff
-	ld	de,#0xffff
-	jp	done
-retm:	ld	l,0(iy)
-	ld	h,1(iy)
-	ld	e,2(iy)
-	ld	d,3(iy)
-	jp	done
+	sbc	a,d
+	ld	d,a
+fret:	ex	de,hl
+	ret
+funs:	bit	7,c
+	jr	z,fret
+fzero:	ld	hl,#0
+	ld	d,h
+	ld	e,l
+	ret
+fbig:	inc	a		; NaN gives 0
+	jr	nz,fsat
+	ld	a,e
+	and	a,#0x7f
+	or	a,h
+	or	a,l
+	jr	nz,fzero
+fsat:	bit	7,c
+	jr	nz,5$
+	ld	hl,#0x7fff		; the largest: 0x7fffffff, or 0xffffffff unsigned
+	bit	0,c
+	jr	nz,6$
+	ld	h,l
+6$:	ld	de,#0xffff
+	ret
+5$:	bit	0,c		; negative: 0x80000000, or 0 unsigned
+	jr	z,fzero
+	ld	hl,#0x8000
+	ld	de,#0
+	ret
 retzero32:
 	ld	hl,#0
 	ld	d,h
 	ld	e,l
 	jp	done
+
+.ifdef SF_MUL_LUT
+	.area	_SFLUT		; 256-byte aligned (linker -b); q1 lo, q1 hi, q2 lo, q2 hi, 512 entries each
+q1lo:
+n = 0
+	.rept	512
+	.db	(n*n/4)&0xff
+n = n + 1
+	.endm
+n = 0
+	.rept	512
+	.db	(n*n/4)>>8
+n = n + 1
+	.endm
+q2lo:
+n = 0
+	.rept	512
+	.db	((n-255)*(n-255)/4)&0xff
+n = n + 1
+	.endm
+n = 0
+	.rept	512
+	.db	((n-255)*(n-255)/4)>>8
+n = n + 1
+	.endm
+.endif
+
+.ifdef SF_MUL_NIB
+	.area	_SFLUT		; 256-byte aligned (linker -b)
+nibt:
+n = 0
+	.rept	256
+	.db	(n/16)*(n&15)
+n = n + 1
+	.endm
+	.area	_DATA
+nbE:	.ds	6
+nbO:	.ds	6
+nbA:	.ds	3
+nbAS:	.ds	3
+nbH:	.ds	3
+nbHS:	.ds	3
+	.area	_CODE
+.endif

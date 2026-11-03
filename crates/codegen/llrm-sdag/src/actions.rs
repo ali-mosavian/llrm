@@ -116,6 +116,9 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
+    /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
+    sext_cheaper_i32_i64: bool,
 }
 
 impl TargetLowering {
@@ -134,6 +137,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            sext_cheaper_i32_i64: false,
         }
     }
 
@@ -315,6 +319,15 @@ impl TargetLowering {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
+    /// `TargetLowering::isSExtCheaperThanZExt(FromTy, ToTy)`.
+    pub fn is_sext_cheaper_than_zext(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.sext_cheaper_i32_i64 && from == EVT::Simple(MVT::I32) && to == EVT::Simple(MVT::I64)
+    }
+
     /// `Subtarget.canUseCMOV()`.
     pub fn can_use_cmov(&self) -> bool {
         self.cmov
@@ -443,6 +456,7 @@ impl TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.sext_cheaper_i32_i64 = true;
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).

@@ -354,6 +354,14 @@ pub trait Tti {
         false
     }
 
+    /// The fewest calls a callee has in the module for the bound above to hold
+    /// its sites (a callee called once is the pin's: the copy
+    /// meets constants the cost model follows, and folds with the sites around
+    /// it).
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        1
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -361,11 +369,6 @@ pub trait Tti {
     /// already taken), nothing at m32.
     fn constant_offset_phi_is_cheap(&self) -> bool {
         true
-    }
-
-    /// The same bound for a caller optimized for speed (its tuning table).
-    fn speed_inline_by_code_size(&self) -> bool {
-        false
     }
 
     /// How many percent of its `CodeSize` units a call and the pushes of its
