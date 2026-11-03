@@ -1,4 +1,4 @@
-target datalayout = "e-p:32:32-i64:32-f80:32-n8:16:32-S32"
+target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 
 define i32 @f(ptr %p0, ptr %p1, i32 %n) {
 entry:

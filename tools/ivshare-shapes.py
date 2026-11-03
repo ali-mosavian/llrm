@@ -2,13 +2,15 @@
 """Regenerates tests/ivshare/shapes/<id>.<p16|p32|p64>.ll: the IR LSR sees for the
 loop shapes of docs (LSR hybrid design, section 5). Run from the repo root."""
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import targetdesc  # noqa: E402
 
 OUT = "crates/opt/llrm-transforms/tests/ivshare/shapes"
-LAYOUT = {
-    16: "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32",
-    32: "e-p:32:32-i64:32-f80:32-n8:16:32-S32",
-    64: "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
-}
+# The datalayouts are the targets', read from their descriptions.
+LAYOUT = {w: targetdesc.targets()[f"m{w}"]["datalayout"] for w in (16, 32, 64)}
+I32 = 32  # the IR type the shapes sum through, not a target width
 
 
 def loop(w, streams, *, ity=None, n="arg", down=False, stride=None, acc=False, guard=True,
@@ -48,10 +50,10 @@ def loop(w, streams, *, ity=None, n="arg", down=False, stride=None, acc=False, g
         if role == "ld":
             t += f"  %v{k} = load {ty}, ptr %a{k}\n"
             bits = int(ty[1:])
-            if bits < 32:
+            if bits < I32:
                 t += f"  %w{k} = sext {ty} %v{k} to i32\n"
                 sums.append(f"%w{k}")
-            elif bits == 32:
+            elif bits == I32:
                 sums.append(f"%v{k}")
             else:
                 t += f"  %w{k} = trunc {ty} %v{k} to i32\n"
@@ -65,9 +67,9 @@ def loop(w, streams, *, ity=None, n="arg", down=False, stride=None, acc=False, g
     for k, (ty, role) in enumerate(streams):
         if role == "st":
             bits = int(ty[1:])
-            val = cur if bits == 32 else None
+            val = cur if bits == I32 else None
             if val is None:
-                t += f"  %t{k} = trunc i32 {cur} to {ty}\n" if bits < 32 else f"  %t{k} = zext i32 {cur} to {ty}\n"
+                t += f"  %t{k} = trunc i32 {cur} to {ty}\n" if bits < I32 else f"  %t{k} = zext i32 {cur} to {ty}\n"
                 val = f"%t{k}"
             t += f"  store {ty} {val}, ptr %a{k}\n"
     if down:
