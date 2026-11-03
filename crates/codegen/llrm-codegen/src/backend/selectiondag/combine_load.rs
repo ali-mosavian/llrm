@@ -8,13 +8,18 @@
 //! combiner holds no vectors or float memory types of another size). Exit:
 //! those ports. Owner w10. Review 2026-11-13.
 //!
+//! DEVIATE LS1 (owner m16, exit 2026-11-17): [`DagCombiner::split_dword_load`]
+//! splits a plain `i32` load read only as its two words. The pin's
+//! `ReduceLoadWidth` ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095)) narrows a load only when nothing else reads
+//! it; m16 only (`split_dword_loads`).
+//!
 //! # See also
 //! LLVM's `DAGCombiner::visitLOAD`
 //! ([L22110](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L22110)).
 
 use super::actions::LoadExt;
 use super::address_analysis::BaseIndexOffset;
-use super::dag::{NodeData, SDValue};
+use super::dag::{MemBase, MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
 use super::mvt::EVT;
@@ -37,6 +42,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             if let Some(forwarded) = self.forward_store_value_to_direct_load(node) {
                 return Some(forwarded);
             }
+            if let Some(split) = self.split_dword_load(node) {
+                return Some(split);
+            }
             return self.improve_load_chain(node);
         }
         // "It's not safe to use the two value CombineTo variant here": only
@@ -48,6 +56,75 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             self.add_to_worklist(user);
         }
         Some(SDValue { node: node.node, res: 0 })
+    }
+
+    /// DEVIATE LS1 (`split_dword_loads`): `trunc i16 L` and `trunc i16 (srl L,
+    /// 16)` of a plain `i32` load `L` are loads of its two words. A use that is
+    /// not a half keeps the one load.
+    fn split_dword_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let value = SDValue { node: node.node, res: 0 };
+        if !self.hooks.split_dword_loads()
+            || self.dag.value_type(node) != EVT::I32
+            || info.mem_vt != EVT::I32
+            || info.ext.is_some()
+            || info.ordering.is_some()
+            || info.volatile
+        {
+            return None;
+        }
+        let (mut lows, mut highs, mut shifts) = (Vec::new(), Vec::new(), Vec::new());
+        for user in self.dag.users(value).collect::<Vec<_>>() {
+            let user = SDValue { node: user, res: 0 };
+            match self.dag.opcode(user) {
+                ISD::Truncate if self.dag.value_type(user) == EVT::I16 => lows.push(user),
+                ISD::Srl
+                    if self.dag.constant(self.dag.operand(user, 1)) == Some(16)
+                        && self.dag.operand(user, 0) == value =>
+                {
+                    shifts.push(user);
+                    for half in self.dag.users(user).collect::<Vec<_>>() {
+                        let half = SDValue { node: half, res: 0 };
+                        if self.dag.opcode(half) != ISD::Truncate || self.dag.value_type(half) != EVT::I16 {
+                            return None;
+                        }
+                        highs.push(half);
+                    }
+                }
+                _ => return None,
+            }
+        }
+        if lows.is_empty() || highs.is_empty() {
+            return None;
+        }
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let low = self.dag.get_load(EVT::I16, chain, ptr, MemInfo { mem_vt: EVT::I16, ..info });
+        let high_ptr = self.dag.get_object_ptr_offset(ptr, 2);
+        let base = match info.base {
+            MemBase::Stack(at) => MemBase::Stack(at + 2),
+            MemBase::CallArgument(at) => MemBase::CallArgument(at + 2),
+            other => other,
+        };
+        let high_info = MemInfo { mem_vt: EVT::I16, align: info.align.min(2), base, ..info };
+        let high = self.dag.get_load(EVT::I16, chain, high_ptr, high_info);
+        let chains = [SDValue { node: low.node, res: 1 }, SDValue { node: high.node, res: 1 }];
+        let joined = self.dag.get_token_factor(&chains);
+        self.replace_value(SDValue { node: node.node, res: 1 }, joined);
+        for &half in &lows {
+            self.replace_value(half, low);
+        }
+        for &half in &highs {
+            self.replace_value(half, high);
+        }
+        // The replaced halves stay in the arena reading the load; left so, the
+        // load would be split again.
+        for dead in lows.iter().chain(&highs).chain(&shifts) {
+            self.dag.delete_dead(dead.node);
+        }
+        Some(value)
     }
 
     /// `isTypeLegal`: every type is fine before type legalization.
