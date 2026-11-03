@@ -30,6 +30,10 @@ fn run() -> i32 {
                 }
             },
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if llrm_debug::is_debug_flag(other) => {
+                eprintln!("{}", llrm_debug::no_writer("llrm-m68k-llc", other, "m68k"));
+                return 2;
+            }
             other => {
                 eprintln!("llrm-m68k-llc: unrecognized argument {other}");
                 return 2;
