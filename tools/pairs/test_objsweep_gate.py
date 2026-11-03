@@ -62,8 +62,8 @@ def test_every_target_objsweep_compiles_has_a_gate_leg_or_a_named_reason():
         if target in gate.PENDING:
             assert gate.PENDING[target].strip(), target
             continue
-        assert target in legs and f"{target} debug" in legs, target
-        assert target in objsweep.DEBUG_LEGS, target
+        assert target in legs, target
+        assert (f"{target} debug" in legs) == (target in objsweep.DEBUG_LEGS), target
 
 
 def test_a_head_with_the_compilers_sources_of_its_base_is_not_swept(tmp_path, monkeypatch):

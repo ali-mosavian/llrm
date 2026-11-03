@@ -23,12 +23,11 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tools"))
 
-LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64", "a64", "wasm") for suffix, debug in (("", False), (" debug", True))]
-# Targets objsweep compiles that the gate does not sweep yet, and why (11-03, the same llrm-cc on both sides, 8 programs at O2: a64 and wasm 8/8 deterministic plain and -g).
+DEBUG_TARGETS = ("m32", "m16", "m64", "a64", "wasm")  # the others write no debug information (z80's llc takes no -g, 6502 has none)
+LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64", "a64", "wasm", "mos", "z80") for suffix, debug in (("", False), (" debug", True)) if not debug or target in DEBUG_TARGETS]
+# Targets objsweep compiles that the gate does not sweep yet, and why (11-03, tip compiler built twice per program, O2: a64 and wasm deterministic plain and -g; 6502 67 of 71 and z80 69 of 71 compile, all deterministic).
 PENDING = {
-    "mos": "needs llrm-6502-llc in both builds; 5 of 8 programs compile (CannotSelect Store on 3: backend, owner llrm-target-6502), no -g leg",
-    "z80": "needs llrm-z80-llc in both builds; 6 of 8 compile (CannotSelect Store on 2: owner llrm-target-z80); its llc takes no -g, so no debug leg",
-    "m68k": "llrm-cc -c reaches llrm-m68k-llc without the -S it requires (usage error on 8 of 8); owner llrm-target-m68k",
+    "m68k": "its objects carried a temp path in the file symbol (not deterministic); fixed in #6689, add the leg when it lands. floats/fpbench fail -c until soft-float lands (llrm-target-m68k)",
 }
 LINE = re.compile(r"(\d+) objects changed \(([^)]*)\); (\d+) identical, (\d+) failed on both sides, (\d+) failed on one side of (\d+)")
 MIN_IDENTICAL = 0.5  # of the cells of a leg that must compile and match for it to say anything
