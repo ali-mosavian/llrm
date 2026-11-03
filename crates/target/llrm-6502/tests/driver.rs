@@ -1312,6 +1312,37 @@ fn a_64_bit_subtract_of_arguments_is_a_borrow_chain_not_compares() {
     assert!(!text.contains("cmp"), "a borrow made by a compare:\n{text}");
 }
 
+/// The overflow flag of a 64-bit add, returned: the scheduler panicked on a
+/// dependence cycle ("units [1, 2, 3, 4] are never ordered") once the add
+/// expanded into a carry chain, whose last carry the return reads as a byte.
+/// `2^64 - 1 + 1` overflows, `1 + 1` does not.
+#[test]
+fn the_overflow_flag_of_a_64_bit_add_is_read_from_the_carry_chain() {
+    let ir = module(
+        r#"declare { i64, i1 } @llvm.uadd.with.overflow.i64(i64, i64)
+@a = internal global i64 -1
+@b = internal global i64 1
+define i8 @wraps() {
+  %x = load volatile i64, ptr @a
+  %y = load volatile i64, ptr @b
+  %r = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %x, i64 %y)
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = zext i1 %o to i8
+  ret i8 %z
+}
+define i8 @fits() {
+  %y = load volatile i64, ptr @b
+  %r = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %y, i64 %y)
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = zext i1 %o to i8
+  ret i8 %z
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "wraps"), 1, "{text}");
+    assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
+}
+
 /// A loaded `i1` that a `select` or an extension tests was selected into a
 /// compare of its own zero extension: `llrm-6502-llc` ran until it had taken
 /// 217 GB. A bit in memory is a byte, `x & 1`. `pick` is 7 for a stored 1 and
