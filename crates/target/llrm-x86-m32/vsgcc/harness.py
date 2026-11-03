@@ -388,6 +388,13 @@ def built_abi():
     return record.read_text().strip() if record.exists() else "watcom"
 
 
+def built_ld():
+    """The long double width, 80 or 64 bits, build.sh compiled both sides at, as it recorded it (a directory of an earlier build has 8
+    bytes in llrm and 12 in gcc: the 64 of Watcom's side was beside the 80 of the reference)."""
+    record = OUT / "ld"
+    return int(record.read_text()) if record.exists() else 64
+
+
 def stub_digest():
     """What stub.s says now: a stub is current when the one it was built from said the same."""
     import hashlib
@@ -570,7 +577,7 @@ def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":
