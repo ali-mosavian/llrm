@@ -1518,7 +1518,9 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
             _ => None,
         })
         .collect();
-    let mut depth = vec![0u32; lines.len()];
+    // one loop per head, reaching to its farthest jump back: a loop with two
+    // jumps back to its head (a `continue`) is one loop, not two nested ones
+    let mut reach = std::collections::BTreeMap::<usize, usize>::new();
     for (at, line) in lines.iter().enumerate() {
         let Line::Inst(text) = line else { continue };
         let mut words = text.split([' ', ',']).filter(|word| !word.is_empty());
@@ -1526,9 +1528,14 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
             continue;
         }
         if let Some(&head) = words.last().and_then(|target| labels.get(target)).filter(|&&head| head <= at) {
-            for one in &mut depth[head..=at] {
-                *one += 1;
-            }
+            let end = reach.entry(head).or_insert(at);
+            *end = (*end).max(at);
+        }
+    }
+    let mut depth = vec![0u32; lines.len()];
+    for (head, end) in reach {
+        for one in &mut depth[head..=end] {
+            *one += 1;
         }
     }
     let (mut bytes, mut clocks) = (0, 0u64);
@@ -1680,5 +1687,15 @@ mod tests {
         ];
         let kept = drop_unreachable(lines);
         assert_eq!(kept, vec![inst("ret z"), inst("jr L1"), label("L1"), inst("ld a, b"), inst("ret")]);
+    }
+
+    /// A loop with two jumps back to its head was counted as two nested
+    /// loops, 8 times too heavy: lz4 -O2 priced a candidate with 40% fewer
+    /// real clocks as 40% dearer.
+    #[test]
+    fn a_loop_with_two_jumps_back_is_one_loop() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![Line::Label("L1".into()), inst("ld a, b"), inst("jr nz, L1"), inst("jr z, L1")];
+        assert_eq!(price_in_loops(&lines).1, price(&lines).1 as u64 * 8);
     }
 }
