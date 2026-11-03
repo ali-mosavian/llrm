@@ -1001,6 +1001,25 @@ entry:
     selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
 }
 
+/// A call argument of `i40` (a 5-byte struct passed by value, struct_odd_sizes
+/// at -O0) stopped at `Legalize(Unsupported CopyToReg i40 "promote operand")`:
+/// the register copy kept the argument's width. It is any-extended to `i64`.
+#[test]
+fn an_m64_call_with_an_odd_wide_argument_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i32 @g(i40)
+define i32 @f(i32 %x) {
+entry:
+  %q = zext i32 %x to i40
+  %r = call i32 @g(i40 %q)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
 /// A `long double` compare at m64 was `Emit(Unmapped("UCOM_FpIr80"))`: the
 /// x86-64 CPUs have `fcomi`, so the table selects its flag-setting form.
 #[test]
