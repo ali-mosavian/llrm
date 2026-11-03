@@ -53,6 +53,9 @@ fn rules(object: &Path) -> Vec<Vec<String>> {
 
 /// A function that calls and uses the result keeps a frame record; before this
 /// the object had no `.eh_frame`, and nothing could unwind through the call.
+/// The saves are stated after the frame register is set up, highest address
+/// first, as the pin does (they were stated at the `stp`, 4 bytes early, in the
+/// other order: `cfi_diff.py` showed pc 4 `{x29, x30}` against the pin's none).
 #[test]
 fn a_function_with_a_frame_record_states_where_its_caller_is() {
     let directory = tempfile::tempdir().unwrap();
@@ -64,13 +67,13 @@ fn a_function_with_a_frame_record_states_where_its_caller_is() {
         rules(&object),
         [[
             "DW_CFA_def_cfa_offset: 16",
-            "DW_CFA_offset: r29 (x29) at cfa-16",
-            "DW_CFA_offset: r30 (x30) at cfa-8",
             "DW_CFA_def_cfa_register: r29 (x29)",
+            "DW_CFA_offset: r30 (x30) at cfa-8",
+            "DW_CFA_offset: r29 (x29) at cfa-16",
             "DW_CFA_def_cfa_register: r31 (sp)",
             "DW_CFA_def_cfa_offset: 0",
-            "DW_CFA_restore: r29 (x29)",
             "DW_CFA_restore: r30 (x30)",
+            "DW_CFA_restore: r29 (x29)",
         ]
         .map(String::from)
         .to_vec()]
@@ -164,23 +167,92 @@ fn compact_encodings(source: &str) -> Option<Vec<String>> {
     )
 }
 
+/// What the platform's clang gives a function that frames: no epilogue rows
+/// (`uwtable(sync)`) and the frame register set (`non-leaf`).
+const ATTRS: &str = "nounwind uwtable(sync) \"frame-pointer\"=\"non-leaf-no-reserve\"";
+
 /// Before this a Mach-O object had no `__compact_unwind` or `__eh_frame`: the
 /// writer refused an unwind section, and a frame's caller was lost to `ld64`.
 #[test]
 fn a_macho_object_has_a_compact_encoding_for_each_function() {
-    let source = "declare i32 @g(ptr)\ndefine i32 @caller(i32 %a) {\n  %r = call i32 @g(ptr null)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\ndefine i32 @leaf(i32 %a) {\n  %r = add i32 %a, 1\n  ret i32 %r\n}\n";
-    let Some(found) = compact_encodings(source) else { return };
+    let source = format!(
+        "declare i32 @g(ptr)\ndefine i32 @caller(i32 %a) {ATTRS} {{\n  %r = call i32 @g(ptr null)\n  %s = add i32 %r, 1\n  ret i32 %s\n}}\ndefine i32 @leaf(i32 %a) {ATTRS} {{\n  %r = add i32 %a, 1\n  ret i32 %r\n}}\n"
+    );
+    let Some(found) = compact_encodings(&source) else { return };
     // The pinned `llc` writes 0x04000000 (a frame, nothing else saved) and
     // 0x02000000 (frameless, no stack) for these.
     assert_eq!(found, ["0x04000000", "0x02000000"]);
 }
 
-/// A register saved below the record is not what the compact frame says (its
-/// pairs are stored high register first), so the function is left to DWARF.
+/// The registers a frame saves are stored in pairs, the higher register at the
+/// lower address, below the record, and the compact word names them. They
+/// were stored the other way round, which the word cannot say, so each such
+/// function was left to its DWARF frame (`0x03...`): 18 of 69 at -O2 against
+/// the pin's one. A register whose partner is free is saved with it, and
+/// `d8`, `x19` and `x21`/`x22` come in the order the word reads them.
 #[test]
-fn a_function_saving_a_register_is_left_to_its_dwarf_frame() {
-    let source = "declare i32 @g(ptr)\ndefine i32 @f(i32 %a) {\n  %r = call i32 @g(ptr null)\n  %s = add i32 %r, %a\n  ret i32 %s\n}\n";
-    let Some(found) = compact_encodings(source) else { return };
-    assert_eq!(found.len(), 1);
-    assert!(found[0].starts_with("0x03"), "{found:?}");
+fn the_saved_pairs_of_a_frame_are_named_in_its_compact_word() {
+    let source = format!(
+        "declare i32 @g(ptr)
+define i32 @one(i32 %a) {ATTRS} {{
+  %r = call i32 @g(ptr null)
+  %s = add i32 %r, %a
+  ret i32 %s
+}}
+define i32 @three(i32 %a, i32 %b, i32 %c) {ATTRS} {{
+  %r = call i32 @g(ptr null)
+  %s = add i32 %r, %a
+  %t = add i32 %s, %b
+  %u = add i32 %t, %c
+  ret i32 %u
+}}
+define double @fp(double %a) {ATTRS} {{
+  %x = fadd double %a, 1.0
+  %r = call i32 @g(ptr null)
+  %y = fadd double %x, 2.0
+  ret double %y
+}}
+define i64 @both(i64 %a, double %b) {ATTRS} {{
+  %r = call i32 @g(ptr null)
+  %f = fptosi double %b to i64
+  %s = add i64 %a, %f
+  ret i64 %s
+}}
+"
+    );
+    let Some(found) = compact_encodings(&source) else { return };
+    // As the pinned `llc` writes them.
+    assert_eq!(found, ["0x04000001", "0x04000003", "0x04000100", "0x04000101"]);
+}
+
+/// The object the entry block touches first sits at `[sp]`, so that access
+/// folds into the frame's allocation (`str x0, [sp, #-32]!`); the pin's order
+/// put the first object at the top, `sub sp` and `str [sp, #8]`, and the dense
+/// one at the bottom cost the same two instructions here. The word is the
+/// pin's frameless 32 bytes.
+#[test]
+fn the_first_touched_frame_object_is_at_sp_and_its_access_folds() {
+    let source = format!(
+        "define i64 @local(i64 %a, i32 %b) {ATTRS} {{
+  %p = alloca i64
+  %q = alloca i32
+  store volatile i64 %a, ptr %p
+  store volatile i32 %b, ptr %q
+  %v = load volatile i32, ptr %q
+  %w = load volatile i32, ptr %q
+  %x = add i32 %v, %w
+  %y = zext i32 %x to i64
+  ret i64 %y
+}}
+"
+    );
+    let text = llrm_arm64::driver::assembly(
+        &format!("target datalayout = \"{DARWIN_DATALAYOUT}\"\n{source}"),
+        Platform::Darwin,
+        true,
+    )
+    .expect("lowers");
+    assert!(text.contains("str x0, [sp, #-16]!"), "{text}");
+    let Some(found) = compact_encodings(&source) else { return };
+    assert_eq!(found, ["0x02001000"]);
 }

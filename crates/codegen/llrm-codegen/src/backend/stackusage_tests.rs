@@ -247,3 +247,14 @@ fn test_a_small_leaf_the_callers_check_covers_goes_unchecked() {
         ["outer"]
     );
 }
+
+/// A recursive program's entry was left out of the stack it adds, so a 2 KB
+/// frame array in `main` above a recursion (bq16 quicksort, bintree) overran
+/// the base stack the recursion ran in and crashed. Its frames count once each,
+/// and the base stack stays the recursion's.
+#[test]
+fn test_a_recursive_entry_adds_the_frames_above_its_recursion() {
+    let main = Procedure { entry: 6010, ..procedure("main", 0, 0, &["ping"]) };
+    let program = module(vec![main, procedure("ping", 0, 0, &["pong"]), procedure("pong", 0, 0, &["ping"])]);
+    assert_eq!(stack_to_add(&program, 0x800, RESERVE, Some(0xF000), &DOS), Ok(4 + 6010 + 8 + RESERVE));
+}

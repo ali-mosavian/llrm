@@ -118,7 +118,7 @@ def test_enter_costs_what_the_486_charges_for_it():
 def test_every_x_kernel_has_its_source_and_its_self_check():
     """The kernels live beside the harness, not in bench/: a lookup in bench/ alone found neither file."""
     names = sorted(p.name for p in harness.KERNELS.iterdir())
-    assert len(names) == 41 and all(n.startswith("x_") for n in names)
+    assert len(names) == 66 and all(n.startswith("x_") for n in names)
     for n in names:
         assert (harness.source_dir(n) / f"{n}.c").is_file() and harness.source_dir(n) == harness.KERNELS / n
         assert harness.source_dir(n).joinpath(f"{n}.out").read_text().split()
@@ -246,3 +246,37 @@ def test_code_bytes_leaves_out_alignment_padding(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "archive_code", lambda prog, variant: 0)
     assert harness.code_size("p", "gccO2") == (7, 10)
     assert harness.code_bytes("p", "gccO2") == 7
+
+
+def build_ld(tmp_path, width, stub, **env):
+    """build.sh of x_ldmath into a fresh work directory at `width`; the finished process."""
+    import subprocess
+    work = tmp_path / f"ld{width}"
+    (work / "o").mkdir(parents=True)
+    (work / "b").mkdir()
+    for name in ("stub.o", "stub.elf", "stub.elf.src"):
+        (work / name).write_bytes((stub / name).read_bytes())
+    return work, subprocess.run([str(HERE / "build.sh"), "x_ldmath"], capture_output=True, text=True,
+                                env={**os.environ, "VSGCC_WORK": str(work), "VSGCC_LD": str(width), "VSGCC_ONLY": "llrm", **env} if env else {**os.environ, "VSGCC_WORK": str(work), "VSGCC_LD": str(width)})
+
+
+def bss_bytes(work, compiler="llrmElfO2"):
+    """The .bss of x_ldmath's ELF object of `compiler`: its three static arrays of 48 long doubles."""
+    import subprocess
+    out = subprocess.run(["size", "-A", str(work / "b" / f"x_ldmath.{compiler}.o")], capture_output=True, text=True).stdout
+    return next(int(l.split()[1]) for l in out.splitlines() if l.startswith(".bss"))
+
+
+def test_long_double_is_one_width_in_llrm_and_the_reference(tmp_path, built):
+    """x_ldmath, x_ldconv and x_ldcmp compared llrm's 8-byte long double with gcc's 12: the rows were doubles against 80-bit code."""
+    for width, element in ((80, 12), (64, 8)):
+        work, done = build_ld(tmp_path, width, built)
+        assert done.returncode == 0 and "FAIL" not in done.stdout, (width, done.stdout, done.stderr)
+        assert (work / "ld").read_text() == str(width)
+        assert bss_bytes(work) == bss_bytes(work, "gccO2") == 3 * 48 * element, (width, bss_bytes(work), bss_bytes(work, "gccO2"))
+
+
+def test_a_build_whose_long_double_is_not_the_reference_s_is_refused(tmp_path, built):
+    work, done = build_ld(tmp_path, 80, built, VSGCC_LLRM_LD="-mlong-double-64")
+    assert done.returncode != 0 and "FAIL long double: llrm is 8 bytes, the reference 12 (80 bit)" in done.stdout, (done.stdout, done.stderr)
+    assert build_ld(tmp_path, 70, built)[1].returncode == 2

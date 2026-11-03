@@ -100,6 +100,9 @@ pub fn program(
         // stand-in for the override table).
         options.unroll = false;
         options.loop_unrolling = false;
+        // No zero- or sign-extending load: the compare of a loaded byte stays a
+        // byte compare (`cp #255`), not a word compare of its extension.
+        options.extload = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         options.library = vec![llrm_mir::libfunc::Routine {
             standard: "strlen",
