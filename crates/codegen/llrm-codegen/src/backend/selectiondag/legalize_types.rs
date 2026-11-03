@@ -601,6 +601,10 @@ impl<'a> TypeLegalizer<'a> {
                 });
             }
         };
+        // Updated in place (`UpdateNodeOperands` found no twin): look at it again.
+        if result.node == n {
+            return Ok(true);
+        }
         self.replace_value_with(node, result);
         Ok(false)
     }

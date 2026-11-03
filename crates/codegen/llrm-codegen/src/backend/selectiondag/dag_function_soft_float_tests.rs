@@ -134,10 +134,14 @@ fn a_soft_float_compare_calls_the_routine_that_answers_it() {
 }
 
 fn calls_of(body: &str, params: &str, ret: &str) -> Vec<String> {
+    calls_of_cc("", body, params, ret)
+}
+
+fn calls_of_cc(cc: &str, body: &str, params: &str, ret: &str) -> Vec<String> {
     let declare = if body.contains("llvm.fabs") { "declare float @llvm.fabs.f32(float)\n" } else { "" };
     let text = format!(
         "target datalayout = \"@m16-datalayout@\"
-{declare}define {ret} @f({params}) \"use-soft-float\"=\"true\" {{
+{declare}define {cc} {ret} @f({params}) \"use-soft-float\"=\"true\" {{
 entry:
 {body}
 }}
@@ -265,4 +269,25 @@ fn a_soft_float_call_places_arguments_by_the_routines_convention() {
     let stack = required(&[("__addsf3".to_owned(), 0, "_x".to_owned())]);
     assert!(native > 0, "the native convention passes the floats in registers");
     assert_eq!(stack, 0, "convention 0 (cdecl16) passes them on the stack");
+}
+
+/// A double argument used on both sides of a branch is copied to a register
+/// (`CopyToReg`); softening it updated the node in place and the legalizer
+/// replaced the node with itself: "potential legalization loop", so every
+/// double bench program that tested a result for NaN failed to compile.
+#[test]
+fn a_soft_double_argument_live_across_blocks_compiles() {
+    let calls = calls_of(
+        "%n = fcmp uno double %a, 0.0
+  br i1 %n, label %nan, label %num
+nan:
+  ret i32 5
+num:
+  %i = bitcast double %a to i64
+  %t = trunc i64 %i to i32
+  ret i32 %t",
+        "double %a",
+        "i32",
+    );
+    assert_eq!(calls, ["__unorddf2"]);
 }
