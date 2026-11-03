@@ -78,3 +78,17 @@ def test_a_head_with_the_compilers_sources_of_its_base_is_not_swept(tmp_path, mo
     assert gate.same_compiler(base)
     (tmp_path / "crates/a.rs").write_text("2"); run("commit", "-qam", "compiler")
     assert not gate.same_compiler(base)
+
+
+def test_a_skipped_step_exits_with_the_gates_skipped_code_not_zero(monkeypatch, capsys):
+    """A skip that exited 0 would be counted ok in the gate summary, a PASS that swept nothing."""
+    import llrmbin
+    import measure
+
+    monkeypatch.setattr(llrmbin, "cc_environment", lambda: {})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "x\n", ""))
+    monkeypatch.setattr(measure, "base_of", lambda *a: "b" * 40)
+    monkeypatch.setattr(measure, "base_with_cc", lambda *a: "b" * 40)
+    monkeypatch.setattr(gate, "same_compiler", lambda *a: True)
+    assert gate.main() == 77 == gate.SKIPPED
+    assert "SKIPPED: no crates diff" in capsys.readouterr().out

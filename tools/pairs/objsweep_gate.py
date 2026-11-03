@@ -76,6 +76,7 @@ def seeded(good: bytes) -> str | None:
     return None if verdict("seeded", line, {}) else "control: a leg with a changed object passed"
 
 
+SKIPPED = 77  # tools/gate/gate.py reads this exit code as the SKIPPED verdict, never ok
 COMPILER_SOURCES = ("crates", "Cargo.toml", "Cargo.lock")
 
 
@@ -96,8 +97,8 @@ def main() -> int:
         print("objsweep: no ancestor with llrm-cc to compare with")
         return 1
     if same_compiler(base_sha):
-        print(f"OBJSWEEP SKIPPED: {base_sha[:10]} and HEAD have the same compiler sources, so the objects cannot differ")
-        return 0
+        print(f"SKIPPED: no crates diff between {base_sha[:10]} and HEAD, so the objects cannot differ")
+        return SKIPPED
     old, new = str(measure.built(base_sha, "objects") / "llrm-cc"), str(Path(head) / "llrm-cc")
     expected = tomllib.loads((HERE / "objsweep_expected.toml").read_text()).get("leg", {})
     failures = [why] if (why := control(new)) else []
