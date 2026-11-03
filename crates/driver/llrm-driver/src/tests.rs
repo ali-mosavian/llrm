@@ -2440,3 +2440,22 @@ fn debug_info(
     .debug
     .expect("debug information")
 }
+
+/// A row on the line of the row before it is not a statement (the pin: a
+/// statement is a line change). Ours marked every row of `a * 2 + a` a
+/// statement, so a debugger stopped on it once per column.
+#[test]
+fn a_row_on_the_same_line_as_the_row_before_is_not_a_statement() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O0", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_same_line_m32.ll"),
+        );
+        let rows: Vec<(usize, u32)> = info.lines.iter().map(|row| (row.offset, row.line)).collect();
+        assert!(rows.windows(2).any(|pair| pair[0].1 == pair[1].1), "premise: two rows on a line: {rows:?}");
+        for pair in rows.windows(2) {
+            let stmt = !info.not_stmt.contains(&(0, pair[1].0));
+            assert_eq!(stmt, pair[0].1 != pair[1].1, "{isel}: {rows:?} not_stmt {:?}", info.not_stmt);
+        }
+    }
+}
