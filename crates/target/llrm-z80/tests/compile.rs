@@ -460,7 +460,10 @@ fn copies_ahead_of_a_branch_with_nothing_between_do_not_trade_places_for_ever() 
         llrm_z80::compile::sink_copies_to_the_branch(&mut function, &assignment);
         let _ = done.send(());
     });
-    assert!(finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "sink_copies_to_the_branch did not return");
+    assert!(
+        finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(),
+        "sink_copies_to_the_branch did not return"
+    );
 }
 
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
