@@ -1,0 +1,2 @@
+DEFINT A-Z
+PRINT 0

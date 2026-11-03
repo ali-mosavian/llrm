@@ -1,0 +1,10 @@
+description = "twin"
+repetitions = 1
+
+[region]
+bas = "BenchNbfx64"
+c = "bench_nbfx64"
+nib = "bench_nbfx64"
+
+[gaps]
+bas = "#364 twin"
