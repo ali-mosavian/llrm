@@ -2591,3 +2591,32 @@ fn function_sections_allocate_in_the_modules_code_segment() {
     assert!(has(&omf_of(&["-ffunction-sections"])));
     assert!(has(&omf_of(&[])));
 }
+
+/// `llrm-llc` on a module stated for Windows or macOS x86-64 answered `no
+/// target for x86_64-pc-windows-msvc` (the target knew one triple), so no COFF
+/// or Mach-O object of x86-64 could be made to compare with the pin's.
+#[test]
+fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format() {
+    for (triple, mangling, magic, format) in [
+        ("x86_64-pc-windows-msvc", "w", &[0x64u8, 0x86][..], llrm_target::object::Format::Coff),
+        ("x86_64-apple-macosx", "o", &[0xcf, 0xfa, 0xed, 0xfe][..], llrm_target::object::Format::MachO),
+        ("x86_64-unknown-linux-gnu", "e", &b"\x7fELF"[..], llrm_target::object::Format::Elf),
+    ] {
+        let text = format!(
+            "target datalayout = \"e-m:{mangling}-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"{triple}\"\ndeclare void @g()\ndefine void @f() {{\n  call void @g()\n  ret void\n}}\n"
+        );
+        let (built, chosen) =
+            crate::llc::compiled(&flags(&[]), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
+        assert_eq!(chosen, format, "{triple}");
+        let object = llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            chosen,
+            llrm_target::Target::objects(&llrm_x86_m64::M64),
+        )
+        .unwrap();
+        assert!(object.starts_with(magic), "{triple}: {:02x?}", &object[..8]);
+    }
+}
