@@ -69,3 +69,24 @@ z80	sum16	Os	gcc	42	1588	196	incl. result move +1 B +4 T +1 insn
 z80	schr	O1	gcc	32	369	51	8-bit result in A, no move
 z80	schr	O2	gcc	32	369	51	8-bit result in A, no move
 z80	schr	Os	gcc	23	327	43	8-bit result in A, no move
+z80	lz4	O1	gcc	392	36070	5211	incl. result move +1 B +4 T +1 insn
+z80	lz4	O2	gcc	447	35777	5129	incl. result move +1 B +4 T +1 insn
+z80	lz4	Os	gcc	391	194967	15314	incl. result move +1 B +4 T +1 insn
+z80	lz4c	O1	gcc	468	69778	11634	incl. result move +1 B +4 T +1 insn
+z80	lz4c	O2	gcc	536	103305	12831	incl. result move +1 B +4 T +1 insn
+z80	lz4c	Os	gcc	434	291439	24847	incl. result move +1 B +4 T +1 insn
+z80	xs8	O1	gcc	39	669	121	8-bit result in A, no move
+z80	xs8	O2	gcc	39	669	121	8-bit result in A, no move
+z80	xs8	Os	gcc	38	780	130	8-bit result in A, no move
+z80	minmax	O1	gcc	77	1780	215	8-bit result in A, no move
+z80	minmax	O2	gcc	53	1918	235	8-bit result in A, no move
+z80	minmax	Os	gcc	37	1702	229	8-bit result in A, no move
+z80	fletcher	O1	gcc	75	2268	288	incl. result move +1 B +4 T +1 insn
+z80	fletcher	O2	gcc	123	3188	327	incl. result move +1 B +4 T +1 insn
+z80	fletcher	Os	gcc	80	2428	305	incl. result move +1 B +4 T +1 insn
+z80	hash16	O1	gcc	90	3221	350	incl. result move +1 B +4 T +1 insn
+z80	hash16	O2	gcc	83	3221	350	incl. result move +1 B +4 T +1 insn
+z80	hash16	Os	gcc	78	3331	361	incl. result move +1 B +4 T +1 insn
+z80	dotx	O1	gcc	45	869	132	8-bit result in A, no move
+z80	dotx	O2	gcc	92	2003	205	8-bit result in A, no move
+z80	dotx	Os	gcc	76	2100	217	8-bit result in A, no move
