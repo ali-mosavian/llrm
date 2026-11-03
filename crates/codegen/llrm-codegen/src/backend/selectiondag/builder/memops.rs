@@ -1258,7 +1258,7 @@ impl Builder<'_> {
         if flat && tail {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
-        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -1277,6 +1277,13 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
+        // ES is an input, not a clobber: the block leaves it as it found it,
+        // so a selector already loaded there is reused.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
+        if let Some((name, selector)) = segment {
+            names.push(name);
+            values.push(selector);
+        }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
@@ -1284,7 +1291,7 @@ impl Builder<'_> {
             clobbers: names
                 .iter()
                 .copied()
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
                 .map(Into::into)
                 .collect(),
             memory: true,
@@ -1324,6 +1331,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         let operands = match strings {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
@@ -1334,23 +1342,19 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
-            // `push ds; pop es`: both pointers are near, in DS; ES holds
-            // whatever the last far access left
-            code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
-            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
-            clobbers: operands
-                .iter()
-                .map(|(name, _)| *name)
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
-                .map(Into::into)
-                .collect(),
+            clobbers: operands.iter().map(|(name, _)| (*name).into()).collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
-        let registers =
-            operands.map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
+        let registers: Vec<_> = operands
+            .into_iter()
+            .chain(segment)
+            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
+            .collect();
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
         chain
     }

@@ -46,7 +46,7 @@ pub fn types_and_globals(module: &mut Module) {
 
 /// The unit's source file, from the `!DIFile` of its `!DICompileUnit`: its
 /// name, and the checksum where it is an MD5.
-fn unit_file(module: &Module) -> Option<(String, Option<String>)> {
+pub fn unit_file(module: &Module) -> Option<(String, Option<String>)> {
     let (id, _) = module.special.iter().find(|(_, one)| one.kind == "DICompileUnit")?;
     let Some(MetadataOperand::Node(file)) = operand(module, *id, "file") else { return None };
     let md5 = ident(module, *file, "checksumkind")
