@@ -278,6 +278,27 @@ fn a_symbol_address_kept_across_a_call_is_copied_to_the_argument_at_m64() {
     assert_eq!(made, 2, "{listing}");
 }
 
+/// The same symbol address hoisted twice out of a loop stayed two registers
+/// (`mov r14, offset a+32; mov r15, offset a+32`), both callee-saved across the
+/// calls: the pin's MachineLICM makes it once (`EliminateCSE`). scroll m64 -O2
+/// was 56 bytes over the pin with five pushes instead of three.
+#[test]
+fn a_symbol_address_hoisted_twice_out_of_a_loop_is_made_once_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h(ptr, ptr, i64)\n\
+                define void @f(i64 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %b = getelementptr i8, ptr @a, i64 160\n\
+                  call void @h(ptr @a, ptr %b, i64 3840)\n  call void @h(ptr %b, ptr @a, i64 3840)\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let made = listing.lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 2, "{listing}");
+}
+
 /// A byte or word add that keeps its source live was a copy and a narrow add
 /// at m64 (`mov r10d, edx; add r10b, 0xec`); the pin makes it a three-address
 /// `lea r9d, [r8 - 20]` (`convertToThreeAddressWithLEA`, `LEA64_32r`).
