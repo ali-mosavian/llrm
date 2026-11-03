@@ -854,6 +854,7 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
             },
             landing: None,
         }

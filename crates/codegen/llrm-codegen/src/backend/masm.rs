@@ -1475,6 +1475,7 @@ fn parts(
         !omit
             && procedure.entry == 0
             && (reserve != 0
+                || procedure.registers.kept
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
@@ -4272,6 +4273,7 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4324,6 +4326,7 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
             };
             let procedure = Procedure {
                 name: "_get".into(),
@@ -4395,6 +4398,7 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4568,6 +4572,7 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4752,6 +4757,7 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
             };
             let procedure = Procedure {
                 name: "_get".into(),

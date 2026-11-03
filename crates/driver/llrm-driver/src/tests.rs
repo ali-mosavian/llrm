@@ -2674,3 +2674,24 @@ fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
     let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
     assert!(why.contains("Win64 calling convention"), "{why}");
 }
+
+/// clang writes `"frame-pointer"="all"` for macOS; a leaf function of ours had
+/// no `push rbp`, so its unwind rows were empty where the pin's state the frame
+/// (16 of 130 functions of the x86-64 Mach-O corpus).
+#[test]
+fn a_function_whose_attribute_keeps_the_frame_pointer_pushes_it_even_as_a_leaf() {
+    let ir = |attribute: &str| {
+        format!(
+            "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"x86_64-apple-macosx\"\n\
+             define i32 @h(i32 %a) #0 {{\n  %r = mul i32 %a, 3\n  ret i32 %r\n}}\n\
+             attributes #0 = {{ nounwind {attribute} }}\n"
+        )
+    };
+    let listing = |attribute: &str| {
+        let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), &ir(attribute), "h").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(listing("\"frame-pointer\"=\"all\"").contains("push rbp"), "{}", listing("\"frame-pointer\"=\"all\""));
+    assert!(!listing("").contains("push rbp"), "control: no attribute, no frame");
+}
