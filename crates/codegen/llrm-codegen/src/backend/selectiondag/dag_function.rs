@@ -805,10 +805,8 @@ fn selected_in(
         info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
     }
     let mut tli = if m16 {
-        // `useSoftFloat()`: clang's `-msoft-float` sets the function attribute.
-        let soft_float = function.attrs.iter().any(
-            |one| matches!(one, llrm_mir::opcode::Attribute::Str(key, Some(value)) if key == "use-soft-float" && value == "true"),
-        );
+        // `useSoftFloat()`, or no x87 among the function's target features.
+        let soft_float = crate::backend::isel::soft_float(&function.attrs);
         TargetLowering::x86_16(Features { soft_float, ..Features::default() }, MVT::I16)
     } else if m64 {
         TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)

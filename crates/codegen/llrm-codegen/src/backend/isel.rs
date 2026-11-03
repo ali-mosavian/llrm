@@ -543,12 +543,18 @@ pub fn convention_for(
     )
 }
 
-/// Whether `attrs` ask for no FPU (`"use-soft-float"="true"`, clang's
-/// `-msoft-float`): the function's floats travel as the integers of their width.
+/// Whether `attrs` ask for no FPU: clang's `-mno-80387` states `-x87` among
+/// the target features (`X86Subtarget::hasX87`), and `"use-soft-float"="true"`
+/// or `+soft-float` is the generic spelling. The floats of such a function
+/// travel as the integers of their width.
 pub fn soft_float(attrs: &[llrm_mir::Attribute]) -> bool {
-    attrs.iter().any(
-        |one| matches!(one, llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" && value == "true"),
-    )
+    attrs.iter().any(|one| match one {
+        llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" => value == "true",
+        llrm_mir::Attribute::Str(key, Some(value)) if key == "target-features" => {
+            value.split(',').any(|feature| feature == "-x87" || feature == "+soft-float")
+        }
+        _ => false,
+    })
 }
 
 /// `convention_for`, where `soft_float` makes a `float` or `double` an integer

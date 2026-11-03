@@ -191,3 +191,24 @@ fn a_soft_float_i64_conversion_calls_the_di_routines() {
     assert_eq!(calls_of("%r = fptosi float %a to i64\nret i64 %r", "float %a", "i64"), ["__fixsfdi"]);
     assert_eq!(calls_of("%r = fptoui double %a to i64\nret i64 %r", "double %a", "i64"), ["__fixunsdfdi"]);
 }
+
+/// clang's `-mno-80387` does not set `use-soft-float`; it takes the x87 out of
+/// the target features. A function so marked was selected with `fld`/`fadd`:
+/// the soft-float build of a C program was the x87 build.
+#[test]
+fn a_function_without_the_x87_feature_is_soft_float() {
+    let text = "target datalayout = \"@m16-datalayout@\"
+define void @f(ptr %p, ptr %q) \"target-features\"=\"-x87\" {
+entry:
+  %a = load float, ptr %p
+  %b = load float, ptr %q
+  %c = fadd float %a, %b
+  store float %c, ptr %p
+  ret void
+}
+";
+    let module = crate::testing::module(text).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["__addsf3"]);
+}
