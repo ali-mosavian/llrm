@@ -10,7 +10,7 @@
 //! LLVM's `Outs` and `Ins` are.
 //!
 //! DEVIATE: not translated are `inreg` (`d0`, `d1`), `nest` (`a1`), `byval`,
-//! `sret`, varargs, tail calls, the Fast convention and callee-pop. Reason:
+//! varargs, tail calls, the Fast convention and callee-pop. Reason:
 //! the slice does not reach them. Exit: M3d.
 //!
 //! DEVIATE: the DAG's global node carries no target flag (`TF=`): a callee is
@@ -83,13 +83,30 @@ impl M68kCalling {
         &self,
         vt: EVT,
         pointer: bool,
+        earlier: usize,
     ) -> llrm_lir::registers::RegId {
         let names = if pointer {
             self.convention.results.get("address")
         } else {
             self.convention.results.get(&(vt.size_in_bits() / 8).max(1).to_string())
         };
-        abi::register(&names.expect("RetCC_M68k_C names a register")[0])
+        let names = names.expect("RetCC_M68k_C names a register");
+        // `CCAssignToReg<[D0, D1]>`: the k-th result of a class takes the k-th
+        // register, the high word of an `i64` first
+        abi::register(names.get(earlier).expect("RetCC_M68k_C has a register for every result"))
+    }
+
+    /// How many of `earlier` results are of the register class of a result of
+    /// `vt`, `pointer`.
+    fn results_before(
+        dag: &SelectionDAG,
+        earlier: impl Iterator<Item = (EVT, bool)>,
+        vt: EVT,
+        pointer: bool,
+    ) -> usize {
+        let class = |vt: EVT, pointer: bool| if pointer { 0 } else { (vt.size_in_bits() / 8).max(1) };
+        let _ = dag;
+        earlier.filter(|&(one, ptr)| class(one, ptr) == class(vt, pointer)).count()
     }
 
     /// `LowerCall`: the arguments stored in the outgoing stack area, the `CALL`
@@ -143,8 +160,10 @@ impl M68kCalling {
         let mut glue = SDValue { node: end.node, res: 1 };
         // `LowerCallResult`
         let mut values = Vec::new();
-        for result in ins {
-            let register = self.result_register(result.vt, result.pointer);
+        for (at, result) in ins.iter().enumerate() {
+            let before =
+                Self::results_before(dag, ins[..at].iter().map(|one| (one.vt, one.pointer)), result.vt, result.pointer);
+            let register = self.result_register(result.vt, result.pointer, before);
             let copy = dag.get_copy_from_phys_reg(chain, register, result.vt, glue);
             chain = SDValue { node: copy.node, res: 1 };
             glue = SDValue { node: copy.node, res: 2 };
@@ -211,6 +230,7 @@ impl M68kCalling {
         let pop = dag.get_constant_with(0, EVT::I32, true, false);
         let mut operands = vec![chain, pop];
         let mut glue = None;
+        let mut sent: Vec<(EVT, bool)> = Vec::new();
         for out in outs {
             // `CCIfType<[i1], CCPromoteToType<i8>>`
             let mut value = out.value;
@@ -218,7 +238,9 @@ impl M68kCalling {
                 value = dag.get_node(out.ext.node(), EVT::I8, &[value]);
             }
             let vt = dag.value_type(value);
-            let register = self.result_register(vt, out.pointer);
+            let before = Self::results_before(dag, sent.iter().copied(), vt, out.pointer);
+            sent.push((vt, out.pointer));
+            let register = self.result_register(vt, out.pointer, before);
             let copy = dag.get_copy_to_phys_reg(chain, register, value, glue);
             chain = SDValue { node: copy.node, res: 0 };
             glue = Some(SDValue { node: copy.node, res: 1 });
@@ -231,6 +253,20 @@ impl M68kCalling {
 }
 
 impl TargetCalling for M68kCalling {
+    /// A hidden result pointer is the first stack argument, as any pointer.
+    fn passes_in_place(
+        &self,
+        attribute: &str,
+    ) -> bool {
+        attribute == "sret"
+    }
+
+    /// `ABI require that for returning structs by value we copy the sret
+    /// argument into %D0`.
+    fn returns_sret_pointer(&self) -> bool {
+        true
+    }
+
     fn lower_call(
         &self,
         dag: &mut SelectionDAG,
@@ -261,6 +297,45 @@ impl TargetCalling for M68kCalling {
         outs: &[Out],
     ) -> SDValue {
         M68kCalling::lower_return(self, dag, chain, outs)
+    }
+
+    /// `LowerCall`'s sibcall: `TC_RETURN chain, callee, fpdiff`, for a direct
+    /// callee whose every argument is the caller's own, in the slot the callee
+    /// reads it from (`MatchingStackOffset`).
+    ///
+    /// DEVIATE: the pin also stores other arguments into the caller's
+    /// incoming slots (`IsEligibleForTailCallOptimization`, L1255); here such
+    /// a call stays a call. Exit: with those stores.
+    fn lower_tail_call(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+    ) -> Option<SDValue> {
+        let (offsets, _) = self.place(outs.len());
+        let forwarded = outs
+            .iter()
+            .zip(offsets)
+            .all(
+                |(out, offset)| {
+                    let NodeData::Mem(info) = dag.node(out.value).data else { return false };
+                    let MemBase::Stack(index) = info.base else { return false };
+                    dag.opcode(out.value) == ISD::Load
+                        && dag.value_type(out.value) == EVT::I32
+                        && dag.fixed_offsets.get(&index) == Some(&offset)
+                },
+            );
+        if !forwarded {
+            return None;
+        }
+        // a direct callee, already the target form (`callee` above)
+        let target = match dag.opcode(callee) {
+            ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode => callee,
+            _ => return None,
+        };
+        let fpdiff = dag.get_constant(0, EVT::I32);
+        Some(dag.get_node(m68kisd::TC_RETURN, EVT::OTHER, &[chain, target, fpdiff]))
     }
 }
 

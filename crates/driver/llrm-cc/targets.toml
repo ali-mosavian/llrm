@@ -4,7 +4,7 @@
 # that target's `datalayout.toml` string (stated once, there); a suffix after it is the row's own.
 # `description` names the crate whose `[c]` states sizeof(int, long, void *, ...); `wchar_bytes` and `long_double_bytes` are the row's libc's departures from it (tests/c_abi.rs
 # holds the front end to them; the triple's default decides nothing).
-# `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run.
+# `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run; a row without a level must give `llc_level_reason`.
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
@@ -43,7 +43,7 @@ datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i1
 clang = ["-target", "aarch64-unknown-linux-gnu", "-ffreestanding"]
 llc = []
 llc_program = "llrm-arm64-llc"
-llc_level = false
+llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
@@ -57,7 +57,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=cdecl"]
@@ -76,7 +76,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=regparm3", "-mc-library"]
@@ -92,7 +92,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
   "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
 ]
@@ -111,7 +111,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
   "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
   "-fborland-extensions", "-fshort-wchar", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
@@ -144,7 +144,7 @@ datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i1
 clang = ["-target", "aarch64-unknown-linux-gnu", "-nostdinc", "-isystem", "{env:LLRM_ARM64_SYSROOT}/usr/aarch64-linux-gnu/include"]
 llc = []
 llc_program = "llrm-arm64-llc"
-llc_level = false
+llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-glibc-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
@@ -220,3 +220,32 @@ llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
 object = "asm"
 link = []
+
+# Z80, as far as sdasz80 text: clang's msp430 is only the C front end (16-bit int and pointers, as SDCC; unsigned char), its
+# datalayout replaced by the Z80's. A row stops at -S, which the tests assemble and link with sdasz80 and sdldz80.
+[z80-sdcc]
+description = "z80"
+triple = "msp430"
+datalayout = "{datalayout:z80}"
+clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
+clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+llc = []
+llc_program = "llrm-z80-llc"
+object = "sdasz80"
+link = ["sh", "-c", "echo 'llrm-cc: the z80 row stops at -S' >&2; exit 1"]
+
+# WebAssembly, 32-bit linear memory, freestanding: the object for `wasm-ld`. The pinned clang is built for x86 only, so
+# `LLRM_CLANG_WASM` names a clang with the WebAssembly target (clang 20 until the pin is built with it). The platform libc row (wasm32-wasi, a
+# fetched sysroot) is planned in docs/working/wasm-libc-plan.md.
+[wasm32]
+description = "wasm"
+description_file = "datalayout32.toml"
+triple = "wasm32-unknown-unknown"
+clang_env = "LLRM_CLANG_WASM"
+datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"
+clang = ["-target", "wasm32-unknown-unknown", "-ffreestanding"]
+llc = ["-filetype=obj"]
+llc_program = "llrm-wasm-llc"
+llc_level = true
+object = "wasm"
+link = ["wasm-ld", "--no-entry", "--allow-undefined", "{objects}", "-o", "{output}"]

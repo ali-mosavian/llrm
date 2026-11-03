@@ -125,7 +125,7 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
 
 /// Blocks reachable from the entry, each before the successors it does not come
 /// back to (reverse post-order).
-fn reverse_post_order(body: &LirBody) -> Vec<i64> {
+pub(crate) fn reverse_post_order(body: &LirBody) -> Vec<i64> {
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     let mut seen = crate::support::hash::HashSet::default();
     let mut order = Vec::new();

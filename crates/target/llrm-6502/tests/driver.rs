@@ -904,3 +904,240 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// `.export` named every function and no variable: two objects with a static
+/// `helper` collided at link time (softfloat's add_bits, cmp_bits, from_mag:
+/// ld65 "Duplicate external identifier"), and a global another object imports
+/// (`counter`) was "Unresolved external". An internal symbol is not exported,
+/// an external one is, function or variable.
+#[test]
+fn only_external_functions_and_variables_are_exported() {
+    let ir = module(
+        "@counter = global i16 0\n@hidden = internal global i16 0\n\
+define internal i8 @helper(i8 %a) #0 {\n  ret i8 %a\n}\n\
+define i8 @pub(i8 %a) {\n  %r = call i8 @helper(i8 %a)\n  ret i8 %r\n}\n\
+attributes #0 = { noinline }",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let exported: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix(".export ")).collect();
+    assert!(exported.contains(&"pub") && exported.contains(&"counter"), "exports {exported:?}:\n{text}");
+    assert!(!exported.contains(&"helper") && !exported.contains(&"hidden"), "exports {exported:?}:\n{text}");
+}
+
+/// A pair passed to a function and returned from it by value arrives member by
+/// member: `swap` returns (b, a), the caller keeps a - b = 7 - 3 of the
+/// swapped pair, 3 - 7 = 0xFC.
+#[test]
+fn an_aggregate_passed_and_returned_by_value_runs() {
+    let ir = module(
+        r#"define internal { i8, i8 } @swap({ i8, i8 } %s) #0 {
+  %a = extractvalue { i8, i8 } %s, 0
+  %b = extractvalue { i8, i8 } %s, 1
+  %x = insertvalue { i8, i8 } undef, i8 %b, 0
+  %y = insertvalue { i8, i8 } %x, i8 %a, 1
+  ret { i8, i8 } %y
+}
+define i8 @probe() {
+  %p = insertvalue { i8, i8 } undef, i8 7, 0
+  %q = insertvalue { i8, i8 } %p, i8 3, 1
+  %r = call { i8, i8 } @swap({ i8, i8 } %q)
+  %a = extractvalue { i8, i8 } %r, 0
+  %b = extractvalue { i8, i8 } %r, 1
+  %d = sub i8 %a, %b
+  ret i8 %d
+}
+attributes #0 = { noinline }"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
+}
+
+/// `x << n` of a 32-bit value by a variable called the bit loop at every level:
+/// 25 clocks a bit, 530 for the shift by 21 that f32 add makes on average (18%
+/// of that routine). At `-O2` the call is the speed variant, whole bytes first;
+/// at `-Os` it stays the 18-byte loop.
+#[test]
+fn a_variable_long_shift_calls_the_speed_variant_at_o2_only() {
+    let ir = module(
+        r#"define i32 @shl(i32 %x, i32 %n) {
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+define i32 @shr(i32 %x, i32 %n) {
+  %r = lshr i32 %x, %n
+  ret i32 %r
+}
+define i32 @sar(i32 %x, i32 %n) {
+  %r = ashr i32 %x, %n
+  ret i32 %r
+}"#,
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3_fast", "__lshrsi3_fast", "__ashrsi3_fast"] {
+        assert!(fast.contains(&format!("{routine}\n")), "no call to {routine} at -O2:\n{fast}");
+    }
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3", "__lshrsi3", "__ashrsi3"] {
+        assert!(small.contains(&format!(" {routine}\n")), "no call to {routine} at -Os:\n{small}");
+    }
+    assert!(!small.contains("_fast"), "a speed variant at -Os:\n{small}");
+}
+
+/// A four-trip loop over a global stayed a loop at `-O2` (22 B, 98 clocks for
+/// `sum4`, against 13 B and 34 clocks unrolled): the driver turned the unroller
+/// off (DEVIATE 6502-5). The pin unrolls it fully at `-O2`; `buf` holds
+/// 1, 2, 3, 4 so the sum is 10.
+#[test]
+fn a_four_trip_loop_is_unrolled_at_o2() {
+    let ir = module(
+        r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
+define i8 @sum4() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %sum, %loop ]
+  %p = getelementptr inbounds i8, ptr @buf, i16 %i
+  %v = load volatile i8, ptr %p
+  %sum = add i8 %s, %v
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+  ret i8 %sum
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("bne") && !text.contains("beq"), "the loop is still a loop:\n{text}");
+    assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
+}
+
+/// `buf[n + 3]` and `buf[n - 1]` with a byte `n` took eleven instructions, a
+/// 16-bit add of the address and an indirect load: the constant had no place in
+/// the indexed form (fill's `buf[n - 1]`: 46 B against llvm-mos's 22). It is
+/// one `lda buf+3,x`.
+#[test]
+fn a_constant_offset_folds_into_the_indexed_load() {
+    let ir = module(
+        r#"@buf = external global [64 x i8]
+define i8 @plus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, 3
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+define i8 @minus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, -1
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("lda buf+3,x"), "no indexed load with the offset:\n{text}");
+    assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
+    assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
+}
+
+/// The compiled `text` without its `rcN = $..` equates, which `run_with` states
+/// itself.
+fn without_equates(text: &str) -> String {
+    text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect()
+}
+
+/// `srem i32` of two sign-extended words called `__modsi3`, the long routine
+/// (recpow at -O1, +434 B): both operands fit a word, so it is `__modhi3`.
+/// -7 % 3 = -1 (0xFF), and -32768 % -1 is 0.
+#[test]
+fn a_remainder_of_two_sign_extended_words_is_the_word_routine() {
+    let ir = module(
+        r#"define i8 @rem(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %r = srem i32 %x, %y
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let function = without_equates(&text);
+    for (a, b, want) in [(-7i16, 3i16, 0xFF), (-32768, -1, 0), (1000, -7, 6)] {
+        let setup = format!(
+            "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr rem\n",
+            a as u16 & 0xFF,
+            (a as u16) >> 8,
+            b as u16 & 0xFF,
+            (b as u16) >> 8
+        );
+        assert_eq!(common::run_with(&format!("narrow-rem-{a}-{b}"), &setup, &function), want, "{a} % {b}");
+    }
+}
+
+/// -32768 / -1 is 32768 in 32 bits and overflows 16: a divide of two
+/// sign-extended words stays long (its high byte is 0x80).
+#[test]
+fn a_divide_of_sign_extended_words_keeps_the_long_quotient() {
+    let words = module(
+        r#"define i8 @high(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %q = sdiv i32 %x, %y
+  %h = lshr i32 %q, 8
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&words, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__divsi3") && !text.contains("__divhi3"), "narrowed:\n{text}");
+    let setup =
+        "  lda #0\n  sta rc2\n  lda #$80\n  sta rc3\n  lda #$FF\n  sta rc4\n  lda #$FF\n  sta rc5\n  jsr high\n";
+    assert_eq!(common::run_with("narrow-div-min", setup, &without_equates(&text)), 0x80);
+}
+
+/// A call result whose callee returns `range(i32 -30010, 30011)` fits a word
+/// (recpow at -O1, whose `srem` of such results called `__modsi3`): the range
+/// is the sign bits of the result, so the remainder is the word routine. The
+/// callee is opaque (hand-written, returning -12345 in A, X, rc2, rc3) and the
+/// level is -O0, where no correlated-propagation narrows it first;
+/// -12345 % 1000 = -345, low byte 0xA7.
+#[test]
+fn a_remainder_of_a_result_with_a_signed_range_is_the_word_routine() {
+    let ir = module(
+        r#"declare range(i32 -30010, 30011) i32 @source()
+define i8 @rem() {
+  %v = call i32 @source()
+  %r = srem i32 %v, 1000
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let source = "source:\n  ldx #$CF\n  lda #$FF\n  sta rc2\n  sta rc3\n  lda #$C7\n  rts\n";
+    let function = format!("{}{source}", without_equates(&text));
+    assert_eq!(common::run_with("narrow-range-rem", "  jsr rem\n", &function), 0xA7);
+}
+
+/// `x > 65535` and `x < 65536` are one test of the high word. The low word of
+/// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
+/// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
+/// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+#[test]
+fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
+    let branch = |compare: &str, then: &str, other: &str| {
+        module(&format!(
+            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+        ))
+    };
+    let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();
+    let greater = assembly(&branch("ugt i32 %x, 65535", "t", "e"), &Request::new(Level::O1)).unwrap();
+    let less = assembly(&branch("ult i32 %x, 65536", "e", "t"), &Request::new(Level::O1)).unwrap();
+    for text in [&greater, &less] {
+        assert!(!text.contains("ldx #255") && !text.contains("sbc"), "a word compared with its bound:\n{text}");
+    }
+    assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
+}

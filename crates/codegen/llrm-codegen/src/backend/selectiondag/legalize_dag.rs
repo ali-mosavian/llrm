@@ -59,6 +59,13 @@ pub trait Hooks {
     /// `TargetLowering::makeLibCall`: a call to the routine `name` with
     /// `args`, whose result is a `ret`; `None` where the target cannot make
     /// one.
+    /// `getStackPointerRegisterToSaveRestore` and the frame's stack alignment:
+    /// the register `STACKSAVE` reads and `STACKRESTORE` and
+    /// `DYNAMIC_STACKALLOC` write; none: the target lowers them itself.
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        None
+    }
+
     fn make_lib_call(
         &mut self,
         _dag: &mut SelectionDAG,
@@ -273,6 +280,48 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some((value, self.dag.get_token_factor(&chains)))
     }
 
+    /// `LegalizeLoadOps`, extending loads of memory narrower than its store
+    /// size (`i1`): with the action `Promote`, a byte-sized extending load of
+    /// the same kind, and for a sign extension the bit sign-extended in the
+    /// register. The value and the chain it replaces.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L483>
+    fn promote_sub_byte_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let ext = info.ext?;
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(node), info.mem_vt) else { return None };
+        let bits = info.mem_vt.size_in_bits();
+        if bits == 0 || bits % 8 == 0 || bits > 8 || self.tli.load_ext_action(ext, wide, mem) != Action::Promote {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let kind = if ext == super::actions::LoadExt::ZExtLoad {
+            super::actions::LoadExt::ZExtLoad
+        } else {
+            super::actions::LoadExt::ExtLoad
+        };
+        let narrow = MemInfo { mem_vt: EVT::I8, ext: None, ..info };
+        let byte = if vt == EVT::I8 {
+            self.dag.get_load(vt, chain, ptr, narrow)
+        } else {
+            self.dag.get_ext_load(kind, vt, chain, ptr, narrow)
+        };
+        let value = if ext == super::actions::LoadExt::SExtLoad {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            self.dag.get_node(ISD::SignExtendInReg, vt, &[byte, ty])
+        } else {
+            byte
+        };
+        Some((value, SDValue { node: byte.node, res: 1 }))
+    }
+
     /// `LegalizeLoadOps`, extending loads: one the target does not have is an
     /// any-extending load and an extension in the register. The value and
     /// the chain it replaces.
@@ -316,7 +365,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
         }
-        if let Some(result) = self.expand_odd_ext_load(node).or_else(|| self.expand_ext_load(node)) {
+        if let Some(result) = self
+            .expand_odd_ext_load(node)
+            .or_else(|| self.promote_sub_byte_ext_load(node))
+            .or_else(|| self.expand_ext_load(node))
+        {
             self.replace_node(node, result.0);
             self.replace_node(SDValue { node: n, res: 1 }, result.1);
             return Ok(());
@@ -418,7 +471,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> SDValue {
         let (chain, table, index) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let pointer = self.dag.config().pointer;
-        let entry = pointer.size_in_bits() / 8;
+        // A 64-bit table is position independent: 32-bit offsets from the
+        // table (`EK_LabelDifference32`), a pointer's worth of entry otherwise.
+        let relative = self.dag.relative_jump_tables();
+        let entry = if relative { 4 } else { pointer.size_in_bits() / 8 };
         let index_vt = self.dag.value_type(index);
         let scale = self.dag.get_constant(u128::from(entry.trailing_zeros()), EVT::I8);
         let index = self.dag.get_node(ISD::Shl, index_vt, &[index, scale]);
@@ -432,6 +488,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             space: 0,
             ordering: None,
         };
+        if relative {
+            let info = MemInfo { mem_vt: EVT::I32, ..info };
+            let offset = self.dag.get_ext_load(super::actions::LoadExt::SExtLoad, pointer, chain, address, info);
+            // `getPICJumpTableRelocBase`: the table itself at 64 bits.
+            let target = self.dag.get_node(ISD::Add, pointer, &[offset, table]);
+            return self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: offset.node, res: 1 }, target]);
+        }
         let target = self.dag.get_load(pointer, chain, address, info);
         self.dag.get_node(ISD::BrInd, EVT::OTHER, &[SDValue { node: target.node, res: 1 }, target])
     }
@@ -726,11 +789,55 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
+            ISD::CtLz | ISD::CtLzZeroPoison => self.expand_ctlz(node).map(|result| vec![result]),
+            ISD::CtTz | ISD::CtTzZeroPoison => self.expand_cttz(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
             ISD::VAEnd => Some(vec![self.dag.operand(node, 0)]),
+            // `ExpandNode`: a copy from and to the stack pointer register.
+            ISD::StackSave if self.hooks.stack_pointer().is_some() => {
+                let (sp, _) = self.hooks.stack_pointer().expect("checked");
+                let vt = self.dag.value_type(node);
+                let chain = self.dag.operand(node, 0);
+                let read = self.dag.get_copy_from_phys_reg_plain(chain, sp, vt);
+                Some(vec![SDValue { node: read.node, res: 0 }, SDValue { node: read.node, res: 1 }])
+            }
+            // `ExpandDYNAMIC_STACKALLOC`: the stack pointer lowered by the size
+            // and aligned past the frame's alignment, inside a call sequence
+            // of no bytes.
+            ISD::DynamicStackAlloc if self.hooks.stack_pointer().is_some() => {
+                let (sp, stack_align) = self.hooks.stack_pointer().expect("checked");
+                let vt = self.dag.value_type(node);
+                let (chain, size) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let align = self.dag.constant(self.dag.operand(node, 2)).unwrap_or(0) as u64;
+                let chain = self.dag.get_callseq_start(chain, 0);
+                let chain = SDValue { node: chain.node, res: 0 };
+                let read = self.dag.get_copy_from_phys_reg_plain(chain, sp, vt);
+                let (current, chain) = (SDValue { node: read.node, res: 0 }, SDValue { node: read.node, res: 1 });
+                let mut lowered = self.dag.get_node(ISD::Sub, vt, &[current, size]);
+                if align > stack_align {
+                    let mask = self
+                        .dag
+                        .get_constant(
+                            (align as i128).wrapping_neg() as u128 & super::fold::mask(vt.size_in_bits()),
+                            vt,
+                        );
+                    lowered = self.dag.get_node(ISD::And, vt, &[lowered, mask]);
+                }
+                let register = self.dag.get_phys_register(vt, sp);
+                let chain = self.dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, register, lowered]);
+                let glue = self.dag.get_node(ISD::Undef, EVT::GLUE, &[]);
+                let end = self.dag.get_callseq_end(chain, 0, 0, glue);
+                Some(vec![lowered, SDValue { node: end.node, res: 0 }])
+            }
+            ISD::StackRestore if self.hooks.stack_pointer().is_some() => {
+                let (sp, _) = self.hooks.stack_pointer().expect("checked");
+                let (chain, value) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let register = self.dag.get_phys_register(self.dag.value_type(value), sp);
+                Some(vec![self.dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, register, value])])
+            }
             ISD::VACopy => {
                 let (chain, dest, src) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
@@ -862,6 +969,93 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_node(ISD::Srl, vt, &[wide, top]))
     }
 
+    /// `TargetLowering::expandCTLZ`
+    /// ([L10964][pin]), scalar: the plain count for a zero-poison one, the
+    /// zero-poison count with the zero case selected, or the bits smeared down
+    /// and counted.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
+    fn expand_ctlz(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        let bits = vt.size_in_bits();
+        let mut op = self.dag.operand(node, 0);
+        if self.dag.opcode(node) == ISD::CtLzZeroPoison && self.tli.is_operation_legal_or_custom(ISD::CtLz, vt) {
+            return Some(self.dag.get_node(ISD::CtLz, vt, &[op]));
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::CtLzZeroPoison, vt) {
+            let count = self.dag.get_node(ISD::CtLzZeroPoison, vt, &[op]);
+            let zero = self.dag.get_constant(0, vt);
+            let flag_vt = self.tli.types.set_cc_result_type(vt);
+            let is_zero = self.dag.get_setcc(flag_vt, op, zero, CondCode::SetEq);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_select(vt, is_zero, width, count));
+        }
+        let mut shift = 1;
+        while shift < bits {
+            let by = self.dag.get_constant(u128::from(shift), EVT::I8);
+            let down = self.dag.get_node(ISD::Srl, vt, &[op, by]);
+            op = self.dag.get_node(ISD::Or, vt, &[op, down]);
+            shift *= 2;
+        }
+        let flipped = self.dag.get_not(op, vt);
+        Some(self.dag.get_node(ISD::CtPop, vt, &[flipped]))
+    }
+
+    /// `TargetLowering::expandCTTZ`, scalar: the plain count for a zero-poison
+    /// one, the zero-poison count with the zero case selected, `nlz(x & -x) ^
+    /// (n - 1)` where only `ctlz` is legal and zero is not a case, else
+    /// `popcount(~x & (x - 1))` (or `n - nlz` of it). DEVIATE SD532: the
+    /// de Bruijn table lookup (for a target with no `ctpop` and no `ctlz`) is
+    /// not translated.
+    fn expand_cttz(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        let bits = vt.size_in_bits();
+        let op = self.dag.operand(node, 0);
+        let poison = self.dag.opcode(node) == ISD::CtTzZeroPoison;
+        if poison && self.tli.is_operation_legal_or_custom(ISD::CtTz, vt) {
+            return Some(self.dag.get_node(ISD::CtTz, vt, &[op]));
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::CtTzZeroPoison, vt) {
+            let count = self.dag.get_node(ISD::CtTzZeroPoison, vt, &[op]);
+            let zero = self.dag.get_constant(0, vt);
+            let flag_vt = self.tli.types.set_cc_result_type(vt);
+            let is_zero = self.dag.get_setcc(flag_vt, op, zero, CondCode::SetEq);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_select(vt, is_zero, width, count));
+        }
+        let use_ctlz = self.tli.is_operation_legal(ISD::CtLz, vt) && !self.tli.is_operation_legal(ISD::CtPop, vt);
+        if use_ctlz && poison {
+            let negated = self.dag.get_negative(op, vt);
+            let lowest = self.dag.get_node(ISD::And, vt, &[op, negated]);
+            let count = self.dag.get_node(ISD::CtLzZeroPoison, vt, &[lowest]);
+            let top = self.dag.get_constant(u128::from(bits - 1), vt);
+            return Some(self.dag.get_node(ISD::Xor, vt, &[count, top]));
+        }
+        let flipped = self.dag.get_not(op, vt);
+        let one = self.dag.get_constant(1, vt);
+        let below = self.dag.get_node(ISD::Sub, vt, &[op, one]);
+        let mask = self.dag.get_node(ISD::And, vt, &[flipped, below]);
+        if use_ctlz {
+            let count = self.dag.get_node(ISD::CtLz, vt, &[mask]);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_node(ISD::Sub, vt, &[width, count]));
+        }
+        Some(self.dag.get_node(ISD::CtPop, vt, &[mask]))
+    }
+
     /// `TargetLowering::expandBITREVERSE`: a byte swap, then the nibbles, the
     /// bit pairs and the bits of each byte swapped. DEVIATE SD218: a width
     /// that is not a power of two (the pin's loop of single bits) is not
@@ -923,7 +1117,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // `ShouldShrinkFPConstant` (no SSE2): a double that is exactly a float
         // is stored as one.
         let (pool_vt, pool_bits) = match mvt {
-            MVT::F64 if self.tli.should_shrink_fp_constant(mvt) => {
+            // Only when the target has a native extending load from the smaller
+            // type (`TLI.isLoadLegal(.., EXTLOAD)`); AArch64 expands it.
+            MVT::F64
+                if self.tli.should_shrink_fp_constant(mvt)
+                    && self.tli.load_ext_action(super::actions::LoadExt::ExtLoad, MVT::F64, MVT::F32)
+                        == Action::Legal =>
+            {
                 let value = f64::from_bits(bits as u64);
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() == bits as u64 && !value.is_nan() {

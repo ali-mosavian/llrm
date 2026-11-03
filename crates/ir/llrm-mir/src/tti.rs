@@ -323,6 +323,12 @@ pub trait Tti {
         false
     }
 
+    /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
+    /// where the target does not say.
+    fn scalar_register_bits(&self) -> u32 {
+        0
+    }
+
     /// `getRegisterBitWidth(FixedWidthVector)`: the bits of the widest vector
     /// register, 0 where the target has none (and the SLP vectorizer is off).
     fn vector_register_bits(&self) -> u32 {
@@ -348,6 +354,14 @@ pub trait Tti {
         false
     }
 
+    /// The fewest calls a callee has in the module for the bound above to hold
+    /// its sites (a callee called once is the pin's: the copy
+    /// meets constants the cost model follows, and folds with the sites around
+    /// it).
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        1
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -355,11 +369,6 @@ pub trait Tti {
     /// already taken), nothing at m32.
     fn constant_offset_phi_is_cheap(&self) -> bool {
         true
-    }
-
-    /// The same bound for a caller optimized for speed (its tuning table).
-    fn speed_inline_by_code_size(&self) -> bool {
-        false
     }
 
     /// How many percent of its `CodeSize` units a call and the pushes of its
@@ -450,6 +459,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// none: no bar.
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
     /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
     /// which a tree-recursive function's copies of itself are chosen by
     /// price: each level of copies is made while the clocks it saves, at
@@ -460,11 +475,8 @@ pub trait Tti {
     }
 
     /// The target's `Threshold` and `MaxPercentThresholdBoost` for the full
-    /// unroll (its tuning table) at `opt_level`; none: the pass's own.
-    fn unroll_threshold_overrides(
-        &self,
-        _opt_level: u32,
-    ) -> (Option<u32>, Option<u32>) {
+    /// unroll (its tuning table); none: the pass's own.
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (None, None)
     }
 
@@ -771,6 +783,22 @@ pub trait Tti {
         false
     }
 
+    /// Instructions the exit test of a counter that ends at zero costs beyond
+    /// the step: 0 where the step's flags (or a branch on the register) end
+    /// the loop, 1 where the zero has to be tested by its own instruction
+    /// (z80's 16-bit `inc`). A counter that does not end at zero pays the
+    /// compare instead.
+    fn zero_test_cost(&self) -> u32 {
+        0
+    }
+
+    /// The registers an address can be formed from by the target's cheapest
+    /// address form (m16: bx, si, di); the general registers where any
+    /// register serves.
+    fn address_registers(&self) -> u32 {
+        self.number_of_gpr_registers()
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
@@ -815,6 +843,19 @@ pub trait Tti {
         8
     }
 
+    /// Whether a stack slot's address is a displacement off the frame register
+    /// in an addressing mode, so as the base of an address it costs no
+    /// register of its own.
+    fn frame_address_is_free(&self) -> bool {
+        false
+    }
+
+    /// The bits one general-purpose register holds: an `i32` takes one at 32,
+    /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
+    fn gpr_bits(&self) -> u32 {
+        32
+    }
+
     /// Instructions a scaled index (`base + scale * index`, scale above 1)
     /// costs beyond the address itself, once for each scaled register: the
     /// backend forms it once and every use of the register shares it. 0
@@ -826,8 +867,12 @@ pub trait Tti {
 
     /// Whether the target adds registers and an immediate in one instruction
     /// whatever the use (x86's `lea`): an unfolded offset beside two or more
-    /// registers then costs no add of its own. DEVIATE LU2 (`lsr_use.rs`).
-    fn address_form_adds_offsets(&self) -> bool {
+    /// registers then costs no add of its own, for a value of `bits` bits.
+    /// DEVIATE LU2 (`lsr_use.rs`).
+    fn address_form_adds_offsets(
+        &self,
+        _bits: u32,
+    ) -> bool {
         false
     }
 

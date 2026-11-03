@@ -133,6 +133,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FAdd => pin::FADD,
         FSub => pin::FSUB,
         FMul => pin::FMUL,
+        FMA => pin::FMA,
         FDiv => pin::FDIV,
         FRem => pin::FREM,
         FNeg => pin::FNEG,
@@ -545,6 +546,18 @@ impl<'a> DagisAdapter<'a> {
             }
         }
         out
+    }
+
+    /// `ReplaceUses` of an `AssertSext` or `AssertZext` by its operand, the
+    /// assertion and what only it read gone.
+    pub fn drop_assertion(
+        &mut self,
+        node: u32,
+    ) {
+        let asserted = SDValue { node, res: 0 };
+        let operand = self.dag.operand(asserted, 0);
+        self.dag.replace_all_uses_with(asserted, operand);
+        self.remove(node);
     }
 
     fn remove(
@@ -1211,6 +1224,11 @@ impl AddrDag for DagisAdapter<'_> {
                     flags: 0,
                 })
             }
+            // Only the position-independent table is a symbol operand
+            // (`relative_jump_tables`); the others keep it in a register.
+            NodeData::JumpTable(index) if self.dag.relative_jump_tables() => {
+                Some(Wrapped { symbol: Symbol { kind: SymbolKind::JumpTable, id: index }, offset: 0, flags: 0 })
+            }
             _ => None,
         }
     }
@@ -1293,6 +1311,7 @@ impl AddrDag for DagisAdapter<'_> {
             }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
             SymbolKind::ConstantPool { .. } => (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id, disp)),
+            SymbolKind::JumpTable => (ISD::TargetJumpTable, NodeData::JumpTable(symbol.id)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))
@@ -1301,7 +1320,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

@@ -15,3 +15,17 @@ stack = 0
 
 [pointers]
 4 = "near"
+
+# The C front end's sizes in bytes (clang --target=wasm32: `long double` is the IEEE quad).
+[c]
+int = 4
+long = 4
+long_long = 8
+pointer = 4
+function_pointer = 4
+size_t = 4
+ptrdiff_t = 4
+wchar_t = 4
+double = 8
+long_double = 16
+enum = 4

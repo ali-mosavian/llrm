@@ -130,6 +130,7 @@ pub mod affine;
 pub mod allocate;
 pub mod allocresult;
 pub mod assignment_tracking;
+pub mod livedebugvalues;
 pub mod livedebugvariables;
 
 pub mod arithmetic;
@@ -216,6 +217,7 @@ pub mod legalize;
 pub mod libmcalls;
 #[cfg(test)]
 mod libmcalls_tests;
+pub mod licm_core;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
@@ -270,6 +272,7 @@ mod shadow_tests;
 pub mod shrinkwrap;
 pub mod slotcopies;
 pub mod slots;
+pub mod stackcoloring;
 pub mod stackusage;
 pub mod stepflags;
 pub mod valuetrack;

@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +127,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-sink", |options, on| options.sink = on),
     ("aarch64-atomic-cfg-tidy", |options, on| options.atomic_cfg_tidy = on),
     ("llrm-cgpaddr", |options, on| options.cgpaddr = on),
+    ("llrm-typepromotion", |options, on| options.typepromotion = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
     ("llrm-stable-loads", |options, on| options.stable_loads = on),
@@ -213,6 +214,9 @@ pub struct Flags {
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
+    /// `-ffunction-sections`: on OMF each function is a COMDAT of its own,
+    /// which the linker drops where nothing refers to it.
+    pub function_sections: bool,
     pub sanitize: Sanitize,
     /// `-fwrapv`: signed arithmetic wraps, so a front end states no no-overflow
     /// promise of it.
@@ -226,6 +230,9 @@ pub struct Flags {
     /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
     /// is an explicit `__cdecl`.
     pub regcall_default: bool,
+    /// `-fallow-pending-abi`: emit for a platform whose description says its
+    /// ABI is not yet carried.
+    pub allow_pending_abi: bool,
     /// `-frame-pointer=<all|non-leaf|non-leaf-no-reserve|reserved|none>`, the
     /// pin's `cl::opt` of `CommandFlags.cpp` (:204): the `"frame-pointer"`
     /// attribute of each function that has none.
@@ -261,6 +268,7 @@ impl Default for Flags {
             wrapv: false,
             float_store: false,
             regcall_default: false,
+            allow_pending_abi: false,
             frame_pointer: None,
             c_library: false,
             level: Level::O2,
@@ -277,6 +285,7 @@ impl Default for Flags {
             milliclocks_per_byte: None,
             output: None,
             assembly: false,
+            function_sections: false,
             sanitize: Sanitize::default(),
             debug: false,
             abi: None,
@@ -315,6 +324,8 @@ impl Flags {
         match flag {
             "-o" | "--output" => self.output = Some(PathBuf::from(value("-o/--output")?)),
             "-S" => self.assembly = true,
+            "-ffunction-sections" => self.function_sections = true,
+            "-fno-function-sections" => self.function_sections = false,
             // LLVM's `-disable-lsr` (TargetPassConfig), also
             // as `-mllvm -disable-lsr`.
             "-disable-lsr" => self.disable_lsr(),
@@ -345,6 +356,7 @@ impl Flags {
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            "-fallow-pending-abi" => self.allow_pending_abi = true,
             _ if flag.starts_with("-frame-pointer=") => {
                 let policy = &flag["-frame-pointer=".len()..];
                 if !["all", "non-leaf", "non-leaf-no-reserve", "reserved", "none"].contains(&policy) {

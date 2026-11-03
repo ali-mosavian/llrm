@@ -299,7 +299,7 @@ fn a_load_feeding_the_return_stays_on_the_stack() {
         ],
     );
 
-    assert!(reg_stackify(&mut f));
+    assert!(reg_stackify(&mut f, false));
     explicit_locals(&mut f);
 
     assert_eq!(dump(&f), ["%2 = LOCAL_GET_I32 0", "%1 = LOAD_I32_A32 2, 0, %2", "RETURN %1"].map(String::from));
@@ -321,7 +321,7 @@ fn a_chain_of_adds_is_one_tree() {
         ],
     );
 
-    reg_stackify(&mut f);
+    reg_stackify(&mut f, false);
     explicit_locals(&mut f);
 
     assert_eq!(
@@ -353,8 +353,36 @@ fn an_add_is_commuted_to_stackify_both_operands() {
         ],
     );
 
-    reg_stackify(&mut f);
+    reg_stackify(&mut f, false);
 
     assert!((0..3).all(|r| f.is_stackified(r)));
     assert_eq!(f.blocks[0][2].operands, [Def(2), Use(0), Use(1)], "the operands swapped");
+}
+
+/// `BR_UNLESS` on a non-comparison became an `EQZ_I32` and a `BR_IF` of line
+/// 0: the branch lost its source line, so its DWARF row vanished.
+#[test]
+fn a_lowered_br_unless_keeps_its_line() {
+    let mut f = function(1, 1, vec![arg(0, 0), Inst { line: 7, ..Inst::new(op::BR_UNLESS, &[Block(0), Use(0)]) }]);
+    llrm_wasm::lower_br_unless::lower_br_unless(&mut f);
+    let lines: Vec<u32> = f.blocks[0].iter().map(|i| i.line).collect();
+    assert_eq!(lines, [0, 7, 7]);
+}
+
+/// `explicit_locals` made its `local.get` and `local.set` at line 0: the row of
+/// a located instruction began after its operand loads, not at them.
+#[test]
+fn explicit_locals_give_their_instructions_the_line_of_the_one_they_serve() {
+    let mut f = function(
+        1,
+        3,
+        vec![
+            arg(0, 0),
+            Inst { line: 5, ..Inst::new(op::LOAD_I32_A32, &[Def(1), Imm(2), Imm(0), Use(0)]) },
+            Inst { line: 6, ..Inst::new(op::RETURN, &[Use(1)]) },
+        ],
+    );
+    explicit_locals(&mut f);
+    let located: Vec<(u16, u32)> = f.blocks[0].iter().map(|i| (i.opcode, i.line)).collect();
+    assert!(located.iter().all(|&(_, line)| line != 0), "{located:?}");
 }

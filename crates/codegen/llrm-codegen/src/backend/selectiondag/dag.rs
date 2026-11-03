@@ -137,6 +137,20 @@ pub enum MemBase {
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).
     JumpTable,
+    /// The IR pointer the access reads or writes (`MachinePointerInfo::V`):
+    /// an index into [`SelectionDAG::mem_locations`] (1-based). Only a target
+    /// whose `useAA` is true records it.
+    Value(std::num::NonZeroU32),
+}
+
+/// What alias analysis is asked about an access (`MachineMemOperand::getValue`
+/// and `getAAInfo`). The location holds only while the access is still `bytes`
+/// wide: a narrowed or merged access at another offset is not described by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemLocation {
+    pub pointer: llrm_mir::module::Operand,
+    pub tbaa: Option<llrm_mir::module::MetadataId>,
+    pub bytes: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +189,9 @@ pub struct DivPrices {
     pub extend: i64,
     pub multiply: i64,
     pub multiply_long: i64,
+    /// The multiply-high of the magic sequence
+    /// ([`OperationCosts::multiply_high`]).
+    pub multiply_high: i64,
     pub divide: i64,
     pub divide_long: i64,
     /// Percent of the divide's price the multiply-high sequence must exceed it
@@ -206,6 +223,11 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
+    /// offset folds as a constant: it goes to the right of a commutative node
+    /// and reassociation moves it outermost. DEVIATE: off by default so x86's
+    /// rows stay as they are until the judge has seen them. Exit: x86 judged.
+    pub global_addresses_constant: bool,
     /// Every symbol is `dso_local`, as clang marks them under `-fno-pic`: an
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
@@ -235,6 +257,26 @@ pub struct DagConfig {
     /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
     /// other end.
     pub big_endian: bool,
+    /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
+    pub fma_faster: bool,
+    /// `visitADD`'s `(add a, b)` -> `(or disjoint a, b)` where the operands
+    /// share no bits. DEVIATE: off by default so x86's rows stay as they are
+    /// until the judge has seen them. Exit: x86 judged, no later than
+    /// 2026-11-20.
+    pub add_to_or_disjoint: bool,
+    /// A signed divide or remainder whose operands fit this narrower legal
+    /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
+    /// wide divide. Set by the targets whose narrow routine is the cheaper.
+    pub narrow_divrem: Option<EVT>,
+    /// The narrow remainder routine is defined for `INT_MIN % -1` (it is 0, as
+    /// the wide one): a remainder then needs no spare bit, as the pin's
+    /// `narrowSDivOrSRem` bumps the width for. An x86 `idiv` traps there.
+    pub narrow_srem_overflow_defined: bool,
+    /// `TargetSubtargetInfo::useAA`: the builder records each load's and
+    /// store's IR pointer ([`MemBase::Value`]) for the combiner's alias
+    /// queries. DEVIATE: off by default (x86 and arm64 answer false). Exit:
+    /// none, the target's own answer.
+    pub use_aa: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -248,6 +290,7 @@ impl Default for DagConfig {
         DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
+            global_addresses_constant: false,
             dso_local_symbols: false,
             absolute_symbols: false,
             pointer: EVT::I32,
@@ -257,6 +300,11 @@ impl Default for DagConfig {
             fp_extended: false,
             known_bits_for_target_node: None,
             big_endian: false,
+            fma_faster: false,
+            add_to_or_disjoint: false,
+            narrow_divrem: None,
+            narrow_srem_overflow_defined: false,
+            use_aa: false,
         }
     }
 }
@@ -292,8 +340,20 @@ fn cse_hash(
     opcode.hash(&mut hasher);
     values.hash(&mut hasher);
     ops.hash(&mut hasher);
-    data.hash(&mut hasher);
+    cse_key(data).hash(&mut hasher);
     hasher.finish()
+}
+
+/// What `FoldingSetNodeID` sees of a node's payload: the pin's ID holds no
+/// `MachineMemOperand` value, so two accesses that differ only in their IR
+/// pointer are one node, the first one's.
+fn cse_key(data: &NodeData) -> NodeData {
+    match *data {
+        NodeData::Mem(info) if matches!(info.base, MemBase::Value(_)) => {
+            NodeData::Mem(MemInfo { base: MemBase::Unknown, ..info })
+        }
+        other => other,
+    }
 }
 
 /// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
@@ -351,6 +411,12 @@ pub struct SelectionDAG {
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
+    /// The alignment of each static alloca's frame object, by frame index
+    /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
+    /// address say. Empty where the layout may place an object lower.
+    pub frame_alignments: Vec<u64>,
+    /// The IR pointers of the accesses ([`MemBase::Value`]).
+    pub mem_locations: Vec<MemLocation>,
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
@@ -433,6 +499,8 @@ impl SelectionDAG {
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
+            frame_alignments: Vec::new(),
+            mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
             temporaries: Vec::new(),
@@ -463,6 +531,19 @@ impl SelectionDAG {
 
     pub fn config(&self) -> &DagConfig {
         &self.config
+    }
+
+    /// The jump table is position independent (`EK_LabelDifference32`, its
+    /// address a symbol operand folded into the jump's address): 64-bit code
+    /// with the "PIC Level" flag. Without it the table is the pin's static
+    /// one, a pointer per case.
+    /// DEVIATE: the pin folds the table into the address at any width
+    /// ([`matchWrapper`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2022),
+    /// `jmpl *.LJTI0_0(,%eax,4)` at 32 bits). Reason: that changes the m16
+    /// and m32 output, which this change keeps as it was. Exit: the switch
+    /// lowering at m32 (x86-m32), 2026-11-20, with its own rows.
+    pub fn relative_jump_tables(&self) -> bool {
+        self.config.pointer == EVT::I64 && !self.config.absolute_symbols
     }
 
     /// How many results of other nodes read `value`'s node (`use_size`).
@@ -533,12 +614,16 @@ impl SelectionDAG {
         work.push(node);
         while let Some(n) = work.pop() {
             // Chain and glue nodes stay: the builder keeps handles on some
-            // (the pin protects them with `HandleSDNode`).
+            // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
+            // token factor goes like any node (`RemoveDeadNodes`): kept, it
+            // stays a user of its operands, `visitTokenFactor` cannot merge
+            // them and the chains nest past `GatherAllAliases` depth 18.
             if n == self.root.node
                 || n == self.entry.node
                 || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
-                || self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE)
+                || (self.nodes[n as usize].opcode != ISD::TokenFactor
+                    && self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE))
             {
                 continue;
             }
@@ -682,7 +767,8 @@ impl SelectionDAG {
         let mut at = *self.cse.head.get(&cse_hash(opcode, values, ops, data))?;
         while at != NONE {
             let node = &self.nodes[at as usize];
-            if node.opcode == opcode && node.values == values && node.ops == ops && node.data == *data {
+            if node.opcode == opcode && node.values == values && node.ops == ops && cse_key(&node.data) == cse_key(data)
+            {
                 return Some(at);
             }
             at = self.cse.next[at as usize];
@@ -1461,6 +1547,21 @@ impl SelectionDAG {
         } else {
             self.get_node(ISD::ZeroExtend, vt, &[value])
         }
+    }
+
+    /// A boolean as the integer 1 or 0: `getZExtOrTrunc` where the target's
+    /// booleans are 0 or 1, else `getSelect(value, 1, 0)` (a 0 or -1 boolean
+    /// zero-extended is 255, not 1).
+    pub fn get_bool_as_bit(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        if self.config.boolean_contents == BooleanContents::ZeroOrOne {
+            return self.get_zext_or_trunc(value, vt);
+        }
+        let (one, zero) = (self.get_constant(1, vt), self.get_constant(0, vt));
+        self.get_select(vt, value, one, zero)
     }
 
     pub fn get_any_ext_or_trunc(

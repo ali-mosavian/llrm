@@ -56,6 +56,9 @@ pub struct X86 {
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
+    /// General registers a value may sit in, where the target's description
+    /// states them (frame and stack pointers excluded); none: the pin's count.
+    pub registers: Option<u32>,
     /// The target's tuning table (`Machine::tuning`); the pin's by default.
     pub tuning: llrm_mir::target::Tuning,
 }
@@ -75,6 +78,10 @@ pub struct RealMode {
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
+    /// Registers the target's cheapest address form can name (a base and an
+    /// index of its classes, the frame's excluded); none: any general
+    /// register.
+    pub address_registers: Option<u32>,
     /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
     /// stays is inlined into an `optsize` caller only if its code does not
     /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
@@ -135,6 +142,7 @@ impl X86 {
                 macro_fusion: false,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             "core2" => Some(X86 {
@@ -144,6 +152,7 @@ impl X86 {
                 macro_fusion: true,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
@@ -155,6 +164,7 @@ impl X86 {
                 macro_fusion: true,
                 quad: true,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
             }),
             _ => None,
@@ -179,6 +189,14 @@ impl X86 {
         real_mode: RealMode,
     ) -> X86 {
         X86 { real_mode: Some(real_mode), ..self.clone() }
+    }
+
+    /// The registers the target's description allocates.
+    pub fn with_registers(
+        &self,
+        registers: u32,
+    ) -> X86 {
+        X86 { registers: Some(registers), ..self.clone() }
     }
 
     /// The target's tuning table.
@@ -550,13 +568,7 @@ impl Tti for X86 {
         self.cmov
     }
 
-    fn unroll_threshold_overrides(
-        &self,
-        opt_level: u32,
-    ) -> (Option<u32>, Option<u32>) {
-        if self.tuning.unroll_override_max_level.is_some_and(|highest| opt_level > highest) {
-            return (None, None);
-        }
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
     }
 
@@ -573,7 +585,14 @@ impl Tti for X86 {
     }
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        self.real_mode.as_ref()?.recursive_inlining
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
+    }
+
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_edge_growth
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
@@ -589,15 +608,15 @@ impl Tti for X86 {
     /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
+    }
+
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) { 1 } else { 2 }
     }
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
-    }
-
-    fn speed_inline_by_code_size(&self) -> bool {
-        self.tuning.inline_size_guard_at_speed
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
@@ -988,12 +1007,27 @@ impl Tti for X86 {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+        self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
-    /// `lea` forms `base + index + displacement` in one instruction.
-    fn address_form_adds_offsets(&self) -> bool {
+    /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
+    /// it.
+    fn frame_address_is_free(&self) -> bool {
         true
+    }
+
+    /// 64 in long mode, else 32 (also at m16, on a 386 or later).
+    fn gpr_bits(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
+    /// `lea` forms `base + index + displacement` in one instruction, from 16
+    /// bits up: there is no 8-bit `lea`.
+    fn address_form_adds_offsets(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits >= 16
     }
 
     /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model
@@ -1015,6 +1049,13 @@ impl Tti for X86 {
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    fn address_registers(&self) -> u32 {
+        self.real_mode
+            .as_ref()
+            .and_then(|real| real.address_registers)
+            .unwrap_or_else(|| self.number_of_gpr_registers())
     }
 
     fn scaled_index_insns(&self) -> u32 {

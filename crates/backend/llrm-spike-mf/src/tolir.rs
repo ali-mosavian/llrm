@@ -20,8 +20,14 @@
 //! bytes) are two values, with no sub-register index to say one is part of
 //! the other. Greedy refuses a function in which their live ranges meet
 //! (`decide` returns None); a pair that arrives and a byte pair that leaves
-//! at another time are fine. Exit: D-6502, if a 6502 function needs both live
-//! together.
+//! at another time are fine. Exit: the lane model (sub-register lanes in
+//! live intervals), 2026-11-30, with DEVIATE 3.
+//!
+//! DEVIATE 3 (beyond the pin): a part of a lane-built value
+//! (`Target::lane_moves`: z80 `PACK`, 6502 `PACK`/`UNPACK`) is hinted the lane
+//! of the register its whole is copied to or from. The pin places the lanes by
+//! coalescing the copies `eliminateRegSequence` makes
+//! (RegisterCoalescer.cpp#L464). Exit: the lane model, 2026-11-30.
 //!
 //! DEVIATE 2: the `MFunction` states no block odds. A branch with one edge
 //! that stays in its loop and one that leaves gets 31 in 32 to stay (LLVM's
@@ -63,6 +69,8 @@ pub struct Converted<T: Target> {
     pub origin: Vec<(usize, usize)>,
     /// Whether a path from the entry reaches each block.
     pub reachable: Vec<bool>,
+    /// Where each value [`Converted::coalesce`] absorbed went.
+    joined: llrm_codegen::coalescer::env::JoinMap,
     pub tii: SpikeInstrInfo<T>,
     pub tri: SpikeRegisterInfo,
 }
@@ -83,11 +91,14 @@ impl<T: Target> Converted<T> {
             .iter()
             .map(|(value, order)| (*value, order.iter().copied().collect::<BTreeSet<RegId>>()))
             .collect();
-        let (body, palettes) = llrm_codegen::coalescer::env::coalesce(
+        let (body, palettes, joined) = llrm_codegen::coalescer::env::coalesce(
             &self.body,
             palettes,
             self.body.pins.clone(),
             size,
+            T::joins_global_copies(),
+            T::joins_pinned_copies(),
+            T::joins_sub_registers(),
             registers,
             Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
@@ -128,6 +139,13 @@ impl<T: Target> Converted<T> {
             }
         }
         self.body = body;
+        self.joined = joined;
+    }
+
+    /// Where each value the coalescer absorbed went: `survivor(value)` is the
+    /// value that stands for it in [`Converted::body`].
+    pub fn joined(&self) -> &llrm_codegen::coalescer::env::JoinMap {
+        &self.joined
     }
 
     /// The registers `value` may take.
@@ -183,6 +201,7 @@ pub fn to_lir<T: Target>(
         pins: IndexMap::default(),
         values: IndexMap::default(),
         origin: Vec::new(),
+        symbols: Vec::new(),
         marker: PhantomData::<T>,
     };
     // every physical register is a value before the first instruction, so a
@@ -193,6 +212,7 @@ pub fn to_lir<T: Target>(
             made.pinned(register);
         }
     }
+    let whole_homes = whole_homes::<T>(function);
     let mut foldable: Vec<Option<(&'static str, usize)>> = Vec::new();
     let clobbered_by_spills = T::spill_clobbers();
     let mut infos: Vec<(&'static str, Vec<OperandInfo>)> = Vec::new();
@@ -207,7 +227,8 @@ pub fn to_lir<T: Target>(
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
-            let (name, own, sources, dests) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+            let (name, mut own, sources, dests) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+            hint_lanes::<T>(inst, &whole_homes, registers, &mut own);
             infos.push((name, own));
             // A copy, spill or reload overwrites the flags a compare set, and
             // greedy puts them where a value is read: the compare and the
@@ -286,6 +307,7 @@ pub fn to_lir<T: Target>(
         saved,
         origin: made.origin,
         reachable,
+        joined: Default::default(),
         tii: SpikeInstrInfo {
             classes: function.classes.clone(),
             registers,
@@ -350,6 +372,9 @@ struct Made<'f, T: Target> {
     pins: IndexMap<u32, RegId>,
     values: IndexMap<RegId, u32>,
     origin: Vec<(usize, usize)>,
+    /// The symbols the function's operands name, in order of first use: the
+    /// number a symbol's `Imm` carries as its address.
+    symbols: Vec<String>,
     marker: PhantomData<T>,
 }
 
@@ -463,9 +488,22 @@ impl<T: Target> Made<'_, T> {
                     sources.push(Loc::Held(held));
                 }
                 Operand::Imm(value) => sources.push(Loc::Imm(Imm { value: *value, width: 0, address: None })),
-                Operand::Symbol(_, offset) => {
+                Operand::Symbol(name, offset) => {
                     symbol = true;
-                    sources.push(Loc::Imm(Imm { value: *offset, width: 0, address: None }));
+                    // The symbol is part of the value: `_s` and `0` are two
+                    // literals, which `from_lir` must not take for one.
+                    let at = self
+                        .symbols
+                        .iter()
+                        .position(|one| one == name)
+                        .unwrap_or_else(
+                            || {
+                                self.symbols.push(name.clone());
+                                self.symbols.len() - 1
+                            },
+                        );
+                    let address = Some(Addr::new(Space::External, at as i64));
+                    sources.push(Loc::Imm(Imm { value: *offset, width: 0, address }));
                 }
                 Operand::Frame(slot) => {
                     sources.push(Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, i64::from(*slot))), 0)));
@@ -652,6 +690,91 @@ fn operands_in<'a>(
 }
 
 /// The name of `inst` and what the target says of its virtual operands.
+/// The register each value is copied to or from, through the chain of copies
+/// between values, where the chain meets one register only: where a
+/// lane-built value ends up whole.
+fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::HashMap<u32, RegId> {
+    let mut parent: Vec<u32> = (0..=function.classes.len() as u32).collect();
+    fn find(
+        parent: &mut [u32],
+        mut v: u32,
+    ) -> u32 {
+        while parent[v as usize] != v {
+            parent[v as usize] = parent[parent[v as usize] as usize];
+            v = parent[v as usize];
+        }
+        v
+    }
+    let mut touched: Vec<(u32, RegId)> = Vec::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Copy) {
+        match inst.operands.as_slice() {
+            [
+                Operand::Def(Reg::Virt(a)) | Operand::Use(Reg::Virt(a)),
+                Operand::Def(Reg::Virt(b)) | Operand::Use(Reg::Virt(b)),
+            ] => {
+                let (x, y) = (find(&mut parent, *a), find(&mut parent, *b));
+                parent[x as usize] = y;
+            }
+            [
+                Operand::Def(Reg::Phys(p)) | Operand::Use(Reg::Phys(p)),
+                Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)),
+            ]
+            | [
+                Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v)),
+                Operand::Def(Reg::Phys(p)) | Operand::Use(Reg::Phys(p)),
+            ] if !T::reserved(T::root(*p)) => {
+                touched.push((*v, *p));
+            }
+            _ => {}
+        }
+    }
+    let mut homes: std::collections::HashMap<u32, Option<RegId>> = std::collections::HashMap::new();
+    for (v, p) in touched {
+        let root = find(&mut parent, v);
+        homes
+            .entry(root)
+            .and_modify(|home| {
+                if *home != Some(p) {
+                    *home = None
+                }
+            })
+            .or_insert(Some(p));
+    }
+    (0..=function.classes.len() as u32)
+        .filter_map(|v| homes.get(&find(&mut parent, v)).copied().flatten().map(|home| (v, home)))
+        .collect()
+}
+
+/// DEVIATE (`Target::lane_moves`): the part of a lane-built value takes as its
+/// hint the lane of the register its whole is copied to or from.
+fn hint_lanes<T: Target>(
+    inst: &Inst,
+    homes: &std::collections::HashMap<u32, RegId>,
+    registers: Regs,
+    infos: &mut [OperandInfo],
+) {
+    let Some((whole, parts)) = T::lane_moves(inst) else { return };
+    let Some(Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = inst.operands.get(whole) else { return };
+    let Some(home) = homes.get(v) else { return };
+    let base = registers.lanes(*home).trailing_zeros();
+    for (part, offset, bytes) in parts {
+        let wanted = ((1_i64 << bytes) - 1) << (base + offset);
+        let ordinal = inst.operands[..part]
+            .iter()
+            .filter(|o| matches!(o, Operand::Def(Reg::Virt(_)) | Operand::Use(Reg::Virt(_))))
+            .count();
+        let Some(info) = infos.get_mut(ordinal) else { continue };
+        if let Some(lane) = info
+            .order
+            .iter()
+            .copied()
+            .find(|register| T::root(*register) == T::root(*home) && registers.lanes(*register) == wanted)
+        {
+            info.hint = Some(lane);
+        }
+    }
+}
+
 fn operand_infos<T: Target>(
     inst: &Inst,
     classes: &[T::Class],

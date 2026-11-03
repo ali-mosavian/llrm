@@ -100,6 +100,16 @@ fn block_label(
     format!("{name}_b{block}")
 }
 
+/// Whether a global of this linkage is visible to other objects: an internal
+/// or private one is not, and a same-named helper in another object must not
+/// collide with it at link time.
+pub fn exported(linkage: llrm_mir::module::Linkage) -> bool {
+    !matches!(
+        linkage,
+        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+    )
+}
+
 /// The function `name` of `module` as ca65 text: its blocks, selected, on
 /// virtual registers and allocated (`alloc.rs`), in layout order.
 ///
@@ -120,11 +130,20 @@ pub fn function_text(
                 graph.recursive(id) || graph.calls_unknown(id)
             },
         );
-    let (items, _) = function_items(module, name, selection)?;
-    let (function, labels) = alloc::build(name, &items).map_err(|why| format!("{name}: {}", why.0))?;
-    let (code, slots) =
-        alloc::emit(function, &labels, recursive, selection.cpu == Cpu::W65c02, selection.zero_page, selection.tuning)?;
-    let mut body = format!(".export {name}\n{code}");
+    let (items, _, places) = function_items_with_places(module, name, selection)?;
+    let (function, labels) =
+        alloc::build_with_places(name, &items, places).map_err(|why| format!("{name}: {}", why.0))?;
+    let (code, slots) = alloc::emit(
+        function,
+        &labels,
+        recursive,
+        selection.cpu == Cpu::W65c02,
+        selection.zero_page,
+        selection.tuning,
+        selection.source.as_ref().map(|(file, line)| (file.as_str(), *line)),
+    )?;
+    let export = module.named(name).is_none_or(|id| exported(module.global(id).linkage));
+    let mut body = format!("{}{code}", if export { format!(".export {name}\n") } else { String::new() });
     body.push_str(".segment \"BSS\"\n");
     for (slot, size) in slots {
         writeln!(body, "{slot}: .res {size}").unwrap();
@@ -165,6 +184,18 @@ pub fn function_items(
     name: &str,
     selection: &Selection,
 ) -> Result<(Vec<Item>, (Vec<String>, Vec<String>)), String> {
+    function_items_with_places(module, name, selection).map(|(items, cells, _)| (items, cells))
+}
+
+/// [`function_items`], with the source places the instructions'
+/// [`MInst::origin`]s number from 1 (`SDLoc` to `DebugLoc`).
+pub fn function_items_with_places(
+    module: &Module,
+    name: &str,
+    selection: &Selection,
+) -> Result<(Vec<Item>, (Vec<String>, Vec<String>), Vec<llrm_codegen::model::lir::SrcLoc>), String> {
+    let mut places: Vec<llrm_codegen::model::lir::SrcLoc> = Vec::new();
+    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::new();
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
     let mut cells = Cells {
@@ -224,7 +255,21 @@ pub fn function_items(
                         );
                     }
                 }
-                for inst in lower(module, name, one, node, &mut values, &mut cells)? {
+                let place = one.dag.lines.get(one.dag.nodes()[node as usize].order as usize).copied().flatten();
+                let number = place.map(|place| {
+                    *number_of
+                        .entry(place)
+                        .or_insert_with(
+                            || {
+                                places.push(place);
+                                places.len() as u32
+                            },
+                        )
+                });
+                for mut inst in lower(module, name, one, node, &mut values, &mut cells)? {
+                    if let (0, Some(number)) = (inst.origin, number) {
+                        inst.origin = number;
+                    }
                     body.push(Item::Inst(inst));
                 }
             }
@@ -251,7 +296,7 @@ pub fn function_items(
         }
     }
     body.extend(edges);
-    Ok((body, (cells.bytes, cells.words)))
+    Ok((body, (cells.bytes, cells.words), places))
 }
 
 /// The frame: the fixed objects (the stack arguments, at the offsets the

@@ -500,12 +500,13 @@ entry:
     }
 }
 
-/// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
-/// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
-/// switches): the target prices no jump table, so the DAG makes compares as the
-/// MIR pass does.
+/// A dense switch at m64 is a jump table of offsets, read through a register
+/// as the pin's PIC code does (`movslq (table,idx,4)`, `add table`, `jmp *`).
+/// It was compares (the target priced no table: `WrapperRIP` of a table
+/// address was `CannotSelect Target(954)`), and a 256-case state machine cost
+/// the allocator 400 M instructions against the pin's 12 M.
 #[test]
-fn a_dense_switch_at_m64_is_compares_not_a_jump_table() {
+fn a_dense_switch_at_m64_is_a_register_jump_through_a_table() {
     let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
 define i32 @f(i32 %x) {
 entry:
@@ -522,7 +523,10 @@ d: ret i32 0
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
+    let insns = done.body.insns();
+    let jumps: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.indirect).collect();
+    assert_eq!(jumps.len(), 1);
+    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some(), "{:?}", jumps[0]);
 }
 
 /// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the
@@ -792,7 +796,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
 }
 
@@ -811,7 +816,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "cvtsi2sd"), "{names:?}");
 }
 
@@ -903,7 +909,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
@@ -1085,6 +1092,43 @@ entry:
     assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
 }
 
+/// `store i1` stopped at `Legalize(Unsupported {op: Store, ty: I1, what:
+/// "promote operand"})`: the promoted value is stored as one byte.
+#[test]
+fn a_store_of_an_i1_value_is_promoted_to_a_byte_store() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, i1 %b) {
+entry:
+  store i1 %b, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("mov") && matches!(w.dests.first(), Some(crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .count();
+    assert_eq!(stores, 1, "one byte store");
+    let m32 = "target datalayout = \"e-p:32:32-n8:16:32\"
+define void @f(ptr %p, i1 %b) {
+entry:
+  store i1 %b, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(m32).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).expect("selected at m32");
+}
+
 /// A store of an `i48` (a packed struct's member) stopped at
 /// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
 /// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.
@@ -1231,4 +1275,26 @@ define void @g(i56 %v) {
     };
     assert_eq!(bytes("f", true), 7, "loaded");
     assert_eq!(bytes("g", false), 7, "stored");
+}
+
+/// A `sext` of a value whose sign bit is zero kept a `movsxd` where the pin's
+/// `visitSIGN_EXTEND` makes it a `zext nneg`, the free `mov r32, r32`:
+/// bench ring and tile +1 B.
+#[test]
+fn an_m64_sext_of_a_value_with_a_zero_sign_bit_is_a_free_zero_extension() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i32 %a) {
+entry:
+  %m = and i32 %a, 255
+  %s = sext i32 %m to i64
+  ret i64 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
+    assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
 }

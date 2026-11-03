@@ -11,11 +11,32 @@ use super::addr;
 use super::generated::ids::isd as m68k_isd;
 use super::generated::{instrinfo, m68k_m68000, m68k_m68020};
 
-/// The CPUs the tables are generated for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The CPUs of the family. The pin selects on three gates only (`IsM68000`,
+/// `AtLeastM68010`, `AtLeastM68020`), so the tables are generated for two:
+/// the 68010 selects from the 68000's, the 68030 and up from the 68020's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Cpu {
     M68000,
+    M68010,
     M68020,
+    M68030,
+    M68040,
+    M68060,
+}
+
+impl Cpu {
+    /// The CPU's column in `timings.times`.
+    pub fn name(self) -> &'static str {
+        ["m68000", "m68010", "m68020", "m68030", "m68040", "m68060"][self as usize]
+    }
+
+    /// `Subtarget->atLeastM68020()` and its siblings.
+    pub fn at_least(
+        self,
+        other: Cpu,
+    ) -> bool {
+        self >= other
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -63,8 +84,8 @@ impl M68kHooks {
         opt_none: bool,
     ) -> M68kHooks {
         let patterns = match cpu {
-            Cpu::M68000 => m68k_m68000::COMPLEX_PATTERNS,
-            Cpu::M68020 => m68k_m68020::COMPLEX_PATTERNS,
+            Cpu::M68000 | Cpu::M68010 => m68k_m68000::COMPLEX_PATTERNS,
+            Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::COMPLEX_PATTERNS,
         };
         let mut complex = vec![None; patterns.iter().map(|&(n, ..)| usize::from(n) + 1).max().unwrap_or(0)];
         for &(number, function, _) in patterns {
@@ -94,8 +115,10 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
         predicate: u16,
     ) -> bool {
         match self.cpu {
-            Cpu::M68000 => m68k_m68000::pattern_predicate(&NoDynamicPredicates, predicate),
-            Cpu::M68020 => m68k_m68020::pattern_predicate(&NoDynamicPredicates, predicate),
+            Cpu::M68000 | Cpu::M68010 => m68k_m68000::pattern_predicate(&NoDynamicPredicates, predicate),
+            Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => {
+                m68k_m68020::pattern_predicate(&NoDynamicPredicates, predicate)
+            }
         }
     }
 
@@ -106,8 +129,10 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
         predicate: u16,
     ) -> bool {
         match self.cpu {
-            Cpu::M68000 => m68k_m68000::node_predicate(dag, self, value, predicate),
-            Cpu::M68020 => m68k_m68020::node_predicate(dag, self, value, predicate),
+            Cpu::M68000 | Cpu::M68010 => m68k_m68000::node_predicate(dag, self, value, predicate),
+            Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => {
+                m68k_m68020::node_predicate(dag, self, value, predicate)
+            }
         }
     }
 

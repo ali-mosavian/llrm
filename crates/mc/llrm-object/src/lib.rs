@@ -2,6 +2,7 @@
 //! `docs/formats/object-model.md`.
 
 pub mod assembler;
+pub mod table;
 
 /// Which debug format a [`Role::Debug`] section belongs to, so a writer needs
 /// no name to tell them apart.
@@ -306,6 +307,21 @@ pub struct Symbol {
     pub size: usize,
     /// OMF: the group a symbol this object does not define is addressed in.
     pub group: Option<usize>,
+    /// ELF `st_other`, Mach-O `N_PEXT`, wasm's visibility flag: who may bind
+    /// to the name from outside the linked image.
+    pub visibility: Visibility,
+}
+
+/// Who may bind to a symbol from outside the image it is linked into
+/// (`STV_*`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Visibility {
+    #[default]
+    Default,
+    /// Not exported from the image.
+    Hidden,
+    /// Exported, but not preemptible.
+    Protected,
 }
 
 impl Symbol {

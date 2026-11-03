@@ -64,6 +64,9 @@ pub struct Features {
     pub shld_slow: bool,
     /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
     pub sse2: bool,
+    /// `useSoftFloat()`: `f32` and `f64` have no register class; their
+    /// arithmetic is a call (m16).
+    pub soft_float: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -104,7 +107,9 @@ pub struct TargetLowering {
     legal_fp_immediates: Vec<(MVT, u128)>,
     /// `isFPImmLegal` as a function of the value, for a target whose answer is
     /// not a short list.
-    fp_imm_predicate: Option<fn(MVT, u128) -> bool>,
+    fp_imm_predicate: Option<fn(MVT, u128, bool) -> bool>,
+    /// The function is optimized for size (`ForCodeSize` of `isFPImmLegal`).
+    opt_for_size: bool,
     /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
     /// more than a straight `movsd`.
     keeps_f64_constants: bool,
@@ -114,6 +119,12 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The object spelling of a routine's name where the convention decorates
+    /// it (`___addsf3@3`).
+    libcall_symbols: HashMap<String, (String, u32)>,
+    /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
+    /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
+    sext_cheaper_i32_i64: bool,
 }
 
 impl TargetLowering {
@@ -128,9 +139,12 @@ impl TargetLowering {
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
             fp_imm_predicate: None,
+            opt_for_size: false,
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            libcall_symbols: HashMap::default(),
+            sext_cheaper_i32_i64: false,
         }
     }
 
@@ -146,6 +160,33 @@ impl TargetLowering {
 
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
     /// one.
+    /// The routine `name` is spelled `symbol` in the object.
+    pub fn set_libcall_symbol(
+        &mut self,
+        name: &str,
+        symbol: String,
+        convention: u32,
+    ) {
+        self.libcall_symbols.insert(name.to_owned(), (symbol, convention));
+    }
+
+    /// The calling convention number the routine `name` was defined under.
+    pub fn libcall_convention(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        self.libcall_symbols.get(name).map(|(_, number)| *number)
+    }
+
+    /// How a call to the routine `name` spells it: as the C compiler spelled
+    /// the definition, else the name.
+    pub fn libcall_symbol(
+        &self,
+        name: &str,
+    ) -> String {
+        self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
+    }
+
     pub fn libcall_name(
         &self,
         op: ISD,
@@ -238,14 +279,23 @@ impl TargetLowering {
         vt: MVT,
         bits: u128,
     ) -> bool {
-        self.legal_fp_immediates.contains(&(vt, bits)) || self.fp_imm_predicate.is_some_and(|legal| legal(vt, bits))
+        self.legal_fp_immediates.contains(&(vt, bits))
+            || self.fp_imm_predicate.is_some_and(|legal| legal(vt, bits, self.opt_for_size))
     }
 
     pub fn set_fp_imm_predicate(
         &mut self,
-        predicate: fn(MVT, u128) -> bool,
+        predicate: fn(MVT, u128, bool) -> bool,
     ) {
         self.fp_imm_predicate = Some(predicate);
+    }
+
+    /// `DAG.shouldOptForSize()` for the function selected next.
+    pub fn set_opt_for_size(
+        &mut self,
+        size: bool,
+    ) {
+        self.opt_for_size = size;
     }
 
     /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
@@ -301,6 +351,15 @@ impl TargetLowering {
         vt: MVT,
     ) -> Action {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
+    }
+
+    /// `TargetLowering::isSExtCheaperThanZExt(FromTy, ToTy)`.
+    pub fn is_sext_cheaper_than_zext(
+        &self,
+        from: EVT,
+        to: EVT,
+    ) -> bool {
+        self.sext_cheaper_i32_i64 && from == EVT::Simple(MVT::I32) && to == EVT::Simple(MVT::I64)
     }
 
     /// `Subtarget.canUseCMOV()`.
@@ -416,7 +475,21 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
+        if !features.soft_float {
+            return Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false);
+        }
+        use ISD::*;
+        let mut t = Self::x86(TargetLoweringInfo::x86_16().with_soft_float(), features, ptr, false);
+        // The x87 lowerings of a compare, a select and an extension have no
+        // registers to work in: the type legalizer softens them first.
+        t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
+        t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
+        // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
+        for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
+            t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
+            t.set_libcall_name(op, MVT::F64, Box::leak(format!("__{stem}df3").into_boxed_str()));
+        }
+        t
     }
 
     /// AArch64: `initActions`, then the scalar integer arms of
@@ -431,6 +504,7 @@ impl TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.sext_cheaper_i32_i64 = true;
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).
@@ -444,6 +518,9 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
         t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
+        // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
+        // type is asked.
+        t.set_ops(&[StackSave], &[MVT::I64], Expand);
         t.set_ops(&[FShr, FShl], &words, Custom);
         t.set_ops(&[Rotl], &words, Expand);
         t.set_ops(&[MulHU, MulHS], &[MVT::I32], Expand);
@@ -453,7 +530,13 @@ impl TargetLowering {
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Expand);
             t.set_ops(&[CtTz], &[MVT::I128], Expand);
         } else {
-            t.set_ops(&[CtPop, Abs], &words, Custom);
+            // DEVIATE SD533 (exit: NEON `cnt` + `addv` when vector MIR lands):
+            // the pin's `LowerCTPOP` is `Custom` (v8i8 `cnt`, `uaddlv`); with
+            // no vector MIR the population count is the scalar
+            // bit-twiddle (`expandCTPOP`), so that the node is
+            // expanded, not refused.
+            t.set_ops(&[CtPop], &words, Expand);
+            t.set_ops(&[Abs], &words, Custom);
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Custom);
             t.set_ops(&[Parity], &[MVT::I64], Custom);
         }

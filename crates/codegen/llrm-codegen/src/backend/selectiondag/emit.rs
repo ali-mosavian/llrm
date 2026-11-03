@@ -3180,7 +3180,7 @@ impl Emitter<'_, '_> {
         }
         match name {
             // A jump through a table: the entry at the table plus the index.
-            "JMP32m" | "JMP16m" => {
+            "JMP32m" | "JMP16m" | "JMP64m" => {
                 let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short jump".to_owned()))?;
                 // The table is the displacement, or the base is its address.
                 let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
@@ -3195,7 +3195,11 @@ impl Emitter<'_, '_> {
                 let scale = self.constant(group[1])?;
                 let mut address = Addr::new(crate::model::ir::Space::Segment, 0);
                 address.index = jump.id;
-                let entry = if name == "JMP16m" { 2 } else { 4 };
+                let entry = match name {
+                    "JMP16m" => 2,
+                    "JMP64m" => 8,
+                    _ => 4,
+                };
                 // At real mode a lone register is the address's base, as the
                 // old selector makes it (16-bit addressing has no scale).
                 let (base, index) =
@@ -3204,6 +3208,26 @@ impl Emitter<'_, '_> {
                 let targets = jump.targets;
                 let what = Semantics { indirect: true, table: targets, ..Semantics::new(Operation::Jump) };
                 self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Mem(cell)], ..what });
+                Ok(Some(()))
+            }
+            // A jump through a register that holds a table entry's address
+            // (the position-independent table of 64-bit code): the table is
+            // the one the register's sum was made from.
+            "JMP64r" => {
+                let table = self
+                    .jump_table_behind(node.ops[0], 8)
+                    .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
+                let Loc::Held(target) = self.operand(node.ops[0])? else {
+                    return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
+                };
+                let jump = self.jump_table(table)?;
+                let what = Semantics {
+                    indirect: true,
+                    table: jump.targets,
+                    table_id: Some(jump.id),
+                    ..Semantics::new(Operation::Jump)
+                };
+                self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![Loc::Held(target)], ..what });
                 Ok(Some(()))
             }
             "MOV32ImmSExti8" => {
@@ -3904,6 +3928,22 @@ impl Emitter<'_, '_> {
         Ok(Mem { addr, through, index, scale, ..cell })
     }
 
+    /// The jump table `value` is made from: the `TargetJumpTable` among the
+    /// operands `depth` levels down.
+    fn jump_table_behind(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<u32> {
+        if let NodeData::JumpTable(table) = self.dag.node(value).data {
+            return Some(table);
+        }
+        if depth == 0 {
+            return None;
+        }
+        self.dag.node(value).ops.iter().find_map(|&op| self.jump_table_behind(op, depth - 1))
+    }
+
     fn jump_table(
         &self,
         table: u32,
@@ -3978,7 +4018,15 @@ impl Emitter<'_, '_> {
                 }
             }
             let held = self.fresh(10);
+            let (before, pooled) = (self.blocks.last().map_or(0, |block| block.insns.len()), cell.is_some());
             self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
+            // A constant-pool entry is memory nothing writes
+            // (`PseudoSourceValue::isConstant`: the pin's
+            // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
+            // X1).
+            if pooled {
+                self.mark_invariant_loads(before);
+            }
             if constant {
                 self.loaded.insert(value, (held, at.0, at.1));
             }

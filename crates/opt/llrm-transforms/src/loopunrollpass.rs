@@ -407,7 +407,7 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     // Override with any target specific settings.
     run.tti.get_unrolling_preferences(has_calls, &mut up);
     // The target's tuning table.
-    let (threshold, boost) = run.tti.unroll_threshold_overrides(run.options.opt_level);
+    let (threshold, boost) = run.tti.unroll_threshold_overrides();
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
@@ -1238,12 +1238,17 @@ fn try_to_unroll_loop(
     }
 
     // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
-    // twice are interleaved past the stack and spill (fpbench, nbody -O3:
-    // slower than the loop, as is the pin's own unroll). Owner
+    // twice are interleaved past the stack and spill. The aggressive bar's
+    // extra growth is where that cost more than the loop (nbody_single and
+    // fpbench -O3: 57 stores and 90 reloads against 30 and 30 rolled), while
+    // within the default bar the unrolled loop won (-O2: nbody_single -2.5%,
+    // fpbench -4.0%), so such a body is held to the default bar. Owner
     // llrm-target-x86-m32, exit 2026-11-20.
     if let Some(peak) = float_stack_overflow(run, lp) {
-        why(run, lp, &format!("{peak} floats live in a body, past half the float stack"));
-        return Unrolled::Unmodified;
+        if up.threshold > UNROLL_THRESHOLD_DEFAULT {
+            why(run, lp, &format!("{peak} floats live in a body, past half the float stack: the default bar"));
+            up.threshold = UNROLL_THRESHOLD_DEFAULT;
+        }
     }
 
     let eph = ephemeral_values(run, analyzed, lp);

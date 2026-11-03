@@ -17,6 +17,8 @@
 //! LLVM's `SelectionDAG::computeKnownBits`
 //! ([L3349](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L3349)).
 
+use llrm_mir::knownbits::Bits;
+
 use super::dag::{BooleanContents, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::ISD;
@@ -44,6 +46,16 @@ impl KnownBits {
     ) -> KnownBits {
         let all = mask(width);
         KnownBits { zero: !value & all, one: value & all, width }
+    }
+
+    /// The same bits as [`llrm_mir::knownbits::KnownBits`].
+    fn to_mir(self) -> llrm_mir::knownbits::KnownBits {
+        llrm_mir::knownbits::KnownBits::from_masks(self.width, self.zero, self.one)
+    }
+
+    /// The same bits as this module's [`KnownBits`].
+    fn from_mir(known: llrm_mir::knownbits::KnownBits) -> KnownBits {
+        KnownBits { zero: known.zero, one: known.one, width: known.width }
     }
 
     /// `KnownBits::isConstant`.
@@ -111,6 +123,15 @@ pub fn known_bits(
     walk(dag, value, 0)
 }
 
+/// Applies a `KnownBits` operation to two walked operands.
+fn binary(
+    lhs: KnownBits,
+    rhs: KnownBits,
+    op: impl Fn(&Bits, &Bits) -> Bits,
+) -> KnownBits {
+    KnownBits::from_mir(op(&lhs.to_mir(), &rhs.to_mir()))
+}
+
 fn walk(
     dag: &SelectionDAG,
     value: SDValue,
@@ -173,6 +194,17 @@ fn walk(
             // The new high bits are zero.
             KnownBits { zero: inner.zero | (all & !mask(inner.width)), one: inner.one, width }
         }
+        // `computeKnownBitsForStackObjectPointer`: the low bits of an aligned
+        // object's address are zero.
+        ISD::FrameIndex | ISD::TargetFrameIndex => {
+            let aligned = match dag.node(value).data {
+                super::dag::NodeData::FrameIndex(index) => {
+                    usize::try_from(index).ok().and_then(|at| dag.frame_alignments.get(at))
+                }
+                _ => None,
+            };
+            KnownBits { zero: aligned.map_or(0, |align| mask(align.trailing_zeros()) & all), one: 0, width }
+        }
         ISD::Add => {
             // `KnownBits::computeForAddSub` without a carry in.
             let (lhs, rhs) = (operand(0), operand(1));
@@ -199,13 +231,10 @@ fn walk(
             let inner = operand(0);
             KnownBits { zero: inner.zero & all, one: inner.one & all, width }
         }
-        ISD::Shl => match dag.constant(dag.operand(value, 1)) {
-            Some(by) if by < u128::from(width) => {
-                let inner = operand(0);
-                KnownBits { zero: ((inner.zero << by) | mask(by as u32)) & all, one: (inner.one << by) & all, width }
-            }
-            _ => KnownBits::unknown(width),
-        },
+        // The pin's `SHL`: `KnownBits::shl`, then the minimum shift amount's
+        // low bits (which `KnownBits::shl` already sets). Node flags are not
+        // modelled, so no-wrap is false.
+        ISD::Shl => binary(operand(0), operand(1), |a, b| Bits::shl(a, b, false, false, b.is_non_zero())),
         // `computeKnownBits` of a `ZEXTLOAD`: the bits above the memory type.
         ISD::Load if value.res == 0 => match &dag.node(value).data {
             super::dag::NodeData::Mem(info) if info.ext == Some(super::actions::LoadExt::ZExtLoad) => {
@@ -217,17 +246,23 @@ fn walk(
             let inner = operand(0);
             KnownBits { zero: inner.zero, one: inner.one, width }
         }
-        ISD::Srl => match dag.constant(dag.operand(value, 1)) {
-            Some(by) if by < u128::from(width) => {
-                let inner = operand(0);
-                KnownBits {
-                    zero: ((inner.zero >> by) | (all & !(all >> by))) & all,
-                    one: (inner.one >> by) & all,
-                    width,
-                }
-            }
-            _ => KnownBits::unknown(width),
-        },
+        ISD::Srl => binary(operand(0), operand(1), |a, b| Bits::lshr(a, b, false, false)),
+        ISD::Sra => binary(operand(0), operand(1), |a, b| Bits::ashr(a, b, false, false)),
+        ISD::Mul => {
+            // The pin sets SelfMultiply only for a self-product that
+            // `isGuaranteedNotToBeUndefOrPoison`; there is no such query here,
+            // so it is never set.
+            binary(operand(1), operand(0), |a, b| Bits::mul(a, b, false))
+        }
+        ISD::MulHU => binary(operand(1), operand(0), Bits::mulhu),
+        ISD::MulHS => binary(operand(1), operand(0), Bits::mulhs),
+        ISD::Sub => binary(operand(0), operand(1), |a, b| Bits::sub(a, b, false, false)),
+        ISD::UDiv => binary(operand(0), operand(1), |a, b| Bits::udiv(a, b, false)),
+        ISD::SDiv => binary(operand(0), operand(1), |a, b| Bits::sdiv(a, b, false)),
+        ISD::URem => binary(operand(0), operand(1), Bits::urem),
+        ISD::SRem => binary(operand(0), operand(1), Bits::srem),
+        ISD::SMax => binary(operand(0), operand(1), Bits::smax),
+        ISD::SMin => binary(operand(0), operand(1), Bits::smin),
         ISD::BSwap | ISD::BitReverse => {
             let inner = operand(0);
             let flip = |v: u128| {

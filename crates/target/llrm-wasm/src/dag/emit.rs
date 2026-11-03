@@ -145,8 +145,15 @@ impl Emitter<'_> {
         let mut out: Vec<Inst> = Vec::new();
         // A unit lists its bottom-most node first; `EmitSchedule` emits the
         // glued ones top-down.
+        // What the instructions made so far came from: the `!dbg` of the
+        // node's `SDNodeOrder`.
+        let mut line = 0;
+        let mut stamped = 0;
         for &node in selected.units.iter().flat_map(|unit| unit.nodes.iter().rev()) {
+            out[stamped..].iter_mut().for_each(|inst| inst.line = line);
+            stamped = out.len();
             let data = dag.node(SDValue { node, res: 0 });
+            line = dag.lines.get(data.order as usize).copied().flatten().map_or(0, |at| at.line);
             match data.opcode {
                 ISD::CopyFromReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
@@ -158,13 +165,21 @@ impl Emitter<'_> {
                 ISD::CopyToReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
                     let value = data.ops[2];
-                    if let (Some(ty), Some(Operand::Use(src))) =
-                        (class(dag.value_type(value)), self.operand(dag, value))
-                    {
-                        let dst = self.builder_reg(number, ty);
-                        if dst != src {
-                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                    match (class(dag.value_type(value)), self.operand(dag, value)) {
+                        (Some(ty), Some(Operand::Use(src))) => {
+                            let dst = self.builder_reg(number, ty);
+                            if dst != src {
+                                out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
+                            }
                         }
+                        // A static alloca that is a phi's input: the frame
+                        // lowering turns the index into the stack pointer
+                        // plus its offset.
+                        (Some(ty), Some(frame @ Operand::Frame(_))) => {
+                            let dst = self.builder_reg(number, ty);
+                            out.push(Inst::new(copy(ty), &[Operand::Def(dst), frame]));
+                        }
+                        _ => {}
                     }
                 }
                 ISD::Machine(code) => {
@@ -239,17 +254,38 @@ impl Emitter<'_> {
                         continue;
                     }
                     operands.extend(uses);
-                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0 };
+                    // `Select_FREEZE`: a `FREEZE` of a value that is not undef
+                    // is selected as a generic `COPY`, which the wasm passes
+                    // know by its class.
+                    let code = match (code, operands.first()) {
+                        (llrm_dagisel::generated::ids::target_opcode::COPY, Some(&Operand::Def(def))) => {
+                            copy(self.f.vreg_type(def))
+                        }
+                        (code, _) => code,
+                    };
+                    let mut inst = Inst { opcode: code, operands, mem: None, tag: 0, line: 0 };
                     if let Some(access) = selected.mem_refs.get(&node).and_then(|nodes| nodes.first()) {
                         let info = &selected.accesses[access];
-                        inst.mem =
-                            Some(Mem { size: u64::from(info.mem_vt.size_in_bits() / 8), align: u64::from(info.align) });
+                        let ordered = info.volatile
+                            || info.ordering.is_some_and(|o| {
+                                !matches!(
+                                    o,
+                                    llrm_mir::opcode::AtomicOrdering::Unordered
+                                        | llrm_mir::opcode::AtomicOrdering::Monotonic
+                                )
+                            });
+                        inst.mem = Some(Mem {
+                            size: u64::from(info.mem_vt.size_in_bits() / 8),
+                            align: u64::from(info.align),
+                            ordered,
+                        });
                     }
                     out.push(inst);
                 }
                 _ => {}
             }
         }
+        out[stamped..].iter_mut().for_each(|inst| inst.line = line);
         let at = self.position[&selected.id];
         if selected.landing {
             // `SelectAllBasicBlocks`: a label at the head of every EH pad.
@@ -338,6 +374,17 @@ pub fn emit(
     for (at, mut phis) in starts {
         phis.append(&mut f.blocks[at]);
         f.blocks[at] = phis;
+    }
+    // The probability of each edge where the IR block's own edges are the
+    // machine block's; the rest are unknown (zero).
+    f.edge_probs = f.succs.clone().iter().map(|to| vec![0; to.len()]).collect();
+    for selected in blocks {
+        let at = emitter.position[&selected.id];
+        for (slot, &to) in f.succs[at].iter().enumerate() {
+            if let Some(&(_, numerator)) = selected.probs.iter().find(|(id, _)| emitter.position.get(id) == Some(&to)) {
+                f.edge_probs[at][slot] = numerator;
+            }
+        }
     }
     f
 }

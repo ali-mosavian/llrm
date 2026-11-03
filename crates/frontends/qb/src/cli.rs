@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--no-placement] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--no-placement] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -59,6 +59,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
     let mut wasm32 = false;
+    let mut no_placement = false;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -101,7 +102,11 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--alternate-math" => frontend.alternate_math = true,
             "--mbf" => frontend.mbf = true,
             "--whole-program" => frontend.whole_program = true,
+            "--export" => frontend.exports.push(value("--export")?),
             "--array-merging" => frontend.array_merging = true,
+            "--frame-arrays" => frontend.frame_array_bytes = 8192,
+            "--keep-far" => frontend.keep_far.push(value("--keep-far")?),
+            "--no-placement" => no_placement = true,
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
@@ -140,6 +145,27 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
+    {
+        let cpu = bound.target.default_cpu();
+        let priced = llrm_codegen::backend::cpu::tuned_for(
+            &*bound.target,
+            cpu,
+            matches!(
+                flags.level,
+                llrm_codegen::driver::flags::Level::Os | llrm_codegen::driver::flags::Level::Oz
+            ),
+        )?
+        .target();
+        frontend.room = llrm_qb_room(
+            priced.registers(),
+            priced.address_registers(),
+            priced.segment_registers(),
+            usize::from(priced.two_address()),
+        );
+        if no_placement {
+            frontend.room = Default::default();
+        }
+    }
     // The bytes of the pointer that is the near space, and of the one that is
     // the far: a target with one space has the same for both.
     let spaces = &bound.target.layout().spaces;
@@ -299,5 +325,21 @@ mod tests {
         assert_eq!(runtime(&["p.bas"]), "llrm");
         assert_eq!(runtime(&["p.bas", "--runtime", "qb45"]), "qb45");
         assert_eq!(runtime(&["p.bas", "-fqb-runtime=pds71"]), "pds71");
+    }
+}
+
+/// The frame-array choice's view of the target: its integer, address and
+/// segment registers, and how many a two-address target keeps back.
+fn llrm_qb_room(
+    registers: i64,
+    addresses: i64,
+    segments: i64,
+    reserve: usize,
+) -> crate::semantic::Room {
+    crate::semantic::Room {
+        registers: registers.max(0) as usize,
+        addresses: addresses.max(0) as usize,
+        reserve,
+        segments: segments.max(0) as usize,
     }
 }
