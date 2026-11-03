@@ -378,6 +378,13 @@ pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
     named_for_data_group(name)
 }
 
+/// DEVIATE X87-DS (valid while no emulator-fixup form is emitted; revisit if
+/// one is added): the pin has no segment registers to hold. An x87 operand with
+/// an address is spelled `ss:` where DS holds a selector, which is a prefix byte
+/// on the real opcodes llrm emits. The emulator's `INT 34h-3Bh` forms (FIDRQQ)
+/// read the caller's DS for a default-segment operand and `INT 3Ch` (FIERQQ,
+/// FISRQQ) takes the override from its own bits; no compiler here emits either
+/// (`test_no_emulator_fixup_form_is_emitted`).
 /// Whether the operand is a memory cell no one can prefix: it names no selector
 /// and has no address, so `datagroup` cannot spell `ss:` for it and it reads
 /// DS. A cell with an address takes `ss:` where DS holds something else.
@@ -611,6 +618,33 @@ mod tests {
         sources: Vec<Loc>,
     ) -> Semantics {
         Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
+    }
+
+    /// The rule above holds only while llrm emits real x87 opcodes: an emitter
+    /// of the emulator's fixup forms must decide DS for them (DEVIATE X87-DS).
+    #[test]
+    fn test_no_emulator_fixup_form_is_emitted() {
+        fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, hits);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && !path.file_name().is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
+                {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for symbol in ["FIDRQQ", "FIERQQ", "FISRQQ", "FICRQQ", "FIARQQ", "FIWRQQ"] {
+                        // This test names them; nothing else may.
+                        if text.contains(symbol) && !path.ends_with("backend/target.rs") {
+                            hits.push(format!("{}: {symbol}", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        let mut hits = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut hits);
+        assert!(hits.is_empty(), "an emulator-fixup form is emitted; revisit DEVIATE X87-DS: {hits:?}");
     }
 
     /// fpbench -Os kept no selector in DS across a loop of `fstp dword ptr
