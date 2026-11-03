@@ -183,3 +183,11 @@ def test_a_compile_runs_under_a_16_gb_address_space_limit(tmp_path):
     out = tmp_path / "x.o"
     data, _ = objsweep.run_compiler([str(stub), "-o", str(out)], out, None)
     assert data is not None and data.strip().isdigit() and int(data) <= 16 * 1024 * 1024, data
+
+
+def test_the_header_names_the_exact_binaries_by_md5(tmp_path):
+    """A z80 llc found by name was a build older than the fix it was blamed for; the header gave no way to tell."""
+    for name, body in (("llrm-cc", b"cc"), ("llrm-z80-llc", b"z80"), ("llrm-llc", b"x86"), ("notes.txt", b"n")):
+        (tmp_path / name).write_bytes(body)
+    line = objsweep.binaries(str(tmp_path / "llrm-cc"))
+    assert line.count(", ") == 2 and "llrm-z80-llc " + objsweep.md5(str(tmp_path / "llrm-z80-llc"))[:12] in line and "notes" not in line

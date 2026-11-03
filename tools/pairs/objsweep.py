@@ -211,6 +211,12 @@ def sweep_arm64(args, sources: list[Path]) -> int:
     return 1 if changed else 0
 
 
+def binaries(cc: str) -> str:
+    """The md5 of the llrm-cc and of every `llrm-*-llc` beside it: the exact compilers a leg ran, not whatever a name finds on PATH."""
+    beside = Path(cc).resolve().parent
+    return ", ".join(f"{one.name} {md5(str(one))[:12]}" for one in sorted([beside / "llrm-cc", *beside.glob("llrm-*llc")]) if one.is_file())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("old")
@@ -234,6 +240,7 @@ def main() -> int:
     import ancestry  # noqa: PLC0415
 
     print(ancestry.header(old_sha, new_sha, args.cross_branch))
+    print(f"old binaries: {binaries(args.old)}\nnew binaries: {binaries(args.new)}")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import voidpair
 
