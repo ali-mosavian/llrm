@@ -375,6 +375,9 @@ fn data_text(
         if label != name {
             renames.push((name.clone(), label.clone()));
         }
+        if crate::select::exported(global.linkage) && label == name {
+            out.push_str(&format!(".export {label}\n"));
+        }
         out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;
         for (word_at, symbol, addend) in words {
