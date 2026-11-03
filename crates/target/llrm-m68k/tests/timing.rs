@@ -231,3 +231,13 @@ fn a_gnu_long_divide_is_the_two_operand_form() {
     assert_eq!(clocks(Cpu::M68020, &gnu("divsll %d5,%d2,%d2")), 90 + 2);
     assert_eq!(clocks(Cpu::M68020, &gnu("divull %d5,%d2,%d2")), clocks(Cpu::M68020, "divu.l %d5, %d2"));
 }
+
+/// objdump prints the target of a PC-relative `lea` as an absolute address,
+/// `lea %pc@(80010000),%a0`; the bare hex was not a displacement the model
+/// knows, so 6972 of 63218 instructions of a 68020 program were "unpriced".
+#[test]
+fn a_gnu_pc_relative_target_address_is_a_displacement() {
+    assert_eq!(gnu("lea %pc@(80010000),%a0"), "lea (0,%pc), %a0");
+    assert_eq!(clocks(Cpu::M68020, &gnu("lea %pc@(80010000),%a0")), clocks(Cpu::M68020, "lea (0x20,%pc), %a0"));
+    assert_eq!(clocks(Cpu::M68000, &gnu("lea %pc@(80010000),%a0")), clocks(Cpu::M68000, "lea (0x20,%pc), %a0"));
+}

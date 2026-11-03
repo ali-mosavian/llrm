@@ -380,6 +380,14 @@ fn gnu_operand(text: &str) -> String {
             let inner = rest.trim_start_matches('(').trim_end_matches(')');
             let mut parts = inner.split(',');
             let displacement = parts.next().unwrap_or("0");
+            // objdump shows a PC-relative target as its absolute address; the
+            // clocks depend on the mode, taken here as a 16-bit displacement
+            let displacement =
+                if base == "%pc" && displacement.len() == 8 && displacement.chars().all(|c| c.is_ascii_hexdigit()) {
+                    "0".to_owned()
+                } else {
+                    displacement.to_owned()
+                };
             match parts.next() {
                 None => format!("({displacement},{base})"),
                 Some(index) => format!("({displacement},{base},{})", index.split(':').next().unwrap_or(index)),
