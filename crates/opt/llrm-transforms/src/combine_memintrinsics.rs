@@ -47,14 +47,69 @@ impl Combiner<'_> {
         &mut self,
         call: InstId,
     ) -> Visit {
-        match self.intrinsic_of(call) {
+        let intrinsic = self.intrinsic_of(call);
+        let found = match intrinsic {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
             Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
             None => self.transform_const_expr_cast_call(call),
             _ => Visit::None,
+        };
+        if !matches!(found, Visit::None) || intrinsic.is_none() {
+            return found;
         }
+        self.fold_arguments_into_select_or_phi(call)
+    }
+
+    /// The end of `visitCallInst` for an intrinsic
+    /// ([L4555](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L4555)):
+    /// where it is safe to speculate with a variable replaced, an argument that
+    /// is a scalar-condition select or a phi has the call folded into it.
+    /// `fmuladd(phi [0.0, %x], c, d)` at a loop exit is a phi of the calls.
+    fn fold_arguments_into_select_or_phi(
+        &mut self,
+        call: InstId,
+    ) -> Visit {
+        let speculatable = {
+            let q = query(self, Some(call));
+            llrm_mir::lazyvalueinfo::is_safe_to_speculatively_execute_with_variable_replaced(&q, call, false)
+        };
+        if !speculatable {
+            return Visit::None;
+        }
+        let arguments: Vec<Operand> =
+            llrm_mir::valuetracking::pattern::call_arguments(self.function.instruction(call)).to_vec();
+        for argument in arguments {
+            let Some(def) = self.definition(argument) else { continue };
+            match self.function.instruction(def).opcode {
+                Opcode::Select => {
+                    let condition_is_vector = self
+                        .function
+                        .instruction(def)
+                        .operands
+                        .first()
+                        .and_then(|&op| self.function.operand_type(self.context, op))
+                        .is_some_and(|ty| matches!(
+                            self.context.types.get(ty),
+                            llrm_mir::types::Type::Vector { .. }
+                        ));
+                    if condition_is_vector {
+                        continue;
+                    }
+                    match self.fold_op_into_select(call, def, false, false) {
+                        Visit::None => {}
+                        found => return found,
+                    }
+                }
+                Opcode::Phi => match self.fold_op_into_phi(call, def, false) {
+                    Visit::None => {}
+                    found => return found,
+                },
+                _ => {}
+            }
+        }
+        Visit::None
     }
 
     /// The first step of `SimplifyAnyMemTransfer` and `SimplifyAnyMemSet`: the

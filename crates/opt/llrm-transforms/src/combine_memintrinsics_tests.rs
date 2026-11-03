@@ -113,3 +113,32 @@ b0:
     );
     assert!(after.contains("ptr align 8 @b"), "{after}");
 }
+
+/// A loop's result `fmuladd(phi [0.0, entry], [%x, exit], 1000.0, 0.5)` after
+/// the loop stayed a call on the phi where the pin's `visitCallInst` folds
+/// the call into the phi (InstCombineCalls.cpp L4555): the entry's value is
+/// the constant 0.5 and the exit block holds the call. wasm recfloat -Os was
+/// 236 B against the pin's 223.
+#[test]
+fn an_intrinsic_on_a_phi_is_folded_into_the_phi() {
+    let after = combined(
+        "declare double @llvm.fmuladd.f64(double, double, double) speculatable
+
+define double @f(i1 %c, double %x) {
+b0:
+  br i1 %c, label %join, label %exit
+exit:
+  br label %join
+join:
+  %p = phi double [ 0.0, %b0 ], [ %x, %exit ]
+  %r = call double @llvm.fmuladd.f64(double %p, double 1000.0, double 0.5)
+  ret double %r
+}
+",
+    );
+    let join = after.split("join:").nth(1).expect("the join block");
+    assert!(!join.contains("call double @llvm.fmuladd.f64(double %p"), "the call is not on the phi: {after}");
+    assert!(join.contains("phi double"), "the phi remains, of the calls: {after}");
+    let exit = after.split("exit:").nth(1).and_then(|rest| rest.split("join:").next()).expect("the exit block");
+    assert!(exit.contains("call double @llvm.fmuladd.f64(double %x"), "the call moved to the exit edge: {after}");
+}
