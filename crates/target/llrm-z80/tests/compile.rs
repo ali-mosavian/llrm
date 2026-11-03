@@ -802,6 +802,18 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
     }
 }
 
+/// A branch to a block that is only a `ret` prints as `ret z`; the block was
+/// printed anyway, a dead `ret` behind the live one: gcd -O2 was 20 B with
+/// two, 19 B with one.
+#[test]
+fn a_return_block_only_conditional_returns_reach_is_not_printed() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let out = text(ir, "gcd", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let rets = out.lines().filter(|line| line.trim() == "ret").count();
+    assert_eq!(rets, 1, "{out}");
+    assert!(out.contains("ret z"), "{out}");
+}
+
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
 /// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
 /// shifts and an add, as the pin's `decomposeMulByConstant` makes it.

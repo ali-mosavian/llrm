@@ -1376,7 +1376,40 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(printer.out)
+    Ok(drop_unreachable(printer.out))
+}
+
+/// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
+fn ends_flow(text: &str) -> bool {
+    text == "ret"
+        || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
+}
+
+/// `ret z` stands in for a branch to a block that is only a `ret`, which
+/// leaves the block with no reader: the code after an unconditional `ret` or
+/// jump, up to the next label something names, never runs.
+fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
+    let named: std::collections::HashSet<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut out = Vec::with_capacity(lines.len());
+    let mut dead = false;
+    for line in &lines {
+        match line {
+            Line::Label(name) if named.contains(name.as_str()) => dead = false,
+            Line::Label(_) | Line::Loc(_) if dead => continue,
+            Line::Inst(_) if dead => continue,
+            Line::Inst(text) => dead = ends_flow(text),
+            _ => {}
+        }
+        out.push(line.clone());
+    }
+    out
 }
 
 /// The `timing/z80.csv` key of an instruction as printed here: operands by
@@ -1395,13 +1428,7 @@ fn form(text: &str) -> String {
     let kind = |one: &str, first: bool| -> String {
         match one {
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
-            "a" | "b" | "c" | "d" | "e" | "h" | "l" => {
-                if mnemonic == "ld" && one == "a" && !first {
-                    "b".to_owned()
-                } else {
-                    "b".to_owned()
-                }
-            }
+            "a" | "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
             "bc" | "de" | "af" => "bc".to_owned(),
             "hl" | "ix" | "iy" | "sp" => one.to_owned(),
             "(hl)" => "(hl)".to_owned(),
@@ -1429,7 +1456,11 @@ fn form(text: &str) -> String {
             }
         }
     };
-    let kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
+    let mut kinds: Vec<String> = operands.iter().enumerate().map(|(at, one)| kind(one, at == 0)).collect();
+    // the table spells a register copy `ld b;c`
+    if mnemonic == "ld" && kinds == ["b", "b"] {
+        kinds[1] = "c".to_owned();
+    }
     // a conditional jump or call names its condition first
     let mut key = mnemonic.to_owned();
     if !kinds.is_empty() {
@@ -1569,4 +1600,42 @@ fn tail_calls(function: &MFunction) -> MFunction {
         }
     }
     function
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `form` spelled a register copy `ld b;b`, a key the table lacks, so
+    /// every copy was priced as an unknown form (2 B, 8 T) instead of
+    /// 1 B, 4 T, and the choice between allocations over-counted copies.
+    #[test]
+    fn a_register_copy_is_priced_from_the_table() {
+        for text in ["ld a, b", "ld h, l", "ld b, b"] {
+            assert_eq!(price(&[Line::Inst(text.to_owned())]), (1, 4), "{text}");
+        }
+        // a store of a register keeps its own key
+        assert_eq!(price(&[Line::Inst("ld (hl), b".to_owned())]), (1, 7));
+    }
+
+    /// A `ret` behind `ret z` that nothing names was printed: 1 B dead, and
+    /// the price of the variant that had it was 6 T too high.
+    #[test]
+    fn code_after_a_return_that_nothing_names_is_dropped() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let label = |name: &str| Line::Label(name.to_owned());
+        let lines = vec![
+            inst("ret z"),
+            inst("jr L1"),
+            label("L2"),
+            inst("ret"),
+            label("L3"),
+            inst("ret"),
+            label("L1"),
+            inst("ld a, b"),
+            inst("ret"),
+        ];
+        let kept = drop_unreachable(lines);
+        assert_eq!(kept, vec![inst("ret z"), inst("jr L1"), label("L1"), inst("ld a, b"), inst("ret")]);
+    }
 }
