@@ -224,3 +224,26 @@ fn a_soft_float_call_is_spelled_as_the_runtime_defines_the_routine() {
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &spelled).unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["___addsf3@3"]);
 }
+
+/// The compare routines return a C `int`: 16 bits at m16, read from `ax`. They
+/// were read as 32 bits from `eax`, whose upper half the callee never set, so
+/// `f != f` was true for every float and a program that canonicalised NaNs
+/// summed 400 NaNs (1984619853 expected, -1677721600 printed).
+#[test]
+fn a_soft_float_compare_reads_a_16_bit_int_result_at_m16() {
+    let text = "target datalayout = \"@m16-datalayout@\"
+define i32 @f(float %a, float %b) \"target-features\"=\"-x87\" {
+entry:
+  %c = fcmp olt float %a, %b
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+";
+    let module = crate::testing::module(text).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call"))).expect("a call");
+    assert_eq!(call.delivers.iter().map(|(held, _)| format!("{held:?}")).collect::<Vec<_>>().len(), 1);
+    assert!(format!("{:?}", call.delivers).contains("width: 2"), "{:?}", call.delivers);
+}

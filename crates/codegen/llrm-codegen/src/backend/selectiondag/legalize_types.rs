@@ -676,9 +676,11 @@ impl<'a> TypeLegalizer<'a> {
         let mut compare = |this: &mut Self, stem: &'static str, cc: CondCode| -> Result<SDValue, LegalizeError> {
             let arch = this.target.ok_or_else(|| unsupported("soften a compare without a target"))?;
             let env = super::libcall::CallEnv { arch, pointer: this.dag.config().pointer };
-            let result = super::libcall::c_lib_call(this.dag, &env, &this.tli.libcall_symbol(pick(stem)), this.tli.libcall_convention(pick(stem)), &[a, b], EVT::I32)
+            // The routines return a C `int`: the pointer's width up to a long (16 at m16, 32 above).
+            let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
+            let result = super::libcall::c_lib_call(this.dag, &env, &this.tli.libcall_symbol(pick(stem)), this.tli.libcall_convention(pick(stem)), &[a, b], int)
                 .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
-            let zero = this.dag.get_constant(0, EVT::I32);
+            let zero = this.dag.get_constant(0, int);
             Ok(this.dag.get_setcc(vt, result, zero, cc))
         };
         use CondCode::*;
