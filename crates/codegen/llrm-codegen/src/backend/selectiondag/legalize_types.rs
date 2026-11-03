@@ -236,6 +236,10 @@ impl<'a> TypeLegalizer<'a> {
                     }
                     return Ok(true);
                 }
+                TypeAction::SoftenFloat => {
+                    let op = self.dag.node(value).opcode;
+                    return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften a float result" });
+                }
             }
         }
         Ok(false)
@@ -258,6 +262,10 @@ impl<'a> TypeLegalizer<'a> {
                 _ if self.custom_lower_node(n, operand_vt) => return Ok(true),
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
+                TypeAction::SoftenFloat => {
+                    let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
+                    return Err(LegalizeError::Unsupported { op, ty: operand_vt, what: "soften a float operand" });
+                }
             };
             if reanalyze {
                 self.set_id(n, NodeId::New);
