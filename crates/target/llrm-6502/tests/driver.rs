@@ -1034,7 +1034,7 @@ fn a_float_is_carried_as_the_integer_of_its_width() {
 /// float_in_place_update).
 #[test]
 fn a_double_crosses_a_block_as_four_words() {
-    let body = "define double @f(i1 %c, ptr %p, ptr %q) {\n  %a = load double, ptr %p\n  %b = load double, ptr %q\n  br i1 %c, label %t, label %e\nt:\n  ret double %a\ne:\n  ret double %b\n}";
+    let body = "declare void @g()\ndefine double @f(double %x, i16 %n) {\nentry:\n  br label %l\nl:\n  %v = phi double [ %x, %entry ], [ %w, %l ]\n  %i = phi i16 [ 0, %entry ], [ %j, %l ]\n  call void @g()\n  %w = fneg double %v\n  %j = add i16 %i, 1\n  %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x1\nx1:\n  ret double %w\n}";
     assembly(&module(body), &Request::new(Level::O2)).unwrap();
 }
 
