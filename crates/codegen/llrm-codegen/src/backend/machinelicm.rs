@@ -67,6 +67,9 @@ use crate::model::passes::LIRTransform;
 
 pub struct MachineLicm {
     pub classes: Rc<RegisterClasses>,
+    /// -Os, -Oz: a carried constant costs the `fstp` that ends it (DEVIATE X1
+    /// is off).
+    pub size: bool,
 }
 
 impl LIRTransform for MachineLicm {
@@ -82,7 +85,7 @@ impl LIRTransform for MachineLicm {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(hoisted(&body, &self.classes))
+        Ok(hoisted_sized(&body, &self.classes, self.size))
     }
 }
 
@@ -129,6 +132,36 @@ fn constant_load(one: &Insn) -> bool {
         && !one.spill_reload
         && !one.spill_store
 }
+
+/// `fld m80` of a constant-pool entry (`Insn::invariant`): the value is made
+/// again on every trip, where gcc's reg-stack leaves it on the x87 stack.
+/// DEVIATE X1, exit 2026-11-20: the load reads `$fpcw`, which the pin's
+/// `IsLoopInvariantInst` accepts only where nothing in the function writes it
+/// (`fisttp` here does); `fld` of an extended constant does not depend on the
+/// rounding control, so it moves regardless and the stack carries it as it
+/// carries `fldz`. Only the 10-byte entries: a dword or qword one folds into
+/// its reader (`fmul m64`, `fcomp m32`), and carried it costs an `fxch` each
+/// trip to put the other operand where the compare wants it (x_ld_clamp +1,304
+/// clk).
+fn pool_load(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::FloatLoad
+            && what.name.as_deref() == Some("fld")
+            && matches!(what.sources.as_slice(), [Loc::Mem(cell)] if cell.selector.is_none() && !cell.stack_argument && cell.width == 10)
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+    }) && one.invariant()
+        && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.call.is_none()
+        && one.group.is_none()
+        && !one.volatile()
+        && !one.spill_reload
+        && !one.spill_store
+}
+
+/// Stack slots a loop keeps free of hoisted constants for its own temporaries
+/// (an operation's two operands and a result).
+const CARRY_RESERVE: usize = 3;
 
 /// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
 /// that keeps a load in it, and the load's block runs on every trip.
@@ -230,9 +263,20 @@ struct X86<'a> {
     floats_named: usize,
     named: usize,
     loads: bool,
+    size: bool,
 }
 
 impl licm::Policy<Wrapped> for X86<'_> {
+    /// A carried constant is read on every trip, the accumulators beside it as
+    /// often: it lies under them on the stack, where `fadd m64` finds the
+    /// accumulator on top (to_double: two `fxch` a trip with it above).
+    fn leads(
+        &self,
+        one: &Wrapped,
+    ) -> bool {
+        pool_load(&one.0)
+    }
+
     fn begin(
         &mut self,
         facts: &licm::Facts<'_, Wrapped>,
@@ -269,6 +313,13 @@ impl licm::Policy<Wrapped> for X86<'_> {
         // stack has room (`constant_load`).
         if constant_load(one) {
             return !self.control_word_written && !self.calls && self.floats_named < self.body.float_stack;
+        }
+        if pool_load(one) {
+            if self.size || self.calls || self.floats_named + CARRY_RESERVE >= self.body.float_stack {
+                return false;
+            }
+            self.floats_named += 1;
+            return true;
         }
         let loads_here = self.loads && (facts.every_trip)(at);
         let limit = self.classes.available.len();
@@ -335,6 +386,15 @@ pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> LirBody {
+    hoisted_sized(body, classes, false)
+}
+
+/// `hoisted`, where `size` keeps the x87 pool constants in their loops.
+pub fn hoisted_sized(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    size: bool,
+) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
     let control_word_written = body
         .insns()
@@ -373,6 +433,7 @@ pub fn hoisted(
         floats_named: 0,
         named: 0,
         loads: false,
+        size,
     };
     let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
     let blocks: Vec<crate::model::lir::Block> = body
@@ -566,6 +627,78 @@ mod tests {
         // recfloat -O2: the pin's `FLDCW` for the `fptosi` after the loop
         // makes `$fpcw` non-constant, so `fld1` stays in the loop.
         assert_eq!(run(false, true), ["jmp"]);
+    }
+
+    /// A loop-invariant `fld m80` of a constant-pool entry was made on every
+    /// trip (6 clk and a popping `fmulp`; gcc keeps the value on the stack):
+    /// x_ld_to_int -O2 +3,533 clk of 18,000 at m32. It is made once, ahead of
+    /// the loop, where the function writes the control word too (`fisttp`),
+    /// but not where a call is in the loop or the stack has no room left for
+    /// the loop's own temporaries.
+    #[test]
+    fn test_an_x87_pool_constant_is_made_before_a_loop_that_leaves_stack_room() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        // `others`: floating values the loop reads from outside it, besides the accumulator.
+        let run = |others: u32, call: bool, truncating: bool, width: u32, size: bool| {
+            let pool = Loc::Mem(Mem::new(None, width));
+            let load = Arc::new(Insn {
+                invariant: true,
+                ..(*insn(10, Operation::FloatLoad, "fld", vec![wide(10)], vec![pool], vec![10], vec![])).clone()
+            });
+            let mut inside = vec![load];
+            let mut last = 1;
+            for (at, value) in (0..others).zip(100..) {
+                let sum = 200 + value;
+                inside.push(insn(20 + at as i64, Operation::Binary, "fadd", vec![wide(sum)], vec![wide(last), wide(value)], vec![sum], vec![last, value]));
+                last = sum;
+            }
+            inside.push(insn(11, Operation::Binary, "fmul", vec![wide(11)], vec![wide(last), wide(10)], vec![11], vec![last, 10]));
+            if call {
+                inside.push(insn(12, Operation::Call, "call", vec![], vec![], vec![], vec![]));
+            }
+            inside.push(branch(13));
+            let mut exit = vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])];
+            if truncating {
+                exit.insert(0, insn(15, Operation::FloatStore, "fisttp", vec![], vec![wide(11)], vec![], vec![11]));
+            }
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    block(1, vec![1, 2], inside).into(),
+                    block(2, vec![], exit).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1].into_iter().chain(100..100 + others).collect();
+            body.float_stack = 8;
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
+            done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(0, false, false, 10, false), ["fld", "jmp"]);
+        // The control word is written after the loop: `fld` does not read its rounding.
+        assert_eq!(run(0, false, true, 10, false), ["fld", "jmp"]);
+        // Four values held across the loop and the constant leave three slots.
+        assert_eq!(run(3, false, false, 10, false), ["fld", "jmp"]);
+        // One more and the loop's own temporaries would not fit.
+        assert_eq!(run(4, false, false, 10, false), ["jmp"]);
+        assert_eq!(run(0, true, false, 10, false), ["jmp"]);
+        // A dword or qword entry folds into its reader and stays there.
+        assert_eq!(run(0, false, false, 4, false), ["jmp"]);
+        assert_eq!(run(0, false, false, 8, false), ["jmp"]);
+        // -Os: the `fstp` that ends the carried constant is a byte the loop did not cost.
+        assert_eq!(run(0, false, false, 10, true), ["jmp"]);
     }
 
     /// A constant made in the loop that a phi of the loop takes (the join of a
