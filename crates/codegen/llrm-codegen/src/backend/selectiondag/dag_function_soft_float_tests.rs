@@ -75,3 +75,26 @@ fn a_soft_float_function_takes_and_returns_integers() {
     let callees: Vec<&str> = done.calls.values().map(String::as_str).collect();
     assert_eq!(callees, ["__addsf3"], "{names:?}");
 }
+
+const FLOAT_CALL: &str = "target datalayout = \"@m16-datalayout@\"
+declare float @g(float)
+define float @f(float %a, float %b) \"use-soft-float\"=\"true\" {
+entry:
+  %s = fadd float %a, %b
+  %r = call float @g(float %s)
+  ret float %r
+}
+";
+
+/// A call passes a float and takes one back as integers, in the registers the
+/// native convention gives an integer of that width.
+#[test]
+fn a_soft_float_call_passes_and_takes_integers() {
+    let module = crate::testing::module(FLOAT_CALL).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "an x87 op: {names:?}");
+    assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["__addsf3", "g"], "{names:?}");
+}

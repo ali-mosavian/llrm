@@ -530,6 +530,13 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_store(chain, bits, ptr, super::dag::MemInfo { mem_vt: int, ..info })
             }
             ISD::BitCast => self.softened_float(self.dag.operand(node, 0)),
+            ISD::CopyToReg if at == 2 => {
+                // `SoftenFloatOp_COPY_TO_REG`'s effect: the integer is copied.
+                let mut ops = self.dag.node(node).ops.clone();
+                ops[2] = self.softened_float(ops[2]);
+                let updated = self.dag.update_node_operands(n, &ops);
+                SDValue { node: updated, res: 0 }
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,

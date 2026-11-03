@@ -1585,7 +1585,7 @@ impl Builder<'_> {
                 first: 0,
             }
         } else {
-            convention_for(
+            crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1595,6 +1595,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types,
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
@@ -1616,7 +1617,7 @@ impl Builder<'_> {
         if let Some(declared) =
             declared.filter(|declared| !runtime && *declared < arg_types.len() && !variadic && plan.popped > 0)
         {
-            plan.popped = convention_for(
+            plan.popped = crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1626,6 +1627,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types[..declared],
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
             .popped;
@@ -2298,9 +2300,13 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
-        if vt.is_floating_point() {
+        // No FPU: a float comes back as the integer of its width.
+        let soft = self.soft_float() && vt.is_floating_point();
+        if vt.is_floating_point() && !soft {
             return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
+        let float_vt = vt;
+        let vt = if soft { EVT::integer(vt.size_in_bits()) } else { vt };
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
         if plan.returns.len() != parts {
             return Err(Refused("result in registers the value does not fill"));
@@ -2321,7 +2327,7 @@ impl Builder<'_> {
         } else {
             pieces[0]
         };
-        Ok(Some(result))
+        Ok(Some(if soft { self.dag.get_node(ISD::BitCast, float_vt, &[result]) } else { result }))
     }
 
     /// The convention names a result register by its widest view; the DAG
