@@ -2663,3 +2663,14 @@ fn a_triple_with_the_os_version_names_the_same_system() {
     assert!(!crate::same_system("x86_64-apple-macosx", "x86_64-pc-windows-msvc"));
     assert!(crate::by_triple("x86_64-apple-macosx10.4.0").is_some());
 }
+
+/// Matching a triple past its OS version must not open the Win64 hole the
+/// pending-ABI gate closes: clang writes `x86_64-pc-windows-msvc19.0.0`, and
+/// that module is refused like the bare triple.
+#[test]
+fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
+    let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-pc-windows-msvc19.0.0\"\ndefine void @f() {\n  ret void\n}\n";
+    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
+    assert!(why.contains("Win64 calling convention"), "{why}");
+}
