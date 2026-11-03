@@ -138,14 +138,25 @@ pub enum Line {
     Label(usize),
     Inst(mc::Inst),
     /// The source place of the instructions that follow, until the next one.
-    Loc(llrm_codegen::model::lir::SrcLoc),
+    Loc(Row),
+}
+
+/// A line-table row: the place and the flags the pin sets on it
+/// (`DwarfDebug::beginInstruction`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Row {
+    pub place: llrm_codegen::model::lir::SrcLoc,
+    /// The first row after the frame is made.
+    pub prologue_end: bool,
+    /// The row of the instruction that takes the frame down.
+    pub epilogue_begin: bool,
 }
 
 /// `out` and the places that start in it (`(index into out, place)`) as
 /// lines, a place ahead of the instruction it starts at.
 fn flush(
     out: &mut Vec<mc::Inst>,
-    marks: &mut Vec<(usize, llrm_codegen::model::lir::SrcLoc)>,
+    marks: &mut Vec<(usize, Row)>,
     lines: &mut Vec<Line>,
 ) {
     let mut marks = std::mem::take(marks).into_iter().peekable();
@@ -256,7 +267,9 @@ pub fn finish(
     opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
-    let mut marks: Vec<(usize, llrm_codegen::model::lir::SrcLoc)> = Vec::new();
+    let mut marks: Vec<(usize, Row)> = Vec::new();
+    // The frame is made by the opening ops: the next row ends the prologue.
+    let mut frame_made = !opening.is_empty();
     let mut last_origin = 0u32;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
@@ -273,10 +286,13 @@ pub fn finish(
             }
             shown += 1;
         }
-        if inst.origin != 0 && inst.origin != last_origin {
-            if let Some(&place) = function.places.get(inst.origin as usize - 1) {
-                marks.push((out.len(), place));
-            }
+        let place = (inst.origin != 0).then(|| function.places.get(inst.origin as usize - 1).copied()).flatten();
+        let returns = inst.kind == Kind::Op("RET");
+        if let Some(place) = place
+            && (inst.origin != last_origin || returns || frame_made)
+        {
+            marks.push((out.len(), Row { place, prologue_end: frame_made, epilogue_begin: returns }));
+            frame_made = false;
         }
         if inst.origin != 0 {
             last_origin = inst.origin;

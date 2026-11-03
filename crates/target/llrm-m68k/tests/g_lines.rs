@@ -47,3 +47,31 @@ fn g_adds_directives_and_leaves_the_instructions_alone() {
     let kept: Vec<&str> = on.lines().filter(|line| !line.trim_start().starts_with(".loc")).collect();
     assert_eq!(kept, off.lines().collect::<Vec<_>>());
 }
+
+/// The directive of each `.loc` row as `(line, column, flags)`.
+fn flagged(text: &str) -> Vec<(u32, u32, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let words: Vec<&str> = line.trim().strip_prefix(".loc")?.split(';').next()?.split_whitespace().collect();
+            Some((words.get(1)?.parse().ok()?, words.get(2)?.parse().ok()?, words.get(3..)?.join(" ")))
+        })
+        .collect()
+}
+
+/// The pin's rows for the same function (`gcard-m68k/m_pin.s`): the line the
+/// function is declared at ahead of the first instruction, `prologue_end` on
+/// the first row after the frame is made, and the epilogue's row with the
+/// return's place, `epilogue_begin`, and `is_stmt 0` because it stays on line
+/// 4. Ours had only the three rows between, with no flag.
+#[test]
+fn the_rows_have_the_pins_scope_row_and_flags() {
+    assert_eq!(
+        flagged(&assembly(true)),
+        [
+            (2, 0, String::new()),
+            (3, 15, "prologue_end".to_owned()),
+            (4, 14, String::new()),
+            (4, 5, "epilogue_begin is_stmt 0".to_owned()),
+        ]
+    );
+}

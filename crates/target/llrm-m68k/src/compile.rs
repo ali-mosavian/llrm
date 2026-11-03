@@ -27,7 +27,7 @@ pub enum Item {
     Bytes(Vec<u8>),
     /// The source place of the instructions that follow (`.loc`): printed only
     /// for `-g`.
-    Loc(llrm_codegen::model::lir::SrcLoc),
+    Loc(crate::expand::Row),
 }
 
 /// What the compiler may do beyond the pin's output.
@@ -145,6 +145,15 @@ pub fn items_with(
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
+    // The line the function is declared at starts its rows (the prologue is
+    // from no instruction).
+    if let Some(line) = module.subprogram_line(module.global(id).function().ok_or("not a function")?) {
+        out.push(Item::Loc(crate::expand::Row {
+            place: llrm_codegen::model::lir::SrcLoc::line(line),
+            prologue_end: false,
+            epilogue_begin: false,
+        }));
+    }
     for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
@@ -205,12 +214,24 @@ pub fn text_with(
     options: Options,
 ) -> Result<String, String> {
     let mut out = String::new();
+    let mut previous = None;
     for item in items_with(module, name, cpu, options)? {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
-            Item::Loc(place) if options.debug => out.push_str(&format!("\t.loc\t0 {} {}\n", place.line, place.column)),
+            Item::Loc(row) if options.debug => {
+                // A row on the line the one before it was on does not start a
+                // statement.
+                let flags = format!(
+                    "{}{}{}",
+                    if row.prologue_end { " prologue_end" } else { "" },
+                    if row.epilogue_begin { " epilogue_begin" } else { "" },
+                    if previous == Some(row.place.line) { " is_stmt 0" } else { "" },
+                );
+                previous = Some(row.place.line);
+                out.push_str(&format!("\t.loc\t0 {} {}{flags}\n", row.place.line, row.place.column));
+            }
             Item::Loc(_) => {}
         }
     }

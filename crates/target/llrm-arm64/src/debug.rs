@@ -78,7 +78,7 @@ pub fn info(
     let declared = |symbol: &str| {
         module.functions().find_map(|(_, global, body)| {
             let name = global.name.owned()?;
-            (crate::data::symbol_name(platform, &name) == symbol).then(|| subprogram_line(module, body)).flatten()
+            (crate::data::symbol_name(platform, &name) == symbol).then(|| module.subprogram_line(body)).flatten()
         })
     };
     for function in functions {
@@ -121,22 +121,6 @@ pub fn info(
     info.code = vec![Range { section: 0, offset: 0, length: at }];
     let _ = Language::default();
     Ok(Some(info))
-}
-
-/// The line a function's `!DISubprogram` says it starts at.
-fn subprogram_line(
-    module: &llrm_mir::Module,
-    function: &llrm_mir::Function,
-) -> Option<u32> {
-    let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
-    let at = module.special.get(node)?.fields.iter().position(|one| one == "line")?;
-    match module.metadata.get(node.0 as usize)?.operands.get(at)? {
-        llrm_mir::MetadataOperand::Constant(value) => match module.context.get(*value).kind {
-            llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// The line table rows of `function`, whose code starts at `start`: one where
