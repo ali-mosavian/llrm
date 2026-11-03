@@ -204,3 +204,38 @@ fn test_a_float_binop_of_two_phis_folds_its_constant_edge() {
         assert!(!out.contains(&format!("{op} double %p")), "{op}: {out}");
     }
 }
+
+/// `visitFAdd` and `visitFMul` call `foldBinOpIntoSelectOrPhi`: `fmul (phi
+/// [1.0, %a], [%i, %b]), 2.0` is a phi of `2.0` and the product in `%b`.
+/// Missing, nbody -O2 kept the `fmul` and `fptosi` after the join (+21 B over
+/// clang).
+#[test]
+fn test_a_float_add_or_multiply_of_a_phi_and_a_constant_folds_into_the_phi() {
+    for (op, folded) in [("fmul", "2.000000e+00"), ("fadd", "3.000000e+00")] {
+        let mut module = parsed(&format!(
+            "define double @f(i1 %c, double %i) {{
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %p = phi double [ 1.0, %a ], [ %i, %b ]
+  %r = {op} double %p, 2.0
+  ret double %r
+}}
+"
+        ));
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let (context, function) = module.function_mut("f").expect("@f");
+        combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+        let out = printed(&module);
+        assert!(out.contains(&format!("[ {folded}, %a ]")), "{op}: {out}");
+        assert!(!out.contains(&format!("{op} double %p")), "{op}: {out}");
+    }
+}

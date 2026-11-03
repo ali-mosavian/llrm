@@ -43,7 +43,8 @@ use crate::combine_shared::simplify_associative_or_commutative;
 /// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
 /// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
 /// C2` is `X op (C1 op C2)` with `reassoc nsz`), then
-/// `foldBinopWithPhiOperands`. DEVIATE 1 covers the rest.
+/// `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`. DEVIATE 1 covers
+/// the rest.
 pub fn visit_fadd_or_fmul(
     c: &mut Combiner,
     inst: InstId,
@@ -54,7 +55,11 @@ pub fn visit_fadd_or_fmul(
     if simplify_associative_or_commutative(c, inst) {
         return Visit::Changed;
     }
-    c.fold_binop_with_phi_operands(inst)
+    let found = c.fold_binop_with_phi_operands(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
+    c.fold_bin_op_into_select_or_phi(inst)
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
