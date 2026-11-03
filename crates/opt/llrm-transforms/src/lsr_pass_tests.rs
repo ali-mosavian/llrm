@@ -361,6 +361,7 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         scaled_index_insns: 2,
         huge_space: None,
         address_registers: None,
+        address_bases: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -572,6 +573,7 @@ b3:
         scaled_index_insns: 2,
         huge_space: None,
         address_registers: None,
+        address_bases: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -636,6 +638,7 @@ b5:
         scaled_index_insns: 2,
         huge_space: Some(3),
         address_registers: None,
+        address_bases: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -929,6 +932,7 @@ b6:
         scaled_index_insns: 0,
         huge_space: None,
         address_registers: None,
+        address_bases: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -1038,6 +1042,7 @@ fn six_registers() -> llrm_x86::tti::X86 {
         scaled_index_insns: 2,
         huge_space: None,
         address_registers: None,
+        address_bases: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -1380,4 +1385,68 @@ e:
     manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
+}
+
+/// grep nib -O2 (`std.io.named`): a copy with an index for each array. Both
+/// arrays took a base-plus-index address, but m16 has one base register (bx),
+/// so the loop reloaded bx from the frame twice a trip (+2.02M clocks); one of
+/// the two stays a single-register pointer.
+#[test]
+fn two_arrays_with_their_own_index_do_not_both_need_the_base_register() {
+    let text = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+
+declare void @bound()
+
+define void @f(ptr addrspace(1) %v0, ptr addrspace(5) %v1) {
+b1:
+  %v2 = load i16, ptr addrspace(1) %v0
+  %v3 = icmp eq i16 %v2, 0
+  br i1 %v3, label %b11, label %b4
+
+b4:
+  %v5 = getelementptr inbounds nuw i8, ptr addrspace(1) %v0, i16 4
+  %v6 = load ptr addrspace(1), ptr addrspace(1) %v5
+  br label %b3
+
+b3:
+  %v7 = phi i16 [ 0, %b4 ], [ %v11, %b8 ]
+  %v8 = phi i16 [ 0, %b4 ], [ %v12, %b8 ]
+  %v9 = icmp ult i16 %v7, 79
+  br i1 %v9, label %b9, label %b8
+
+b5:
+  %v10 = icmp ult i16 %v11, 80
+  br i1 %v10, label %b11, label %b12
+
+b8:
+  %v11 = phi i16 [ %v16, %b9 ], [ %v7, %b3 ]
+  %v12 = add nuw i16 %v8, 1
+  %exitcond = icmp eq i16 %v12, %v2
+  br i1 %exitcond, label %b5, label %b3
+
+b9:
+  %v13 = getelementptr inbounds i8, ptr addrspace(1) %v6, i16 %v8
+  %v14 = getelementptr inbounds nuw i8, ptr addrspace(5) %v1, i16 %v7
+  %v15 = load i8, ptr addrspace(1) %v13
+  store i8 %v15, ptr addrspace(5) %v14
+  %v16 = add nuw nsw i16 %v7, 1
+  br label %b8
+
+b11:
+  %v17 = phi i16 [ %v11, %b5 ], [ 0, %b1 ]
+  %v18 = getelementptr inbounds nuw i8, ptr addrspace(5) %v1, i16 %v17
+  store i8 0, ptr addrspace(5) %v18
+  ret void
+
+b12:
+  call void @bound()
+  unreachable
+}
+"#;
+    let mut module = parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr"), "{after}");
 }

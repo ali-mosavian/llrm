@@ -484,6 +484,8 @@ pub struct Collection<'a, 'b> {
     /// are not induction variables. The registers LSR may use are those the
     /// target has less these.
     pub other_register_units: u32,
+    /// `unmanaged_address_pairs` of the loop.
+    pub unmanaged_pairs: Vec<(Scev, Scev)>,
     /// Set by `solve` when no solution fits the registers left after
     /// `other_register_units`: every one spills, and the count no longer tells
     /// them apart (DEVIATE LU3b).
@@ -532,6 +534,7 @@ impl<'a, 'b> Collection<'a, 'b> {
             swapped_compares: Vec::new(),
             insert_attempts: 0,
             other_register_units: 0,
+            unmanaged_pairs: Vec::new(),
             ignore_pressure: std::cell::Cell::new(false),
             size: false,
             rated: std::cell::Cell::new(0),
@@ -911,6 +914,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     hardware_loop_profitable: self.hardware_loop_profitable,
                     as_written: true,
                     other_register_units: self.pressure_units(),
+                    fixed_pairs: &self.unmanaged_pairs,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1071,4 +1075,45 @@ pub fn loop_register_units(
     let blocks: Vec<BlockId> = lp.get_blocks().to_vec();
     llrm_analysis::liveness::pressure_weighted(cx.function, &blocks, &|one| weights.get(&one).copied().unwrap_or(0))
         as u32
+}
+
+/// The registers of the loop's loads and stores whose address is a base plus
+/// an index LSR does not manage (the index is not a recurrence of the loop,
+/// like a counter that steps on a condition): each is a pair one of whose
+/// registers must be a base register (DEVIATE LU8).
+pub fn unmanaged_address_pairs(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    l: BlockId,
+) -> Vec<(Scev, Scev)> {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return Vec::new() };
+    let mut pairs = Vec::new();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let instruction = cx.function.instruction(inst);
+            let address = match instruction.opcode {
+                Opcode::Load { .. } => instruction.operands[0],
+                Opcode::Store { .. } => instruction.operands[1],
+                _ => continue,
+            };
+            if !se.is_value_scevable(cx, address) {
+                continue;
+            }
+            let s = se.get_scev(cx, address);
+            if se.scev_type(s) != Type::Add || se.is_loop_invariant(cx, s, Some(l)) {
+                continue;
+            }
+            let operands: Vec<Scev> = se.operands(s).iter().map(|u| u.scev).collect();
+            if let [a, b] = operands[..]
+                && se.as_constant(a).is_none()
+                && se.as_constant(b).is_none()
+                && se.addrec_header(a) != Some(l)
+                && se.addrec_header(b) != Some(l)
+                && !pairs.contains(&(a, b))
+            {
+                pairs.push((a, b));
+            }
+        }
+    }
+    pairs
 }

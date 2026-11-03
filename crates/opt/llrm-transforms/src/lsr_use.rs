@@ -65,7 +65,7 @@ use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::tti::{Cost as TtiCost, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
-use llrm_support::hash::{HashSet, IndexSet};
+use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
 
@@ -491,6 +491,9 @@ pub struct Rating<'a, 'b> {
     pub as_written: bool,
     /// Registers held across the loop by values LSR does not manage.
     pub other_register_units: u32,
+    /// The base-plus-index addresses of the loop's accesses LSR does not
+    /// manage (DEVIATE LU8).
+    pub fixed_pairs: &'a [(Scev, Scev)],
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -501,6 +504,9 @@ pub struct Cost {
     /// The registers rated scaled so far, with their scale: the target's
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
+    /// The register pairs of the base-plus-index address forms rated so far
+    /// (DEVIATE LU8).
+    pairs: Vec<(Scev, Scev)>,
 }
 
 impl Cost {
@@ -598,6 +604,22 @@ impl Cost {
                     self.c.insns += scaled_insns;
                 }
             }
+        }
+
+        // DEVIATE LU8: one register of each pair must be a base register; a
+        // pair that no `address_base_registers` registers hold one of costs a
+        // move in and a move out every trip.
+        if lu.kind == Kind::Address
+            && (r.tti.address_base_registers() as usize) < r.tti.number_of_gpr_registers() as usize
+            && let (Some(index), [base]) = (f.scaled_reg, f.base_regs.as_slice())
+            && !self.pairs.contains(&(*base, index))
+        {
+            let limit = r.tti.address_base_registers() as usize;
+            let swaps = |pairs: &[(Scev, Scev)]| uncovered_pairs(&[r.fixed_pairs, pairs].concat(), limit);
+            let before = swaps(&self.pairs);
+            self.pairs.push((*base, index));
+            // Out of the base register and back again.
+            self.c.insns += 2 * (swaps(&self.pairs) - before) as u32;
         }
 
         // The non-zero immediates.
@@ -874,4 +896,30 @@ fn is_stack_slot(
     let Some(Operand::Value(v)) = r.se.unknown_value(s) else { return false };
     let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
     matches!(r.cx.function.instruction(def).opcode, Opcode::Alloca { .. })
+}
+
+/// How many of the pairs none of `limit` registers holds one of (the most
+/// held by one register is taken first, as a vertex cover is): the addresses
+/// whose base register has to be swapped in around the access.
+fn uncovered_pairs(
+    pairs: &[(Scev, Scev)],
+    limit: usize,
+) -> usize {
+    let mut rest: Vec<(Scev, Scev)> = pairs.to_vec();
+    for _ in 0..limit {
+        if rest.is_empty() {
+            break;
+        }
+        let mut degree: HashMap<Scev, usize> = HashMap::default();
+        for &(a, b) in &rest {
+            *degree.entry(a).or_default() += 1;
+            *degree.entry(b).or_default() += 1;
+        }
+        let Some((&pick, _)) = degree.iter().max_by_key(|&(&reg, &held)| (held, std::cmp::Reverse(format!("{reg:?}"))))
+        else {
+            break;
+        };
+        rest.retain(|&(a, b)| a != pick && b != pick);
+    }
+    rest.len()
 }

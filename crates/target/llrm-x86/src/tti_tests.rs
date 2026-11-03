@@ -331,6 +331,7 @@ fn real_mode_drops_an_lsr_solution_the_model_rates_worse_and_flat_code_keeps_it(
         scaled_index_insns: 2,
         huge_space: None,
         address_registers: None,
+        address_bases: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
