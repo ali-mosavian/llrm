@@ -1055,3 +1055,16 @@ fn a_float_argument_is_refused_not_a_panic() {
     let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses a float");
     assert!(why.contains("not a byte or a word"), "{why}");
 }
+
+/// `br i1 %c, label %r, label %r` (left by -O0 and by x_switch's mid-end)
+/// made a `jp c` and a `jp` to one `ret` block: the block was copied into
+/// the predecessor in place of the `jp` and deleted, leaving the `jp c`
+/// without a target, and the compiler panicked in tail merging.
+#[test]
+fn a_conditional_branch_to_the_same_return_block_as_the_jump_keeps_that_block() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine i16 @f(i16 %x) {{\n  %c = icmp sgt i16 %x, 0\n  br i1 %c, label %r, label %r\nr:\n  ret i16 0\n}}"
+    );
+    let out = text(&ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}
