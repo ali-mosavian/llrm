@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_generate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_generate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:78bb160a9d9e2063e1be28768c58fcb306d00eb0da704e04b88a3a7fafeb3ed4 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:70adcbe7ae6a9a01ef58bc6c0242911fc47d8ec74368b11268060b3b4444b3f3 -->
 
 # lsr_generate
 
@@ -42,3 +42,9 @@ keeps a loop's exit counter beside the scaled one it is a multiple of
 (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
 the line.
+
+DEVIATE LG2: for an even factor `getExactSDiv` fails where the compared
+value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although
+only 0 then has a product of 0. Without it a byte-stepped loop kept a second
+counter beside the byte index (examples/dot m16: `dec cx` and a spill).
+Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.

@@ -214,7 +214,9 @@ pub fn select_function(
     };
     // `getJumpConditionMergingParams`: the cost model splits every merged
     // condition into branches.
-    let target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    let mut target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    // `getOptLevel() != None`: clusters, jump tables, bit tests and peeling.
+    target.switch_optimize = optimize;
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
     let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
@@ -255,13 +257,28 @@ pub fn select_function(
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
+            // `addSuccessorWithProb`: the edges the builder made of a switch
+            // are the machine blocks' own; the IR's apply to a block it left
+            // alone.
+            let made: Vec<(u32, u32)> = info
+                .edge_probs
+                .iter()
+                .filter(|(from, ..)| *from == id)
+                .map(|&(_, to, probability)| (to.0, probability))
+                .collect();
             selected.push(Selected {
                 id: id.0,
                 origin: origin.0,
                 unwind: if unwinding { unwind_of(function, origin) } else { None },
                 landing: unwinding && id == origin && starts_with_landing_pad(function, origin),
                 phis,
-                probs: if n == 0 { probs.clone() } else { Vec::new() },
+                probs: if !made.is_empty() {
+                    made
+                } else if n == 0 {
+                    probs.clone()
+                } else {
+                    Vec::new()
+                },
                 dag: one.dag,
                 units,
                 mem_refs,
