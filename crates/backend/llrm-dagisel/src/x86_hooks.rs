@@ -630,12 +630,27 @@ impl<D: AddrDag> X86Predicates<D> for X86Hooks {
         X86Hooks::has_no_carry_flag_uses(self, dag, flags)
     }
 
+    /// `isDef32` ([L544][def32]): a 32-bit definition other than a truncate,
+    /// a register copy, an assertion, a freeze or a `bsf`/`bsr` that may leave
+    /// the destination alone leaves the upper half zero.
+    ///
+    /// [def32]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L544
     fn is_def32(
         &self,
-        _: &D,
-        _: u32,
+        dag: &D,
+        node: u32,
     ) -> bool {
-        false
+        if dag.is_machine(node) {
+            return true;
+        }
+        let opcode = dag.opcode(node);
+        let bit_scan = matches!(opcode, x86isd::BSF | x86isd::BSR)
+            && !matches!(dag.opcode(dag.operand(node, 0).node), isd::UNDEF | isd::Constant);
+        !(matches!(
+            opcode,
+            isd::TRUNCATE | isd::CopyFromReg | isd::AssertSext | isd::AssertZext | isd::AssertAlign | isd::FREEZE
+        ) || bit_scan)
     }
 
     fn check_tc_ret_enough_regs(

@@ -536,6 +536,19 @@ fn a_zero_extended_shifted_index_is_a_scaled_address_at_m64() {
     assert!(listing.contains("*8]") && !listing.contains("shl"), "{listing}");
 }
 
+/// `isDef32` answered `false` for every node, so `zext (shl i32)` stayed an
+/// explicit `movzx rax, eax` after a shift that already zeroes the upper half
+/// (bench bitfield_long_long, +1 B per site).
+#[test]
+fn a_zero_extended_32_bit_definition_costs_no_instruction_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(i32 %x) {\n  %s = shl i32 %x, 8\n  %z = zext i32 %s to i64\n  ret i64 %z\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("movzx") && !listing.contains("mov eax, eax"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each

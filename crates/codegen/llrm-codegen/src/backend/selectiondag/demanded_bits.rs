@@ -443,7 +443,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
                         let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));
-                        let shl = self.dag.get_node(ISD::Shl, half, &[x, by]);
+                        let shl = self.dag.get_node_flags(ISD::Shl, half, &[x, by], super::dag::SDNodeFlags::NO_UNSIGNED_WRAP);
                         let new = self.dag.get_node(ISD::ZeroExtend, vt, &[shl]);
                         return Self::combine_to(tlo, op, new);
                     }
