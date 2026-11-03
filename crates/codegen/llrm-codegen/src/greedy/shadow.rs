@@ -1207,7 +1207,8 @@ pub fn decide_with_split(
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
         (0..body.blocks.len()).map(|block| mbfi.get_block_freq_relative_to_entry_block(block) as f32).collect();
-    if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+    crate::greedy::trace::begin(&body.name);
+    if crate::greedy::trace::on() {
         eprintln!("block frequencies {:?}", freq);
     }
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
@@ -1525,9 +1526,6 @@ pub fn decide_with_split(
     for (reg, root) in &fixed_regs {
         greedy.fixed.insert(*reg);
         greedy.matrix.vrm.assign_virt2phys(*reg, *root);
-    }
-    if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
-        eprintln!("== {}", body.name);
     }
     greedy.allocate_phys_regs();
     if inline {

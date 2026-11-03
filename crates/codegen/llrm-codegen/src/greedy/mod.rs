@@ -21,4 +21,5 @@ pub mod spliteditor;
 pub mod splitkit;
 pub mod targetinfo;
 pub mod tii;
+pub mod trace;
 pub mod virtregmap;

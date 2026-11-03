@@ -901,7 +901,7 @@ impl Splitter<'_, '_> {
             self.ss.global_cand[cand].reset(&mut self.ss.cache, &env, Some(phys));
         }
 
-        let trace = llrm_support::env_flag!("LLRM_GREEDY_DECISIONS");
+        let trace = crate::greedy::trace::on();
         self.ss.placer.prepare();
         let mut cost = BlockFrequency(0);
         if !self.add_split_constraints(cand, &mut cost) {
@@ -1089,7 +1089,7 @@ impl Splitter<'_, '_> {
             let mut bc = std::mem::take(&mut self.ss.bundle_cand);
             let b = self.ss.global_cand[best_cand].get_bundles(&mut bc, best_cand);
             self.ss.bundle_cand = bc;
-            if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            if crate::greedy::trace::on() {
                 eprintln!("Split for {:?} in {b} bundles", self.ss.global_cand[best_cand].phys_reg);
             }
             if b != 0 {

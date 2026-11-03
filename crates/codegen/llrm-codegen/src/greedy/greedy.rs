@@ -588,7 +588,8 @@ pub struct RAGreedy<'a> {
     csr_cost: BlockFrequency,
     /// `SetOfBrokenHints`, in the order they were recorded.
     broken: Vec<u32>,
-    /// Keep the decision lines `LLRM_GREEDY_DECISIONS` prints (tests read them).
+    /// Keep the decision lines `LLRM_GREEDY_DECISIONS` prints (tests read
+    /// them).
     pub record_decisions: bool,
     pub decisions: Vec<String>,
 }
@@ -623,14 +624,14 @@ impl<'a> RAGreedy<'a> {
     /// One decision line: printed under `LLRM_GREEDY_DECISIONS`, kept when a
     /// test asks. The pin's `-debug-only=regalloc` analogue.
     fn tracing(&self) -> bool {
-        self.record_decisions || llrm_support::env_flag!("LLRM_GREEDY_DECISIONS")
+        self.record_decisions || crate::greedy::trace::on()
     }
 
     fn note(
         &mut self,
         line: String,
     ) {
-        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+        if crate::greedy::trace::on() {
             eprintln!("{line}");
         }
         if self.record_decisions {
@@ -814,7 +815,8 @@ impl<'a> RAGreedy<'a> {
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
-                let hint = format!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
+                let hint =
+                    format!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
                 self.note(hint);
                 let line = decision_line(
                     virt_reg.reg(),
@@ -824,7 +826,7 @@ impl<'a> RAGreedy<'a> {
                     &verdict,
                 );
                 self.note(line);
-                if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS_INTERVALS") {
+                if (llrm_support::env_flag!("LLRM_GREEDY_DECISIONS_INTERVALS") && crate::greedy::trace::on()) {
                     eprintln!("    {}", virt_reg);
                 }
             }
@@ -1173,7 +1175,7 @@ impl<'a> RAGreedy<'a> {
             hints: &mut self.hints,
         };
         let split = splitter.split_around_hint_reg(hint, virt, &blocks, new_vregs);
-        if split && llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+        if split && crate::greedy::trace::on() {
             eprintln!("dec v{} hint-split around {hint:?} in {} blocks -> {new_vregs:?}", virt.reg(), blocks.len());
         }
         split
@@ -2130,8 +2132,8 @@ mod tests {
 
     /// z80 lz4 -Oz kept a loop counter in the frame and a once-read offset in a
     /// register, and `LLRM_GREEDY_DECISIONS` printed no line for the eviction
-    /// that decided it: the trace named the interval taken off the queue and its
-    /// outcome, never the intervals it displaced or their weights.
+    /// that decided it: the trace named the interval taken off the queue and
+    /// its outcome, never the intervals it displaced or their weights.
     #[test]
     fn test_an_eviction_names_who_took_the_register_and_who_lost_it_with_weights() {
         let mut insns = vec![insn(vec![1], vec![]), insn(vec![2], vec![]), insn(vec![3], vec![])];
