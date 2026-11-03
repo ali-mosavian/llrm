@@ -2653,3 +2653,13 @@ fn an_x86_64_macho_object_spells_its_symbols_with_the_leading_underscore() {
     let has = |name: &[u8]| object.windows(name.len()).any(|window| window == name);
     assert!(has(b"_f\0") && has(b"_g\0"), "the symbol table lacks `_f`/`_g`");
 }
+
+/// The pin's clang writes `x86_64-apple-macosx10.4.0`; the lookup wanted the
+/// bare triple, so every module clang made was refused (`no target for ...`)
+/// and the x86-64 Mach-O unwind comparison read 0 functions of 60 programs.
+#[test]
+fn a_triple_with_the_os_version_names_the_same_system() {
+    assert!(crate::same_system("x86_64-apple-macosx", "x86_64-apple-macosx10.4.0"));
+    assert!(!crate::same_system("x86_64-apple-macosx", "x86_64-pc-windows-msvc"));
+    assert!(crate::by_triple("x86_64-apple-macosx10.4.0").is_some());
+}
