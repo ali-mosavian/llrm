@@ -13,7 +13,7 @@ use std::process::Command;
 #[test]
 fn a_c_alias_is_refused_for_x86_64_not_dropped() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-O2", "-S", "-o", "/dev/stdout"])

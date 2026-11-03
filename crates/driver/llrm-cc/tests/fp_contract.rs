@@ -16,7 +16,7 @@ fn run(contract: Option<&str>) -> (String, String) {
     std::fs::create_dir_all(&work).unwrap();
     let source = root.join("tests/cc/fp_contract/contract.c");
     let compile = |extra: &[&str], output: &Path, listing: bool| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"));
         command
             .env("LLRM_CC_TARGET", "x86_32-linux")
             .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
@@ -72,13 +72,13 @@ fn a_contracted_multiply_add_is_the_x87_multiply_then_add() {
 /// pin's clang and gcc make `fmadd` (nbody ran 47859 instructions for 16857).
 fn arm64_listing(extra: &[&str]) -> Option<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let llc = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).with_file_name("llrm-arm64-llc");
+    let llc = Path::new(env!("CARGO_BIN_EXE_llrm-cc-bin")).with_file_name("llrm-arm64-llc");
     if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llc.exists() {
         eprintln!("skipped: LLRM_PIN_CLANG names no pinned clang, or {} is not built", llc.display());
         return None;
     }
     let out = std::env::temp_dir().join(format!("llrm-cc-fma-{}-{}.s", extra.len(), std::process::id()));
-    let ran = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let ran = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "arm64-linux")
         .args(["-O2", "-S"])
         .args(extra)

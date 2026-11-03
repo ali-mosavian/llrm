@@ -48,7 +48,7 @@ fn high_pcs(info: &str) -> Vec<(String, u64)> {
 fn a_functions_debug_range_ends_at_its_size_not_at_the_next_function() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let object = std::env::temp_dir().join(format!("debug_end_{}.o", std::process::id()));
-    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-c", "-m64", "-O2", "-g", "-fobject-format=elf"])
