@@ -24,10 +24,26 @@ pub fn all() -> Vec<Rc<dyn Target>> {
 /// The target whose description states `triple` as its `llvm_triple`: the one a
 /// module's `target triple` names.
 pub fn by_triple(triple: &str) -> Option<Rc<dyn Target>> {
-    all().into_iter().find(|one| {
-        let layout = one.layout();
-        layout.llvm_triple.as_deref() == Some(triple) || layout.platforms.iter().any(|system| system.triple == triple)
-    })
+    all()
+        .into_iter()
+        .find(
+            |one| {
+                let layout = one.layout();
+                layout.llvm_triple.as_deref() == Some(triple)
+                    || layout.platforms.iter().any(|system| same_system(&system.triple, triple))
+            },
+        )
+}
+
+/// Whether `stated`, the triple of a module, names the system `listed` does:
+/// clang writes the OS version into it (`x86_64-apple-macosx10.4.0`), which the
+/// description leaves out.
+pub fn same_system(
+    listed: &str,
+    stated: &str,
+) -> bool {
+    let bare = |triple: &str| triple.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.').to_owned();
+    listed == stated || bare(listed) == bare(stated)
 }
 
 /// What a tool's `--mode N` stands for: the datalayout of the target whose

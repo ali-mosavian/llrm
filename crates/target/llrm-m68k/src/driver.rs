@@ -54,8 +54,12 @@ impl Level {
 pub fn cpu_of(name: &str) -> Result<Cpu, String> {
     match name {
         "68000" | "m68000" => Ok(Cpu::M68000),
+        "68010" | "m68010" => Ok(Cpu::M68010),
         "68020" | "m68020" => Ok(Cpu::M68020),
-        _ => Err(format!("unknown m68k cpu `{name}`; choose 68000 or 68020")),
+        "68030" | "m68030" => Ok(Cpu::M68030),
+        "68040" | "m68040" => Ok(Cpu::M68040),
+        "68060" | "m68060" => Ok(Cpu::M68060),
+        _ => Err(format!("unknown m68k cpu `{name}`; choose 68000, 68010, 68020, 68030, 68040 or 68060")),
     }
 }
 

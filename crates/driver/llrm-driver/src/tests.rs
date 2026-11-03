@@ -2653,3 +2653,24 @@ fn an_x86_64_macho_object_spells_its_symbols_with_the_leading_underscore() {
     let has = |name: &[u8]| object.windows(name.len()).any(|window| window == name);
     assert!(has(b"_f\0") && has(b"_g\0"), "the symbol table lacks `_f`/`_g`");
 }
+
+/// The pin's clang writes `x86_64-apple-macosx10.4.0`; the lookup wanted the
+/// bare triple, so every module clang made was refused (`no target for ...`)
+/// and the x86-64 Mach-O unwind comparison read 0 functions of 60 programs.
+#[test]
+fn a_triple_with_the_os_version_names_the_same_system() {
+    assert!(crate::same_system("x86_64-apple-macosx", "x86_64-apple-macosx10.4.0"));
+    assert!(!crate::same_system("x86_64-apple-macosx", "x86_64-pc-windows-msvc"));
+    assert!(crate::by_triple("x86_64-apple-macosx10.4.0").is_some());
+}
+
+/// Matching a triple past its OS version must not open the Win64 hole the
+/// pending-ABI gate closes: clang writes `x86_64-pc-windows-msvc19.0.0`, and
+/// that module is refused like the bare triple.
+#[test]
+fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
+    let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-pc-windows-msvc19.0.0\"\ndefine void @f() {\n  ret void\n}\n";
+    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
+    assert!(why.contains("Win64 calling convention"), "{why}");
+}

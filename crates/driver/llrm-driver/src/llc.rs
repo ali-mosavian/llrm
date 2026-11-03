@@ -392,7 +392,12 @@ pub fn compiled_dumping(
     let bound = bound(flags, triple.as_deref())?;
     // The system the module's triple names writes its own object format unless
     // `-fobject-format=` says otherwise.
-    let system = bound.target.layout().platforms.into_iter().find(|one| Some(&one.triple) == triple.as_ref());
+    let system = bound
+        .target
+        .layout()
+        .platforms
+        .into_iter()
+        .find(|one| triple.as_deref().is_some_and(|stated| crate::same_system(&one.triple, stated)));
     if let Some(why) = system.as_ref().and_then(|one| one.pending.as_ref()).filter(|_| !flags.allow_pending_abi) {
         return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
     }
