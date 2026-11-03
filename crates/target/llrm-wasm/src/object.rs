@@ -327,6 +327,9 @@ pub struct Encoded {
     pub variables: Vec<(u32, i64)>,
     /// The local that holds the stack pointer after the prologue.
     pub frame_base: Option<u32>,
+    /// `-g`: the metadata record and the local of each variable that is an
+    /// argument the code never overwrites.
+    pub argument_variables: Vec<(u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -409,7 +412,37 @@ pub fn encode_function(f: &Function) -> Encoded {
         lines,
         variables: f.variables.iter().map(|one| (one.record, one.disp)).collect(),
         frame_base: frame_base_local(f),
+        argument_variables: unwritten_arguments(f),
     }
+}
+
+/// The variables that are arguments, whose local no instruction writes: the
+/// local holds the argument through the whole function.
+fn unwritten_arguments(f: &Function) -> Vec<(u32, u32)> {
+    use crate::dagisel::generated::ids::opcode as op;
+    let written: std::collections::BTreeSet<i64> = f
+        .blocks
+        .iter()
+        .flatten()
+        .filter_map(|inst| match (inst.opcode, &inst.operands[..]) {
+            (
+                op::LOCAL_SET_I32 | op::LOCAL_SET_I64 | op::LOCAL_SET_F32 | op::LOCAL_SET_F64,
+                [Operand::Imm(local), ..],
+            ) => Some(*local),
+            (code, [_, Operand::Imm(local), ..]) if is_local_tee(code) => Some(*local),
+            _ => None,
+        })
+        .collect();
+    f.argument_variables
+        .iter()
+        .filter(|&&(_, number)| (number as usize) < f.params.len() && !written.contains(&i64::from(number)))
+        .copied()
+        .collect()
+}
+
+fn is_local_tee(opcode: u16) -> bool {
+    use crate::dagisel::post_ids as post;
+    [post::LOCAL_TEE_I32, post::LOCAL_TEE_I64, post::LOCAL_TEE_F32, post::LOCAL_TEE_F64].contains(&opcode)
 }
 
 /// The local the prologue stores the lowered stack pointer in: the `local.set`

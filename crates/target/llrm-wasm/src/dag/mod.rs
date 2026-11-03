@@ -115,6 +115,7 @@ pub fn compile_function(
             first.declared.iter().map(|&(record, frame)| crate::mir::Variable { record, frame, disp: 0 }).collect()
         })
         .unwrap_or_default();
+    f.argument_variables = blocks.first().map(|first| first.argument_variables.clone()).unwrap_or_default();
     f.nothrow = non_throwing(module);
     f.callee_memory = callee_memory(module);
     f.personality = unwinding

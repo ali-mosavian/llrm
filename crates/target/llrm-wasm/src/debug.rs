@@ -119,6 +119,16 @@ pub fn sections(
                 location: model::Location::Frame { disp: disp + one.offset },
             });
         }
+        for &(record, local) in &function.argument_variables {
+            let Some(one) = llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(record)) else { continue };
+            let Some(&r#type) = debug.nodes.get(&one.r#type) else { continue };
+            variables.push(model::Variable {
+                name: one.name,
+                r#type,
+                kind: if one.parameter { model::Kind::Parameter } else { model::Kind::Local },
+                location: model::Location::WasmLocal(local),
+            });
+        }
         // Parameters first, in the order the source declares them.
         let order = |name: &str| procedure.parameters.iter().position(|one| one == name).unwrap_or(usize::MAX);
         variables.sort_by_key(|one| (one.kind != model::Kind::Parameter, order(&one.name)));

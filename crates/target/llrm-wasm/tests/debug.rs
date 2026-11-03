@@ -23,9 +23,18 @@ fn linked(
     fixture: &str,
     tool: &[&str],
 ) -> String {
+    linked_at(fixture, llrm_wasm::driver::Level::O0, tool)
+}
+
+fn linked_at(
+    fixture: &str,
+    level: llrm_wasm::driver::Level,
+    tool: &[&str],
+) -> String {
     let source =
         std::fs::read_to_string(format!("{}/tests/ir/{fixture}", env!("CARGO_MANIFEST_DIR"))).expect("fixture");
-    let bytes = llrm_wasm::driver::object_g(&source, Width::W32, Options::default(), "d.c").expect("object");
+    let options = Options { level, ..Options::default() };
+    let bytes = llrm_wasm::driver::object_g(&source, Width::W32, options, "d.c").expect("object");
     let dir = std::env::temp_dir().join(format!("wasm-g-{}-{}", std::process::id(), fixture));
     std::fs::create_dir_all(&dir).unwrap();
     let (object, linked) = (dir.join("d.o"), dir.join("l.wasm"));
@@ -101,4 +110,15 @@ fn each_function_states_its_own_frame_base() {
     for want in ["fbreg +12", "fbreg +8", "fbreg +4", "fbreg +0"] {
         assert!(info.contains(want), "{want} missing:\n{info}");
     }
+}
+
+/// An `-O2` parameter had no location: its `#dbg_value` of the argument was
+/// dropped, so the debugger showed `x` as optimized out. Clang 20 puts it in
+/// its argument's local for the whole function.
+#[test]
+fn an_o2_parameter_is_its_argument_local() {
+    let info = linked_at("debug_vars_o2.ll", llrm_wasm::driver::Level::O2, &["--debug-info"]);
+    let at = info.find("DW_AT_name\t(\"x\")").unwrap_or_else(|| panic!("no x:\n{info}"));
+    let location = info[at..].split("\n\n").next().unwrap();
+    assert!(location.contains("DW_AT_location\t(DW_OP_WASM_location 0x0 0x0, DW_OP_stack_value)"), "{info}");
 }

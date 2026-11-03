@@ -261,6 +261,9 @@ pub struct Function {
     pub sp: Option<VReg>,
     /// `-g`: the variables whose home is a stack object.
     pub variables: Vec<Variable>,
+    /// `-g`: the (metadata record, argument number) of each variable the IR
+    /// says is an argument.
+    pub argument_variables: Vec<(u32, u32)>,
     pub(crate) vregs: Vec<ValType>,
     stackified: Vec<bool>,
 }
