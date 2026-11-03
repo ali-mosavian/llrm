@@ -3,22 +3,6 @@
 #include "softfloat.h"
 #include "sf_helpers.h"
 
-#ifdef SF_PACK_INLINE
-/* sf32_pack for 1 <= e <= 254 (no overflow, no denormal) in the caller: saves a call and the callee's saved registers on the common path. */
-static inline sf32 pack_near(uint32_t sign, int e, uint32_t m)
-{
-    if ((unsigned)(e - 1) < 254u) {
-        uint32_t r = m & 7;
-        m >>= 3;
-        if (r > 4 || (r == 4 && (m & 1))) m++;
-        return sign + ((uint32_t)(e - 1) << 23) + m;
-    }
-    return sf32_pack(sign, e, m);
-}
-#else
-#define pack_near sf32_pack
-#endif
-
 #define SIGN 0x80000000u
 #define INF 0x7F800000u
 

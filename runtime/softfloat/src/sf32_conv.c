@@ -20,7 +20,7 @@ static sf32 from_mag(uint32_t sign, uint32_t x)
     if (!x) return 0;
     int n = 31 - sf_clz32(x);
     uint32_t m = n > 26 ? sf_shr_sticky32(x, n - 26) : x << (26 - n);
-    return sf32_pack(sign, n + 127, m);
+    return pack_near(sign, n + 127, m);
 }
 
 static sf32 from_u32_bits(uint32_t x) { return from_mag(0, x); }
@@ -39,11 +39,15 @@ static uint32_t magnitude(sf32 a, int *big)
 
 static int32_t to_i32_bits(sf32 a)
 {
-    int big;
-    uint32_t m = magnitude(a, &big);
-    if ((a << 1) > 0xFF000000u) return 0;
-    if (a & SIGN) return (big || m > 0x80000000u) ? INT32_MIN : (int32_t)(0u - m);
-    return (big || m > 0x7FFFFFFFu) ? INT32_MAX : (int32_t)m;
+    int e = (int)((a >> 23) & 0xFF) - 127;
+    if (e < 0) return 0;
+    if (e >= 31) { /* from 2^31 up: saturates; -2^31 is the saturated value itself */
+        if ((a << 1) > 0xFF000000u) return 0;
+        return (a & SIGN) ? INT32_MIN : INT32_MAX;
+    }
+    uint32_t m = (a & 0x7FFFFFu) | 0x800000u;
+    m = e >= 23 ? m << (e - 23) : m >> (23 - e);
+    return (a & SIGN) ? (int32_t)(0u - m) : (int32_t)m;
 }
 
 static uint32_t to_u32_bits(sf32 a)
