@@ -270,6 +270,104 @@ pub fn run(function: &mut MFunc) {
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
+    narrow_extension_uses(function);
+    dead_code(function);
+}
+
+/// The registers `op` reads as 32 bits: the operands of a `W` form and of the
+/// long multiplies.
+fn narrow_reads(op: &mut Op) -> Vec<&mut Gpr> {
+    match op {
+        Op::I(Inst::ThreeSource { op, width, rn, rm, ra, .. }) => match (op, width) {
+            (Mul3::Smaddl | Mul3::Smsubl | Mul3::Umaddl | Mul3::Umsubl, _) => vec![rn, rm],
+            (Mul3::Madd | Mul3::Msub, Width::W) => vec![rn, rm, ra],
+            _ => Vec::new(),
+        },
+        Op::I(Inst::AddSubImm { width: Width::W, rn, .. } | Inst::LogicImm { width: Width::W, rn, .. }) => vec![rn],
+        Op::I(
+            Inst::AddSubShifted { width: Width::W, rn, rm, .. } | Inst::LogicShifted { width: Width::W, rn, rm, .. },
+        ) => vec![rn, rm],
+        _ => Vec::new(),
+    }
+}
+
+/// `PeepholeOptimizer::optimizeExtInstr`
+/// ([PeepholeOptimizer.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L587),
+/// `AArch64InstrInfo::isCoalescableExtInstr`): a 32 to 64 bit extension whose
+/// result is only read as 32 bits (through copies) is not needed; the readers
+/// take its source. `switch`'s `digit * digit` kept `sxtw` for the `smull`
+/// that reads its low half.
+fn narrow_extension_uses(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let copies = single_copies(function, &definitions);
+    let root = |mut register: Reg| {
+        while let Some(&next) = copies.get(&register) {
+            register = next;
+        }
+        register
+    };
+    let mut extensions: HashMap<Reg, Reg> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if let Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm | Bitfield::Ubfm,
+            width: Width::X,
+            rd,
+            rn,
+            immr: 0,
+            imms: 31,
+        }) = op
+            && rd.is_virtual()
+            && rn.is_virtual()
+            && definitions.get(&Reg::Gpr(*rd)) == Some(&1)
+            && definitions.get(&Reg::Gpr(*rn)) == Some(&1)
+        {
+            extensions.insert(Reg::Gpr(*rd), Reg::Gpr(*rn));
+        }
+    }
+    if extensions.is_empty() {
+        return;
+    }
+    // An extension is dropped only when every read of it, through copies, is
+    // a 32-bit one.
+    let mut blocked: HashSet<Reg> = HashSet::new();
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            let is_copy = matches!(op, Op::Copy { .. });
+            let narrow: Vec<Gpr> = narrow_reads(op).into_iter().map(|slot| *slot).collect();
+            let uses = op.defs_and_uses().1;
+            let mut narrow_left = narrow;
+            for used in uses {
+                let at = root(used);
+                if !extensions.contains_key(&at) || is_copy && used == at {
+                    continue;
+                }
+                match used {
+                    Reg::Gpr(gpr) => match narrow_left.iter().position(|one| *one == gpr) {
+                        Some(index) if !is_copy => {
+                            narrow_left.remove(index);
+                        }
+                        _ if is_copy => {}
+                        _ => {
+                            blocked.insert(at);
+                        }
+                    },
+                    Reg::Fpr(_) => {
+                        blocked.insert(at);
+                    }
+                }
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            for slot in narrow_reads(op) {
+                let at = root(Reg::Gpr(*slot));
+                if let Some(&Reg::Gpr(source)) = extensions.get(&at).filter(|_| !blocked.contains(&at)) {
+                    *slot = source;
+                }
+            }
+        }
+    }
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -895,6 +993,40 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!(made(1), 0, "{function:#?}");
+    }
+
+    /// `sxtw` was kept for a `smull` that reads only the low half of its
+    /// result (`switch`: `sbfm x15, x1, #0, #31` and +4 B). The pin's
+    /// `optimizeExtInstr` has the reader take the source.
+    #[test]
+    fn an_extension_read_only_as_32_bits_is_dropped() {
+        let sext = Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm,
+            width: Width::X,
+            rd: Gpr(71),
+            rn: Gpr(70),
+            immr: 0,
+            imms: 31,
+        });
+        let smull = Op::I(Inst::ThreeSource {
+            op: Mul3::Smaddl,
+            width: Width::X,
+            rd: Gpr(72),
+            rn: Gpr(71),
+            rm: Gpr(71),
+            ra: Gpr(31),
+        });
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![MBlock {
+            label: "entry".into(),
+            ops: vec![movz(70, 3), sext, smull, Op::Return { uses: vec![Reg::Gpr(Gpr(72))], tail: None }].into(),
+        }];
+        narrow_extension_uses(&mut function);
+        dead_code(&mut function);
+        let extensions =
+            function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::BitfieldMove { .. }))).count();
+        assert_eq!(extensions, 0, "{function:#?}");
     }
 
     /// A value made in an outer loop was sunk into the inner loop that reads it
