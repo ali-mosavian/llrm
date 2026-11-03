@@ -764,6 +764,26 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
     }
 }
 
+/// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
+/// hash16 89 B / 6644 T against SDCC's 40 B / 1686 T. A constant `2^n +- 1` is
+/// shifts and an add, as the pin's `decomposeMulByConstant` makes it.
+#[test]
+fn a_multiply_by_a_constant_one_off_a_power_of_two_is_shifts_and_an_add() {
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
+              define i16 @f(i16 %x) {\n  %r = mul i16 %x, 33\n  ret i16 %r\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("mulhi3"), "{out}");
+}
+
+/// A word shifted left by a constant in `hl` was `sla l; rl h` a bit (4 B / 16
+/// T) where `add hl, hl` is 1 B / 11 T; hash16's `<< 5` paid 10 instructions.
+#[test]
+fn a_word_shifted_left_in_hl_is_doublings() {
+    let ir = include_str!("kernels/ir/hash16.ll");
+    let out = text(ir, "hash16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.matches("add hl, hl").count() >= 5 && !out.contains("rl h"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

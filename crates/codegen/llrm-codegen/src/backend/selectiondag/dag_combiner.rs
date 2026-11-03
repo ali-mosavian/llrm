@@ -128,6 +128,19 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitMUL`'s `(mul x, c)` for a `c` that is `2^n +- 1` (times a power
+    /// of two) as shifts and an add or subtract, where the target says the
+    /// pieces are cheaper than the multiply (`decomposeMulByConstant`,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L2633>).
+    /// The pin's default is false.
+    fn decompose_mul_by_constant(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> bool {
+        false
+    }
+
     /// `TargetLowering::isMulAddWithConstProfitable` for a single-use add, on
     /// the constants `c1` and `c2` of the type `vt`.
     fn is_mul_add_with_const_profitable(
@@ -2494,6 +2507,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
+        // `(mul x, 2^n +- 1)` as `(add/sub (shl x, n), x)`, and with a trailing
+        // power of two as a shift of both ([pin][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024
+        if let (Some(c), false) = (c1, opaque) {
+            if self.hooks.decompose_mul_by_constant(vt, c) {
+                if let Some(decomposed) = self.decompose_mul(n0, vt, c) {
+                    return Some(decomposed);
+                }
+            }
+        }
         // `(mul (shl x, c1), c2)` is `(mul x, c2 << c1)`.
         if self.dag.opcode(n0) == ISD::Shl {
             let (x, c1_shift) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
@@ -2516,6 +2541,44 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
+    /// k`, or `None` for any other constant.
+    fn decompose_mul(
+        &mut self,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> Option<SDValue> {
+        let width = vt.size_in_bits();
+        let ones = super::fold::mask(width);
+        let negative = c >> (width - 1) & 1 == 1;
+        let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
+        // the constant `2` is `2^0 + 1`
+        let zeros = if magnitude == 2 { 0 } else { magnitude.trailing_zeros() };
+        magnitude >>= zeros;
+        let (add, bits) = if (magnitude - 1).is_power_of_two() {
+            (true, magnitude - 1)
+        } else if (magnitude + 1).is_power_of_two() {
+            (false, magnitude + 1)
+        } else {
+            return None;
+        };
+        let amount = bits.trailing_zeros() + zeros;
+        if amount >= width {
+            return None;
+        }
+        let high_amount = self.shift_amount(vt, amount);
+        let high = self.dag.get_node(ISD::Shl, vt, &[x, high_amount]);
+        let low = if zeros == 0 {
+            x
+        } else {
+            let low_amount = self.shift_amount(vt, zeros);
+            self.dag.get_node(ISD::Shl, vt, &[x, low_amount])
+        };
+        let result = self.dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+        Some(if negative { self.dag.get_negative(result, vt) } else { result })
     }
 
     /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or
