@@ -284,10 +284,22 @@ impl LoopIdiomRecognize {
                     0,
                 );
                 let group = (object, instruction.operands[0]);
-                if !groups.contains(&group) {
-                    groups.push(group);
-                    let ty = run.function.operand_type(run.context, instruction.operands[0]);
-                    lengths.extend(ty.map(|ty| run.env.layout.store_size(&run.context.types, ty) as i64));
+                // The stores of one object with one value are one fill: its
+                // length is theirs summed.
+                let size = run
+                    .function
+                    .operand_type(run.context, instruction.operands[0])
+                    .map(|ty| run.env.layout.store_size(&run.context.types, ty) as i64);
+                match groups.iter().position(|seen| *seen == group) {
+                    Some(at) => {
+                        if let (Some(length), Some(size)) = (lengths.get_mut(at), size) {
+                            *length += size;
+                        }
+                    }
+                    None => {
+                        groups.push(group);
+                        lengths.extend(size);
+                    }
                 }
             }
         }
@@ -362,6 +374,7 @@ impl LoopIdiomRecognize {
                         lengths: lengths.iter().map(|size| (be.zext_value() as i64 + 1) * size).collect(),
                     })
                 },
+                matches!(is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val), Some(Byte::Constant(0))),
             ) {
                 return false;
             }

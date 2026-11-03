@@ -891,6 +891,7 @@ pub(crate) fn fills_pay(
     at_speed: bool,
     clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
     inline: Option<InlineFills>,
+    zero: bool,
 ) -> bool {
     // `clocks`' last entry is the cells the fill stores in all: a cell is a
     // `stos` of a dword, or the pattern's own cell.
@@ -911,7 +912,7 @@ pub(crate) fn fills_pay(
     // known, the bytes are in the price: a fill larger than the loop still pays
     // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
     let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
-    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill))
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill_with(zero)))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
             // backend prices a memset's fill against its stores. The loop
@@ -922,7 +923,7 @@ pub(crate) fn fills_pay(
             // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
             let (fill, fill_bytes) = match inline.as_ref().filter(|inline| at_speed && inline.all_inline()) {
                 Some(inline) => (inline.price(clocks), inline.price(costs)),
-                None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
+                None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill_with(zero)),
             };
             let saved = loop_bytes - fill_bytes;
             if rate == 0 {
@@ -1049,7 +1050,7 @@ fn _cheaper_by(
     // Isel expands a few cells to stores, as gcc's by-pieces rule says, and a
     // few bytes of a copy to loads and stores.
     let Some((bytes, backward)) = moved else {
-        let string = costs.fill + trips * costs.fill_cell;
+        let string = stored.map_or(costs.fill, |(_, zero)| costs.fill_with(zero)) + trips * costs.fill_cell;
         let fill = match (stored, known) {
             // The fill's length known: stores while they are under the CPU's
             // ratio, as `memset` expands it (a CPU with none states keeps the

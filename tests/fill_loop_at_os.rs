@@ -12,8 +12,9 @@ fn fill_listing(
     std::fs::write(directory.join("a.c"), source).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(directory)
+        .args(["-m16", "-march=i386"])
         .args(flags)
-        .args(["-m16", "-march=i386", "-S", "-o", "a.s", "a.c"])
+        .args(["-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -60,4 +61,15 @@ fn at_os_a_word_fill_loop_is_rep_stosw() {
     let text = fill_listing(WORD_FILL, &["-Os"]);
     assert!(text.contains("rep stosw"), "{text}");
     assert!(!text.contains("jne"), "{text}");
+}
+
+const SEVEN_TRIPS: &str = "struct { short a[7], b[7]; } s;\nvoid init(void)\n{\n    int i;\n    for (i = 0; i < 7; ++i) {\n        s.a[i] = -1;\n        s.b[i] = -1;\n    }\n}\n";
+
+/// lru c -O2: 7 trips of two word stores were a `rep stosd` of 28 B, 19 B
+/// against the loop's 20 and 3 clocks slower: the pass priced the fill at 14
+/// bytes of inline stores and left out its load of -1 and its 66h prefixes.
+#[test]
+fn at_o2_two_stores_of_seven_trips_stay_a_loop() {
+    let text = fill_listing(SEVEN_TRIPS, &["-O2", "-march=i486"]);
+    assert!(!text.contains("rep stos"), "{text}");
 }

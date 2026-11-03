@@ -1218,9 +1218,9 @@ b0:
 
 b1:
   %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
-  %p = getelementptr %S, ptr @s, i16 0, i32 0, i16 %i
+  %p = getelementptr inbounds %S, ptr @s, i16 0, i32 0, i16 %i
   store i16 -1, ptr %p
-  %q = getelementptr %S, ptr @s, i16 0, i32 1, i16 %i
+  %q = getelementptr inbounds %S, ptr @s, i16 0, i32 1, i16 %i
   store i16 -1, ptr %q
   %next = add nuw nsw i16 %i, 1
   %done = icmp eq i16 %next, 7
