@@ -1320,6 +1320,17 @@ pub fn laid_out(
         rows.sort_by_key(|row| row.offset);
         // A line-0 row is not a statement (`DwarfDebug::beginInstruction`
         // records it with no flags).
+        // A row of a line other than the last one's is a statement
+        // (`beginInstruction`: `DL.getLine() != OldLine`).
+        let mut old = 0;
+        for row in &rows {
+            if row.line != 0 && row.line == old && !segment.forced.contains(&row.offset) {
+                info.not_stmt.insert((section, row.offset));
+            }
+            if row.line != 0 {
+                old = row.line;
+            }
+        }
         info.not_stmt.extend(rows.iter().filter(|row| row.line == 0).map(|row| (section, row.offset)));
         info.lines.extend(rows);
     }
