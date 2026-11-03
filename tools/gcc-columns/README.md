@@ -5,7 +5,7 @@ spike Z80 and MOS 6502 backends; the fork is GPLv3 and stays outside this reposi
 hand-written runtime helpers and the measured tables are here.
 
     gcc_z80_bench.py  --cc1 PATH   # 23 kernels x O1/O2/Os, ucsim_z80; --tsv writes matrix rows
-    gcc_6502_bench.py --cc1 PATH   # 30 C kernels + 51 hand-corpus kernels x O1/O2/Os, sim65
+    gcc_6502_bench.py --cc1 PATH [--cpu 65c02]   # 30 C kernels + 51 hand-corpus kernels x O1/O2/Os, sim65
     vs_6502.py MATRIX_DIR OUT.md DATE
 
 `PATH` is the fork's `cc1` (`make all-gcc`, target `z80-unknown-elf` or `mos6502-unknown-elf`). Methods are

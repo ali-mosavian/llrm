@@ -121,6 +121,9 @@ def driver(args, wide, expect, calls, rel=None):
 
 
 SIM = "sim65"
+TARGET = "sim6502"
+COMPILER = "gcc"
+CFLAGS = []
 
 
 def sim(binpath, cwd):
@@ -161,10 +164,13 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--hand", default=os.path.join(HERE, "..", "..", "crates/target/llrm-6502/tests/bench/hand"), help="dir of hand-corpus .spec/.c files, '' to skip")
     ap.add_argument("--sim", default="sim65", help="sim65, or a build that also prints '<n> instructions'")
+    ap.add_argument("--cpu", default="6502", choices=["6502", "65c02"])
     ap.add_argument("--tsv", default="")
     ap.add_argument("--tsv-header", default="")
     a = ap.parse_args()
-    global SIM
+    global SIM, TARGET, COMPILER, CFLAGS
+    if a.cpu == "65c02":
+        TARGET, COMPILER, CFLAGS = "sim65c02", "gcc-65c02", ["-m65c02"]
     SIM = os.path.abspath(a.sim) if os.sep in a.sim else a.sim
     kernels = [(n, ar, wd, ex, None, None) for n, ar, wd, ex in K]
     if a.hand:
@@ -176,7 +182,7 @@ def main():
     objs = []
     for f in sorted(os.listdir(a.rt)):
         if f.endswith(".s"):
-            r = sh(["ca65", "-t", "sim6502", "-o", f[:-2] + ".o", os.path.join(os.path.abspath(a.rt), f)], w)
+            r = sh(["ca65", "-t", TARGET, "-o", f[:-2] + ".o", os.path.join(os.path.abspath(a.rt), f)], w)
             assert r.returncode == 0, r.stderr
             objs.append(f[:-2] + ".o")
     sh(["rm", "-f", "rt.lib"], w)
@@ -193,15 +199,15 @@ def main():
     r = sh([a.cc1, "-version", "-quiet", "empty.c", "-o", "/dev/null"], w)
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
     hdr = [f"cc1: {a.cc1} md5 {md5(a.cc1)}", f"version: {ver}",
-           "assembler/linker/sim: " + sh(["sim65", "--version"], w).stderr.strip().splitlines()[0] + " (ca65/ld65 via cl65 -t sim6502)",
-           "flags: cc1 -quiet -<level> -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls"]
+           "assembler/linker/sim: " + sh(["sim65", "--version"], w).stderr.strip().splitlines()[0] + " (ca65/ld65 via cl65 -t " + TARGET + ")",
+           "flags: cc1 -quiet -<level> -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls"]
     rows, bad, notes = {}, [], {}
     for name, args, wide, expect, ksrc, rel in kernels:
         if name not in want:
             continue
         for lvl in a.levels.split(","):
             cell = (name, lvl)
-            p = sh([a.cc1, "-quiet", f"-{lvl}"] + ([] if ksrc else [f"-DK_{name}"]) + [ksrc or src, "-o", "k.s"], w)
+            p = sh([a.cc1, "-quiet", f"-{lvl}"] + CFLAGS + ([] if ksrc else [f"-DK_{name}"]) + [ksrc or src, "-o", "k.s"], w)
             if p.returncode:
                 bad.append((*cell, "compile: " + (p.stderr or p.stdout)[-200:].replace("\n", " "))); continue
             asm = open(f"{w}/k.s").read()
@@ -211,11 +217,11 @@ def main():
             fail = None
             for calls in (1, 101):
                 open(f"{w}/d.s", "w").write(driver(args, wide, expect, calls, rel).replace("_KERNEL", kernel_sym))
-                p = sh(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "k.s", "rt.lib"], w)
+                p = sh(["cl65", "-t", TARGET, "-m", "x.map", "-o", "x.bin", "d.s", "k.s", "rt.lib"], w)
                 if p.returncode:
                     fail = "link: " + (p.stderr or p.stdout)[-200:].replace("\n", " "); break
                 # a symbol gcc calls must not resolve to cc65's library: other ABI
-                alien = sorted(set(re.findall(r"sim6502\.lib\((\w+)\.o\)", open(f"{w}/x.map").read())) - CC65_STARTUP)
+                alien = sorted(set(re.findall(r"sim65(?:c)?02\.lib\((\w+)\.o\)", open(f"{w}/x.map").read())) - CC65_STARTUP)
                 if alien:
                     fail = "links the cc65 library (" + ",".join(alien) + "): other ABI"; break
                 try:
@@ -228,7 +234,7 @@ def main():
                 ins_.append(ni)
             if fail:
                 bad.append((*cell, fail)); continue
-            r = sh(["ca65", "-t", "sim6502", "-o", "k.o", "k.s"], w)
+            r = sh(["ca65", "-t", TARGET, "-o", "k.o", "k.s"], w)
             body = code_size("k.o", w)
             used = helper_closure(asm, exports, imports)
             extra = sum(helper_bytes[h] for h in used)
@@ -259,7 +265,7 @@ def main():
             for l in lv:
                 if name in want:
                     c = rows.get((name, l))
-                    t.append("\t".join(["6502", name, l, "gcc"] + ([str(c[0]), str(c[1]), "" if c[2] is None else str(c[2]), notes.get((name, l), "")] if c else ["", "", "", "n/a: " + nb.get((name, l), "not run")])))
+                    t.append("\t".join(["6502", name, l, COMPILER] + ([str(c[0]), str(c[1]), "" if c[2] is None else str(c[2]), notes.get((name, l), "")] if c else ["", "", "", "n/a: " + nb.get((name, l), "not run")])))
         open(a.tsv, "w").write("\n".join(t) + "\n")
     print(text)
 
