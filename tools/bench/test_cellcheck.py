@@ -56,3 +56,11 @@ def test_equal_bytes_and_instructions_with_other_clocks_is_a_pad_parity_candidat
     assert cellcheck.pad_parity({key: head}, {key: base}) == {key}
     assert cellcheck.check({key: head}, {key: base})
     assert cellcheck.pad_parity({key: row(1001, 101)}, {key: base}) == set()
+
+
+def test_a_row_that_did_not_compile_is_an_error_not_a_comparison():
+    """A bar compiler without --export gave 50 error rows; the check read them as "base has no instructions" on 100 cells and named no cause."""
+    bad = {"error": "compile: usage\nllrm-qb: error: unrecognized arguments: --export"}
+    out = cellcheck.check({"p/bas/Os": row(1, 1)}, {"p/bas/Os": bad})
+    assert out == ["p/bas/Os: ERROR in base: llrm-qb: error: unrecognized arguments: --export"]
+    assert cellcheck.check({"p/bas/Os": bad}, {"p/bas/Os": row(1, 1)})[0].startswith("p/bas/Os: ERROR in head")
