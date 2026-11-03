@@ -145,8 +145,15 @@ impl Emitter<'_> {
         let mut out: Vec<Inst> = Vec::new();
         // A unit lists its bottom-most node first; `EmitSchedule` emits the
         // glued ones top-down.
+        // What the instructions made so far came from: the `!dbg` of the
+        // node's `SDNodeOrder`.
+        let mut line = 0;
+        let mut stamped = 0;
         for &node in selected.units.iter().flat_map(|unit| unit.nodes.iter().rev()) {
+            out[stamped..].iter_mut().for_each(|inst| inst.line = line);
+            stamped = out.len();
             let data = dag.node(SDValue { node, res: 0 });
+            line = dag.lines.get(data.order as usize).copied().flatten().map_or(0, |at| at.line);
             match data.opcode {
                 ISD::CopyFromReg => {
                     let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
@@ -278,6 +285,7 @@ impl Emitter<'_> {
                 _ => {}
             }
         }
+        out[stamped..].iter_mut().for_each(|inst| inst.line = line);
         let at = self.position[&selected.id];
         if selected.landing {
             // `SelectAllBasicBlocks`: a label at the head of every EH pad.

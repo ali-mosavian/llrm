@@ -167,3 +167,16 @@ fn a_shift_is_the_shift_of_its_width() {
         assert_eq!(select(&mut dag, shift), name);
     }
 }
+
+/// Selection dropped the IR's `!dbg`: every selected instruction had line 0,
+/// so a `-g` wasm object had nothing to build `.debug_line` from.
+#[test]
+fn selected_instructions_carry_their_irs_source_line() {
+    let source =
+        std::fs::read_to_string(format!("{}/tests/ir/debug_lines.ll", env!("CARGO_MANIFEST_DIR"))).expect("fixture");
+    let module = llrm_wasm::driver::module(&source, llrm_wasm::Width::W32).expect("module");
+    let f = llrm_wasm::dag::compile_function(&module, "f", llrm_wasm::Width::W32, llrm_wasm::dag::Options::default())
+        .expect("compiles");
+    let lines: std::collections::BTreeSet<u32> = f.blocks.iter().flatten().map(|i| i.line).collect();
+    assert!(lines.is_superset(&[11, 12, 13].into()), "{lines:?}");
+}
