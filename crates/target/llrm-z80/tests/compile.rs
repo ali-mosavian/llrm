@@ -284,6 +284,17 @@ fn a_widened_load_goes_to_the_pairs_low_half() {
     assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
+/// `digits`' guard and latch both test `v >= 10` (`sub a, #10` ... `sbc a,
+/// #0`), once ahead of the loop and once at its bottom. Tail merging did not
+/// cross from the guard into the loop, so the 8-byte test was emitted twice
+/// (80 B against SDCC's 77); the pin merges across loops before placement: 72
+/// B.
+#[test]
+fn a_guard_and_a_latch_with_the_same_test_share_it() {
+    let out = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::O2)).expect("compiles");
+    assert_eq!(out.matches("sbc a, #0").count(), 1, "{out}");
+}
+
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
 /// instructions at -O2; 11 B, 160 T, 18 with it).

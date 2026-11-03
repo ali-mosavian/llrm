@@ -852,7 +852,9 @@ pub fn merge_tails<J: Jump, C>(
         loops: std::collections::HashMap::new(),
         jump: std::marker::PhantomData,
     };
-    mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
+    if !J::merge_across_loops() {
+        mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
+    }
     tail_merge_blocks(&mut mf)
 }
 
