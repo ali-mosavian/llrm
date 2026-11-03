@@ -145,6 +145,13 @@ impl<T: Target> Converted<T> {
     /// The body ordered by the translated pre-RA `MachineScheduler`
     /// (`machinesched::scheduled`): each value counts against the pressure set
     /// of its class, whose limit is the registers the class may take.
+    ///
+    /// DEVIATE MS6: memory is one lane, a load reads it and a store writes it,
+    /// so no access moves past a store (the pin asks alias analysis).
+    /// DEVIATE MS7: the graph's latencies are the shared defaults, not the
+    /// CPU's scheduling model (the pin's generic scheduler reads
+    /// `SchedModel`). Exit for both: an arm64 `SchedModel` and alias queries
+    /// on the spike function.
     pub fn schedule(
         &mut self,
         function: &MFunction<T::Class>,
@@ -224,7 +231,8 @@ impl<T: Target> Converted<T> {
                             values
                                 .iter()
                                 .filter_map(|value| self.body.pins.get(value))
-                                // the zero register is no lane: nothing writes it
+                                // the zero register is no lane: nothing writes
+                                // it
                                 .filter(|register| registers.known(**register))
                                 .map(|register| Lanes::span(*register, 0, 1))
                                 .fold(Lanes::new(), |all, one| all.or(&one))
