@@ -79,6 +79,23 @@ impl Tti for M68k {
         "M68k"
     }
 
+    /// `BasicTTIImplBase::isLegalAddImmediate` forwards to the lowering, whose
+    /// default (M68k does not override it) accepts every immediate.
+    fn is_legal_add_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
+    /// `BasicTTIImplBase::isLegalICmpImmediate`: as above.
+    fn is_legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `TargetLoweringBase::isLegalAddressingMode`.
     fn is_legal_addressing_mode(
         &self,
