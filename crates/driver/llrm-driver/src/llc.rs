@@ -228,6 +228,22 @@ fn decorate(
             global.name = Some(spelled).into();
         }
     }
+    // An alias is spelled as what it names is.
+    for at in 0..module.aliases.len() {
+        let aliasee = module.aliases[at].aliasee;
+        let convention = match module.global(aliasee).function() {
+            Some(one) => calling.by_number(one.calling_convention).unwrap_or(default),
+            None => calling.by_number(0).unwrap_or(default),
+        };
+        let name = module.aliases[at].name.clone();
+        let spelled = match name.strip_prefix('\u{1}') {
+            Some(exact) => Some(exact.to_owned()),
+            None => convention.decorated(format, &name),
+        };
+        if let Some(spelled) = spelled {
+            module.aliases[at].name = spelled;
+        }
+    }
     spellings
 }
 
@@ -407,7 +423,6 @@ pub fn compiled_dumping(
     }
     let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
-    module.refuse_aliases("x86").map_err(|error| format!("{name}: {error}"))?;
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
         // front ends report as they link their MIR.
