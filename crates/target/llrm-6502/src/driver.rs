@@ -83,7 +83,13 @@ pub struct Request {
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { platform: Platform::parse(SIM65).expect("sim65 parses"), cpu: Cpu::Mos6502, level, passes: Vec::new(), debug: false }
+        Self {
+            platform: Platform::parse(SIM65).expect("sim65 parses"),
+            cpu: Cpu::Mos6502,
+            level,
+            passes: Vec::new(),
+            debug: false,
+        }
     }
 }
 

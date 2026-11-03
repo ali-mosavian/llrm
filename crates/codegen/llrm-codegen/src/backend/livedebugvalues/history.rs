@@ -36,7 +36,8 @@ pub fn history(
     let mut out: BTreeMap<Var, Vec<Entry>> = BTreeMap::new();
     for one in sorted {
         let entries = out.entry(Var { variable: one.variable, piece: one.piece }).or_default();
-        // A range that starts where the last ended: the variable was never nowhere.
+        // A range that starts where the last ended: the variable was never
+        // nowhere.
         if entries.last() == Some(&Entry::Clobber { at: one.start }) {
             entries.pop();
         }
@@ -119,9 +120,10 @@ pub fn in_code(
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::registers::RegId;
+
     use super::*;
     use crate::backend::livedebugvariables::Place;
-    use llrm_lir::registers::RegId;
 
     fn range(
         variable: u32,
@@ -152,7 +154,10 @@ mod tests {
     #[test]
     fn a_range_that_follows_at_once_is_a_second_value() {
         let found = history(&[range(1, 0, 10, 5), range(1, 10, 20, 0)], 100);
-        assert!(matches!(found[&var(1)].as_slice(), [Entry::Value { at: 0, .. }, Entry::Value { at: 10, .. }, Entry::Clobber { at: 20 }]));
+        assert!(matches!(
+            found[&var(1)].as_slice(),
+            [Entry::Value { at: 0, .. }, Entry::Value { at: 10, .. }, Entry::Clobber { at: 20 }]
+        ));
     }
 
     /// A range open to the end of the code is not clobbered there: the
@@ -190,7 +195,8 @@ mod tests {
     /// runs to the end of the code.
     #[test]
     fn a_value_runs_to_the_next_entry_and_the_last_to_the_end_of_the_code() {
-        let (one, two) = (Where::Place(Place::Register(RegId::from_raw(5))), Where::Place(Place::Register(RegId::from_raw(0))));
+        let (one, two) =
+            (Where::Place(Place::Register(RegId::from_raw(5))), Where::Place(Place::Register(RegId::from_raw(0))));
         let entries = [Entry::Value { at: 0, place: one }, Entry::Value { at: 10, place: two }];
         assert_eq!(locations(&entries, 40, &|at| at + 1), [(0, 10, one), (10, 40, two)]);
     }

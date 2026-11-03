@@ -703,25 +703,30 @@ fn flowed(
         Place::Register(register) => masm::Place::Register(register),
         Place::Cell(disp) => masm::Place::Cell { disp, bytes: 0 },
     };
-    super::livedebugvalues::history::in_code(&placed.ranges, &placed.insns, &|id| starts.get(&(*slot_of.get(&id)? as u64)).copied(), length)
-        .into_iter()
-        .map(|(var, ranges)| {
-            let ranges = ranges
-                .into_iter()
-                .filter_map(|(from, to, at)| {
-                    let held = match at {
-                        Where::Place(one) => Held::Place(place(one)),
-                        Where::Offset(one, add) => Held::Offset(place(one), add),
-                        Where::Constant(value) => Held::Constant(value),
-                        Where::Entry(register) => Held::Entry(register),
-                        Where::Undef => return None,
-                    };
-                    Some((from, to, vec![held]))
-                })
-                .collect();
-            ((var.variable, var.piece), ranges)
-        })
-        .collect()
+    super::livedebugvalues::history::in_code(
+        &placed.ranges,
+        &placed.insns,
+        &|id| starts.get(&(*slot_of.get(&id)? as u64)).copied(),
+        length,
+    )
+    .into_iter()
+    .map(|(var, ranges)| {
+        let ranges = ranges
+            .into_iter()
+            .filter_map(|(from, to, at)| {
+                let held = match at {
+                    Where::Place(one) => Held::Place(place(one)),
+                    Where::Offset(one, add) => Held::Offset(place(one), add),
+                    Where::Constant(value) => Held::Constant(value),
+                    Where::Entry(register) => Held::Entry(register),
+                    Where::Undef => return None,
+                };
+                Some((from, to, vec![held]))
+            })
+            .collect();
+        ((var.variable, var.piece), ranges)
+    })
+    .collect()
 }
 
 /// The one place that holds a value in every range of `ranges`, which must run

@@ -57,16 +57,15 @@ pub struct Options {
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options =
-        Options {
-            mid_end: false,
-            size: false,
-            source_order: false,
-            indexed: false,
-            push_frame: false,
-            short: false,
-            debug: false,
-        };
+    pub const PINNED: Options = Options {
+        mid_end: false,
+        size: false,
+        source_order: false,
+        indexed: false,
+        push_frame: false,
+        short: false,
+        debug: false,
+    };
 }
 
 impl Default for Options {

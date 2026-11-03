@@ -165,7 +165,8 @@ pub fn program(
     let mut units: Vec<(usize, Option<&llrm_debug::Function>)> = Vec::new();
     for section in sections {
         if out.sequence_per_function {
-            let own = info.functions.iter().filter(|one| one.ranges.first().is_some_and(|range| range.section == section));
+            let own =
+                info.functions.iter().filter(|one| one.ranges.first().is_some_and(|range| range.section == section));
             units.extend(own.map(|function| (section, Some(function))));
         } else {
             units.push((section, None));

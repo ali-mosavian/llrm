@@ -3005,7 +3005,13 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name), slots, sunk, shared, moved))
+    Ok((
+        own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name),
+        slots,
+        sunk,
+        shared,
+        moved,
+    ))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,

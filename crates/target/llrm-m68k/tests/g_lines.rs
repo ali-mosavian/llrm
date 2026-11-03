@@ -8,7 +8,10 @@ fn assembly(debug: bool) -> String {
     assembly_of("lines.ll", debug)
 }
 
-fn assembly_of(fixture: &str, debug: bool) -> String {
+fn assembly_of(
+    fixture: &str,
+    debug: bool,
+) -> String {
     let directory = tempfile::tempdir().unwrap();
     let out = directory.path().join("lines.s");
     let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"));
@@ -16,7 +19,8 @@ fn assembly_of(fixture: &str, debug: bool) -> String {
     if debug {
         command.arg("-g");
     }
-    let said = command.arg("-o").arg(&out).arg(format!("{}/tests/g/{fixture}", env!("CARGO_MANIFEST_DIR"))).output().unwrap();
+    let said =
+        command.arg("-o").arg(&out).arg(format!("{}/tests/g/{fixture}", env!("CARGO_MANIFEST_DIR"))).output().unwrap();
     assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
     std::fs::read_to_string(out).unwrap()
 }

@@ -6,14 +6,21 @@ mod target_dir;
 use std::path::Path;
 use std::process::Command;
 
-fn tool(program: &str, args: &[&str], file: &Path) -> Option<String> {
+fn tool(
+    program: &str,
+    args: &[&str],
+    file: &Path,
+) -> Option<String> {
     let out = Command::new(program).args(args).arg(file).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// The bytes `function` moves the stack pointer down by: pushes and
 /// `sub $n,%rsp`, up to its first `ret`.
-fn moved(disassembly: &str, function: &str) -> u64 {
+fn moved(
+    disassembly: &str,
+    function: &str,
+) -> u64 {
     let mut total = 0;
     let mut inside = false;
     for line in disassembly.lines() {
@@ -42,7 +49,11 @@ fn moved(disassembly: &str, function: &str) -> u64 {
 
 /// The deepest CFA offset the FDE covering `function` describes, less the
 /// return address.
-fn described(frames: &str, function: &str, start: u64) -> u64 {
+fn described(
+    frames: &str,
+    function: &str,
+    start: u64,
+) -> u64 {
     let _ = function;
     let mut inside = false;
     let mut deepest = 0;

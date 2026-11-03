@@ -6,12 +6,17 @@ mod target_dir;
 use std::path::Path;
 use std::process::Command;
 
-fn run(program: &str, args: &[&str], file: &Path) -> Option<String> {
+fn run(
+    program: &str,
+    args: &[&str],
+    file: &Path,
+) -> Option<String> {
     let out = Command::new(program).args(args).arg(file).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// `(name, DW_AT_high_pc)` of each subprogram, as `readelf` prints the info section.
+/// `(name, DW_AT_high_pc)` of each subprogram, as `readelf` prints the info
+/// section.
 fn high_pcs(info: &str) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     let (mut name, mut high, mut inside) = (String::new(), None, false);
@@ -27,7 +32,8 @@ fn high_pcs(info: &str) -> Vec<(String, u64)> {
         } else if inside && line.contains("DW_AT_name") {
             name = line.rsplit(": ").next().unwrap_or("").trim().to_owned();
         } else if inside && line.contains("DW_AT_high_pc") {
-            high = line.rsplit(": ").next().and_then(|n| u64::from_str_radix(n.trim().trim_start_matches("0x"), 16).ok());
+            high =
+                line.rsplit(": ").next().and_then(|n| u64::from_str_radix(n.trim().trim_start_matches("0x"), 16).ok());
         }
     }
     flush(&mut name, &mut high, &mut out);

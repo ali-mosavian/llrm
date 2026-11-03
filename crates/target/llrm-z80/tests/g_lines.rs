@@ -72,7 +72,11 @@ fn adb_of(
         .replace(&LOCATED_LAYOUT.replace("i16", ret), LOCATED_LAYOUT)
         .replace("SIZE", &size.to_string())
         .replace("ENC", encoding);
-    llrm_z80::driver::adb(&ir, &llrm_z80::driver::Request { debug: true, ..llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2) }).expect("an adb")
+    llrm_z80::driver::adb(
+        &ir,
+        &llrm_z80::driver::Request { debug: true, ..llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2) },
+    )
+    .expect("an adb")
 }
 
 /// The `.adb` named no result type, or read signed and unsigned alike
@@ -95,7 +99,11 @@ fn the_adb_lists_a_declared_function_with_its_type() {
         .replace("%c = add i16 %a, %b, !dbg !7", "%c = call i16 @g(i16 %a), !dbg !7")
         .replace("!6 = !DISubroutineType(types: !{null})", "!6 = !DISubroutineType(types: !{null})\n!10 = !DISubprogram(name: \"g\", scope: !1, file: !1, line: 9, type: !11, spFlags: 0)\n!11 = !DISubroutineType(types: !{!12, !12})\n!12 = !DIBasicType(name: \"int\", size: 16, encoding: DW_ATE_signed)")
         .replace("declare i16 @g(i16)", "declare i16 @g(i16) !dbg !10");
-    let adb = llrm_z80::driver::adb(&ir, &llrm_z80::driver::Request { debug: true, ..llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2) }).expect("an adb");
+    let adb = llrm_z80::driver::adb(
+        &ir,
+        &llrm_z80::driver::Request { debug: true, ..llrm_z80::driver::Request::new(llrm_z80::driver::Level::O2) },
+    )
+    .expect("an adb");
     assert!(adb.contains("S:G$g$0_0$0({2}DF,SI:S),C,0,0"), "{adb}");
 }
 
@@ -149,7 +157,8 @@ fn the_adb_writes_a_parameter_as_sdcc_does() {
     let dir = std::env::temp_dir().join(format!("z80-adb-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("f.c"), "int g(int);\nint f(int a, unsigned b){int x=g(a);return x+b;}\n").unwrap();
-    let Ok(status) = std::process::Command::new("sdcc").current_dir(&dir).args(["-mz80", "--debug", "-c", "f.c"]).status()
+    let Ok(status) =
+        std::process::Command::new("sdcc").current_dir(&dir).args(["-mz80", "--debug", "-c", "f.c"]).status()
     else {
         return;
     };

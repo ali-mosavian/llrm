@@ -520,10 +520,14 @@ pub fn emit(
                 let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
                 if let Some(&Some(place)) = one.dag.lines.get(order) {
                     let places = &mut emitter.function.places;
-                    let number = *place_numbers.entry(place).or_insert_with(|| {
-                        places.push(place);
-                        places.len()
-                    });
+                    let number = *place_numbers
+                        .entry(place)
+                        .or_insert_with(
+                            || {
+                                places.push(place);
+                                places.len()
+                            },
+                        );
                     for made in &mut insts[before..] {
                         if made.origin == 0 {
                             made.origin = number as u32;

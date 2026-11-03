@@ -1288,7 +1288,12 @@ impl Builder<'_> {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
-            clobbers: names.iter().copied().filter(|name| Some(*name) != segment.map(|(es, _)| es)).map(Into::into).collect(),
+            clobbers: names
+                .iter()
+                .copied()
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
+                .map(Into::into)
+                .collect(),
             memory: true,
             fixups: Vec::new(),
         };

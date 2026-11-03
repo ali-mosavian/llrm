@@ -140,9 +140,15 @@ fn locate_with(
                         NoteValue::Offset(value, add) => (*value, Some(*add), Where::Undef, Where::Undef),
                         NoteValue::Arrived(value, register) => {
                             let gap = if entry_values { Where::Entry(*register) } else { Where::Undef };
-                            // Before its first place it is still in the register it
+                            // Before its first place it is still in the
+                            // register it
                             // arrived in (the pin's live-in `DBG_VALUE $reg`).
-                            (*value, None, gap, if entry_values { gap } else { Where::Place(Place::Register(*register)) })
+                            (
+                                *value,
+                                None,
+                                gap,
+                                if entry_values { gap } else { Where::Place(Place::Register(*register)) },
+                            )
                         }
                         NoteValue::Expr(expr) => match (expr.args.as_slice(), expr.ops.is_empty()) {
                             ([NoteArg::Value(value)], true) if expr.value => (*value, None, Where::Undef, Where::Undef),
@@ -508,7 +514,11 @@ mod tests {
         let found = locate(&[note(10, 1, NoteValue::Arrived(5, RegId::from_raw(7)))], &table, 40, false);
         assert_eq!(
             ranges(&found),
-            [(10, 20, Where::Place(Place::Register(RegId::from_raw(7)))), (20, 30, Where::Place(reg(1))), (30, 40, Where::Undef)]
+            [
+                (10, 20, Where::Place(Place::Register(RegId::from_raw(7)))),
+                (20, 30, Where::Place(reg(1))),
+                (30, 40, Where::Undef)
+            ]
         );
         let address = NoteValue::Expr(std::sync::Arc::new(crate::model::lir::NoteExpr {
             args: vec![NoteArg::Value(5)],

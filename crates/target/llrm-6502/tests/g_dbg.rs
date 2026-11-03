@@ -37,8 +37,11 @@ fn g_names_the_file_and_the_lines_that_have_code() {
 #[test]
 fn g_adds_directives_and_leaves_the_instructions_alone() {
     let plain = text(false);
-    let without_directives: String =
-        text(true).lines().filter(|line| !line.trim_start().starts_with(".dbg")).map(|line| format!("{line}\n")).collect();
+    let without_directives: String = text(true)
+        .lines()
+        .filter(|line| !line.trim_start().starts_with(".dbg"))
+        .map(|line| format!("{line}\n"))
+        .collect();
     assert_eq!(without_directives, plain);
 }
 

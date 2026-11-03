@@ -4722,7 +4722,8 @@ mod tests {
         for (noted, stamped) in [(true, true), (true, false), (false, false)] {
             let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
             let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
-            let slots: crate::support::hash::HashMap<u64, i64> = [(r#move.id(), 16), (leave.id(), 32)].into_iter().collect();
+            let slots: crate::support::hash::HashMap<u64, i64> =
+                [(r#move.id(), 16), (leave.id(), 32)].into_iter().collect();
             let mut body = lir::LirBody::new(
                 "get",
                 1,

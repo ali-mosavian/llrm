@@ -261,7 +261,10 @@ pub fn adb(
                     format!("B,1,{}", offset - ends.get(index as usize).copied().unwrap_or(0))
                 }
             };
-            out.push_str(&format!("S:L{stem}.{}${}$1_0${at}({{{size}}}{spelling}),{place}\n", one.function, variable.name));
+            out.push_str(&format!(
+                "S:L{stem}.{}${}$1_0${at}({{{size}}}{spelling}),{place}\n",
+                one.function, variable.name
+            ));
         }
     }
     // A function the module calls but does not define: a symbol of its own.

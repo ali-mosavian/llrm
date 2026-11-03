@@ -502,7 +502,11 @@ pub fn flow_of(
             written.extend(one.clobbers.iter().copied());
             written.extend(one.delivers.iter().map(|(_, register)| *register));
             if !written.is_empty() {
-                events.push((here, if one.arrival() { 0 } else { 2 }, Event::Def { written, mask: None, livein: one.arrival() }));
+                events.push((
+                    here,
+                    if one.arrival() { 0 } else { 2 },
+                    Event::Def { written, mask: None, livein: one.arrival() },
+                ));
             }
             let root = |value: u32| target.parents.get(&value).copied().unwrap_or(value);
             let register = |value: &u32| placed.get(value).copied();

@@ -143,7 +143,8 @@ pub fn select_function(
     for (reg, parts) in wide {
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
-    let variables = variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
+    let variables =
+        variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
     Ok(Selection { blocks: selected, locals, cpu, widths, variables })
 }
 
