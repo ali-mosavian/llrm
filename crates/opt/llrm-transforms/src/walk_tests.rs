@@ -2458,6 +2458,7 @@ fn m32_tree_calls(
 /// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
 /// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
 /// into itself to depth 8 (REC-2).
+#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
@@ -2467,6 +2468,7 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
 /// gcc rejects the recursive edge of quicksort and bintree at -O2 ("max-inline-insns-auto
 /// limit reached", growth 25-28 and 15-22 against 15) and takes it at -O3
 /// (30): a body that grows past 15 is copied at -O3 only.
+#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
     let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
@@ -2480,11 +2482,12 @@ fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
 /// is read in those units, not in `gcc_insns` (fib 8, quicksort 18 against
 /// gcc's 34, which let quicksort and bintree grow 490 -> 1218 and 449 -> 1464
 /// bytes at m32 -O2).
+#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
     let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
     let (_, _, fib) = module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
-    assert_eq!((crate::inline::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
 }
 
 /// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
@@ -2492,6 +2495,7 @@ fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
 /// where gcc rejects it ("max-inline-insns-auto limit reached"): the call
 /// term of the bar scaled with the parameters, 10 for three, which gave it
 /// growth 12.
+#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_the_edge_growth_of_a_three_parameter_recursion_is_its_size_less_the_call() {
     let module = parsed(
@@ -2522,7 +2526,16 @@ rec:
 ",
     );
     let (_, _, insert) = module.functions().next().expect("insert");
-    let size = crate::inline::gcc_size(insert);
+    let size = llrm_gpl_gcc::gcc_size(insert);
     assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
     assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
+}
+
+/// Without `gcc-gpl` the edge bar cannot be computed: m32 copies no recursion
+/// and its code equals the pin's (REC-2 is inert).
+#[cfg(not(feature = "gcc-gpl"))]
+#[test]
+fn test_m32_copies_no_recursion_without_the_gcc_feature() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
 }
