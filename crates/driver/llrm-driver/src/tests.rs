@@ -496,18 +496,17 @@ fn a_red_zone_that_costs_displacement_bytes_is_not_taken_at_m64() {
     assert!(!listing.contains("rsp+rdi*2-"), "{listing}");
 }
 
-/// `shl nuw nsw i64 (zext i32 x), 3` was a 64-bit shift (REX.W, a 7 B
-/// base-less `lea` once three-address): the pin's
-/// `ShrinkDemandedOp` and half-width shift run them as 32-bit ones, which
-/// zero-extend for free at x86-64 (pattern_fill Os).
+/// `(x + y) & 0xffffffff` was a 64-bit `add` and a `movzx` (REX.W): the pin's
+/// `ShrinkDemandedOp` runs it as one 32-bit `add`, which zero-extends for free
+/// at x86-64 (pattern_fill Os).
 #[test]
 fn a_zero_extended_operand_is_computed_at_32_bits_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                define i64 @f(i32 %x, i32 %y) {\n  %a = zext i32 %x to i64\n  %s = shl nuw nsw i64 %a, 3\n  %b = zext i32 %y to i64\n  %t = add nuw nsw i64 %s, %b\n  ret i64 %t\n}\n";
+                define i64 @f(i64 %x, i64 %y) {\n  %s = add i64 %x, %y\n  %m = and i64 %s, 4294967295\n  ret i64 %m\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("shl edi, 3") && !listing.contains("shl r") && !listing.contains("rdi*8"), "{listing}");
+    assert!(!listing.contains("rax") && !listing.contains("movzx"), "{listing}");
 }
 
 /// The half-width shifts built their amount in the narrow type, not the
