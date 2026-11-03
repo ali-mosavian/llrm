@@ -1852,13 +1852,18 @@ pub fn float_stack(
         return _assemble(&raised(create_reg_reg(Code::Fxch_st0_sti, RegId::ST0, stack_register(index))), at, true);
     }
     // COMPARE, "fcom" or "fcomp", (), (St(0), St(index)): st(0) against any
-    // slot, popped or not
+    // slot, popped or not; "fcomi" and "fcomip" set EFLAGS themselves
     let compare =
         (what.op == Operation::Compare && dests.is_empty() && sources.len() == 2 && st_index(&sources[0]) == Some(0))
             .then(|| st_index(&sources[1]))
             .flatten();
-    if let (Some(index), Some(name @ ("fcom" | "fcomp"))) = (compare, name) {
-        let code = if name == "fcom" { Code::Fcom_st0_sti } else { Code::Fcomp_st0_sti };
+    if let (Some(index), Some(name @ ("fcom" | "fcomp" | "fcomi" | "fcomip"))) = (compare, name) {
+        let code = match name {
+            "fcom" => Code::Fcom_st0_sti,
+            "fcomp" => Code::Fcomp_st0_sti,
+            "fcomi" => Code::Fcomi_st0_sti,
+            _ => Code::Fcomip_st0_sti,
+        };
         return _assemble(&raised(create_reg_reg(code, RegId::ST0, stack_register(index))), at, true);
     }
     // SELECT, "cmovCC", (St(0),), (St(0), St(index)): `fcmovCC`, which reads
@@ -2784,7 +2789,7 @@ pub fn emit_in(
     if op == Operation::Compare && name.starts_with('f') {
         // st(0) is implicit; what is encoded is the memory operand, if any.
         let memory: Vec<&ir::Mem> = sources.iter().filter_map(mem_of).collect();
-        if memory.is_empty() && matches!(name, "fcom" | "fcomp") {
+        if memory.is_empty() && matches!(name, "fcom" | "fcomp" | "fcomi" | "fcomip") {
             return float_stack(what, at);
         }
         return if memory.is_empty() { bare(name, at) } else { float_memory(name, memory[0], at) };

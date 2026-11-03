@@ -202,6 +202,7 @@ fn popping(what: &Semantics) -> Option<Semantics> {
         (Operation::FloatStore, "fist") => Some(renamed("fistp")),
         (Operation::FloatStore, "fistt") => Some(renamed("fisttp")),
         (Operation::Compare, "fcom") => Some(renamed("fcomp")),
+        (Operation::Compare, "fcomi") => Some(renamed("fcomip")),
         (Operation::Compare, "fcomp") if what.sources == [st(0), st(1)] => Some(renamed("fcompp")),
         (Operation::Compare, "ficom") => Some(renamed("ficomp")),
         // `ST(i) = ST(i) op ST(0)` pops as `op p`.
@@ -840,7 +841,13 @@ impl Fps<'_> {
         self.slot(right)?;
         self.move_to_top(left)?;
         let slot = self.slot(right)?;
-        self.emit(semantics(Operation::Compare, "fcom", Vec::new(), vec![st(0), st(slot)]));
+        let flags = self.one().what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fcomi"));
+        self.emit(semantics(
+            Operation::Compare,
+            if flags { "fcomi" } else { "fcom" },
+            Vec::new(),
+            vec![st(0), st(slot)],
+        ));
         self.deferred = Some(Vec::new());
         let (kills_left, kills_right) = (step.kills(left), step.kills(right));
         let result: Result<(), Raised> = (|| {
@@ -854,7 +861,9 @@ impl Fps<'_> {
         })();
         let deferred = self.deferred.take().unwrap_or_default();
         result?;
-        self.status()?;
+        if !flags {
+            self.status()?;
+        }
         for slot in deferred {
             self.insert(semantics(Operation::FloatStore, "fstp", vec![st(slot)], vec![st(0)]));
         }

@@ -2951,6 +2951,10 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
+                if name.contains("FpIr") {
+                    self.push(Operation::Compare, "fcomi", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                    return Ok(Some(()));
+                }
                 match self.status_reader(n) {
                     Some(sahf) => {
                         self.pending_fcom.insert(sahf, (left, right));

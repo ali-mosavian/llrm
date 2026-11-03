@@ -1012,7 +1012,7 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fcom"))));
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fcomi"))));
 }
 
 /// A `long double` converted to `u64` at m64 was

@@ -3228,6 +3228,10 @@ pub fn _instruction(
             vec![format!("{name} {}, {}", dests[0], sources[0])]
         }
         Operation::Unary => vec![format!("{name} {}", dests[0])],
+        // `fcomi` has no implicit operand: `fcomip st(0), st(1)`.
+        Operation::Compare if matches!(name, "fcomi" | "fcomip") => {
+            vec![format!("{name} {}, {}", sources[0], sources[1])]
+        }
         Operation::Compare if name.starts_with('f') => {
             let memory: Vec<&String> = sources
                 .iter()

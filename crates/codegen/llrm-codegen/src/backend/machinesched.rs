@@ -1571,7 +1571,10 @@ mod tests {
             insn(1, semantics(Operation::Binary, "adc", vec![held(3)], vec![held(3), held(4)]), vec![3], vec![3, 4]),
         ];
         assert_eq!(graph(&insns, regs, 16).preds[1], [0], "the adc stays after the fcom");
-        for name in ["fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "ftst", "fxam"] {
+        for name in [
+            "fcom", "fcomp", "fcompp", "fcomi", "fcomip", "fucom", "fucomp", "fucompp", "ficom", "ficomp", "ftst",
+            "fxam",
+        ] {
             let one = insn(0, semantics(Operation::Compare, name, vec![], vec![]), vec![], vec![]);
             assert!(x87_compare(&one), "{name}");
         }
