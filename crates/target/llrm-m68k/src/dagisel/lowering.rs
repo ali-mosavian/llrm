@@ -135,6 +135,9 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     {
         tl.set_libcall_name(op, MVT::I32, name);
     }
+    // `RTLIB::MUL_I64`: what `forceExpandWideMUL` calls for the product of two
+    // `i32`s (a `smul.fix` with no `MULHS`, as the 68000's and the pin's)
+    tl.set_libcall_name(Mul, MVT::I64, "__muldi3");
     tl
 }
 
@@ -215,6 +218,17 @@ impl Hooks for M68kLowering {
         ret: EVT,
         signed: bool,
     ) -> Option<SDValue> {
+        self.make_lib_call_parts(dag, name, args, &[ret], signed)?.first().copied()
+    }
+
+    fn make_lib_call_parts(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        rets: &[EVT],
+        signed: bool,
+    ) -> Option<Vec<SDValue>> {
         use super::call::{Ext, In, Out};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let outs: Vec<Out> = args
@@ -229,16 +243,18 @@ impl Hooks for M68kLowering {
                 sret: false,
             })
             .collect();
+        let ins: Vec<In> = rets
+            .iter()
+            .map(|&ret| In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any })
+            .collect();
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let (_chain, values) = super::call::M68kCalling::default().lower_call(
-            dag,
-            root,
-            callee,
-            &outs,
-            &[In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }],
-        );
-        values.first().copied()
+        let (_chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &ins);
+        (values.len() == rets.len()).then_some(values)
+    }
+
+    fn little_endian(&self) -> bool {
+        false
     }
 }
 
