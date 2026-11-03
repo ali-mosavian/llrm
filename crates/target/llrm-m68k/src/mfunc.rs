@@ -538,7 +538,10 @@ pub fn emit(
         emitter.function.blocks.push(block);
     }
     // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
-    // the block the phi is in.
+    // the block the phi is in, from every block made for the exporting IR
+    // block that leaves for it (`FinishBasicBlock` gives the phi an input for
+    // each block a lowering split off).
+    let leaves = llrm_spike_mf::regalloc::successors(&emitter.function);
     for (pred, one) in blocks.iter().enumerate() {
         for update in &one.phis {
             let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
@@ -559,10 +562,19 @@ pub fn emit(
             };
             let result = register(&mut emitter, update.result);
             let incoming = register(&mut emitter, update.incoming);
-            let phis = &mut emitter.function.blocks[at].phis;
-            match phis.iter_mut().find(|phi| phi.result == result) {
-                Some(phi) => phi.incoming.push((pred, incoming)),
-                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            let mut edges: Vec<usize> = (0..blocks.len())
+                .filter(|&from| blocks[from].parent == one.block && leaves[from].contains(&at))
+                .collect();
+            if edges.is_empty() {
+                edges.push(pred);
+            }
+            for from in edges {
+                let phis = &mut emitter.function.blocks[at].phis;
+                match phis.iter_mut().find(|phi| phi.result == result) {
+                    Some(phi) if phi.incoming.iter().any(|(edge, _)| *edge == from) => {}
+                    Some(phi) => phi.incoming.push((from, incoming)),
+                    None => phis.push(Phi { result, incoming: vec![(from, incoming)] }),
+                }
             }
         }
     }

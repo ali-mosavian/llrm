@@ -25,7 +25,7 @@ use llrm_spike_mf::{
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
-use crate::emit::{MInst, Operand as Machine, address, spill};
+use crate::emit::{MInst, Operand as Machine, address, indexed_address, spill};
 use crate::reg;
 use crate::select::Item;
 
@@ -1349,9 +1349,9 @@ pub fn build_with_places(
                 }
             }
             op::LDAX | op::STAX => {
-                let Machine::Label(symbol) = &o[1] else { return Err(Unsupported("an indexed access".into())) };
+                let symbol = indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
                 let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
-                let index = b.byte(name(&o[2])?)?;
+                let index = b.byte(name(&o[3])?)?;
                 b.copy(x, index);
                 if inst.opcode == op::LDAX {
                     b.define(name(&o[0])?);

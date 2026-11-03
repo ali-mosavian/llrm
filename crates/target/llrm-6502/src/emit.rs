@@ -118,6 +118,21 @@ fn branch_on(code: u128) -> Result<&'static str, String> {
     })
 }
 
+/// `symbol+offset` (or `symbol-k` for an offset above $7FFF, which the access
+/// wraps to) for an indexed access.
+pub fn indexed_address(
+    symbol: &Operand,
+    offset: &Operand,
+) -> Result<String, String> {
+    match offset {
+        Operand::Imm(offset) if *offset > 0x7FFF => match symbol {
+            Operand::Label(symbol) => Ok(format!("{symbol}-{}", 0x1_0000 - offset)),
+            other => Err(format!("{other:?} is not an absolute address")),
+        },
+        _ => address(symbol, offset),
+    }
+}
+
 /// `symbol+offset` for an absolute access.
 pub fn address(
     symbol: &Operand,
@@ -302,11 +317,8 @@ pub fn expand(
         }
         op::LDAX | op::STAX => {
             let load = inst.opcode == op::LDAX;
-            let (value, symbol, index) = if load { (&o[0], &o[1], &o[2]) } else { (&o[0], &o[1], &o[2]) };
-            let Operand::Label(symbol) = symbol else {
-                return Err(format!("an indexed access takes a symbol, not {symbol:?}"));
-            };
-            let (value, index) = (reg(value)?, reg(index)?);
+            let (value, index) = (reg(&o[0])?, reg(&o[3])?);
+            let symbol = indexed_address(&o[1], &o[2])?;
             if load {
                 writeln!(out, "  ldx {index}\n  lda {symbol},x\n  sta {value}").unwrap();
             } else {
