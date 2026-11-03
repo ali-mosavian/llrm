@@ -384,7 +384,13 @@ impl Printer<'_> {
                     }
                 }
             }
-            "SHL16" if shift_count(inst)? == 1 && self.register(inst, 0)? == reg::HL => self.push("add hl, hl"),
+            // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
+            // h`'s 4 B / 16 T
+            "SHL16" if self.register(inst, 0)? == reg::HL => {
+                for _ in 0..shift_count(inst)? {
+                    self.push("add hl, hl");
+                }
+            }
             "SHL16" | "SRL16" | "SRA16" => {
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (lo, hi) = (name(lo), name(hi));
