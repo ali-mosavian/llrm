@@ -2539,3 +2539,30 @@ fn test_m32_copies_no_recursion_without_the_gcc_feature() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
     assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
 }
+
+/// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
+/// default build must link none of it. Reads the manifests: the dependency is
+/// `optional`, no `default` feature set names `gcc-gpl`, and no other crate
+/// depends on the crate.
+#[test]
+fn test_the_default_build_links_no_gcc_derived_crate() {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = here.join("../../..");
+    let transforms = std::fs::read_to_string(here.join("Cargo.toml")).unwrap();
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let dependency = transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
+    assert!(dependency.contains("optional = true"), "llrm-gpl-gcc is a plain dependency: {dependency}");
+    for (name, text) in [("llrm-transforms", &transforms), ("the workspace root", &workspace)] {
+        let default = text.lines().find(|line| line.trim_start().starts_with("default = ")).unwrap_or("");
+        assert!(!default.contains("gcc-gpl"), "{name} enables gcc-gpl by default: {default}");
+    }
+    for entry in std::fs::read_dir(root.join("crates")).unwrap().flatten().flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten()) {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
+        let owner = entry.file_name();
+        if owner == "llrm-gpl-gcc" || owner == "llrm-transforms" {
+            continue;
+        }
+        assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
+}
