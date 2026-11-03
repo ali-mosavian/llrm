@@ -46,4 +46,4 @@ Coverage differs: the gcc objects also hold the compares and negate, which the h
   is responsible (ftou with add off 462, sub off 451, neg/not off 441). One general cause was fixed (a constant mask emitted `and #255`/`and #0`
   for identity bytes: ftou 458 -> 442); the rest is 4-byte carry chains and copies for zero-extended operands.
 - gcc returns in rc2..rc5, the hand code in registers; the caller's move of the result is not charged to either side.
-- Not measured: Z80 (backend ICEs on SImode shift/multiply), llrm-cc on the same C. All -O1 cells pass (0 fails); -O1 clocks are not benched.
+- Not measured: Z80 (its SImode shift/multiply patterns work now, tested on ucsim; `sf32.c` and `sf32_conv.c` compile, `int32.c` still hits the reload limit), llrm-cc on the same C. All -O1 cells pass (0 fails); -O1 clocks are not benched.
