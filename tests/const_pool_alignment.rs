@@ -71,5 +71,12 @@ fn test_dword_constants_on_their_boundary_ask_for_no_alignment() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(text.matches("db ").count() >= 2, "{text}");
-    assert!(!text.lines().skip_while(|line| *line != ".data").take_while(|line| *line != ".data?").any(|line| line.trim() == "align 4"), "{text}");
+    assert!(
+        !text
+            .lines()
+            .skip_while(|line| *line != ".data")
+            .take_while(|line| *line != ".data?")
+            .any(|line| line.trim() == "align 4"),
+        "{text}"
+    );
 }
