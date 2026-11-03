@@ -84,6 +84,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         multiply_by_clocks: true,
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
+        inline_size_guard_at_size: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }

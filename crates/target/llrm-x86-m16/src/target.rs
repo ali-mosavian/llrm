@@ -312,7 +312,6 @@ impl Machine for Dos {
             // it), and frame reloads in sum_three. Exit 2026-11-30: the
             // bytes those rows hold above main recovered by the register
             // allocator, then re-price the chain.
-            inline_size_guard_at_speed: true,
             // DEVIATE: a constant offset is a displacement of the access at
             // m16; behind a sunk phi it costs an add and a register
             // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
