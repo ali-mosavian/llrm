@@ -448,12 +448,16 @@ pub fn gcc_size(body: &Function) -> i64 {
         .sum()
 }
 
-/// What a copy of `body` into itself adds, in `gcc_size`: its size less twice
-/// the call it replaces, the call and the moves of its arguments and result
-/// (gcc's edge growth, `want_inline_small_function_p`; its dump gives fib 6,
-/// quicksort 25-28, bintree walk 15-22 for sizes 12, 34 and 23).
+/// The size of the call a copy of a recursive body replaces, with the moves of
+/// its arguments and result: `gcc_size` less this is gcc's edge growth in its
+/// `-fdump-ipa-inline-details` for fib (size 12, growth 6), quicksort `sort`
+/// (34, 25-28) and bintree `walk` (23, 15-22); the same for 1 and 3 parameters.
+const RECURSIVE_CALL_SIZE: i64 = 6;
+
+/// What a copy of `body` into itself adds, in `gcc_size` (gcc's edge growth,
+/// `want_inline_small_function_p`).
 pub fn recursive_edge_growth(body: &Function) -> i64 {
-    gcc_size(body) - 2 * (2 + body.parameters().len() as i64)
+    gcc_size(body) - RECURSIVE_CALL_SIZE
 }
 
 fn semantic_count(body: &Function) -> i64 {

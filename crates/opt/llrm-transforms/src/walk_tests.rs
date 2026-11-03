@@ -2486,3 +2486,43 @@ fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
     let (_, _, fib) = module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
     assert_eq!((crate::inline::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
 }
+
+/// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
+/// gcc's dump) was peeled into its caller at m32 -O2 (code 257 -> 299 bytes)
+/// where gcc rejects it ("max-inline-insns-auto limit reached"): the call
+/// term of the bar scaled with the parameters, 10 for three, which gave it
+/// growth 12.
+#[test]
+fn test_the_edge_growth_of_a_three_parameter_recursion_is_its_size_less_the_call() {
+    let module = parsed(
+        "define void @insert(ptr %t, i32 %at, i32 %node) {
+b0:
+  %n3 = mul i32 %node, 3
+  %p = getelementptr i32, ptr %t, i32 %n3
+  %k = load i32, ptr %p
+  %a3 = mul i32 %at, 3
+  %q = getelementptr i32, ptr %t, i32 %a3
+  %k2 = load i32, ptr %q
+  %lt = icmp slt i32 %k, %k2
+  %side = select i1 %lt, i32 1, i32 2
+  %i = add i32 %a3, %side
+  %s = getelementptr i32, ptr %t, i32 %i
+  %c = load i32, ptr %s
+  %z = icmp eq i32 %c, 0
+  br i1 %z, label %put, label %rec
+
+put:
+  store i32 %node, ptr %s
+  ret void
+
+rec:
+  call void @insert(ptr %t, i32 %c, i32 %node)
+  ret void
+}
+",
+    );
+    let (_, _, insert) = module.functions().next().expect("insert");
+    let size = crate::inline::gcc_size(insert);
+    assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
+    assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
+}
