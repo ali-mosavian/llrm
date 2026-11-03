@@ -1161,3 +1161,25 @@ fn test_a_recursion_called_with_two_lengths_keeps_the_length_a_parameter() {
     assert!(text.contains("icmp ult i16 %row, %0") && text.contains("call void @trap()"), "{text}");
     assert!(!text.contains("icmp ult i16 %row, 12") && !text.contains("icmp ult i16 %row, 5"), "{text}");
 }
+
+/// `willreturn` for a loop nothing proves finite summarized every global again
+/// for each such function (8.3G of 28G instructions at 1200 functions): the
+/// summaries are made once for the walk over the components.
+#[test]
+fn stamping_does_not_summarize_every_global_for_each_function() {
+    let scans = |functions: usize| {
+        let text: String = (0..functions)
+            .map(|n| {
+                format!(
+                    "define i32 @f{n}(ptr %p) {{\nb0:\n  br label %b1\nb1:\n  %v = load i32, ptr %p\n  %c = icmp ne i32 %v, 0\n  br i1 %c, label %b1, label %b2\nb2:\n  ret i32 %v\n}}\n"
+                )
+            })
+            .collect();
+        let mut module = parsed(&text);
+        let before = llrm_mir::memory::callee_map_scans();
+        crate::testing::stamped(&mut module).unwrap();
+        llrm_mir::memory::callee_map_scans() - before
+    };
+    let (few, many) = (scans(4), scans(32));
+    assert!(many <= few + 2, "4 functions: {few} scans, 32: {many}");
+}

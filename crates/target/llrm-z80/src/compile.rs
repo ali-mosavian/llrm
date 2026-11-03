@@ -1499,8 +1499,13 @@ fn tail_duplicate_returns(function: &mut MFunction) {
         let reaches_unconditionally = |function: &MFunction, p: usize| {
             let last = function.blocks[p].insts.last();
             match last {
+                // a conditional branch ahead of it to the same block keeps the
+                // original alive
                 Some(inst) if inst.barrier => {
-                    matches!(inst.kind, Kind::Op("JP")) && inst.operands == [Operand::Block(id)]
+                    let insts = &function.blocks[p].insts;
+                    matches!(inst.kind, Kind::Op("JP"))
+                        && inst.operands == [Operand::Block(id)]
+                        && !insts[..insts.len() - 1].iter().any(|one| one.operands.contains(&Operand::Block(id)))
                 }
                 // falls through: no branch at all, or a conditional one that
                 // goes elsewhere
