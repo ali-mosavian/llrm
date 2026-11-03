@@ -302,10 +302,6 @@ pub fn estimate(
     estimate_calling(cpu, text, &[], None)
 }
 
-/// [`estimate`], a `jsr` of one of `routines` also costing the clocks given,
-/// and the lines of a block `n` (label `<function>_b<n>`) weighed by the loops
-/// `depth_of(n)` says it is in, where the text's own jumps back would say more:
-/// a function laid out with far branches has them nested into one another.
 thread_local! {
     static LABEL_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -316,6 +312,10 @@ pub fn label_scans() -> usize {
     LABEL_SCANS.with(std::cell::Cell::get)
 }
 
+/// [`estimate`], a `jsr` of one of `routines` also costing the clocks given,
+/// and the lines of a block `n` (label `<function>_b<n>`) weighed by the loops
+/// `depth_of(n)` says it is in, where the text's own jumps back would say more:
+/// a function laid out with far branches has them nested into one another.
 pub fn estimate_calling(
     cpu: Cpu,
     text: &str,
