@@ -368,3 +368,21 @@ fn a_lowered_br_unless_keeps_its_line() {
     let lines: Vec<u32> = f.blocks[0].iter().map(|i| i.line).collect();
     assert_eq!(lines, [0, 7, 7]);
 }
+
+/// `explicit_locals` made its `local.get` and `local.set` at line 0: the row of
+/// a located instruction began after its operand loads, not at them.
+#[test]
+fn explicit_locals_give_their_instructions_the_line_of_the_one_they_serve() {
+    let mut f = function(
+        1,
+        3,
+        vec![
+            arg(0, 0),
+            Inst { line: 5, ..Inst::new(op::LOAD_I32_A32, &[Def(1), Imm(2), Imm(0), Use(0)]) },
+            Inst { line: 6, ..Inst::new(op::RETURN, &[Use(1)]) },
+        ],
+    );
+    explicit_locals(&mut f);
+    let located: Vec<(u16, u32)> = f.blocks[0].iter().map(|i| (i.opcode, i.line)).collect();
+    assert!(located.iter().all(|&(_, line)| line != 0), "{located:?}");
+}
