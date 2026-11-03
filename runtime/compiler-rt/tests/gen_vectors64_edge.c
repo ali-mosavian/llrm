@@ -1,4 +1,4 @@
-/* Like gen_vectors64.c (same vectors64.h layout), but the operands target the hand-written m68k paths (src/m68k/sf64.s)
+/* Like gen_vectors64.c (same vectors64.h layout), but the operands target the hand-written m68k paths (config/m68k/sf64.s)
  * that random bits rarely reach. A model of the divide counts its rare steps; a run of 2000 or more fails if one is never hit.
  * cc -O2 -ffp-contract=off tests/gen_vectors64_edge.c -o gen && ./gen [n [start [count]]] > vectors64.h
  * The stream is the first n pairs (the divide-step check runs over all n); records start..start+count-1 are written. -DEXT: see put_record. */
