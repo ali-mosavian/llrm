@@ -1196,6 +1196,7 @@ entry:
         optional: false,
         enter: false,
         free: false,
+        kept: false,
         wrap_split_size: false,
         slot_scratch: None,
     };

@@ -760,6 +760,7 @@ pub trait Target {
             wrap_split_size: self.frame_wrap_split_size(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
+            kept: false,
         }
     }
 
@@ -822,6 +823,10 @@ pub struct FrameRegisters {
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,
+    /// The function's `"frame-pointer"` attribute keeps the frame register
+    /// even where nothing needs it
+    /// (`MachineFunction::disableFramePointerElim`).
+    pub kept: bool,
 }
 
 impl FrameRegisters {

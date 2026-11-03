@@ -1187,6 +1187,7 @@ fn staged(
         module.named(name).and_then(|id| module.global(id).function()).map_or(&[], |function| &function.attrs);
     if crate::backend::framefree::disable_frame_pointer_elim(function_attrs, !calls.is_empty()) {
         registers.optional = false;
+        registers.kept = true;
     }
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && !crate::backend::framefree::has_fp(
