@@ -270,7 +270,7 @@ pub fn slice(
         numbered(&|hasher| unit.metadata.len().hash(hasher)),
     ];
     own_parts.hash(&mut own);
-    let named = named(context, function, unit.metadata);
+    let named = named(context, function, unit.metadata, outer);
     let mut cache = FACTS.with(|cache| cache.take());
     if !cache.outer.as_ref().and_then(std::rc::Weak::upgrade).is_some_and(|then| std::rc::Rc::ptr_eq(&then, held)) {
         cache = Facts { outer: Some(std::rc::Rc::downgrade(held)), ..Facts::default() };
@@ -392,6 +392,7 @@ fn named(
     context: &Context,
     function: &Function,
     metadata: &[llrm_mir::module::MetadataNode],
+    outer: &Outer,
 ) -> BTreeSet<GlobalId> {
     let mut out = BTreeSet::new();
     if let Some(one) = function.personality {
@@ -404,6 +405,34 @@ fn named(
             }
         }
     }
+    // Metadata is only added to in a run, so a module of the proxy's metadata's
+    // length names what the proxy saw: found once per proxy, not per body.
+    if metadata.len() == outer.metadata.len() {
+        out.extend(outer.memo(0, || MetadataNamed(metadata_named(context, metadata))).0.iter().copied());
+    } else {
+        out.extend(metadata_named(context, metadata));
+    }
+    out
+}
+
+/// The globals the module's metadata names.
+struct MetadataNamed(BTreeSet<GlobalId>);
+
+thread_local! {
+    static METADATA_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has read every metadata node for the globals they name.
+pub fn metadata_scans() -> usize {
+    METADATA_SCANS.with(std::cell::Cell::get)
+}
+
+fn metadata_named(
+    context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+) -> BTreeSet<GlobalId> {
+    METADATA_SCANS.with(|scans| scans.set(scans.get() + 1));
+    let mut out = BTreeSet::new();
     for node in metadata {
         for operand in &node.operands {
             if let MetadataOperand::Constant(id) = operand {
@@ -426,5 +455,60 @@ mod tests {
         let mut by_hand = llrm_mir::hash::Fx::default();
         7u32.hash(&mut by_hand);
         assert_eq!(hasher.finish(), by_hand.finish());
+    }
+
+    const IR: &str = "@a = global i16 0\n@b = global i16 0\n\
+        define i16 @f() {\nb:\n  ret i16 0\n}\n\
+        !0 = !{ptr @a}\n!1 = !{ptr @b}\n!llrm.test = !{!0, !1}\n";
+
+    /// The slice of the module's only body under `outer`, as a pass at the
+    /// start of a function sees it.
+    fn slice_of(
+        module: &mut llrm_mir::module::Module,
+        outer: &std::rc::Rc<llrm_mir::passes::Outer>,
+    ) -> super::Slice {
+        use llrm_mir::module::{GlobalKind, Module};
+        use llrm_mir::passes::{Declared, Unit};
+        let layout = llrm_mir::datalayout::DataLayout::default();
+        let mut declared = Declared::of(module);
+        let Module { context, globals, metadata, .. } = module;
+        let function = globals
+            .iter_mut()
+            .find_map(|one| match &mut one.kind {
+                GlobalKind::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("a function");
+        let unit = Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+        super::slice(&unit, outer)
+    }
+
+    /// Metadata is added to in a run (inlining a body with `!llvm.loop` or
+    /// `!srcloc`, intrinsic lowering, any pass that attaches a node): a global
+    /// named by a node added after the proxy was made is read by the body, so
+    /// the slice must see it. A scan cached for the proxy and never dropped
+    /// returned the slice from before the node (0.9G of 28G instructions saved
+    /// by the cache at 1200 functions).
+    #[test]
+    fn a_node_added_after_the_proxy_changes_the_slice() {
+        let mut module = crate::testing::parsed(IR);
+        let added = module.metadata.pop().expect("two nodes");
+        let outer = std::rc::Rc::new(llrm_mir::passes::Outer::of(&module, None));
+        let before = slice_of(&mut module, &outer);
+        module.metadata.push(added);
+        // `own` has the count of nodes in it; the globals read are the part to look at.
+        assert_ne!(slice_of(&mut module, &outer).parts[4], before.parts[4], "the node naming @b was not seen");
+    }
+
+    /// The nodes are read once for a proxy, not for each body that asks.
+    #[test]
+    fn the_metadata_is_read_once_for_a_proxy() {
+        let mut module = crate::testing::parsed(IR);
+        let outer = std::rc::Rc::new(llrm_mir::passes::Outer::of(&module, None));
+        let before = super::metadata_scans();
+        for _ in 0..5 {
+            slice_of(&mut module, &outer);
+        }
+        assert_eq!(super::metadata_scans() - before, 1);
     }
 }
