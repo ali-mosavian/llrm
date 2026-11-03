@@ -162,3 +162,29 @@ fn walking_by_each_kind_of_step_reads_the_same_words() {
         }
     }
 }
+
+/// `adda.l #N, %aX` read as the `lea (N,%aX), %aX` it replaces.
+fn as_lea(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.strip_prefix("\tadda.l\t#").and_then(|rest| rest.split_once(", ")) {
+            Some((imm, reg)) => format!("\tlea\t({imm},{reg}), {reg}"),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// On the 68040 `adda.l #N` costs one clock and `lea (N,An)` two, and the
+/// tied `adda` was chosen before allocation: it changed the allocation of the
+/// whole function, and seed 277 came out 18 bytes larger and 8 clocks slower
+/// than at the 68020 (154 assembly lines differed beyond the adds). The form
+/// is chosen after allocation now, so the two CPUs allocate alike.
+#[test]
+fn the_cpu_that_prefers_adda_to_lea_allocates_as_the_one_that_does_not() {
+    use llrm_m68k::driver::{Level, assembly, cpu_of};
+    let ir = include_str!("data/seed277-pointer-adds.ll");
+    let on = |cpu: &str| assembly(ir, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
+    let (m68020, m68040) = (on("68020"), on("68040"));
+    assert!(m68040.contains("adda.l"), "the 68040 takes adda somewhere");
+    assert_eq!(as_lea(&m68040), as_lea(&m68020));
+}

@@ -57,6 +57,8 @@ struct Sink {
     eh_pad: Vec<bool>,
     uses: Vec<Vec<Use>>,
     defs: Vec<u32>,
+    /// The block of each register's definition and whether it is a `PHI`.
+    def_site: Vec<(usize, bool)>,
     /// `CEBCandidates`: the edges already considered this round.
     considered: HashSet<(usize, usize)>,
     /// `CEMergeCandidates`: the block that first held back sinking a register
@@ -177,6 +179,7 @@ impl Sink {
             eh_pad,
             uses: Vec::new(),
             defs: Vec::new(),
+            def_site: Vec::new(),
             considered: HashSet::new(),
             merge_candidates: HashMap::new(),
             copy_source: HashMap::new(),
@@ -193,6 +196,7 @@ impl Sink {
         let n = f.num_vregs();
         self.uses = vec![Vec::new(); n];
         self.defs = vec![0; n];
+        self.def_site = vec![(usize::MAX, false); n];
         for (b, insts) in f.blocks.iter().enumerate() {
             for inst in insts {
                 let is_phi = inst.opcode == PHI;
@@ -201,7 +205,10 @@ impl Sink {
                 }
                 for (at, operand) in inst.operands.iter().enumerate() {
                     match *operand {
-                        Operand::Def(r) => self.defs[r as usize] += 1,
+                        Operand::Def(r) => {
+                            self.defs[r as usize] += 1;
+                            self.def_site[r as usize] = (b, is_phi);
+                        }
                         Operand::Use(r) => {
                             let phi_pred = match (is_phi, inst.operands.get(at + 1)) {
                                 (true, Some(&Operand::Block(p))) => Some(p as usize),
@@ -305,6 +312,7 @@ impl Sink {
     fn find_succ(
         &self,
         defs: &[VReg],
+        reads: &[VReg],
         parent: usize,
         block: usize,
         break_phi_edge: &mut bool,
@@ -330,7 +338,7 @@ impl Sink {
                 }
             }
             let chosen = to?;
-            if !self.is_profitable_to_sink_to(reg, defs, parent, block, chosen, depth) {
+            if !self.is_profitable_to_sink_to(reg, defs, reads, parent, block, chosen, depth) {
                 return None;
             }
         }
@@ -343,6 +351,7 @@ impl Sink {
         &self,
         reg: VReg,
         defs: &[VReg],
+        reads: &[VReg],
         parent: usize,
         block: usize,
         to: usize,
@@ -361,11 +370,24 @@ impl Sink {
             return true;
         }
         if depth < 16
-            && let Some(next) = self.find_succ(defs, parent, to, &mut false, depth + 1)
+            && let Some(next) = self.find_succ(defs, reads, parent, to, &mut false, depth + 1)
         {
-            return self.is_profitable_to_sink_to(reg, defs, parent, to, next, depth + 1);
+            return self.is_profitable_to_sink_to(reg, defs, reads, parent, to, next, depth + 1);
         }
-        false
+        // In a cycle, sinking still pays when it shortens the live ranges of
+        // the results and no operand defined in the cycle adds pressure.
+        let Some(cycle) = self.loops.get_loop_for(BlockId(block as u32)) else { return false };
+        let header = cycle.get_header().0 as usize;
+        let shortened = defs.iter().all(|&d| self.all_uses_dominated_by_block(d, to, block, &mut false, &mut false));
+        shortened
+            && reads.iter().all(|&r| {
+                let (at, is_phi) = self.def_site[r as usize];
+                let in_cycle =
+                    self.loops.get_loop_for(BlockId(at as u32)).is_some_and(|l| l.get_header().0 as usize == header);
+                // DEVIATE 1: `registerPressureSetExceedsLimit` for an operand
+                // defined in the cycle is "exceeds".
+                !in_cycle || (is_phi && at == header)
+            })
     }
 
     /// `PostponeSplitCriticalEdge`: note the edge to split when that is worth
@@ -516,12 +538,14 @@ impl Sink {
             return false;
         }
         let defs: Vec<VReg> = inst.defs().collect();
+        let reads: Vec<VReg> =
+            inst.operands.iter().filter_map(|o| if let Operand::Use(r) = *o { Some(r) } else { None }).collect();
         if defs.is_empty() || defs.iter().any(|&r| self.defs[r as usize] != 1 || self.uses[r as usize].is_empty()) {
             return false;
         }
         let may_load = desc(inst.opcode).is_some_and(|info| info.has(flag::MAY_LOAD));
         let mut break_phi_edge = false;
-        let Some(to) = self.find_succ(&defs, b, b, &mut break_phi_edge, 0) else { return false };
+        let Some(to) = self.find_succ(&defs, &reads, b, b, &mut break_phi_edge, 0) else { return false };
         // A block with several predecessors: sink along the edge if it is
         // safe, else try to break it.
         if self.pred_count[to] > 1 {

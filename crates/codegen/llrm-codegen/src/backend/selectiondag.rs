@@ -150,6 +150,7 @@ mod reassociate;
 pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
+pub mod setcc_extreme;
 pub mod switchcg;
 pub mod target_calling;
 pub mod x86_carry;
