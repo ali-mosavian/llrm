@@ -738,6 +738,9 @@ static const unsigned long V[NV][11] = { /* a, b, add, sub, mul, div, cmp, i2f(a
   {0xF37B398Bu,0x7E800000u,0x7E7FFFFCu,0xFE800002u,0xFF800000u,0xB47B398Bu,-1,0xCD484C67u,0x4F737B3Au,0xDEADBEEFu,0xDEADBEEFu},
   {0x007FFFFFu,0x8022762Eu,0x005D89D1u,0x00A2762Du,0x80000000u,0xC06DB6ACu,1,0x4AFFFFFEu,0x4AFFFFFEu,0x00000000u,0x00000000u},
 };
+/* The compiler calls these for the float operations after the program is whole: referenced here, the dead-code pass keeps them. */
+static void *const keep[] = { (void *)__addsf3, (void *)__subsf3, (void *)__mulsf3, (void *)__divsf3, (void *)__eqsf2, (void *)__nesf2,
+                              (void *)__ltsf2, (void *)__lesf2, (void *)__gtsf2, (void *)__gesf2, (void *)__floatsisf, (void *)__fixsfsi };
 static float bits(unsigned long u) { union { unsigned long u; float f; } x; x.u = u; return x.f; }
 static unsigned long canon(float f) { union { unsigned long u; float f; } x; if (f != f) return 0x7FC00000ul; x.f = f; return x.u; }
 long bench_sfm16_float(int n)
@@ -753,4 +756,11 @@ long bench_sfm16_float(int n)
     }
     return (long)acc;
 }
-int main(void) { report(bench_sfm16_float(NV)); return 0; }
+int main(void)
+{
+    static void *volatile sink;
+    int i;
+    for (i = 0; i < 12; ++i) sink = keep[i];
+    report(bench_sfm16_float(NV));
+    return 0;
+}

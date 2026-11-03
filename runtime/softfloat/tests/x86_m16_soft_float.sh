@@ -1,6 +1,6 @@
 #!/bin/bash
-# usage: tests/x86_m16_soft_float.sh [NV] [BENCH_DIR] -> bench program sfm16_float: plain float C (+ - * / compares, int<->float) over NV vectors with the
-# soft-float library flattened beside it (SF_INTABI). Build with LLRM_BENCH_FLAGS=-msoft-float; the expected output is the same program on the host FPU (SSE, round to nearest).
+# usage: [LLRM_CC=path/to/llrm-cc] tests/x86_m16_soft_float.sh [NV] [BENCH_DIR] -> bench program sfm16_float: plain float C (+ - * / compares, int<->float) over NV vectors with the
+# soft-float library flattened beside it (SF_INTABI). Build with LLRM_BENCH_FLAGS=-mno-80387; the expected output is the same program on the host FPU (SSE, round to nearest).
 set -e
 cd "$(dirname "$0")/.."
 NV=${1:-400}; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
@@ -17,6 +17,9 @@ printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $
   echo '#endif'
   cat $T/vectors.h
   cat <<'C'
+/* The compiler calls these for the float operations after the program is whole: referenced here, the dead-code pass keeps them. */
+static void *const keep[] = { (void *)__addsf3, (void *)__subsf3, (void *)__mulsf3, (void *)__divsf3, (void *)__eqsf2, (void *)__nesf2,
+                              (void *)__ltsf2, (void *)__lesf2, (void *)__gtsf2, (void *)__gesf2, (void *)__floatsisf, (void *)__fixsfsi };
 static float bits(unsigned long u) { union { unsigned long u; float f; } x; x.u = u; return x.f; }
 static unsigned long canon(float f) { union { unsigned long u; float f; } x; if (f != f) return 0x7FC00000ul; x.f = f; return x.u; }
 long bench_sfm16_float(int n)
@@ -32,10 +35,25 @@ long bench_sfm16_float(int n)
     }
     return (long)acc;
 }
-int main(void) { report(bench_sfm16_float(NV)); return 0; }
+int main(void)
+{
+    static void *volatile sink;
+    int i;
+    for (i = 0; i < 12; ++i) sink = keep[i];
+    report(bench_sfm16_float(NV));
+    return 0;
+}
 C
 } > $B/$n/$n.c
 printf 'description = "%s: plain float C over %s vectors, soft-float library flattened"\nrepetitions = 1\n\n[region]\nc = "bench_%s"\n' "$n" "$NV" "$n" > $B/$n/bench.toml
 sed -i '1i #define __SOFT_LIB 1' $B/$n/$n.c
 gcc -m32 -msse2 -mfpmath=sse -O0 -w -U__SOFT_LIB $B/$n/$n.c $T/rep.c -o $T/ref && $T/ref > $B/$n/$n.out
 echo "wrote $B/$n expected $(cat $B/$n/$n.out)"
+# A program that matches the host proves nothing if it ran on the x87: with LLRM_CC, the compiled function must call the routines and use no x87 op.
+if [ -n "$LLRM_CC" ]; then
+  $LLRM_CC --target=x86_16-wat -march=i386 -O2 -mno-80387 -S -o $T/f.s $B/$n/$n.c
+  x87=$(awk '/^bench_sfm16_float:/,/^[a-z_0-9]+:$/ && !/^bench_sfm16_float:/ {exit} {print}' $T/f.s | grep -c -E '^\s+f(ld|st|add|sub|mul|div|comp|ild|istp|xch)' || true)
+  calls=$(grep -c -E 'call.*__(add|sub|mul|div)sf3' $T/f.s || true)
+  echo "x87 ops $x87, soft-float calls $calls"
+  [ "$x87" -eq 0 ] && [ "$calls" -gt 0 ]
+fi

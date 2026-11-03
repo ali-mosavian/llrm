@@ -119,6 +119,8 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The object spelling of a routine's name where the convention decorates it (`___addsf3@3`).
+    libcall_symbols: HashMap<String, String>,
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
@@ -140,6 +142,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
         }
     }
@@ -156,6 +159,24 @@ impl TargetLowering {
 
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
     /// one.
+    /// The routine `name` is spelled `symbol` in the object.
+    pub fn set_libcall_symbol(
+        &mut self,
+        name: &str,
+        symbol: String,
+    ) {
+        self.libcall_symbols.insert(name.to_owned(), symbol);
+    }
+
+    /// How a call to the routine `name` spells it: as the C compiler spelled
+    /// the definition, else the name.
+    pub fn libcall_symbol(
+        &self,
+        name: &str,
+    ) -> String {
+        self.libcall_symbols.get(name).cloned().unwrap_or_else(|| name.to_owned())
+    }
+
     pub fn libcall_name(
         &self,
         op: ISD,

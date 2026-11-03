@@ -141,7 +141,7 @@ pub fn lib_call(
 pub fn c_lib_call(
     dag: &mut SelectionDAG,
     env: &CallEnv<'_>,
-    name: &'static str,
+    name: &str,
     args: &[SDValue],
     ret: EVT,
 ) -> Option<SDValue> {

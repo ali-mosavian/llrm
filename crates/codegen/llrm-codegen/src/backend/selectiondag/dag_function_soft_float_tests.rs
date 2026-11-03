@@ -212,3 +212,15 @@ entry:
     let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["__addsf3"]);
 }
+
+/// The runtime is C: its `__addsf3` is defined under the convention's spelling
+/// (`___addsf3@3` in OMF). The call named the bare `__addsf3`, so a program
+/// with the library linked in failed with "__addsf3 is an undefined reference".
+#[test]
+fn a_soft_float_call_is_spelled_as_the_runtime_defines_the_routine() {
+    let module = crate::testing::module(FLOAT_ADD).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let spelled = [("__addsf3".to_owned(), 0, "___addsf3@3".to_owned())];
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &spelled).unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.calls.values().map(String::as_str).collect::<Vec<_>>(), ["___addsf3@3"]);
+}
