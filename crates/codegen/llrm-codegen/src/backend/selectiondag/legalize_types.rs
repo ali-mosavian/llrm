@@ -1413,9 +1413,12 @@ impl<'a> TypeLegalizer<'a> {
         Ok(())
     }
 
-    /// `ExpandIntRes_AssertSext` and `ExpandIntRes_AssertZext`: an assertion
-    /// wider than a half goes to the high half, one inside the low half asserts
-    /// the low half and the high is its sign (or zero).
+    /// `ExpandIntRes_AssertSext`
+    /// ([L4048](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4048))
+    /// and `ExpandIntRes_AssertZext`
+    /// ([L4069](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp#L4069)):
+    /// an assertion wider than a half goes to the high half, one inside the low
+    /// half asserts the low half and the high is its sign (or zero).
     fn expand_assert_ext(
         &mut self,
         value: SDValue,

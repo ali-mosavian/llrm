@@ -18,8 +18,22 @@ fn case(
     dividend: EVT,
     divisor_constant: Option<u128>,
 ) -> (SelectionDAG, SDValue) {
+    case_with(narrow, false, op, dividend, divisor_constant)
+}
+
+fn case_with(
+    narrow: Option<EVT>,
+    srem_defined: bool,
+    op: ISD,
+    dividend: EVT,
+    divisor_constant: Option<u128>,
+) -> (SelectionDAG, SDValue) {
     let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
-    let mut dag = SelectionDAG::new(DagConfig { narrow_divrem: narrow, ..DagConfig::default() });
+    let mut dag = SelectionDAG::new(DagConfig {
+        narrow_divrem: narrow,
+        narrow_srem_overflow_defined: srem_defined,
+        ..DagConfig::default()
+    });
     let x = dag.get_register(dividend, 5);
     let x = dag.get_node(ISD::SignExtend, EVT::I32, &[x]);
     let y = match divisor_constant {
@@ -33,15 +47,22 @@ fn case(
     (dag, root)
 }
 
-/// `srem i32` of two sign-extended words is a word `srem`, sign extended.
+/// `srem i32` of two sign-extended words is a word `srem`, sign extended, where
+/// the target's word remainder is defined for -32768 % -1. Elsewhere (an x86
+/// `idiv` traps there) the width is bumped as the pin's `narrowSDivOrSRem`
+/// does, and only a divisor constant other than -1 narrows it.
 #[test]
 fn a_remainder_of_two_sign_extended_words_is_made_at_the_word() {
-    let (dag, root) = case(Some(EVT::I16), ISD::SRem, EVT::I16, None);
+    let (dag, root) = case_with(Some(EVT::I16), true, ISD::SRem, EVT::I16, None);
     assert_eq!(dag.opcode(root), ISD::SignExtend, "{:?}", dag.opcode(root));
     let inner = dag.operand(root, 0);
     assert_eq!((dag.opcode(inner), dag.value_type(inner)), (ISD::SRem, EVT::I16));
     let (dag, root) = case(None, ISD::SRem, EVT::I16, None);
     assert_eq!(dag.opcode(root), ISD::SRem, "without the target's say-so");
+    let (dag, root) = case_with(Some(EVT::I16), false, ISD::SRem, EVT::I16, None);
+    assert_eq!(dag.opcode(root), ISD::SRem, "a word remainder that traps at the minimum");
+    let (dag, root) = case_with(Some(EVT::I16), false, ISD::SRem, EVT::I16, Some(1000));
+    assert_eq!(dag.opcode(root), ISD::SignExtend, "over a constant other than -1");
 }
 
 /// -32768 / -1 is 32768, which a word quotient cannot hold: two sign-extended

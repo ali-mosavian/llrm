@@ -225,8 +225,10 @@ impl BuilderTarget {
     pub fn with_narrow_divrem(
         mut self,
         narrow: EVT,
+        srem_overflow_defined: bool,
     ) -> BuilderTarget {
         self.dag.narrow_divrem = Some(narrow);
+        self.dag.narrow_srem_overflow_defined = srem_overflow_defined;
         self
     }
 
@@ -2183,10 +2185,13 @@ impl Builder<'_> {
             rest = tail;
         }
         let _ = vt;
-        // Not a pin site: the pin asserts only a range that zero extends
-        // (`lowerRangeToAssertZExt`). A signed range gives the sign bits
-        // `ComputeNumSignBits` reads, so a divide of the result is narrowed
-        // ([`super::narrow_divrem`]).
+        // `CallBase::getRange`
+        // ([L381](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L381))
+        // asserts through `lowerRangeToAssertZExt`
+        // ([L10947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L10947)),
+        // which takes only a range that zero extends. A signed range gives the
+        // sign bits `ComputeNumSignBits` reads, so a divide of the result is
+        // narrowed ([`super::narrow_divrem`]).
         if let Some(bits) = std::mem::take(&mut self.call_result_range_bits)
             && !aggregate
             && assert.is_none()
