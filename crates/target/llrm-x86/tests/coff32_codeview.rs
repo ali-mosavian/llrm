@@ -34,6 +34,7 @@ fn public(
         definition: Definition::Defined { section, offset },
         size: 0,
         group: None,
+        visibility: Default::default(),
     }
 }
 

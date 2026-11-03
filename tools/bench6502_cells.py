@@ -66,7 +66,7 @@ def main(argv):
         f"compared {len(both)} of {len(both) + len(broken)} cells: bytes {total(new, both, 0)} (base {total(base, both, 0)}), "
         f"cycles {total(new, both, 1)} (base {total(base, both, 1)})"
     )
-    worse = sorted(((new[k][0] - base[k][0], new[k][1] - base[k][1], k[0], k[1]) for k in both if new[k][0] > base[k][0]), reverse=True)
+    worse = sorted(((new[k][0] - base[k][0], new[k][1] - base[k][1], k[0], k[1]) for k in both if new[k][0] > base[k][0] or new[k][1] > base[k][1]), reverse=True)
     for row in worse[:15]:
         print("worse", row)
     return 1 if broken else 0
