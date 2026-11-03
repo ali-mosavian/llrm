@@ -2634,3 +2634,22 @@ fn a_windows_module_is_refused_while_the_target_lacks_its_abi() {
     let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
     assert!(why.contains("Win64 calling convention"), "{why}");
 }
+
+/// An x86-64 Mach-O object named its symbols `f` and `g`; the system's linker
+/// looks for `_f` and `_g`, so no call resolved.
+#[test]
+fn an_x86_64_macho_object_spells_its_symbols_with_the_leading_underscore() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-apple-macosx\"\ndeclare void @g()\ndefine void @f() {\n  call void @g()\n  ret void\n}\n";
+    let (built, format) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap();
+    let has = |name: &[u8]| object.windows(name.len()).any(|window| window == name);
+    assert!(has(b"_f\0") && has(b"_g\0"), "the symbol table lacks `_f`/`_g`");
+}
