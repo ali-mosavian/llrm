@@ -31,7 +31,7 @@ General causes, each a mechanism rather than a cell:
 
 ## B. Pin-faithful, gcc smaller or faster (bar vs gcc; oversight)
 ours within 5% of the pin; gcc-13 smaller by >10%. Grouped by what gcc does:
-- Recursion inlined by gcc (self-recursive inlining): fib O2/O3 (27 insns vs 304-333, ~2x faster), rectwo O2/O3 (24 vs 188, 3.7x faster), recchop (56 vs 408), frames (49 vs 252), recpow O3 (83 vs 408), queens O3 (75 vs 1004). Bytes go the other way (gcc is 7-12x bigger): speed only, a size-for-speed trade the pin does not make.
+- Recursion inlined by gcc (self-recursive inlining): fib O2/O3 (27 insns vs 304-333, ~2x faster), rectwo O2/O3 (24 vs 188, 3.7x faster), recchop (56 vs 408), frames (49 vs 252), recpow O3 (83 vs 408), queens O3 (75 vs 1004). Bytes go the other way (gcc is 7-12x bigger). Open CLOCK row, pin-gap (the pin has no self-recursion inlining): only a translated pass closes it, no row fix.
 - Loops left rolled where the pin and we unroll: crc O2 (39 vs 25 insns), matmul O2 (390 vs 80), shellsort O2/O3 (140/321 vs 68/52), tile O3 (92 vs 20), sieve, ring. Bytes only; the pin unrolls these.
 - Os: gcc-13 is smaller than the pin on recpow (324 vs 200), switch (320 vs 256), queens, recchop, recsum (72 vs 40), fib, frames, ring, recfloat, sieve: -Os of the pin is not the floor. Needs a priced size model (Os: bytes per call/prologue) or the gcc mechanism; not a row fix.
 - FP: fpbench, nbody_single O2/O3 (212 vs 116, 213 vs 120): gcc has fewer insns (fmadd 3 vs 18 in fpbench O2; cause not read); pin-nv = ours.

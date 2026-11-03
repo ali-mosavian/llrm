@@ -5,6 +5,7 @@ Header: compiled-cell counts and md5 of every compiler binary."""
 import sys, os, subprocess, re, statistics, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from codebytes import kernel
+from cmp import regressions_vs_best
 H = os.path.dirname(os.path.abspath(__file__)); WORK = os.environ.get("BENCH_WORK", "/tmp/darwin-bench"); os.makedirs(WORK, exist_ok=True); REPO = os.environ.get("BENCH_REPO", os.getcwd())
 PIN = os.environ["LLRM_PIN_CLANG"]; GCC = "/opt/homebrew/bin/gcc-13"; LLRM = os.environ["LLRM_CC"]
 SDK = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
@@ -63,9 +64,9 @@ for prog in progs:
     cls = ""
     if "llrm-cc" in v and all(k in v for k in ("pin", "gcc13", "pin-nv", "gcc13-nv")):
         l = v["llrm-cc"]
-        worse = lambda names, i: l[i] > 1.10 * min(v[x][i] for x in names)
-        vec_bad = worse(("pin", "gcc13"), 4) or worse(("pin", "gcc13"), 1)
-        nv_bad = worse(("pin-nv", "gcc13-nv"), 4) or worse(("pin-nv", "gcc13-nv"), 1)
+        cell = lambda r: (r[1], r[2], r[4])
+        bad = lambda names: regressions_vs_best(cell(l), [cell(v[x]) for x in names], (1.10,) * 3)
+        vec_bad = bad(("pin", "gcc13")); nv_bad = bad(("pin-nv", "gcc13-nv"))
         cls = "vector-deferred" if vec_bad and not nv_bad else ("worse (also without vectors)" if nv_bad else "")
         if not all(v[k][0] for k in v): cls += " WRONG-OUTPUT"
     print(line + "  " + cls)

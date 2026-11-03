@@ -4,6 +4,7 @@ Run from a checkout holding bench/. Uses the pilot's source patching (noinline k
 import sys, os, subprocess, re, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from codebytes import kernel
+from cmp import regressions
 H = os.path.dirname(os.path.abspath(__file__)); WORK = os.environ.get("BENCH_WORK", "/tmp/darwin-bench"); os.makedirs(WORK, exist_ok=True); REPO = os.environ.get("BENCH_REPO", os.getcwd())
 SDK = subprocess.check_output(["xcrun", "--show-sdk-path"], text=True).strip()
 BUILDS = {"head": os.environ["LLRM_CC_HEAD"], "base": os.environ["LLRM_CC_BASE"]}
@@ -58,7 +59,7 @@ for p, d in by.items():
     (okh, kbh, ih, th), (okb, kbb, ib, tb) = d["head"], d["base"]
     flag = ("" if okh else " WRONG-OUTPUT-HEAD") + ("" if okb else " WRONG-OUTPUT-BASE")
     line = f"{p:13}{kbb:6}{kbh:6} |{ib:5}{ih:5} |{tb:9.2f}{th:9.2f}{flag}"
-    if kbh > kbb or ih > ib or th > tb * 1.10 or flag: worse.append(line)
+    if regressions((kbh, ih, th), (kbb, ib, tb)) or flag: worse.append(line)
     else: same.append(line)
 print("WORSE (head > base) first:"); print("\n".join(worse) or "none")
 print("NOT WORSE:"); print("\n".join(same))
