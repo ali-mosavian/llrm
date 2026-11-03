@@ -373,6 +373,8 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     /// `OptLevel == CodeGenOptLevel::None`: the chain, store and load combines
     /// the pin skips at `-O0` are skipped.
     pub(super) opt_none: bool,
+    /// `BatchAA`, for a target whose `useAA` is true.
+    pub(super) alias: Option<&'a dyn super::chain_combine::AliasOracle>,
 }
 
 fn op_is_srl(op: ISD) -> bool {
@@ -395,6 +397,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             combined: NodeSet::default(),
             tli: None,
             opt_none: false,
+            alias: None,
         }
     }
 
@@ -404,6 +407,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         tli: &'a TargetLowering,
     ) -> DagCombiner<'a, H> {
         self.tli = Some(tli);
+        self
+    }
+
+    /// The alias analysis `mayAlias` asks when the addresses decide nothing.
+    pub fn with_alias(
+        mut self,
+        alias: &'a dyn super::chain_combine::AliasOracle,
+    ) -> DagCombiner<'a, H> {
+        self.alias = Some(alias);
         self
     }
 

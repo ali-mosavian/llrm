@@ -137,6 +137,20 @@ pub enum MemBase {
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).
     JumpTable,
+    /// The IR pointer the access reads or writes (`MachinePointerInfo::V`):
+    /// an index into [`SelectionDAG::mem_locations`] (1-based). Only a target
+    /// whose `useAA` is true records it.
+    Value(std::num::NonZeroU32),
+}
+
+/// What alias analysis is asked about an access (`MachineMemOperand::getValue`
+/// and `getAAInfo`). The location holds only while the access is still `bytes`
+/// wide: a narrowed or merged access at another offset is not described by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemLocation {
+    pub pointer: llrm_mir::module::Operand,
+    pub tbaa: Option<llrm_mir::module::MetadataId>,
+    pub bytes: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +264,11 @@ pub struct DagConfig {
     /// until the judge has seen them. Exit: x86 judged, no later than
     /// 2026-11-20.
     pub add_to_or_disjoint: bool,
+    /// `TargetSubtargetInfo::useAA`: the builder records each load's and
+    /// store's IR pointer ([`MemBase::Value`]) for the combiner's alias
+    /// queries. DEVIATE: off by default (x86 and arm64 answer false). Exit:
+    /// none, the target's own answer.
+    pub use_aa: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -275,6 +294,7 @@ impl Default for DagConfig {
             big_endian: false,
             fma_faster: false,
             add_to_or_disjoint: false,
+            use_aa: false,
         }
     }
 }
@@ -310,8 +330,20 @@ fn cse_hash(
     opcode.hash(&mut hasher);
     values.hash(&mut hasher);
     ops.hash(&mut hasher);
-    data.hash(&mut hasher);
+    cse_key(data).hash(&mut hasher);
     hasher.finish()
+}
+
+/// What `FoldingSetNodeID` sees of a node's payload: the pin's ID holds no
+/// `MachineMemOperand` value, so two accesses that differ only in their IR
+/// pointer are one node, the first one's.
+fn cse_key(data: &NodeData) -> NodeData {
+    match *data {
+        NodeData::Mem(info) if matches!(info.base, MemBase::Value(_)) => {
+            NodeData::Mem(MemInfo { base: MemBase::Unknown, ..info })
+        }
+        other => other,
+    }
 }
 
 /// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
@@ -373,6 +405,8 @@ pub struct SelectionDAG {
     /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
     /// address say. Empty where the layout may place an object lower.
     pub frame_alignments: Vec<u64>,
+    /// The IR pointers of the accesses ([`MemBase::Value`]).
+    pub mem_locations: Vec<MemLocation>,
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
@@ -456,6 +490,7 @@ impl SelectionDAG {
             constant_pool: Vec::new(),
             first_temporary: 0,
             frame_alignments: Vec::new(),
+            mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
             temporaries: Vec::new(),
@@ -722,7 +757,8 @@ impl SelectionDAG {
         let mut at = *self.cse.head.get(&cse_hash(opcode, values, ops, data))?;
         while at != NONE {
             let node = &self.nodes[at as usize];
-            if node.opcode == opcode && node.values == values && node.ops == ops && node.data == *data {
+            if node.opcode == opcode && node.values == values && node.ops == ops && cse_key(&node.data) == cse_key(data)
+            {
                 return Some(at);
             }
             at = self.cse.next[at as usize];

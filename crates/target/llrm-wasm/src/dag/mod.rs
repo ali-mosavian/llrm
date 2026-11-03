@@ -2,6 +2,7 @@
 //! its calling lowering, the selection pipeline and the emitter, then the
 //! machine passes in the pin's `-O0` order.
 
+pub mod alias;
 pub mod call;
 pub mod emit;
 pub mod function;

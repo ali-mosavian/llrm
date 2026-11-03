@@ -109,7 +109,7 @@ pub mod bitcast_combine;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
 pub mod builder;
-mod chain_combine;
+pub mod chain_combine;
 pub mod combine_funnel;
 pub mod combine_load;
 pub mod combine_store_merge;
@@ -157,7 +157,8 @@ pub mod x86_preprocess;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
-    BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG,
+    BooleanContents, DagConfig, MemBase, MemInfo, MemLocation, NodeData, Rauw, SDNode, SDNodeFlags, SDValue,
+    SelectionDAG,
 };
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
