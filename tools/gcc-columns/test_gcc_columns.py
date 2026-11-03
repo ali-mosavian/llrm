@@ -68,3 +68,17 @@ def test_sf_z80_harness_sources_exist():
     names = re.search(r'F="([^"]+)"', open(os.path.join(d, "build.sh")).read()).group(1).split()
     for f in names:
         assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
+
+
+def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
+    """vs_6502.py read only 6502-gcc.tsv: a cell the gcc-noivopts-Os column wins (memchr, minmax, sum16 -Os) showed the worse number."""
+    import subprocess
+    d = tempfile.mkdtemp()
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    open(f"{d}/6502.tsv", "w").write(h + "6502\tp\tOs\tours\t120\t1500\t300\t\n")
+    open(f"{d}/6502-gcc.tsv", "w").write(h + "6502\tp\tOs\tgcc\t100\t1200\t310\t\n")
+    open(f"{d}/6502-gcc.noivopts.tsv", "w").write(h + "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    out = f"{d}/vs.md"
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vs_6502.py"), d, out, "2026-11-04"], check=True)
+    row = next(l for l in open(out) if l.startswith("| p |"))
+    assert row.split("|")[2:4] == [" 100 ", " 900 "], row
