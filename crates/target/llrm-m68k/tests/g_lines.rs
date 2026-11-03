@@ -5,6 +5,10 @@
 use std::process::Command;
 
 fn assembly(debug: bool) -> String {
+    assembly_of("lines.ll", debug)
+}
+
+fn assembly_of(fixture: &str, debug: bool) -> String {
     let directory = tempfile::tempdir().unwrap();
     let out = directory.path().join("lines.s");
     let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-m68k-llc"));
@@ -12,7 +16,7 @@ fn assembly(debug: bool) -> String {
     if debug {
         command.arg("-g");
     }
-    let said = command.arg("-o").arg(&out).arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/g/lines.ll")).output().unwrap();
+    let said = command.arg("-o").arg(&out).arg(format!("{}/tests/g/{fixture}", env!("CARGO_MANIFEST_DIR"))).output().unwrap();
     assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
     std::fs::read_to_string(out).unwrap()
 }
@@ -74,4 +78,24 @@ fn the_rows_have_the_pins_scope_row_and_flags() {
             (4, 5, "epilogue_begin is_stmt 0".to_owned()),
         ]
     );
+}
+
+/// A block's first instruction stands under a row of its own, as the pin's does
+/// (a located one, or line 0 for one with no place): the argument move at the
+/// top of a switch's block was listed under the row of the block before it,
+/// so a debugger stopped there showed the wrong line.
+#[test]
+fn the_first_instruction_of_a_block_has_a_row_of_its_own() {
+    let text = assembly_of("switch.ll", true);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let mut checked = 0;
+    for (at, line) in lines.iter().enumerate() {
+        if !line.starts_with(".LBB") {
+            continue;
+        }
+        let next = lines[at + 1..].iter().find(|one| !one.starts_with(".LBB"));
+        assert!(next.is_some_and(|one| one.starts_with(".loc")), "{line} is followed by {next:?} in\n{text}");
+        checked += 1;
+    }
+    assert!(checked >= 2, "the fixture has blocks to check: {text}");
 }

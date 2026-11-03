@@ -150,6 +150,8 @@ pub struct Row {
     pub prologue_end: bool,
     /// The row of the instruction that takes the frame down.
     pub epilogue_begin: bool,
+    /// The first row of a block: a statement even on the line before it.
+    pub block_top: bool,
 }
 
 /// `out` and the places that start in it (`(index into out, place)`) as
@@ -272,6 +274,7 @@ pub fn finish(
     // The frame is made by the opening ops: the next row ends the prologue.
     let mut frame_made = !opening.is_empty();
     let mut last_origin = 0u32;
+    let mut block_top = false;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
@@ -284,17 +287,22 @@ pub fn finish(
                 flush(&mut out, &mut marks, &mut lines);
                 lines.push(Line::Label(shown));
                 last_origin = 0;
+                block_top = true;
             }
             shown += 1;
         }
         let place = (inst.origin != 0).then(|| function.places.get(inst.origin as usize - 1).copied()).flatten();
         let returns = inst.kind == Kind::Op("RET");
+        // A block's first instruction without a place stands under line 0.
+        let place = place.or(block_top.then(|| llrm_codegen::model::lir::SrcLoc::line(0)));
         if let Some(place) = place
-            && (inst.origin != last_origin || returns || frame_made)
+            && (inst.origin != last_origin || returns || frame_made || block_top)
         {
-            marks.push((out.len(), Row { place, prologue_end: frame_made, epilogue_begin: returns }));
-            frame_made = false;
+            let row = Row { place, prologue_end: frame_made && place.line != 0, epilogue_begin: returns, block_top };
+            marks.push((out.len(), row));
+            frame_made = frame_made && place.line == 0;
         }
+        block_top = false;
         if inst.origin != 0 {
             last_origin = inst.origin;
         }

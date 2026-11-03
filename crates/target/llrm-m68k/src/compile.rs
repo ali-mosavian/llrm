@@ -150,6 +150,7 @@ pub fn items_with(
     if let Some(line) = module.subprogram_line(module.global(id).function().ok_or("not a function")?) {
         out.push(Item::Loc(crate::expand::Row {
             place: llrm_codegen::model::lir::SrcLoc::line(line),
+            block_top: false,
             prologue_end: false,
             epilogue_begin: false,
         }));
@@ -227,9 +228,13 @@ pub fn text_with(
                     "{}{}{}",
                     if row.prologue_end { " prologue_end" } else { "" },
                     if row.epilogue_begin { " epilogue_begin" } else { "" },
-                    if previous == Some(row.place.line) { " is_stmt 0" } else { "" },
+                    if row.place.line == 0 || (previous == Some(row.place.line) && !row.block_top) {
+                        " is_stmt 0"
+                    } else {
+                        ""
+                    },
                 );
-                previous = Some(row.place.line);
+                previous = (row.place.line != 0).then_some(row.place.line);
                 out.push_str(&format!("\t.loc\t0 {} {}{flags}\n", row.place.line, row.place.column));
             }
             Item::Loc(_) => {}
