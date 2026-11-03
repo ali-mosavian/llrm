@@ -11,7 +11,8 @@
 //! Numbered deviations from the pin (reason / owner / exit / review):
 //! - **SD36** `checkTCRetEnoughRegs` is `false` and `isSExtAbsoluteSymbolRef`
 //!   is `false`: tail calls and absolute symbols are not translated yet, and
-//!   `false` only declines a pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
+//!   `false` only declines a pattern. Owner sdag-c. Exit: C3. Review
+//!   2026-12-10.
 //! - **SD221** (m16) `shouldAvoidImmediateInstFormsForSize` does not count a
 //!   call argument's store as a use: it is a `push imm` at real mode, smaller
 //!   than the register that would hold the constant. The pin has no 16-bit
