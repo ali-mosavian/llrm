@@ -25,24 +25,6 @@ b0:
 }
 ";
 
-const UNUSED_PARAMETER: &str = "define internal i16 @f(i16 %a, i16 %unused) noinline {
-b0:
-  %done = icmp sle i16 %a, 0
-  br i1 %done, label %out, label %again
-again:
-  %m = sub i16 %a, 1
-  %r = call i16 @f(i16 %m, i16 %unused)
-  ret i16 %r
-out:
-  ret i16 %a
-}
-
-define i16 @top(i16 %x) {
-b0:
-  %r = call i16 @f(i16 %x, i16 12)
-  ret i16 %r
-}
-";
 
 /// The pipeline the compilers run over `text`, the `runs` lines of it.
 fn pipeline_runs(

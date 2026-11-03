@@ -215,8 +215,24 @@ impl LoopIdiomRecognize {
         // Optimize the store into a memcpy, if it feeds an similarly strided
         // load.
         let for_memcpy = self.store_refs_for_memcpy.clone();
+        let mut copied = false;
         for &store in &for_memcpy {
-            made_change |= self.process_loop_store_of_loop_load_store(run, store, be_count);
+            copied |= self.process_loop_store_of_loop_load_store(run, store, be_count);
+        }
+        made_change |= copied;
+        // DEVIATE: a fill beside a store of a computed value stays a loop at
+        // speed (`process_loop_strided_store`), and the pin makes both in this
+        // run; the store a memcpy took away leaves the fill alone, so it is
+        // judged again. Exit: none.
+        if copied {
+            {
+                let cx = cx!(run);
+                self.collect_stores(&cx, run.se, run.cur_loop, block);
+            }
+            let again = self.store_refs_for_memset.clone();
+            for (_, list) in &again {
+                made_change |= self.process_loop_stores(run, list, be_count, ForMemset::Yes);
+            }
         }
 
         made_change |= self.process_loop_mem_intrinsic(run, block, be_count, MemKind::Cpy);
