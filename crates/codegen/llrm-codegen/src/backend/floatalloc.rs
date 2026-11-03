@@ -583,11 +583,18 @@ fn _exact(one: &Insn) -> bool {
         | Operation::Call
         | Operation::Return
         | Operation::Escape
-        | Operation::Barrier
         | Operation::Restore
         | Operation::Data => false,
+        // The status word is read as it is: a compare's answer.
+        Operation::Barrier => name == "fnstsw",
         Operation::FloatLoad => !matches!(name, "fldpi" | "fldl2e" | "fldl2t" | "fldlg2" | "fldln2"),
-        Operation::FloatStore => false,
+        // A store into a stack register (`fstp st(1)`, a release) is an 80-bit
+        // value into an 80-bit register and rounds nothing; one to memory
+        // rounds to the memory's width. Counted as rounding, each compare and
+        // release in a loop of conversions put the caller's word back
+        // (x_ldcmp -Os: 6 `fldcw`, now 2; 345 -> 327 B, 207247 -> 195735
+        // clocks).
+        Operation::FloatStore => what.dests.iter().all(|place| matches!(place, Loc::Reg(_))),
         Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
             matches!(
                 name,

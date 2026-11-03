@@ -814,6 +814,16 @@ fn switched(shape: &[(i64, &str, Vec<i64>)]) -> Vec<(i64, Vec<String>)> {
                             'r' => sem(Operation::Return, "ret", vec![], vec![]),
                             'b' => sem(Operation::Branch, "jne", vec![], vec![]),
                             'a' => sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]),
+                            // `fnstsw ax`, the answer of a compare
+                            'm' => sem(Operation::FloatStore, "fstp", vec![m(&cell)], vec![st(0)]),
+                            's' => sem(
+                                Operation::Barrier,
+                                "fnstsw",
+                                vec![Loc::Reg(llrm_lir::Reg { register: RegId::AX, width: 2 })],
+                                vec![],
+                            ),
+                            // `fstp st(1)`, a release into a stack register
+                            'p' => sem(Operation::FloatStore, "fstp", vec![st(1)], vec![st(0)]),
                             _ => sem(Operation::Nothing, "", vec![], vec![]),
                         },
                     )
@@ -1105,4 +1115,27 @@ fn test_float_prep_asks_liveness_of_the_floating_values_only() {
 
 fn int(value: u32) -> Loc {
     Loc::Held(Held { value, width: 4 })
+}
+
+/// A loop that converts twice a trip with a compare's `fnstsw` and a `fstp
+/// st(1)` between the conversions rounds nothing: both are exact. Counted as
+/// rounding they put the caller's word back around each conversion, six `fldcw`
+/// where two do (x_ldcmp -Os: 345 B and 207247 clocks against 327 B and
+/// 195735).
+#[test]
+fn test_a_status_word_read_and_a_register_release_between_conversions_do_not_round() {
+    let result = switched(&[(0, ".", vec![5]), (5, "cspcsb", vec![5, 9]), (9, "r", vec![])]);
+    let words = result.iter().flat_map(|(_, names)| names).filter(|name| *name == "fldcw").count();
+    assert_eq!(words, 2, "{result:?}");
+    let loop_words = result.iter().find(|(at, _)| *at == 5).unwrap().1.iter().filter(|name| *name == "fldcw").count();
+    assert_eq!(loop_words, 0, "no switch inside the loop: {result:?}");
+}
+
+/// Control: a store to memory rounds to the memory's width, so a loop that
+/// stores a double between conversions still puts the caller's word back.
+#[test]
+fn test_a_store_to_memory_between_conversions_still_rounds() {
+    let result = switched(&[(0, ".", vec![5]), (5, "cmcmb", vec![5, 9]), (9, "r", vec![])]);
+    let loop_words = result.iter().find(|(at, _)| *at == 5).unwrap().1.iter().filter(|name| *name == "fldcw").count();
+    assert!(loop_words > 0, "{result:?}");
 }
