@@ -131,6 +131,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let chain = self.dag.operand(node, 0);
         self.replace_value(SDValue { node: node.node, res: 0 }, forwarded);
         self.replace_value(SDValue { node: node.node, res: 1 }, chain);
+        // `CombineTo` removes the load at once.
+        self.dag.delete_replaced(node.node);
+        self.requeue_survivors();
         Some(node)
     }
 

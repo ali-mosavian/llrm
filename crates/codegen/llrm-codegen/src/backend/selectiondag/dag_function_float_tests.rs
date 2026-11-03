@@ -943,11 +943,11 @@ fn a_converted_value_with_another_reader_or_a_volatile_store_keeps_its_slot() {
     assert!(movers(&twice) > 0, "{twice:?}");
 }
 
-/// A store to the same cell before the conversion's store stays before it:
+/// A (volatile: a plain one is dead, the next store covers it) store to the same cell before the conversion's store stays before it:
 /// the `fist` takes the conversion store's place, not the scratch slot's.
 #[test]
 fn a_converted_store_stays_after_an_earlier_store_to_its_cell() {
-    let made = stored_conversion("i32", "store i32 7, ptr @g\n  store i32 %r, ptr @g");
+    let made = stored_conversion("i32", "store volatile i32 7, ptr @g\n  store i32 %r, ptr @g");
     let first_mov = made.iter().position(|(_, name)| name == "mov").expect("the store of 7");
     let fist = made.iter().position(|(_, name)| name.starts_with("fist")).expect("a fist");
     assert!(first_mov < fist, "{made:?}");

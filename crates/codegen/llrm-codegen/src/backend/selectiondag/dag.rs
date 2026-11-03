@@ -325,6 +325,9 @@ pub struct SelectionDAG {
     /// `delete_dead`'s worklist, kept between calls: a fresh `vec![node]` per
     /// call was one allocation each (51K on jpeg_fixed -O2).
     dead_work: Vec<u32>,
+    /// The nodes a deletion left alive with one reader fewer
+    /// (`recursivelyDeleteUnusedNodes`' `AddToWorklist`), for the combiner.
+    revisit: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
@@ -429,6 +432,7 @@ impl SelectionDAG {
             cse: Cse::default(),
             deleted: Vec::new(),
             dead_work: Vec::new(),
+            revisit: Vec::new(),
             cur_order: 0,
             lines: Vec::new(),
             inst_order: Vec::new(),
@@ -554,7 +558,9 @@ impl SelectionDAG {
     ) {
         let mut work = std::mem::take(&mut self.dead_work);
         work.push(node);
+        let mut first = true;
         while let Some(n) = work.pop() {
+            let initial = std::mem::take(&mut first);
             // Chain and glue nodes stay: the builder keeps handles on some
             // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
             // token factor goes like any node (`RemoveDeadNodes`): kept, it
@@ -571,6 +577,9 @@ impl SelectionDAG {
             }
             let results = self.nodes[n as usize].values.len() as u8;
             if (0..results).any(|res| self.has_users(SDValue { node: n, res })) {
+                if !initial {
+                    self.revisit.push(n);
+                }
                 continue;
             }
             self.cse_forget(n);
@@ -615,7 +624,16 @@ impl SelectionDAG {
         let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
         for op in operands {
             self.delete_dead(op);
+            if !self.is_deleted(op) {
+                self.revisit.push(op);
+            }
         }
+    }
+
+    /// The nodes the deletions since the last call left alive with one reader
+    /// fewer.
+    pub(super) fn take_revisit(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.revisit)
     }
 
     /// Whether `delete_dead` removed `node`: nothing reads it, and it reads

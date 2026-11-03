@@ -176,6 +176,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         self.add_to_worklist(token.node);
+        // `CombineTo` removes the load at once.
+        self.dag.delete_replaced(node.node);
+        self.requeue_survivors();
         Some(node)
     }
 

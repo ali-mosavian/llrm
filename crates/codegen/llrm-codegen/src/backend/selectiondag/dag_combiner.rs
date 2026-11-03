@@ -506,6 +506,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
             let before = self.dag.node_count();
             let result = self.combine(SDValue { node: n, res: 0 });
+            self.requeue_survivors();
             for (old, new) in self.dag.take_replacements() {
                 self.replace_value(old, new);
                 self.add_to_worklist_with_users(new.node);
@@ -535,6 +536,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             self.dag.delete_dead(n);
             self.dag.delete_replaced(n);
+            self.requeue_survivors();
+        }
+    }
+
+    /// `recursivelyDeleteUnusedNodes`: a node a deletion leaves alive, one
+    /// reader fewer, is looked at again.
+    pub(super) fn requeue_survivors(&mut self) {
+        for survivor in self.dag.take_revisit() {
+            if !self.is_dead(survivor) {
+                self.add_to_worklist(survivor);
+            }
         }
     }
 
@@ -1134,8 +1146,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let one_use_setcc = |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.has_one_use(v.node);
             if one_use_setcc(self.dag, a) || one_use_setcc(self.dag, b) {
                 let flipped = if self.dag.opcode(n0) == ISD::And { ISD::Or } else { ISD::And };
-                let (not_a, not_b) =
-                    (self.dag.get_node(ISD::Xor, vt, &[a, n1]), self.dag.get_node(ISD::Xor, vt, &[b, n1]));
+                // `SDLoc(N00)`, `SDLoc(N01)`: each not keeps the IR order of
+                // the compare it flips, which the source-order scheduler reads.
+                let here = self.dag.cur_order;
+                self.dag.cur_order = self.dag.node(a).order;
+                let not_a = self.dag.get_node(ISD::Xor, vt, &[a, n1]);
+                self.dag.cur_order = self.dag.node(b).order;
+                let not_b = self.dag.get_node(ISD::Xor, vt, &[b, n1]);
+                self.dag.cur_order = here;
                 self.add_to_worklist(not_a.node);
                 self.add_to_worklist(not_b.node);
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
@@ -2265,6 +2283,84 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
+    /// `visitSTORE`'s two checks of the store the chain ends in
+    /// ([L24849](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L24849)):
+    /// the same value to the same place again is the chain itself, and a store
+    /// nothing else is chained to, to a part of what this one writes, is
+    /// dropped.
+    fn dead_preceding_store(
+        &mut self,
+        node: SDValue,
+        chain: SDValue,
+        value: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if self.opt_none || info.volatile || info.ordering.is_some() {
+            return None;
+        }
+        if let Some(earlier) = self.dead_for_the_next_store(node, chain, info) {
+            return Some(earlier);
+        }
+        if self.dag.opcode(chain) != ISD::Store {
+            return None;
+        }
+        let NodeData::Mem(before) = self.dag.node(chain).data else { return None };
+        if before.volatile || before.ordering.is_some() || before.space != info.space {
+            return None;
+        }
+        if self.dag.operand(chain, 2) == ptr && self.dag.operand(chain, 1) == value && before.mem_vt == info.mem_vt {
+            return Some(chain);
+        }
+        if !self.dag.has_one_use(chain.node) || self.dag.opcode(self.dag.operand(chain, 2)) == ISD::Undef {
+            return None;
+        }
+        // `BaseIndexOffset::contains`: the earlier store starts at or after
+        // this one and ends inside it.
+        let bytes = super::address_analysis::BaseIndexOffset::matching(self.dag, node)
+            .equal_base_index(&super::address_analysis::BaseIndexOffset::matching(self.dag, chain), self.dag)?;
+        if bytes < 0 || bytes * 8 + i64::from(before.mem_vt.size_in_bits()) > i64::from(info.mem_vt.size_in_bits()) {
+            return None;
+        }
+        let earlier = self.dag.operand(chain, 0);
+        self.replace_value(chain, earlier);
+        self.dag.delete_replaced(chain.node);
+        self.requeue_survivors();
+        Some(node)
+    }
+
+    /// The check above from the earlier store: its one user is a store of the
+    /// same chain position that writes all of it. Which of the two is looked at
+    /// last depends on the order the chains were improved in.
+    fn dead_for_the_next_store(
+        &mut self,
+        node: SDValue,
+        chain: SDValue,
+        info: MemInfo,
+    ) -> Option<SDValue> {
+        if !self.dag.has_one_use(node.node) {
+            return None;
+        }
+        let next = self.dag.users(node).next()?;
+        let later = SDValue { node: next, res: 0 };
+        if self.dag.opcode(later) != ISD::Store || self.dag.operand(later, 0) != node {
+            return None;
+        }
+        let NodeData::Mem(after) = self.dag.node(later).data else { return None };
+        if after.volatile || after.ordering.is_some() || after.space != info.space {
+            return None;
+        }
+        if self.dag.opcode(self.dag.operand(node, 2)) == ISD::Undef {
+            return None;
+        }
+        let bytes = super::address_analysis::BaseIndexOffset::matching(self.dag, later)
+            .equal_base_index(&super::address_analysis::BaseIndexOffset::matching(self.dag, node), self.dag)?;
+        if bytes < 0 || bytes * 8 + i64::from(info.mem_vt.size_in_bits()) > i64::from(after.mem_vt.size_in_bits()) {
+            return None;
+        }
+        Some(chain)
+    }
+
     /// `visitSTORE`, `replaceStoreOfFPConstant`: `store float 1.5, p` is
     /// `store i32 0x3fc00000, p`, and a double constant the FPU cannot load
     /// directly is two `i32` stores, so the constant is never loaded onto the
@@ -2312,6 +2408,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(node);
         }
         if let Some(done) = self.truncating_store_demanded_bits(node, chain, value, ptr, info) {
+            return Some(done);
+        }
+        if let Some(done) = self.dead_preceding_store(node, chain, value, ptr, info) {
             return Some(done);
         }
         // `replaceStoreOfFPConstant` takes a volatile store too
