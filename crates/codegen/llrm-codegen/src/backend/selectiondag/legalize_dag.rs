@@ -1011,7 +1011,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     /// `TargetLowering::expandCTTZ`, scalar: the plain count for a zero-poison
     /// one, the zero-poison count with the zero case selected, `nlz(x & -x) ^
     /// (n - 1)` where only `ctlz` is legal and zero is not a case, else
-    /// `popcount(~x & (x - 1))` (or `n - nlz` of it). DEVIATE SD219: the
+    /// `popcount(~x & (x - 1))` (or `n - nlz` of it). DEVIATE SD532: the
     /// de Bruijn table lookup (for a target with no `ctpop` and no `ctlz`) is
     /// not translated.
     fn expand_cttz(

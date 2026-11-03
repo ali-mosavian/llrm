@@ -69,3 +69,19 @@ fn the_bit_reverse_of_an_i8_is_rbit_and_a_shift() {
     );
     assert!(text.contains("rbit"), "{text}");
 }
+
+/// A population count has no NEON `cnt` yet (no vector MIR), so DEVIATE SD533
+/// expands it to the scalar bit-twiddle: a refused op is a hole. The test pins
+/// that form (no `cnt`, a multiply by 0x0101..01 for the byte sum) so the swap
+/// to NEON is deliberate.
+#[test]
+fn a_population_count_is_the_scalar_expansion_until_vectors_land() {
+    for bits in [8, 16, 32, 64] {
+        let text = assembly(&format!(
+            "declare i{bits} @llvm.ctpop.i{bits}(i{bits})\n\
+             define i{bits} @f(i{bits} %a) {{\n %r = call i{bits} @llvm.ctpop.i{bits}(i{bits} %a)\n ret i{bits} %r\n}}\n"
+        ));
+        assert!(!text.contains("cnt"), "i{bits}: {text}");
+        assert!(text.contains("and"), "i{bits}: {text}");
+    }
+}
