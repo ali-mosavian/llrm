@@ -586,6 +586,19 @@ fn a_multiply_by_10_or_7_stays_an_imul_and_by_5_a_lea_at_m64() {
     assert!(five.contains("lea") && !five.contains("imul"), "{five}");
 }
 
+/// `x * 10 + y` is `lea; lea`: the chain's last step folds into the `add`.
+/// The priced `imul` left an `add` behind (struct_odd_sizes -O2: 157 B against
+/// 154 B before the pricing and 152 B for the pin).
+#[test]
+fn a_product_summed_into_an_add_keeps_the_lea_chain_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x, i32 %y) {\n  %m = mul i32 %x, 10\n  %s = add i32 %y, %m\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("lea") && !listing.contains("imul"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each

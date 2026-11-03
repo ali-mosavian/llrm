@@ -1998,8 +1998,15 @@ fn combine_mul(
     // sheet's chain decides alone: the pin's cases (`lea` pairs, `shl; sub`)
     // cost an instruction and bytes the `imul` does not, and a tie keeps it.
     // The pin: <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191>.
+    // A product `{3,5,9} << {1,2,3}` summed into an `add` keeps the pin's
+    // chain: its last step folds into the `add` as a scaled `lea`, which the
+    // sheet does not price.
     // Exit 2026-11-20. Owner llrm-target-x86-m64.
-    if let Some(pricing) = profile.filter(|pricing| pricing.price_pin) {
+    let summed = signed > 0
+        && [3u128, 5, 9].iter().any(|base| abs % base == 0 && matches!(abs / base, 2 | 4 | 8))
+        && dag.has_one_use(node.node)
+        && dag.users(node).next().is_some_and(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
+    if let Some(pricing) = profile.filter(|pricing| pricing.price_pin && !summed) {
         return priced_chain(dag, x, signed as i64, vt, pricing);
     }
     let (mut first, mut second) = (0u128, 0u128);
