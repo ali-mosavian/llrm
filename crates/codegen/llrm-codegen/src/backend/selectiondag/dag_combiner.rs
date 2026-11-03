@@ -76,6 +76,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `foldBinOpIntoSelect`: a binary operator of a select of constants and
+    /// a constant is a select of the folded constants. DEVIATE: off by
+    /// default, as above; called after the operator's own folds, not within
+    /// them; `foldSelectWithIdentityConstant` and the peek through a
+    /// truncated shift amount are not ported. Exit: x86 judged.
+    fn fold_bin_op_into_select(&self) -> bool {
+        false
+    }
+
     /// `visitXOR`'s `(xor (and x, y), y)` is `(and (not x), y)`. DEVIATE: off
     /// by default so x86's rows stay as they are until the judge has seen
     /// them. Exit: x86 judged.
@@ -449,6 +458,8 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     /// `OptLevel == CodeGenOptLevel::None`: the chain, store and load combines
     /// the pin skips at `-O0` are skipped.
     pub(super) opt_none: bool,
+    /// `BatchAA`, for a target whose `useAA` is true.
+    pub(super) alias: Option<&'a dyn super::chain_combine::AliasOracle>,
 }
 
 fn op_is_srl(op: ISD) -> bool {
@@ -471,6 +482,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             combined: NodeSet::default(),
             tli: None,
             opt_none: false,
+            alias: None,
         }
     }
 
@@ -480,6 +492,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         tli: &'a TargetLowering,
     ) -> DagCombiner<'a, H> {
         self.tli = Some(tli);
+        self
+    }
+
+    /// The alias analysis `mayAlias` asks when the addresses decide nothing.
+    pub fn with_alias(
+        mut self,
+        alias: &'a dyn super::chain_combine::AliasOracle,
+    ) -> DagCombiner<'a, H> {
+        self.alias = Some(alias);
         self
     }
 
@@ -639,6 +660,83 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     fn visit(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let result = self.visit_opcode(node);
+        if result.is_none()
+            && self.hooks.fold_bin_op_into_select()
+            && matches!(
+                self.dag.opcode(node),
+                ISD::Add
+                    | ISD::Sub
+                    | ISD::Mul
+                    | ISD::SDiv
+                    | ISD::UDiv
+                    | ISD::SRem
+                    | ISD::URem
+                    | ISD::And
+                    | ISD::Or
+                    | ISD::Xor
+                    | ISD::Shl
+                    | ISD::Sra
+                    | ISD::Srl
+            )
+        {
+            return self.fold_bin_op_into_select(node);
+        }
+        result
+    }
+
+    /// `DAGCombiner::foldBinOpIntoSelect` for an integer operator: `add
+    /// (select c, C1, C2), C3` is `select c, C1 + C3, C2 + C3`, and `and`
+    /// or `or` of a select of 0 and -1 takes the other operand into the
+    /// select.
+    fn fold_bin_op_into_select(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let opcode = self.dag.opcode(node);
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        // The old select must go away with the operator.
+        let (mut at, mut sel) = (0, self.dag.operand(node, 0));
+        if self.dag.opcode(sel) != ISD::Select || !self.dag.has_one_use(sel.node) {
+            (at, sel) = (1, self.dag.operand(node, 1));
+        }
+        if self.dag.opcode(sel) != ISD::Select || !self.dag.has_one_use(sel.node) {
+            return None;
+        }
+        let (cond, ct, cf) = (self.dag.operand(sel, 0), self.dag.operand(sel, 1), self.dag.operand(sel, 2));
+        let (kt, kf) = (self.dag.constant(ct)?, self.dag.constant(cf)?);
+        let mask = super::fold::mask(vt.size_in_bits());
+        let (kt, kf) = (kt & mask, kf & mask);
+        let other = self.dag.operand(node, at ^ 1);
+        let (opaque_t, opaque_f) = (self.dag.is_opaque(ct), self.dag.is_opaque(cf));
+        let zero_ones = (kt == 0 && kf == mask) || (kf == 0 && kt == mask);
+        let free_other = matches!(opcode, ISD::And | ISD::Or) && zero_ones;
+        let constant_other = self.dag.constant(other).is_some() && !self.dag.is_opaque(other);
+        if opaque_t || opaque_f || (!free_other && !constant_other) {
+            return None;
+        }
+        let (new_t, new_f) = if free_other {
+            // `and (select c, 0, -1), x` is `select c, 0, x`; `or`, with -1.
+            let absorbing = if opcode == ISD::And { 0 } else { mask };
+            (if kt == absorbing { ct } else { other }, if kf == absorbing { cf } else { other })
+        } else if at == 1 {
+            (self.dag.get_node(opcode, vt, &[other, ct]), self.dag.get_node(opcode, vt, &[other, cf]))
+        } else {
+            (self.dag.get_node(opcode, vt, &[ct, other]), self.dag.get_node(opcode, vt, &[cf, other]))
+        };
+        if !free_other && (self.dag.constant(new_t).is_none() || self.dag.constant(new_f).is_none()) {
+            return None;
+        }
+        Some(self.dag.get_select(vt, cond, new_t, new_f))
+    }
+
+    fn visit_opcode(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
@@ -850,6 +948,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
+            return Some(folded);
+        }
+        if let Some(folded) = super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond) {
             return Some(folded);
         }
         // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
@@ -1957,8 +2058,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
-        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
-            return self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags);
+        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags)
+        {
+            return Some(regrouped);
+        }
+        // `(add a, b)` is `(or disjoint a, b)` where the two share no bits
+        // ([L3318][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3318
+        if self.dag.config().add_to_or_disjoint && super::dagisel_adapter::no_common_bits(self.dag, n0, n1) {
+            return Some(self.dag.get_node_flags(ISD::Or, vt, &[n0, n1], SDNodeFlags::DISJOINT));
         }
         None
     }

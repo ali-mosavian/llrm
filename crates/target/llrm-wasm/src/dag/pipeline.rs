@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 
 use llrm_codegen::backend::registerinfo::RegId;
+use llrm_codegen::backend::selectiondag::chain_combine::AliasOracle;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::{DagisAdapter, PinRegisters};
@@ -130,6 +131,15 @@ pub enum Refusal {
 struct WasmCombines;
 
 impl CombineHooks for WasmCombines {
+    /// `TargetLowering::convertSelectOfConstantsToMath`: wasm keeps the pin's
+    /// default, so `(shl (select c, 1, 2), 2)` folds into one `select 4, 8`.
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
@@ -139,6 +149,10 @@ impl CombineHooks for WasmCombines {
     }
 
     fn rebuild_brcond_condition(&self) -> bool {
+        true
+    }
+
+    fn fold_bin_op_into_select(&self) -> bool {
         true
     }
 
@@ -215,10 +229,11 @@ fn combine(
     dag: &mut SelectionDAG,
     level: CombineLevel,
     tli: &TargetLowering,
+    alias: &dyn AliasOracle,
     optimize: bool,
 ) {
     let mut hooks = WasmCombines;
-    let combiner = DagCombiner::new(dag, &mut hooks, level).with_tli(tli);
+    let combiner = DagCombiner::new(dag, &mut hooks, level).with_tli(tli).with_alias(alias);
     if optimize { combiner } else { combiner.with_opt_none() }.run();
 }
 
@@ -228,6 +243,7 @@ pub fn select_block(
     cpu: Cpu,
     features: Features,
     info: &mut FunctionLoweringInfo,
+    alias: &dyn AliasOracle,
     optimize: bool,
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu, features);
@@ -236,21 +252,15 @@ pub fn select_block(
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
-    if llrm_codegen::support::env_var("LLRM_DAGDUMP0").is_some() {
-        eprintln!("BEFORE\n{}", dag.dump());
-    }
-    combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, optimize);
-    if llrm_codegen::support::env_var("LLRM_DAGDUMP0").is_some() {
-        eprintln!("AFTER1\n{}", dag.dump());
-    }
+    combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, alias, optimize);
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
         eprintln!("{}", dag.dump());
     }
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    combine(dag, CombineLevel::AfterLegalizeTypes, &tli, optimize);
+    combine(dag, CombineLevel::AfterLegalizeTypes, &tli, alias, optimize);
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    combine(dag, CombineLevel::AfterLegalizeDag, &tli, optimize);
+    combine(dag, CombineLevel::AfterLegalizeDag, &tli, alias, optimize);
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
     }

@@ -32,7 +32,15 @@ exit:
 /// `body` with the SCEV of the invariants `%a` and `%b`, the loop's header and
 /// its recurrence `{0,+,1}`.
 fn with_loop(body: impl FnOnce(&Cx, &mut ScalarEvolution, Scev, Scev, BlockId, Scev)) {
-    let module = llrm_mir::parse::module(LOOP).expect("a module");
+    with_loop_of(LOOP, body)
+}
+
+/// `with_loop` over `source`, whose parameters are `%a` and `%b`.
+fn with_loop_of(
+    source: &str,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, Scev, Scev, BlockId, Scev),
+) {
+    let module = llrm_mir::parse::module(source).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::default();
     let tree = DomTree::of(function);
@@ -147,6 +155,22 @@ fn an_offset_beside_two_registers_is_the_displacement_of_the_lea() {
             Formula { base_regs: vec![a], has_base_reg: true, unfolded_offset: Immediate(8), ..Formula::default() };
         let cost = rated(cx, se, header, &basic, &one, &HashSet::default());
         assert_eq!(cost.c.num_base_adds, 1);
+    });
+}
+
+/// DEVIATE LU2 holds from 16 bits up: x86 has no 8-bit `lea`, so `a + b + 1`
+/// in i8 is two adds. Charged as one, switch_table_holes (m32 -O2) lost its
+/// i8 counter `{1,+,1}` to an i32 one with a `+ 25` the store paid for.
+#[test]
+fn an_offset_beside_two_byte_registers_is_an_add_of_its_own() {
+    let byte_loop = LOOP.replace("i32", "i8");
+    with_loop_of(&byte_loop, |cx, se, a, b, header, _| {
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.unfolded_offset = Immediate(1);
+        f.canonicalize(se, header);
+        let basic = use_of(Kind::Basic, &[0]);
+        let cost = rated(cx, se, header, &basic, &f, &HashSet::default());
+        assert_eq!(cost.c.num_base_adds, 2, "the registers, then the offset");
     });
 }
 
