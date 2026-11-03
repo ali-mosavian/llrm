@@ -790,6 +790,18 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
     }
 }
 
+/// minmax -Oz loaded a byte into `a` that its max compare also reads from a
+/// register, so the byte was copied out of `a` again and the pointer lost its
+/// pair: spilled and reloaded by `pop de; push de` every trip, 60 B / 2938 T
+/// became 64 B / 3557 T. A byte a non-copy reads as a register is not loaded
+/// through `a`.
+#[test]
+fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
