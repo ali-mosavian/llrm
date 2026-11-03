@@ -14,7 +14,7 @@
 //!
 //! - it is read exactly once in the body;
 //! - its defining instruction is the nearest earlier definition in the block, a
-//!   plain `fld` or `fild` of a memory cell, not volatile, with no clobbers and
+//!   plain `fld` or `fild` of a memory cell, with no clobbers and
 //!   not part of a group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
@@ -264,7 +264,6 @@ fn _refolded(
                 && _loads_memory(one.what.as_ref())
                 && defs.get(&value) == Some(&1)
                 && uses.get(&value).is_some_and(|reads| *reads >= 1)
-                && !one.volatile
                 && one.clobbers.is_empty()
                 && one.group.is_none()
             {
@@ -493,6 +492,9 @@ fn _fused(
 ) -> Arc<Insn> {
     let mut fused = (**one).clone();
     fused.what = Some(what);
+    // A volatile cell is still read once, by the fused instruction, and kept
+    // in order against every other volatile access (`_home_of`).
+    fused.volatile |= load.volatile;
     let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
     fused.uses = one
         .uses
@@ -546,8 +548,8 @@ pub fn read_from_cell(
 }
 
 /// The load that defines `value`, if it may be read again at `at` as a memory
-/// operand: the nearest definition in the block, a plain load of a cell, not
-/// volatile, with no clobbers and not part of a group, and nothing between it
+/// operand: the nearest definition in the block, a plain load of a cell, with
+/// no clobbers and not part of a group, and nothing between it
 /// and `at` volatile, a call, a barrier or an escape, or able to write the
 /// cell.
 fn _home_of(
@@ -564,7 +566,7 @@ fn _home_of(
                 .is_some_and(|made| made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))),
         )?;
     let load = &insns[home];
-    if !_loads_memory(load.what.as_ref()) || load.volatile || !load.clobbers.is_empty() || load.group.is_some() {
+    if !_loads_memory(load.what.as_ref()) || !load.clobbers.is_empty() || load.group.is_some() {
         return None;
     }
     let cell = cell_of(load);
@@ -781,6 +783,24 @@ mod tests {
             fstp(4, 4, frame(-4)),
         ]);
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
+    }
+
+    /// int_compared_with_float -Os: a volatile float read once by a compare was
+    /// `fld [m]; fxch; fcompp` (+24 B over six sites); the compare reads the
+    /// cell itself, and stays volatile.
+    #[test]
+    fn test_a_volatile_load_a_compare_reads_once_is_its_memory_operand() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let volatile = {
+            let mut load = (*fld(1, 2, global(0, 0))).clone();
+            load.volatile = true;
+            Arc::new(load)
+        };
+        let compare = insn(2, Operation::Compare, "fcom", vec![], vec![held(1), held(2)]);
+        let body = one_block(vec![fld(0, 1, frame(-4)), volatile, compare]);
+        let done = folded(&body, cpu, REGISTERS);
+        assert_eq!(names(&done), ["fld", "fcom+m"]);
+        assert!(done.blocks[0].insns.last().expect("an instruction").volatile);
     }
 
     /// A store to the cell between two reads changes the value the second one
