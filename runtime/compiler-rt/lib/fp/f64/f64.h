@@ -12,6 +12,7 @@
 #define SF_QNAN 0x7FF8000000000000ull
 #define sf_clz sf_clz64
 #define sf_shr_sticky sf_shr_sticky64
+#define SF_SHR_STICKY_ADD sf_shr_sticky64
 #define SF_ROUND3 sf_round3_64
 #define SF_PACK sf64_pack
 #define SF_UNPACK SF_N(unpack)
