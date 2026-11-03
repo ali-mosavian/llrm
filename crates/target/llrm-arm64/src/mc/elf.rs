@@ -111,6 +111,7 @@ mod tests {
             definition: Definition::Defined { section, offset: 0 },
             size: 0,
             group: None,
+            visibility: Default::default(),
         }
     }
 

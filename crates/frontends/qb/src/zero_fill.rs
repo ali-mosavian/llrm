@@ -78,6 +78,9 @@ pub(super) fn laid_out(
     program
 }
 
+/// The size from which a zeroed object is not laid out with the others.
+const BIG: i64 = 256;
+
 /// The bytes, from `low` up to BP, of two or more zeroed aggregates, and
 /// a type of one of them.
 struct Span {
@@ -128,12 +131,16 @@ fn relayout(
             [one] if matches!(types[&places[*one].r#type].kind, TypeKind::Integer | TypeKind::Float | TypeKind::Pointer | TypeKind::Boolean)
         )
     };
-    groups.sort_by_key(|group| match (group.3, scalar(&group.2)) {
-        (true, false) => 0,
-        (true, true) => 1,
-        (false, _) => 2,
+    // A big zeroed object keeps to itself: one fill clears it either way, and
+    // as part of the span it could be neither split into values nor dropped
+    // with the dead descriptor beside it.
+    let merged = |group: &(i64, i64, Vec<usize>, bool)| group.3 && !scalar(&group.2) && group.1 - group.0 < BIG;
+    groups.sort_by_key(|group| match (merged(group), group.3) {
+        (true, _) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
     });
-    let aggregates = groups.iter().filter(|group| group.3 && !scalar(&group.2)).count();
+    let aggregates = groups.iter().filter(|group| merged(group)).count();
     let r#type = groups.first().map(|group| places[group.2[0]].r#type);
     let mut cursor = 0;
     let mut span = None;

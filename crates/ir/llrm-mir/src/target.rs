@@ -53,14 +53,26 @@ pub struct Tuning {
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
-    /// The inliner's D11 bound (a callee that stays must not grow the code)
-    /// also holds a caller optimized for speed; false: the pin's threshold
-    /// alone decides there.
-    pub inline_size_guard_at_speed: bool,
+    /// The inliner's D11 bound holds a caller optimized for size on this target
+    /// (the real-mode description's `inline_size_guard` is the same bound
+    /// at m16): a callee that stays is copied only if it does not grow the
+    /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
+    /// alone decides, which allows the growth.
+    pub inline_size_guard_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE REC-2: (depth, callee `gcc_insns`) of the recursion copied at
+    /// speed, gcc's `max-inline-recursive-depth` and
+    /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
+    /// pin's inliner.
+    pub recursive_inlining: Option<(u32, i64)>,
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
+    /// of the recursive callee may grow its caller
+    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
+    /// it; none: no such bar.
+    pub recursive_edge_growth: Option<(i64, i64)>,
 }
 
 impl Tuning {
@@ -82,8 +94,10 @@ impl Tuning {
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
-        inline_size_guard_at_speed: false,
+        inline_size_guard_at_size: false,
         keep_constant_displacements: false,
+        recursive_inlining: None,
+        recursive_edge_growth: None,
     };
 }
 
@@ -332,6 +346,12 @@ pub struct OperationCosts {
     /// more than the divide for the divide to stay (`isIntDivCheap`,
     /// priced); 0 where the target states none.
     pub divide_margin: i64,
+    /// The multiply-high of a constant divide's sequence: the product's upper
+    /// half, where the CPU's multiply ends early on a short multiplier (the
+    /// 486's 13..42) and the multiplier is the dividend, whose value the
+    /// selector does not know: priced at the minimum, as gcc's
+    /// `mul_highpart_cost` prices a non-constant multiplier (`mult_init`).
+    pub multiply_high: i64,
     pub shift: i64,
     pub address: i64,
     /// An address advanced in a space whose displacement carries into its
@@ -487,6 +507,7 @@ impl Default for OperationCosts {
             multiply_long: 1,
             divide_long: 1,
             divide_margin: 0,
+            multiply_high: 1,
             shift: 1,
             address: 1,
             carry: 1,

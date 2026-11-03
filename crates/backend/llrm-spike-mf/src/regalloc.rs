@@ -99,6 +99,29 @@ pub trait Target {
         false
     }
 
+    /// Where `inst` builds or splits a register from its lanes (a
+    /// `REG_SEQUENCE`, the z80's `PACK`, the 6502's `PACK` and `UNPACK`):
+    /// `(whole, [(part, byte offset, bytes)])`, as operand positions.
+    /// DEVIATE: the pin places the lanes by coalescing the copies
+    /// `eliminateRegSequence` makes; until the lane model lands (exit
+    /// 2026-11-30) each part is hinted the lane of the register its whole is
+    /// copied to or from.
+    fn lane_moves(_inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        None
+    }
+
+    /// The part of `register` that `inst` reads through its use operand
+    /// `operand`, where it reads less than the whole (the Z80's sign test of a
+    /// pair reads the high byte). The pin writes the part as a subregister
+    /// index on the operand.
+    fn read_part(
+        _inst: &Inst,
+        _operand: usize,
+        register: RegId,
+    ) -> RegId {
+        register
+    }
+
     /// Whether `inst` reads the status flags set by the instruction before
     /// it, where a copy, spill or reload overwrites them: the two are one
     /// instruction to the allocator, which puts nothing between them.
@@ -123,6 +146,20 @@ pub trait Target {
     /// WebAssembly false (the default of a target that sets nothing). Here
     /// true, as before, until a target's owner states otherwise.
     fn joins_global_copies() -> bool {
+        true
+    }
+
+    /// DEVIATE C13: whether a copy between widths is joined (the pin always
+    /// does). Exit for a target that says false: its profitability rule.
+    fn joins_sub_registers() -> bool {
+        true
+    }
+
+    /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
+    /// one (an argument register, not reserved) is joined. The pin joins only
+    /// reserved registers, so a target that states false leaves the copy to
+    /// the allocator, as the pin does. Here true, as before.
+    fn joins_pinned_copies() -> bool {
         true
     }
 
@@ -368,7 +405,10 @@ pub fn eliminate_phis_with<C: Copy>(
                 let insts = &mut function.blocks[pred].insts;
                 let point = copy_point(insts, incoming);
                 let point = if hoist { hoisted_point(insts, incoming, point) } else { point };
-                insts.insert(point, Inst::copy(temporary, incoming));
+                // The copy stands under the instruction it is placed before.
+                let mut copy = Inst::copy(temporary, incoming);
+                copy.origin = insts.get(point).or(insts.last()).map_or(0, |beside| beside.origin);
+                insts.insert(point, copy);
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
@@ -419,7 +459,9 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
                 if destination == source {
                     continue;
                 }
-                out.push(Inst::copy(destination, source));
+                let mut copy = Inst::copy(destination, source);
+                copy.origin = inst.origin;
+                out.push(copy);
                 inst.operands[used] = Operand::Use(destination);
             }
             out.push(inst);

@@ -635,17 +635,15 @@ impl Builder<'_> {
         let dwords = length / 4;
         let words = u64::from(length % 4 >= 2);
         let bytes = u64::from(length % 2 == 1);
-        // From two dwords on a register holds the value (`xor ecx, ecx` 3 B,
-        // `mov ecx, imm32` 6) and each store is that register's 4, 3 or 3
-        // bytes; a lone dword is `mov dword ptr [m], imm32`. A 10-byte clear
-        // is 14 bytes of stores against 16 of fill (the object's, measured).
-        let shared = dwords > 1;
-        let (each, setup, word, byte) = match (shared, zero) {
-            (true, true) => (4, 3, 3, 3),
-            (true, false) => (4, 6, 3, 3),
-            (false, _) => (8, 0, 5, 4),
-        };
-        let stored = setup + dwords * each + words * word + bytes * byte;
+        // The value in a register (`xor ecx, ecx` 3 B, `mov ecx, imm32` 6; each
+        // store 4, 3, 3 B) or as immediates (`mov dword ptr [m], imm32` 8, a
+        // word 5, a byte 4): whichever is fewer. A 10-byte clear is 14 bytes
+        // of stores against 16 of fill (the object's, measured), a 7-byte one
+        // 13.
+        let setup = if zero { 3 } else { 6 };
+        let register = setup + dwords * 4 + words * 3 + bytes * 3;
+        let immediates = dwords * 8 + words * 5 + bytes * 4;
+        let stored = register.min(immediates);
         if stored <= FILL_BYTES {
             return false;
         }
@@ -1096,6 +1094,19 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
                     }
+                    // Tuned for size, a fill of whole words at word alignment
+                    // is words where a word takes no prefix (real mode): the
+                    // same bytes as `rep stosb`'s and half the iterations.
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && self.target.dag.pointer.size_in_bits() == 16
+                            && !self.runtime_has("memset")
+                            && bytes % 2 == 0
+                            && alignment >= 2 =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, 2)?
+                    }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
                 }
@@ -1328,7 +1339,7 @@ impl Builder<'_> {
         if flat && tail {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
-        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -1347,6 +1358,13 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
+        // ES is an input, not a clobber: the block leaves it as it found it,
+        // so a selector already loaded there is reused.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
+        if let Some((name, selector)) = segment {
+            names.push(name);
+            values.push(selector);
+        }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
@@ -1354,7 +1372,7 @@ impl Builder<'_> {
             clobbers: names
                 .iter()
                 .copied()
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
                 .map(Into::into)
                 .collect(),
             memory: true,
@@ -1394,6 +1412,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         let operands = match strings {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
@@ -1404,23 +1423,19 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
-            // `push ds; pop es`: both pointers are near, in DS; ES holds
-            // whatever the last far access left
-            code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
-            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
-            clobbers: operands
-                .iter()
-                .map(|(name, _)| *name)
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
-                .map(Into::into)
-                .collect(),
+            clobbers: operands.iter().map(|(name, _)| (*name).into()).collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
-        let registers =
-            operands.map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
+        let registers: Vec<_> = operands
+            .into_iter()
+            .chain(segment)
+            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
+            .collect();
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
         chain
     }

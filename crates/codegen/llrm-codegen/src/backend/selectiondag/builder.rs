@@ -220,6 +220,18 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with a signed divide or remainder of operands that fit the
+    /// legal type `narrow` made at that type ([`super::narrow_divrem`]).
+    pub fn with_narrow_divrem(
+        mut self,
+        narrow: EVT,
+        srem_overflow_defined: bool,
+    ) -> BuilderTarget {
+        self.dag.narrow_divrem = Some(narrow);
+        self.dag.narrow_srem_overflow_defined = srem_overflow_defined;
+        self
+    }
+
     /// This target with divides by constants kept as divides (`isIntDivCheap`).
     pub fn with_int_div_cheap(
         mut self,
@@ -635,6 +647,7 @@ impl<'a> Builder<'a> {
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
+            call_result_range_bits: None,
             fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
@@ -684,6 +697,10 @@ struct Builder<'a> {
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
+    /// The signed bits a call's `range` return attribute (the call's or the
+    /// callee's, `CallBase::getRange`) leaves its result: `AssertSext` of that
+    /// width.
+    call_result_range_bits: Option<u32>,
     /// The parameters the callee declares: the arguments after them are
     /// variadic.
     fixed_args: usize,
@@ -806,10 +823,13 @@ impl Builder<'_> {
             Ok(reg_vt) => Ok((reg_vt, 1)),
             Err(_) => {
                 let widest = EVT::integer(*self.target.legal_ints.last().expect("a legal integer"));
-                if vt.is_integer() && vt.size_in_bits() == 2 * widest.size_in_bits() {
-                    Ok((widest, 2))
+                // `getNumRegisters`: an integer wider than a register is
+                // that many registers when the width is a power of two of them
+                let count = vt.size_in_bits() / widest.size_in_bits();
+                if vt.is_integer() && vt.size_in_bits() % widest.size_in_bits() == 0 && count.is_power_of_two() {
+                    Ok((widest, count as usize))
                 } else {
-                    Err(Refused("integer wider than two registers"))
+                    Err(Refused("integer wider than a power-of-two count of registers"))
                 }
             }
         }
@@ -825,7 +845,19 @@ impl Builder<'_> {
         if vt == MVT::Far.into() {
             return Ok((EVT::I16, 2));
         }
+        if let Some(int) = self.soft_float_integer(vt) {
+            return self.parts(int);
+        }
         self.parts(vt)
+    }
+
+    /// Under soft float a float crosses blocks in the integer registers of
+    /// its width; none of the float types has a register.
+    fn soft_float_integer(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (self.soft_float() && vt.is_floating_point()).then(|| EVT::integer(vt.size_in_bits()))
     }
 
     /// `getNumRegistersForCallingConv`: an integer a convention returns in
@@ -857,6 +889,46 @@ impl Builder<'_> {
         let high = self.dag.get_node(ISD::ExtractElement, part, &[value, one]);
         let low = self.dag.get_node(ISD::ExtractElement, part, &[value, zero]);
         [low, high]
+    }
+
+    /// `getCopyToParts` for `count` equal parts, a power of two: halves, then
+    /// the halves' halves, the low part first.
+    fn split_parts(
+        &mut self,
+        value: SDValue,
+        part: EVT,
+        count: usize,
+    ) -> Vec<SDValue> {
+        if count == 2 {
+            return self.split_value(value, part).to_vec();
+        }
+        let half = EVT::integer(self.dag.value_type(value).size_in_bits() / 2);
+        let [low, high] = self.split_value(value, half);
+        let mut all = self.split_parts(low, part, count / 2);
+        all.extend(self.split_parts(high, part, count / 2));
+        all
+    }
+
+    /// `getCopyFromParts` for equal parts: the halves are paired, then the
+    /// pairs.
+    fn join_parts(
+        &mut self,
+        vt: EVT,
+        pieces: &[SDValue],
+        pointer: bool,
+    ) -> SDValue {
+        if pieces.len() == 2 {
+            return self.dag.get_node_flags(ISD::BuildPair, vt, pieces, pair_kind(vt, pointer));
+        }
+        let half = EVT::integer(vt.size_in_bits() / 2);
+        let (low, high) = pieces.split_at(pieces.len() / 2);
+        let pair = [self.join_parts(half, low, false), self.join_parts(half, high, false)];
+        self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
+    }
+
+    /// The path of the plan-based conventions carries one register or two.
+    fn at_most_two(parts: usize) -> Result<(), Refused> {
+        if parts > 2 { Err(Refused("integer wider than two registers")) } else { Ok(()) }
     }
 
     fn operand_type(
@@ -950,13 +1022,22 @@ impl Builder<'_> {
         }
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
-            let vt = self.type_of(self.function.value(arg).ty)?;
+            let declared = self.type_of(self.function.value(arg).ty)?;
+            // No FPU: a float in registers arrives as the integer of its width.
+            let soft = self.soft_float()
+                && declared.is_floating_point()
+                && matches!(
+                    self.convention.parameters.get(at),
+                    Some(Parameter::Registers(_))
+                );
+            let vt = if soft { EVT::integer(declared.size_in_bits()) } else { declared };
             // the registers a convention names split a value as
             // `getNumRegisters` does
             let (mut part_vt, parts) = match self.convention.parameters.get(at) {
                 Some(Parameter::Registers(regs)) => self.parts_in(vt, regs.len())?,
                 _ => self.parts(vt)?,
             };
+            Self::at_most_two(parts)?;
             // `CCPromoteToType<i32>`: a byte or word in a register is the
             // dword, whose high bits `zeroext`/`signext` assert
             if matches!(
@@ -1056,6 +1137,7 @@ impl Builder<'_> {
             } else {
                 pieces[0]
             };
+            let value = if soft { self.dag.get_node(ISD::BitCast, declared, &[value]) } else { value };
             self.node_map.insert(arg, value);
             if self.function.parameter_attrs.get(at).is_some_and(|attrs| {
                 attrs
@@ -1089,6 +1171,24 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// The parts of the function's own scalar integer result when the target
+    /// cannot return them in registers: the result is returned through a
+    /// hidden pointer (`CanLowerReturn` false).
+    fn demoted_result(
+        &self,
+        calling: &'static dyn TargetCalling,
+        result: TypeId,
+    ) -> Result<bool, Refused> {
+        if self.module.context.types.is_void(result) || self.is_aggregate(result) {
+            return Ok(false);
+        }
+        let vt = self.type_of(result)?;
+        if vt.is_floating_point() || !vt.is_integer() {
+            return Ok(false);
+        }
+        Ok(!calling.can_lower_return(&self.calling_parts(vt)?))
+    }
+
     /// `LowerArguments` with the target's `LowerFormalArguments`, which takes
     /// every parameter at once.
     fn lower_arguments_with(
@@ -1102,6 +1202,24 @@ impl Builder<'_> {
         }
         let mut ins = Vec::new();
         let mut shapes = Vec::new();
+        let (result, _, _) = self.module.signature(self.function.ty);
+        let demoted = self.demoted_result(calling, result)?;
+        if demoted {
+            // `LowerArguments`: "put in an sret pointer parameter before all
+            // the other parameters"
+            let pointer = self.target.dag.pointer;
+            let hidden = self.calling_parts(pointer)?;
+            let split = hidden.len() > 1;
+            ins.extend(hidden.into_iter().map(|vt| In {
+                vt,
+                pointer: true,
+                arg_vt: pointer,
+                split,
+                sret: true,
+                ext: Ext::Any,
+            }));
+        }
+        let hidden_parts = ins.len();
         for &arg in &parameters {
             let ty = self.function.value(arg).ty;
             // An aggregate is passed leaf by leaf (`ComputeValueVTs`).
@@ -1144,7 +1262,7 @@ impl Builder<'_> {
             offsets.push(offset);
             -(offsets.len() as i32)
         };
-        let parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
         // `SaveVarArgRegisters`: the save areas are stack objects made after
         // the allocas', numbered from the next frame index.
         let mut requests: Vec<(u32, u32)> = Vec::new();
@@ -1163,6 +1281,16 @@ impl Builder<'_> {
         if let Some(area) = &area {
             self.dag.set_root(area.chain);
         }
+        if demoted {
+            // `DemoteRegister`: the hidden pointer is kept to store the result
+            let rest = parts.split_off(hidden_parts);
+            let hidden = self.join_from_calling(&parts, self.target.dag.pointer, None, true);
+            parts = rest;
+            let reg = self.info.new_reg();
+            self.info.demote_reg = Some(reg);
+            let copy = self.dag.get_copy_to_reg(self.dag.entry_node(), reg, hidden);
+            self.dag.set_root(copy);
+        }
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
         }
@@ -1176,6 +1304,21 @@ impl Builder<'_> {
             }
             let value = self.merge(&values);
             self.node_map.insert(arg, value);
+            if calling.returns_sret_pointer()
+                && attrs.iter().any(|attr| {
+                    matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Type(name, _) if name == "sret"
+                    )
+                })
+            {
+                // `SRetReturnReg`: kept to be returned
+                let reg = self.info.new_reg();
+                self.info.sret_reg = Some(reg);
+                let entry = self.dag.entry_node();
+                let copy = self.dag.get_copy_to_reg(entry, reg, value);
+                self.dag.set_root(copy);
+            }
             if outside.contains(&arg) {
                 let reg = self.info.create_reg(arg);
                 self.copy_value_to_register(Operand::Value(arg), reg, ISD::AnyExtend)?;
@@ -1564,7 +1707,7 @@ impl Builder<'_> {
                 first: 0,
             }
         } else {
-            convention_for(
+            crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1574,6 +1717,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types,
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
@@ -1595,7 +1739,7 @@ impl Builder<'_> {
         if let Some(declared) =
             declared.filter(|declared| !runtime && *declared < arg_types.len() && !variadic && plan.popped > 0)
         {
-            plan.popped = convention_for(
+            plan.popped = crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1605,6 +1749,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types[..declared],
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
             .popped;
@@ -1682,6 +1827,11 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         self.call_result_assert = extension_assert(&info.return_attrs);
+        self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
+            &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
+            instruction,
+        )
+        .map(|range| range.get_min_signed_bits());
         self.fixed_args = named;
         self.call_sret = info.argument_attrs.iter().map(|attrs| has_sret(attrs)).collect();
         self.call_attrs_move_arguments = match self.calling() {
@@ -1834,8 +1984,11 @@ impl Builder<'_> {
             return Ok(vec![if narrow { self.dag.get_node(ext.node(), parts[0], &[value]) } else { value }]);
         }
         let [low, high] = self.split_value(value, EVT::integer(vt.size_in_bits() / 2));
-        let mut all = self.split_for_calling(low, ext)?;
-        all.extend(self.split_for_calling(high, ext)?);
+        // `getCopyToParts`: the parts of a big-endian target are reversed, the
+        // high half first
+        let (first, second) = if self.is_big_endian() { (high, low) } else { (low, high) };
+        let mut all = self.split_for_calling(first, ext)?;
+        all.extend(self.split_for_calling(second, ext)?);
         Ok(all)
     }
 
@@ -1863,9 +2016,18 @@ impl Builder<'_> {
             return self.dag.get_node(ISD::Truncate, vt, &[one]);
         }
         let half = EVT::integer(vt.size_in_bits() / 2);
-        let (low, high) = parts.split_at(parts.len() / 2);
+        let (first, second) = parts.split_at(parts.len() / 2);
+        // `getCopyFromParts`: a big-endian target's first half is the high one
+        let (low, high) = if self.is_big_endian() { (second, first) } else { (first, second) };
         let pair = [self.join_from_calling(low, half, None, false), self.join_from_calling(high, half, None, false)];
         self.dag.get_node_flags(ISD::BuildPair, vt, &pair, pair_kind(vt, pointer))
+    }
+
+    fn is_big_endian(&self) -> bool {
+        matches!(
+            self.target.target_nodes,
+            Some(TargetNodes { big_endian: true, .. })
+        )
     }
 
     fn is_pointer_type(
@@ -1939,7 +2101,35 @@ impl Builder<'_> {
                 });
             }
         }
-        let void = self.module.context.types.is_void(result_type);
+        let mut void = self.module.context.types.is_void(result_type);
+        // `LowerCallTo`, `CanLowerReturn` false: the result comes back through
+        // a stack slot whose address is the first argument
+        let demoted = self.demoted_result(calling, result_type)?;
+        let mut slot = None;
+        if demoted {
+            let types = &self.module.context.types;
+            let size = self.layout.alloc_size(types, result_type) as u32;
+            let index = self.info.new_stack_object(size, 1);
+            let address = self.dag.get_frame_index(self.target.dag.pointer, index);
+            let pointer = self.target.dag.pointer;
+            let pieces = self.split_for_calling(address, Ext::Any)?;
+            let split = pieces.len() > 1;
+            let hidden: Vec<Out> = pieces
+                .into_iter()
+                .map(|value| Out {
+                    value,
+                    ext: Ext::Any,
+                    pointer: true,
+                    arg_vt: pointer,
+                    split,
+                    variadic: false,
+                    sret: true,
+                })
+                .collect();
+            outs.splice(0..0, hidden);
+            slot = Some((index, address));
+            void = true;
+        }
         // `ComputeValueVTs`: an aggregate result is its leaves, each answered
         // like a scalar result.
         let mut layout: Vec<(EVT, usize, bool)> = Vec::new();
@@ -1991,6 +2181,21 @@ impl Builder<'_> {
             &mut |size, align| info.new_stack_object(size, align),
         );
         self.dag.set_root(chain);
+        if let Some((index, address)) = slot {
+            let vt = self.type_of(result_type)?;
+            let info = MemInfo {
+                mem_vt: vt,
+                align: 1,
+                volatile: false,
+                base: MemBase::Stack(index),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let load = self.dag.get_load(vt, chain, address, info);
+            self.pending_loads.push(SDValue { node: load.node, res: 1 });
+            return Ok(Some(load));
+        }
         if void {
             return Ok(None);
         }
@@ -2003,6 +2208,23 @@ impl Builder<'_> {
             rest = tail;
         }
         let _ = vt;
+        // `CallBase::getRange`
+        // ([L381](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L381))
+        // asserts through `lowerRangeToAssertZExt`
+        // ([L10947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L10947)),
+        // which takes only a range that zero extends. A signed range gives the
+        // sign bits `ComputeNumSignBits` reads, so a divide of the result is
+        // narrowed ([`super::narrow_divrem`]).
+        if let Some(bits) = std::mem::take(&mut self.call_result_range_bits)
+            && !aggregate
+            && assert.is_none()
+        {
+            let wide = self.dag.value_type(leaves[0]);
+            if wide.is_integer() && bits > 0 && bits < wide.size_in_bits() {
+                let narrow = self.dag.get_value_type_node(EVT::integer(bits));
+                leaves[0] = self.dag.get_node(ISD::AssertSext, wide, &[leaves[0], narrow]);
+            }
+        }
         Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
     }
 
@@ -2072,6 +2294,7 @@ impl Builder<'_> {
                 Parameter::Registers(regs) => self.parts_in(vt, regs.len())?,
                 _ => self.parts(vt)?,
             };
+            Self::at_most_two(parts)?;
             let pieces = if parts == 2 { self.split_value(*value, part_vt).to_vec() } else { vec![*value] };
             match parameter {
                 Parameter::Cell(_) | Parameter::Bytes(_) if sibling => {}
@@ -2277,10 +2500,15 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
-        if vt.is_floating_point() {
+        // No FPU: a float comes back as the integer of its width.
+        let soft = self.soft_float() && vt.is_floating_point();
+        if vt.is_floating_point() && !soft {
             return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
+        let float_vt = vt;
+        let vt = if soft { EVT::integer(vt.size_in_bits()) } else { vt };
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
+        Self::at_most_two(parts)?;
         if plan.returns.len() != parts {
             return Err(Refused("result in registers the value does not fill"));
         }
@@ -2300,7 +2528,7 @@ impl Builder<'_> {
         } else {
             pieces[0]
         };
-        Ok(Some(result))
+        Ok(Some(if soft { self.dag.get_node(ISD::BitCast, float_vt, &[result]) } else { result }))
     }
 
     /// The convention names a result register by its widest view; the DAG
@@ -2344,10 +2572,28 @@ impl Builder<'_> {
         chain: SDValue,
         instruction: &llrm_mir::module::Instruction,
     ) -> Result<(), Refused> {
-        if self.info.sret_reg.is_some() {
-            return Err(Refused("sret with a target's calling hook"));
-        }
         let mut outs = Vec::new();
+        if let (Some(reg), Some(&operand)) = (self.info.demote_reg, instruction.operands.first()) {
+            // `visitRet` with a demoted result: stored through the hidden
+            // pointer, nothing is returned in registers
+            let value = self.get_value(operand)?;
+            let vt = self.dag.value_type(value);
+            let pointer = self.target.dag.pointer;
+            let address = self.dag.get_copy_from_reg(chain, reg, pointer);
+            let info = MemInfo {
+                mem_vt: vt,
+                align: 1,
+                volatile: false,
+                base: MemBase::Unknown,
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let store = self.dag.get_store(chain, value, address, info);
+            let node = calling.lower_return(&mut self.dag, store, &[]);
+            self.dag.set_root(node);
+            return Ok(());
+        }
         if let Some(&operand) = instruction.operands.first() {
             let ty = self.function.operand_type(&self.module.context, operand).ok_or(Refused("a return of no type"))?;
             let values = self.value_parts(operand)?;
@@ -2374,10 +2620,29 @@ impl Builder<'_> {
                 }
             }
         }
+        if let Some(reg) = self.info.sret_reg {
+            // `LowerReturn`: the saved `sret` pointer is a result too
+            let pointer = self.target.dag.pointer;
+            let saved = self.dag.get_copy_from_reg(chain, reg, pointer);
+            outs.push(Out {
+                value: saved,
+                ext: Ext::Any,
+                pointer: false,
+                arg_vt: pointer,
+                split: false,
+                sret: false,
+                variadic: false,
+            });
+        }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
         let node = calling.lower_return(&mut self.dag, chain, &outs);
         self.dag.set_root(node);
         Ok(())
+    }
+
+    /// `useSoftFloat()` of the function being built.
+    fn soft_float(&self) -> bool {
+        crate::backend::isel::soft_float(&self.function.attrs)
     }
 
     fn visit_ret(
@@ -2441,6 +2706,13 @@ impl Builder<'_> {
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
+            // No FPU: a float leaves as the integer of its width.
+            let (value, vt) = if self.soft_float() && vt.is_floating_point() {
+                let int = EVT::integer(vt.size_in_bits());
+                (self.dag.get_node(ISD::BitCast, int, &[value]), int)
+            } else {
+                (value, vt)
+            };
             if let (true, Some(xmm)) = (vt.is_floating_point(), self.convention.float_result) {
                 // `LowerReturn` with SSE: copied to the vector register
                 let copy = self.dag.get_copy_to_phys_reg(chain, xmm, value, glue);
@@ -2453,6 +2725,7 @@ impl Builder<'_> {
                 ops.push(value);
             } else {
                 let (part_vt, parts) = self.parts_in(vt, self.convention.returns.len())?;
+                Self::at_most_two(parts)?;
                 // a narrow integer fills its register (`getCopyToParts`, by the
                 // return's `zeroext`/`signext`)
                 let value = if parts == 1 && vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
@@ -2647,14 +2920,21 @@ impl Builder<'_> {
         vt: EVT,
         pointer: bool,
     ) -> Result<SDValue, Refused> {
+        if let Some(int) = self.soft_float_integer(vt) {
+            let bits = self.copy_from_reg(reg, int, false)?;
+            return Ok(self.dag.get_node(ISD::BitCast, vt, &[bits]));
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
-        if parts == 2 {
-            // each part's copy chained to the one before; the halves paired
-            let regs = self.info.part_regs(reg, 2);
-            let low = self.dag.get_copy_from_reg(entry, regs[0], reg_vt);
-            let high = self.dag.get_copy_from_reg(SDValue { node: low.node, res: 1 }, regs[1], reg_vt);
-            return Ok(self.dag.get_node_flags(ISD::BuildPair, vt, &[low, high], pair_kind(vt, pointer)));
+        if parts > 1 {
+            // each part's copy chained to the one before; the parts paired
+            let regs = self.info.part_regs(reg, parts);
+            let mut pieces: Vec<SDValue> = Vec::new();
+            for reg in regs {
+                let after = pieces.last().map_or(entry, |last| SDValue { node: last.node, res: 1 });
+                pieces.push(self.dag.get_copy_from_reg(after, reg, reg_vt));
+            }
+            return Ok(self.join_parts(vt, &pieces, pointer));
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
@@ -2681,12 +2961,17 @@ impl Builder<'_> {
         reg: u32,
         extend: ISD,
     ) -> Result<(), Refused> {
-        let vt = self.dag.value_type(value);
+        let mut vt = self.dag.value_type(value);
+        let mut value = value;
+        if let Some(int) = self.soft_float_integer(vt) {
+            value = self.dag.get_node(ISD::BitCast, int, &[value]);
+            vt = int;
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
-        if parts == 2 {
-            let regs = self.info.part_regs(reg, 2);
-            let halves = self.split_value(value, reg_vt);
+        if parts > 1 {
+            let regs = self.info.part_regs(reg, parts);
+            let halves = self.split_parts(value, reg_vt, parts);
             let copies: Vec<SDValue> =
                 halves.iter().zip(&regs).map(|(half, reg)| self.dag.get_copy_to_reg(entry, *reg, *half)).collect();
             let chain = self.dag.get_token_factor(&copies);
@@ -3721,9 +4006,18 @@ mod f80_tests {
     struct Bytes {
         outs: std::sync::Mutex<Vec<(usize, usize)>>,
         ins: std::sync::Mutex<Vec<EVT>>,
+        /// The most result parts it returns in registers; none set, any.
+        result_parts: usize,
     }
 
     impl TargetCalling for Bytes {
+        fn can_lower_return(
+            &self,
+            parts: &[EVT],
+        ) -> bool {
+            self.result_parts == 0 || parts.len() <= self.result_parts
+        }
+
         fn lower_call(
             &self,
             dag: &mut SelectionDAG,
@@ -3811,6 +4105,27 @@ mod f80_tests {
         let stub: &'static Bytes = Box::leak(Box::default());
         built_with_bytes("define i32 @f(i32 %a) {\n  ret i32 %a\n}", stub);
         assert_eq!(*stub.outs.lock().unwrap(), [(4, 4)]);
+    }
+
+    /// A result of more parts than the target returns in registers went to
+    /// the hook as parts it could not place: the build stopped at "a result
+    /// the convention has no registers for". It is returned through a hidden
+    /// pointer, the first argument (`CanLowerReturn` false): the callee stores
+    /// it, the caller reads it from a stack slot.
+    #[test]
+    fn a_result_the_target_cannot_return_in_registers_goes_through_a_hidden_pointer() {
+        let stub: &'static Bytes = Box::leak(Box::new(Bytes { result_parts: 2, ..Bytes::default() }));
+        built_with_bytes("define i32 @f(i32 %a) {\n  ret i32 %a\n}", stub);
+        assert_eq!(*stub.outs.lock().unwrap(), [(0, 0)], "nothing returned in registers");
+        let stub: &'static Bytes = Box::leak(Box::new(Bytes { result_parts: 2, ..Bytes::default() }));
+        built_with_bytes(
+            "declare i32 @g(i8)\ndefine i32 @f(i8 %a) {\n  %r = call i32 @g(i8 %a)\n  ret i32 %r\n}",
+            stub,
+        );
+        // the hidden pointer is four byte parts, then the byte argument: five
+        // bytes
+        assert_eq!(stub.outs.lock().unwrap()[0], (5, 5));
+        assert!(stub.ins.lock().unwrap().is_empty(), "the call has no register result");
     }
 
     /// Two byte arguments were both named for the one register x86 gives by
