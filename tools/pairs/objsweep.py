@@ -53,6 +53,7 @@ DEBUG_LEGS = {
     "m16": [["-g"], ["-gtd"], ["-gcodeview"], ["-gdwarf-5"]],
     "m64": [["-g", "-fobject-format=elf"]],
     "a64": [["-g"]],
+    "wasm": [["-g"]],
 }
 
 
