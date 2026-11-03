@@ -497,7 +497,27 @@ impl ProgramPass for Walk {
                                             - gone,
                                     )
                                 } else {
-                                    (0, 0)
+                                    // At size the units count a call by its
+                                    // parameters, not the words and address forms it
+                                    // pushes: the target's byte prices decide too.
+                                    let costs = program.target.size_costs();
+                                    let now = module.global(id).function().expect("a body");
+                                    let gone: i64 = if credit > 0 {
+                                        calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
+                                            .sum()
+                                    } else {
+                                        0
+                                    };
+                                    (
+                                        0,
+                                        function_bytes(module, &program.layout, &costs, now)
+                                            - function_bytes(module, &program.layout, &costs, &kept)
+                                            - gone,
+                                    )
                                 };
                                 if remarks {
                                     eprintln!(
@@ -517,7 +537,7 @@ impl ProgramPass for Walk {
                                         growth
                                     );
                                 }
-                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) {
+                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) || (rate == 0 && growth < 0) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
