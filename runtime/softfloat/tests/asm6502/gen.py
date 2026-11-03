@@ -1,4 +1,5 @@
-# usage: gen.py add|sub|mul|div|itof|utof|ftoi|ftou n  -> ca65 records a,b,expected (3 x .dword); a NaN expectation is $7fc00000, any NaN passes
+# usage: gen.py add|sub|mul|div|itof|utof|ftoi|ftou n [edge]  -> (edge: n records with add/sub exponent gaps 20..34,
+# mul/div results near the denormal range, ftoi/ftou exponents 126..160) ca65 records a,b,expected (3 x .dword); a NaN expectation is $7fc00000, any NaN passes
 import struct, random, sys
 op, n = sys.argv[1], int(sys.argv[2])
 f = lambda b: struct.unpack('<f', struct.pack('<I', b))[0]
@@ -49,6 +50,25 @@ while len(recs) < n:
         d = random.choice([40, 30, 3, 2])
         b = random.getrandbits(32) if random.random() < .3 else (random.getrandbits(32) & 0x807fffff) | ((((a >> 23) & 255) + random.randint(-d, d)) & 255) << 23
     recs.append((a, b))
+if sys.argv[3:] == ['edge']:
+    m = lambda: random.choice([0, 1, 0x7fffff, 0x400000, 0x7ffffe, random.getrandbits(23)])
+    sg = lambda: random.choice([0, 1 << 31])
+    recs = []
+    while len(recs) < n:
+        if op in ('add', 'sub'):
+            ea = random.randint(36, 254); d = random.randint(20, 34)
+            a, b = sg() | ea << 23 | m(), sg() | (ea - d) << 23 | m()
+            if random.random() < .5: a, b = b, a
+        elif op in ('mul', 'div'):
+            ea = random.randint(0, 160); r = random.randint(-33, 3)
+            eb = r + 127 - ea if op == 'mul' else ea + 127 - r
+            if not 0 <= eb <= 254: continue
+            a, b = sg() | ea << 23 | m(), sg() | eb << 23 | m()
+        elif op in ('ftoi', 'ftou'):
+            a = sg() | random.randint(126, 160) << 23 | m(); b = 0
+        else:
+            a = random.getrandbits(random.randint(1, 32)); b = 0
+        recs.append((a, b))
 print("nrec = %d\nvec:" % len(recs))
 for a, b in recs:
     print("  .dword $%08x, $%08x, $%08x" % (a, b, ref(a, b)))

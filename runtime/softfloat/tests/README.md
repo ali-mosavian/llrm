@@ -10,7 +10,7 @@ Host oracle (run from `runtime/softfloat`, each prints `fails=0` or its totals):
 
 Targets:
 - m68k (qemu): `LLRM_CC_DIR=dir tests/run_m68k.sh CPU OPT [n]`, `tests/m68k_cmp_unordered.c`, `tests/m68k_wrapper_size.sh`, `tests/m68k_no_self_call.sh`, `tests/size_m68k.sh [CPU] [OPT]`
-- z80 (ucsim): `tests/z80/run.sh [ops]`
+- z80 (ucsim): `tests/z80/run.sh [ops]` (env NV vectors, RUN_TIMEOUT s, SIM); `tests/z80/run_guard.sh` checks it fails instead of hanging
 - 6502 (sim65): `tests/asm6502/run.sh [n] [ops]`, `tests/asm6502/bench_wide.py`, `LLRM_CC=llrm-cc tests/run_sim65.sh [n]`
 - x86: `tests/size_x86.sh [OPT]`, `tests/size_m16.sh [OPT]`, `tests/x86_kernels.sh`, `tests/x86_kernels_ref.sh`, `tests/x86_m16_kernels.sh [NV] [BENCH_DIR]`
 
