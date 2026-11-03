@@ -227,6 +227,25 @@ impl Tti for Z80Tti {
         }
     }
 
+    /// DEVIATE Z80L1: the pin's order puts `add_rec_cost` before
+    /// `num_base_adds`; AArch64's puts the base adds first (and the
+    /// instruction count second). The Z80 has no base+register address, so a
+    /// base add is an `add hl,rr` and two moves each iteration while another
+    /// induction variable is one `inc rr`: lz4's match copy kept `dst + off`
+    /// as a base add and its pointers in the frame (102905 clocks, gcc 35781).
+    /// Reason: the pin's Z80 does not exist. Exit: the order measured on all
+    /// 60 cells with the exit-value use priced (schr, find).
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            (c.num_regs, c.num_base_adds, c.add_rec_cost, c.num_iv_muls, c.scale_cost, c.imm_cost, c.setup_cost)
+        };
+        key(a) < key(b)
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false

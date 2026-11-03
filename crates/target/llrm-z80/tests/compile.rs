@@ -1285,4 +1285,24 @@ fn two_modules_compiled_in_turn_do_not_share_the_cache() {
     assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
     let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
     assert_eq!(first, again);
+
+/// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
+/// push bc; add hl,bc`) and its pointers in ix slots: 102905 clocks at -O2,
+/// gcc's end-pointer loop 35781. Both copies, the literals and the match, are
+/// loops of registers: load, store, two increments, the count.
+#[test]
+fn a_match_copy_loop_keeps_its_pointers_in_registers() {
+    let out = text(include_str!("kernels/ir/lz4.ll"), "lz4", 0, &Request::new(Level::O2)).expect("compiles");
+    let copies = out
+        .split("\nL0_")
+        .filter(|block| {
+            let lines: Vec<&str> = block.lines().collect();
+            let label = lines[0].trim_end_matches(':');
+            lines.len() <= 9
+                && lines.iter().any(|line| line.trim_start().starts_with("ld (") && line.ends_with(", a"))
+                && lines.last().is_some_and(|last| last.trim() == format!("jr nz, L0_{label}"))
+                && !lines.iter().any(|line| line.contains("(ix)"))
+        })
+        .count();
+    assert_eq!(copies, 2, "{out}");
 }
