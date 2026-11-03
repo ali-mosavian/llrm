@@ -768,7 +768,15 @@ impl Printer<'_> {
                 return false;
             }
         }
-        matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET")))
+        if matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET"))) {
+            return true;
+        }
+        // the block ends with the pair unmentioned: what the blocks it goes on
+        // to read of it (the loop head of digits defines `de` first thing)
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        ![pair, lo, hi].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
     }
 
     /// Whether the byte register `register` holds nothing a later instruction
