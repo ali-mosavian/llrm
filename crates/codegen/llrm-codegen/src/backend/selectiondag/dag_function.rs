@@ -817,8 +817,8 @@ fn selected_in(
         TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
     };
     // The soft-float routines are spelled as the C compiler spelled their definitions.
-    for (name, _, symbol) in libcalls {
-        tli.set_libcall_symbol(name, symbol.clone());
+    for (name, number, symbol) in libcalls {
+        tli.set_libcall_symbol(name, symbol.clone(), *number);
     }
     // SD214: with a math library the pin calls it for these; the call is not
     // translated yet, so the node is refused rather than selected inline.

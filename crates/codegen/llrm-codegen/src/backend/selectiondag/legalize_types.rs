@@ -485,7 +485,7 @@ impl<'a> TypeLegalizer<'a> {
                 let call = self.tli.libcall_name(op, vt).and_then(|name| {
                     let arch = self.target?;
                     let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
-                    super::libcall::c_lib_call(self.dag, &env, &self.tli.libcall_symbol(name), &args, int)
+                    super::libcall::c_lib_call(self.dag, &env, &self.tli.libcall_symbol(name), self.tli.libcall_convention(name), &args, int)
                 });
                 call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
             }
@@ -636,7 +636,7 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<SDValue, LegalizeError> {
         let arch = self.target.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften without a target" })?;
         let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
-        super::libcall::c_lib_call(self.dag, &env, &self.tli.libcall_symbol(name), args, ret)
+        super::libcall::c_lib_call(self.dag, &env, &self.tli.libcall_symbol(name), self.tli.libcall_convention(name), args, ret)
             .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "the routine cannot be called" })
     }
 
@@ -676,7 +676,7 @@ impl<'a> TypeLegalizer<'a> {
         let mut compare = |this: &mut Self, stem: &'static str, cc: CondCode| -> Result<SDValue, LegalizeError> {
             let arch = this.target.ok_or_else(|| unsupported("soften a compare without a target"))?;
             let env = super::libcall::CallEnv { arch, pointer: this.dag.config().pointer };
-            let result = super::libcall::c_lib_call(this.dag, &env, &this.tli.libcall_symbol(pick(stem)), &[a, b], EVT::I32)
+            let result = super::libcall::c_lib_call(this.dag, &env, &this.tli.libcall_symbol(pick(stem)), this.tli.libcall_convention(pick(stem)), &[a, b], EVT::I32)
                 .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
             let zero = this.dag.get_constant(0, EVT::I32);
             Ok(this.dag.get_setcc(vt, result, zero, cc))

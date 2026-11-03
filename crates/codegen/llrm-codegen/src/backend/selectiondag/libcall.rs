@@ -134,7 +134,7 @@ pub fn lib_call(
 }
 
 /// `makeLibCall` for a C routine: `name` called with `args`, each placed where
-/// the target's native convention puts an integer of its width, and a result
+/// `convention` (the routine's own, else the target's native one) puts an integer of its width, and a result
 /// of type `ret` read from where that convention leaves it (a pair of
 /// registers, low first, is a `BuildPair`). `None` where an argument needs
 /// several registers.
@@ -142,11 +142,13 @@ pub fn c_lib_call(
     dag: &mut SelectionDAG,
     env: &CallEnv<'_>,
     name: &str,
+    convention: Option<u32>,
     args: &[SDValue],
     ret: EVT,
 ) -> Option<SDValue> {
     use llrm_target::calling::Place as Where;
-    let native = env.arch.calling().native();
+    let calling = env.arch.calling();
+    let native = convention.and_then(|number| calling.by_number(number)).unwrap_or_else(|| calling.native());
     let slot = env.arch.stack_slot_bytes();
     let kinds: Vec<_> = args
         .iter()

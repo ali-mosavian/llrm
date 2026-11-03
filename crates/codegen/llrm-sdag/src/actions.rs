@@ -120,7 +120,7 @@ pub struct TargetLowering {
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
     /// The object spelling of a routine's name where the convention decorates it (`___addsf3@3`).
-    libcall_symbols: HashMap<String, String>,
+    libcall_symbols: HashMap<String, (String, u32)>,
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
@@ -164,8 +164,17 @@ impl TargetLowering {
         &mut self,
         name: &str,
         symbol: String,
+        convention: u32,
     ) {
-        self.libcall_symbols.insert(name.to_owned(), symbol);
+        self.libcall_symbols.insert(name.to_owned(), (symbol, convention));
+    }
+
+    /// The calling convention number the routine `name` was defined under.
+    pub fn libcall_convention(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        self.libcall_symbols.get(name).map(|(_, number)| *number)
     }
 
     /// How a call to the routine `name` spells it: as the C compiler spelled
@@ -174,7 +183,7 @@ impl TargetLowering {
         &self,
         name: &str,
     ) -> String {
-        self.libcall_symbols.get(name).cloned().unwrap_or_else(|| name.to_owned())
+        self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
     }
 
     pub fn libcall_name(

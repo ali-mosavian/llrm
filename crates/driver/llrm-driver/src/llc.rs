@@ -437,7 +437,8 @@ pub fn compiled_dumping(
         .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
         .unwrap_or(default);
     options.libcalls.extend(libm_calls(library, format.name()));
-    options.libcalls.extend(soft_float_calls(library, format.name()));
+    // The soft-float routines are C compiled under the program's own convention, not the Watcom library's.
+    options.libcalls.extend(soft_float_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
