@@ -13,9 +13,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-from dwarf_loc_diff import code_of, run
+from dwarf_loc_diff import run
 
 SP, FP = 31, 29
+
+
+def code_of(disassembly: str) -> dict[str, list[str]]:
+    """Each function's instructions as `offset text` (hex offset), immediates kept: `dwarf_loc_diff.code_of` cuts a line at `#`, which on arm64
+    is the start of every immediate, so the stack adjustments were invisible and every frame address read as wrong."""
+    out: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in disassembly.splitlines():
+        if (head := re.match(r"^[0-9a-f]+ <(.+)>:$", line)) is not None:
+            current = out.setdefault(head.group(1), [])
+        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\t(.*)$", line)):
+            current.append(f"{row.group(1)} {row.group(2).split('//')[0].strip()}")
+    return out
 
 
 def reg_number(name: str) -> int | None:
@@ -26,6 +39,11 @@ def reg_number(name: str) -> int | None:
     if name[0] == "d" and name[1:].isdigit():
         return 64 + int(name[1:])
     return None
+
+
+def callee_saved(register: int) -> bool:
+    """x19..x28, the frame record and d8..d15: what an unwinder must find; a spilled temporary is not its business."""
+    return 19 <= register <= 30 or 72 <= register <= 79
 
 
 def _imm(text: str) -> int:
@@ -42,12 +60,18 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
     sp = 0
     fp: int | None = None
     stored: dict[int, int] = {}
+    # `add x16, sp, #off`: the scratch address a big frame's saves go through.
+    alias: dict[str, int] = {}
+    # `mov x16, #4128` and the like: a stack adjustment too big for an immediate goes through a register.
+    constant: dict[str, int] = {}
     by_pc = {row[0]: row for row in rows}
     current = None
     verdict_at = None
+    # The rows are offsets from the function's first instruction, the disassembly's are from the section's.
+    base = int(code[0].split(" ", 1)[0], 16) if code else 0
     for line in code:
         pc_text, text = line.split(" ", 1)
-        pc = int(pc_text, 16)
+        pc = int(pc_text, 16) - base
         mnemonic, _, rest = text.partition("\t")
         operands = _operands(rest)
         if verdict_at is None and mnemonic in {"bl", "blr", "ret"}:
@@ -63,22 +87,27 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
             for register, offset in saved.items():
                 if stored.get(register) != offset:
                     problems.append(f"pc {pc}: register {register} said saved at cfa{offset:+}, stored at {stored.get(register)}")
-        if pc == verdict_at and current is not None and set(current[3]) != set(stored):
-            problems.append(f"pc {pc}: after the prologue the rows save {sorted(current[3])}, the code stored {sorted(stored)}")
-        if mnemonic == "ret":
+        kept = {register for register in stored if callee_saved(register)}
+        if pc == verdict_at and current is not None and set(current[3]) != kept:
+            problems.append(f"pc {pc}: after the prologue the rows save {sorted(current[3])}, the code stored {sorted(kept)}")
+        # Past the first unconditional exit the straight line is not the prologue's any more (a block laid out after the epilogue).
+        if mnemonic in {"ret", "b", "br"}:
             break
         memory = next((op for op in operands if op.startswith("[")), None)
         pre = bool(memory) and memory.endswith("]!")
         post = bool(memory) and memory.endswith("]") and len(operands) >= 2 and operands[-1].startswith("#") and operands[-2] == memory
-        on_sp = memory is not None and memory.startswith("[sp")
-        offset = _imm(memory.strip("[]!").split(",")[1]) if memory and "," in memory.strip("[]!") else 0
+        base_register = memory.strip("[]!").split(",")[0].strip() if memory else ""
+        on_sp = base_register == "sp" or base_register in alias
+        parts = memory.strip("[]!").split(",") if memory else []
+        # `[sp, x10]` or `[x0, x1, lsl #2]`: no immediate to follow.
+        offset = _imm(parts[1]) if len(parts) > 1 and parts[1].strip().startswith("#") else 0
         count = 2 if mnemonic in {"stp", "ldp"} else 1
         registers = [reg_number(op) for op in operands[:count]]
         if mnemonic in {"stp", "str"} and on_sp:
             if pre:
                 sp += offset
                 offset = 0
-            at = sp + offset
+            at = (sp if base_register == "sp" else alias[base_register]) + offset
             for index, register in enumerate(registers):
                 if register is not None:
                     stored[register] = at + 8 * index
@@ -91,8 +120,21 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
                 sp += _imm(operands[-1])
             elif pre:
                 sp += offset
+        elif mnemonic == "mov" and len(operands) == 2 and operands[1].startswith("#"):
+            constant[operands[0]] = _imm(operands[1])
+        elif mnemonic in {"sub", "add"} and operands[:2] == ["sp", "sp"] and operands[2] in constant:
+            sp += (-1 if mnemonic == "sub" else 1) * constant[operands[2]]
+        elif mnemonic == "add" and operands[1:2] == ["sp"] and operands[0] not in {"sp", "x29"} and operands[2] in constant:
+            alias[operands[0]] = sp + constant[operands[2]]
+        elif mnemonic == "add" and operands[:2] == ["x29", "sp"] and operands[2] in constant:
+            fp = sp + constant[operands[2]]
+        elif mnemonic == "add" and operands[1:2] == ["sp"] and operands[0] not in {"sp", "x29"} and operands[2].startswith("#"):
+            shift = _imm(operands[3].split("#")[1]) if len(operands) > 3 and operands[3].startswith("lsl") else 0
+            alias[operands[0]] = sp + (_imm(operands[2]) << shift)
         elif mnemonic in {"sub", "add"} and operands[:2] == ["sp", "sp"] and operands[2].startswith("#"):
-            sp += (-1 if mnemonic == "sub" else 1) * _imm(operands[2])
+            # `#1, lsl #12` is 4096.
+            shift = _imm(operands[3].split("#")[1]) if len(operands) > 3 and operands[3].startswith("lsl") else 0
+            sp += (-1 if mnemonic == "sub" else 1) * (_imm(operands[2]) << shift)
         elif mnemonic == "add" and operands[:2] == ["x29", "sp"] and operands[2].startswith("#"):
             fp = sp + _imm(operands[2])
         elif mnemonic == "mov" and operands[:2] == ["x29", "sp"]:
