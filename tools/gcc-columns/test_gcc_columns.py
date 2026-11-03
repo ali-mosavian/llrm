@@ -63,3 +63,9 @@ def test_z80_16bit_result_is_charged_the_de_store():
     assert Z.result_charge(Z.U16) == (1, 8, 1)
     assert Z.result_charge("int") == (1, 8, 1)
     assert Z.result_charge(Z.U8) == (0, 0, 0)
+
+
+def test_z80_table_header_names_the_single_tu_ice():
+    """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
+    assert "single-translation-unit softfloat build" in open(root).readline()
