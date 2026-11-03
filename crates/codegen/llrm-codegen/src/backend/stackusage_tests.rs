@@ -65,6 +65,8 @@ fn module(procedures: Vec<Procedure>) -> Module {
         names: IndexMap::default(),
         externs: Vec::new(),
         publics: Vec::new(),
+        visibility: Default::default(),
+        aliases: Vec::new(),
         data: Vec::new(),
         procedures,
         private: Default::default(),

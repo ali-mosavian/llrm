@@ -419,14 +419,12 @@ impl Walk<'_> {
 }
 
 /// The flag lanes of `lanes`, but AF: nothing emitted reads it. An x87
-/// instruction names lanes past the six of EFLAGS (its status word, which
-/// `fnstsw; sahf` moves there): it counts as reading and writing all six.
+/// instruction also names lanes past the six of EFLAGS (its status word, which
+/// `fnstsw; sahf` moves there): those are not flags, so `fmul` leaves a `dec`'s
+/// flags alone, as `fcomi` and `sahf` name the six themselves.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
     use llrm_lir::flag::Flag;
-    let six = Flag::READ.bits();
-    let mask = lanes.mask() as u32;
-    let beyond = mask & !(six | Flag::AF.bits()) != 0;
-    crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
+    crate::backend::lanes::Lanes::flags(lanes.mask() as u32 & Flag::READ.bits())
 }
 
 /// What becomes of the flags `insns[index]` sets, walking `insns` after it.

@@ -12,6 +12,7 @@ fn main() {
 
 fn run() -> i32 {
     let mut assembly = false;
+    let mut debug = false;
     let mut level = Level::O2;
     let mut cpu = "68000".to_owned();
     let mut output = None;
@@ -20,6 +21,7 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
+            "-g" => debug = true,
             "-o" => output = arguments.next(),
             other if other.starts_with("-mcpu=") => cpu = other["-mcpu=".len()..].to_owned(),
             other if other.starts_with("-O") => match Level::parse(&other[2..]) {
@@ -30,6 +32,10 @@ fn run() -> i32 {
                 }
             },
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if llrm_debug::is_debug_flag(other) => {
+                eprintln!("{}", llrm_debug::no_writer("llrm-m68k-llc", other, "m68k"));
+                return 2;
+            }
             other => {
                 eprintln!("llrm-m68k-llc: unrecognized argument {other}");
                 return 2;
@@ -37,7 +43,7 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input.filter(|_| assembly) else {
-        eprintln!("usage: llrm-m68k-llc -S [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [-o OUT] FILE.ll");
+        eprintln!("usage: llrm-m68k-llc -S [-g] [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [-o OUT] FILE.ll");
         return 2;
     };
     let text = match std::fs::read_to_string(&input) {
@@ -47,7 +53,7 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let result = driver::cpu_of(&cpu).and_then(|cpu| driver::assembly(&text, cpu, level));
+    let result = driver::cpu_of(&cpu).and_then(|cpu| driver::assembly_with_debug(&text, cpu, level, debug));
     match result {
         Ok(text) => {
             let path = output

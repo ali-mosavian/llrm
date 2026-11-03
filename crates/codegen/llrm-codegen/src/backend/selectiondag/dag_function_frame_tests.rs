@@ -496,7 +496,7 @@ fn a_memmove_with_a_proved_direction_is_a_string_copy() {
 fn a_backward_memmove_at_m32_of_an_odd_size_moves_bytes() {
     let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
     let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
-    let bytes = [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC];
+    let bytes = [0xFD, 0xF3, 0xA4, 0xFC];
     assert!(backward.inline.values().any(|code| code[..] == bytes), "{:?}", backward.inline);
 }
 

@@ -48,6 +48,8 @@ pub struct TargetEnv {
     pub keep_pinned: bool,
     /// `JoinGlobalCopies` (`CoalescerEnv::joins_global_copies`).
     pub joins_global_copies: bool,
+    /// `CoalescerEnv::joins_pinned_copies`.
+    pub joins_pinned_copies: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
@@ -82,6 +84,10 @@ pub struct Join {
 impl CoalescerEnv for TargetEnv {
     fn joins_global_copies(&self) -> bool {
         self.joins_global_copies
+    }
+
+    fn joins_pinned_copies(&self) -> bool {
+        self.joins_pinned_copies
     }
 
     fn tuned_for_size(&self) -> bool {
@@ -229,6 +235,7 @@ pub fn coalesce(
     pins: IndexMap<u32, RegId>,
     size: bool,
     joins_global_copies: bool,
+    joins_pinned_copies: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
@@ -255,6 +262,7 @@ pub fn coalesce(
         size,
         keep_pinned: true,
         joins_global_copies,
+        joins_pinned_copies,
         aliases,
         should_join,
         freq,
