@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--no-placement] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--no-placement] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -59,6 +59,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
     let mut wasm32 = false;
+    let mut no_placement = false;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -105,6 +106,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--array-merging" => frontend.array_merging = true,
             "--frame-arrays" => frontend.frame_array_bytes = 8192,
             "--keep-far" => frontend.keep_far.push(value("--keep-far")?),
+            "--no-placement" => no_placement = true,
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
@@ -157,6 +159,9 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         let costs = priced.costs();
         frontend.room =
             llrm_qb_room(priced.address_registers(), priced.segment_registers(), 2 * (costs.load + costs.store));
+        if no_placement {
+            frontend.room = Default::default();
+        }
     }
     // The bytes of the pointer that is the near space, and of the one that is
     // the far: a target with one space has the same for both.
