@@ -7,7 +7,7 @@ Cost = run with the call minus run without it (argument set-up, call, return and
 bench_sdcc.py. Bytes = the kernel's code, plus the runtime routines it calls. A row counts only if the result equals the
 value worked out by hand. The driver is compiled by this compiler, so both sides' argument set-up is their own.
 """
-import argparse, os, re, subprocess, sys, tempfile
+import argparse, atexit, os, re, shutil, subprocess, sys, tempfile
 
 U8, U16 = "i8", "i16"
 R = 0x8F00
@@ -26,6 +26,17 @@ K = [
     ("reverse", "i8", [("ptr", "@buf"), ("i8", "8")], 6),
     ("bsearch8", "i8", [("ptr", "@tab"), ("i8", "8"), ("i8", "17")], 5),
     ("sum16", "i16", [("ptr", "@buf"), ("i8", "16")], 80), ("schr", "i8", [("ptr", "@str"), ("i8", "111")], 4),
+]
+# Correctness-only rows: no SDCC baseline, run only when named in --kernels.
+EXTRA = [
+    # the carry out of a 32-bit add is a compare used as a value (SETCC8)
+    # the caller stores the 8th and 9th byte argument on the stack
+    ("stackargs", "i8", [("i8", "5")], 30),
+    # a 300-byte local: the frame objects below it are out of IX's byte displacement
+    ("bigframe", "i8", [("i8", "5")], 5),
+    # a call through a function pointer
+    ("indirect", "i16", [("i16", "21")], 42),
+    ("carry32", "i16", [("i32", "65535"), ("i8", "1")], 1),
 ]
 HEADER = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"\n'
 CRT0 = "\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n"
@@ -123,7 +134,7 @@ def baseline(path):
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) == 5 and re.match(r"\d+ / \d+ / \d+", cells[1]):
             rows = [tuple(int(x) for x in c.split(" / ")) for c in cells[1:] if c != "FAIL"]
-            best[cells[0]] = (min(r[0] for r in rows), min(r[1] for r in rows))
+            best[cells[0]] = (min(r[0] for r in rows), min(r[1] for r in rows), min(r[2] for r in rows))
     return best
 
 
@@ -139,6 +150,7 @@ def main():
     want = args.kernels.split(",") if args.kernels else [k[0] for k in K]
     sdcc = baseline(args.baseline)
     w = tempfile.mkdtemp(prefix="z80ours-")
+    atexit.register(shutil.rmtree, w, True)  # /tmp has a fixed inode count
     open(f"{w}/crt0.s", "w").write(CRT0)
     open(f"{w}/data.s", "w").write(DATA)
     for s in ("crt0", "data"):
@@ -156,39 +168,40 @@ def main():
         q = sh(["sdasz80", "-g", "-o", f"{stem}.rel", f"{stem}.s"], w)
         return (f"{stem}.rel", None) if q.returncode == 0 else (None, "sdasz80: " + (q.stdout + q.stderr)[-200:])
 
-    print(f"| kernel | ours B | ours T | SDCC B | SDCC T | B | T |\n|---|---|---|---|---|---|---|")
-    for name, ret, params, expect in K:
+    print("| kernel | ours B | ours T | ours insn | SDCC B | SDCC T | SDCC insn | B | T | insn |\n|---|---|---|---|---|---|---|---|---|---|")
+    for name, ret, params, expect in K + EXTRA:
         if name not in want:
             continue
         src = f"{args.ir_dir}/{name}.ll"
         kernel, why = compile_ir(src, "k")
         if not kernel:
-            print(f"| {name} | refused: {why[:70]} | | | | | |")
+            print(f"| {name} | refused: {why[:70]} | | | | | | | | |")
             continue
         open(f"{w}/d.ll", "w").write(driver(name, ret, params, True))
         open(f"{w}/e.ll", "w").write(driver(name, ret, params, False))
         d, why = compile_ir(f"{w}/d.ll", "d")
         e, why2 = compile_ir(f"{w}/e.ll", "e")
         if not d or not e:
-            print(f"| {name} | driver refused: {(why or why2)[:70]} | | | | | |")
+            print(f"| {name} | driver refused: {(why or why2)[:70]} | | | | | | | | |")
             continue
         times = []
         for objs in (["e.rel"], ["d.rel", "k.rel"]):
             p = sh(["sdldz80", "-i", "-m", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "data.rel", *objs, "rt.rel"], w)
             if p.returncode:
-                times.append(None); print(f"| {name} | link: {(p.stdout+p.stderr)[-80:]} | | | | | |"); break
+                times.append(None); print(f"| {name} | link: {(p.stdout+p.stderr)[-80:]} | | | | | | | | |"); break
             times.append(run("x.ihx", w))
         if None in times:
             continue
         (t0, i0, _), (t1, i1, got) = times
         mask = 0xFFFF if ret == "i16" else 0xFF
         if got & mask != expect & mask:
-            print(f"| {name} | WRONG: got {got & mask:#x}, hand-derived {expect & mask:#x} | | | | | |")
+            print(f"| {name} | WRONG: got {got & mask:#x}, hand-derived {expect & mask:#x} | | | | | | | | |")
             continue
         size = code_size(f"{w}/k.rel") + runtime_bytes(w, graph, open(f"{w}/k.s").read())
-        b, t = sdcc.get(name, (None, None))
+        assert size < 4096, f"{name}: {size} B of code: a runtime routine was sized up to a symbol far away (end the runtime with __rt_end)"
+        b, t, n = sdcc.get(name, (None, None, None))
         verdict = lambda ours, theirs: "" if theirs is None else ("win" if ours < theirs else "tie" if ours == theirs else "LOSE")
-        print(f"| {name} | {size} | {t1 - t0} | {b} | {t} | {verdict(size, b)} | {verdict(t1 - t0, t)} |")
+        print(f"| {name} | {size} | {t1 - t0} | {i1 - i0} | {b} | {t} | {n} | {verdict(size, b)} | {verdict(t1 - t0, t)} | {verdict(i1 - i0, n)} |")
 
 
 main()

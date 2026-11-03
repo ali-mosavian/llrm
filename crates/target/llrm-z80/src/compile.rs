@@ -1,9 +1,9 @@
 //! A function from IR to sdasz80 text: the shared DAG stages, then the Z80
 //! machine function, allocation, expansion and printing.
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::cfg::Cfg;
-use llrm_spike_mf::regalloc::{Assignment, eliminate_phis_with, two_address};
+use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_address};
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::{Request, selections};
@@ -135,6 +135,8 @@ fn allocate(
     name: &str,
 ) -> Result<Allocated, String> {
     two_address(&mut function);
+    read_bytes_through_their_pairs(&mut function);
+    use_the_shift_carry(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
@@ -144,15 +146,161 @@ fn allocate(
         dump(&function);
     }
     remove_identity_copies(&mut function, &assignment);
+    tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
     llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
+    place_copies_where_needed(&mut function, &assignment);
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
     if slots_are_a_stack(&mut function, &assignment) {
         slots.clear();
+    } else {
+        spills_first(&mut function, &assignment);
     }
     Ok((function, assignment, slots, reads))
+}
+
+/// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. :
+/// ..` beside `c << 1`) is the carry the shift left behind: `jr c` after `sla
+/// e; rl d` (or `add hl, hl`). The test copied the high byte before the shift
+/// and read its bit after (`ld h, d` ... `bit 7, h`), 5 B and 12 T on each of
+/// crc16's 8 trips.
+///
+/// Only a test whose value is the one the shift read (the copy the shift is
+/// tied to, unchanged since), read by branches in the block, with no flags set
+/// between the shift and the test.
+pub fn use_the_shift_carry(function: &mut MFunction) {
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let found = (|| {
+                let shift = &block.insts[at];
+                let (
+                    Kind::Op("SHL16"),
+                    [Operand::Def(Reg::Virt(shifted)), Operand::Use(Reg::Virt(tied)), Operand::Imm(1)],
+                ) = (shift.kind, &shift.operands[..])
+                else {
+                    return None;
+                };
+                if shifted != tied {
+                    return None;
+                }
+                // the copy the shift's operand was made by, and the value it
+                // copies
+                let copy = block
+                    .insts[..at]
+                    .iter()
+                    .rposition(
+                        |inst| matches!(
+                            &inst.operands[..],
+                            [Operand::Def(Reg::Virt(d)), ..] if d == shifted
+                        ),
+                    )?;
+                let [Operand::Def(_), Operand::Use(Reg::Virt(old))] = block.insts[copy].operands[..] else {
+                    return None;
+                };
+                if block.insts[copy].kind != Kind::Copy {
+                    return None;
+                }
+                let writes = |inst: &Inst, v: u32| {
+                    inst.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == v))
+                };
+                if block.insts[copy + 1..at].iter().any(|inst| writes(inst, old) || inst.call) {
+                    return None;
+                }
+                // the test of the old value, after the shift with no flag set
+                // between
+                let mut test = None;
+                for (k, inst) in block.insts.iter().enumerate().skip(at + 1) {
+                    if inst.kind == Kind::Op("BIT7_16")
+                        && matches!(
+                            &inst.operands[..],
+                            [_, Operand::Use(Reg::Virt(v))] if *v == old
+                        )
+                    {
+                        test = Some(k);
+                        break;
+                    }
+                    if inst.sets_flags || inst.call || writes(inst, old) {
+                        return None;
+                    }
+                }
+                let test = test?;
+                // every reader is a branch of this block
+                let readers: Vec<usize> =
+                    (test + 1..block.insts.len()).filter(|&k| block.insts[k].reads_flags).collect();
+                let flags_set_later = block.insts[test + 1..].iter().any(|inst| inst.sets_flags);
+                let ends_here = block.insts.last().is_some_and(|inst| inst.terminator);
+                let branches = readers.iter().all(|&k| matches!(block.insts[k].kind, Kind::Op("JPZ" | "JPNZ")));
+                (!readers.is_empty() && branches && !flags_set_later && ends_here).then_some((test, readers))
+            })();
+            if let Some((test, readers)) = found {
+                for k in readers {
+                    block.insts[k].kind = match block.insts[k].kind {
+                        Kind::Op("JPNZ") => Kind::Op("JPC"),
+                        _ => Kind::Op("JPNC"),
+                    };
+                }
+                block.insts.remove(test);
+            }
+            at += 1;
+        }
+    }
+}
+
+/// A byte loaded through `hl` that is wanted in `a` is loaded through
+/// the pointer's own pair (`ld a, (bc)`), so the copy into `hl` is gone and
+/// `hl` stays free for a pointer that has no other form (`cp (hl)`): scmp
+/// copied both its pointers into `hl` on every trip. The use in `a` is
+/// followed through copies, around loops.
+fn read_bytes_through_their_pairs(function: &mut MFunction) {
+    let copy_of = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
+        (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) => Some((*to, *from)),
+        _ => None,
+    };
+    // the values wanted in `a`: some use is a copy into `a` or into such a
+    // value
+    let mut in_a = std::collections::HashSet::<u32>::new();
+    loop {
+        let before = in_a.len();
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            if let Some((to, Reg::Virt(from))) = copy_of(inst) {
+                if to == Reg::Phys(reg::A) || matches!(to, Reg::Virt(w) if in_a.contains(&w)) {
+                    in_a.insert(from);
+                }
+            }
+        }
+        if in_a.len() == before {
+            break;
+        }
+    }
+    for block in &mut function.blocks {
+        for at in 0..block.insts.len().saturating_sub(1) {
+            let (copy, load) = (&block.insts[at], &block.insts[at + 1]);
+            let (
+                Some((Reg::Phys(hl), _)),
+                Kind::Op("LD8rm"),
+                [Operand::Def(Reg::Virt(byte)), Operand::Use(Reg::Phys(pointer))],
+            ) = (copy_of(copy), load.kind, &load.operands[..])
+            else {
+                continue;
+            };
+            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) {
+                continue;
+            }
+            let (Operand::Use(from), Operand::Def(to)) = (copy.operands[1].clone(), load.operands[0].clone()) else {
+                continue;
+            };
+            let mut read = load.clone();
+            read.kind = Kind::Op("LD8Arp");
+            read.operands = vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(from)];
+            let mut out = copy.clone();
+            out.operands = vec![Operand::Def(to), Operand::Use(Reg::Phys(reg::A))];
+            block.insts[at] = read;
+            block.insts[at + 1] = out;
+        }
+    }
 }
 
 /// The pair `register` is, or is half of, if `push` and `pop` can move it: not
@@ -269,6 +417,51 @@ pub fn slots_are_a_stack(
     true
 }
 
+/// Moves the entry block's spills of argument registers up to its start while
+/// nothing before them writes the register or touches the slot, so the
+/// prologue can `push` them: crc16 stored `n` and `p` with `ld -1(ix), a` /
+/// `ld -3(ix), l` / `ld -2(ix), h` after a pair of `push af`, 9 B more than
+/// `push af` / `push hl`.
+pub fn spills_first(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    if llrm_spike_mf::regalloc::successors(function).iter().any(|next| next.contains(&0)) {
+        return;
+    }
+    let insts = &mut function.blocks[0].insts;
+    let mut first = 0;
+    for at in 0..insts.len() {
+        let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(source)]) =
+            (insts[at].kind, &insts[at].operands[..])
+        else {
+            continue;
+        };
+        let (slot, source) = (*slot, register(*source));
+        let blocked = insts[first..at]
+            .iter()
+            .any(
+                |before| before.call
+                    || before.barrier
+                    || before.terminator
+                    || before.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) => Z80Registers::overlaps(register(*r), source),
+                        Operand::Frame(other) => *other == slot,
+                        _ => false,
+                    }),
+            );
+        if !blocked {
+            let moved = insts.remove(at);
+            insts.insert(first, moved);
+            first += 1;
+        }
+    }
+}
+
 /// A constant made in a loop is made once before it (`MachineLICM`'s hoisting
 /// of a trivially rematerializable instruction): `find` made `ld hl, #buf` on
 /// every trip. Where the registers run out the allocator makes the constant
@@ -376,6 +569,206 @@ pub fn remove_identity_copies(
     }
 }
 
+/// The copies the allocation left, cleaned: the copies back first, since one
+/// that reads a register stops the copy before it from moving down.
+pub fn tidy_copies(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    remove_copies_back(function, assignment);
+    sink_copies_to_the_branch(function, assignment);
+}
+
+/// Moves a copy down to the block's branches when nothing after it reads or
+/// writes either register, so the compare before it stays last among the
+/// instructions a branch hoist must move over: sum_arr's `ld b, a` sat ahead
+/// of `or a, a`, and the `ld a, #0` both successors begin with could not be
+/// hoisted past a compare that reads `a`.
+pub fn sink_copies_to_the_branch(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    for block in &mut function.blocks {
+        let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+        let mut at = 0;
+        while at + 1 < end {
+            let inst = &block.insts[at];
+            let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (inst.kind, &inst.operands[..]) else {
+                at += 1;
+                continue;
+            };
+            let (dst, src) = (register(*dst), register(*src));
+            let blocked = |later: &Inst| {
+                later.call
+                    || later.barrier
+                    || later.may_store
+                    || later.side_effects
+                    || later.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => {
+                            let r = register(*r);
+                            Z80Registers::overlaps(r, dst)
+                                || (matches!(operand, Operand::Def(_)) && Z80Registers::overlaps(r, src))
+                        }
+                        Operand::Frame(_) => false,
+                        _ => false,
+                    })
+            };
+            // only all the way: a copy stopped short sits between a reload and
+            // the compare it folds into
+            if (at + 1..end).any(|later| blocked(&block.insts[later])) {
+                at += 1;
+                continue;
+            }
+            let moved = block.insts.remove(at);
+            block.insts.insert(end - 1, moved);
+        }
+    }
+}
+
+/// Drops a copy of what the register already holds: a copy back into the
+/// register another copy read from (`ld b, a` ... `ld a, b`), or the same copy
+/// again, while neither register is written in between. A block only one
+/// earlier block enters starts from the copies that block ended with.
+///
+/// DEVIATE from `llrm_spike_mf::remove_redundant_copies`, which compares
+/// roots (`ld a, c` after `ld b, a` is no copy back), stays in one block and
+/// misses the repeat. Reason: `b` and `c` are lanes of one root. Exit: the
+/// shared helper compares lanes.
+pub fn remove_copies_back(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    copies_in_force(function, assignment, true);
+}
+
+/// The copies in force at the end of each block, as `(destination, source)`
+/// registers; `drop` also removes the ones a copy repeats.
+fn copies_in_force(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    drop: bool,
+) -> Vec<Vec<(RegId, RegId)>> {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let successors = llrm_spike_mf::regalloc::successors(function);
+    let mut entered = vec![0usize; function.blocks.len()];
+    for to in successors.iter().flatten() {
+        entered[*to] += 1;
+    }
+    // `(destination, source)` of the copies in force at the end of each block
+    let mut ended: Vec<Vec<(RegId, RegId)>> = vec![Vec::new(); function.blocks.len()];
+    for at in 0..function.blocks.len() {
+        // the block's one entrance, if it came earlier in the layout
+        let mut held = match successors.iter().position(|next| next.contains(&at)) {
+            Some(from) if entered[at] == 1 && from < at => ended[from].clone(),
+            _ => Vec::new(),
+        };
+        let mut keep = Vec::with_capacity(function.blocks[at].insts.len());
+        for inst in std::mem::take(&mut function.blocks[at].insts) {
+            let copy = match (inst.kind, &inst.operands[..]) {
+                (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => Some((register(*dst), register(*src))),
+                _ => None,
+            };
+            let repeats = copy.is_some_and(|(dst, src)| held.contains(&(src, dst)) || held.contains(&(dst, src)));
+            if drop && repeats {
+                continue;
+            }
+            if inst.call {
+                held.clear();
+            }
+            let written: Vec<RegId> = inst
+                .operands
+                .iter()
+                .filter_map(|o| if let Operand::Def(r) = o { Some(register(*r)) } else { None })
+                .collect();
+            held.retain(|&(to, from)| {
+                !written.iter().any(|&w| Z80Registers::overlaps(w, to) || Z80Registers::overlaps(w, from))
+            });
+            held.extend(copy);
+            keep.push(inst);
+        }
+        function.blocks[at].insts = keep;
+        ended[at] = held;
+    }
+    ended
+}
+
+/// Moves the copy a loop head starts with into the back edge, when every other
+/// entrance has made it already: `ld a, b` at a loop head, where the entry
+/// has just made it, runs every trip and once more at the exit; on the back
+/// edge alone it runs once a trip. Elsewhere (a diamond's join) the move made
+/// popcount and bsearch8 larger: the copy in a block of its own kept a jump.
+/// The flow into the join is the sum of its entrances, so the count of copies
+/// run never grows, and the code does not grow either: the copy moves, it is
+/// not copied.
+///
+/// The pin has no such step: its allocator joins the copy out of existence
+/// (`canJoinPhys`) or leaves it where selection put it. Here the join of an
+/// argument's entry copy into its register is refused (`joins_pinned_copies`),
+/// so the copy stays where selection put it.
+pub fn place_copies_where_needed(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let successors = llrm_spike_mf::regalloc::successors(function);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let ended = copies_in_force(function, assignment, false);
+        for head in 1..function.blocks.len() {
+            let entrances: Vec<usize> =
+                (0..function.blocks.len()).filter(|&from| successors[from].contains(&head)).collect();
+            let Some(first) = function.blocks[head].insts.first() else { continue };
+            let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (first.kind, &first.operands[..]) else {
+                continue;
+            };
+            let (dst, src) = (register(*dst), register(*src));
+            if entrances.len() < 2 || dst == src {
+                continue;
+            }
+            let made = |from: usize| ended[from].contains(&(dst, src)) || ended[from].contains(&(src, dst));
+            let lacking: Vec<usize> = entrances.iter().copied().filter(|&from| !made(from)).collect();
+            // one entrance lacks it, by a block that only leads here
+            let [from] = lacking[..] else { continue };
+            if successors[from] != [head] {
+                continue;
+            }
+            let block = &function.blocks[from];
+            let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+            let touched = block
+                .insts[end..]
+                .iter()
+                .any(
+                    |inst| inst.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => {
+                            Z80Registers::overlaps(register(*r), dst) || Z80Registers::overlaps(register(*r), src)
+                        }
+                        _ => false,
+                    }),
+                );
+            // a block of nothing but its jump is an edge a branch folds away;
+            // the copy would keep it, and the jump with it
+            if touched || end == 0 {
+                continue;
+            }
+            let copy = function.blocks[head].insts.remove(0);
+            function.blocks[from].insts.insert(end, copy);
+            changed = true;
+            break;
+        }
+    }
+}
+
 /// Reads the byte a `LO`/`HI` extracts straight from its half of the pair when
 /// the pair keeps its value to the last use, instead of copying it to a byte
 /// register first (`ld d, c` / `cp a, d` becomes `cp a, c`).
@@ -386,6 +779,16 @@ pub fn use_lanes_in_place(
     function: &mut MFunction,
     assignment: &Assignment,
 ) {
+    // a byte read in place frees the half it was copied into, so another byte
+    // kept from that half may now be read in place too
+    while use_lanes_once(function, assignment) {}
+}
+
+fn use_lanes_once(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let mut removed = false;
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
@@ -418,7 +821,13 @@ pub fn use_lanes_in_place(
                 continue;
             };
             let (byte, half) = (*byte, if op == "LO" { lo } else { hi });
-            if defs[byte as usize] != 1 || uses[byte as usize].iter().any(|one| *one != b) {
+            // a byte nothing virtual reads is read through its register by an
+            // instruction that names it (a copy into `a` that allocation made
+            // the identity is gone): it is still made
+            if defs[byte as usize] != 1
+                || uses[byte as usize].is_empty()
+                || uses[byte as usize].iter().any(|one| *one != b)
+            {
                 at += 1;
                 continue;
             }
@@ -429,7 +838,12 @@ pub fn use_lanes_in_place(
                     last = k;
                 }
             }
-            let clobbered = insts[at + 1..=last]
+            // a PACK that reads the byte writes the pair after reading both
+            // halves (`pack`), so its own write to the half does
+            // not clobber it: the low half of a pair kept while the
+            // high half is replaced stays where it is
+            let checked = if insts[last].kind == Kind::Op("PACK") { last } else { last + 1 };
+            let clobbered = insts[at + 1..checked]
                 .iter()
                 .any(
                     |later| later.call
@@ -452,8 +866,10 @@ pub fn use_lanes_in_place(
                 }
             }
             function.blocks[b].insts.remove(at);
+            removed = true;
         }
     }
+    removed
 }
 
 /// `function`, one instruction per line, on stderr (`LLRM_Z80_DUMP=name`).
@@ -515,7 +931,7 @@ pub fn text(
             symbol(&mut out, format!("C${file}${line}$0_0${number}_0"));
         }
     }
-    out.push_str(&format!("_{name}::\n"));
+    out.push_str(&format!("{}::\n", crate::data::symbol(name)));
     for line in lines(ir, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
