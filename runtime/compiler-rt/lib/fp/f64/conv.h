@@ -18,7 +18,9 @@ static inline int64_t to_signed(sf64 a, int bits)
 {
     int big;
     uint64_t m = magnitude(a, bits, &big), top = 1ull << (bits - 1);
+#ifndef SF_FIX_NAN_UNDEF
     if (is_nan_64(a)) return 0;
+#endif
     if (a & SF_SIGN) return (big || m > top) ? (int64_t)(0ull - top) : (int64_t)(0ull - m);
     return (big || m > top - 1) ? (int64_t)(top - 1) : (int64_t)m;
 }
@@ -27,7 +29,11 @@ static inline uint64_t to_unsigned(sf64 a, int bits)
 {
     int big;
     uint64_t m = magnitude(a, bits, &big);
+#ifdef SF_FIX_NAN_UNDEF
+    if (a & SF_SIGN) return 0;
+#else
     if (is_nan_64(a) || (a & SF_SIGN)) return 0;
+#endif
     return big ? (bits == 64 ? UINT64_MAX : (1ull << bits) - 1) : m;
 }
 
