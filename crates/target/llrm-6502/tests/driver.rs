@@ -1094,6 +1094,8 @@ fn a_float_operation_is_a_call_of_its_softfloat_routine() {
     call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
     call("define float @f(i32 %n) {\n  %r = sitofp i32 %n to float\n  ret float %r\n}", "__floatsisf");
     call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__ltsf2");
+}
+
 /// The compiled `text` without its `rcN = $..` equates, which `run_with` states
 /// itself.
 fn without_equates(text: &str) -> String {
