@@ -256,6 +256,16 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with the signed power-of-two bias as an `and` where it is
+    /// priced below the shift.
+    pub fn with_sdiv_bias_by_and(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.dag.sdiv_bias_by_and = on;
+        self
+    }
+
     /// This target with jump tables on or off.
     pub fn with_jump_tables(
         mut self,

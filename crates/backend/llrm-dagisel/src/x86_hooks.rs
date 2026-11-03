@@ -59,6 +59,9 @@ pub struct Options {
     pub multiply_early_out: bool,
     /// The address forms the target has (SD3).
     pub address_mode: AddrMode,
+    /// `and x, 0xff` and `0xffff` are the `movzx` of the pin's table (true), or
+    /// stay an `and` where the CPU extends slower than it masks (SD460).
+    pub mask_by_extension: bool,
 }
 
 impl Options {

@@ -232,6 +232,10 @@ pub struct DagConfig {
     /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
     /// `sdiv` by a power of two stays an `sdiv`.
     pub sdiv_pow2_stays: bool,
+    /// `BuildSDIVPow2`'s bias, `Sign >>> (bits - log2 |d|)`, is the equal
+    /// `Sign & (2^log2 |d| - 1)` (DEVIATE SD461): the target prices an `and` with
+    /// an immediate under a shift.
+    pub sdiv_bias_by_and: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
@@ -273,6 +277,7 @@ impl Default for DagConfig {
             int_div_cheap: false,
             div_prices: None,
             sdiv_pow2_stays: false,
+            sdiv_bias_by_and: false,
             fp_extended: false,
             known_bits_for_target_node: None,
             big_endian: false,

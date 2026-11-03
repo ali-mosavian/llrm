@@ -416,6 +416,14 @@ impl Profile {
         Ok(self.size || self.cost("movzx")? <= self.cost("alu_rr")?)
     }
 
+    /// Whether the signed `/2^k` bias is `sar r,31; and r,2^k-1` rather than
+    /// `sar r,31; shr r,32-k`: where speed is wanted and the `and` with an
+    /// immediate takes fewer clocks than the shift (the 486 and the Pentium: 1
+    /// against 2). For size the shift is shorter (3 B against 5 or 6).
+    pub fn sdiv_bias_by_and(&self) -> Result<bool, String> {
+        Ok(!self.size && self.cost("alu_ri")? < self.cost("shift_ri")?)
+    }
+
     /// Whether `words` pops into a dead register clean a call's arguments
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
@@ -964,6 +972,19 @@ mod widen_load_tests {
 #[cfg(test)]
 mod mask_tests {
     use super::*;
+
+    /// The signed `/2^k` bias is a mask where the `and` is priced below the
+    /// shift (the 486: 1 clock against 2; the Pentium shifts in 1, so it keeps
+    /// the shift), and a shift for size.
+    #[test]
+    fn test_the_sdiv_bias_is_a_mask_only_where_the_and_is_cheaper_and_not_for_size() {
+        for (name, mask) in [("486", true), ("P5", false)] {
+            let mut cpu = profile(name).expect("a cpu").clone();
+            assert_eq!(cpu.sdiv_bias_by_and(), Ok(mask), "{name}");
+            cpu.size = true;
+            assert_eq!(cpu.sdiv_bias_by_and(), Ok(false), "{name} for size");
+        }
+    }
 
     /// `and r,255` as `movzx r,al` is three clocks against one on the 386,
     /// 486 and Pentium, so it is chosen there only for size; a one-clock

@@ -33,6 +33,7 @@ use crate::x86_llrm::{
     FATAN_OPCODE, FCOS_OPCODE, FEXP_OPCODE, FEXP2_OPCODE, FLN_OPCODE, FLOG2_OPCODE, FRINT_OPCODE, FSIN_OPCODE,
     llrm_opcode, select_llrm_node,
 };
+use crate::x86_mask::select_mask_and;
 use crate::x86_mul::{select_mul_flags, select_mul_lohi};
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -48,6 +49,11 @@ pub fn select_node<D: AddrDag>(
     match dag.opcode(node) {
         isd::STORE => {
             if fold_load_store_into_mem_operand(dag, hooks, node) {
+                return Outcome::Selected;
+            }
+        }
+        isd::AND => {
+            if select_mask_and(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }

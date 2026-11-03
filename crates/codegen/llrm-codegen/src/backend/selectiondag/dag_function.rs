@@ -857,6 +857,7 @@ fn selected_in(
         // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_div_prices(div_prices(&cpu, bitness))
+        .with_sdiv_bias_by_and(cpu.sdiv_bias_by_and().unwrap_or(false))
         .with_jump_tables(
             cpu.target().costs().jump_table != 0
                 && !function.attrs.iter().any(|attr| {
@@ -963,6 +964,7 @@ fn selected_in(
             .flatten()
             .is_some_and(|clocks| clocks.minimum < clocks.maximum),
         address_mode,
+        mask_by_extension: cpu.masks_by_extension().unwrap_or(true),
     });
     let selector = Selector::new(if m16 {
         x86_m16::TABLE

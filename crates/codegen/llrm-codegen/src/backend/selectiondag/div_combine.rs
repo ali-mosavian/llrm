@@ -272,7 +272,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let (top, inexact, by) =
                     (self.shift_amount(vt, bits - 1), self.shift_amount(vt, bits - log), self.shift_amount(vt, log));
                 let sign = self.dag.get_node(ISD::Sra, vt, &[n0, top]);
-                let srl = self.dag.get_node(ISD::Srl, vt, &[sign, inexact]);
+                // DEVIATE SD461 (owner x86-m32, exit: the target says so in its
+                // description for every shift-and-mask pair, review 2026-12-10):
+                // where an `and` with an immediate is priced below the shift
+                // (486, Pentium: 1 clock against 2), the bias is the mask.
+                let srl = if self.dag.config().sdiv_bias_by_and {
+                    let mask = self.dag.get_constant((1u128 << log) - 1, vt);
+                    self.dag.get_node(ISD::And, vt, &[sign, mask])
+                } else {
+                    self.dag.get_node(ISD::Srl, vt, &[sign, inexact])
+                };
                 let sum = self.dag.get_node(ISD::Add, vt, &[n0, srl]);
                 let quotient = if c == 1 || negated == 1 { n0 } else { self.dag.get_node(ISD::Sra, vt, &[sum, by]) };
                 let negative = c >> (bits - 1) & 1 == 1;
