@@ -856,6 +856,7 @@ mod tests {
                 free: false,
                 kept: false,
                 exit_cfi: true,
+                saved_first: false,
             },
             landing: None,
         }

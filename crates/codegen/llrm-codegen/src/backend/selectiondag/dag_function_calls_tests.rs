@@ -1198,6 +1198,7 @@ entry:
         free: false,
         kept: false,
         exit_cfi: true,
+        saved_first: false,
         wrap_split_size: false,
         slot_scratch: None,
     };

@@ -2725,3 +2725,26 @@ fn an_x86_64_macho_frame_states_no_address_at_its_exit_but_elf_does() {
     assert_eq!(def_cfa_rsp_8("x86_64-unknown-linux-gnu", "e"), 2, "control: ELF states the address after the pop");
     assert_eq!(def_cfa_rsp_8("x86_64-apple-macosx", "o"), 1, "Mach-O states none");
 }
+
+/// A 64-bit function that calls nothing, or has no locals, pushed its
+/// callee-saved registers in the wrong order or after the space for its locals:
+/// `push rbx; push r14` where the pin has `push r14; push rbx`, and `sub rsp,
+/// 8; push rbx` where the pin has the register first. The unwind rows named
+/// other offsets for 16 of 130 functions of the x86-64 Mach-O corpus.
+#[test]
+fn a_64_bit_frame_pushes_its_registers_first_and_the_last_of_the_list_first() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
+              define i32 @fib(i32 %n) #0 {\n\
+              entry:\n  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %loop\n\
+              loop:\n  %i = phi i32 [ %i2, %loop ], [ %n, %entry ]\n  %acc = phi i32 [ %acc2, %loop ], [ 0, %entry ]\n\
+              \x20 %a = add nsw i32 %i, -1\n  %r = call i32 @fib(i32 %a)\n  %i2 = add nsw i32 %i, -2\n  %acc2 = add i32 %r, %acc\n\
+              \x20 %t = icmp ult i32 %i, 4\n  br i1 %t, label %done, label %loop\n\
+              done:\n  %x = phi i32 [ %n, %entry ], [ %i2, %loop ]\n  %y = phi i32 [ 0, %entry ], [ %acc2, %loop ]\n\
+              \x20 %z = add i32 %x, %y\n  ret i32 %z\n}\n\
+              attributes #0 = { nounwind \"frame-pointer\"=\"all\" }\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), ir, "fib").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let at = |text: &str| listing.find(text).unwrap_or_else(|| panic!("no `{text}` in\n{listing}"));
+    assert!(at("push r14") < at("push rbx"), "{listing}");
+}

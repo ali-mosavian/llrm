@@ -399,6 +399,7 @@ mod tests {
             free: false,
             kept: false,
             exit_cfi: true,
+            saved_first: false,
         };
         let facts = CalleeFacts::of(&parsed(LEAF)).0;
         facts.record(
@@ -456,6 +457,7 @@ mod tests {
             free: false,
             kept: false,
             exit_cfi: true,
+            saved_first: false,
         };
         let calls = IndexMap::from_iter([(7, "release".to_owned())]);
         facts.record("trim", &body, &frame, &calls);
