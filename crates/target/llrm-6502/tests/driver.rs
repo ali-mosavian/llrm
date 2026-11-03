@@ -951,3 +951,32 @@ attributes #0 = { noinline }"#,
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
 }
+
+/// `buf[n + 3]` and `buf[n - 1]` with a byte `n` took eleven instructions, a
+/// 16-bit add of the address and an indirect load: the constant had no place in
+/// the indexed form (fill's `buf[n - 1]`: 46 B against llvm-mos's 22). It is
+/// one `lda buf+3,x`.
+#[test]
+fn a_constant_offset_folds_into_the_indexed_load() {
+    let ir = module(
+        r#"@buf = external global [64 x i8]
+define i8 @plus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, 3
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+define i8 @minus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, -1
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("lda buf+3,x"), "no indexed load with the offset:\n{text}");
+    assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
+    assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
+}
