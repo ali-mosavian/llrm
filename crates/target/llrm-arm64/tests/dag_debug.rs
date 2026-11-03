@@ -76,9 +76,9 @@ fn the_dag_path_places_the_variables_in_their_frame_objects() {
     assert_eq!(
         variables(&o0),
         [
-            ("a".to_owned(), "Frame { disp: -20 }".to_owned()),
-            ("b".to_owned(), "Frame { disp: -24 }".to_owned()),
-            ("t".to_owned(), "Frame { disp: -28 }".to_owned())
+            ("a".to_owned(), "Frame { disp: -32 }".to_owned()),
+            ("b".to_owned(), "Frame { disp: -28 }".to_owned()),
+            ("t".to_owned(), "Frame { disp: -24 }".to_owned())
         ]
     );
     for (text, level) in FIXTURES {

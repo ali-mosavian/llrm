@@ -111,25 +111,107 @@ fn paired(list: &[Csr]) -> Vec<(Csr, Option<Csr>)> {
     out
 }
 
+/// How many operations name each frame object.
+fn object_uses(function: &MFunc) -> Vec<u64> {
+    let mut uses = vec![0; function.slots.len()];
+    for block in &function.blocks {
+        for op in &block.ops {
+            match op {
+                Op::I(
+                    Inst::Load { addr: Addr::Slot { slot, .. }, .. }
+                    | Inst::Store { addr: Addr::Slot { slot, .. }, .. },
+                )
+                | Op::FrameAddress { slot, .. } => {
+                    if let Some(count) = uses.get_mut(*slot as usize) {
+                        *count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    uses
+}
+
+/// Each frame object's offset from the stack pointer, and the locals' size.
+///
+/// The objects are in the order of `X86FrameLowering::orderFrameObjects`
+/// ([permalink](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L4301)),
+/// which AArch64's own does not have: the densest (uses per byte) nearest the
+/// register they are addressed from, so that the offsets are the small ones
+/// and the first access can be the one at `[sp]` that the frame's allocation
+/// folds into (`str x, [sp, #-N]!`), the one the entry block touches first.
+/// From the stack pointer that means the alignment slack goes at the top of the
+/// locals; from the frame pointer, at the bottom, as
+/// `calculateFrameObjectOffsets` fills from the top. DEVIATE: the pin's AArch64
+/// order is the index order, the first object at the top, and its `sub sp; str
+/// [sp, #8]` is two instructions the fold makes one (exit: none, the rule is
+/// the better one).
+fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
+    let uses = object_uses(function);
+    let size = |at: usize| function.slots[at].size.max(1);
+    // Densest last, as the pin's list: ties go to the larger alignment.
+    let mut order: Vec<usize> = (0..function.slots.len()).collect();
+    order.sort_by(|&a, &b| {
+        (uses[a] * size(b)).cmp(&(uses[b] * size(a))).then(function.slots[a].align.cmp(&function.slots[b].align))
+    });
+    let mut slots = vec![0; function.slots.len()];
+    if function.dynamic {
+        // From the frame pointer, at the top: the densest first.
+        let mut down = 0;
+        let mut from_top = vec![0; slots.len()];
+        for &at in order.iter().rev() {
+            let slot = &function.slots[at];
+            down = (down + slot.size).next_multiple_of(slot.align.max(1));
+            from_top[at] = down;
+        }
+        let locals_end = (down + function.outgoing).next_multiple_of(16);
+        for (at, from) in from_top.iter().enumerate() {
+            slots[at] = locals_end - from;
+        }
+        return (slots, locals_end);
+    }
+    // The object the entry block touches first, at offset 0 of it, goes at
+    // `[sp]`: that access folds into the frame's allocation.
+    let first = function
+        .blocks
+        .first()
+        .and_then(
+            |block| block
+                .ops
+                .iter()
+                .find_map(
+                    |op| match op {
+                        Op::I(
+                            Inst::Load { addr: Addr::Slot { slot, offset }, .. }
+                            | Inst::Store { addr: Addr::Slot { slot, offset }, .. },
+                        ) => Some((*slot as usize, *offset)),
+                        _ => None,
+                    },
+                ),
+        );
+    if let Some((first, 0)) = first
+        && let Some(at) = order.iter().position(|&one| one == first)
+    {
+        order.remove(at);
+        order.push(first);
+    }
+    let mut at = function.outgoing;
+    for &index in order.iter().rev() {
+        let slot = &function.slots[index];
+        at = at.next_multiple_of(slot.align.max(1));
+        slots[index] = at;
+        at += slot.size;
+    }
+    (slots, at.next_multiple_of(16))
+}
+
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
     darwin: bool,
 ) -> Layout {
-    // The objects go from the top of the locals down, in index order, each
-    // aligned from the top (`calculateFrameObjectOffsets`); the outgoing
-    // arguments are at the bottom.
-    let mut down = 0;
-    let from_top: Vec<u64> = function
-        .slots
-        .iter()
-        .map(|slot| {
-            down = (down + slot.size).next_multiple_of(slot.align.max(1));
-            down
-        })
-        .collect();
-    let locals_end = (down + function.outgoing).next_multiple_of(16);
-    let slots = from_top.iter().map(|at| locals_end - at).collect();
+    let (slots, locals_end) = place_objects(function);
     let record = function.calls || function.dynamic;
     let pairs = paired(&saved_list(allocation, record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();

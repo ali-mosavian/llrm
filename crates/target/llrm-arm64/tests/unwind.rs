@@ -225,17 +225,24 @@ define i64 @both(i64 %a, double %b) {ATTRS} {{
     assert_eq!(found, ["0x04000001", "0x04000003", "0x04000100", "0x04000101"]);
 }
 
-/// A frame object goes at the top of the locals, as the pin's: `str x0,
-/// [sp, #8]` under a 16-byte `sub`, which the compact word reads as a stack
-/// of 16. At the bottom it was `str x0, [sp]`.
+/// The object the entry block touches first sits at `[sp]`, so that access
+/// folds into the frame's allocation (`str x0, [sp, #-32]!`); the pin's order
+/// put the first object at the top, `sub sp` and `str [sp, #8]`, and the dense
+/// one at the bottom cost the same two instructions here. The word is the
+/// pin's frameless 32 bytes.
 #[test]
-fn the_first_frame_object_is_at_the_top_of_the_locals() {
+fn the_first_touched_frame_object_is_at_sp_and_its_access_folds() {
     let source = format!(
-        "define i64 @local(i64 %a) {ATTRS} {{
+        "define i64 @local(i64 %a, i32 %b) {ATTRS} {{
   %p = alloca i64
+  %q = alloca i32
   store volatile i64 %a, ptr %p
-  %v = load volatile i64, ptr %p
-  ret i64 %v
+  store volatile i32 %b, ptr %q
+  %v = load volatile i32, ptr %q
+  %w = load volatile i32, ptr %q
+  %x = add i32 %v, %w
+  %y = zext i32 %x to i64
+  ret i64 %y
 }}
 "
     );
@@ -245,7 +252,7 @@ fn the_first_frame_object_is_at_the_top_of_the_locals() {
         true,
     )
     .expect("lowers");
-    assert!(text.contains("str x0, [sp, #8]"), "{text}");
+    assert!(text.contains("str x0, [sp, #-16]!"), "{text}");
     let Some(found) = compact_encodings(&source) else { return };
     assert_eq!(found, ["0x02001000"]);
 }
