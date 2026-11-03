@@ -1768,9 +1768,13 @@ impl Builder<'_> {
             None => called,
         };
         let mut values = Vec::new();
-        for argument in arguments {
+        for (at, argument) in arguments.iter().enumerate() {
             let value = self.get_value(*argument)?;
-            let value = self.pass_float_bits(*argument, value);
+            let in_xmm = matches!(
+                plan.parameters.get(at),
+                Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
+            );
+            let value = if in_xmm { value } else { self.pass_float_bits(*argument, value) };
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1909,7 +1913,8 @@ impl Builder<'_> {
     /// (its load has no other user) is passed as the dword it is. The pin
     /// loads it onto the x87 stack and stores it to the argument slot (`fld;
     /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
-    /// `push dword ptr [m]`.
+    /// `push dword ptr [m]`. Not for an argument the convention passes in an
+    /// xmm register: the dword has no xmm form (`movd xmm0, xmm0`).
     fn pass_float_bits(
         &mut self,
         argument: Operand,
