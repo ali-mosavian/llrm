@@ -407,6 +407,18 @@ pub struct OperationCosts {
     /// A store of a constant that fills a dword where the target needs a
     /// prefix or a wider immediate for it; 0: `store + prefix`.
     pub store_dword: i64,
+    /// The bytes a fill adds to `fill` for the value it stores: the load of
+    /// the accumulator, of a zero (`fill_load_zero`) or of any other value.
+    /// 0: `fill` has them in.
+    pub fill_load: i64,
+    pub fill_load_zero: i64,
+    /// What a dword unit adds over a word one: the operand-size prefixes, and
+    /// the wider immediate of a value that is not zero. 0: none.
+    pub fill_wide: i64,
+    pub fill_wide_value: i64,
+    /// The fill is made at speed, in dwords where the length allows
+    /// (`Tuning`), not by the pass's own `-Os` word unit.
+    pub wide_fill: bool,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -445,6 +457,17 @@ pub struct OperationCosts {
 }
 
 impl OperationCosts {
+    /// The bytes of a fill of `zero` or of another value: `fill` and the
+    /// load of the value, in dwords when the fill is made so.
+    pub fn fill_with(
+        &self,
+        zero: bool,
+    ) -> i64 {
+        let load = if zero { self.fill_load_zero } else { self.fill_load };
+        let wide = if self.wide_fill { self.fill_wide + if zero { 0 } else { self.fill_wide_value } } else { 0 };
+        self.fill + load + wide
+    }
+
     /// The ratio under which a constant memset of `zero` bytes, or of any other
     /// byte, is stores; 0 where none is stated. `size`: tuned for size.
     pub fn pieces(
@@ -543,6 +566,11 @@ impl Default for OperationCosts {
             fill_segment: 0,
             memset_stores: 0,
             store_dword: 0,
+            fill_load: 0,
+            fill_load_zero: 0,
+            fill_wide: 0,
+            fill_wide_value: 0,
+            wide_fill: false,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,

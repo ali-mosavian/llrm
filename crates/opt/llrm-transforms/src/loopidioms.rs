@@ -295,8 +295,14 @@ pub fn filled_with(
     }) {
         return false;
     }
-    let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
-    let bytes = outer.target().size_costs();
+    let tuning = outer.target().tuning();
+    let stores = if size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset } as i64;
+    let costs = OperationCosts {
+        memset_stores: stores,
+        wide_fill: !size,
+        ..if size { outer.target().size_costs() } else { outer.target().costs() }
+    };
+    let bytes = OperationCosts { memset_stores: stores, wide_fill: !size, ..outer.target().size_costs() };
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
@@ -1024,10 +1030,20 @@ fn _cheaper_by(
                 if pieces < costs.pieces(size, zero) {
                     pieces * costs.store
                 } else {
-                    costs.fill + (length + 3) / 4 * costs.fill_cell
+                    costs.fill_with(zero) + (length + 3) / 4 * costs.fill_cell
                 }
             }
-            (_, Some(count)) if count <= 16 => count * costs.store,
+            // Few trips are stores only where the backend stores the fill
+            // inline: seven trips of two words are 28 bytes, a `rep stosd`
+            // beside its four stores.
+            (_, Some(count))
+                if count <= 16
+                    && stored.is_none_or(|(length, _)| {
+                        costs.memset_stores == 0 || InlineFills::one(costs.memset_stores, length).all_inline()
+                    }) =>
+            {
+                count * costs.store
+            }
             _ => string,
         };
         return trips * each > fills * fill;

@@ -1209,6 +1209,43 @@ fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
     assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
 }
 
+const ONE_OBJECT_TWO_STORES: &str = "%S = type { [7 x i16], [7 x i16] }
+@s = global %S zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr %S, ptr @s, i16 0, i32 0, i16 %i
+  store i16 -1, ptr %p
+  %q = getelementptr %S, ptr @s, i16 0, i32 1, i16 %i
+  store i16 -1, ptr %q
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 7
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// lru's lhead/ltail loop (two word stores of -1 a trip, seven trips, one
+/// object) at m16 -O2 became a `rep stosd` of 28 bytes, 19 B against the loop's
+/// 20 for +3 clocks: lru c +3 clocks for 1 B. The price took it for seven
+/// stores (7 clocks, the backend stores four) and left out the load of -1 and
+/// the 66h prefixes (12 B).
+#[test]
+fn a_fill_the_backend_makes_a_rep_stos_is_priced_with_its_value_load_and_prefixes() {
+    let mut module = parsed(&format!("{DOS}{ONE_OBJECT_TWO_STORES}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopIdioms { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
 const ZEROED_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer
 define void @f() {
 b0:

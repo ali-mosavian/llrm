@@ -120,7 +120,7 @@ const OPERATIONS: [&str; 40] = [
 
 /// Operations a table may leave out: 0 in `OperationCosts` then, which its
 /// reader reads as "the usual sum".
-const OPTIONAL: [&str; 1] = ["store_dword"];
+const OPTIONAL: [&str; 5] = ["store_dword", "fill_load", "fill_load_zero", "fill_wide", "fill_wide_value"];
 
 impl Description {
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -265,6 +265,10 @@ impl Description {
                 "direction" => out.direction = value,
                 "unroll_budget" => out.unroll_budget = value,
                 "store_dword" => out.store_dword = value,
+                "fill_load" => out.fill_load = value,
+                "fill_load_zero" => out.fill_load_zero = value,
+                "fill_wide" => out.fill_wide = value,
+                "fill_wide_value" => out.fill_wide_value = value,
                 other => unreachable!("`{other}` was checked"),
             }
         }

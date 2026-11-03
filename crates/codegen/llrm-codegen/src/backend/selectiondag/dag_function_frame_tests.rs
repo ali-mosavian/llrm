@@ -1697,3 +1697,46 @@ fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
     assert_eq!(constant_fill_unit(203, 2).as_deref(), Some("1"));
     assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
 }
+
+/// The `rep stos` unit of a constant 28-byte `memset` of `value` at `align 2`,
+/// tuned for size (`size`) or not, at m16 on the 486.
+fn fill_unit_of(
+    value: i32,
+    size: bool,
+) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p) {{
+entry:
+  call void @llvm.memset.p0.i16(ptr align 2 %p, i8 {value}, i16 28, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = size;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| {
+            w.sources.iter().find_map(|source| match source {
+                crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                _ => None,
+            })
+        })
+}
+
+/// lru nib -Os: a 28-byte fill of -1 was `rep stosw` of 14, +1 B over the
+/// bytes (`mov ax, -1` 3 B, `mov al, -1` 2 B) for -112 clocks, which -Os does
+/// not trade. A zero is `xor ax, ax` either way and keeps the word.
+#[test]
+fn at_size_a_fill_of_a_value_that_is_not_zero_stays_bytes() {
+    assert_eq!(fill_unit_of(-1, true).as_deref(), Some("1"));
+    assert_eq!(fill_unit_of(0, true).as_deref(), Some("2"));
+    assert_eq!(fill_unit_of(-1, false).as_deref(), Some("4"), "premise: at speed it widens");
+}

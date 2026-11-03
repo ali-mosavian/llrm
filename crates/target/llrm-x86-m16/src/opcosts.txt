@@ -112,3 +112,9 @@ fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri_exact
 float_release = x87_release
 # A dword store of a constant is the word store with a prefix and a wider immediate; the clocks are the usual sum.
 store_dword = mov_mi32
+# The value a fill stores is loaded into the accumulator: `xor ax, ax` for zero, `mov ax, imm16` otherwise. A dword unit adds the 66h
+# on that load and on `stosd`, and two bytes of immediate (`mov eax, -1` is 6 bytes, `rep stosd` 3).
+fill_load_zero = 2
+fill_load = mov_ri_exact
+fill_wide = 2
+fill_wide_value = 2

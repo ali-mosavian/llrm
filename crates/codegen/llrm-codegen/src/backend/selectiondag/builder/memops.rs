@@ -1783,7 +1783,13 @@ impl Builder<'_> {
             // `getOptimalRepType`: a dword at most on a target with 32-bit
             // registers, whatever its pointers; for size the pointer's width
             // (`mov eax, 0` is more bytes: fpbench.nib +3 at -Os).
-            let block = alignment.min(if self.has_opt_size() { word } else { word.max(4) });
+            // At size a value that is not zero stays bytes: `mov ax, -1` is 3
+            // bytes where `mov al, -1` is 2 (lru nib -Os +1 B for -112 clocks).
+            let block = if self.has_opt_size() && byte & 255 != 0 {
+                1
+            } else {
+                alignment.min(if self.has_opt_size() { word } else { word.max(4) })
+            };
             let mut pattern = byte as u64 & 255;
             if block >= 2 {
                 pattern |= pattern << 8;
