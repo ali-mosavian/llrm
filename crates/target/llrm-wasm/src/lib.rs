@@ -11,6 +11,7 @@ pub mod custom_inserter;
 pub mod dag;
 pub mod dagisel;
 pub mod dead_mi;
+pub mod debug;
 pub mod driver;
 pub mod eh_reentry;
 pub mod exception_info;
