@@ -1,6 +1,6 @@
 ; binary32 <-> 32-bit integer for the 6502, hand written; links with sf32.s (rounding). ABI as sf32.s:
 ; the argument in rc2..rc5, the result in A:X:rc2:rc3. Float to int truncates; out of range saturates, NaN gives 0
-; (matches lib/fp/sf32_conv.c).
+; (matches lib/fp/f32/fix_si.c lib/fp/f32/float_si.c).
 
 .setcpu "6502"
 .include "sf32.inc"

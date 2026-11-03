@@ -16,7 +16,7 @@ tests/ tools/       host oracles, per-target harnesses, generators
 Add a target: a `config/<target>/` with a `config.h` that defines the knobs below, and assembly for any routine the generic C cannot do well; the generic C stays the fallback for everything else.
 
 
-- `lib/fp/sf32.c`, `lib/fp/sf32_conv.c`, `lib/fp/sf32_conv64.c`: binary32 arithmetic and compare; 32-bit integer conversions (no 64-bit type); 64-bit integer and binary64 conversions. Exact IEEE-754 round to nearest even, denormals, inf, NaN. Out-of-range float to int saturates, NaN gives 0.
+- `lib/fp/f32/`: binary32 arithmetic and compare; 32-bit integer conversions (no 64-bit type, `float_si.c fix_si.c`); 64-bit integer and binary64 conversions (`*_di.c extend.c trunc.c`). Exact IEEE-754 round to nearest even, denormals, inf, NaN. Out-of-range float to int saturates, NaN gives 0.
 - `tests/host_f32.c`: bit-exact oracle against the host FPU (NaN compared as a class):
 
 ```

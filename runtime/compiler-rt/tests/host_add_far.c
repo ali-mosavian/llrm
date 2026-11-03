@@ -1,5 +1,5 @@
 /* Operands whose exponents differ by 20..40 (powers of two, 0x7FFFFF mantissas, random; both signs, add and sub): the far-exponent early
- * return of add_bits must give the host FPU's result. cc -O2 -ffp-contract=off -fno-builtin -DSF_INTABI -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_add_far.c lib/fp/sf32.c lib/fp/sf32_conv.c */
+ * return of add_bits must give the host FPU's result. cc -O2 -ffp-contract=off -fno-builtin -DSF_INTABI -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_add_far.c lib/fp/f32/*.c */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
