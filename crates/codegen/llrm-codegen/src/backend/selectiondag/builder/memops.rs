@@ -640,8 +640,6 @@ impl Builder<'_> {
         opt_size: bool,
         filled: bool,
     ) -> Option<SDValue> {
-            return None;
-        }
         const FLDZ: u64 = 2;
         const FST_QWORD: u64 = 3;
         if self.target.dag.pointer.size_in_bits() != 16
