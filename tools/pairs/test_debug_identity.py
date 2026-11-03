@@ -24,10 +24,11 @@ def test_the_positive_control_needs_debug_sections_in_the_g_object():
 
 def test_a_compile_that_hands_back_bytes_is_compared_from_those_bytes(tmp_path, monkeypatch):
     """The sweep's compile removes the object it wrote: opening the path crashed with FileNotFoundError and compared nothing."""
+    import importlib.util
     import shutil
     import subprocess
 
-    if not (shutil.which("cc") and shutil.which("objcopy")):
+    if not (shutil.which("cc") and shutil.which("objcopy")) or importlib.util.find_spec("elftools") is None:
         return
     (tmp_path / "x.c").write_text("int f(int a) { return a + 1; }\n")
     plain, debug = tmp_path / "plain.o", tmp_path / "debug.o"
@@ -50,10 +51,11 @@ def test_an_object_with_debug_sections_added_reads_the_same_apart_from_them(tmp_
     """-g puts section symbols and a file symbol in the symbol table and shifts every index after them: read raw, `.symtab`, `.strtab` and
     the relocation sections differed in all 158 objects of the corpus, with or without the marks. Read as symbols and relocations by name
     they match."""
+    import importlib.util
     import shutil
     import subprocess
 
-    if not (shutil.which("cc") and shutil.which("objcopy")):
+    if not (shutil.which("cc") and shutil.which("objcopy")) or importlib.util.find_spec("elftools") is None:
         return
     (tmp_path / "x.c").write_text("extern int g(int);\nint data = 3;\nint f(int a) { return g(a) + data; }\n")
     plain, debug = tmp_path / "plain.o", tmp_path / "debug.o"
