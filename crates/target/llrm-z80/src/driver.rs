@@ -55,11 +55,13 @@ pub struct Request {
     pub level: Level,
     /// `-f[no-]PASS` switches, applied to the mid-end.
     pub passes: Vec<String>,
+    /// `-g`: SDCC's `C$file$line$..` labels ahead of the instructions.
+    pub debug: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new() }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false }
     }
 }
 
@@ -86,6 +88,9 @@ pub fn program(
         Some(stated) if stated == layout => {}
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not the Z80's `{layout}`")),
         None => return Err(format!("the module states no datalayout; the Z80's is `{layout}`")),
+    }
+    if request.debug {
+        llrm_mir::dbgimport::types_and_globals(&mut module);
     }
     let mut program = Program::new(vec![module], machine())?;
     if request.level != Level::O0 {
@@ -176,4 +181,106 @@ impl llrm_mir::target::Machine for Z80Machine {
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Z80Tti::new()))
     }
+}
+
+/// The source file of the unit's `!DICompileUnit` and the line function `name`
+/// starts at (its `!DISubprogram`'s `scopeLine`), if `text` has them.
+pub fn source_of(
+    text: &str,
+    name: &str,
+) -> Option<(String, Option<u32>)> {
+    let module = llrm_mir::parse::module(&without_triple(text)).ok()?;
+    let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
+    let line = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
+    Some((file, line))
+}
+
+/// SDCC's size and spelling of a debug type, as the `.adb` writes it: the class
+/// and then the sign (`SI:S` int, `SI:U` unsigned int, `SC:U` char, `DG,SC:U`
+/// pointer to char); none for one it has no spelling for.
+pub(crate) fn sdcc_type(
+    module: &llrm_mir::module::Module,
+    id: llrm_mir::module::MetadataId,
+) -> Option<(i64, String)> {
+    use llrm_mir::debuginfo::{Kind, Scalar, read_type};
+    let one = read_type(module, id)?;
+    match one.kind {
+        Kind::Scalar => {
+            let (size, class, sign) = match Scalar::from_value(&one.name)? {
+                Scalar::Void => (0, "SV", "S"),
+                // DW_ATE_signed_char says signed, whatever SDCC's plain char is
+                Scalar::Char | Scalar::Int8 => (1, "SC", "S"),
+                Scalar::UInt8 => (1, "SC", "U"),
+                Scalar::Int16 => (2, "SI", "S"),
+                Scalar::UInt16 => (2, "SI", "U"),
+                Scalar::Int32 => (4, "SL", "S"),
+                Scalar::UInt32 => (4, "SL", "U"),
+                Scalar::Float32 => (4, "SF", "S"),
+                _ => return None,
+            };
+            Some((size, format!("{class}:{sign}")))
+        }
+        Kind::Pointer => Some((2, format!("DG,{}", sdcc_type(module, one.target?)?.1))),
+        _ => None,
+    }
+}
+
+/// The module's `.adb` (ASxxxx debug records, which sdld merges into the
+/// `.cdb`): the module, then each defined function with its result type.
+/// None without debug info. The lines come from the `C$` symbols.
+pub fn adb(
+    text: &str,
+    request: &Request,
+) -> Option<String> {
+    use llrm_spike_mf::VariablePlace;
+    let mut program = program(text, request).ok()?;
+    program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
+    let module = &program.modules[0];
+    let (file, _) = llrm_mir::dbgimport::unit_file(module)?;
+    let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
+    let mut out = format!("M:{stem}\n");
+    for one in llrm_mir::debuginfo::functions(module) {
+        let procedure = llrm_mir::debuginfo::read_type(module, one.r#type)?;
+        let result = match procedure.target {
+            Some(result) => sdcc_type(module, result)?.1,
+            None => "SV:S".to_owned(),
+        };
+        let size = 2;
+        out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
+        out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
+        let Ok(selection) = select_function(module, &one.function, request.cpu) else { continue };
+        // Frame objects sit below IX, the locals first (`expand::layout`).
+        let mut below = 0;
+        let ends: Vec<i64> = selection
+            .locals
+            .iter()
+            .map(|&bytes| {
+                below += bytes;
+                below
+            })
+            .collect();
+        for (at, variable) in selection.variables.iter().enumerate() {
+            let Some((size, spelling)) = sdcc_type(module, variable.r#type) else { continue };
+            let place = match variable.place {
+                VariablePlace::Register(register) => format!("R,0,0,{}", crate::expand::register_list(register)),
+                VariablePlace::Frame { index, offset } => {
+                    format!("B,1,{}", offset - ends.get(index as usize).copied().unwrap_or(0))
+                }
+            };
+            out.push_str(&format!(
+                "S:L{stem}.{}${}$1_0${at}({{{size}}}{spelling}),{place}\n",
+                one.function, variable.name
+            ));
+        }
+    }
+    // A function the module calls but does not define: a symbol of its own.
+    for one in llrm_mir::debuginfo::declarations(module) {
+        let procedure = llrm_mir::debuginfo::read_type(module, one.r#type)?;
+        let result = match procedure.target {
+            Some(result) => sdcc_type(module, result)?.1,
+            None => "SV:S".to_owned(),
+        };
+        out.push_str(&format!("S:G${}$0_0$0({{2}}DF,{result}),C,0,0\n", one.function));
+    }
+    Some(out)
 }

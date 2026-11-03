@@ -39,6 +39,7 @@ fn run() -> i32 {
             },
             other if other.starts_with("-f") => request.passes.push(other.to_owned()),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if llrm_debug::is_debug_flag(other) => request.debug = true,
             other => {
                 eprintln!("llrm-6502-llc: unrecognized argument {other}");
                 return 2;

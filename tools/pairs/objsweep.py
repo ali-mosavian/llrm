@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import os
 import re
+import resource
 import subprocess
 import sys
 import tempfile
@@ -41,8 +42,8 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
     return done.stdout.split() if done.returncode == 0 else None
 
 
-CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat"}  # llrm-cc's LLRM_CC_TARGET rows
-FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"]}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
+CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat", "a64": "arm64-linux"}  # llrm-cc's LLRM_CC_TARGET rows
+FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": []}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
 
 
 # The -g leg: the debug formats each target writes. An object holds its debug sections, so comparing whole objects compares them.
@@ -59,12 +60,20 @@ def writer_results(directory: Path) -> dict[str, str]:
     return {file.name: hashlib.md5(file.read_bytes()).hexdigest()[:12] for pattern in ("*.bin", "*.err") for file in sorted(directory.glob(pattern))}
 
 
+MEMORY_LIMIT = 16 << 30
+
+
+def limit_memory() -> None:
+    """Each compile is bounded: one unbounded llc grew to 217 GB and took the box."""
+    resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
+
+
 def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None, environment: dict[str, str] | None = None) -> tuple[bytes | None, str]:
     """(object bytes, '') or (None, first line of stderr); fills `writers` with the other formats' md5s when given."""
     side = out.with_suffix(".writers")
     side.mkdir(exist_ok=True)
     env = {**(environment or os.environ), "LLRM_OBJECT_ALL_WRITERS": str(side)} if writers is not None else environment
-    done = subprocess.run(command, capture_output=True, text=True, timeout=600, env=env)
+    done = subprocess.run(command, capture_output=True, text=True, timeout=600, env=env, preexec_fn=limit_memory)
     if writers is not None:
         writers.update(writer_results(side))
     for file in side.glob("*"):
@@ -90,9 +99,9 @@ def compile_one(binary: str, source: Path, target: str, level: str, out: Path, i
     return run_compiler(command, out, writers, environment)
 
 
-def compile_arm64(binary: str, source: Path, out: Path, writers: dict[str, str] | None = None) -> tuple[bytes | None, str]:
-    """`llrm-arm64-llc` on a `.ll` file: the object of its triple's platform (Mach-O or ELF), and with `writers` the other format's too."""
-    return run_compiler([binary, "-o", str(out), str(source)], out, writers)
+def compile_arm64(binary: str, source: Path, out: Path, writers: dict[str, str] | None = None, debug: bool = False) -> tuple[bytes | None, str]:
+    """`llrm-arm64-llc` on a `.ll` file: the object of its triple's platform (Mach-O or ELF), and with `writers` the other format's too; `debug` asks for `-g`."""
+    return run_compiler([binary, *(["-g"] if debug else []), "-o", str(out), str(source)], out, writers)
 
 
 def summary(changed: list[tuple[str, int, int]], top: int = 5) -> list[str]:
@@ -140,7 +149,11 @@ def sweep(args, sources: list[Path], isel: str) -> int:
             else:
                 other = sorted(f for f in {*wa, *wb} if wa.get(f) != wb.get(f))
                 changed.append((name, len(a), len(b), other))
-    print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}")
+    compiled = same + len(changed)
+    print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}; {compiled} compiled on both sides")
+    if cells and not compiled:
+        # "0 changed" of cells that never compiled is no identity: the sweep must not pass.
+        print("objsweep: NO EVIDENCE: no cell compiled on both sides, so nothing was compared")
     for name, x, y, other in changed:
         print(f"  changed {name}: {x} -> {y} bytes ({y - x:+d})" + (f"; writers: {', '.join(other)}" if other else ""))
     print("split:")
@@ -150,7 +163,10 @@ def sweep(args, sources: list[Path], isel: str) -> int:
         print(f"  ONE-SIDED FAIL {name}: {why}")
     for name, why in both[:10]:
         print(f"  failed on both {name}: {why}")
+    if cells and not compiled:
+        return 2
     return 1 if changed or one_side else 0
+
 
 def sweep_arm64(args, sources: list[Path]) -> int:
     """The `.ll` files of --arm64 through `llrm-arm64-llc` beside OLD and beside NEW: the Mach-O and ELF objects of each must match."""
@@ -159,12 +175,16 @@ def sweep_arm64(args, sources: list[Path]) -> int:
     if missing:
         print(f"objsweep --arm64: no llrm-arm64-llc at {', '.join(missing)}: the arm64 objects were NOT compared")
         return 1
+    debug = getattr(args, "debug", False)
+    if debug and not any("DICompileUnit" in source.read_text(errors="replace") for source in sources):
+        print("objsweep --arm64 --debug: NO EVIDENCE: no source carries debug info (!DICompileUnit), so no object has a .debug_* section to compare")
+        return 2
     scratch = Path(tempfile.mkdtemp(prefix="objsweep-arm64-"))
 
     def run(source):
         old_writers, new_writers = {}, {}
-        old = compile_arm64(old_bin, source, scratch / f"{source.stem}.old.o", old_writers)
-        new = compile_arm64(new_bin, source, scratch / f"{source.stem}.new.o", new_writers)
+        old = compile_arm64(old_bin, source, scratch / f"{source.stem}.old.o", old_writers, debug)
+        new = compile_arm64(new_bin, source, scratch / f"{source.stem}.new.o", new_writers, debug)
         return source, old, new, old_writers, new_writers
 
     changed, failed, same = [], [], 0
@@ -176,11 +196,15 @@ def sweep_arm64(args, sources: list[Path]) -> int:
                 same += 1
             else:
                 changed.append((source.stem, sorted(f for f in {*wa, *wb} if wa.get(f) != wb.get(f)) or ["object"]))
-    print(f"objsweep --arm64: {len(changed)} objects changed; {same} identical, {len(failed)} failed of {len(sources)}")
+    compared = same + len(changed)
+    print(f"objsweep --arm64: {compared} compared, {len(failed)} refused of {len(sources)}; {len(changed)} objects changed, {same} identical")
     for name, formats in changed:
         print(f"  changed {name}: {', '.join(formats)}")
     for name, why in failed[:10]:
         print(f"  failed {name}: {why}")
+    if not compared:
+        print("objsweep --arm64: NO EVIDENCE: no object compiled on both sides")
+        return 2
     return 1 if changed else 0
 
 
