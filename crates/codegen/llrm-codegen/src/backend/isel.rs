@@ -548,13 +548,17 @@ pub fn convention_for(
 /// or `+soft-float` is the generic spelling. The floats of such a function
 /// travel as the integers of their width.
 pub fn soft_float(attrs: &[llrm_mir::Attribute]) -> bool {
-    attrs.iter().any(|one| match one {
-        llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" => value == "true",
-        llrm_mir::Attribute::Str(key, Some(value)) if key == "target-features" => {
-            value.split(',').any(|feature| feature == "-x87" || feature == "+soft-float")
-        }
-        _ => false,
-    })
+    attrs
+        .iter()
+        .any(
+            |one| match one {
+                llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" => value == "true",
+                llrm_mir::Attribute::Str(key, Some(value)) if key == "target-features" => {
+                    value.split(',').any(|feature| feature == "-x87" || feature == "+soft-float")
+                }
+                _ => false,
+            },
+        )
 }
 
 /// `convention_for`, where `soft_float` makes a `float` or `double` an integer
@@ -757,7 +761,11 @@ fn argument_of(
     class: Option<&str>,
     soft_float: bool,
 ) -> llrm_mir::target::Argument {
-    let soft = soft_float && matches!(types.get(ty), Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80));
+    let soft = soft_float
+        && matches!(
+            types.get(ty),
+            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+        );
     llrm_mir::target::Argument {
         bytes: i64::from(size),
         integer: soft || types.int_bits(ty).is_some(),
@@ -6718,7 +6726,9 @@ impl Selector<'_, '_, '_> {
                     Some(bytes) => byval_bytes(self.module, &self.layout, self.arch, bytes)?,
                     None => self.size(ty)?,
                 };
-                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index), false), self.arch.stack_slot_bytes()));
+                kinds.push(
+                    entry.kind(argument_of(self.types(), ty, size, class(index), false), self.arch.stack_slot_bytes()),
+                );
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
