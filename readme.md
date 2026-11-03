@@ -1,103 +1,58 @@
-# llrm -- Low Level Real Machine
+# llrm
 
-`llrm` is a compiler suite for 16-bit real-mode DOS (and a flat 32-bit DOS target) that aims at GCC/LLVM-quality
-code. Every frontend raises to one SSA IR (MIR), shares one optimizer and x86 backend, and writes linkable OMF
-`.OBJ` files. For people who build llrm, use its compilers or work on it; documentation starts at [docs](docs/readme.md), and
-[comparison](docs/comparison/readme.md) sets its output beside other compilers'.
+`llrm` is a cross compiler. Several source languages and several targets share one optimizer and one backend
+framework. For every target the aim is to match or beat gcc and LLVM, or the best compiler for that target and
+platform, on code size and speed, at a compile time near LLVM's.
 
-![llrm pipeline: QuickBASIC, Nib and C raise through HIR and BC objects straight to MIR; one target-neutral optimizer; one x86 real-mode backend](docs/architecture/pipeline.svg)
+The optimizer and backend are a Rust translation of LLVM, pinned to one commit. A frontend raises its language to one
+SSA IR (MIR); target-neutral passes run on it; a target is a set of description files (registers, instructions, calling
+conventions, costs) the shared backend reads. No shared pass names a target. Documentation starts at
+[docs](docs/readme.md); [comparison](docs/comparison/readme.md) sets the output beside other compilers'.
 
-MIR passes are machine-independent; only lowering, allocation and peephole see registers or instructions
-([the MIR boundary](docs/architecture/split.md)). The goal is output within 1.5x of a hand-derived modern-compiler
-listing for every suite program; [measurement](docs/working/measurement/readme.md) says how it is measured.
+![llrm pipeline: QuickBASIC, Nib and C raise to MIR; one target-neutral optimizer; one backend per target](docs/architecture/pipeline.svg)
+
+## Targets
+
+| Target | Platform, object | Compared against |
+|---|---|---|
+| x86 16-bit | DOS real mode, OMF | Borland, Watcom, BC, gcc, clang |
+| x86 32-bit | DOS under an extender (OMF), Linux (ELF) | gcc, clang |
+| x86-64 | Linux (ELF) | gcc, clang |
+| arm64 | Linux (ELF), macOS (Mach-O) | gcc, clang |
+| 6502, 65C02 | ca65 assembly, sim65 | llvm-mos, cc65, SDCC, hand-written assembly |
+| m68k (68000, 68020) | assembly | gcc, clang |
+| Z80, WebAssembly | in development | SDCC; clang (wasm32) |
+
+The gate refuses a change that makes any benchmark cell worse than main's. What is measured, and against which
+version of each compiler, is in [comparison](docs/comparison/readme.md).
 
 ## Programs
 
-Each is built from `src/bin`. `llrm-qb` is the default `cargo run` target.
-
 | Program | Does |
 |---|---|
-| `llrm-qb` | QuickBASIC-family source (QB 4.5, QBasic 1.1, PDS 7.1, VBDOS, QuickrBASIC) to an object; see [the dialects](docs/frontends/qb/dialects.md) |
-| `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`), to an object; see [the front end](docs/frontends/c/ow-contract.md) |
-| `llrm-nib` | Nib, llrm's own language, to an object; see [the language](docs/frontends/nib/readme.md) |
-| `llrm-omf` | A small input route: objects written by QuickBASIC's BC, raised to MIR and compiled afresh; see [BC objects](docs/frontends/bc.md) |
-| `llrm-mir` | Reads and verifies MIR text and writes it back; `--run [--entry NAME] [--fuel N]` runs `@main` on the interpreter; `--ivs` prints each innermost loop's induction-variable count |
-| `llrm-run` | Runs a Nib module's entry on the host HIR interpreter: `llrm-run [-m16\|-m32] SOURCE.nib [ENTRY] [INTEGER...]` |
-| `nibfront` | Nib's front end alone: `--tokens`, `--syntax`, or `--declare h\|bi\|inc` for C, QuickBASIC and assembler declarations of a module |
-| `nib-lsp` | Nib's language server; see [the server](docs/frontends/nib/lsp.md) |
+| `llrm-cc` | `cc`-compatible driver: C and C++ through the pinned clang, then llrm's backend; `-target NAME` picks the target from [targets.toml](crates/driver/llrm-cc/targets.toml) |
+| `llrm-qb` | QuickBASIC-family source (QB 4.5, PDS 7.1, VBDOS) to an object |
+| `llrm-nib` | Nib, llrm's own language, to an object |
+| `llrm-c` | C through Open Watcom's front end, DOS targets only |
+| `llrm-omf` | Objects written by QuickBASIC's BC, raised to MIR and compiled afresh |
+| `llrm-mir` | Reads, verifies and runs MIR text |
 
-Floating point is native x87, so a coprocessor is required. The crates behind these programs are in
-[crates](docs/reference/crates.md).
-
-## Build
+## Build and use
 
 ```sh
 cargo build --release
+target/release/llrm-cc -target arm64-linux -O2 -S examples/dot/dot.c
 ```
 
-The default feature `toolchain` bootstraps what the compilers and tests need:
-
-| Feature | Builds |
-|---|---|
-| `wccq` | Open Watcom's front end for `llrm-c` (`toolchain/owshim/`) |
-| `jw` | `jwasm` and `jwlink` |
-| `dosrun` | the headless DOSBox-X the DOS tests run on |
-
-Their binaries land in `target/<profile>`. Sources are cloned under `$XDG_CACHE_HOME/llrm` (`~/.cache/llrm` when
-unset), one tree per pinned commit, made whole or not at all, so worktrees and parallel builds share them safely.
-`$OWROOT` names an existing Open Watcom tree to use instead of cloning one. The scripts need a Unix host.
-
-`--no-default-features --features wccq` builds only the front end the library tests need. Without any feature the
-build bootstraps nothing; `llrm-c` then has no Open Watcom front end.
-
-On Debian or Ubuntu the toolchain needs:
-
-```sh
-sudo apt install build-essential git autoconf automake libtool libpng-dev libpcap-dev libncurses-dev
-```
-
-The Rust toolchain is pinned by `rust-toolchain.toml`. Python tools run through `uv`; see
-[the tools](docs/reference/tools.md).
-
-## Use
-
-```sh
-target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
-target/release/llrm-c program.c -o PROGRAM.OBJ
-target/release/llrm-nib program.nib -o PROGRAM.OBJ
-target/release/llrm-omf MAIN.OBJ DRAW.OBJ -o build/optimized -march=i486
-```
-
-`llrm-qb`'s default runtime is llrm's own; `--runtime qb45|pds71|vbdos` selects a Microsoft one, and the default
-dialect is `vbdos`. `llrm-omf` takes every object of a program in LINK order, ignores `.LIB` arguments, writes
-`-o` as the object (one input) or a directory (several), and writes nothing unless every object succeeds.
-
-`llrm-qb`, `llrm-c`, `llrm-nib` and `llrm-omf` share gcc-named options:
-
-| Option | Does |
-|---|---|
-| `-O0` `-O1` `-O2` `-O3` `-Omax` `-Os` `-Oz` `-Og` | Optimization level; `-O2` is the default. What each level turns on: [levels](docs/reference/levels.md) |
-| `-f[no-]PASS` | One pass on or off by gcc's name, for example `unroll-loops`, `inline-functions`, `strength-reduce`, `gcse`, `tree-dse`; the names are the `PASSES` table in `crates/codegen/llrm-codegen/src/driver/flags.rs` |
-| `-march=CPU`, `-mtune=CPU` | The processor, gcc's name for it (`i386` through `core2`) |
-| `-m16`, `-m32` | The target; `-fobject-format=omf\|elf\|macho\|coff` its object format |
-| `-fsanitize=CHECKS`, `-ftrapv`, `-fwrapv` | Run-time checks: `bounds`, `integer-divide-by-zero`, `signed-integer-overflow`, `stack`, or `undefined` (the first three); see [semantic switches](docs/reference/semantics/readme.md) |
-| `-g` | Debug information; see [formats](docs/formats/readme.md) |
-| `-S` | Writes the assembly listing instead of an object |
-| `--dump DIR` | Writes every stage to `DIR`, for diffing; `llrm-qb`, `llrm-c` and `llrm-nib` take it, and `LLRM_MIR_STAGES=DIR` does the same for any of them |
-
-`llrm-qb --runtime-frames` calls the runtime's frame entry and exit in every procedure, so its frame chain, stack check
-and event poll are there to debug against. `--own-frames` is accepted and does nothing.
-
-One loop in three languages, compiled with `-S` and compared: [examples/dot](examples/dot).
-[Loop strength reduction](docs/optimizations/passes/lsr_pass.md) says what the backend does with it.
+The default feature `toolchain` bootstraps Open Watcom, `jwasm`, `jwlink` and the headless DOSBox-X the DOS tests run
+on. `llrm-cc` needs the pinned clang (`toolchain/clang/pin`; [how it runs](docs/frontends/c/clang-route.md)). The
+options are gcc's: `-O0`..`-O3`, `-Os`, `-Oz`, `-f[no-]PASS`, `-march`, `-g`, `-S`; see [levels](docs/reference/levels.md).
+The Rust toolchain is pinned by `rust-toolchain.toml`; format with `tools/fmt.sh`; tests are in
+[testing](docs/working/testing.md).
 
 ## Example
 
-One loop in three languages: a dot product of two `int` arrays, returned as a
-`long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
-prints with `-march=i486`, and the comments are added by hand. C is in the medium model.
-
-C, `llrm-c dot.c -march=i486 -S`:
+[`examples/dot`](examples/dot): a dot product of two arrays, returned as a `long`, compiled with `llrm-cc -O2 -S`.
 
 ```c
 long dot(const int *a, const int *b, int n)
@@ -110,215 +65,121 @@ long dot(const int *a, const int *b, int n)
 }
 ```
 
+x86-64, `-target x86_64-linux`:
+
 ```asm
-_dot@3 proc far
-L0_0:
-    test cx, cx
-    jle L0_4294967297               ; [header copy] one guard for n <= 0, ahead of the prologue
-L0_17:
-    push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
-    push di
-    mov si, ax                      ; si = a, an address register: ax cannot address
-    mov di, dx                      ; di = b
-    add cx, cx                      ; cx = 2n, the byte length of each array
-    mov bx, cx
-    neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
-    add si, cx                      ; [biased] a + 2n, so a[i] is at [bx+si]
-    add di, cx                      ; [biased] b + 2n
-    xor eax, eax                    ; total = 0
-L0_4:
-    movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
-    movsx edx, word ptr [bx+di]     ; b[i]
-    imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
-    add eax, ecx                    ; total += product
-    add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
-    jne L0_4
+dot proc near
+L0_1:
+    test edx, edx
+    jle L0_2_1
 L0_2:
-    pop di                          ; the long is already in eax: it returns there
-    pop si                          ; no frame: nothing is on the stack
-    retf
-L0_4294967297:
-    xor eax, eax                    ; n <= 0: no saved registers were touched
-    retf
-_dot@3 endp
+    movzx rcx, edx
+    xor eax, eax
+    xor edx, edx
+L0_3:
+    movsx r8, dword ptr [rdi+rdx*4]
+    movsx r9, dword ptr [rsi+rdx*4]
+    imul r9, r8
+    add rax, r9
+    inc rdx
+    cmp rcx, rdx
+    jne L0_3
+L0_4:
+    ret
+L0_2_1:
+    xor eax, eax
+    ret
+dot endp
 ```
 
-Nib, `llrm-nib dot.nib --entry dot -march=i486 -S`:
+arm64, `-target arm64-linux`:
 
+```asm
+dot:
+.Ldot.0:
+	orr x11, xzr, x0, lsl #0
+	subs wzr, w2, #0
+	b.le .Ldot.e4
+.Ldot.1:
+	movz x0, #0, lsl #0
+.Ldot.2:
+	ldrsw x10, [x11]
+	ldrsw x9, [x1]
+	madd x0, x9, x10, x0
+	sub x2, x2, #1
+	cbz x2, .Ldot.e5
+.Ldot.e6:
+	add x11, x11, #4
+	add x1, x1, #4
+	b .Ldot.2
+.Ldot.e5:
+	ret x30
+.Ldot.e4:
+	movz x0, #0, lsl #0
+	ret x30
 ```
-fn dot(a: &[i16], b: &[i16]) -> i32:
-    let mut total: i32 = 0
-    for (x, y) in zip(a, b):
-        total += i32(x) * i32(y)
-    return total
+
+m68k, 68020, `-target m68k-68020`:
+
+```asm
+dot:
+	movem.l	%d2-%d3, -(%sp)
+	move.l	(20,%sp), %d2
+	ble	.LBB0_3
+	move.l	(16,%sp), %a0
+	move.l	(12,%sp), %a1
+	moveq	#0, %d0
+.LBB0_2:
+	move.l	(%a1)+, %d3
+	move.l	(%a0)+, %d1
+	muls.l	%d3, %d1
+	add.l	%d0, %d1
+	move.l	%d1, %d0
+	subq.l	#1, %d2
+	bne	.LBB0_2
+	bra	.LBB0_4
+.LBB0_3:
+	moveq	#0, %d0
+.LBB0_4:
+	movem.l	(%sp)+, %d2-%d3
+	rts
 ```
+
+x86 16-bit, medium model, `int` is 16 bits, `-target x86_16-dos`:
 
 ```asm
 _dot proc far
-    push bp                     ; a is the far pointer [bp+6], b [bp+10]
+    push bp
     mov bp, sp
-    sub sp, 6
     push si
     push di
 L0_1:
-    les di, dword ptr [bp+6]
-    mov cx, word ptr es:[di]
-    lfs bx, dword ptr [bp+10]
-    mov ax, word ptr fs:[bx]
-    mov word ptr [bp-4], ax
-    test ax, ax
-    sete al
-    mov word ptr [bp-2], cx
+    mov cx, word ptr [bp+10]
     test cx, cx
-    sete cl
-    or cl, al
-    xor eax, eax
-    test cl, cl
-    jne L0_3
+    jle L0_2_1
 L0_2:
-    mov cx, 1
-    mov ax, word ptr es:[di+4]
-    mov word ptr [bp-6], ax
-    mov es, word ptr es:[di+6]
-    mov di, word ptr fs:[bx+4]
-    mov fs, word ptr fs:[bx+6]
+    mov di, word ptr [bp+6]
+    xor eax, eax
+    xor bx, bx
+L0_3:
+    movsx edx, word ptr [bx+di]
+    mov si, word ptr [bp+8]
+    movsx esi, word ptr [bx+si]
+    imul esi, edx
+    add eax, esi
+    add bx, 2
+    dec cx
+    jne L0_3
+    jmp L0_4
+L0_2_1:
     xor eax, eax
 L0_4:
-    mov edx, eax
-    lea bx, [ecx+ecx]
-    mov si, word ptr [bp-6]
-    movsx esi, word ptr es:[bx+si-2]
-    movsx eax, word ptr fs:[bx+di-2]
-    imul eax, esi
-    add eax, edx
-    cmp cx, word ptr [bp-2]
-    jae L0_3
-L0_5:
-    mov dx, cx
-    inc dx
-    cmp cx, word ptr [bp-4]
-    mov cx, dx
-    jb L0_4
-L0_3:                           ; cx = min(len(a), len(b)): zip ends with the shorter slice,
-    pop di                      ; the long is in eax, where it returns
+    shld edx, eax, 16
+    pop di
     pop si
-    leave
+    pop bp
     retf
 _dot endp
 ```
 
-A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
-elements until the shorter slice ends, so there is no `n`, and no index to check.
-Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
-
-BASIC, `llrm-qb dot.bas --dialect pds71 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline=DOT -S` (DOT is called once, and would go into its caller):
-
-```basic
-DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
-DECLARE FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
-
-n = 9: m = 7
-REDIM p(n) AS INTEGER, q(m) AS INTEGER
-PRINT Dot&(p(), q())
-
-FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
-    IF x < y THEN Min% = x ELSE Min% = y
-END FUNCTION
-
-FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
-    DIM total AS LONG, i AS INTEGER
-    FOR i = 0 TO Min%(UBOUND(a), UBOUND(b))
-        total = total + CLNG(a(i)) * b(i)
-    NEXT
-    Dot& = total
-END FUNCTION
-```
-
-```asm
-DOT proc near
-L1_1:
-    mov ax, word ptr P%+14
-    mov dx, ax
-    dec dx
-    mov cx, word ptr Q%+14
-    mov bx, cx
-    dec bx
-    cmp dx, bx
-    jl L1_11
-L1_10:
-    mov dx, bx
-L1_11:
-    test dx, dx
-    js L1_2_1
-L1_2:
-    dec cx                      ; UBOUND(b)
-    dec ax
-    cmp cx, ax
-    jl L1_25
-L1_24:
-    mov cx, ax
-L1_25:
-    push bp                     ; a plain frame, not B$ENRA; near, as --whole-program
-    mov bp, sp                  ; sees every caller. a() is [bp+6], b() [bp+4]
-    sub sp, 2
-    push si
-    push di
-    mov es, word ptr P%+2
-    mov ax, word ptr P%+10
-    mov word ptr [bp-2], ax
-    mov fs, word ptr Q%+2
-    mov di, word ptr Q%+10
-    inc cx
-    xor eax, eax
-    xor bx, bx
-L1_3:
-    mov si, word ptr [bp-2]
-    movsx edx, word ptr es:[bx+si]
-    movsx esi, word ptr fs:[bx+di]
-    imul esi, edx
-    add eax, esi
-    add bx, 2                   ; [flag reuse] the step's flags end the loop at 0
-    dec cx
-    jne L1_3
-L1_4:
-    shld edx, eax, 16           ; the long returns in DX:AX
-    pop di
-    pop si
-    leave
-    ret
-L1_2_1:
-    xor eax, eax
-    shld edx, eax, 16
-    ret
-DOT endp
-```
-
-An array is a descriptor: its segment goes in `es` or `fs` before the loop.
-`UBOUND` is two loads and a decrement: the rank is the declaration's, so the count's
-slot is fixed, and nothing tests that the array is allocated, as BC does not without
-`/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
-where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
-procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
-The frame is a plain one, not the runtime's `B$ENRA` and `B$EXSA`.
-`Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
-lets the inliner take it; by reference it stays a call
-([#114](https://github.com/ali-mosavian/llrm/issues/114)).
-
-All three compile to the same loop: six instructions, one induction variable.
-Loop strength reduction ([#98](https://github.com/ali-mosavian/llrm/issues/98))
-biases each array's base by its byte length, so the counter, running from minus
-that length up to zero, is also the offset of every access, and its flags end the
-loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
-
-## Validate
-
-```sh
-cargo test --release <name>
-uv run --project tools python tools/loops/run.py --quick
-```
-
-The second command runs the loop corpus: one loop program per case, emitted as C, QuickBASIC and Nib and checked
-against an independent oracle and against hand-derived quality bounds. [Testing](docs/working/testing.md) has the
-rest; [debugging](docs/working/debugging.md) finds a miscompile in a running DOS program.
-
-Format with `tools/fmt.sh`.
+The listings are `llrm-cc -O2 -S` output of the function, verbatim; `tests/test_readme.py` holds them to it.
