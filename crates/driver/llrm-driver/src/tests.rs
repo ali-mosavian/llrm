@@ -400,6 +400,22 @@ fn a_128_byte_constant_fill_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores()
     assert!(small.contains("movaps") && !small.contains("rep stos"), "{small}");
 }
 
+/// `x + 1` and `x + 2` of a live 64-bit source were `mov rax, rdi; inc rax` /
+/// `mov rax, rdi; add rax, 2` (6-7 B each); the pin's `convertToThreeAddress`
+/// makes an `ADD64ri` and an `INC64r` of a live source a `lea` (4 B)
+/// (os_locals_between_pushes O2 +27 B).
+#[test]
+fn a_64_bit_add_of_a_live_source_is_a_lea_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(i64, i64, i64)\n\
+                define void @f(i64 %x) {\n  %a = add i64 %x, 1\n  %b = add i64 %x, 2\n  call void @use(i64 %x, i64 %a, i64 %b)\n  call void @use(i64 %x, i64 %x, i64 %x)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("lea rsi, [rbx+1]") && listing.contains("lea rdx, [rbx+2]"), "{listing}");
+    assert!(!listing.contains("add r") && !listing.contains("inc r"), "{listing}");
+}
+
 /// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
 /// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
 /// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
