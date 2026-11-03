@@ -2554,6 +2554,7 @@ fn emit_with<const STACK: bool>(
         }
         let mut repeated = 0;
         for (i, inst) in block.insts.iter().enumerate() {
+            out.place = inst.origin;
             // the rest of a run of one-bit shifts a loop has emitted
             if repeated > 0 {
                 repeated -= 1;
