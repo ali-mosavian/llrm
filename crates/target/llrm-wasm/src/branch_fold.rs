@@ -16,10 +16,10 @@
 //! `HoistCommonCode` moves the instructions two single-predecessor successors
 //! start with into the block that branches to them.
 //!
-//! DEVIATE 1: no tail merging, no `OptimizeBranches` outside these cases, and
-//! not in a function with a personality (try scopes name their blocks). Exit:
-//! the shared branch folder over the neutral machine function (S4), no later
-//! than 2026-11-20; deleting this file is part of that PR.
+//! DEVIATE 1: tail merging is `tail_merge`'s, no `OptimizeBranches` outside
+//! these cases, and not in a function with a personality (try scopes name their
+//! blocks). Exit: the shared branch folder over the neutral machine function
+//! (S4), no later than 2026-11-20; deleting this file is part of that PR.
 //!
 //! # See also
 //! `BranchFolding.cpp`, pin d1106deb71cc: `OptimizeBlock`, `IsBranchOnlyBlock`.
@@ -108,17 +108,17 @@ pub fn forward_branch_only_blocks(f: &mut Function) -> bool {
 /// The explicit branches ending a block, as `TargetInstrInfo::analyzeBranch`
 /// reports them.
 #[derive(Clone)]
-struct Ending {
+pub(crate) struct Ending {
     /// `TBB`: the target of the conditional branch, or of the only branch.
-    taken: Option<usize>,
+    pub(crate) taken: Option<usize>,
     /// `FBB`: the target of the unconditional branch after a conditional one.
-    other: Option<usize>,
+    pub(crate) other: Option<usize>,
     /// The condition, a `BR_IF` or `BR_UNLESS` with its target left out.
-    cond: Option<Inst>,
+    pub(crate) cond: Option<Inst>,
 }
 
 /// `None` when the block ends in a branch table: `analyzeBranch` fails.
-fn ending(
+pub(crate) fn ending(
     f: &Function,
     block: usize,
 ) -> Option<Ending> {
@@ -139,7 +139,7 @@ fn ending(
 }
 
 /// `removeBranch` then `insertBranch`.
-fn set_branches(
+pub(crate) fn set_branches(
     f: &mut Function,
     block: usize,
     taken: Option<usize>,
@@ -168,7 +168,7 @@ fn set_branches(
 }
 
 /// `reverseBranchCondition`.
-fn reversed(cond: &Inst) -> Inst {
+pub(crate) fn reversed(cond: &Inst) -> Inst {
     let mut cond = cond.clone();
     cond.opcode = if cond.opcode == op::BR_IF { op::BR_UNLESS } else { op::BR_IF };
     cond

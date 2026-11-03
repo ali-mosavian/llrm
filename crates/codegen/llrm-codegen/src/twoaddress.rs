@@ -636,8 +636,8 @@ pub fn three_address(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
-        && into.width == 4
-        && base.width == 4
+        && (into.width == 4 || narrow_lea(mode, into.width))
+        && base.width == into.width
         && into.value != base.value
     {
         let offset = if name == "inc" { 1 } else { -1 };
@@ -645,7 +645,7 @@ pub fn three_address(
         made.what = Some(Semantics {
             op: Operation::Address,
             name: Some("lea".into()),
-            dests: vec![Loc::Held(*into)],
+            dests: vec![Loc::Held(Held { width: 4, ..*into })],
             sources: vec![Loc::Mem(Mem {
                 base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
                 offset,
@@ -670,7 +670,10 @@ pub fn three_address(
     let word = width == 2
         && mode == ThreeAddress::AddSubWords
         && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
-    if !(width == 4 || word) || base.width != width || into.value == base.value {
+    // `ADD8ri`, `ADD16ri`, `ADD8rr`, `ADD16rr` (not `SUB8ri`, `SUB16ri`: the
+    // pin's FIXME) through `LEA64_32r`.
+    let narrow = narrow_lea(mode, width) && what.name.as_deref() == Some("add");
+    if !(width == 4 || word || narrow) || base.width != width || into.value == base.value {
         return None;
     }
     let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
@@ -691,6 +694,11 @@ pub fn three_address(
         }
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
+            let value = &match width {
+                1 => i64::from(*value as i8),
+                2 if narrow => i64::from(*value as i16),
+                _ => *value,
+            };
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
             // A word unit step stays `inc`: with the source in an address
             // register the `lea` is three bytes against the INC's one, and
@@ -698,9 +706,9 @@ pub fn three_address(
             if word && step.abs() == 1 {
                 return None;
             }
-            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, width) }
+            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
-        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
+        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
             Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
         }
         _ => return None,
@@ -709,11 +717,21 @@ pub fn three_address(
     made.what = Some(Semantics {
         op: Operation::Address,
         name: Some("lea".into()),
-        dests: vec![Loc::Held(*into)],
+        dests: vec![Loc::Held(if narrow { Held { width: 4, ..*into } } else { *into })],
         sources: vec![Loc::Mem(cell)],
         ..Semantics::new(Operation::Address)
     });
     Some(Arc::new(made))
+}
+
+/// `convertToThreeAddressWithLEA`: a byte or word `add`, `inc` or `dec` is a
+/// `LEA64_32r` of the source read whole, only where registers are 64 bits
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L1228>).
+fn narrow_lea(
+    mode: ThreeAddress,
+    width: u32,
+) -> bool {
+    mode == ThreeAddress::Wide && matches!(width, 1 | 2)
 }
 
 /// Whether the flags `insns[index]` writes are written again, in its block,
@@ -1583,6 +1601,29 @@ mod tests {
     use crate::model::ir::{Held, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// A byte `add` of a constant is a `LEA64_32r` only where registers are 64
+    /// bits (`Wide`): the pin's `convertToThreeAddressWithLEA` returns null on
+    /// a 32-bit target, so the m16 and m32 listings are untouched.
+    #[test]
+    fn test_a_byte_add_is_a_lea_only_at_wide() {
+        let held = |value: u32| Held { value, width: 1 };
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![Loc::Held(held(2))],
+            sources: vec![Loc::Held(held(1)), Loc::Imm(crate::model::ir::Imm { value: 236, width: 1, address: None })],
+            ..Semantics::new(Operation::Binary)
+        };
+        let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
+        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords, ThreeAddress::All] {
+            assert!(three_address(&one, mode).is_none(), "{mode:?}");
+        }
+        let made = three_address(&one, ThreeAddress::Wide).expect("a lea at Wide");
+        let lea = made.what.as_ref().unwrap();
+        assert_eq!(lea.name.as_deref(), Some("lea"));
+        let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
+        assert_eq!(cell.offset, -20, "the byte immediate is signed");
+    }
 
     /// `process_copy` entered every instruction of a block in a std `HashSet`
     /// (SipHash, 409 Ir an insert, 0.86 M of d_faces' 11.7 M in TwoAddress)

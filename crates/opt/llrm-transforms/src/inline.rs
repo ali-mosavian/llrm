@@ -407,6 +407,23 @@ pub fn gcc_work(body: &Function) -> i64 {
     gcc_insns(body) + (LOOP_TRIPS - 1) * looped
 }
 
+/// What a copy of `body` into itself adds (gcc's edge growth,
+/// `want_inline_small_function_p`), in gcc's size units. The estimate is
+/// GPL-3.0-or-later (`llrm-gpl-gcc`, feature `gcc-gpl`); without it the growth
+/// is unbounded, so no bar that asks for it is met and no recursive callee is
+/// copied (DEVIATE REC-2 is inert).
+pub fn recursive_edge_growth(body: &Function) -> i64 {
+    #[cfg(feature = "gcc-gpl")]
+    {
+        llrm_gpl_gcc::recursive_edge_growth(body)
+    }
+    #[cfg(not(feature = "gcc-gpl"))]
+    {
+        let _ = body;
+        i64::MAX
+    }
+}
+
 fn semantic_count(body: &Function) -> i64 {
     body.walk().filter(|&(_, inst)| semantic(body, inst)).count() as i64
 }

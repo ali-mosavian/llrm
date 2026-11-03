@@ -111,6 +111,10 @@ pub struct Out {
     pub segment: Option<llrm_object::FixupKind>,
     /// Each list of ranges' offset in the section of them.
     pub range_offsets: Vec<u32>,
+    /// A line sequence per function, addressed by the function's own symbol,
+    /// instead of one per code section (a target with no symbol that addresses
+    /// a section, such as WebAssembly's function offsets).
+    pub sequence_per_function: bool,
 }
 
 impl Out {
@@ -131,6 +135,7 @@ impl Out {
             line_strings: Strings::default(),
             segment: None,
             range_offsets: Vec::new(),
+            sequence_per_function: false,
         }
     }
 }

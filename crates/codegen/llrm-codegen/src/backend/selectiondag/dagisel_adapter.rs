@@ -548,6 +548,18 @@ impl<'a> DagisAdapter<'a> {
         out
     }
 
+    /// `ReplaceUses` of an `AssertSext` or `AssertZext` by its operand, the
+    /// assertion and what only it read gone.
+    pub fn drop_assertion(
+        &mut self,
+        node: u32,
+    ) {
+        let asserted = SDValue { node, res: 0 };
+        let operand = self.dag.operand(asserted, 0);
+        self.dag.replace_all_uses_with(asserted, operand);
+        self.remove(node);
+    }
+
     fn remove(
         &mut self,
         node: u32,
@@ -1308,7 +1320,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

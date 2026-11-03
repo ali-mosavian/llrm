@@ -1,5 +1,5 @@
 # The m68k C ABI at the pin (M68kCallingConv.td, CC_M68k_C and RetCC_M68k_C): every argument is promoted to a
-# 4-byte stack slot, pushed in order and removed by the caller. A result is in d0 (a pointer in a0).
+# 4-byte stack slot, pushed in order and removed by the caller. A result is in d0, then d1 (a pointer in a0).
 # DEVIATE: the `inreg` (d0, d1), `nest` (a1) and byval arguments, and the Fast convention, are not described.
 default = "c"
 private = "c"
@@ -40,7 +40,7 @@ variadic_float = "double"
 elf = "*"
 
 [c.result]
-1 = ["bd0"]
-2 = ["wd0"]
-4 = ["d0"]
+1 = ["bd0", "bd1"]
+2 = ["wd0", "wd1"]
+4 = ["d0", "d1"]
 address = ["a0"]

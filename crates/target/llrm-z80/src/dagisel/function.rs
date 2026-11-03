@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
+use llrm_codegen::backend::selectiondag::DagConfig;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
@@ -26,6 +27,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_spike_mf::{Variable, VariablePlace};
 
 use super::call::{CALL, RET_GLUE, Z80Calling};
 use super::hooks::Cpu;
@@ -39,11 +41,17 @@ pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
+        soft_float: true,
         jump_tables: false,
         string_instructions: false,
-        // the runtime's own routines (runtime/mos_rt.s), called by the name the
-        // C library gives them
-        libcalls: Some(["memcpy", "memmove", "memset"].map(|name| (name.to_owned(), 0, name.to_owned())).to_vec()),
+        // the runtime's own routines (runtime/z80_rt.s). `memcpy` and `memmove`
+        // take the C library's registers. The compiler's `memset` has the byte
+        // as `i8` (in A) where C's takes an `int`: its own entry, `__memseta`.
+        libcalls: Some(
+            [("memcpy", "__memcpy"), ("memmove", "__memmove"), ("memset", "__memseta")]
+                .map(|(name, symbol)| (name.to_owned(), 0, symbol.to_owned()))
+                .to_vec(),
+        ),
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
@@ -55,6 +63,9 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
+        // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
+        // the symbol's linkage (`isOffsetFoldingLegal`)
+        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::m16().dag },
         ..BuilderTarget::m16()
     }
 }
@@ -91,6 +102,8 @@ pub struct Selection {
     /// input is read on an edge laid out before any block that names it (a
     /// loop's back edge).
     pub widths: HashMap<u32, u32>,
+    /// `-g`: the variables the debug info names and where each is (the `.adb`).
+    pub variables: Vec<Variable>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -140,7 +153,55 @@ pub fn select_function(
     for (reg, parts) in wide {
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths })
+    let variables =
+        variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+}
+
+/// The variables of `function` (after the debug import): parameters in the
+/// register their position arrives in, declared locals in their frame object.
+/// A parameter that does not arrive in a register, and a variable the debug
+/// info cannot spell, are left out.
+fn variable_sites(
+    module: &Module,
+    function: &Function,
+    name: &str,
+    info: &FunctionLoweringInfo,
+    live_ins: &[(RegId, u32)],
+) -> Vec<Variable> {
+    let mut sites = Vec::new();
+    let Some(described) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else {
+        return sites;
+    };
+    for (index, parameter, ty) in &described.parameters {
+        let Some(&(register, _)) = usize::try_from(*index).ok().and_then(|at| live_ins.get(at)) else { continue };
+        sites.push(Variable {
+            name: parameter.clone(),
+            r#type: *ty,
+            expr: Vec::new(),
+            parameter: true,
+            place: VariablePlace::Register(register),
+        });
+    }
+    for record in function.debug_records() {
+        let (llrm_mir::DebugWhat::Declare(Operand::Value(address)), Some(variable)) =
+            (record.what, llrm_mir::debuginfo::read_variable(module, record.variable))
+        else {
+            continue;
+        };
+        let Some(&index) = info.static_allocas.get(&address) else { continue };
+        if variable.scope != name || variable.parameter {
+            continue;
+        }
+        sites.push(Variable {
+            name: variable.name,
+            r#type: variable.r#type,
+            expr: record.expression.and_then(|node| module.expression(node)).unwrap_or_default(),
+            parameter: false,
+            place: VariablePlace::Frame { index: index as i32, offset: variable.offset },
+        });
+    }
+    sites
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`
@@ -184,7 +245,13 @@ fn select_built(
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
+    // the scratch slots the legalizers ask for (a long long result's memory)
+    // are frame objects numbered after the function's
+    built.dag.first_temporary = info.next_stack_object();
     let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    for (size, align) in std::mem::take(&mut built.dag.temporaries) {
+        info.new_stack_object(size, align);
+    }
     // DEVIATE: refused. A `switch` made of several blocks puts one copy list on
     // all its edges, and a phi read on another edge is lost. Reason: the
     // edges leave blocks the builder made. Exit: split the critical edges

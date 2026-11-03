@@ -95,6 +95,7 @@ mod tests {
             definition: Definition::Defined { section: 0, offset },
             size: 0,
             group: None,
+            visibility: Default::default(),
         }
     }
 
@@ -233,6 +234,7 @@ mod tests {
                 blocks: Vec::new(),
                 frame: Vec::new(),
                 all_calls: false,
+                frame_base: None,
                 calls: Vec::new(),
             }],
             ..Info::default()

@@ -280,6 +280,48 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some((value, self.dag.get_token_factor(&chains)))
     }
 
+    /// `LegalizeLoadOps`, extending loads of memory narrower than its store
+    /// size (`i1`): with the action `Promote`, a byte-sized extending load of
+    /// the same kind, and for a sign extension the bit sign-extended in the
+    /// register. The value and the chain it replaces.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L483>
+    fn promote_sub_byte_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let ext = info.ext?;
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(node), info.mem_vt) else { return None };
+        let bits = info.mem_vt.size_in_bits();
+        if bits == 0 || bits % 8 == 0 || bits > 8 || self.tli.load_ext_action(ext, wide, mem) != Action::Promote {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let kind = if ext == super::actions::LoadExt::ZExtLoad {
+            super::actions::LoadExt::ZExtLoad
+        } else {
+            super::actions::LoadExt::ExtLoad
+        };
+        let narrow = MemInfo { mem_vt: EVT::I8, ext: None, ..info };
+        let byte = if vt == EVT::I8 {
+            self.dag.get_load(vt, chain, ptr, narrow)
+        } else {
+            self.dag.get_ext_load(kind, vt, chain, ptr, narrow)
+        };
+        let value = if ext == super::actions::LoadExt::SExtLoad {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            self.dag.get_node(ISD::SignExtendInReg, vt, &[byte, ty])
+        } else {
+            byte
+        };
+        Some((value, SDValue { node: byte.node, res: 1 }))
+    }
+
     /// `LegalizeLoadOps`, extending loads: one the target does not have is an
     /// any-extending load and an extension in the register. The value and
     /// the chain it replaces.
@@ -323,7 +365,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
         }
-        if let Some(result) = self.expand_odd_ext_load(node).or_else(|| self.expand_ext_load(node)) {
+        if let Some(result) = self
+            .expand_odd_ext_load(node)
+            .or_else(|| self.promote_sub_byte_ext_load(node))
+            .or_else(|| self.expand_ext_load(node))
+        {
             self.replace_node(node, result.0);
             self.replace_node(SDValue { node: n, res: 1 }, result.1);
             return Ok(());
@@ -743,6 +789,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
+            ISD::CtLz | ISD::CtLzZeroPoison => self.expand_ctlz(node).map(|result| vec![result]),
+            ISD::CtTz | ISD::CtTzZeroPoison => self.expand_cttz(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             ISD::CtTzZeroPoison | ISD::CtLzZeroPoison => self.expand_zero_poison_count(node).map(|result| vec![result]),
             ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
@@ -920,6 +968,93 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         };
         let top = amount(self.dag, u128::from(len - 8));
         Some(self.dag.get_node(ISD::Srl, vt, &[wide, top]))
+    }
+
+    /// `TargetLowering::expandCTLZ`
+    /// ([L10964][pin]), scalar: the plain count for a zero-poison one, the
+    /// zero-poison count with the zero case selected, or the bits smeared down
+    /// and counted.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp
+    fn expand_ctlz(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        let bits = vt.size_in_bits();
+        let mut op = self.dag.operand(node, 0);
+        if self.dag.opcode(node) == ISD::CtLzZeroPoison && self.tli.is_operation_legal_or_custom(ISD::CtLz, vt) {
+            return Some(self.dag.get_node(ISD::CtLz, vt, &[op]));
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::CtLzZeroPoison, vt) {
+            let count = self.dag.get_node(ISD::CtLzZeroPoison, vt, &[op]);
+            let zero = self.dag.get_constant(0, vt);
+            let flag_vt = self.tli.types.set_cc_result_type(vt);
+            let is_zero = self.dag.get_setcc(flag_vt, op, zero, CondCode::SetEq);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_select(vt, is_zero, width, count));
+        }
+        let mut shift = 1;
+        while shift < bits {
+            let by = self.dag.get_constant(u128::from(shift), EVT::I8);
+            let down = self.dag.get_node(ISD::Srl, vt, &[op, by]);
+            op = self.dag.get_node(ISD::Or, vt, &[op, down]);
+            shift *= 2;
+        }
+        let flipped = self.dag.get_not(op, vt);
+        Some(self.dag.get_node(ISD::CtPop, vt, &[flipped]))
+    }
+
+    /// `TargetLowering::expandCTTZ`, scalar: the plain count for a zero-poison
+    /// one, the zero-poison count with the zero case selected, `nlz(x & -x) ^
+    /// (n - 1)` where only `ctlz` is legal and zero is not a case, else
+    /// `popcount(~x & (x - 1))` (or `n - nlz` of it). DEVIATE SD532: the
+    /// de Bruijn table lookup (for a target with no `ctpop` and no `ctlz`) is
+    /// not translated.
+    fn expand_cttz(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(node);
+        if !vt.is_integer() {
+            return None;
+        }
+        let bits = vt.size_in_bits();
+        let op = self.dag.operand(node, 0);
+        let poison = self.dag.opcode(node) == ISD::CtTzZeroPoison;
+        if poison && self.tli.is_operation_legal_or_custom(ISD::CtTz, vt) {
+            return Some(self.dag.get_node(ISD::CtTz, vt, &[op]));
+        }
+        if self.tli.is_operation_legal_or_custom(ISD::CtTzZeroPoison, vt) {
+            let count = self.dag.get_node(ISD::CtTzZeroPoison, vt, &[op]);
+            let zero = self.dag.get_constant(0, vt);
+            let flag_vt = self.tli.types.set_cc_result_type(vt);
+            let is_zero = self.dag.get_setcc(flag_vt, op, zero, CondCode::SetEq);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_select(vt, is_zero, width, count));
+        }
+        let use_ctlz = self.tli.is_operation_legal(ISD::CtLz, vt) && !self.tli.is_operation_legal(ISD::CtPop, vt);
+        if use_ctlz && poison {
+            let negated = self.dag.get_negative(op, vt);
+            let lowest = self.dag.get_node(ISD::And, vt, &[op, negated]);
+            let count = self.dag.get_node(ISD::CtLzZeroPoison, vt, &[lowest]);
+            let top = self.dag.get_constant(u128::from(bits - 1), vt);
+            return Some(self.dag.get_node(ISD::Xor, vt, &[count, top]));
+        }
+        let flipped = self.dag.get_not(op, vt);
+        let one = self.dag.get_constant(1, vt);
+        let below = self.dag.get_node(ISD::Sub, vt, &[op, one]);
+        let mask = self.dag.get_node(ISD::And, vt, &[flipped, below]);
+        if use_ctlz {
+            let count = self.dag.get_node(ISD::CtLz, vt, &[mask]);
+            let width = self.dag.get_constant(u128::from(bits), vt);
+            return Some(self.dag.get_node(ISD::Sub, vt, &[width, count]));
+        }
+        Some(self.dag.get_node(ISD::CtPop, vt, &[mask]))
     }
 
     /// `TargetLowering::expandBITREVERSE`: a byte swap, then the nibbles, the

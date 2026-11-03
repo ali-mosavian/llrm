@@ -4,7 +4,7 @@
 //!
 //! DEVIATE SD206: integer types the target holds in a register only (no
 //! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
-//! divides, no widened `MULHU` of an `i32`), no `DIVREM` merging, and
+//! divides), no `DIVREM` merging, and
 //! `BuildSDIVPow2` is the generic shift sequence: the pin's `cmov` form for a
 //! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is the
 //! configured `int_div_cheap` (the pin's `minsize`; the `-Os` rule of the
@@ -130,6 +130,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
             return Some(self.dag.get_node(ISD::UDiv, vt, &[n0, n1]));
+        }
+        if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
         }
         self.visit_sdiv_like(n0, n1, node)
     }
@@ -377,8 +382,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         None
     }
 
-    /// `TargetLowering::BuildUDIV`, for a type the target holds. The pin's
-    /// widened `i32` multiply needs a legal `i64`, which this target has not.
+    /// `TargetLowering::BuildUDIV`, for a type the target holds.
     fn build_udiv(
         &mut self,
         n0: SDValue,
@@ -397,7 +401,30 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let known = super::known_bits::known_bits(self.dag, n0);
         let known_zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
         let leading = known_zeros.min(bits - (128 - d.leading_zeros()));
-        let found = unsigned_magic(d, bits, leading, true, false);
+        // [L7031][pin]: an `i32` divisor with no cheap magic is widened
+        // to `i64` when the wide high multiply exists. The even-divisor rewrite
+        // is kept unless the zero extension is free.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L7031
+        let widened = self.hooks.widened_unsigned_divide_type(vt);
+        let wide = widened.unwrap_or(vt);
+        let has_wide_mulhu = widened.is_some() && self.can_do(ISD::MulHU, wide);
+        let has_wide_lohi = widened.is_some() && self.can_do(ISD::UMulLoHi, wide);
+        let allow_widen = has_wide_mulhu || has_wide_lohi;
+        let allow_even = !(allow_widen && self.hooks.zero_extend_i32_to_i64_free());
+        let found = unsigned_magic(d, bits, leading, allow_even, allow_widen);
+        if found.widen {
+            let extended = self.dag.get_node(ISD::ZeroExtend, wide, &[n0]);
+            let magic = self.dag.get_constant(found.magic, wide);
+            let high = if has_wide_mulhu {
+                self.dag.get_node(ISD::MulHU, wide, &[extended, magic])
+            } else {
+                let both = self.dag.get_node_multi(ISD::UMulLoHi, &[wide, wide], &[extended, magic]);
+                SDValue { node: both.node, res: 1 }
+            };
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[high]));
+        }
         let mut quotient = n0;
         if found.pre_shift != 0 {
             let by = self.shift_amount(vt, found.pre_shift);
@@ -434,6 +461,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if signed {
             if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
                 return Some(self.dag.get_node(ISD::URem, vt, &[n0, n1]));
+            }
+            if let Some(narrow) = self.dag.config().narrow_divrem
+                && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+            {
+                return Some(narrowed);
             }
         } else if self.dag.constant(n1).is_some_and(|c| c.is_power_of_two()) {
             let ones = self.dag.get_all_ones_constant(vt);

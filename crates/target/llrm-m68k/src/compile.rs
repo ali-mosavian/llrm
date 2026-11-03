@@ -25,6 +25,9 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// The source place of the instructions that follow (`.loc`): printed only
+    /// for `-g`.
+    Loc(crate::expand::Row),
 }
 
 /// What the compiler may do beyond the pin's output.
@@ -47,18 +50,35 @@ pub struct Options {
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// Print the source places (`.loc`) of the instructions (`-g`).
+    pub debug: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
-    pub const PINNED: Options =
-        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, short: false };
+    pub const PINNED: Options = Options {
+        mid_end: false,
+        size: false,
+        source_order: false,
+        indexed: false,
+        push_frame: false,
+        short: false,
+        debug: false,
+    };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, short: true }
+        Options {
+            mid_end: true,
+            size: false,
+            source_order: false,
+            indexed: true,
+            push_frame: true,
+            short: true,
+            debug: false,
+        }
     }
 }
 
@@ -115,6 +135,7 @@ pub fn items_with(
     };
     let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
     if options.short {
+        crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
     }
@@ -124,10 +145,21 @@ pub fn items_with(
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
     let mut out = vec![Item::Label(name.to_owned())];
+    // The line the function is declared at starts its rows (the prologue is
+    // from no instruction).
+    if let Some(line) = module.subprogram_line(module.global(id).function().ok_or("not a function")?) {
+        out.push(Item::Loc(crate::expand::Row {
+            place: llrm_codegen::model::lir::SrcLoc::line(line),
+            block_top: false,
+            prologue_end: false,
+            epilogue_begin: false,
+        }));
+    }
     for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
+            Line::Loc(place) => Item::Loc(place),
         });
     }
     Ok(out)
@@ -183,11 +215,29 @@ pub fn text_with(
     options: Options,
 ) -> Result<String, String> {
     let mut out = String::new();
+    let mut previous = None;
     for item in items_with(module, name, cpu, options)? {
         match item {
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Loc(row) if options.debug => {
+                // A row on the line the one before it was on does not start a
+                // statement.
+                let flags = format!(
+                    "{}{}{}",
+                    if row.prologue_end { " prologue_end" } else { "" },
+                    if row.epilogue_begin { " epilogue_begin" } else { "" },
+                    if row.place.line == 0 || (previous == Some(row.place.line) && !row.block_top) {
+                        " is_stmt 0"
+                    } else {
+                        ""
+                    },
+                );
+                previous = (row.place.line != 0).then_some(row.place.line);
+                out.push_str(&format!("\t.loc\t0 {} {}{flags}\n", row.place.line, row.place.column));
+            }
+            Item::Loc(_) => {}
         }
     }
     Ok(out)
