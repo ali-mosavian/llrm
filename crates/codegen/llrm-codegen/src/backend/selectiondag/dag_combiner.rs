@@ -260,6 +260,12 @@ pub trait CombineHooks {
         false
     }
 
+    /// `isZExtFree(i32, i64)`, which keeps the even-divisor rewrite of
+    /// `BuildUDIV` out of the way of the widened multiply (x86-64 and AArch64).
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
+        false
+    }
+
     /// `BuildSDIV`/`BuildUDIV`'s "a legal multiply of the wide type" for any
     /// width, not only `i16` and below. DEVIATE: off by default, as above.
     /// Exit: x86 judged.

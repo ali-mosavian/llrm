@@ -125,6 +125,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
+        true
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }
