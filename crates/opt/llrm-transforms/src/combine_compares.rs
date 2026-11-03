@@ -356,7 +356,7 @@ fn fold_gep_icmp(
     let index_ty = c.index_type(lhs_gep.ty);
     if base.ptr == Some(rhs) && can_fold(base.lhs_flags) && !c.is_expensive(&base) {
         // ((gep Ptr, OFFSET) cmp Ptr) ---> (OFFSET cmp 0)
-        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
+        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
         let zero = c.int(c.type_of(offset), 0);
         return Some(new_icmp_of(c, base.lhs_flags, offset, zero));
     }
@@ -415,8 +415,8 @@ fn fold_gep_icmp(
             }
         }
         if fold {
-            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
-            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty);
+            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
+            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty, true);
             return Some(new_icmp_of(c, base.lhs_flags.and(base.rhs_flags), l, r));
         }
     }

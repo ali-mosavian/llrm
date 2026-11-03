@@ -208,7 +208,8 @@ impl Writer<'_> {
                     | Location::Constant(_)
                     | Location::Offset(..)
                     | Location::Expression { .. }
-                    | Location::EntryValue(_) => {}
+                    | Location::EntryValue(_)
+                    | Location::WasmLocal(_) => {}
                 }
             }
         }

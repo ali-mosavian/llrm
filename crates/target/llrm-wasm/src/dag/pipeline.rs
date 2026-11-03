@@ -30,6 +30,7 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::live_out;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue, SelectionDAG, TargetLowering};
 use llrm_dagisel::dag::{Dag, SDValue as PinValue};
@@ -138,6 +139,14 @@ impl CombineHooks for WasmCombines {
     }
 
     fn rebuild_brcond_condition(&self) -> bool {
+        true
+    }
+
+    fn merge_stores_after_legalization(
+        &self,
+        _mem: EVT,
+    ) -> bool {
+        // The pin's default; EVT holds no vectors yet.
         true
     }
 

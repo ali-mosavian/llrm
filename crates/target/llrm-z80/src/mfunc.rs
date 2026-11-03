@@ -69,6 +69,7 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     match u16::try_from(id).ok()? {
         pin::ACCRegClassID => Some(crate::reg::A),
         pin::HLRRegClassID => Some(crate::reg::HL),
+        pin::IYRRegClassID => Some(crate::reg::IY),
         _ => None,
     }
 }
@@ -225,7 +226,7 @@ impl Emitter<'_> {
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 // C symbols take SDCC's underscore; the runtime's own routines
                 // are named as they are
-                Operand::Symbol(format!("_{name}"), offset)
+                Operand::Symbol(crate::data::symbol(name), offset)
             }
             (ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, NodeData::Symbol(id)) => {
                 let name = self.dag.symbol_names.get(id as usize).ok_or("an external symbol with no name")?;
@@ -270,6 +271,14 @@ impl Emitter<'_> {
                 if let Some(&register) = self.arrives_in.get(&src) {
                     self.arrives_in.insert(dst, register);
                 }
+                into.push(Inst::copy(dst, src));
+            }
+            // `TargetOpcode::COPY`: what a `freeze` is selected to
+            // (`Select_FREEZE`)
+            ISD::Machine(20) => {
+                let src = self.used(n.ops[0], "COPY")?;
+                let dst = self.new_reg(Class::of_type(n.values[0]));
+                self.values.insert((node, 0), dst);
                 into.push(Inst::copy(dst, src));
             }
             ISD::Machine(code) => {
@@ -621,6 +630,7 @@ pub fn emit(
     // the frame objects the selector made; the allocas came first, at their
     // index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
+    let mut place_numbers = HashMap::new();
     let width_class = |bits: u32| if bits > 8 { Class::Gr16 } else { Class::Gr8 };
     for one in &selection.blocks {
         emitter.dag = &one.dag;
@@ -645,11 +655,33 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers
+                        .entry(place)
+                        .or_insert_with(
+                            || {
+                                places.push(place);
+                                places.len()
+                            },
+                        );
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
-        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+        let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
+        block.place_unlocated();
+        emitter.function.blocks.push(block);
     }
     phis(&mut emitter, selection, width_class)?;
     Ok(emitter.function)

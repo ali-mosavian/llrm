@@ -185,6 +185,7 @@ fn module(
                 | Location::Offset(..)
                 | Location::Expression { .. }
                 | Location::EntryValue(_)
+                | Location::WasmLocal(_)
                 | Location::Pieces(_)
                 | Location::Relative { .. } => {}
             }
@@ -346,6 +347,7 @@ mod tests {
             blocks: Vec::new(),
             frame: Vec::new(),
             all_calls: false,
+            frame_base: None,
             calls: Vec::new(),
         };
         let info = Info {
@@ -371,6 +373,7 @@ mod tests {
                     definition: Definition::Defined { section: 0, offset: 0 },
                     size: 0,
                     group: None,
+                    visibility: Default::default(),
                 }],
                 omf_groups: Vec::new(),
                 omf_comdat: Vec::new(),

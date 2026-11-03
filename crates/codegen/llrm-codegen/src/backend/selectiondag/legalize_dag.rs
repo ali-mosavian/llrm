@@ -280,6 +280,48 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some((value, self.dag.get_token_factor(&chains)))
     }
 
+    /// `LegalizeLoadOps`, extending loads of memory narrower than its store
+    /// size (`i1`): with the action `Promote`, a byte-sized extending load of
+    /// the same kind, and for a sign extension the bit sign-extended in the
+    /// register. The value and the chain it replaces.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp#L483>
+    fn promote_sub_byte_ext_load(
+        &mut self,
+        node: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.dag.opcode(node) != ISD::Load {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        let ext = info.ext?;
+        let (EVT::Simple(wide), EVT::Simple(mem)) = (self.dag.value_type(node), info.mem_vt) else { return None };
+        let bits = info.mem_vt.size_in_bits();
+        if bits == 0 || bits % 8 == 0 || bits > 8 || self.tli.load_ext_action(ext, wide, mem) != Action::Promote {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let kind = if ext == super::actions::LoadExt::ZExtLoad {
+            super::actions::LoadExt::ZExtLoad
+        } else {
+            super::actions::LoadExt::ExtLoad
+        };
+        let narrow = MemInfo { mem_vt: EVT::I8, ext: None, ..info };
+        let byte = if vt == EVT::I8 {
+            self.dag.get_load(vt, chain, ptr, narrow)
+        } else {
+            self.dag.get_ext_load(kind, vt, chain, ptr, narrow)
+        };
+        let value = if ext == super::actions::LoadExt::SExtLoad {
+            let ty = self.dag.get_value_type_node(info.mem_vt);
+            self.dag.get_node(ISD::SignExtendInReg, vt, &[byte, ty])
+        } else {
+            byte
+        };
+        Some((value, SDValue { node: byte.node, res: 1 }))
+    }
+
     /// `LegalizeLoadOps`, extending loads: one the target does not have is an
     /// any-extending load and an extension in the register. The value and
     /// the chain it replaces.
@@ -323,7 +365,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
         }
-        if let Some(result) = self.expand_odd_ext_load(node).or_else(|| self.expand_ext_load(node)) {
+        if let Some(result) = self
+            .expand_odd_ext_load(node)
+            .or_else(|| self.promote_sub_byte_ext_load(node))
+            .or_else(|| self.expand_ext_load(node))
+        {
             self.replace_node(node, result.0);
             self.replace_node(SDValue { node: n, res: 1 }, result.1);
             return Ok(());

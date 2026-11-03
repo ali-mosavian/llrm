@@ -95,12 +95,52 @@ pub fn assembly(
     cpu: Cpu,
     level: Level,
 ) -> Result<String, String> {
+    assembly_with_debug(text, cpu, level, false)
+}
+
+/// [`assembly`], with each instruction's source place (`.loc`) where `debug`.
+pub fn assembly_with_debug(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    debug: bool,
+) -> Result<String, String> {
+    let dump = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
+    assembly_with(text, cpu, level, debug, dump.as_deref())
+}
+
+/// [`assembly`], writing the mid-end's stages to `dump` (`N/NNN-stage.ll`, as
+/// every other target's `--dump DIR` and `LLRM_MIR_STAGES` do).
+pub fn assembly_dumping(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    dump: Option<&std::path::Path>,
+) -> Result<String, String> {
+    assembly_with(text, cpu, level, false, dump)
+}
+
+/// [`assembly`] with the debug lines and the stage dump chosen.
+pub fn assembly_with(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    debug: bool,
+    dump: Option<&std::path::Path>,
+) -> Result<String, String> {
     let mut program = program(text)?;
     let options = MidEnd { library: Vec::new(), ..level.mid_end() };
-    llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
+    if let Some(dump) = dump {
+        std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
+    }
+    let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
+    llrm_transforms::pipeline::applied(&mut program, &applied)?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
+    // expansion
+    program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
     let module = &program.modules[0];
-    let backend = Options { size: matches!(level, Level::Os | Level::Oz), ..Options::default() };
+    let backend = Options { size: matches!(level, Level::Os | Level::Oz), debug, ..Options::default() };
     let mut out = String::new();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {

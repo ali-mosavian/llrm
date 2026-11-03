@@ -33,7 +33,15 @@ K = [
     ("bsearch8", U8, [("const " + U8 + "*", "tab"), (U8, "8"), (U8, "17")], 5),
     ("sum16", U16, [("const " + U8 + "*", "buf"), (U8, "16")], 80),
     ("schr", U8, [("const char*", "str"), (U8, "111")], 4),
+    ("lz4", U16, [("const " + U8 + "*", "lz"), (U8 + "*", "lzout"), (U16, "634")], 634),
+    ("lz4c", U16, [("const " + U8 + "*", "lz"), (U8 + "*", "lzout"), (U16, "634")], 52785),
+    ("xs8", U8, [(U8, "0xA5"), (U8, "5")], 107),
+    ("minmax", U8, [("const " + U8 + "*", "buf"), (U8, "16")], 8),
+    ("fletcher", U16, [("const " + U8 + "*", "buf"), (U8, "16")], 15952),
+    ("hash16", U16, [("const char*", "str")], 51393),
+    ("dotx", U8, [("const " + U8 + "*", "buf"), ("const " + U8 + "*", "tab"), (U8, "8")], 101),
 ]
+ONLY = os.environ.get("ONLY", "").split(",") if os.environ.get("ONLY") else None
 
 VARIANTS = {
     "size": ["--opt-code-size"],
@@ -61,11 +69,15 @@ CRT0 = """\t.module crt0
 DATA = """\t.module data
 \t.area _DABS (ABS)
 \t.org 0x9000
-\t.globl _buf, _str, _tab
+\t.globl _buf, _str, _tab, _lz, _lzout
 _buf:\t.db 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3
 _str:\t.ascii "hello world"
 \t.db 0,0,0,0,0
 _tab:\t.db 2,5,8,11,14,17,20,23
+\t.org 0x9100
+_lz:\t.db 48,97,98,99,3,0,17,100,2,0,255,5,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,7,0,255,26,63,120,121,122,40,0,0,242,255,0,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,113,1,0,48,101,110,100
+\t.org 0x9300
+_lzout:
 """
 
 CODE_AREAS = {"_CODE", "_HOME", "_GSINIT", "_GSFINAL", "_INITIALIZER"}
@@ -111,7 +123,7 @@ def run(ihx, cwd, dump):
 
 def driver(name, ret, args):
     protos = ", ".join(t for t, _ in args) or "void"
-    pre = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[];\n"
+    pre = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[]; extern unsigned char lz[]; extern unsigned char lzout[];\n"
     pre += f"extern {ret} {name}({protos});\n__at(0x{R:x}) volatile {ret} r;\n"
     call = f"r = {name}({', '.join(a for _, a in args)});"
     return pre + "void main(void) {\n#ifndef EMPTY\n  " + call + "\n#endif\n}\n"
@@ -127,6 +139,8 @@ def main():
     uv = sh(["ucsim_z80", "-v"], w).stdout.strip().splitlines()[0]
     rows, bad = {}, []
     for name, ret, args, want in K:
+        if ONLY and name not in ONLY:
+            continue
         open(f"{w}/d.c", "w").write(driver(name, ret, args))
         sh(["sdcc", *BASE, "-c", "-DEMPTY", "d.c", "-o", "e.rel"], w)
         sh(["sdcc", *BASE, "-c", "d.c", "-o", "d.rel"], w)
@@ -150,8 +164,10 @@ def main():
             rows[(name, vn)] = (bytes_, t - base_t, i - base_i)
     # Instrument guard: rows counted by hand from SDCC's asm and the Zilog T-state table.
     # zero = call 17 + xor 4 + ret 10 + ld (nn),a 13; max8(3,9) = 7+7+17+4+4+4+12+4+10+13.
-    assert rows[("zero", "size")] == (2, 44, 4), rows[("zero", "size")]
-    assert rows[("max8", "size")][1:] == (82, 10), rows[("max8", "size")]
+    if ("zero", "size") in rows:
+        assert rows[("zero", "size")] == (2, 44, 4), rows[("zero", "size")]
+    if ("max8", "size") in rows:
+        assert rows[("max8", "size")][1:] == (82, 10), rows[("max8", "size")]
     with open(OUT, "w") as f:
         f.write(f"# SDCC on the 6502 bench kernels (Z80)\n\n{ver}\n{uv} (Z80), sz80\n\n")
         f.write("Cost = run with the call minus run without it (argument set-up, call, return and the result store included). "
@@ -159,6 +175,8 @@ def main():
                 "(exact without breakpoints, checked on 10 NOPs + HALT).\n\n")
         f.write("| kernel | " + " | ".join(f"{v} B / T / insn" for v in VARIANTS) + " |\n|---|" + "---|" * len(VARIANTS) + "\n")
         for name, *_ in K:
+            if ONLY and name not in ONLY:
+                continue
             cells = []
             for vn in VARIANTS:
                 r = rows.get((name, vn))

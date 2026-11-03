@@ -50,14 +50,17 @@ impl Level {
 
     fn mid_end(self) -> llrm_transforms::pipeline::Options {
         use llrm_transforms::pipeline::Options as MidEnd;
-        match self {
+        // `SelectionDAGBuilder::visitSwitch` lowers the switches (`br_table`);
+        // the mid-end's `switchlower` would leave isel a compare tree.
+        let options = match self {
             Self::O0 => MidEnd::none(),
             Self::O1 => MidEnd::basic(),
             Self::O2 => MidEnd::default(),
             Self::O3 => MidEnd::speed(),
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
-        }
+        };
+        MidEnd { lower_switches: false, ..options }
     }
 }
 

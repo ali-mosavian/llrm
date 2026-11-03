@@ -113,6 +113,18 @@ pub trait CombineHooks {
         false
     }
 
+    /// `mergeStoresAfterLegalization`: stores of `mem` are also merged once
+    /// types are legal, to catch the stores legalization made (a promoted
+    /// `i16` store is a truncating `i32` one). The pin's default is true and
+    /// x86's is `!mem.is_vector()`. DEVIATE: off by default, as above. Exit:
+    /// x86 judged.
+    fn merge_stores_after_legalization(
+        &self,
+        _mem: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its
     /// load, and puts the freeze back on the narrowed load. Default false
     /// until x86 is judged.
@@ -123,6 +135,19 @@ pub trait CombineHooks {
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
     /// Default false until x86 is judged.
     fn fold_mul_of_add_with_constant(&self) -> bool {
+        false
+    }
+
+    /// `visitMUL`'s `(mul x, c)` for a `c` that is `2^n +- 1` (times a power
+    /// of two) as shifts and an add or subtract, where the target says the
+    /// pieces are cheaper than the multiply (`decomposeMulByConstant`,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L2633>).
+    /// The pin's default is false.
+    fn decompose_mul_by_constant(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> bool {
         false
     }
 
@@ -188,6 +213,18 @@ pub trait CombineHooks {
         _store: SDValue,
     ) -> Option<SDValue> {
         None
+    }
+
+    /// DEVIATE LS1 (owner m16, exit 2026-11-17): a plain `i32` load every use
+    /// of which is a word half (`trunc i16`, or `trunc i16 (srl 16)`) is
+    /// two `i16` loads. The pin's `ReduceLoadWidth`
+    /// ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095))
+    /// narrows a load only when nothing else reads it, so the pin keeps
+    /// one `mov eax,[m]` and a `shld`. m16 only: its halves are the registers
+    /// a `long` is returned and passed in (DX:AX), and a 16-bit register file
+    /// has no dword half to extract for free. Default off.
+    fn split_dword_loads(&self) -> bool {
+        false
     }
 
     /// DEVIATE PAIR1: whether the after-legalize combine ends with a sweep that
@@ -267,6 +304,21 @@ pub trait CombineHooks {
         _base_offs: i64,
         _scale: i64,
     ) -> bool {
+        false
+    }
+
+    /// The type `BuildUDIV` widens `vt` to for an uncooperative divisor
+    /// ([L7031]: `i32` to `i64`), or `None` where the target does not.
+    fn widened_unsigned_divide_type(
+        &self,
+        _vt: EVT,
+    ) -> Option<EVT> {
+        None
+    }
+
+    /// `isZExtFree(i32, i64)`, which keeps the even-divisor rewrite of
+    /// `BuildUDIV` out of the way of the widened multiply (x86-64 and AArch64).
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
         false
     }
 
@@ -2600,6 +2652,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
+        // `(mul x, 2^n +- 1)` as `(add/sub (shl x, n), x)`, and with a trailing
+        // power of two as a shift of both ([pin][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024
+        if let (Some(c), false) = (c1, opaque) {
+            if self.hooks.decompose_mul_by_constant(vt, c) {
+                if let Some(decomposed) = self.decompose_mul(n0, vt, c) {
+                    return Some(decomposed);
+                }
+            }
+        }
         // `(mul (shl x, c1), c2)` is `(mul x, c2 << c1)`.
         if self.dag.opcode(n0) == ISD::Shl {
             let (x, c1_shift) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
@@ -2622,6 +2686,44 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
+    /// k`, or `None` for any other constant.
+    fn decompose_mul(
+        &mut self,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> Option<SDValue> {
+        let width = vt.size_in_bits();
+        let ones = super::fold::mask(width);
+        let negative = c >> (width - 1) & 1 == 1;
+        let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
+        // the constant `2` is `2^0 + 1`
+        let zeros = if magnitude == 2 { 0 } else { magnitude.trailing_zeros() };
+        magnitude >>= zeros;
+        let (add, bits) = if (magnitude - 1).is_power_of_two() {
+            (true, magnitude - 1)
+        } else if (magnitude + 1).is_power_of_two() {
+            (false, magnitude + 1)
+        } else {
+            return None;
+        };
+        let amount = bits.trailing_zeros() + zeros;
+        if amount >= width {
+            return None;
+        }
+        let high_amount = self.shift_amount(vt, amount);
+        let high = self.dag.get_node(ISD::Shl, vt, &[x, high_amount]);
+        let low = if zeros == 0 {
+            x
+        } else {
+            let low_amount = self.shift_amount(vt, zeros);
+            self.dag.get_node(ISD::Shl, vt, &[x, low_amount])
+        };
+        let result = self.dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+        Some(if negative { self.dag.get_negative(result, vt) } else { result })
     }
 
     /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or
