@@ -42,7 +42,7 @@ _main:
 '''
 LIBS = ('sf64', 'int64')
 def compile_libs(opt):
-    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', '-Iinclude', f'src/{f}.c', '-o', f'{T}/{opt}_{f}.s')
+    for f in LIBS: sh(CC, '--target=6502-sim65', f'-{opt}', '-S', '-DSF_INTABI', *([os.environ['SF_EXTRA']] if os.environ.get('SF_EXTRA') else []), '-Iinclude', f'src/{f}.c', '-o', f'{T}/{opt}_{f}.s')
 
 def strip_exports(path):  # llrm-cc exports statics, which collide across objects
     s = open(path).read()
@@ -93,6 +93,8 @@ def ours(op, opt):
     for f in LIBS:
         p = f'{d}/r/{opt}_{f}.s'; strip_exports(p)
         sh('ca65', '-t', 'sim6502', '-U', p, '-o', p[:-2] + '.o'); objs.append(p[:-2] + '.o')
+    for a in os.environ.get('SF_ASM', '').split():  # extra hand-written library sources (e.g. src/6502/di64.s), linked into the library build only
+        r_ = sh('ca65', '-t', 'sim6502', '-I', f'{here}/../../src/6502', a, '-o', f'{d}/{os.path.basename(a)}.o'); assert r_.returncode == 0, r_.stderr; objs.append(f'{d}/{os.path.basename(a)}.o')
     open(f'{d}/stub.s', 'w').write('rc2 = 130\n' + ''.join('rc%d = %d\n' % (i, 128 + i) for i in range(3, 8)) + f'.export {SYM[op]}\n{SYM[op]}:\n lda #0\n ldx #0\n' + ''.join(f' sta rc{i}\n' for i in range(2, 8)) + ' rts\n')
     bss = sum(int(m.group(1)) for o in objs for m in [re.search(r'BSS:\s+(\d+)', sh('od65', '--dump-segsize', o).stdout)] if m)
     if bss: open(f'{d}/stub.s', 'a').write(f'.segment "BSS"\n .res {bss}\n')  # same BSS as the library build: crt0's zerobss loop is not the operation

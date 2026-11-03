@@ -14,7 +14,7 @@ MOS_RT=${MOS_RT:?set MOS_RT to the mos_rt.s runtime}
 for g in gen_vectors64 gen_vectors64_edge; do cc -O2 -ffp-contract=off -DEXT tests/$g.c -o $T/$g; done
 driver() { $LLRM_CC --target=6502-sim65 -O2 -S -DSF_INTABI -DSHOW=$SHOW -Iinclude -I$T tests/sim65_main64.c -o $T/main.s; }
 LIBS="sf64 sf32_conv64 sf32_conv sf32 int64"
-for f in $LIBS; do $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI -Iinclude src/$f.c -o $T/$f.s; done
+for f in $LIBS; do $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI ${SF_EXTRA:+"$SF_EXTRA"} -Iinclude src/$f.c -o $T/$f.s; done
 # ld65 links whole objects: keep only what the driver reaches (int64.c would bring its divide for a shift).
 $T/gen_vectors64 1 > $T/vectors64.h; driver
 mkdir $T/r
