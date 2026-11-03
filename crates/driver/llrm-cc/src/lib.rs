@@ -285,6 +285,8 @@ const LLC_FLAGS: &[&str] = &[
     "-ffloat-store",
     "-fverify-ir",
     "-fno-float-store",
+    "-ffunction-sections",
+    "-fno-function-sections",
 ];
 const LLC_PREFIXES: &[&str] =
     &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
