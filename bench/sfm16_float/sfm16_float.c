@@ -15,6 +15,14 @@ typedef unsigned char sfu8; typedef signed char sfi8; typedef short sfi16; typed
 #define UINT32_MAX 4294967295ul
 #ifdef __SOFT_LIB
 #define SF_INTABI 1
+/* The x86 m16 (386+, no x87) configuration: a widening 32x32 multiply, Newton division, sf32_pack's common case inlined.
+ * Each beats or ties compiler-rt per op on clocks (tests/x86_m16_kernels.sh); on the default 16x16 partial products the Newton division loses. */
+#ifndef SF_X86_M16_H
+#define SF_X86_M16_H
+#define SF_MUL32X32(a, b, h, l) do { sfu64 p_ = (sfu64)(a) * (b); *(h) = (sfu32)(p_ >> 32); *(l) = (sfu32)p_; } while (0)
+#define SF_DIV_NEWTON 1
+#define SF_PACK_INLINE 1
+#endif
 /* Soft-float runtime. Every entry point carries its canonical compiler-rt/libgcc name
  * (`__addsf3`, ...); SF_NAME(n) is `__n` in the runtime and `sfb_n` in the host test. */
 #ifndef SOFTFLOAT_H
@@ -123,6 +131,22 @@ static inline void sf_mul24x24_loop(sfu32 a, sfu32 b, sfu32 *hi, sfu32 *lo)
 }
 
 #endif
+
+#ifdef SF_PACK_INLINE
+/* sf32_pack for 1 <= e <= 254 (no overflow, no denormal) in the caller: saves a call and the callee's saved registers on the common path. */
+static inline sf32 pack_near(sfu32 sign, int e, sfu32 m)
+{
+    if ((unsigned)(e - 1) < 254u) {
+        sfu32 r = m & 7;
+        m >>= 3;
+        if (r > 4 || (r == 4 && (m & 1))) m++;
+        return sign + ((sfu32)(e - 1) << 23) + m;
+    }
+    return sf32_pack(sign, e, m);
+}
+#else
+#define pack_near sf32_pack
+#endif
 /* IEEE-754 binary32, round to nearest even, denormals, inf and NaN.
  * Working form: 27-bit mantissa (implicit one at bit 26, three guard bits). */
 
@@ -170,7 +194,7 @@ static sf32 add_bits(sf32 a, sf32 b)
         m = ma + mb;
         if (m & (UINT32_C(1) << 27)) { m = sf_shr_sticky32(m, 1); ea++; }
     }
-    return sf32_pack(sign, ea, m);
+    return pack_near(sign, ea, m);
 }
 
 static sf32 sub_bits(sf32 a, sf32 b) { return add_bits(a, b ^ SIGN); }
@@ -196,10 +220,10 @@ static sf32 mul_bits(sf32 a, sf32 b)
     sf_mul32x32(ma, mb, &hi, &lo);
 #endif
     /* The product has its top bit at 47 or 46; keep 27 bits and fold the rest. */
-    int e = ea + eb - 127, sh = 20;
-    if (hi >> 15) { sh = 21; e++; }
-    sfu32 m = (hi << (32 - sh)) | (lo >> sh) | ((lo << (32 - sh)) != 0);
-    return sf32_pack(sign, e, m);
+    int e = ea + eb - 126;
+    if (!(hi >> 15)) { e--; hi = (hi << 1) | (lo >> 31); lo <<= 1; }
+    sfu32 m = (hi << 11) | (lo >> 21) | ((lo << 11) != 0);
+    return pack_near(sign, e, m);
 }
 
 static sf32 div_bits(sf32 a, sf32 b)
@@ -227,12 +251,13 @@ static sf32 div_bits(sf32 a, sf32 b)
      * call: with a widening SF_MUL32X32, x86 m16 400 divs 404k -> 277k clocks, x86 m32 through llrm-cc 280k -> 222k, but gcc 191k -> 223k
      * and with the default 16x16 partials m16 563k: an integrator opts in. */
     sfu32 hi, lo, mb8 = mb << 8, x = 0x7504F333u - mb8;
-    for (int i = 0; i < 3; i++) {
-        sf_mul32x32(x, mb8, &hi, &lo);
-        sfu32 corr = 0u - hi;
-        sf_mul32x32(x, corr, &hi, &lo);
-        x = (hi << 1) | (lo >> 31);
-    }
+#define NEWTON_STEP() do { \
+        sf_mul32x32(x, mb8, &hi, &lo); \
+        sfu32 corr = 0u - hi; \
+        sf_mul32x32(x, corr, &hi, &lo); \
+        x = (hi << 1) | (lo >> 31); \
+    } while (0)
+    NEWTON_STEP(); NEWTON_STEP(); NEWTON_STEP();
     if (x < 0x80000000u) x = 0xFFFFFFFFu;
     sf_mul32x32(ma << 8, x, &hi, &lo);
     q = hi >> 4;
@@ -253,7 +278,7 @@ static sf32 div_bits(sf32 a, sf32 b)
 #endif
     int e = ea - eb + 126;
     if (q >> 27) { q = (q >> 1) | (q & 1); e++; }
-    return sf32_pack(sign, e, q | inexact);
+    return pack_near(sign, e, q | inexact);
 }
 
 static int cmp_bits(sf32 a, sf32 b, int unordered)
@@ -302,7 +327,7 @@ static sf32 from_mag(sfu32 sign, sfu32 x)
     if (!x) return 0;
     int n = 31 - sf_clz32(x);
     sfu32 m = n > 26 ? sf_shr_sticky32(x, n - 26) : x << (26 - n);
-    return sf32_pack(sign, n + 127, m);
+    return pack_near(sign, n + 127, m);
 }
 
 static sf32 from_u32_bits(sfu32 x) { return from_mag(0, x); }
@@ -321,11 +346,15 @@ static sfu32 magnitude(sf32 a, int *big)
 
 static sfi32 to_i32_bits(sf32 a)
 {
-    int big;
-    sfu32 m = magnitude(a, &big);
-    if ((a << 1) > 0xFF000000u) return 0;
-    if (a & SIGN) return (big || m > 0x80000000u) ? INT32_MIN : (sfi32)(0u - m);
-    return (big || m > 0x7FFFFFFFu) ? INT32_MAX : (sfi32)m;
+    int e = (int)((a >> 23) & 0xFF) - 127;
+    if (e < 0) return 0;
+    if (e >= 31) { /* from 2^31 up: saturates; -2^31 is the saturated value itself */
+        if ((a << 1) > 0xFF000000u) return 0;
+        return (a & SIGN) ? INT32_MIN : INT32_MAX;
+    }
+    sfu32 m = (a & 0x7FFFFFu) | 0x800000u;
+    m = e >= 23 ? m << (e - 23) : m >> (23 - e);
+    return (a & SIGN) ? (sfi32)(0u - m) : (sfi32)m;
 }
 
 static sfu32 to_u32_bits(sf32 a)
