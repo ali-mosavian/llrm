@@ -2266,6 +2266,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let flipped = self.dag.get_node(ISD::Sub, vt, &[c, b]);
             return Some(self.dag.get_node(ISD::Add, vt, &[n0, flipped]));
         }
+        // a - (a & b) -> a & ~b
+        if self.dag.opcode(n1) == ISD::And {
+            let (x, y) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1));
+            let other = if x == n0 {
+                Some(y)
+            } else if y == n0 {
+                Some(x)
+            } else {
+                None
+            };
+            if let Some(b) = other
+                && (self.dag.has_one_use(n1.node) || konst(self, b).is_some())
+            {
+                let not = self.dag.get_not(b, vt);
+                return Some(self.dag.get_node(ISD::And, vt, &[n0, not]));
+            }
+        }
         None
     }
 
