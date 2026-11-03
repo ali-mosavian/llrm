@@ -132,3 +132,22 @@ fn the_programs_harness_leaves_no_temporary_tree_behind() {
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     assert!(left.is_empty(), "left behind: {left:?}");
 }
+
+/// C programs run on ucsim through the crate's own compiler, against their
+/// `.out` files (`tests/programs/c`): a verdict other than PASS fails.
+#[test]
+fn the_programs_of_this_crate_run_and_print_what_c_does() {
+    let clang = std::env::var("LLRM_PIN_CLANG")
+        .unwrap_or_else(|_| format!("{}/scratch/llvm-build/bin/clang", std::env::var("HOME").unwrap_or_default()));
+    if !have("sdasz80") || !have("sdldz80") || !have("ucsim_z80") || !std::path::Path::new(&clang).exists() {
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/programs/run.py"), "--llc", env!("CARGO_BIN_EXE_llrm-z80-llc")])
+        .args(["--clang", &clang, "--src", &format!("{dir}/tests/programs/c"), "--jobs", "2"])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.lines().last().is_some_and(|last| last.starts_with("PASS ")), "{text}");
+}

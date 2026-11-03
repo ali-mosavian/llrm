@@ -624,14 +624,14 @@ impl Printer<'_> {
             }
             "LEAFI" => {
                 // the stack pointer sits at the bottom of the frame the
-                // prologue made
+                // prologue made, and the stack arguments a call has pushed
                 let offset = self
                     .frame
                     .offsets
                     .get(&self.frame_index(inst, 1)?)
                     .copied()
                     .ok_or("a frame object with no place")?;
-                self.push(format!("ld hl, #{}", offset + self.frame.below_ix()));
+                self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes));
                 self.push("add hl, sp");
             }
             "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
