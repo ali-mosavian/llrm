@@ -805,7 +805,9 @@ fn selected_in(
         info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
     }
     let mut tli = if m16 {
-        TargetLowering::x86_16(Features::default(), MVT::I16)
+        // `useSoftFloat()`, or no x87 among the function's target features.
+        let soft_float = crate::backend::isel::soft_float(&function.attrs);
+        TargetLowering::x86_16(Features { soft_float, ..Features::default() }, MVT::I16)
     } else if m64 {
         TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
     } else {
@@ -814,6 +816,11 @@ fn selected_in(
         let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
         TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
     };
+    // The soft-float routines are spelled as the C compiler spelled their
+    // definitions.
+    for (name, number, symbol) in libcalls {
+        tli.set_libcall_symbol(name, symbol.clone(), *number);
+    }
     // SD214: with a math library the pin calls it for these; the call is not
     // translated yet, so the node is refused rather than selected inline.
     if arch.has_libm() {
