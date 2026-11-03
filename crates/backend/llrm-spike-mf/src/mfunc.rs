@@ -128,6 +128,13 @@ impl Block {
     /// the place of the next one in its block that has one, the user it was
     /// made for (the pin emits a node with its user's `DebugLoc`); one after
     /// the last located instruction takes the last place.
+    ///
+    /// DEVIATE: every unlocated instruction is filled; the pin gives line 0
+    /// (flags 0) to one that feeds nothing located at a block top (a phi or
+    /// edge copy, a bare jump), as x86 does (#6512). Reason: the spike
+    /// targets' line tables take a row per place and have no line-0 row
+    /// (ca65 `.dbg line`, SDCC `C$` symbols). Exit: 2026-11-15, fill only
+    /// instructions that define a value a located one reads.
     pub fn place_unlocated(&mut self) {
         let mut next = 0;
         for inst in self.insts.iter_mut().rev() {
