@@ -163,6 +163,13 @@ pub trait Target {
         true
     }
 
+    /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
+    /// register coalescer in the pin) orders the function before allocation.
+    /// Here false: a target opts in once its numbers say so.
+    fn schedules_before_allocation() -> bool {
+        false
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {

@@ -142,6 +142,130 @@ impl<T: Target> Converted<T> {
         self.joined = joined;
     }
 
+    /// The body ordered by the translated pre-RA `MachineScheduler`
+    /// (`machinesched::scheduled`): each value counts against the pressure set
+    /// of its class, whose limit is the registers the class may take.
+    pub fn schedule(
+        &mut self,
+        function: &MFunction<T::Class>,
+        registers: Regs,
+    ) {
+        let mut sets: Vec<(T::Class, u32)> = Vec::new();
+        for class in &function.classes {
+            if !sets.iter().any(|(one, _)| one == class) {
+                sets.push((*class, T::candidates(*class).len() as u32));
+            }
+        }
+        let limit = T::candidates(T::any()).len();
+        let known = function.classes.len() as u32;
+        let pins = self.body.pins.clone();
+        // The scheduler reads the register file off the body; allocation does
+        // not.
+        let before = self.body.registers.replace(registers);
+        let allocatable = self.body.clone();
+        self.body = self.with_effects(function, registers);
+        let scheduled = llrm_codegen::backend::machinesched::scheduled(&self.body, limit, |_, counted| {
+            let mut model =
+                llrm_codegen::backend::regpressure::Model::new(sets.iter().map(|(_, limit)| *limit).collect());
+            for value in 1..=known {
+                if pins.contains_key(&value) || !counted(value) {
+                    continue;
+                }
+                let class = function.classes[value as usize - 1];
+                let at = sets.iter().position(|(one, _)| *one == class).expect("a class of the function has a set");
+                model.count(value, 1, std::rc::Rc::from(vec![at]));
+            }
+            model
+        });
+        // What allocation reads is the original instruction, in the order the
+        // scheduler chose.
+        let original: std::collections::HashMap<i64, Arc<Insn>> = allocatable
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter().map(|one| (one.at, Arc::clone(one))))
+            .collect();
+        let blocks = scheduled
+            .blocks
+            .iter()
+            .map(|block| block.with_insns(block.insns.iter().map(|one| Arc::clone(&original[&one.at])).collect()))
+            .collect();
+        self.body = allocatable.with_blocks(blocks);
+        self.body.registers = before;
+    }
+
+    /// A copy of the body whose instructions state their effects, for the
+    /// scheduler: the shared decoder knows no arm64 name. An instruction reads
+    /// and writes the registers its pinned values stand for, the status flags
+    /// (one lane) where it reads or sets them, and memory (one more lane)
+    /// where it loads or stores; one with side effects is a barrier.
+    fn with_effects(
+        &self,
+        function: &MFunction<T::Class>,
+        registers: Regs,
+    ) -> LirBody {
+        use llrm_codegen::backend::lanes::Lanes;
+        let _ = registers;
+        let bits = self.body.bits;
+        let flags = Lanes::flags(1);
+        let memory = Lanes::flags(1 << 30);
+        let blocks = self
+            .body
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| {
+                        let Some(&(from, at)) = self.origin.get((one.at / 2) as usize) else { return Arc::clone(one) };
+                        let inst = &function.blocks[from].insts[at];
+                        // POC: `Lanes` is the x86 register file's; a pinned
+                        // register takes one of 28 flag-lane bits by its
+                        // index, so two registers may share one (more
+                        // dependences, never fewer).
+                        let named = |values: &[u32]| -> Lanes {
+                            values
+                                .iter()
+                                .filter_map(|value| self.body.pins.get(value))
+                                .flat_map(|register| {
+                                    Lanes::flags(1 << (1 + register.index() % 28)).iter().copied().collect::<Vec<_>>()
+                                })
+                                .collect()
+                        };
+                        let (mut reads, mut writes) = (named(&one.uses), named(&one.defines));
+                        let bundle = one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some(BUNDLE));
+                        if inst.reads_flags || bundle {
+                            reads.extend(flags.iter().copied());
+                        }
+                        if inst.sets_flags || bundle {
+                            writes.extend(flags.iter().copied());
+                        }
+                        if inst.may_load {
+                            reads.extend(memory.iter().copied());
+                        }
+                        if inst.may_store {
+                            writes.extend(memory.iter().copied());
+                            reads.extend(memory.iter().copied());
+                        }
+                        let mut made = (**one).clone();
+                        made.volatile = made.volatile || inst.side_effects;
+                        if let Some(what) = made.what.as_mut() {
+                            if what.op == Operation::Nothing && inst.may_store {
+                                what.op = Operation::Binary;
+                            }
+                        }
+                        for slot in &made.register_effects {
+                            slot.get_or_init(|| (bits, Some((reads.clone(), writes.clone()))));
+                        }
+                        Arc::new(made)
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.body.with_blocks(blocks)
+    }
+
     /// Where each value the coalescer absorbed went: `survivor(value)` is the
     /// value that stands for it in [`Converted::body`].
     pub fn joined(&self) -> &llrm_codegen::coalescer::env::JoinMap {
@@ -1499,6 +1623,9 @@ pub fn allocate_greedy<T: Target>(
     let mut converted = to_lir::<T>(function, registers)?;
     if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce(registers, size);
+    }
+    if T::schedules_before_allocation() && !llrm_support::env_flag!("LLRM_NO_PRESCHED") {
+        converted.schedule(function, registers);
     }
     let order = |value: u32| converted.order(value);
     let inputs = ShadowInputs { size, ..converted.inputs(registers, &order) };
