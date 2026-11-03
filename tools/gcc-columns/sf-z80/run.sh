@@ -2,7 +2,7 @@
 # usage: run.sh DIR VAR OP SYMBOL [N]: fails and cycles/call on ucsim_z80 for one gcc op (VAR = sf32 | sf32_6502).
 # DIR holds the .rel files of build.sh. VEC=file replaces the generated records; OBJS="a.rel b.rel" replaces the linked objects.
 # Code and records must end below the data at 0xc000: a run whose layout overlaps is refused, not measured.
-here=$(cd "$(dirname "$0")" && pwd); G=$here/../../../runtime/softfloat/tests/z80; H=$here/../rt-z80
+here=$(cd "$(dirname "$0")" && pwd); G=$here/../../../runtime/compiler-rt/tests/z80; H=$here/../rt-z80
 d=$(cd "$1" && pwd); V=$2; op=$3; sym=$4; N=${5:-700}
 T=$(mktemp -d); cd "$T"; ulimit -v 16000000
 case $op in itof|utof|ftoi|ftou) NA=1;; *) NA=2;; esac
@@ -14,7 +14,7 @@ nv=$(sed -n 's/^NV = //p' vec.inc)
 sed "s/\\bOP\\b/$sym/g; s/NARGS-1/$NA-1/g" "$here/drvg.s" > drvg.s
 for f in "$H"/*.s; do cp "$f" .; sdasz80 -o "$(basename "$f" .s).rel" "$(basename "$f")"; done
 ls *.rel | grep -v -e "^crt0" -e "^drvg" -e "^stub" > rt.lib
-if [ -n "$OBJS" ]; then OBJ=$OBJS; else [ "$V" = sf32 ] && OBJ="$d/sf32.rel $d/sf32_conv.rel" || OBJ="$d/sf32_6502.rel"; OBJ="$OBJ $d/int32.rel"; fi
+if [ -n "$OBJS" ]; then OBJ=$OBJS; else [ "$V" = sf32 ] && OBJ="$d/f32_*.rel" || OBJ="$d/x6502/*.rel"; OBJ="$OBJ $d/int32.rel"; fi
 # stub run: the same records, a bare ret
 printf '\t.module stub\n\t.area _CODE\n\t.globl %s\n%s:\n\tret\n' "$sym" "$sym" > stub.s; sdasz80 -o stub.rel stub.s
 sdasz80 -o drvg.rel drvg.s || exit 1
