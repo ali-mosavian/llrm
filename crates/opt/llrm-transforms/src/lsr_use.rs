@@ -904,6 +904,10 @@ fn holds_no_offset(
     r: &mut Rating,
     s: Scev,
 ) -> bool {
+    // A local is addressed off the frame register, outside the class.
+    if is_stack_slot(r, s) {
+        return true;
+    }
     match r.se.unknown_value(s) {
         Some(Operand::Constant(_)) => true,
         Some(Operand::Value(v)) => {
