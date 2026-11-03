@@ -27,6 +27,25 @@ fn the_runtime_computes_what_c_computes() {
     assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
 }
 
+/// `strlen` is `cpir` over a count that starts at 0: the empty string must be
+/// 0 (the count wraps to 0xFFFF) and 299 bytes must not stop at 8 bits.
+#[test]
+fn strlen_counts_what_c_counts() {
+    let missing: Vec<_> = ["sdasz80", "sdcc", "ucsim_z80"].into_iter().filter(|tool| !have(tool)).collect();
+    if !missing.is_empty() {
+        let optional = std::env::var("Z80_ORACLE_OPTIONAL").is_ok_and(|flag| flag == "1");
+        assert!(optional, "{missing:?} not found: strlen cannot be checked (Z80_ORACLE_OPTIONAL=1 skips it)");
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/runtime/strlen.py"), &format!("{dir}/runtime/z80_rt.s")])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
+}
+
 /// `__udivhi3` called `__umodhi3` and swapped the pair back: 55 B against
 /// SDCC's 55, a tie on bytes. The divide rows must stay wins on both bytes and
 /// cycles.
@@ -47,4 +66,88 @@ fn the_divide_routines_beat_sdcc_on_bytes_and_cycles() {
         let line = text.lines().find(|line| line.starts_with(row)).unwrap_or_else(|| panic!("no row {row}:\n{text}"));
         assert!(line.ends_with("bytes WIN, T WIN"), "{line}\n{text}");
     }
+}
+
+/// The runtime had no `memcpy`, `memmove` or `memset`: 7 programs of
+/// tests/run/c linked to nothing. Counts of 0, 1 and 300, overlap both ways and
+/// the result register against C's meaning.
+#[test]
+fn the_memory_routines_move_what_c_moves() {
+    let missing: Vec<_> = ["sdasz80", "sdldz80", "ucsim_z80"].into_iter().filter(|tool| !have(tool)).collect();
+    if !missing.is_empty() {
+        let optional = std::env::var("Z80_ORACLE_OPTIONAL").is_ok_and(|flag| flag == "1");
+        assert!(
+            optional,
+            "{missing:?} not found: the memory routines cannot be checked (Z80_ORACLE_OPTIONAL=1 skips it)"
+        );
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/runtime/memops.py"), &format!("{dir}/runtime/z80_rt.s")])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
+}
+
+/// The runtime exported `_strlen`, `_memcpy`, `_memmove` and `_memset`: a
+/// program defining its own `strlen` failed to link (2 programs of
+/// tests/run/c). Its exports are `__` names, which C reserves.
+#[test]
+fn the_runtime_exports_no_name_a_program_may_define() {
+    let clashing: Vec<_> = llrm_z80::RUNTIME
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(".globl"))
+        .flat_map(|names| names.split(','))
+        .map(str::trim)
+        .filter(|name| name.starts_with('_') && !name.starts_with("__"))
+        .collect();
+    assert!(clashing.is_empty(), "{clashing:?} are C library names a program may define");
+}
+
+/// The programs harness left a `z80prog-*` tree in the temporary directory
+/// per run: /tmp is a tmpfs with a fixed inode count, and the trees helped
+/// fill it until the landing runner stopped (PREFLIGHT: /tmp has 7% free).
+#[test]
+fn the_programs_harness_leaves_no_temporary_tree_behind() {
+    if !have("sdasz80") {
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let scratch = std::env::temp_dir().join(format!("z80-harness-tmp-{}", std::process::id()));
+    std::fs::create_dir_all(scratch.join("src")).expect("a scratch directory");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/programs/run.py"), "--src"])
+        .arg(scratch.join("src"))
+        .env("TMPDIR", &scratch)
+        .output()
+        .expect("python3 runs");
+    let left: Vec<_> = std::fs::read_dir(&scratch)
+        .expect("the scratch directory")
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name != "src")
+        .collect();
+    std::fs::remove_dir_all(&scratch).ok();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    assert!(left.is_empty(), "left behind: {left:?}");
+}
+
+/// C programs run on ucsim through the crate's own compiler, against their
+/// `.out` files (`tests/programs/c`): a verdict other than PASS fails.
+#[test]
+fn the_programs_of_this_crate_run_and_print_what_c_does() {
+    let clang = std::env::var("LLRM_PIN_CLANG")
+        .unwrap_or_else(|_| format!("{}/scratch/llvm-build/bin/clang", std::env::var("HOME").unwrap_or_default()));
+    if !have("sdasz80") || !have("sdldz80") || !have("ucsim_z80") || !std::path::Path::new(&clang).exists() {
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/programs/run.py"), "--llc", env!("CARGO_BIN_EXE_llrm-z80-llc")])
+        .args(["--clang", &clang, "--src", &format!("{dir}/tests/programs/c"), "--jobs", "2"])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.lines().last().is_some_and(|last| last.starts_with("PASS ")), "{text}");
 }

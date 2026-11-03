@@ -24,6 +24,7 @@ TABLE = [
     ("p/bas/Os", row(1000, 100, 150), row(1000, 100), True),  # -Os: a tie in bytes and clocks gates instructions
     ("p/bas/Os", row(999, 100, 150), row(1000, 100), False),  # clocks lower: instructions do not gate
     ("p/bq32/Os", row(1000, 101), row(1000, 100), True),
+    ("p/bq16/Os", row(1001, 100), row(1000, 100), True),  # -Os: clocks alone worse, bytes and instructions equal
     ("p/bas/O2", row(10, 10), row(0, 10, instructions=0), True),  # a base that executed nothing is no base
 ]
 
