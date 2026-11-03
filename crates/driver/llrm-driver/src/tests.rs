@@ -2748,3 +2748,26 @@ fn a_64_bit_frame_pushes_its_registers_first_and_the_last_of_the_list_first() {
     let at = |text: &str| listing.find(text).unwrap_or_else(|| panic!("no `{text}` in\n{listing}"));
     assert!(at("push r14") < at("push rbx"), "{listing}");
 }
+
+/// A one-slot frame after the saved registers was `sub rsp, 8` / `add rsp, 8`
+/// (4 bytes each), where the pin has `push rax` / `pop rcx` (1 byte each): the
+/// saved-first order lost the one-slot form, +6 bytes on 84 of 595 cells of the
+/// x86-64 corpus (fib -Os, bintree, histo, quicksort ...).
+#[test]
+fn a_one_slot_frame_after_the_saved_registers_is_push_rax_and_pop_rcx() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
+              define i32 @fib(i32 %n) #0 {\n\
+              entry:\n  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %loop\n\
+              loop:\n  %i = phi i32 [ %i2, %loop ], [ %n, %entry ]\n  %acc = phi i32 [ %acc2, %loop ], [ 0, %entry ]\n\
+              \x20 %a = add nsw i32 %i, -1\n  %r = call i32 @fib(i32 %a)\n  %i2 = add nsw i32 %i, -2\n  %acc2 = add i32 %r, %acc\n\
+              \x20 %t = icmp ult i32 %i, 4\n  br i1 %t, label %done, label %loop\n\
+              done:\n  %x = phi i32 [ %n, %entry ], [ %i2, %loop ]\n  %y = phi i32 [ 0, %entry ], [ %acc2, %loop ]\n\
+              \x20 %z = add i32 %x, %y\n  ret i32 %z\n}\n\
+              attributes #0 = { nounwind optsize }\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-Os", "--isel=dag"]), ir, "fib").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rbx") || listing.contains("push r14"), "premise: saved registers\n{listing}");
+    assert!(listing.contains("push rax") && listing.contains("pop rcx"), "{listing}");
+    assert!(!listing.contains("sub rsp, 8") && !listing.contains("add rsp, 8"), "{listing}");
+}
