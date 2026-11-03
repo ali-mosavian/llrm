@@ -1236,6 +1236,15 @@ impl<'a> TypeLegalizer<'a> {
                 let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
                 self.dag.get_node(ISD::Srl, to, &[reversed, added])
             }
+            ISD::BitCast => {
+                // `PromoteIntRes_BITCAST`: through a stack slot, the value
+                // stored as its own type and loaded as the narrow integer.
+                let src = self.dag.operand(value, 0);
+                let (slot, store, cell) = self.store_to_slot(src);
+                let info = super::dag::MemInfo { mem_vt: vt, ..self.slot_info(src, cell) };
+                let load = self.dag.get_load(vt, store, slot, info);
+                self.dag.get_node(ISD::AnyExtend, to, &[load])
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
