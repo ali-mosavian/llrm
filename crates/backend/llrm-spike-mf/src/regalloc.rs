@@ -138,6 +138,12 @@ pub trait Target {
         true
     }
 
+    /// DEVIATE C13: whether a copy between widths is joined (the pin always
+    /// does). Exit for a target that says false: its profitability rule.
+    fn joins_sub_registers() -> bool {
+        true
+    }
+
     /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
     /// one (an argument register, not reserved) is joined. The pin joins only
     /// reserved registers, so a target that states false leaves the copy to
