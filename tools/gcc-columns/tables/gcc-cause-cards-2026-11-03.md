@@ -148,3 +148,11 @@ Upper bounds from a dataflow over the emitted -O2 asm of the 30 C kernels (label
 - Branch relaxation: 17 `b?? skip; jmp` pairs, 16 of them in lz4/lz4c/crc16 whose bodies exceed the window. No `bra` on NMOS, so they stay.
 Each moves under 1% of the geomean over 69 programs (only 4-6 programs change, by 2-5% each). Not implemented. Instrument: static count on
 `-O2` asm without the 51 hand kernels; if oversight wants the hand kernels in the bound, it is a rerun of the same script.
+
+## Step 2 measured with the hand kernels (2026-11-03, replaces the estimate above)
+
+The static estimate covered the 30 C kernels only. Measured: the full 6502 bench (81 programs x O1/O2/Os, hand kernels included) run through
+a scratch wrapper (`cc1_peep.py`, a 6502-register tool, kept out of the repo), which deletes the `ldy #n` / `lda rcN` the dataflow over labels proves redundant (flags unread) after the real cc1.
+Every cell still passes the result oracle. Geomean over the cells that change: best-per-program bytes -0.9%, clocks -1.1%; 19 of 81 programs change
+(strpbrk, strcspn, strlen, popcount, max8 and lz4-like loops lead, 3-9% each). That is at the 1% line, so it is oversight's call; it is an upper bound
+for these two patterns (no NMOS `bra`, so relaxation is not in it).
