@@ -245,6 +245,14 @@ pub struct DagConfig {
     pub big_endian: bool,
     /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
     pub fma_faster: bool,
+    /// A signed divide or remainder whose operands fit this narrower legal
+    /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
+    /// wide divide. Set by the targets whose narrow routine is the cheaper.
+    pub narrow_divrem: Option<EVT>,
+    /// The narrow remainder routine is defined for `INT_MIN % -1` (it is 0, as
+    /// the wide one): a remainder then needs no spare bit, as the pin's
+    /// `narrowSDivOrSRem` bumps the width for. An x86 `idiv` traps there.
+    pub narrow_srem_overflow_defined: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -269,6 +277,8 @@ impl Default for DagConfig {
             known_bits_for_target_node: None,
             big_endian: false,
             fma_faster: false,
+            narrow_divrem: None,
+            narrow_srem_overflow_defined: false,
         }
     }
 }

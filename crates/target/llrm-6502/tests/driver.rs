@@ -6,10 +6,6 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::driver::{Level, Request, assembly};
 
-fn without_equates(text: &str) -> String {
-    text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect()
-}
-
 fn module(function: &str) -> String {
     format!("target datalayout = \"{}\"\n{function}\n", datalayout())
 }
@@ -1043,6 +1039,86 @@ define i8 @minus(i8 %n) {
     assert!(text.contains("lda buf+3,x"), "no indexed load with the offset:\n{text}");
     assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
     assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
+}
+
+/// The compiled `text` without its `rcN = $..` equates, which `run_with` states
+/// itself.
+fn without_equates(text: &str) -> String {
+    text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect()
+}
+
+/// `srem i32` of two sign-extended words called `__modsi3`, the long routine
+/// (recpow at -O1, +434 B): both operands fit a word, so it is `__modhi3`.
+/// -7 % 3 = -1 (0xFF), and -32768 % -1 is 0.
+#[test]
+fn a_remainder_of_two_sign_extended_words_is_the_word_routine() {
+    let ir = module(
+        r#"define i8 @rem(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %r = srem i32 %x, %y
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let function = without_equates(&text);
+    for (a, b, want) in [(-7i16, 3i16, 0xFF), (-32768, -1, 0), (1000, -7, 6)] {
+        let setup = format!(
+            "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr rem\n",
+            a as u16 & 0xFF,
+            (a as u16) >> 8,
+            b as u16 & 0xFF,
+            (b as u16) >> 8
+        );
+        assert_eq!(common::run_with(&format!("narrow-rem-{a}-{b}"), &setup, &function), want, "{a} % {b}");
+    }
+}
+
+/// -32768 / -1 is 32768 in 32 bits and overflows 16: a divide of two
+/// sign-extended words stays long (its high byte is 0x80).
+#[test]
+fn a_divide_of_sign_extended_words_keeps_the_long_quotient() {
+    let words = module(
+        r#"define i8 @high(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %q = sdiv i32 %x, %y
+  %h = lshr i32 %q, 8
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&words, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__divsi3") && !text.contains("__divhi3"), "narrowed:\n{text}");
+    let setup =
+        "  lda #0\n  sta rc2\n  lda #$80\n  sta rc3\n  lda #$FF\n  sta rc4\n  lda #$FF\n  sta rc5\n  jsr high\n";
+    assert_eq!(common::run_with("narrow-div-min", setup, &without_equates(&text)), 0x80);
+}
+
+/// A call result whose callee returns `range(i32 -30010, 30011)` fits a word
+/// (recpow at -O1, whose `srem` of such results called `__modsi3`): the range
+/// is the sign bits of the result, so the remainder is the word routine. The
+/// callee is opaque (hand-written, returning -12345 in A, X, rc2, rc3) and the
+/// level is -O0, where no correlated-propagation narrows it first;
+/// -12345 % 1000 = -345, low byte 0xA7.
+#[test]
+fn a_remainder_of_a_result_with_a_signed_range_is_the_word_routine() {
+    let ir = module(
+        r#"declare range(i32 -30010, 30011) i32 @source()
+define i8 @rem() {
+  %v = call i32 @source()
+  %r = srem i32 %v, 1000
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let source = "source:\n  ldx #$CF\n  lda #$FF\n  sta rc2\n  sta rc3\n  lda #$C7\n  rts\n";
+    let function = format!("{}{source}", without_equates(&text));
+    assert_eq!(common::run_with("narrow-range-rem", "  jsr rem\n", &function), 0xA7);
 }
 
 /// `x > 65535` and `x < 65536` are one test of the high word. The low word of

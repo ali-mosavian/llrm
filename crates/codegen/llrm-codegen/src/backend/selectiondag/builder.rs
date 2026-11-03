@@ -220,6 +220,18 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with a signed divide or remainder of operands that fit the
+    /// legal type `narrow` made at that type ([`super::narrow_divrem`]).
+    pub fn with_narrow_divrem(
+        mut self,
+        narrow: EVT,
+        srem_overflow_defined: bool,
+    ) -> BuilderTarget {
+        self.dag.narrow_divrem = Some(narrow);
+        self.dag.narrow_srem_overflow_defined = srem_overflow_defined;
+        self
+    }
+
     /// This target with divides by constants kept as divides (`isIntDivCheap`).
     pub fn with_int_div_cheap(
         mut self,
@@ -635,6 +647,7 @@ impl<'a> Builder<'a> {
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
+            call_result_range_bits: None,
             fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
@@ -684,6 +697,10 @@ struct Builder<'a> {
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
+    /// The signed bits a call's `range` return attribute (the call's or the
+    /// callee's, `CallBase::getRange`) leaves its result: `AssertSext` of that
+    /// width.
+    call_result_range_bits: Option<u32>,
     /// The parameters the callee declares: the arguments after them are
     /// variadic.
     fixed_args: usize,
@@ -828,7 +845,19 @@ impl Builder<'_> {
         if vt == MVT::Far.into() {
             return Ok((EVT::I16, 2));
         }
+        if let Some(int) = self.soft_float_integer(vt) {
+            return self.parts(int);
+        }
         self.parts(vt)
+    }
+
+    /// Under soft float a float crosses blocks in the integer registers of
+    /// its width; none of the float types has a register.
+    fn soft_float_integer(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (self.soft_float() && vt.is_floating_point()).then(|| EVT::integer(vt.size_in_bits()))
     }
 
     /// `getNumRegistersForCallingConv`: an integer a convention returns in
@@ -993,7 +1022,15 @@ impl Builder<'_> {
         }
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
-            let vt = self.type_of(self.function.value(arg).ty)?;
+            let declared = self.type_of(self.function.value(arg).ty)?;
+            // No FPU: a float in registers arrives as the integer of its width.
+            let soft = self.soft_float()
+                && declared.is_floating_point()
+                && matches!(
+                    self.convention.parameters.get(at),
+                    Some(Parameter::Registers(_))
+                );
+            let vt = if soft { EVT::integer(declared.size_in_bits()) } else { declared };
             // the registers a convention names split a value as
             // `getNumRegisters` does
             let (mut part_vt, parts) = match self.convention.parameters.get(at) {
@@ -1100,6 +1137,7 @@ impl Builder<'_> {
             } else {
                 pieces[0]
             };
+            let value = if soft { self.dag.get_node(ISD::BitCast, declared, &[value]) } else { value };
             self.node_map.insert(arg, value);
             if self.function.parameter_attrs.get(at).is_some_and(|attrs| {
                 attrs
@@ -1669,7 +1707,7 @@ impl Builder<'_> {
                 first: 0,
             }
         } else {
-            convention_for(
+            crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1679,6 +1717,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types,
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
@@ -1700,7 +1739,7 @@ impl Builder<'_> {
         if let Some(declared) =
             declared.filter(|declared| !runtime && *declared < arg_types.len() && !variadic && plan.popped > 0)
         {
-            plan.popped = convention_for(
+            plan.popped = crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1710,6 +1749,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types[..declared],
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
             .popped;
@@ -1787,6 +1827,11 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         self.call_result_assert = extension_assert(&info.return_attrs);
+        self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
+            &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
+            instruction,
+        )
+        .map(|range| range.get_min_signed_bits());
         self.fixed_args = named;
         self.call_sret = info.argument_attrs.iter().map(|attrs| has_sret(attrs)).collect();
         self.call_attrs_move_arguments = match self.calling() {
@@ -2163,6 +2208,23 @@ impl Builder<'_> {
             rest = tail;
         }
         let _ = vt;
+        // `CallBase::getRange`
+        // ([L381](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L381))
+        // asserts through `lowerRangeToAssertZExt`
+        // ([L10947](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L10947)),
+        // which takes only a range that zero extends. A signed range gives the
+        // sign bits `ComputeNumSignBits` reads, so a divide of the result is
+        // narrowed ([`super::narrow_divrem`]).
+        if let Some(bits) = std::mem::take(&mut self.call_result_range_bits)
+            && !aggregate
+            && assert.is_none()
+        {
+            let wide = self.dag.value_type(leaves[0]);
+            if wide.is_integer() && bits > 0 && bits < wide.size_in_bits() {
+                let narrow = self.dag.get_value_type_node(EVT::integer(bits));
+                leaves[0] = self.dag.get_node(ISD::AssertSext, wide, &[leaves[0], narrow]);
+            }
+        }
         Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
     }
 
@@ -2438,9 +2500,13 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
-        if vt.is_floating_point() {
+        // No FPU: a float comes back as the integer of its width.
+        let soft = self.soft_float() && vt.is_floating_point();
+        if vt.is_floating_point() && !soft {
             return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
+        let float_vt = vt;
+        let vt = if soft { EVT::integer(vt.size_in_bits()) } else { vt };
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
         Self::at_most_two(parts)?;
         if plan.returns.len() != parts {
@@ -2462,7 +2528,7 @@ impl Builder<'_> {
         } else {
             pieces[0]
         };
-        Ok(Some(result))
+        Ok(Some(if soft { self.dag.get_node(ISD::BitCast, float_vt, &[result]) } else { result }))
     }
 
     /// The convention names a result register by its widest view; the DAG
@@ -2574,6 +2640,11 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `useSoftFloat()` of the function being built.
+    fn soft_float(&self) -> bool {
+        crate::backend::isel::soft_float(&self.function.attrs)
+    }
+
     fn visit_ret(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -2635,6 +2706,13 @@ impl Builder<'_> {
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
+            // No FPU: a float leaves as the integer of its width.
+            let (value, vt) = if self.soft_float() && vt.is_floating_point() {
+                let int = EVT::integer(vt.size_in_bits());
+                (self.dag.get_node(ISD::BitCast, int, &[value]), int)
+            } else {
+                (value, vt)
+            };
             if let (true, Some(xmm)) = (vt.is_floating_point(), self.convention.float_result) {
                 // `LowerReturn` with SSE: copied to the vector register
                 let copy = self.dag.get_copy_to_phys_reg(chain, xmm, value, glue);
@@ -2842,6 +2920,10 @@ impl Builder<'_> {
         vt: EVT,
         pointer: bool,
     ) -> Result<SDValue, Refused> {
+        if let Some(int) = self.soft_float_integer(vt) {
+            let bits = self.copy_from_reg(reg, int, false)?;
+            return Ok(self.dag.get_node(ISD::BitCast, vt, &[bits]));
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts > 1 {
@@ -2879,7 +2961,12 @@ impl Builder<'_> {
         reg: u32,
         extend: ISD,
     ) -> Result<(), Refused> {
-        let vt = self.dag.value_type(value);
+        let mut vt = self.dag.value_type(value);
+        let mut value = value;
+        if let Some(int) = self.soft_float_integer(vt) {
+            value = self.dag.get_node(ISD::BitCast, int, &[value]);
+            vt = int;
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts > 1 {

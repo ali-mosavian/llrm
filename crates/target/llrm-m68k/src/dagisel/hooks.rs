@@ -25,6 +25,11 @@ pub enum Cpu {
 }
 
 impl Cpu {
+    /// The CPU's column in `timings.times`.
+    pub fn name(self) -> &'static str {
+        ["m68000", "m68010", "m68020", "m68030", "m68040", "m68060"][self as usize]
+    }
+
     /// `Subtarget->atLeastM68020()` and its siblings.
     pub fn at_least(
         self,

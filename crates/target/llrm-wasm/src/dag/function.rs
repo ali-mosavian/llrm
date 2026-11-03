@@ -7,6 +7,7 @@ use llrm_codegen::backend::isel::Convention;
 use llrm_codegen::backend::selectiondag::builder::{BuilderTarget, TargetNodes, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_codegen::backend::selectiondag::{BooleanContents, DagConfig, MemInfo, SelectionDAG};
@@ -173,6 +174,13 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// `-g`: the metadata id of each variable declared by a `#dbg_declare` of
+    /// a static alloca, and the frame index of that alloca. The same on every
+    /// block.
+    pub declared: Vec<(u32, i32)>,
+    /// `-g` at `-O1` and up: the metadata id of each variable that one
+    /// `#dbg_value` says is an argument, and the argument's number.
+    pub argument_variables: Vec<(u32, u32)>,
     /// StackColoring: the frame object each of the function's allocas moves to
     /// once selection is done (`frame`'s first entries are the allocas').
     pub stack_colors: Vec<i32>,
@@ -234,7 +242,26 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     for &block in function.layout() {
+        if optimize {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values
+            // do once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| visited.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    let bits = |bits: u32| (bits <= 64 && bits != 0).then(|| if bits <= 32 { 32 } else { 64 });
+                    live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+            visited.insert(block);
+        }
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
@@ -288,15 +315,42 @@ pub fn select_function(
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                declared: Vec::new(),
+                argument_variables: Vec::new(),
                 stack_colors: Vec::new(),
             });
         }
     }
     let (mut frame, stack_colors) = static_frame(module, function, &layout, &info)?;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
+    let declared: Vec<(u32, i32)> = function
+        .debug_records()
+        .iter()
+        .filter_map(|record| {
+            let llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)) = record.what else { return None };
+            let variable = llrm_mir::debuginfo::read_variable(module, record.variable)?;
+            let index = *info.static_allocas.get(&address)?;
+            (variable.scope == name).then_some((record.variable.0, index))
+        })
+        .collect();
+    // A variable said once, to an argument: its home is the argument's local
+    // for as long as the code leaves it there.
+    let mut argument_variables: Vec<(u32, u32)> = Vec::new();
+    let mut said: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    for record in function.debug_records() {
+        *said.entry(record.variable.0).or_default() += 1;
+        let llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(value)) = record.what else { continue };
+        let llrm_mir::module::ValueDef::Argument(number) = function.value(value).def else { continue };
+        if llrm_mir::debuginfo::read_variable(module, record.variable).is_some_and(|one| one.scope == name) {
+            argument_variables.push((record.variable.0, number));
+        }
+    }
+    argument_variables.retain(|(variable, _)| said[variable] == 1);
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.declared.clone_from(&declared);
+        block.argument_variables.clone_from(&argument_variables);
         block.stack_colors.clone_from(&stack_colors);
     }
     Ok(selected)

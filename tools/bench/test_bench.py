@@ -268,7 +268,7 @@ class SizeTests(unittest.TestCase):
             obj, exe = Path(where) / "p.obj", Path(where) / "p.exe"
             obj.write_bytes(test_sizes.object_with(12))
             exe.write_bytes(b"MZ" + bytes(3000))
-            run = mock.Mock(error=None, output=b"1\n", region=mock.Mock(instructions=5, memory_operands=2))
+            run = mock.Mock(error=None, output=b"1\n", region=mock.Mock(instructions=50, memory_operands=2))
             with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
                 got = bench.measure(("p", exe, exe, "f", ["1"], obj))
         self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 0, 40))
@@ -1050,6 +1050,35 @@ def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_
     assert len(out) == 1 and "INVALID" in out[0], out
     assert any("INVALID BASE" in one for one in bench.against("control bas -Os", {"instructions": 0}, {"instructions": 0})), "a base that ran nothing is no base, even when the head ran nothing too"
     assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
+
+
+def test_a_kernel_folded_to_a_constant_is_an_error_not_a_row(tmp_path, monkeypatch):
+    """parity/control, algebra and memory in C ran 2 instructions each (`mov eax, 15007; retf`): the sources set constants and called the kernel,
+    so clang folded it. The rows read 8x to 70x better than bq16, which ran the work, and the gap was taken for a compiler's."""
+    exe = tmp_path / "V0.exe"
+    exe.write_bytes(b"")
+
+    def run(instructions):
+        region = types.SimpleNamespace(instructions=instructions, memory_operands=0, clocks=15)
+        return lambda *a, **k: types.SimpleNamespace(output=b"15007\n", error="", region=region)
+
+    monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
+    monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["15007"])
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
+    job = ("V0", exe, tmp_path / "x.map", "bench_control", ["15007"], tmp_path / "x.obj")
+    monkeypatch.setattr(bench.icount, "run", run(2))
+    assert "kernel folded away" in bench.measure(job)["error"]
+    monkeypatch.setattr(bench.icount, "run", run(bench.FOLDED_BELOW))
+    assert bench.measure(job)["instructions"] == bench.FOLDED_BELOW
+
+
+def test_no_c_parity_source_hands_its_kernel_constants():
+    """The same fault at the source: every parity C file that calls its kernel must read the inputs through volatile, as branch, loop, qlight and qmove do."""
+    for source in sorted((bench.BENCH / "parity").glob("*/*.c")):
+        text = source.read_text()
+        if "demo_" in text:
+            assert "volatile" in text, f"{source.name} sets its kernel's inputs from constants: clang folds the call"
 
 
 def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
