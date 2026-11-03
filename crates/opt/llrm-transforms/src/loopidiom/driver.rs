@@ -223,8 +223,9 @@ impl LoopIdiomRecognize {
         // DEVIATE: a fill beside a store of a computed value stays a loop at
         // speed (`process_loop_strided_store`), and the pin makes both in this
         // run; the store a memcpy took away leaves the fill alone, so it is
-        // judged again. Exit: none.
-        if copied {
+        // judged again, at speed: under -Os the call setup of a memset is more
+        // bytes than the loop it replaces. Exit: none.
+        if copied && !self.for_size {
             {
                 let cx = cx!(run);
                 self.collect_stores(&cx, run.se, run.cur_loop, block);
