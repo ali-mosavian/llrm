@@ -228,15 +228,22 @@ impl LiveIntervals {
         // A def that keeps the rest of the value reads it (`readsReg()`).
         for &value in &one.defines {
             let reads_reg = one.partial_defs.contains(&value);
-            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber: false });
+            let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
+            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber: false, lanes });
         }
         for &value in &one.uses {
-            self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false });
+            self.push_operand(
+                value,
+                Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes: Operand::ALL },
+            );
         }
         // An operand flagged undef names the register and reads nothing
         // (`MachineOperand::isUndef`): it starts and extends no live range.
         for &value in &one.undefs {
-            self.push_operand(value, Operand { instr, is_def: false, reads_reg: false, early_clobber: false });
+            self.push_operand(
+                value,
+                Operand { instr, is_def: false, reads_reg: false, early_clobber: false, lanes: Operand::ALL },
+            );
         }
     }
 
@@ -1232,6 +1239,8 @@ impl LiveIntervals {
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::valuelanes::ValueLanes;
+
     use super::*;
     use crate::model::lir::{Block, LirBlock};
     use crate::support::hash::IndexMap;
@@ -1438,6 +1447,20 @@ mod tests {
         assert!(lis.operands(1).iter().all(|op| !op.reads_reg || !op.is_def));
         let at_narrow = lis.indexes.get_instruction_index(insns[1].id());
         assert!(!lis.interval(1).live_at(&at_narrow), "the first write is dead");
+    }
+
+    /// A def of the high byte of a value names that lane on its operand, and a
+    /// rename carries the lanes with the value; an unlisted def names all.
+    #[test]
+    fn test_a_def_names_the_lanes_it_defines() {
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        let insns = [insn(&[1], &[]), Arc::new(high), insn(&[], &[1])];
+        let lis = LiveIntervals::new(&body(&insns));
+        let lanes: Vec<_> = lis.operands(1).iter().filter(|op| op.is_def).map(|op| op.lanes).collect();
+        assert_eq!(lanes, vec![Operand::ALL, ValueLanes::at(1, 1)]);
+        let renamed = insns[1].renamed(&|value| if value == 1 { 7 } else { value });
+        assert_eq!(renamed.def_lanes, vec![(7, ValueLanes::at(1, 1))]);
     }
 
     /// Renaming the value renames the marker with it.

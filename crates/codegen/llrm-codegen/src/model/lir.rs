@@ -144,6 +144,10 @@ pub struct Insn {
     /// `eliminateRegSequence` makes from a `REG_SEQUENCE`. Liveness still takes
     /// the destination whole; the lane model reads this (C1 step 1).
     pub lane_copies: Vec<(u32, u32, llrm_lir::valuelanes::ValueLanes)>,
+    /// The lanes of a value it defines, where it defines less than all of
+    /// them (the `:subN` on a def operand); a value not listed is defined
+    /// whole.
+    pub def_lanes: Vec<(u32, llrm_lir::valuelanes::ValueLanes)>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -540,6 +544,9 @@ impl Insn {
         for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
         }
+        for &(value, _) in &self.def_lanes {
+            any |= moves(value)?;
+        }
         for &(from, to, _) in &self.lane_copies {
             any |= moves(from)? | moves(to)?;
         }
@@ -584,6 +591,7 @@ impl Insn {
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
         made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
+        made.def_lanes = self.def_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
         made.lane_copies = self
             .lane_copies
             .iter()
@@ -642,6 +650,7 @@ impl Insn {
             undefs: Vec::new(),
             partial_defs: Vec::new(),
             lane_copies: Vec::new(),
+            def_lanes: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),

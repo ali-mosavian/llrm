@@ -38,6 +38,8 @@
 
 use std::rc::Rc;
 
+use llrm_lir::valuelanes::ValueLanes;
+
 use super::cfg::{Cfg, DomTree};
 use super::liverange::{LiveInterval, LiveRange, LiveRangeUpdater, Segment, VNInfo, Vn};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
@@ -501,6 +503,14 @@ pub struct Operand {
     /// `readsReg()`: a use, or a def that also reads (tied, partial).
     pub reads_reg: bool,
     pub early_clobber: bool,
+    /// The lanes the operand names (its `:subN`); all of them for a whole
+    /// value.
+    pub lanes: ValueLanes,
+}
+
+impl Operand {
+    /// An operand that names the whole value.
+    pub const ALL: ValueLanes = ValueLanes(u16::MAX);
 }
 
 /// `LiveIntervalCalc` (LiveIntervalCalc.h): `LiveRangeCalc` for the live
