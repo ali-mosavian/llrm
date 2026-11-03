@@ -40,6 +40,7 @@ pub mod set_p2align;
 pub mod sort_region;
 pub mod spike_coalesce;
 pub mod tail_duplicate;
+pub mod tail_merge;
 pub mod unreachable_blocks;
 
 use llrm_lir::registers::{RegId, Row};

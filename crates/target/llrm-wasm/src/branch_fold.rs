@@ -16,10 +16,10 @@
 //! `HoistCommonCode` moves the instructions two single-predecessor successors
 //! start with into the block that branches to them.
 //!
-//! DEVIATE 1: no tail merging, no `OptimizeBranches` outside these cases, and
-//! not in a function with a personality (try scopes name their blocks). Exit:
-//! the shared branch folder over the neutral machine function (S4), no later
-//! than 2026-11-20; deleting this file is part of that PR.
+//! DEVIATE 1: tail merging is `tail_merge`'s, no `OptimizeBranches` outside
+//! these cases, and not in a function with a personality (try scopes name their
+//! blocks). Exit: the shared branch folder over the neutral machine function
+//! (S4), no later than 2026-11-20; deleting this file is part of that PR.
 //!
 //! # See also
 //! `BranchFolding.cpp`, pin d1106deb71cc: `OptimizeBlock`, `IsBranchOnlyBlock`.
@@ -168,7 +168,7 @@ fn set_branches(
 }
 
 /// `reverseBranchCondition`.
-fn reversed(cond: &Inst) -> Inst {
+pub(crate) fn reversed(cond: &Inst) -> Inst {
     let mut cond = cond.clone();
     cond.opcode = if cond.opcode == op::BR_IF { op::BR_UNLESS } else { op::BR_IF };
     cond

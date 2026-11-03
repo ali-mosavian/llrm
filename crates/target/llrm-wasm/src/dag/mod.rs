@@ -149,19 +149,24 @@ pub fn compile_function(
     ) {
         crate::spike_coalesce::coalesce(&mut f);
     }
-    if options.level != crate::driver::Level::O0 && crate::branch_fold::forward_branch_only_blocks(&mut f) {
-        remove_unreachable_blocks(&mut f);
-    }
+    let for_size = matches!(
+        options.level,
+        crate::driver::Level::Os | crate::driver::Level::Oz
+    );
     if options.level != crate::driver::Level::O0 {
-        if crate::branch_fold::fold_branches(&mut f) {
+        // `BranchFolder::OptimizeFunction`: tail merging, then the branches,
+        // until neither changes anything.
+        for _ in 0..=f.blocks.len() {
+            let mut changed = crate::tail_merge::tail_merge(&mut f, for_size);
+            changed |= crate::branch_fold::forward_branch_only_blocks(&mut f);
+            changed |= crate::branch_fold::fold_branches(&mut f);
+            if !changed {
+                break;
+            }
             remove_unreachable_blocks(&mut f);
         }
     }
     if options.level != crate::driver::Level::O0 {
-        let for_size = matches!(
-            options.level,
-            crate::driver::Level::Os | crate::driver::Level::Oz
-        );
         if crate::tail_duplicate::tail_duplicate(&mut f, for_size) {
             remove_unreachable_blocks(&mut f);
             // The pin runs `FixIrreducibleControlFlow` after it.
