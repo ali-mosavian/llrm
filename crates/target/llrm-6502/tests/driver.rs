@@ -904,3 +904,22 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// `.export` named every function and no variable: two objects with a static
+/// `helper` collided at link time (softfloat's add_bits, cmp_bits, from_mag:
+/// ld65 "Duplicate external identifier"), and a global another object imports
+/// (`counter`) was "Unresolved external". An internal symbol is not exported,
+/// an external one is, function or variable.
+#[test]
+fn only_external_functions_and_variables_are_exported() {
+    let ir = module(
+        "@counter = global i16 0\n@hidden = internal global i16 0\n\
+define internal i8 @helper(i8 %a) #0 {\n  ret i8 %a\n}\n\
+define i8 @pub(i8 %a) {\n  %r = call i8 @helper(i8 %a)\n  ret i8 %r\n}\n\
+attributes #0 = { noinline }",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let exported: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix(".export ")).collect();
+    assert!(exported.contains(&"pub") && exported.contains(&"counter"), "exports {exported:?}:\n{text}");
+    assert!(!exported.contains(&"helper") && !exported.contains(&"hidden"), "exports {exported:?}:\n{text}");
+}
