@@ -63,7 +63,7 @@ _PAGE_PENALTY = {n for n in ('LDA', 'LDX', 'LDY', 'ADC', 'SBC', 'AND', 'ORA', 'E
 PV_OPEN, PV_CLOSE, PV_READ, PV_WRITE, PV_ARGS, PV_EXIT = 0xFFF4, 0xFFF5, 0xFFF6, 0xFFF7, 0xFFF8, 0xFFF9
 
 class Result:
-    def __init__(self): self.cycles = 0; self.exit = None; self.insns = 0; self.classes = {}; self.funcs = {}; self.fclasses = {}
+    def __init__(self): self.cycles = 0; self.exit = None; self.insns = 0; self.classes = {}; self.funcs = {}; self.fclasses = {}; self.addr = {}; self.mem = None; self.rng = []
 
 def parse_labels(path):
     """ld65 -Ln file: name -> address."""
@@ -82,7 +82,7 @@ def parse_dbg(path):
             if n and t and v and t.group(1) == 'lab': out.setdefault(n.group(1), int(v.group(1), 16))
     return out
 
-def run(binary, labels=None, args=('sim65',), maxcycles=500_000_000, trace=None):
+def run(binary, labels=None, args=('sim65',), maxcycles=500_000_000, trace=None, blocks=False):
     """Execute a sim65 image. labels: name -> address. Returns Result with .cycles .exit .classes .funcs {entry: [name, calls, excl, incl]}."""
     if binary[:5] != b'sim65': raise ValueError('not a sim65 binary')
     cpu, spzp, load, reset = binary[6], binary[7], binary[8] | binary[9] << 8, binary[10] | binary[11] << 8
@@ -234,6 +234,7 @@ def run(binary, labels=None, args=('sim65',), maxcycles=500_000_000, trace=None)
         if trace: trace(ipc, name, cyc)
     # the exit hook is entered by JSR or JMP: its call and the frames still open are charged as they stand
     import bisect
+    if blocks: entries |= {a for a in names if load <= a < load + len(prog)}  # every label starts a range: block-level profile
     rng = sorted(entries)
     ex_by = {}; fcls = res.fclasses
     for a_, (n_, c_, cl_) in ex_addr.items():
@@ -243,7 +244,7 @@ def run(binary, labels=None, args=('sim65',), maxcycles=500_000_000, trace=None)
     for f, t0 in stack:
         active[f] -= 1
         if not active[f]: incl[f] = incl.get(f, 0) + cyc - t0
-    res.cycles = cyc; res.insns = ninsn
+    res.cycles = cyc; res.insns = ninsn; res.addr = ex_addr; res.mem = bytes(mem); res.rng = rng
     for fc in fcls.values():
         for c_, (n_, cy_) in fc.items():
             o = res.classes.get(c_, (0, 0)); res.classes[c_] = (o[0] + n_, o[1] + cy_)
@@ -252,11 +253,32 @@ def run(binary, labels=None, args=('sim65',), maxcycles=500_000_000, trace=None)
         res.funcs[a] = [nm(a), calls.get(a, 0), ex_by.get(a, 0), incl.get(a, 0)]
     return res
 
+def disasm(mem, a, names=None):
+    name, mode, _, _ = _T[mem[a]]; lo, hi = mem[a + 1], mem[a + 2]; w = lo | hi << 8
+    f = lambda v: (names or {}).get(v) or '$%04X' % v
+    op = {'imp': '', 'acc': ' a', 'imm': ' #$%02X' % lo, 'zp': ' $%02X' % lo, 'zpx': ' $%02X,x' % lo, 'zpy': ' $%02X,y' % lo,
+          'abs': ' ' + f(w), 'absx': ' %s,x' % f(w), 'absy': ' %s,y' % f(w), 'ind': ' (%s)' % f(w), 'indx': ' ($%02X,x)' % lo,
+          'indy': ' ($%02X),y' % lo, 'rel': ' ' + f((a + 2 + (lo - 256 if lo > 127 else lo)) & 0xFFFF)}[mode]
+    return name.lower() + op, _SIZE[mode]
+
+def annotate(res, labels, func, out=sys.stdout):
+    """Listing of one function's range (by name) with execution count and cycles per instruction, label at each block."""
+    names = {}
+    for n, a in sorted(labels.items(), key=lambda kv: (len(kv[0]), kv[0]), reverse=True): names[a] = n
+    start = labels[func]; nxt = [a for a in res.rng if a > start]; end = nxt[0] if nxt else start + 1
+    a = start
+    while a < end:
+        if a in names: print('%s:' % names[a], file=out)
+        t, n = disasm(res.mem, a, names); e = res.addr.get(a)
+        print('  %04X %9s %9s  %s' % (a, e[0] if e else '', e[1] if e else '', t), file=out); a += n
+
 def merge(results):
     """Sum several Results (same binary layout)."""
     t = Result()
     for r in results:
-        t.cycles += r.cycles; t.insns += r.insns
+        t.cycles += r.cycles; t.insns += r.insns; t.mem = r.mem; t.rng = sorted(set(t.rng) | set(r.rng))
+        for a, (n, cy, cl) in r.addr.items():
+            o = t.addr.setdefault(a, [0, 0, cl]); o[0] += n; o[1] += cy
         for c, (n, cy) in r.classes.items():
             o = t.classes.get(c, (0, 0)); t.classes[c] = (o[0] + n, o[1] + cy)
         for a, (nm_, ca, ex, inc) in r.funcs.items():
@@ -285,7 +307,9 @@ def labels_for(lbl=None, dbg=None):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('bin'); ap.add_argument('-l', '--labels'); ap.add_argument('--dbg'); ap.add_argument('--top', type=int, default=12)
+    ap.add_argument('--annotate', help='print this function with per-instruction counts')
     ap.add_argument('--maxcycles', type=int, default=500_000_000)
     a = ap.parse_args()
     r = run(open(a.bin, 'rb').read(), labels_for(a.labels, a.dbg), maxcycles=a.maxcycles)
     report(r, a.top)
+    if a.annotate: annotate(r, labels_for(a.labels, a.dbg), a.annotate)

@@ -2,11 +2,12 @@
 """profile_f64.py DIR [N] [OPS]: per-function cycles of the 6502 binary64 add/sub/mul/div that bench_f64.py built in DIR (the directory
 it prints). Each of the N records (default 100) is one sim65 run with start_idx/count_n patched as the bench does; the run is
 profiled with profile6502.py and its cycle total and exit code must equal sim65's own (a difference is a bug in the profiler: exit 1).
+Env: BLOCKS=1 profiles per label instead of per function; ANNOTATE=name prints that function's listing with counts summed over the records.
 Prints per op the top functions by exclusive cycles per record, and the opcode-class histogram."""
 import os, subprocess, sys
 import profile6502 as P
 
-DIR = sys.argv[1]; N = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+DIR = sys.argv[1] if len(sys.argv) > 1 else '.'; N = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 OPS = sys.argv[3].split() if len(sys.argv) > 3 else ['add', 'sub', 'mul', 'div']
 OPT = os.environ.get('OPT', 'Os')
 DRIVER = {'zerobss', 'startup', 'callmain', 'initlib', 'donelib', 'main', '_main', 'exit', 'pushax', 'push0', 'pusha0'}
@@ -46,7 +47,7 @@ def main():
         d = f'{DIR}/{OPT}_{op}'; relink_with_debug(d); patched, labels = patcher(d)
         runs = []
         for i in range(1, N + 1):
-            img = patched(i, 1); r = P.run(img, labels); c, rc = sim65(img, f'{d}/q.bin'); runs.append(r)
+            img = patched(i, 1); r = P.run(img, labels, blocks=bool(os.environ.get('BLOCKS'))); c, rc = sim65(img, f'{d}/q.bin'); runs.append(r)
             if (r.cycles, r.exit) != (c, rc):
                 bad += 1; print(f'MISMATCH {op} record {i}: profiler {r.cycles} exit {r.exit}, sim65 {c} exit {rc}')
         total_bad += bad; t = P.merge(runs)
@@ -55,6 +56,7 @@ def main():
         print('%-26s %8s %10s %10s %6s' % ('function (per record)', 'calls', 'excl', 'incl', 'excl%'))
         for a, (nm, ca, ex, inc) in sorted(lib.items(), key=lambda kv: -kv[1][2])[:12]:
             print('%-26s %8.1f %10.0f %10.0f %5.1f%%' % (nm, ca / N, ex / N, inc / N, 100 * ex / t.cycles))
+        if os.environ.get('ANNOTATE'): P.annotate(t, labels, os.environ['ANNOTATE'])  # counts summed over the records
         print('driver+startup (excl, per record): %.0f' % (sum(v[2] for v in t.funcs.values() if v[0] in DRIVER) / N))
         hist = {c: [0, 0] for c in P.CLASSES}  # library code only: the startup's zero-fill is not the operation
         for a in lib:
@@ -63,4 +65,4 @@ def main():
         print('class (library code)  insns/rec cycles/rec   cyc%')
         for c in P.CLASSES: print('%-8s %20.0f %9.0f %6.1f%%' % (c, hist[c][0] / N, hist[c][1] / N, 100 * hist[c][1] / tot))
     sys.exit(1 if total_bad else 0)
-main()
+if __name__ == '__main__': main()

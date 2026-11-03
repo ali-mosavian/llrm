@@ -145,18 +145,18 @@ def mos(op):
         c.append('  if (r.u != W[i] && !(((r.u << 1) > 0xFFE0000000000000ull) && ((W[i] << 1) > 0xFFE0000000000000ull))) fails++; (void)s; }')
         c.append(' printf("%lu %lu %lu %lu %u\\n", sum, sb, (unsigned long)mx, (unsigned long)mb, fails); return 0; }')
         return '\n'.join(c)
-    open(f'{T}/m0.c', 'w').write(prog(0))
-    sh(f'{MOS}/mos-sim-clang', '-Os', '-o', f'{T}/m0', f'{T}/m0.c')
+    open(f'{T}/m0_{op}.c', 'w').write(prog(0))
+    sh(f'{MOS}/mos-sim-clang', '-Os', '-o', f'{T}/m0_{op}', f'{T}/m0_{op}.c')
     out = []  # size: one call on volatile operands against none, independent of N
     for noop in (0, 1):
         open(f'{T}/z{noop}.c', 'w').write('#include <stdint.h>\ntypedef union { double d; uint64_t u; } U;\nvolatile U x, y, r;\nint main(void) { U a = x, b = y, c; c.d = %s; r = c; return 0; }\n' % ('a.d' if noop else e.replace('x.d', 'a.d').replace('y.d', 'b.d')))
         sh(f'{MOS}/mos-sim-clang', '-Os', '-o', f'{T}/z{noop}', f'{T}/z{noop}.c')
         out.append(int(sh(f'{MOS}/llvm-size', f'{T}/z{noop}.elf').stdout.split('\n')[1].split()[0]))
-    s, sb, mx, mb, f = map(int, sh(f'{MOS}/mos-sim', f'{T}/m0').stdout.split())
+    s, sb, mx, mb, f = map(int, sh(f'{MOS}/mos-sim', f'{T}/m0_{op}').stdout.split())
     assert f == 0, f'llvm-mos {op}: {f} wrong results'
     return (s - sb) / N, mx - mb, out[0] - out[1]
 
-print('llrm-cc md5', subprocess.run(['md5sum', CC], capture_output=True, text=True).stdout[:12], f'N={N}')
+print('llrm-cc md5', subprocess.run(['md5sum', CC], capture_output=True, text=True).stdout[:12], f'N={N} dir={T}')
 print('op   | ' + ' | '.join(f'ours -{o} mean/worst clk, B' for o in OPTS) + ' | llvm-mos mean/worst clk, B')
 for opt in OPTS: compile_libs(opt)
 for op in OPS:
