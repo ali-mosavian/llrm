@@ -617,6 +617,10 @@ pub struct Function {
     pub body: Option<(usize, usize)>,
     /// Called and returned from far.
     pub far: bool,
+    /// What its frame cells are measured from, where that is not the unit's
+    /// ([`Info::frame_base`]): WebAssembly's frame pointer is a local of its
+    /// own in each function.
+    pub frame_base: Option<FrameBase>,
     /// The module's own code, whose variables are the module's.
     pub module: bool,
     /// Parameters first, in order, then the locals.
