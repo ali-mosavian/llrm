@@ -55,11 +55,13 @@ pub struct Request {
     pub level: Level,
     /// `-f[no-]PASS` switches, applied to the mid-end.
     pub passes: Vec<String>,
+    /// `-g`: SDCC's `C$file$line$..` labels ahead of the instructions.
+    pub debug: bool,
 }
 
 impl Request {
     pub fn new(level: Level) -> Self {
-        Self { cpu: Cpu::Z80, level, passes: Vec::new() }
+        Self { cpu: Cpu::Z80, level, passes: Vec::new(), debug: false }
     }
 }
 
@@ -170,4 +172,10 @@ impl llrm_mir::target::Machine for Z80Machine {
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         Some(Rc::new(crate::tti::Z80Tti::new()))
     }
+}
+
+/// The source file of the unit's `!DICompileUnit`, if `text` has one.
+pub fn source_file(text: &str) -> Option<String> {
+    let module = llrm_mir::parse::module(&without_triple(text)).ok()?;
+    llrm_mir::dbgimport::unit_file(&module).map(|(name, _)| name)
 }

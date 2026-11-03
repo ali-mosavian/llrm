@@ -503,11 +503,22 @@ pub fn text(
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
+    let file = request.debug.then(|| crate::driver::source_file(ir)).flatten();
     let mut out = format!("_{name}::\n");
+    let mut rows = 0;
     for line in lines(ir, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),
+            // SDCC's names for a line (`C$file$line$block_level$n`): a symbol
+            // at the address, which sdld puts in the `.cdb`.
+            Line::Loc(line) => {
+                if let Some(file) = &file {
+                    rows += 1;
+                    let symbol = format!("C${file}${line}$0_0${number}_{rows}");
+                    out.push_str(&format!("\t{symbol}\t= .\n\t.globl\t{symbol}\n"));
+                }
+            }
         }
     }
     Ok(out)
