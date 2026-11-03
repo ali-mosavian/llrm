@@ -39,6 +39,7 @@ pub mod m68kisd {
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
     pub const ADD: ISD = ISD::Target(ids::ADD);
     pub const SUB: ISD = ISD::Target(ids::SUB);
+    pub const SUBX: ISD = ISD::Target(ids::SUBX);
     pub const UMUL: ISD = ISD::Target(ids::UMUL);
     pub const SMUL: ISD = ISD::Target(ids::SMUL);
     pub const AND: ISD = ISD::Target(ids::AND);
@@ -191,6 +192,7 @@ impl Hooks for M68kLowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
@@ -518,6 +520,28 @@ fn lower_setcc(
     let flags = emit_cmp(dag, op0, op1, code);
     let code = cc_operand(dag, code);
     Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `LowerSETCCCARRY`: the comparison of `lhs` and `rhs` with a borrow in, as
+/// `subx` over the carry turned into the extend flag (`carry + -1`).
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let mut unchanged = rhs;
+    let code = translate_cc(dag, cc, &mut unchanged);
+    let carry_vt = dag.value_type(carry);
+    let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
+    let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
+    let compared = dag.get_node_multi(
+        m68kisd::SUBX,
+        &[dag.value_type(lhs), EVT::I8],
+        &[lhs, rhs, SDValue { node: carry.node, res: 1 }],
+    );
+    let code = cc_operand(dag, code);
+    dag.get_node(m68kisd::SETCC, EVT::I8, &[code, SDValue { node: compared.node, res: 1 }])
 }
 
 /// `M68k::GetOppositeBranchCondition`: the codes pair up as `(2n, 2n + 1)`:
