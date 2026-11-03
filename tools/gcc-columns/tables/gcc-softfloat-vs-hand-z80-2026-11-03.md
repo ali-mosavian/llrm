@@ -1,5 +1,7 @@
 # Softfloat C through gcc vs hand Z80 asm, 2026-11-03
 
+**STALE 2026-11-04: measured from runtime/softfloat/src (the monolithic sf32.c), which a286a52c00 moved into runtime/compiler-rt (one file per operation); re-measure on compiler-rt due 2026-11-06.**
+
 TL;DR: gcc is 6.9-31x slower than `src/z80/*.s` per op and 7.2x larger (18004 B vs 2491 B, smallest cell); every gcc result is bit-exact. Cells: `softfloat-z80.tsv`.
 
 Method: `runtime/softfloat/src/sf32*.c` + `int32.c` (`sf32` generic, `sf32_6502` 6502-shaped), `-DSF_INTABI`, -O2/-Os, spike gcc Z80 backend (arguments on the stack,

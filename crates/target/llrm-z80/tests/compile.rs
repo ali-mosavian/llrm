@@ -272,11 +272,16 @@ fn a_byte_read_by_an_alu_op_is_read_from_memory() {
 
 /// A loaded byte that is widened went to a byte register and was copied to the
 /// pair's low half (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte
-/// and 4 T-states more per widened load.
+/// and 4 T-states more per widened load. (A word minus the widened byte: with
+/// the byte on both sides it is `SUBZX8`.)
 #[test]
 fn a_widened_load_goes_to_the_pairs_low_half() {
-    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
+    let out = compiled(
+        "define i16 @w(ptr %p, i16 %x) {\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i16\n  %r = sub i16 %x, %z\n  ret i16 %r\n}",
+        "w",
+    );
+    let direct = ["ld c, (hl)\n\tld b, #0", "ld e, (hl)\n\tld d, #0"].iter().any(|pair| out.contains(pair));
+    assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
 /// `digits` kept its counter across the divide call in a frame slot (`ld
@@ -1119,4 +1124,14 @@ fn a_conditional_branch_to_the_same_return_block_as_the_jump_keeps_that_block() 
     );
     let out = text(&ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ret"), "{out}");
+}
+
+/// A word that joins a byte and a constant (`*a`, or 0 where the string
+/// ended) was not known to have a zero high byte, so strcmp's `*a - *b` was a
+/// 16-bit `sbc hl, de` with both bytes widened by hand: scmp -O2 took 36 B and
+/// 183 clocks. The difference is `sub a, b` and the borrow as the high byte.
+#[test]
+fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
 }
