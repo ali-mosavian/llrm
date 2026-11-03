@@ -8,11 +8,19 @@ mod common;
 const SOURCE: &str = "int f(double x) { return (int)(x < -3 ? -3 : (x > 4 ? 4 : x)); }\n";
 
 fn assembled(source: &str) -> String {
+    assembled_for(source, &["--target=x86_32-wat", "-m32", "-mabi=sysv", "-march=i486"])
+}
+
+fn assembled_for(
+    source: &str,
+    target: &[&str],
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["--target=x86_32-wat", "-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .args(target)
+        .args(["-O2", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -37,4 +45,13 @@ fn test_a_clamp_converted_to_an_integer_converts_on_the_middle_path_only() {
 fn test_a_select_of_two_variables_keeps_one_conversion_after_it() {
     let text = assembled("int f(double x, double y, int c) { return (int)(c ? x : y); }\n");
     assert_eq!(text.matches("fistp").count(), 1, "{text}");
+}
+
+/// Control: where one `cvttsd2si` converts (x86-64 SSE) the select stays and
+/// the limits are not converted on their own paths.
+#[test]
+fn test_a_cheap_conversion_on_x86_64_keeps_the_clamp_a_select() {
+    let text = assembled_for(SOURCE, &["--target=x86_64-linux"]);
+    assert_eq!(text.matches("cvttsd2si").count(), 1, "{text}");
+    assert!(!text.contains(", -3\n"), "{text}");
 }
