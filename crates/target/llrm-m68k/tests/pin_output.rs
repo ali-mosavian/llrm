@@ -53,8 +53,15 @@ fn not_and_swap_encode_as_binutils_does() {
 /// `flags.rs`, which only a schedule that separates a compare from its uses
 /// reaches; the ILP list scheduler (the default) keeps them together and
 /// retests.
-const SOURCE_ORDER: Options =
-    Options { mid_end: true, size: false, source_order: true, indexed: false, push_frame: false, short: false };
+const SOURCE_ORDER: Options = Options {
+    mid_end: true,
+    size: false,
+    source_order: true,
+    indexed: false,
+    push_frame: false,
+    short: false,
+    debug: false,
+};
 
 fn compiled(
     ir: &str,
@@ -157,7 +164,8 @@ v25:\n\
 /// A second select on the codes of a compare, after the first one's join set
 /// them again (and a call between), stayed a `CMOV` pseudo: "CMOV16d is a
 /// pseudo-instruction: it has no encoding" (differential seeds 719 and 847).
-/// The join of the first restores the codes the head kept.
+/// The join of the first restores the codes the head kept, or the head turned
+/// them into a byte before the call (`79bcf1f048`'s known bits).
 #[test]
 fn a_second_select_on_the_codes_of_one_compare_is_expanded() {
     let ir = "@zero = external global i8\n\
@@ -196,7 +204,17 @@ entry:\n\
 }";
     let text = compiled(ir, SOURCE_ORDER);
     assert!(!text.contains("should not be emitted"), "{text}");
-    assert!(text.contains("%ccr") || text.contains("%sr"), "{text}");
+    // the codes outlive the call: saved, or the condition taken into a byte
+    // before it (`scs`, since the known bits of a compare are 0/1)
+    let kept = text
+        .lines()
+        .any(
+            |line| {
+                let mnemonic = line.trim().split_whitespace().next().unwrap_or("");
+                mnemonic.len() == 3 && mnemonic.starts_with('s') && mnemonic != "sub"
+            },
+        );
+    assert!(text.contains("%ccr") || text.contains("%sr") || kept, "{text}");
 }
 
 /// `divu.l %d2,%d1` and `divs.l %d2,%d1`, from binutils. The pin's rows encoded

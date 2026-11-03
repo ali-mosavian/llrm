@@ -27,7 +27,7 @@ pub use commute::commute_tied;
 pub use fold::{
     branch_fold, branch_fold_hoisting, remove_identity_copies, remove_redundant_copies, remove_redundant_copies_between,
 };
-pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg};
+pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, Variable, VariablePlace};
 pub use regalloc::{Allocate, Assignment, GraphColoring, Join, Side, Target};
 pub use reloads::forward_reloads;
 pub use reschedule::reschedule_kills;

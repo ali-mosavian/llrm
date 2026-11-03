@@ -254,6 +254,26 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A byte or word add that keeps its source live was a copy and a narrow add
+/// at m64 (`mov r10d, edx; add r10b, 0xec`); the pin makes it a three-address
+/// `lea r9d, [r8 - 20]` (`convertToThreeAddressWithLEA`, `LEA64_32r`).
+/// copy_runs m64 -O2 had the extra instruction. Straight-line code: in a loop
+/// the strength reduction turned the add into an induction variable and the
+/// test lost its premise on release/next.
+#[test]
+fn a_byte_and_a_word_add_that_keep_their_source_are_leas_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define void @f(i8 %t, i16 %u, ptr %p, ptr %q) {\nentry:\n  %a = add i8 %t, -20\n  store volatile i8 %a, ptr %p\n\
+                  %b = add i16 %u, 300\n  store volatile i16 %b, ptr %q\n\
+                  %pt = getelementptr i8, ptr %p, i64 1\n  store volatile i8 %t, ptr %pt\n\
+                  %qu = getelementptr i8, ptr %q, i64 2\n  store volatile i16 %u, ptr %qu\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("-20]")), "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+300]")), "{listing}");
+}
+
 /// A `{ i64, i48 }` (a packed struct of 14 bytes) crossed the DAG selector as
 /// an `i48`, which nothing legalized: torture 20131127-1 was refused at -m64,
 /// "Unsupported CopyToReg Int(48) promote operand".
@@ -2277,6 +2297,47 @@ fn a_dense_switch_at_m64_is_a_read_only_table_of_pc_relative_entries() {
     }
 }
 
+/// A dense switch at m64 without the "PIC Level" flag (`-fno-pic`) is the pin's
+/// static table: a pointer per case, `R_X86_64_64` against the block, jumped
+/// through as `jmp *table(,%rax,8)`. Ours was always the PC-relative table of
+/// 4-byte offsets, which only a PIE needs.
+#[test]
+fn a_dense_switch_at_m64_without_the_pic_level_flag_is_a_table_of_pointers() {
+    let mut text =
+        String::from("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n");
+    for i in 0..8 {
+        text += &format!("declare void @g{i}()\n");
+    }
+    text += "define void @f(i32 %x) {\n  switch i32 %x, label %d [\n";
+    for i in 0..8 {
+        text += &format!("    i32 {i}, label %l{i}\n");
+    }
+    text += "  ]\n";
+    for i in 0..8 {
+        text += &format!("l{i}:\n  call void @g{i}()\n  ret void\n");
+    }
+    text += "d:\n  ret void\n}\n!llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m64::M64),
+    )
+    .unwrap()
+    .object;
+    let table = object.sections.iter().find(|one| one.role == llrm_object::Role::ROData).expect("a read-only section");
+    assert_eq!(table.image.len(), 8 * 8);
+    assert!(
+        table.relocs.len() == 8
+            && table.relocs.iter().all(|one| !one.pc_rel && one.kind == llrm_object::FixupKind::DATA_8),
+        "{:?}",
+        table.relocs
+    );
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("*8]"), "{listing}");
+}
+
 /// The same table through the Mach-O and COFF writers: each takes it (the
 /// entries are `S + A - P` against the code, as in ELF), and COFF's fields are
 /// the `slot + 4 - table` its `REL32` adds the code's address to.
@@ -2458,4 +2519,75 @@ fn a_row_on_the_same_line_as_the_row_before_is_not_a_statement() {
             assert_eq!(stmt, pair[0].1 != pair[1].1, "{isel}: {rows:?} not_stmt {:?}", info.not_stmt);
         }
     }
+}
+
+/// The copy that puts a call's argument in its register is of the call's line
+/// (the pin's `COPY` has the call's `DebugLoc`). Ours had none, so every case
+/// block of a switch began with a line-0 row: 5 of them in 8 cases.
+#[test]
+fn the_argument_move_of_a_switch_case_is_of_the_calls_line() {
+    let info = debug_info(
+        &["-m32", "-O2", "-g", "-fobject-format=elf", "--isel=dag"],
+        include_str!("../tests/data/debug_switch_args_m32_o2.ll"),
+    );
+    let zero = info.lines.iter().filter(|row| row.line == 0).count();
+    assert!(zero <= 2, "{zero} line-0 rows: {:?}", info.lines);
+}
+
+/// The record types of an OMF object, in order (type byte, 2-byte length,
+/// body).
+fn omf_record_types(bytes: &[u8]) -> Vec<u8> {
+    let mut types = Vec::new();
+    let mut at = 0;
+    while at + 3 <= bytes.len() {
+        types.push(bytes[at]);
+        at += 3 + usize::from(u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]));
+    }
+    types
+}
+
+fn omf_of(arguments: &[&str]) -> Vec<u8> {
+    let directory = std::env::temp_dir().join(format!("fsec-{}-{}", std::process::id(), arguments.join("")));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("two.ll");
+    std::fs::write(
+        &source,
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+         define i16 @callee(i16 %a) {\n  %b = add i16 %a, 1\n  ret i16 %b\n}\n\
+         define i16 @caller(i16 %a) {\n  %b = call i16 @callee(i16 %a)\n  ret i16 %b\n}\n\
+         define i16 @unused(i16 %a) {\n  %b = mul i16 %a, 3\n  ret i16 %b\n}\n",
+    )
+    .unwrap();
+    let output = directory.join("two.obj");
+    let mut all = vec!["-m16", "-fobject-format=omf", "-o", output.to_str().unwrap()];
+    all.extend_from_slice(arguments);
+    crate::llc::compile(&flags(&all), &source, None).unwrap();
+    std::fs::read(output).unwrap()
+}
+
+/// The C path wrote one segment for the module's code whatever the program,
+/// so the linker could not drop an uncalled function (sfm16_mul: 2687 B of
+/// text, 662 B reached). `-ffunction-sections` writes a COMDAT per function.
+#[test]
+fn function_sections_write_a_comdat_per_function_on_omf() {
+    let comdats = |bytes: &[u8]| omf_record_types(bytes).into_iter().filter(|kind| matches!(kind, 0xC2 | 0xC3)).count();
+    assert_eq!(comdats(&omf_of(&["-ffunction-sections"])), 3);
+    assert_eq!(comdats(&omf_of(&[])), 0, "off by default: today's object");
+}
+
+/// With the flag off the object is the one written before the flag existed.
+#[test]
+fn no_function_sections_is_the_default_object() {
+    assert_eq!(omf_of(&["-fno-function-sections"]), omf_of(&[]));
+}
+
+/// Every function's COMDAT is allocated in the module's code segment
+/// (`<MODULE>_TEXT`), the segment the one-segment layout names: function
+/// sections change the grouping, not the segment. (`-mcode-segment=` is not
+/// read on this path, with or without the flag.)
+#[test]
+fn function_sections_allocate_in_the_modules_code_segment() {
+    let has = |object: &[u8]| object.windows(8).any(|window| window == b"TWO_TEXT");
+    assert!(has(&omf_of(&["-ffunction-sections"])));
+    assert!(has(&omf_of(&[])));
 }
