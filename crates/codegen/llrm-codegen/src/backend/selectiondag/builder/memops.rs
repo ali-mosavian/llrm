@@ -1067,9 +1067,7 @@ impl Builder<'_> {
                     .and_then(|bytes| self.x87_zero_stores(root, dst, bytes, alignment, opt_size, filled));
                 let inline = match constant {
                     _ if floats.is_some() => floats,
-                    Some(bytes) if !filled => {
-                        self.inline_memset(root, dst, other, bytes, limit, alignment)?
-                    }
+                    Some(bytes) if !filled => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
                     _ => None,
                 };
                 match (inline, constant) {

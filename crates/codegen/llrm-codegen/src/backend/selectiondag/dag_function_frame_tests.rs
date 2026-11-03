@@ -1161,7 +1161,8 @@ fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
 #[test]
 fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
     for parity in [0, 1] {
-        // whole doubles are x87 stores, not a fill (`a_zero_clear_of_doubles_*`)
+        // whole doubles are x87 stores, not a fill
+        // (`a_zero_clear_of_doubles_*`)
         let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity && n % 8 != 0).collect();
         let first = sizes.iter().copied().find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
         assert!(first > 8, "{first}");
@@ -1192,7 +1193,12 @@ entry:
     let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     cpu.size = size;
     let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
-    done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| format!("{:?}:{}", w.op, w.name.clone().unwrap_or_default())).collect()
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| format!("{:?}:{}", w.op, w.name.clone().unwrap_or_default()))
+        .collect()
 }
 
 /// nbody O2/Os at m16 grew 100 B: each 16-byte zero clear of two doubles was
