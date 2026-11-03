@@ -2161,10 +2161,10 @@ impl Selector<'_, '_, '_> {
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
-                    // More than the frame keeps the stack aligned to: the frame
-                    // realigns the stack pointer for it.
-                    let wanted = wanted.map_or(0, |one| one as i64);
-                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
+                    // The declared alignment wins over the natural one; above
+                    // what the frame keeps the stack aligned to, the frame
+                    // realigns the stack pointer.
+                    let align = align.max(wanted.map_or(0, |one| one as i64));
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
