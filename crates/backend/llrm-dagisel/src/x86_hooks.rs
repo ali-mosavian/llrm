@@ -9,10 +9,9 @@
 //! and `selectMOV64Imm32` never match here (SD35).
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD36** `checkTCRetEnoughRegs` is `false` and `isDef32`,
-//!   `isSExtAbsoluteSymbolRef` are `false`: tail calls, 64-bit zero-extension
-//!   and absolute symbols are not translated yet, and `false` only declines a
-//!   pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
+//! - **SD36** `checkTCRetEnoughRegs` is `false` and `isSExtAbsoluteSymbolRef`
+//!   is `false`: tail calls and absolute symbols are not translated yet, and
+//!   `false` only declines a pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
 //! - **SD221** (m16) `shouldAvoidImmediateInstFormsForSize` does not count a
 //!   call argument's store as a use: it is a `push imm` at real mode, smaller
 //!   than the register that would hold the constant. The pin has no 16-bit
@@ -26,7 +25,7 @@
 //! The shadow harness: `Selector::select(dag, &mut X86Hooks::new(..), node)`.
 
 use crate::dag::{Hooks, PatternContext, SDValue, X86Predicates};
-use crate::generated::ids::{isd, mvt, x86, x86isd};
+use crate::generated::ids::{isd, mvt, target_opcode, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
 use crate::instr;
 use crate::matcher::Vt;
@@ -630,12 +629,32 @@ impl<D: AddrDag> X86Predicates<D> for X86Hooks {
         X86Hooks::has_no_carry_flag_uses(self, dag, flags)
     }
 
+    /// `isDef32` ([L544][def32]): any node that defines a 32-bit result zeroes
+    /// the upper half of the 64-bit register, but a truncate, a copy from a
+    /// register, an assertion, a freeze and a bit scan of a non-constant may
+    /// not. `EXTRACT_SUBREG` is compared as a machine opcode.
+    ///
+    /// [def32]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L544
     fn is_def32(
         &self,
-        _: &D,
-        _: u32,
+        dag: &D,
+        node: u32,
     ) -> bool {
-        false
+        let opcode = dag.opcode(node);
+        let bit_scan = (opcode == x86isd::BSF || opcode == x86isd::BSR) && {
+            let first = dag.operand(node, 0);
+            let constant = matches!(dag.opcode(first.node), isd::Constant | isd::TargetConstant);
+            !dag.is_undef(first) && !constant
+        };
+        opcode != isd::TRUNCATE
+            && !(dag.is_machine(node) && opcode == target_opcode::EXTRACT_SUBREG)
+            && opcode != isd::CopyFromReg
+            && opcode != isd::AssertSext
+            && opcode != isd::AssertZext
+            && opcode != isd::AssertAlign
+            && opcode != isd::FREEZE
+            && !bit_scan
     }
 
     fn check_tc_ret_enough_regs(
