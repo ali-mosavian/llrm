@@ -482,11 +482,7 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv) => {
                 // `SoftenFloatRes_Binary`: `makeLibCall` of the softened operands.
                 let args = [self.softened_float(self.dag.operand(value, 0)), self.softened_float(self.dag.operand(value, 1))];
-                let call = self.tli.libcall_name(op, vt).and_then(|name| {
-                    let arch = self.target?;
-                    let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
-                    super::libcall::c_lib_call(self.dag, &env, &self.tli.libcall_symbol(name), self.tli.libcall_convention(name), &args, int)
-                });
+                let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
                 call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
             }
             ISD::Load => {
@@ -638,10 +634,26 @@ impl<'a> TypeLegalizer<'a> {
         op: ISD,
         vt: EVT,
     ) -> Result<SDValue, LegalizeError> {
-        let arch = self.target.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften without a target" })?;
+        self.soft_call(name, args, ret).ok_or(LegalizeError::Unsupported { op, ty: vt, what: "the routine cannot be called" })
+    }
+
+    /// `makeLibCall` of a softened float's routine: the target's own call
+    /// lowering when it has one (`Hooks::make_lib_call`), else the C
+    /// convention over the target's calling description.
+    fn soft_call(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+    ) -> Option<SDValue> {
+        if let Some(hooks) = self.hooks.as_mut() {
+            if let Some(call) = hooks.make_lib_call(self.dag, name, args, ret, false) {
+                return Some(call);
+            }
+        }
+        let arch = self.target?;
         let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
         super::libcall::c_lib_call(self.dag, &env, &self.tli.libcall_symbol(name), self.tli.libcall_convention(name), args, ret)
-            .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "the routine cannot be called" })
     }
 
     /// `SoftenFloatOp_SETCC` over `softenSetCCOperands`: the compare as
@@ -678,11 +690,10 @@ impl<'a> TypeLegalizer<'a> {
             }
         };
         let mut compare = |this: &mut Self, stem: &'static str, cc: CondCode| -> Result<SDValue, LegalizeError> {
-            let arch = this.target.ok_or_else(|| unsupported("soften a compare without a target"))?;
-            let env = super::libcall::CallEnv { arch, pointer: this.dag.config().pointer };
             // The routines return a C `int`: the pointer's width up to a long (16 at m16, 32 above).
             let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
-            let result = super::libcall::c_lib_call(this.dag, &env, &this.tli.libcall_symbol(pick(stem)), this.tli.libcall_convention(pick(stem)), &[a, b], int)
+            let result = this
+                .soft_call(pick(stem), &[a, b], int)
                 .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
             let zero = this.dag.get_constant(0, int);
             Ok(this.dag.get_setcc(vt, result, zero, cc))

@@ -116,6 +116,15 @@ pub fn target_lowering() -> TargetLowering {
     ]) {
         tl.set_libcall_name(op, MVT::I32, name);
     }
+    // softened floats: compiler-rt's routines
+    for (vt, names) in [
+        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
+        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
+    ] {
+        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
+    }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     tl

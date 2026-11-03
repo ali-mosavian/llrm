@@ -1028,3 +1028,20 @@ fn a_float_is_carried_as_the_integer_of_its_width() {
     let choose = "define float @s(i1 %c, float %x, float %y) {\n  %r = select i1 %c, float %x, float %y\n  ret float %r\n}";
     assembly(&module(choose), &request).unwrap();
 }
+
+/// A float add, a multiply, an int-to-float and a compare are calls of the
+/// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
+/// each stopped at "the target names no routine" or, for the compare, at a
+/// `CALL` the selector cannot take (the call was built for x86).
+#[test]
+fn a_float_operation_is_a_call_of_its_softfloat_routine() {
+    let request = Request::new(Level::O2);
+    let call = |body: &str, routine: &str| {
+        let text = assembly(&module(body), &request).unwrap();
+        assert!(text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")), "{routine}:\n{text}");
+    };
+    call("define float @f(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}", "__addsf3");
+    call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
+    call("define float @f(i32 %n) {\n  %r = sitofp i32 %n to float\n  ret float %r\n}", "__floatsisf");
+    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__ltsf2");
+}

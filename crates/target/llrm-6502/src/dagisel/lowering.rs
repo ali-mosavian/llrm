@@ -131,6 +131,15 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_operation_action(op, vt, Action::Custom);
         }
     }
+    // softened floats: compiler-rt's routines
+    for (vt, names) in [
+        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
+        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
+    ] {
+        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
+    }
     tl
 }
 
@@ -157,6 +166,78 @@ impl Hooks for MosLowering {
             }
             _ => None,
         }
+    }
+
+    /// `makeLibCall` through `LowerCall`: the routine's address is a target
+    /// external symbol; a long or a long long travels as words, low first.
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out, lower_call};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let words = |dag: &mut SelectionDAG, value: SDValue| -> Vec<SDValue> {
+            let vt = dag.value_type(value);
+            if vt.size_in_bits() <= 16 {
+                return vec![value];
+            }
+            (0..vt.size_in_bits() / 16)
+                .map(|at| {
+                    let moved = if at == 0 {
+                        value
+                    } else {
+                        let amount = dag.get_constant(u128::from(16 * at), EVT::I8);
+                        dag.get_node(ISD::Srl, vt, &[value, amount])
+                    };
+                    dag.get_node(ISD::Truncate, EVT::I16, &[moved])
+                })
+                .collect()
+        };
+        let mut outs = Vec::new();
+        for &value in args {
+            let vt = dag.value_type(value);
+            let parts = words(dag, value);
+            let split = parts.len() > 1;
+            outs.extend(parts.into_iter().map(|part| Out {
+                value: part,
+                ext,
+                pointer: false,
+                arg_vt: vt,
+                split,
+                variadic: false,
+                sret: false,
+            }));
+        }
+        let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
+        let part_vt = if count > 1 { EVT::I16 } else { ret };
+        let ins = vec![In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any }; count as usize];
+        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let root = dag.entry_node();
+        let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        join_words(dag, &values, ret)
+    }
+}
+
+/// The words of a long or a long long, low first, as the one value.
+fn join_words(
+    dag: &mut SelectionDAG,
+    words: &[SDValue],
+    vt: EVT,
+) -> Option<SDValue> {
+    match words {
+        [one] => Some(*one),
+        [lo, hi] => Some(dag.get_node(ISD::BuildPair, vt, &[*lo, *hi])),
+        [a, b, c, d] => {
+            let half = EVT::integer(vt.size_in_bits() / 2);
+            let low = dag.get_node(ISD::BuildPair, half, &[*a, *b]);
+            let high = dag.get_node(ISD::BuildPair, half, &[*c, *d]);
+            Some(dag.get_node(ISD::BuildPair, vt, &[low, high]))
+        }
+        _ => None,
     }
 }
 
