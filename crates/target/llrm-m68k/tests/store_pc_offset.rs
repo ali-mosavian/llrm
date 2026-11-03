@@ -57,3 +57,16 @@ fn a_store_to_a_global_never_writes_through_the_pc() {
         }
     }
 }
+
+#[test]
+fn a_load_of_a_global_plus_offset_stays_one_pc_relative_instruction() {
+    let body = "
+define i32 @f() {
+  %v = load i32, ptr getelementptr inbounds (i8, ptr @shared, i32 4), align 4
+  ret i32 %v
+}";
+    for cpu in [Cpu::M68000, Cpu::M68020] {
+        let out = text(cpu, body);
+        assert!(out.contains("(shared+4,%pc)") && !out.contains("lea"), "the load changed on {cpu:?}:\n{out}");
+    }
+}
