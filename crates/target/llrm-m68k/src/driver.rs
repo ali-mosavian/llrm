@@ -77,6 +77,7 @@ pub fn program(text: &str) -> Result<Program, String> {
         kept.push('\n');
     }
     let mut module = llrm_mir::parse::module(&kept).map_err(|error| error.to_string())?;
+    module.refuse_aliases("m68k")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let expected = crate::kernels::DATALAYOUT;
     match module.datalayout.as_deref() {
@@ -98,6 +99,9 @@ pub fn assembly(
     let options = MidEnd { library: Vec::new(), ..level.mid_end() };
     llrm_transforms::pipeline::applied(&mut program, &Applied { options, ..Applied::default() })?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `llvm.scmp` and `llvm.ucmp` have no m68k instruction: the generic
+    // expansion
+    program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
     let module = &program.modules[0];
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), ..Options::default() };
     let mut out = String::new();

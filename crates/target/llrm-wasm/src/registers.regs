@@ -9,3 +9,8 @@ sp32 32 sp32 0 reserved,stack,int,base - -
 sp64 64 sp64 0 reserved,int,base - -
 fp32 32 fp32 0 reserved,frame,int,base - -
 fp64 64 fp64 0 reserved,int,base - -
+# The virtual locals as the shared coalescer sees them: one register per value type, so a join needs the same type.
+wi32 32 wi32 0 int - -
+wi64 64 wi64 0 int - -
+wf32 32 wf32 0 int - -
+wf64 64 wf64 0 int - -

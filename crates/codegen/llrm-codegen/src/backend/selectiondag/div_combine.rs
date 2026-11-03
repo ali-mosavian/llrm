@@ -36,6 +36,7 @@ struct DivSet {
     extend: i64,
     multiply: i64,
     multiply_long: i64,
+    multiply_high: i64,
     divide: i64,
     divide_long: i64,
 }
@@ -189,6 +190,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 extend: p.extend,
                 multiply: p.multiply,
                 multiply_long: p.multiply_long,
+                multiply_high: p.multiply_high,
                 divide: p.divide,
                 divide_long: p.divide_long,
             },
@@ -216,7 +218,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             sized(if width == 4 { set.divide_long } else { set.divide }) + if signed { set.extend } else { set.add };
         // A multiply-high of a narrower value is the widened product, its high
         // half taken.
-        let high = wide(set.multiply_long) + if width < 4 { set.extend + set.shift } else { 0 };
+        let high = wide(set.multiply_high) + if width < 4 { set.extend + set.shift } else { 0 };
         let (add, shift) = (sized(set.add), sized(set.shift));
         let magic = if signed {
             let found = signed_magic(d, bits);

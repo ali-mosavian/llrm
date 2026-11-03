@@ -19,6 +19,7 @@ use super::call::{CALL, WasmCalling};
 use super::pipeline::{Scheduled, select_block};
 use crate::dagisel::generated::ids::isd;
 use crate::dagisel::hooks::Cpu;
+use crate::features::Features;
 use crate::mir::ValType;
 use crate::{REGISTER_INFO, Width};
 
@@ -30,12 +31,19 @@ pub(crate) fn pointer(width: Width) -> EVT {
 }
 
 /// The calling `TargetNodes` borrows for `'static`, one per width.
-fn calling(width: Width) -> &'static WasmCalling {
-    static W32: WasmCalling = WasmCalling { pointer: EVT::I32 };
-    static W64: WasmCalling = WasmCalling { pointer: EVT::I64 };
-    match width {
-        Width::W32 => &W32,
-        Width::W64 => &W64,
+fn calling(
+    width: Width,
+    features: Features,
+) -> &'static WasmCalling {
+    static W32: WasmCalling = WasmCalling { pointer: EVT::I32, bulk_memory_opt: true };
+    static W32_NO_BULK: WasmCalling = WasmCalling { pointer: EVT::I32, bulk_memory_opt: false };
+    static W64: WasmCalling = WasmCalling { pointer: EVT::I64, bulk_memory_opt: true };
+    static W64_NO_BULK: WasmCalling = WasmCalling { pointer: EVT::I64, bulk_memory_opt: false };
+    match (width, features.has("bulk-memory-opt")) {
+        (Width::W32, true) => &W32,
+        (Width::W32, false) => &W32_NO_BULK,
+        (Width::W64, true) => &W64,
+        (Width::W64, false) => &W64_NO_BULK,
     }
 }
 
@@ -53,11 +61,20 @@ fn shift_amount_of(vt: EVT) -> EVT {
     EVT::integer(bits)
 }
 
-pub fn builder_target(width: Width) -> BuilderTarget {
+pub fn builder_target(
+    width: Width,
+    features: Features,
+) -> BuilderTarget {
     BuilderTarget {
         dag: DagConfig {
             pointer: pointer(width),
             offset_folding: true,
+            global_addresses_constant: true,
+            // DEVIATE: clang marks every symbol `dso_local` under `-fno-pic`,
+            // which the IR parser drops, so every symbol is. The golden
+            // inputs carry the keyword. Exit: `GlobalValue` carries it, no
+            // later than 2026-11-20.
+            dso_local_symbols: true,
             boolean_contents: BooleanContents::ZeroOrOne,
             // The pin keeps `i32.div_s` for `sdiv x, 4` at every
             // level: `isIntDivCheap`.
@@ -82,7 +99,7 @@ pub fn builder_target(width: Width) -> BuilderTarget {
             ret: ISD::Target(isd::RETURN),
             stack_pointer: if width == Width::W32 { "sp32" } else { "sp64" },
             big_endian: false,
-            calling: Some(calling(width)),
+            calling: Some(calling(width, features)),
         }),
         ..BuilderTarget::m64()
     }
@@ -150,6 +167,9 @@ pub struct Selected {
     /// What the phis of the successors take from this block's edges (an IR
     /// block's; the extra ones have none).
     pub phis: Vec<PhiCopy>,
+    /// The probability of each edge to a successor block, as a numerator over
+    /// 2^31 (`BranchProbabilityInfo`); the extra blocks have none.
+    pub probs: Vec<(u32, u32)>,
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
@@ -171,6 +191,7 @@ pub fn select_function(
     name: &str,
     width: Width,
     unwinding: bool,
+    optimize: bool,
 ) -> Result<Vec<Selected>, String> {
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -179,6 +200,7 @@ pub fn select_function(
         .function()
         .filter(|one| !one.is_declaration())
         .ok_or_else(|| format!("@{name} has no body"))?;
+    let features = Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
     // The target's `TargetCalling` places every value; the builder reads none
     // of this.
     let convention = Convention {
@@ -190,9 +212,22 @@ pub fn select_function(
         stack_arguments: 0,
         first: 0,
     };
-    let target = builder_target(width);
+    // `getJumpConditionMergingParams`: the cost model splits every merged
+    // condition into branches.
+    let mut target = builder_target(width, features).with_tti(Some(std::rc::Rc::new(crate::machine::Wasm)));
+    // `getOptLevel() != None`: clusters, jump tables, bit tests and peeling.
+    target.switch_optimize = optimize;
     let arch = WasmArch { width };
     let cpu = if width == Width::W32 { Cpu::Wasm32 } else { Cpu::Wasm64 };
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout: &layout,
+        },
+        function,
+    );
     let mut info = FunctionLoweringInfo::new(function);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
@@ -212,18 +247,38 @@ pub fn select_function(
                 Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let probs = llrm_mir::loopinfo::children(function, block)
+            .enumerate()
+            .map(|(at, to)| (to.0, bpi.get_edge_probability(function, block, at).get_numerator()))
+            .collect::<Vec<_>>();
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
-        for (id, origin, mut one, phis) in group {
+        for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
             let Scheduled { units, mem_refs, accesses } =
-                select_block(&mut one.dag, cpu, &info.jump_tables).map_err(|why| format!("{why:?}"))?;
+                select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
+            // `addSuccessorWithProb`: the edges the builder made of a switch
+            // are the machine blocks' own; the IR's apply to a block it left
+            // alone.
+            let made: Vec<(u32, u32)> = info
+                .edge_probs
+                .iter()
+                .filter(|(from, ..)| *from == id)
+                .map(|&(_, to, probability)| (to.0, probability))
+                .collect();
             selected.push(Selected {
                 id: id.0,
                 origin: origin.0,
                 unwind: if unwinding { unwind_of(function, origin) } else { None },
                 landing: unwinding && id == origin && starts_with_landing_pad(function, origin),
                 phis,
+                probs: if !made.is_empty() {
+                    made
+                } else if n == 0 {
+                    probs.clone()
+                } else {
+                    Vec::new()
+                },
                 dag: one.dag,
                 units,
                 mem_refs,

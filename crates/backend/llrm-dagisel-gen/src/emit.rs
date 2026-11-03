@@ -148,7 +148,9 @@ fn expr(
         Expr::Atom(a) => {
             let method =
                 cpu.dynamic_method(a).ok_or_else(|| format!("`{a}` is open but has no PatternContext method"))?;
-            format!("ctx.{method}()")
+            // A method with arguments (`has_feature("SignExt")`) is written
+            // whole.
+            if method.contains('(') { format!("ctx.{method}") } else { format!("ctx.{method}()") }
         }
         Expr::Not(e) => format!("!{}", expr(e, cpu)?),
         Expr::And(parts) => {

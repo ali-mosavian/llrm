@@ -4,7 +4,7 @@
 //!
 //! DEVIATE W7: not translated are inline asm operands, `FAKE_USE` and debug
 //! values. Reason: QB produces none. Exit: with wasm inline asm and debug
-//! info.
+//! info (undated, none planned).
 //!
 //! # See also
 //! `WebAssemblyExplicitLocals.cpp`, pin d1106deb71cc: `explicitLocals` (L261),

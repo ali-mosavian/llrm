@@ -12,10 +12,13 @@ pub fn register(name: &str) -> RegId {
         .unwrap_or_else(|| panic!("calling.toml names no register {name}"))
 }
 
-/// The `z80` convention.
-pub fn z80() -> llrm_target::calling::Convention {
-    let calling = llrm_target::calling::Calling::parse(crate::CALLING).expect("calling.toml");
-    calling.conventions.into_iter().find(|one| one.name == "z80").expect("convention z80")
+/// The `z80` convention, parsed once: every call lowering asks for it.
+pub fn z80() -> &'static llrm_target::calling::Convention {
+    static PARSED: std::sync::OnceLock<llrm_target::calling::Convention> = std::sync::OnceLock::new();
+    PARSED.get_or_init(|| {
+        let calling = llrm_target::calling::Calling::parse(crate::CALLING).expect("calling.toml");
+        calling.conventions.into_iter().find(|one| one.name == "z80").expect("convention z80")
+    })
 }
 
 /// The pair register that holds a byte register (`l` is half of `hl`): the

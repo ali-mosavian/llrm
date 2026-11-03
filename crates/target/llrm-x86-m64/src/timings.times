@@ -22,7 +22,7 @@ set_ratio_size      =
 clear_ratio_size    =
 # No jump table: a table of code addresses needs an absolute relocation per entry, which a PIE refuses; the
 # position-independent form (a table of offsets from its own address) is not selected yet.
-jump_table          =
+jump_table          5
 cache_line          = 
 pairing             =
 [clocks]
