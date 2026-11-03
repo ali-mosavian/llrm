@@ -361,6 +361,22 @@ fn a_leaf_with_saved_registers_keeps_its_red_zone_at_m64() {
     assert!(!listing.contains("sub rsp") && listing.contains("[rsp+rdi-"), "{listing}");
 }
 
+/// A constant non-zero fill of 64 bytes at m64 was eight `mov qword [..], rcx`
+/// (fill_nest Os +20 B over the pin): the pin loads the splat from the
+/// constant pool and stores it with `movaps`.
+#[test]
+fn a_constant_fill_at_m64_is_a_pool_splat_and_16_byte_stores() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = global [64 x i8] zeroinitializer, align 16\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                define void @f() {\n  call void @llvm.memset.p0.i64(ptr align 16 @g, i8 65, i64 64, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert_eq!(listing.matches("movaps").count(), 5, "{listing}");
+    assert!(!listing.contains("qword ptr [rsp") && !listing.contains("movabs"), "{listing}");
+}
+
 /// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
 /// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
 /// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
@@ -1923,7 +1939,8 @@ fn a_big_coff_frame_is_probed_before_it_is_allocated() {
 }
 
 /// A probed frame that ends in a sibling call gives its stack back before the
-/// `jmp`: the probe and the omitted-frame exit must agree on the size.
+/// `jmp`: the probe and the omitted-frame exit must agree on the size (the
+/// red zone takes 128 B of the 20048 off both).
 #[test]
 fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     let text = format!(
@@ -1933,7 +1950,7 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     let jmp = lines.iter().position(|line| line.starts_with("jmp ")).unwrap_or_else(|| panic!("{listing}"));
-    assert!(lines[jmp - 1].starts_with("add rsp, 20") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
+    assert!(lines[jmp - 1].starts_with("add rsp, 19") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
@@ -2167,22 +2184,23 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
 /// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
 /// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
 /// operand (RAX) not set by a glued CopyToReg" refused the function. The fill
-/// byte is not zero: a zero fill is `xorps` and 16-byte stores (the pin's
-/// `getOptimalMemOpType`) and no longer reaches `rep stosq`.
+/// byte is a register's, so the fill stays `rep stosb`: a constant fill is a
+/// pool splat and 16-byte stores (the pin's `getOptimalMemOpType`), and the
+/// `rep stosq` of a large clear is the 128-byte test's.
 #[test]
-fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
+fn a_register_fill_and_a_quadword_copy_at_m64_are_rep_string_instructions() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @use(ptr, ptr)\n\
                 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
-                define void @f(ptr %s) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
-                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 7, i64 72, i1 false)\n\
+                define void @f(ptr %s, i8 %v) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
+                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 %v, i64 72, i1 false)\n\
                 \x20 call void @llvm.memcpy.p0.p0.i64(ptr align 16 %b, ptr align 16 %s, i64 72, i1 false)\n\
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("rep stosq") && listing.contains("rep movsq"), "{listing}");
+    assert!(listing.contains("rep stosb") && listing.contains("rep movsq"), "{listing}");
 }
 
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at

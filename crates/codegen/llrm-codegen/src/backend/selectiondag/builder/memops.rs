@@ -11,7 +11,7 @@ use llrm_mir::opcode::{Attribute, CallInfo};
 
 use super::super::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue};
 use super::super::isd::ISD;
-use super::super::mvt::EVT;
+use super::super::mvt::{EVT, MVT};
 use super::super::target_calling::TargetCalling;
 use super::super::x86isd;
 use super::{Builder, Refused, convention_for};
@@ -698,7 +698,9 @@ impl Builder<'_> {
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let zero = self.dag.constant(value) == Some(0);
-        let widest = self.widest_mem_op_sse(size, !zero);
+        // A constant byte is a splat in the pool (`v4i32` of the pin); only a
+        // value held in a register has no 16-byte form here.
+        let widest = self.widest_mem_op_sse(size, self.dag.constant(value).is_none());
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
@@ -712,7 +714,19 @@ impl Builder<'_> {
             if width == 16 {
                 let align = self.dag.get_constant(u128::from(common_alignment(align, off)), EVT::I32);
                 let to = self.dag.get_object_ptr_offset(dst, off as i64);
-                chains.push(self.dag.get_node(x86isd::LLRM_ZERO128, EVT::OTHER, &[chain, to, align]));
+                let node = if zero {
+                    self.dag.get_node(x86isd::LLRM_ZERO128, EVT::OTHER, &[chain, to, align])
+                } else {
+                    let byte = self.dag.constant(value).unwrap_or(0) & 0xff;
+                    let splat = (0..16).fold(0u128, |all, at| all | byte << (at * 8));
+                    let pointer = self.dag.config().pointer;
+                    let pool = self.dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
+                    let from = self
+                        .dag
+                        .get_node(super::super::x86_lowering::wrapper_kind(&self.dag, pointer), pointer, &[pool]);
+                    self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[chain, to, from, align])
+                };
+                chains.push(node);
                 off += width;
                 left = left.saturating_sub(width);
                 continue;

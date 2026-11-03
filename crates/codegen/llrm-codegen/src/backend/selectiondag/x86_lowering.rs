@@ -1419,7 +1419,7 @@ fn combine_cmov(
 /// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
 /// position-independent code (small code model), the absolute `Wrapper`
 /// elsewhere.
-fn wrapper_kind(
+pub(super) fn wrapper_kind(
     dag: &SelectionDAG,
     vt: EVT,
 ) -> ISD {
