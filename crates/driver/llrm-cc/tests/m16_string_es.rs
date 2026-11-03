@@ -37,7 +37,7 @@ fn backward_copies_load_es_once() {
          }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",

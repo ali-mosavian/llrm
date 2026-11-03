@@ -13,7 +13,7 @@ fn compile(
     file: &str,
 ) -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", target)
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .arg("-fsyntax-only")
@@ -57,7 +57,7 @@ fn m16_objects_name_their_code_segment_after_the_source_and_export_globals() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let listing_path = std::env::temp_dir().join(format!("llrm-cc-segments-{}.s", std::process::id()));
-    let listing = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let listing = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-S", "-O1", "-o"])

@@ -35,7 +35,7 @@ fn a_base_and_scaled_dword_index_takes_the_shortest_displacement() {
          long k(long x, long y) { return x + y * 4 + 4000; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",
