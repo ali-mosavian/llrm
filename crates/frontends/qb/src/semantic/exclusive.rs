@@ -6,8 +6,9 @@
 //! provable of a parameter when the callee is internal (`--whole-program`)
 //! and every call of it passes, for that parameter, a local of the caller
 //! that no other argument of the call names, a variable nothing else holds
-//! the address of. An element, a pointer, a copy or a STATIC or SHARED
-//! variable is never proven.
+//! the address of, or a copy made for the call (an expression), which nothing
+//! else names. An element, a pointer or a STATIC or SHARED variable is never
+//! proven.
 
 use super::tags::{Passing, Tag};
 use super::{Compiler, Function};
@@ -58,14 +59,17 @@ fn distinct_local(
     arguments: &[Passing],
     index: usize,
 ) -> bool {
-    let Some(Passing::Variable(place)) = arguments.get(index) else {
-        return false;
+    let place = match arguments.get(index) {
+        Some(Passing::Variable(place)) => *place,
+        // A slot made for this call: no other argument can name it.
+        Some(Passing::Temporary) => return true,
+        _ => return false,
     };
-    caller.places.iter().any(|one| one.id == *place && one.storage == "local")
+    caller.places.iter().any(|one| one.id == place && one.storage == "local")
         && arguments.iter().enumerate().all(|(at, other)| {
             at == index
                 || match other {
-                    Passing::Variable(again) => again != place,
+                    Passing::Variable(again) => *again != place,
                     Passing::Value | Passing::Temporary | Passing::Array(_) => true,
                     _ => false,
                 }
