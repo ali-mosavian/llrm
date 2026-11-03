@@ -3,7 +3,7 @@
 
     tools/pairs/objsweep_gate.py
 
-Two `llrm-cc` builds (the merge-base's with LLRM_MEASURE_REF, origin/main unless named, tools/measure.py's cached `dist`; this tree's), `objsweep.py` over m16, m32 and m64, plain and
+Two `llrm-cc` builds (the merge-base's with LLRM_MEASURE_REF, origin/main unless named, tools/measure.py's cached `dist`; this tree's), `objsweep.py` over m16, m32, m64 and arm64, plain and
 `--debug`, O2 and Os. Each leg must change as many objects as `objsweep_expected.toml` says (none where it says nothing): a PR that moves
 bytes on purpose lists the count and why, and the file is empty again once the base has the change. A leg that compiled too little
 proves nothing and fails, and a control (the same program at O2 and at Os must differ) shows the comparison sees a change.
@@ -23,7 +23,14 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tools"))
 
-LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64") for suffix, debug in (("", False), (" debug", True))]
+LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64", "a64") for suffix, debug in (("", False), (" debug", True))]
+# Targets objsweep compiles that the gate does not sweep yet, and why (11-03, the same llrm-cc on both sides, 8 programs at O2: a64 and wasm 8/8 deterministic plain and -g).
+PENDING = {
+    "wasm": "needs llrm-wasm-llc in both gate builds (the dist build makes llrm-cc and llrm-llc only); deterministic 8/8 plain and -g",
+    "mos": "needs llrm-6502-llc in both builds; 5 of 8 programs compile (CannotSelect Store on 3: backend, owner llrm-target-6502), no -g leg",
+    "z80": "needs llrm-z80-llc in both builds; 6 of 8 compile (CannotSelect Store on 2: owner llrm-target-z80); its llc takes no -g, so no debug leg",
+    "m68k": "llrm-cc -c reaches llrm-m68k-llc without the -S it requires (usage error on 8 of 8); owner llrm-target-m68k",
+}
 LINE = re.compile(r"(\d+) objects changed \(([^)]*)\); (\d+) identical, (\d+) failed on both sides, (\d+) failed on one side of (\d+)")
 MIN_IDENTICAL = 0.5  # of the cells of a leg that must compile and match for it to say anything
 

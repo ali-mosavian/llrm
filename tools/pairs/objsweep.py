@@ -42,8 +42,9 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
     return done.stdout.split() if done.returncode == 0 else None
 
 
-CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat", "a64": "arm64-linux"}  # llrm-cc's LLRM_CC_TARGET rows
-FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": []}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
+CC_TARGETS = {"m32": "x86_32-wat", "m16": "x86_16-wat", "a64": "arm64-linux", "m68k": "m68k-68000", "mos": "6502-sim65", "z80": "z80-sdcc", "wasm": "wasm32"}  # llrm-cc's LLRM_CC_TARGET rows
+NO_ISEL = {"m68k", "mos", "z80", "wasm"}  # their llc has one selector and takes no --isel
+FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"], "a64": [], "m68k": [], "mos": [], "z80": [], "wasm": []}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
 
 
 # The -g leg: the debug formats each target writes. An object holds its debug sections, so comparing whole objects compares them.
@@ -51,6 +52,7 @@ DEBUG_LEGS = {
     "m32": [["-g", "-fobject-format=elf"], ["-gdwarf-2", "-fobject-format=elf"], ["-gcodeview", "-fobject-format=coff"], ["-g", "-fobject-format=omf"]],
     "m16": [["-g"], ["-gtd"], ["-gcodeview"], ["-gdwarf-5"]],
     "m64": [["-g", "-fobject-format=elf"]],
+    "a64": [["-g"]],
 }
 
 
@@ -95,7 +97,7 @@ def compile_one(binary: str, source: Path, target: str, level: str, out: Path, i
         environment = {key: value for key, value in os.environ.items() if key not in ("LLRM_CC_TARGET", "LLRM_CLANG_M16") or (key == "LLRM_CLANG_M16" and target == "m16")}
         if target in CC_TARGETS:
             environment["LLRM_CC_TARGET"] = CC_TARGETS[target]
-    command = [binary, *FLAGS[target], f"--isel={isel}", *os.environ.get("OBJSWEEP_FLAGS", "").split(), *(extra or []), f"-{level}", *(["-c"] if cc else []), "-o", str(out), str(source)]
+    command = [binary, *FLAGS[target], *([] if target in NO_ISEL else [f"--isel={isel}"]), *os.environ.get("OBJSWEEP_FLAGS", "").split(), *(extra or []), f"-{level}", *(["-c"] if cc else []), "-o", str(out), str(source)]
     return run_compiler(command, out, writers, environment)
 
 

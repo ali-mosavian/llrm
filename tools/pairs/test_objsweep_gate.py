@@ -50,3 +50,16 @@ def test_the_m16_clang_of_the_pin_reaches_llrm_cc(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("LLRM_CLANG_M16", raising=False)
     assert llrmbin.cc_environment()["LLRM_CLANG_M16"] == str(clang)
+
+
+def test_every_target_objsweep_compiles_has_a_gate_leg_or_a_named_reason():
+    """The gate swept m16, m32 and m64 only: a change to arm64's Mach-O or ELF bytes (or its -g sections) passed the objects step unseen."""
+    import objsweep
+
+    legs = {leg for leg, _, _ in gate.LEGS}
+    for target in objsweep.FLAGS:
+        if target in gate.PENDING:
+            assert gate.PENDING[target].strip(), target
+            continue
+        assert target in legs and f"{target} debug" in legs, target
+        assert target in objsweep.DEBUG_LEGS, target
