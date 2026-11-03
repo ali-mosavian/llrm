@@ -8,6 +8,9 @@
 //!   `readnone`, `readonly` and `writeonly` do not rule out.
 //! - Any other location (`other`, `inaccessiblemem`, `errnomem`) is an unknown
 //!   read or write.
+//! - A parameter whose every use in the body is a constant-offset load, store
+//!   or constant-length memory intrinsic is accessed at those bytes only
+//!   (`initializes::accessed`, DEVIATE I3).
 //! - A pointer parameter without `nocapture` is captured.
 //!
 //! # Example
@@ -229,12 +232,24 @@ fn summary_of(
             ..MemoryObject::new(MemoryKind::Parameter)
         });
         debug_assert_eq!(object.key, Key::Int(index as i64));
-        let whole = Slice::whole(object);
+        let narrowed = (access.is_ref_set() || access.is_mod_set())
+            .then(|| crate::initializes::accessed(module, layout, id, index))
+            .flatten();
+        let state = |set: &mut crate::sliceset::SliceSet, ranges: Option<&Vec<(i64, i64)>>| match ranges {
+            Some(ranges) => {
+                for &(low, high) in ranges {
+                    set.insert(Slice::new(object, low, high, 1, 1).expect("a non-empty range"));
+                }
+            }
+            None => {
+                set.insert(Slice::whole(object));
+            }
+        };
         if access.is_ref_set() {
-            summary.reads.insert(whole);
+            state(&mut summary.reads, narrowed.as_ref().map(|one| &one.reads));
         }
         if access.is_mod_set() {
-            summary.writes.insert(whole);
+            state(&mut summary.writes, narrowed.as_ref().map(|one| &one.writes));
         }
     }
     summary

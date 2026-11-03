@@ -331,6 +331,56 @@ fn collect(
     result
 }
 
+/// The bytes a function may read and may write through one pointer parameter.
+pub(crate) struct Accessed {
+    pub reads: Vec<(i64, i64)>,
+    pub writes: Vec<(i64, i64)>,
+}
+
+/// The bytes the body of `id` reads and writes through its pointer parameter
+/// `index`, where every use is a constant-offset, non-volatile load, store or
+/// constant-length `memset`/`memcpy`/`memmove`; None (the whole pointee) for
+/// any other use, an interposable definition or a parameter that is not used.
+///
+/// DEVIATE I3 (no exit): LLVM states only the must-write bytes
+/// (`inferInitializes`, FunctionAttrs.cpp:1118); the may-access ranges give
+/// `Summary` the field-level footprint of a call that the attribute summaries
+/// (`memory(argmem)`) lose.
+pub(crate) fn accessed(
+    module: &Module,
+    layout: &DataLayout,
+    id: GlobalId,
+    index: usize,
+) -> Option<Accessed> {
+    let function = module.global(id).function()?;
+    if !crate::argumentattrs::exact_definition(module, id) {
+        return None;
+    }
+    let entry = function.entry()?;
+    let uses = collect(module, layout, function, *function.parameters().get(index)?, entry);
+    let (mut reads, mut writes) = (Ranges::default(), Ranges::default());
+    let mut seen = false;
+    for block in uses.per_block.values() {
+        if block.has_unknown_access {
+            return None;
+        }
+        for (_, access) in block.insts.iter() {
+            // An empty range is a variable index or an empty access: unbounded.
+            let known = !access.ranges.is_empty() && access.ranges.0.iter().all(|&(low, _)| low >= 0);
+            if !known {
+                return None;
+            }
+            match access.kind {
+                Kind::Read => reads = reads.union(&access.ranges),
+                Kind::Write => writes = writes.union(&access.ranges),
+                Kind::WriteWithSideEffect | Kind::Unknown => return None,
+            }
+            seen = true;
+        }
+    }
+    seen.then_some(Accessed { reads: reads.0, writes: writes.0 })
+}
+
 /// The initialized ranges of the parameter `index` of `id` (`inferInitializes`
 /// without stating them): None where there is nothing to state.
 fn inferred(
