@@ -283,7 +283,11 @@ pub fn machine_with<'a>(
             selector,
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
-        Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
+        Box::new(crate::backend::fixupbw::FixupBw {
+            size: target.size,
+            widens_byte: target.widens_load(1)?,
+            widens_word: target.widens_load(2)?,
+        }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),
             size: target.size,

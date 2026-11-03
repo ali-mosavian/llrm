@@ -116,11 +116,42 @@ fn update_of(
     (offset == 0 || offset == amount).then_some(amount)
 }
 
+/// Whether `inst` reads or writes `sp`: register 31 in a slot that means the
+/// stack pointer, not the zero register (`orr x9, xzr, x0` does not).
+fn touches_sp(inst: &Inst) -> bool {
+    let sp = |register: &Gpr| *register == Gpr::R31;
+    let based = |addr: &Addr| match addr {
+        Addr::Offset { base, .. }
+        | Addr::PageOffset { base, .. }
+        | Addr::Pre { base, .. }
+        | Addr::Post { base, .. }
+        | Addr::Register { base, .. } => sp(base),
+        Addr::Slot { .. } => false,
+    };
+    match inst {
+        Inst::AddSubImm { op, rd, rn, .. } | Inst::AddSubExtended { op, rd, rn, .. } => {
+            sp(rn) || (!op.set_flags && sp(rd))
+        }
+        Inst::AddPageOffset { rd, rn, .. } => sp(rd) || sp(rn),
+        Inst::LogicImm { rd, .. } => sp(rd),
+        Inst::Load { addr, .. }
+        | Inst::Store { addr, .. }
+        | Inst::LoadPair { addr, .. }
+        | Inst::StorePair { addr, .. } => based(addr),
+        Inst::Atomic { rn, .. } => sp(rn),
+        Inst::Prefetch { base, .. } => sp(base),
+        _ => false,
+    }
+}
+
 /// Whether `inst` reads or writes `register`.
 fn touches(
     inst: &Inst,
     register: Reg,
 ) -> bool {
+    if register == Reg::Gpr(Gpr::R31) {
+        return touches_sp(inst);
+    }
     let (defs, uses) = inst.defs_and_uses();
     defs.contains(&register) || uses.contains(&register)
 }
@@ -451,6 +482,25 @@ mod tests {
     fn an_add_before_an_access_at_zero_is_a_pre_index() {
         let out = merged(vec![step(0, 8), at(int(8, 1), true, 0, 0)]);
         assert!(matches!(&out[..], [Inst::Load { addr: Addr::Pre { imm: 8, .. }, .. }]), "{out:?}");
+    }
+
+    /// `sub sp, sp, #96; orr x9, xzr, x0; str x10, [sp]` stayed apart: register
+    /// 31 of the `orr` (the zero register) read as `sp`, which cost 4 bytes on
+    /// fpbench; the pin makes `str x10, [sp, #-96]!`.
+    #[test]
+    fn a_move_from_the_zero_register_does_not_stop_a_stack_pre_index() {
+        let mov = Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(9),
+            rn: Gpr(31),
+            rm: Gpr(0),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let out = merged(vec![step(31, -96), mov, at(int(8, 10), false, 31, 0)]);
+        assert!(matches!(&out[1], Inst::Store { addr: Addr::Pre { imm: -96, .. }, .. }), "{out:?}");
     }
 
     #[test]

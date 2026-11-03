@@ -65,17 +65,17 @@ fn an_unsigned_compare_branches_on_carry() {
     assert_eq!(selected(ir, "f"), [vec!["CMP8", "BCS", "JMP"], vec!["LDI8", "RET"], vec!["LDI8", "RET"]]);
 }
 
-/// Known gap (shared builder): an aggregate passed or returned by value is
-/// refused while a target states its calling convention through the hook; the
-/// 6502 passes aggregates by pointer.
+/// An aggregate passed or returned by value was refused ("known gap") until the
+/// builder placed it through the target's calling hook; both select now.
 #[test]
-fn aggregates_by_value_are_refused() {
+fn aggregates_by_value_select() {
     for (ir, name) in [
         ("define i8 @f({ i8, i8 } %s) {\n  %r = extractvalue { i8, i8 } %s, 0\n  ret i8 %r\n}", "f"),
         ("define { i8, i8 } @g() {\n  ret { i8, i8 } zeroinitializer\n}", "g"),
     ] {
         let text = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
         let module = llrm_mir::parse::module(&text).expect("parses");
-        assert!(select_function(&module, name, Cpu::Mos6502).is_err(), "@{name} should be refused");
+        let selected = select_function(&module, name, Cpu::Mos6502);
+        assert!(selected.is_ok(), "@{name} should select: {:?}", selected.err());
     }
 }

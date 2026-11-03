@@ -74,7 +74,10 @@ impl PinRegisters for WasmPins {
 }
 
 /// What the scheduler reads of the instruction descriptions.
-pub struct WasmSched;
+pub struct WasmSched {
+    /// Not `-O0`: `createDefaultScheduler` is source order at `-O0` only.
+    pub optimize: bool,
+}
 
 impl SchedInfo for WasmSched {
     fn pin_register(
@@ -105,10 +108,13 @@ impl SchedInfo for WasmSched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
-    /// `createDefaultScheduler` at `-O0` (`OptLevel == None`) is the
-    /// source-order list scheduler.
+    /// `createDefaultScheduler` is the source-order list scheduler at `-O0`
+    /// (`OptLevel == None`); above it, `WebAssemblyTargetLowering` asks for
+    /// `Sched::RegPressure` (`setSchedulingPreference`) and the subtarget
+    /// disables the machine scheduler (`enableMachineScheduler` is false), so
+    /// the register-reduction scheduler (`createBURRListDAGScheduler`) runs.
     fn source_order(&self) -> bool {
-        true
+        !self.optimize
     }
 }
 
@@ -137,6 +143,12 @@ impl CombineHooks for WasmCombines {
         _mem: EVT,
     ) -> bool {
         // The pin's default; EVT holds no vectors yet.
+        true
+    }
+
+    /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
+    /// target.
+    fn simplify_demanded_add_sub_mul(&self) -> bool {
         true
     }
 }
@@ -263,5 +275,5 @@ pub fn select_block(
     })
     .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();
-    Ok(Scheduled { units: schedule(dag, root, &WasmSched), mem_refs, accesses })
+    Ok(Scheduled { units: schedule(dag, root, &WasmSched { optimize }), mem_refs, accesses })
 }

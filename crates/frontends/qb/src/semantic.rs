@@ -518,7 +518,7 @@ impl AdLayout {
 }
 
 /// How BC was told to compile the module.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Options {
     /// /R.
     pub row_major: bool,
@@ -547,6 +547,9 @@ pub struct Options {
     /// Nothing outside the module calls its procedures: they get internal
     /// linkage, and no PUBDEF, so such a call fails to link.
     pub whole_program: bool,
+    /// Procedures `whole_program` keeps public: the program's entry points
+    /// for whatever links with it (`--export`).
+    pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
     pub run_time_module: bool,
@@ -581,6 +584,15 @@ impl Options {
     /// The bytes of a far pointer.
     pub fn far(&self) -> usize {
         if self.far_bytes == 0 { 4 } else { self.far_bytes }
+    }
+
+    /// Whether the procedure `name` is public: BASIC names are case-blind and a
+    /// type suffix is no part of one.
+    pub fn is_public(
+        &self,
+        name: &str,
+    ) -> bool {
+        !self.whole_program || self.exports.iter().any(|one| canonical(one).eq_ignore_ascii_case(canonical(name)))
     }
 
     /// Whether far pointers are near ones: the target has one address space.
@@ -684,7 +696,7 @@ fn built_from(
     }
     let detached_results = detach_results(&mut module, dialect);
     let module = &module;
-    let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
+    let mut compiler = Compiler::new(module_name, dialect, runtime, options.clone());
     compiler.source = source;
     compiler.detached_results = detached_results;
     compiler.record_default_types(module)?;
@@ -906,7 +918,7 @@ fn built_from(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported && !procedure.private && !compiler.options.whole_program {
+            if procedure.exported && !procedure.private && compiler.options.is_public(&procedure.name) {
                 "external"
             } else {
                 "internal"
@@ -1753,7 +1765,7 @@ impl Compiler {
         Self {
             dialect,
             runtime: runtime.into(),
-            options,
+            options: options.clone(),
             module_name: module_name.into(),
             types,
             variables: BTreeMap::new(),

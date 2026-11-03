@@ -197,6 +197,12 @@ def test_a_non_cargo_command_under_a_slot_dies_alone_past_the_memory_cap(tmp_pat
     assert over.returncode != 0 and "ok" not in over.stdout and "MemoryError" in over.stderr, (over.returncode, over.stderr[-200:])
 
 
+def test_a_non_cargo_command_under_a_slot_gets_a_cap_big_enough_for_a_dosbox_jit(tmp_path):
+    """The 16 GB cap broke every bench.py DOSBox leg ("Could not allocate dynamic translator buffer", BrokenProcessPool) from 21:55: a script gets 96 GB, still far below the 190 GB runaways."""
+    done = _slot(tmp_path, ["sh", "-c", "ulimit -d"], TEST_MEM_CAP_GB="")
+    assert done.stdout.strip() == str(96 << 20), done.stdout
+
+
 def test_a_non_cargo_command_under_a_slot_is_killed_at_the_timeout(tmp_path):
     done = _slot(tmp_path, ["sleep", "30"], BUILDSLOT_TIMEOUT="1")
     assert done.returncode == 124, done.returncode
