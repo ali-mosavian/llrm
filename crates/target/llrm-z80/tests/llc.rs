@@ -16,12 +16,13 @@ fn a_kernel_is_written_as_sdasz80_text() {
     assert!(text.contains(".area _CODE") && text.contains("_add16::") && text.contains("add hl, de"), "{text}");
 }
 
+/// A double compiles since #6578, so the refused function is an i128 one.
 #[test]
 fn a_refused_function_fails_the_exit_status() {
     let dir = env!("CARGO_MANIFEST_DIR");
     let source = std::env::temp_dir().join("llrm-z80-llc-refused.ll");
     let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16\"\n\
-              define i8 @g(ptr %p) {\n  %v = load double, ptr %p\n  %r = fptosi double %v to i8\n  ret i8 %r\n}\n";
+              define i128 @g(i128 %a, i128 %b) {\n  %r = mul i128 %a, %b\n  ret i128 %r\n}\n";
     std::fs::write(&source, ir).unwrap();
     let out = std::env::temp_dir().join("llrm-z80-llc-refused.s");
     let done = llc(&["-S", "-o", out.to_str().unwrap(), source.to_str().unwrap()]);
