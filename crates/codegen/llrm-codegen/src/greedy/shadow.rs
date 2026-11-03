@@ -568,7 +568,10 @@ impl super::splitkit::SplitEnv for BodySplitEnv<'_> {
             at,
             covers,
             defines: vec![to],
-            what: Some(Semantics { dests: vec![Loc::Held(Held { value: to, width: defined.width })], ..what }),
+            what: Some(Semantics {
+                dests: vec![Loc::Held(Held { value: to, width: defined.width, offset: 0 })],
+                ..what
+            }),
             spill_reload: true,
             rematerialized: true,
             ..def.clone()
@@ -1617,7 +1620,7 @@ mod tests {
     #[test]
     fn test_x87_values_take_fp0_to_fp6_and_the_rest_spill() {
         use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
-        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let float = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
         let what = |op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
             name: Some(name.into()),
@@ -1866,8 +1869,8 @@ mod tests {
         let insn = |at: i64, what: Semantics, defines: &[u32], uses: &[u32]| {
             Arc::new(Insn::new(at, None, Some(what), defines.to_vec(), uses.to_vec()))
         };
-        let float = Loc::Held(Held { value: 1, width: 10 });
-        let selector = Loc::Held(Held { value: 2, width: 2 });
+        let float = Loc::Held(Held { value: 1, width: 10, offset: 0 });
+        let selector = Loc::Held(Held { value: 2, width: 2, offset: 0 });
         let cell = |disp: i64| Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, disp)), 8));
         let data = |_: i64| Loc::Mem(Mem { through: RegId::SI, ..Mem::new(None, 8) });
         let load = || insn(1, what(Operation::FloatLoad, "fld", vec![float.clone()], vec![cell(-8)]), &[1], &[]);
@@ -2153,8 +2156,8 @@ mod tests {
         let copy = {
             let what = Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 1, width: 2 })],
-                sources: vec![Loc::Held(Held { value: 2, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
                 ..Semantics::new(Operation::Move)
             };
             Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))
@@ -2271,8 +2274,8 @@ mod tests {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
-            sources: vec![Loc::Held(Held { value: 2, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 4, offset: 0 })],
             ..Semantics::new(Operation::Move)
         };
         let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
@@ -2310,8 +2313,8 @@ mod tests {
         use crate::model::ir::{Held, Loc, Operation, Semantics};
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 2 })],
-            sources: vec![Loc::Held(Held { value: 2, width: 2 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
             ..Semantics::new(Operation::Move)
         };
         let insns = vec![Arc::new(Insn::new(0, None, Some(what), vec![1], vec![2]))];
@@ -2337,7 +2340,11 @@ mod tests {
         );
         let copy = env.build_copy(&lis, 7, 1, None);
         let width = copy.what.as_ref().map(|what| what.dests.clone());
-        assert_eq!(width, Some(vec![Loc::Held(Held { value: 7, width: 4 })]), "the table says 4, the operands say 2");
+        assert_eq!(
+            width,
+            Some(vec![Loc::Held(Held { value: 7, width: 4, offset: 0 })]),
+            "the table says 4, the operands say 2"
+        );
     }
 
     /// A phi value defined by a literal on one edge and an add on the other
@@ -2348,7 +2355,7 @@ mod tests {
     fn test_a_split_remakes_a_literal_definition_of_a_register_defined_twice() {
         use crate::greedy::splitkit::SplitEnv as _;
         use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
-        let held = |value| Loc::Held(Held { value, width: 4 });
+        let held = |value| Loc::Held(Held { value, width: 4, offset: 0 });
         let literal = Semantics {
             name: Some("mov".into()),
             dests: vec![held(1)],
@@ -2419,7 +2426,7 @@ mod tests {
     fn test_a_spilled_values_stored_word_takes_the_class_its_instructions_give() {
         use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};
         let (base, word) = (1u32, 2u32);
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let what = |op, name: &str, dests, sources| Semantics {
             name: Some(name.into()),
             dests,
@@ -2428,7 +2435,7 @@ mod tests {
         };
         let imm = |value| Loc::Imm(Imm { value, width: 2, address: None });
         let make = |at, defines: Vec<u32>, uses: Vec<u32>, w| Arc::new(Insn::new(at, None, Some(w), defines, uses));
-        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let cell = Mem { base: Some(Held { value: base, width: 2, offset: 0 }), ..Mem::new(None, 2) };
         let insns = vec![
             make(1, vec![base], vec![], what(Operation::Move, "mov", vec![held(base)], vec![imm(2)])),
             make(2, vec![word], vec![], what(Operation::Move, "mov", vec![held(word)], vec![imm(3)])),

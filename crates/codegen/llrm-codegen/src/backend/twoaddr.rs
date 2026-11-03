@@ -270,7 +270,7 @@ fn _unfolded(
     if into.value == first.value || into.width != first.width || cell.width != first.width {
         return None;
     }
-    let loaded = Held { value: mint(), width: first.width };
+    let loaded = Held { value: mint(), width: first.width, offset: 0 };
     let reads: Vec<u32> = ir::values(&Loc::Mem(cell.clone())).iter().map(|held| held.value).collect();
     let load = _inserted(one, _move(Loc::Held(loaded), Loc::Mem(cell.clone())), vec![loaded.value], reads);
     let mut add = one.clone();
@@ -643,7 +643,7 @@ fn _through_register(
     {
         return None;
     }
-    let held = Held { value: mint(), width: into.width };
+    let held = Held { value: mint(), width: into.width, offset: 0 };
     let first = &what.sources[0];
     let load = _inserted(
         one,
@@ -694,7 +694,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn addition(name: &str) -> Insn {
@@ -812,12 +812,12 @@ mod tests {
         let mut arrival = nothing(0);
         arrival.defines = vec![1, 2, 3];
         arrival.delivers = vec![
-            (Held { value: 1, width: 4 }, RegId::EAX),
-            (Held { value: 2, width: 4 }, RegId::EDX),
-            (Held { value: 3, width: 4 }, RegId::EBX),
+            (Held { value: 1, width: 4, offset: 0 }, RegId::EAX),
+            (Held { value: 2, width: 4, offset: 0 }, RegId::EDX),
+            (Held { value: 3, width: 4, offset: 0 }, RegId::EBX),
         ];
         let mut ret = nothing(3);
-        ret.requires = vec![(Held { value: 5, width: 4 }, RegId::EAX)];
+        ret.requires = vec![(Held { value: 5, width: 4, offset: 0 }, RegId::EAX)];
         ret.uses = vec![5];
         let input = LirBody::new(
             "six",
@@ -864,13 +864,13 @@ mod tests {
         let mut arrival = nothing(0);
         arrival.defines = vec![1, 2, 3, 4];
         arrival.delivers = vec![
-            (Held { value: 1, width: 4 }, RegId::EAX),
-            (Held { value: 2, width: 4 }, RegId::EDX),
-            (Held { value: 3, width: 4 }, RegId::EBX),
-            (Held { value: 4, width: 4 }, RegId::ECX),
+            (Held { value: 1, width: 4, offset: 0 }, RegId::EAX),
+            (Held { value: 2, width: 4, offset: 0 }, RegId::EDX),
+            (Held { value: 3, width: 4, offset: 0 }, RegId::EBX),
+            (Held { value: 4, width: 4, offset: 0 }, RegId::ECX),
         ];
         let mut ret = nothing(4);
-        ret.requires = vec![(Held { value: 9, width: 4 }, RegId::EAX)];
+        ret.requires = vec![(Held { value: 9, width: 4, offset: 0 }, RegId::EAX)];
         ret.uses = vec![9];
         let input = LirBody::new(
             "six",
@@ -1350,7 +1350,7 @@ mod tests {
         base: u32,
     ) -> Arc<Insn> {
         use crate::model::ir::Mem;
-        let cell = Mem { base: Some(Held { value: base, width: 4 }), offset: 4, ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: base, width: 4, offset: 0 }), offset: 4, ..Mem::new(None, 4) };
         let what = Semantics {
             name: Some("lea".into()),
             dests: vec![held(into, 4)],
@@ -1732,7 +1732,8 @@ mod tests {
         let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
         let mut one =
             Insn::new(at, Some((at, at)), Some(what), arrives.iter().map(|(value, _)| *value).collect(), vec![]);
-        one.delivers = arrives.iter().map(|(value, register)| (Held { value: *value, width: 4 }, *register)).collect();
+        one.delivers =
+            arrives.iter().map(|(value, register)| (Held { value: *value, width: 4, offset: 0 }, *register)).collect();
         Arc::new(one)
     }
 
@@ -1743,7 +1744,7 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
         let mut one = Insn::new(at, Some((at, at)), Some(what), vec![], vec![value]);
-        one.requires = vec![(Held { value, width: 4 }, register)];
+        one.requires = vec![(Held { value, width: 4, offset: 0 }, register)];
         Arc::new(one)
     }
 

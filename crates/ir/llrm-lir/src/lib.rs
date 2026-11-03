@@ -66,6 +66,9 @@ impl Reg {
 pub struct Held {
     pub value: u32,
     pub width: u32,
+    /// The byte of the value the operand starts at (a sub-register index:
+    /// `AH` is byte 1); 0 for the low part.
+    pub offset: u32,
 }
 
 impl Held {
@@ -73,7 +76,7 @@ impl Held {
     /// byte of a register, AH, is not yet a way to spell an operand; C1
     /// step 1).
     pub const fn lanes(&self) -> valuelanes::ValueLanes {
-        valuelanes::ValueLanes::low(self.width)
+        valuelanes::ValueLanes::at(self.offset, self.width)
     }
 }
 
@@ -724,7 +727,7 @@ impl IntoIterator for Values {
 
 /// Python `values`: every SSA value named by one selected operand.
 pub fn values(where_: &Loc) -> Values {
-    let nothing = Held { value: 0, width: 0 };
+    let nothing = Held { value: 0, width: 0, offset: 0 };
     let mut found = Values { held: [nothing; 3], len: 0 };
     let mut named = |held: &Held| {
         found.held[found.len] = *held;
@@ -818,7 +821,7 @@ mod tests {
     fn a_frame_cell_is_the_frames_by_its_space_not_by_its_register() {
         let table = |space| Mem {
             through: RegId::EBP,
-            index: Some(Held { value: 2, width: 4 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
             index_through: RegId::EDX,
             ..Mem::new(Some(Addr::new(space, -16)), 4)
         };
@@ -839,7 +842,7 @@ mod tests {
     /// of equality made [p] and [p+2] one cell.
     #[test]
     fn two_addressless_cells_at_different_displacements_are_different_cells() {
-        let at = |offset| Mem { base: Some(Held { value: 1, width: 2 }), offset, ..Mem::new(None, 2) };
+        let at = |offset| Mem { base: Some(Held { value: 1, width: 2, offset: 0 }), offset, ..Mem::new(None, 2) };
         assert_ne!(at(0), at(2));
         let address = |offset| AddressRef { offset, ..AddressRef::new(None) };
         assert_ne!(address(0), address(2));
@@ -850,10 +853,10 @@ mod tests {
         // Port of tests/test_ir.
         // py::test_two_cells_reached_by_different_values_are_different_cells.
         let mut left = Mem::new(None, 2);
-        left.base = Some(Held { value: 1, width: 2 });
+        left.base = Some(Held { value: 1, width: 2, offset: 0 });
         left.through = RegId::BX;
         let mut right = left.clone();
-        right.base = Some(Held { value: 2, width: 2 });
+        right.base = Some(Held { value: 2, width: 2, offset: 0 });
         right.through = RegId::SI;
 
         assert_ne!(left, right);
@@ -867,7 +870,7 @@ mod tests {
     #[test]
     fn how_a_memory_operand_is_spelled_is_part_of_its_identity() {
         let mut left = Mem::new(Some(Addr::new(Space::Segment, 4)), 2);
-        left.base = Some(Held { value: 4, width: 2 });
+        left.base = Some(Held { value: 4, width: 2, offset: 0 });
         let hash = |memory: &Mem| {
             use std::hash::Hasher;
             let mut state = std::collections::hash_map::DefaultHasher::new();
@@ -893,14 +896,17 @@ mod tests {
     #[test]
     fn values_finds_a_held_wherever_it_is() {
         // Port of tests/test_ir.py::test_values_finds_a_held_wherever_it_is.
-        let held = Held { value: 7, width: 2 };
+        let held = Held { value: 7, width: 2, offset: 0 };
         assert_eq!(values(&Loc::Held(held)), vec![held]);
 
         let mut memory = Mem::new(None, 4);
         memory.base = Some(held);
-        memory.index = Some(Held { value: 8, width: 2 });
-        memory.selector = Some(Held { value: 9, width: 2 });
-        assert_eq!(values(&Loc::Mem(memory)), vec![held, Held { value: 8, width: 2 }, Held { value: 9, width: 2 }],);
+        memory.index = Some(Held { value: 8, width: 2, offset: 0 });
+        memory.selector = Some(Held { value: 9, width: 2, offset: 0 });
+        assert_eq!(
+            values(&Loc::Mem(memory)),
+            vec![held, Held { value: 8, width: 2, offset: 0 }, Held { value: 9, width: 2, offset: 0 }],
+        );
     }
 
     #[test]
@@ -908,19 +914,19 @@ mod tests {
         // Port of tests/test_ir.
         // py::test_mapped_replaces_a_nested_base_and_leaves_the_rest.
         let mut memory = Mem::new(Some(Addr::new(Space::Far, 8)), 4);
-        memory.base = Some(Held { value: 1, width: 2 });
-        memory.selector = Some(Held { value: 2, width: 2 });
-        memory.index = Some(Held { value: 3, width: 2 });
+        memory.base = Some(Held { value: 1, width: 2, offset: 0 });
+        memory.selector = Some(Held { value: 2, width: 2, offset: 0 });
+        memory.index = Some(Held { value: 3, width: 2, offset: 0 });
         memory.through = RegId::BX;
 
         let Loc::Mem(mapped_memory) =
-            mapped(&Loc::Mem(memory.clone()), |held| Held { value: held.value + 10, width: held.width })
+            mapped(&Loc::Mem(memory.clone()), |held| Held { value: held.value + 10, width: held.width, offset: 0 })
         else {
             panic!("a memory operand remains memory");
         };
-        assert_eq!(mapped_memory.base, Some(Held { value: 11, width: 2 }));
-        assert_eq!(mapped_memory.index, Some(Held { value: 13, width: 2 }));
-        assert_eq!(mapped_memory.selector, Some(Held { value: 12, width: 2 }));
+        assert_eq!(mapped_memory.base, Some(Held { value: 11, width: 2, offset: 0 }));
+        assert_eq!(mapped_memory.index, Some(Held { value: 13, width: 2, offset: 0 }));
+        assert_eq!(mapped_memory.selector, Some(Held { value: 12, width: 2, offset: 0 }));
         assert_eq!(mapped_memory.through, memory.through);
         assert_eq!(mapped_memory.addr, memory.addr);
     }
@@ -928,9 +934,9 @@ mod tests {
     #[test]
     fn restoring_and_modelled_barrier_keep_the_python_contract() {
         let restored = restoring(
-            Loc::Held(Held { value: 1, width: 4 }),
-            Loc::Held(Held { value: 2, width: 2 }),
-            Loc::Held(Held { value: 3, width: 2 }),
+            Loc::Held(Held { value: 1, width: 4, offset: 0 }),
+            Loc::Held(Held { value: 2, width: 2, offset: 0 }),
+            Loc::Held(Held { value: 3, width: 2, offset: 0 }),
         );
         assert_eq!(restored.op, Operation::Restore);
         assert_eq!(restored.name.as_deref(), Some("restore"));
@@ -1156,7 +1162,7 @@ mod repr_tests {
             AddressRef::new(None).repr(),
             "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)"
         );
-        assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
+        assert_eq!(Held { value: 3, width: 2, offset: 0 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
             name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],

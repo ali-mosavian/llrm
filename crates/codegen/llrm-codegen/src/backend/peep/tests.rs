@@ -29,7 +29,7 @@ fn folded(
     between: Semantics,
     reads: i64,
 ) -> Vec<Arc<Insn>> {
-    let value = Held { value: 1, width: 2 };
+    let value = Held { value: 1, width: 2, offset: 0 };
     let load = Insn::new(
         0,
         Some((0, 0)),
@@ -67,7 +67,7 @@ fn pushes(insns: &[Arc<Insn>]) -> Vec<Loc> {
 /// argument; tests/run/qb/procs.bas stopped compiling.
 #[test]
 fn a_load_read_once_is_pushed_from_its_cell_across_unrelated_work() {
-    let other = Held { value: 2, width: 2 };
+    let other = Held { value: 2, width: 2, offset: 0 };
     let out = folded(what(Operation::Move, "mov", vec![Loc::Held(other)], vec![Loc::Held(other)]), 1);
     assert_eq!(pushes(&out), [Loc::Mem(argument())]);
     assert_eq!(out.len(), 2, "the load leaves the block");
@@ -78,18 +78,23 @@ fn a_load_read_once_is_pushed_from_its_cell_across_unrelated_work() {
 #[test]
 fn a_store_between_the_load_and_its_push_keeps_the_load() {
     let out = folded(
-        what(Operation::Move, "mov", vec![Loc::Mem(argument())], vec![Loc::Held(Held { value: 2, width: 2 })]),
+        what(
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(argument())],
+            vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
+        ),
         1,
     );
-    assert_eq!(pushes(&out), [Loc::Held(Held { value: 1, width: 2 })]);
+    assert_eq!(pushes(&out), [Loc::Held(Held { value: 1, width: 2, offset: 0 })]);
 }
 
 /// A value read twice must stay loaded for its other reader.
 #[test]
 fn a_load_read_twice_is_not_pushed_from_its_cell() {
-    let other = Held { value: 2, width: 2 };
+    let other = Held { value: 2, width: 2, offset: 0 };
     let out = folded(what(Operation::Move, "mov", vec![Loc::Held(other)], vec![Loc::Held(other)]), 2);
-    assert_eq!(pushes(&out), [Loc::Held(Held { value: 1, width: 2 })]);
+    assert_eq!(pushes(&out), [Loc::Held(Held { value: 1, width: 2, offset: 0 })]);
 }
 
 /// The old pass dropped every definition of a folded value, the rule drops
@@ -98,7 +103,7 @@ fn a_load_read_twice_is_not_pushed_from_its_cell() {
 #[test]
 #[should_panic(expected = "held value 1 is defined 2 times")]
 fn a_folded_value_defined_twice_is_refused() {
-    let value = Held { value: 1, width: 2 };
+    let value = Held { value: 1, width: 2, offset: 0 };
     let load = |at| {
         Arc::new(Insn::new(
             at,
@@ -127,7 +132,7 @@ fn a_folded_value_defined_twice_is_refused() {
 /// left as the selector made it.
 #[test]
 fn a_target_without_rules_leaves_the_code_alone() {
-    let value = Held { value: 1, width: 2 };
+    let value = Held { value: 1, width: 2, offset: 0 };
     let load = Arc::new(Insn::new(
         0,
         Some((0, 0)),
@@ -201,7 +206,7 @@ fn test_a_group_asks_its_first_test_only_of_the_operations_its_rules_start_on() 
         None
     }
     let matcher = Matcher { width: 1, first: &[Operation::Move], head, tail, cross: None };
-    let value = Held { value: 1, width: 2 };
+    let value = Held { value: 1, width: 2, offset: 0 };
     let insns: Vec<Arc<Insn>> =
         [(Operation::Move, "mov"), (Operation::Binary, "add"), (Operation::Push, "push"), (Operation::Binary, "sub")]
             .into_iter()

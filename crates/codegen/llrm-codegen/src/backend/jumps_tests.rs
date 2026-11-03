@@ -1775,7 +1775,8 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
                 let uses = if next(3) > 0 { vec![next(6) as u32] } else { Vec::new() };
                 let mut one = Insn::new(at * 10 + step as i64, None, None, defines, uses);
                 if next(5) == 0 {
-                    one.requires = vec![(crate::model::ir::Held { value: next(6) as u32, width: 2 }, RegId::AX)];
+                    one.requires =
+                        vec![(crate::model::ir::Held { value: next(6) as u32, width: 2, offset: 0 }, RegId::AX)];
                 }
                 insns.push(Arc::new(one));
             }

@@ -454,7 +454,10 @@ impl<'a> InlineSpiller<'a> {
                 at: beside.at,
                 covers: Some((at, at)),
                 defines: vec![value],
-                what: Some(Semantics { dests: vec![Loc::Held(Held { value, width: defined.width })], ..what.clone() }),
+                what: Some(Semantics {
+                    dests: vec![Loc::Held(Held { value, width: defined.width, offset: 0 })],
+                    ..what.clone()
+                }),
                 spill_reload: true,
                 rematerialized: true,
                 ..(*def).clone()
@@ -1793,7 +1796,7 @@ mod tests {
     }
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 10 })
+        Loc::Held(Held { value, width: 10, offset: 0 })
     }
 
     /// An ISA whose spill, reload and copy forms are not x86's `mov`: the
@@ -1902,9 +1905,9 @@ mod tests {
     /// target's instruction info for them.
     #[test]
     fn test_a_spill_and_a_reload_are_the_targets_forms() {
-        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let word = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
-        let based = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) });
+        let based = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2, offset: 0 }), ..Mem::new(None, 2) });
         let op = |at, op, name, dests, sources, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics { name: Some(name).map(Into::into), dests, sources, ..Semantics::new(op) };
             Arc::new(Insn::new(at, Some((at, at + 1)), Some(what), defines, uses))
@@ -2070,7 +2073,7 @@ mod tests {
     /// store of the sibling `v2`, named at `sibling_width`, in each arm.
     fn stores_after_hoisting(sibling_width: u32) -> Vec<(usize, Vec<u32>)> {
         use crate::model::ir::Imm;
-        let word = |value: u32| Loc::Held(Held { value, width: if value == 2 { sibling_width } else { 4 } });
+        let word = |value: u32| Loc::Held(Held { value, width: if value == 2 { sibling_width } else { 4 }, offset: 0 });
         let cell = Mem::new(Some(Addr::new(Space::Frame, -4)), 4);
         let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
@@ -2177,7 +2180,7 @@ mod tests {
     /// defined twice and the siblings may hold two.
     fn sibling_home(redefined: bool) -> (u32, u32) {
         use crate::model::ir::Imm;
-        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let word = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some("mov".into()),
@@ -2274,7 +2277,7 @@ mod tests {
     #[test]
     fn test_a_copy_folded_to_a_store_is_a_mergeable_spill() {
         use crate::model::ir::Imm;
-        let word = |value: u32| Loc::Held(Held { value, width: 2 });
+        let word = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let mov = |at: i64, dest: Loc, source: Loc, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some("mov".into()),

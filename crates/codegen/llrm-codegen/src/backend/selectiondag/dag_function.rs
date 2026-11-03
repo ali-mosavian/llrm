@@ -1134,7 +1134,7 @@ fn selected_in(
                 let width = arrived_width(&arrived, *vreg).unwrap_or_else(|| regs.bytes(*register).unwrap_or(4) as u32);
                 let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
                 arrival.defines.push(value);
-                arrival.delivers.push((Held { value, width }, view));
+                arrival.delivers.push((Held { value, width, offset: 0 }, view));
             }
             // A sibling call through an argument that arrives in a register
             // the epilogue leaves alone jumps through that register, as the
@@ -1202,8 +1202,9 @@ fn selected_in(
                     (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
             {
                 let width = built.dag.value_type(low).size_in_bits() / 8;
-                noted_wides
-                    .get_or_insert_with(id, || (Held { value: low_made, width }, Held { value: high_made, width }));
+                noted_wides.get_or_insert_with(id, || {
+                    (Held { value: low_made, width, offset: 0 }, Held { value: high_made, width, offset: 0 })
+                });
             }
         }
         emitted.extend(done.blocks);

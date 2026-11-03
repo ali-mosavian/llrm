@@ -9,7 +9,7 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
 fn held(value: u32) -> Held {
-    Held { value, width: 4 }
+    Held { value, width: 4, offset: 0 }
 }
 
 fn cell(

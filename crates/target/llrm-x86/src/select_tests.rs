@@ -625,8 +625,8 @@ fn test_a_frame_slots_displacement_is_not_a_relocatable_field() {
 fn test_a_global_cell_reached_through_base_and_index_keeps_its_relocation() {
     let cell = ir::Mem {
         through: RegId::BX,
-        base: Some(ir::Held { value: 1, width: 2 }),
-        index: Some(ir::Held { value: 2, width: 2 }),
+        base: Some(ir::Held { value: 1, width: 2, offset: 0 }),
+        index: Some(ir::Held { value: 2, width: 2, offset: 0 }),
         index_through: RegId::DI,
         scale: 1,
         ..ir::Mem::new(Some(at(Space::Segment, 0x6, RegId::None, RegId::None)), 2)

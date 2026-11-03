@@ -152,7 +152,7 @@ fn a_targets_pins_come_from_its_own_forms() {
     use llrm_codegen::backend::classes::RegisterClasses;
     use llrm_codegen::model::ir::{Held, Loc, Mem, Operation, Semantics};
 
-    let held = |value: u32| Loc::Held(Held { value, width: 2 });
+    let held = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
     // `stosd` as real mode lowers it: a placeholder cell and the pointer after;
     // the value, the pointer, the selector.
     let store = Semantics {
@@ -807,7 +807,7 @@ fn an_operand_of_an_sse_form_is_confined_to_xmm_registers() {
     use llrm_codegen::backend::regclass::{Confinement, Sets, confinement_of};
     use llrm_codegen::model::ir::{Held, Loc, Operation, Semantics};
     use llrm_codegen::model::lir::Insn;
-    let held = |value, width| Loc::Held(Held { value, width });
+    let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
     let add = |name: &str, width| {
         let what = Semantics {
             name: Some(name.into()),

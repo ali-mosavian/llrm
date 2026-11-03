@@ -506,8 +506,8 @@ fn duplicate(
             let value = next;
             next += 1;
             let what = super::phielim::move_of(
-                crate::model::ir::Held { value, width },
-                crate::model::ir::Held { value: from, width },
+                crate::model::ir::Held { value, width, offset: 0 },
+                crate::model::ir::Held { value: from, width, offset: 0 },
             );
             let mut copy = Insn::new(beside.at, Some((beside.at, beside.at)), Some(what), vec![value], vec![from]);
             copy.call = beside.call.clone();
@@ -662,7 +662,7 @@ mod tests {
     fn work(value: u32) -> Arc<Insn> {
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(crate::model::ir::Held { value, width: 4 })],
+            dests: vec![Loc::Held(crate::model::ir::Held { value, width: 4, offset: 0 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
         };
@@ -904,8 +904,8 @@ mod tests {
     fn reading(value: u32) -> Arc<Insn> {
         let what = Semantics {
             name: Some("add".into()),
-            dests: vec![Loc::Held(crate::model::ir::Held { value: 90, width: 4 })],
-            sources: vec![Loc::Held(crate::model::ir::Held { value, width: 4 })],
+            dests: vec![Loc::Held(crate::model::ir::Held { value: 90, width: 4, offset: 0 })],
+            sources: vec![Loc::Held(crate::model::ir::Held { value, width: 4, offset: 0 })],
             ..Semantics::new(Operation::Binary)
         };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![90], vec![value]))

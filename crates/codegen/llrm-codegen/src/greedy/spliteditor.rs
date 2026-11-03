@@ -1717,8 +1717,8 @@ mod tests {
         ) -> Arc<Insn> {
             let what = Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: to, width: 2 })],
-                sources: vec![Loc::Held(Held { value: from, width: 2 })],
+                dests: vec![Loc::Held(Held { value: to, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: from, width: 2, offset: 0 })],
                 ..Semantics::new(Operation::Move)
             };
             Arc::new(Insn::new(0, None, Some(what), vec![to], vec![from]))
@@ -1939,7 +1939,7 @@ mod tests {
         let literal = |value: i64| {
             let what = Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
                 sources: vec![Loc::Imm(Imm { value, width: 2, address: None })],
                 ..Semantics::new(Operation::Move)
             };

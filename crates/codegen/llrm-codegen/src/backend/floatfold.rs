@@ -682,7 +682,7 @@ mod tests {
     const REGISTERS: usize = 6;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 10 })
+        Loc::Held(Held { value, width: 10, offset: 0 })
     }
 
     fn global(
@@ -827,7 +827,7 @@ mod tests {
         between: Vec<Arc<Insn>>,
         crowd: &[u32],
     ) -> LirBody {
-        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         two_blocks_through(pointer, between, crowd)
     }
 
@@ -881,7 +881,7 @@ mod tests {
     #[test]
     fn test_a_load_is_kept_where_a_store_through_a_pointer_may_reach_its_cell_before_a_reader() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
-        let other = Mem { base: Some(Held { value: 8, width: 2 }), ..Mem::new(None, 4) };
+        let other = Mem { base: Some(Held { value: 8, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut store = (*fstp(3, 2, other)).clone();
         store.uses = vec![8];
         let got = names(&folded(&two_blocks(vec![Arc::new(store)], &[]), cpu, REGISTERS));
@@ -909,8 +909,8 @@ mod tests {
     #[test]
     fn test_a_cell_with_an_index_and_a_dword_displacement_costs_seven_bytes_at_32_bits() {
         let pointer = Mem {
-            base: Some(Held { value: 9, width: 4 }),
-            index: Some(Held { value: 10, width: 4 }),
+            base: Some(Held { value: 9, width: 4, offset: 0 }),
+            index: Some(Held { value: 10, width: 4, offset: 0 }),
             offset: 320,
             ..Mem::new(None, 4)
         };
@@ -929,9 +929,9 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("add".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![
-                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Held(Held { value: 9, width: 2, offset: 0 }),
                     Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Binary)
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn test_a_load_is_kept_where_its_pointer_is_written_before_its_one_reader_in_the_block() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
-        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut load = (*fld(0, 1, pointer)).clone();
         load.uses = vec![9];
         let step = Arc::new(Insn::new(
@@ -955,9 +955,9 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("add".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![
-                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Held(Held { value: 9, width: 2, offset: 0 }),
                     Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Binary)

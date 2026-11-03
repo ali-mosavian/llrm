@@ -183,7 +183,7 @@ fn candidate(
 fn expression(what: &Semantics) -> Semantics {
     let mut key = what.clone();
     if let Some(Loc::Held(dest)) = key.dests.first_mut() {
-        *dest = Held { value: 0, width: dest.width };
+        *dest = Held { value: 0, width: dest.width, offset: 0 };
     }
     key
 }
@@ -784,6 +784,7 @@ pub fn shared(
                     *place = llrm_lir::mapped(place, |held| Held {
                         value: walk.read_as(one.id(), held.value),
                         width: held.width,
+                        offset: 0,
                     });
                 }
                 expression(&named)
@@ -874,7 +875,7 @@ mod tests {
     use crate::model::lir::LirBlock;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(

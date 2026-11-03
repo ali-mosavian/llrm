@@ -297,7 +297,7 @@ fn dword_pairs(
         .unwrap_or(0);
     for (high, low) in joined {
         fresh += 1;
-        let whole = ir::Held { value: fresh, width: 4 };
+        let whole = ir::Held { value: fresh, width: 4, offset: 0 };
         let (at, _, _) = loads[&high].clone();
         let (_, _, cell) = loads[&low].clone();
         let insns = made.get_mut(&at).expect("the loads' block");

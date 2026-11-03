@@ -433,7 +433,7 @@ fn through(
     let mut what = made.what.take().expect("an access has semantics");
     {
         let cell = cell_mut(&mut what, source, place);
-        cell.base = Some(Held { value: lea.value, width: lea.width });
+        cell.base = Some(Held { value: lea.value, width: lea.width, offset: 0 });
         cell.index = None;
         cell.scale = 1;
         cell.offset = shift;
@@ -466,7 +466,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Held {
-        Held { value, width: 4 }
+        Held { value, width: 4, offset: 0 }
     }
 
     fn cell(

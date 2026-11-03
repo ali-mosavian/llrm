@@ -559,7 +559,7 @@ impl Insn {
             let settled = |place: &Loc| -> Result<Loc, E> {
                 let mut failed = None;
                 let out = llrm_lir::mapped(place, |held| match rename(held.value) {
-                    Ok(value) => Held { value, width: held.width },
+                    Ok(value) => Held { value, width: held.width, offset: 0 },
                     Err(error) => {
                         failed.get_or_insert(error);
                         *held
@@ -578,7 +578,9 @@ impl Insn {
         made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
-                .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
+                .map(|(held, register)| {
+                    Ok((Held { value: rename(held.value)?, width: held.width, offset: 0 }, *register))
+                })
                 .collect()
         };
         made.requires = wants(&self.requires)?;
@@ -1877,12 +1879,12 @@ mod tests {
         let mut untouched = (*instruction(0x10, None)).clone();
         untouched.defines = vec![2];
         untouched.uses = vec![1];
-        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4 })];
+        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4, offset: 0 })];
         let untouched = Arc::new(untouched);
         let mut named = (*untouched).clone();
         named.uses = vec![7];
         named.what.as_mut().unwrap().sources =
-            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4 }), ..Mem::new(None, 4) })];
+            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4, offset: 0 }), ..Mem::new(None, 4) })];
         let named = Arc::new(named);
         let to_nine = |value: u32| if value == 7 { 9 } else { value };
         assert!(Arc::ptr_eq(&untouched.renamed(&to_nine), &untouched), "nothing it names moves");
@@ -1905,7 +1907,7 @@ mod tests {
         source.defines = vec![2];
         source.uses = vec![1];
         source.group = Some(7);
-        source.requires = vec![(Held { value: 1, width: 2 }, RegId::DL)];
+        source.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::DL)];
         source.spill_reload = true;
         let source = Arc::new(source);
         let anchored = anchor(Arc::clone(&source));
@@ -2019,15 +2021,18 @@ mod tests {
             Some((16, 18)),
             Some(Semantics {
                 name: Some("call".into()),
-                sources: vec![Loc::Held(Held { value: 1, width: 2 })],
+                sources: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
                 target: Some(5),
                 ..Semantics::new(Operation::Call)
             }),
             Vec::new(),
             Vec::new(),
         );
-        one.requires = vec![(Held { value: 1, width: 2 }, RegId::CX), (Held { value: 7, width: 4 }, RegId::EBX)];
-        one.delivers = vec![(Held { value: 9, width: 1 }, RegId::AL)];
+        one.requires = vec![
+            (Held { value: 1, width: 2, offset: 0 }, RegId::CX),
+            (Held { value: 7, width: 4, offset: 0 }, RegId::EBX),
+        ];
+        one.delivers = vec![(Held { value: 9, width: 1, offset: 0 }, RegId::AL)];
         let line = |one: &Insn| {
             format!(
                 "  {:4} {} req={} del={}",

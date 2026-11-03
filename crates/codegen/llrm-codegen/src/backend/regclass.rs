@@ -1325,8 +1325,8 @@ mod tests {
     fn test_a_segment_only_a_phi_reads_has_the_class_of_its_web() {
         let (entry_segment, segment, base, loaded) = (1, 2, 3, 4);
         let cell = Mem {
-            base: Some(Held { value: base, width: 2 }),
-            selector: Some(Held { value: segment, width: 2 }),
+            base: Some(Held { value: base, width: 2, offset: 0 }),
+            selector: Some(Held { value: segment, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources, target| Semantics {
@@ -1336,7 +1336,7 @@ mod tests {
             target,
             ..Semantics::new(op)
         };
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let make =
             |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
         let entry = LirBlock {
@@ -1422,7 +1422,7 @@ mod tests {
     #[test]
     fn test_a_stored_word_recomputes_to_no_class_and_its_base_keeps_one() {
         let (base, word) = (1, 2);
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let semantics = |op, name: &str, dests, sources| Semantics {
             name: Some(name.into()),
             dests,
@@ -1432,7 +1432,7 @@ mod tests {
         let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
         let make =
             |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
-        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let cell = Mem { base: Some(Held { value: base, width: 2, offset: 0 }), ..Mem::new(None, 2) };
         let block = LirBlock {
             at: 0,
             insns: vec![
@@ -1468,7 +1468,7 @@ mod tests {
     fn test_an_operand_is_xmm_by_its_form_not_its_width() {
         let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
         let restricted = |name: &str, width: u32| {
-            let held = |value| Loc::Held(Held { value, width });
+            let held = |value| Loc::Held(Held { value, width, offset: 0 });
             let what = Semantics {
                 name: Some(name.into()),
                 dests: vec![held(1)],

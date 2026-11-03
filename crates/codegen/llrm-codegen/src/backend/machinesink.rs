@@ -1189,7 +1189,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -1612,7 +1612,7 @@ mod tests {
     #[test]
     fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
             ..LirBlock::new(
@@ -1660,7 +1660,7 @@ mod tests {
     #[test]
     fn test_a_lea_is_not_a_load_and_sinks_past_a_branch() {
         use crate::model::ir::Mem;
-        let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: 1, width: 4, offset: 0 }), ..Mem::new(None, 4) };
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
@@ -1801,7 +1801,7 @@ mod tests {
     #[test]
     fn test_a_load_goes_along_a_critical_edge_past_no_store() {
         use crate::model::ir::Mem;
-        let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: 1, width: 4, offset: 0 }), ..Mem::new(None, 4) };
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
@@ -1932,7 +1932,7 @@ mod tests {
         // (v12).
         let bubble = |reads: u32| {
             let cell = Mem {
-                index: Some(Held { value: 10, width: 4 }),
+                index: Some(Held { value: 10, width: 4, offset: 0 }),
                 scale: 4,
                 ..Mem::new(Some(Addr::new(Space::Segment, 4)), 4)
             };

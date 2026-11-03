@@ -1670,7 +1670,7 @@ mod tests {
     /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
     #[test]
     fn test_a_register_table_jump_gets_a_table_of_differences() {
-        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8 });
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8, offset: 0 });
         let jump = Semantics {
             indirect: true,
             table: vec![1, 2],
@@ -2043,7 +2043,7 @@ mod tests {
         let regs = crate::backend::registerinfo::test_regs();
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
-            index: Some(ir::Held { value: 1, width: 4 }),
+            index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
             index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)

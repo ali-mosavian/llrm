@@ -552,11 +552,11 @@ mod tests {
         old_on_left: bool,
         volatile: bool,
     ) -> Vec<Arc<Insn>> {
-        let base = Held { value: 1, width: 2 };
+        let base = Held { value: 1, width: 2, offset: 0 };
         let cell = Loc::Mem(Mem { base: Some(base), ..Mem::new(None, 4) });
-        let old = Held { value: 2, width: 4 };
-        let source = Held { value: 3, width: 4 };
-        let result = Held { value: 4, width: 4 };
+        let old = Held { value: 2, width: 4, offset: 0 };
+        let source = Held { value: 3, width: 4, offset: 0 };
+        let result = Held { value: 4, width: 4, offset: 0 };
         let (left, right) = if old_on_left { (old, source) } else { (source, old) };
         vec![
             _insn(
@@ -598,14 +598,14 @@ mod tests {
 
         let selected = selected(&insns, &_users(&insns));
 
-        let cell = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 4) });
+        let cell = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2, offset: 0 }), ..Mem::new(None, 4) });
         assert_eq!(
             selected.last().unwrap().what,
             Some(semantics(
                 Operation::Binary,
                 "add",
                 vec![cell.clone()],
-                vec![cell, Loc::Held(Held { value: 3, width: 4 })],
+                vec![cell, Loc::Held(Held { value: 3, width: 4, offset: 0 })],
             ))
         );
         assert!(selected.last().unwrap().defines.is_empty());
@@ -628,8 +628,8 @@ mod tests {
         use crate::model::ir::Imm;
         use crate::support::pyrepr::{self, Repr};
 
-        let cell = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 1) });
-        let held = |value, width| Loc::Held(Held { value, width });
+        let cell = Loc::Mem(Mem { base: Some(Held { value: 1, width: 2, offset: 0 }), ..Mem::new(None, 1) });
+        let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
         let insn = |at, what, defines, uses| _insn(at, what, defines, uses, false);
         let insns = vec![
             insn(0, semantics(Operation::Extend, "movzx", vec![held(2, 2)], vec![cell.clone()]), vec![2], vec![1]),

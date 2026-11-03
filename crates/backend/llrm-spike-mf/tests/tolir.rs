@@ -1067,7 +1067,7 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
                 again.spill_reload = true;
                 again.rematerialized = true;
                 let what = again.what.as_mut().expect("semantics");
-                what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                what.dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
                 insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
                 insns.insert(nine + 1, std::sync::Arc::new(again));
@@ -1124,7 +1124,7 @@ fn test_a_zero_made_again_is_not_taken_for_a_symbol() {
                 again.defines = vec![3];
                 again.spill_reload = true;
                 again.rematerialized = true;
-                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 let store = insns.iter().position(|one| one.uses == [2]).expect("the read");
                 insns[store] = insns[store].renamed(&|name| if name == 2 { 3 } else { name });
                 insns.insert(address + 1, std::sync::Arc::new(again));

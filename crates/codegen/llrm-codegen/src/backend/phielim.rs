@@ -645,7 +645,7 @@ pub(crate) fn _copy(
     let mut one = Insn::new(
         at,
         Some(edge),
-        Some(move_of(Held { value: into, width }, Held { value: out_of, width })),
+        Some(move_of(Held { value: into, width, offset: 0 }, Held { value: out_of, width, offset: 0 })),
         vec![into],
         vec![out_of],
     );
@@ -772,13 +772,16 @@ pub fn _split_edges(
                     let mut copy = match constant {
                         Some(what) => {
                             moved.insert((where_, b));
-                            let into = Loc::Held(Held { value: a, width: widths[&a] });
+                            let into = Loc::Held(Held { value: a, width: widths[&a], offset: 0 });
                             (*_made(beside, at, Semantics { dests: vec![into], ..what }, vec![a], vec![])).clone()
                         }
                         None => (*_made(
                             beside,
                             at,
-                            move_of(Held { value: a, width: widths[&a] }, Held { value: b, width: widths[&a] }),
+                            move_of(
+                                Held { value: a, width: widths[&a], offset: 0 },
+                                Held { value: b, width: widths[&a], offset: 0 },
+                            ),
                             vec![a],
                             vec![b],
                         ))

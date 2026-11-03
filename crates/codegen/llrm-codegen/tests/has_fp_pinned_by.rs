@@ -91,7 +91,7 @@ fn test_call_frame_pseudos_are_a_depth_the_walk_follows() {
 #[test]
 fn test_a_pushed_value_does_not_keep_the_frame_register() {
     let registers = llrm_x86_m32::M32.frame_registers();
-    let held = Loc::Held(llrm_codegen::model::ir::Held { value: 1, width: 4 });
+    let held = Loc::Held(llrm_codegen::model::ir::Held { value: 1, width: 4, offset: 0 });
     let push = Semantics { name: Some("push".into()), sources: vec![held], ..Semantics::new(Operation::Push) };
     assert_eq!(pinned(push, &registers), None);
 }

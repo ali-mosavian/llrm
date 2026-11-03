@@ -137,7 +137,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
                                 let value = border[at];
                                 made.uses.push(value);
                                 made.widths.push((value, 10));
-                                Loc::Held(Held { value, width: 10 })
+                                Loc::Held(Held { value, width: 10, offset: 0 })
                             }
                             None => place.clone(),
                         })
@@ -150,7 +150,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
                                 let value = border[at];
                                 made.defines.push(value);
                                 made.widths.push((value, 10));
-                                Loc::Held(Held { value, width: 10 })
+                                Loc::Held(Held { value, width: 10, offset: 0 })
                             }
                             None => place.clone(),
                         })

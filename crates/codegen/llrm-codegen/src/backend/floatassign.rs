@@ -345,7 +345,12 @@ pub(crate) fn _spill_home(
     value: u32,
     cell: Mem,
 ) -> Arc<Insn> {
-    let load = semantics(Operation::FloatLoad, "fld", vec![Loc::Held(Held { value, width: 10 })], vec![Loc::Mem(cell)]);
+    let load = semantics(
+        Operation::FloatLoad,
+        "fld",
+        vec![Loc::Held(Held { value, width: 10, offset: 0 })],
+        vec![Loc::Mem(cell)],
+    );
     Arc::new(Insn { widths: vec![(value, 10)], defines: vec![value], ..inserted(0, load) })
 }
 
@@ -358,7 +363,7 @@ pub(crate) fn _stored(
         Operation::FloatStore,
         "fstp",
         vec![Loc::Mem(cell.clone())],
-        vec![Loc::Held(Held { value, width: 10 })],
+        vec![Loc::Held(Held { value, width: 10, offset: 0 })],
     );
     Arc::new(Insn { spill_store: true, ..Insn::new(at, Some((at, at)), Some(what), Vec::new(), vec![value]) })
 }
@@ -566,8 +571,8 @@ fn _sequenced(body: &LirBody) -> LirBody {
                 let copy_of = |model: &Insn, d: u32, s: u32| -> Arc<Insn> {
                     let mut made = model.clone();
                     let what = made.what.as_mut().expect("a copy");
-                    what.dests = vec![Loc::Held(Held { value: d, width: 10 })];
-                    what.sources = vec![Loc::Held(Held { value: s, width: 10 })];
+                    what.dests = vec![Loc::Held(Held { value: d, width: 10, offset: 0 })];
+                    what.sources = vec![Loc::Held(Held { value: s, width: 10, offset: 0 })];
                     made.defines = vec![d];
                     made.uses = vec![s];
                     made.widths = vec![(d, 10), (s, 10)];

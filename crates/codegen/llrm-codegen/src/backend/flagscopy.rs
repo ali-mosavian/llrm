@@ -228,7 +228,7 @@ fn make(
 }
 
 fn byte(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 1 })
+    Loc::Held(Held { value, width: 1, offset: 0 })
 }
 
 /// The bytes already holding a condition, by code (`CondRegArray`).
@@ -957,7 +957,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn pseudo(

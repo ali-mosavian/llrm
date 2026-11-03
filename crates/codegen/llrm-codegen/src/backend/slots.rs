@@ -1454,7 +1454,7 @@ mod tests {
             disp_width: 4,
             ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), 4)
         });
-        let held = Loc::Held(Held { value: 7, width: 4 });
+        let held = Loc::Held(Held { value: 7, width: 4, offset: 0 });
         let x87 = |at: i64,
                    op: Operation,
                    name: &str,
@@ -1506,7 +1506,7 @@ mod tests {
             disp_width: 4,
             ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), 4)
         });
-        let held = Loc::Held(Held { value: 7, width: 4 });
+        let held = Loc::Held(Held { value: 7, width: 4, offset: 0 });
         let body = LirBody::new(
             "f",
             0,

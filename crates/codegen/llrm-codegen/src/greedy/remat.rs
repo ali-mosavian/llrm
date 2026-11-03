@@ -291,7 +291,7 @@ mod tests {
     ) -> Insn {
         let what = Semantics {
             name: Some(name.into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources,
             ..Semantics::new(op)
         };
@@ -327,10 +327,10 @@ mod tests {
     /// pin makes it again where `row` still holds (`allUsesAvailableAt`).
     #[test]
     fn test_a_lea_of_a_register_is_made_again() {
-        let cell = Mem { base: Some(Held { value: 2, width: 4 }), offset: 1, ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: 2, width: 4, offset: 0 }), offset: 1, ..Mem::new(None, 4) };
         let what = Semantics {
             name: Some("lea".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Address)
         };
@@ -394,7 +394,7 @@ mod tests {
     }
 
     fn word(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 2 })
+        Loc::Held(Held { value, width: 2, offset: 0 })
     }
 
     /// The pin takes a load of an incoming stack argument as invariant (an

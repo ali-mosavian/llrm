@@ -14,7 +14,12 @@ fn loading(cell: Mem) -> LirBody {
     let load = Insn::new(
         0,
         Some((0, 1)),
-        semantics(Operation::Move, "mov", vec![Loc::Held(Held { value: 1, width: 2 })], vec![Loc::Mem(cell)]),
+        semantics(
+            Operation::Move,
+            "mov",
+            vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+            vec![Loc::Mem(cell)],
+        ),
         vec![],
         vec![],
     );
@@ -43,7 +48,12 @@ fn loaded(body: &LirBody) -> Mem {
 /// through BP, with an index.
 fn indexed_frame_cell() -> Mem {
     let addr = Addr::new(Space::Frame, -30);
-    Mem { through: RegId::BP, disp_width: 2, index: Some(Held { value: 2, width: 2 }), ..Mem::new(Some(addr), 2) }
+    Mem {
+        through: RegId::BP,
+        disp_width: 2,
+        index: Some(Held { value: 2, width: 2, offset: 0 }),
+        ..Mem::new(Some(addr), 2)
+    }
 }
 
 /// UBOUND of a local REDIM array printed -1: its bounds' indexed cell was
@@ -78,7 +88,7 @@ fn holding_a_selector(cell: Mem) -> LirBody {
         Some(Semantics {
             name: Some("mov".into()),
             dests: vec![Loc::Reg(ir::Reg { register: RegId::DS, width: 2 })],
-            sources: vec![Loc::Held(Held { value: 3, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 3, width: 2, offset: 0 })],
             ..Semantics::new(Operation::Move)
         }),
         vec![],

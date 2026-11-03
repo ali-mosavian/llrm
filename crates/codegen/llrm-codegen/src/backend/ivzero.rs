@@ -383,7 +383,7 @@ pub fn zeroed(body: &LirBody) -> LirBody {
         let j_next = next + 1;
         let j0 = next + 2;
         next += 3;
-        let held = |value: u32| Held { value, width };
+        let held = |value: u32| Held { value, width, offset: 0 };
         // The start in the preheader.
         let pre_at = at_of[&pre];
         let last = out.blocks[pre_at].insns.last().cloned().expect("a terminator");
@@ -546,7 +546,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 2 })
+        Loc::Held(Held { value, width: 2, offset: 0 })
     }
 
     fn imm(value: i64) -> Loc {
@@ -592,10 +592,10 @@ mod tests {
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let cell = Loc::Mem(if plain {
-            Mem { base: Some(Held { value: 2, width: 2 }), offset: disp, ..Mem::new(None, 1) }
+            Mem { base: Some(Held { value: 2, width: 2, offset: 0 }), offset: disp, ..Mem::new(None, 1) }
         } else {
             Mem {
-                base: Some(Held { value: 2, width: 2 }),
+                base: Some(Held { value: 2, width: 2, offset: 0 }),
                 ..Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Segment, disp)), 1)
             }
         });
@@ -678,7 +678,8 @@ mod tests {
     fn test_an_index_read_as_a_value_is_left_alone() {
         // Addressed and used as a value in one instruction: only the value
         // use can refuse it.
-        let both = Loc::Mem(Mem { base: Some(Held { value: 2, width: 2 }), offset: 100, ..Mem::new(None, 1) });
+        let both =
+            Loc::Mem(Mem { base: Some(Held { value: 2, width: 2, offset: 0 }), offset: 100, ..Mem::new(None, 1) });
         let reader = insn(15, Operation::Binary, "add", vec![held(6)], vec![held(2), both], vec![6], vec![2]);
         let done = zeroed(&counted(100, false, inc(), "jne", Some(reader)));
         assert_eq!(names(&done, 1), ["movzx", "add", "inc", "sub", "jne", "jmp"]);

@@ -306,7 +306,7 @@ pub fn shared(
             Some(_) => 2,
             None => continue,
         };
-        let held = |value: u32| Held { value, width };
+        let held = |value: u32| Held { value, width, offset: 0 };
         let b0 = bases[0];
         let iv = next;
         let iv_next = next + 1;
@@ -455,7 +455,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 2 })
+        Loc::Held(Held { value, width: 2, offset: 0 })
     }
 
     fn insn(
@@ -484,8 +484,8 @@ mod tests {
     ) -> LirBody {
         let cell = |base: u32| {
             Loc::Mem(Mem {
-                base: Some(Held { value: base, width: 2 }),
-                index: Some(Held { value: 10, width: 2 }),
+                base: Some(Held { value: base, width: 2, offset: 0 }),
+                index: Some(Held { value: 10, width: 2, offset: 0 }),
                 ..Mem::new(None, 2)
             })
         };

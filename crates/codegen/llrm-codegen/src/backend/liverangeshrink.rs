@@ -423,7 +423,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -516,7 +516,10 @@ mod tests {
     #[test]
     fn test_a_value_delivered_in_a_register_does_not_count_as_a_shortened_range() {
         let entry = Arc::new(Insn {
-            delivers: vec![(Held { value: 10, width: 4 }, RegId::EAX), (Held { value: 11, width: 4 }, RegId::EDX)],
+            delivers: vec![
+                (Held { value: 10, width: 4, offset: 0 }, RegId::EAX),
+                (Held { value: 11, width: 4, offset: 0 }, RegId::EDX),
+            ],
             ..Insn::new(0, None, None, vec![10, 11], vec![])
         });
         let before = body(vec![entry, constant(1, 12), add(2, 13, 10, 11), ret(3)]);

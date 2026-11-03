@@ -549,7 +549,7 @@ mod tests {
         const DX: RegId = RegId::DX;
         const SI: RegId = RegId::SI;
         for registers in [vec![CX], vec![BX, CX], vec![AX, BX, CX, DX, SI, DI]] {
-            let size = Held { value: 100, width: 2 };
+            let size = Held { value: 100, width: 2, offset: 0 };
             let init = Insn::new(
                 0,
                 Some((0, 3)),
@@ -564,7 +564,7 @@ mod tests {
             );
             let operands: Vec<Held> = registers
                 .iter()
-                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2 } })
+                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2, offset: 0 } })
                 .collect();
             let mut call = Insn::new(
                 3,
@@ -588,12 +588,12 @@ mod tests {
             address.what = Some(semantics(
                 Operation::Move,
                 "lea",
-                vec![Loc::Held(Held { value: 101, width: 2 })],
+                vec![Loc::Held(Held { value: 101, width: 2, offset: 0 })],
                 vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -32))))],
             ));
             let addressed = body_of(vec![init.clone(), call.clone(), address]);
             assert_eq!(of(&addressed, Some(&calls), "", None).unwrap().slot(200_i64, 2), Ok(-34));
-            for required in [vec![], vec![(Held { value: 999, width: 2 }, CX)]] {
+            for required in [vec![], vec![(Held { value: 999, width: 2, offset: 0 }, CX)]] {
                 let mut invalid_call = call.clone();
                 invalid_call.requires = required;
                 let invalid = body_of(vec![init.clone(), invalid_call]);

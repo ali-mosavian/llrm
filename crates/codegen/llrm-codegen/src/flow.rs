@@ -621,8 +621,8 @@ mod tests {
     fn test_the_machine_phase_gate_names_the_phase_that_made_bad_lir() {
         let what = ir::Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(ir::Held { value: 2, width: 2 })],
-            sources: vec![Loc::Held(ir::Held { value: 1, width: 2 })],
+            dests: vec![Loc::Held(ir::Held { value: 2, width: 2, offset: 0 })],
+            sources: vec![Loc::Held(ir::Held { value: 1, width: 2, offset: 0 })],
             ..ir::Semantics::new(Operation::Move)
         };
         let source = Insn::new(1, Some((1, 1)), Some(what), vec![2], vec![1]);

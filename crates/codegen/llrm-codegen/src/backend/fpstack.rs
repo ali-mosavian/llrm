@@ -909,7 +909,7 @@ impl Fps<'_> {
         let held = match word.delivers.iter().find(|(_, register)| *register == self.status_word) {
             Some(&(held, _)) => held,
             None => {
-                let held = Held { value: self.take_fresh(), width: 2 };
+                let held = Held { value: self.take_fresh(), width: 2, offset: 0 };
                 word.defines.push(held.value);
                 word.delivers.push((held, self.status_word));
                 word.widths.push((held.value, 2));

@@ -169,7 +169,7 @@ fn a_quadword_divide_and_negate_take_a_memory_operand() {
 fn a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named() {
     let cell = ir::Mem {
         through: RegId::BP,
-        index: Some(llrm_lir::Held { value: 1, width: 8 }),
+        index: Some(llrm_lir::Held { value: 1, width: 8, offset: 0 }),
         index_through: RegId::RDX,
         scale: 1,
         disp_width: 2,

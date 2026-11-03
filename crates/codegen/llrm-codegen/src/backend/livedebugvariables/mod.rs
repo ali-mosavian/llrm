@@ -659,8 +659,10 @@ mod tests {
 
         let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
         let mut entry = Insn::new(0, None, Some(what), vec![21, 22], vec![]);
-        entry.delivers =
-            vec![(Held { value: 7, width: 4 }, RegId::from_raw(1)), (Held { value: 8, width: 4 }, RegId::from_raw(2))];
+        entry.delivers = vec![
+            (Held { value: 7, width: 4, offset: 0 }, RegId::from_raw(1)),
+            (Held { value: 8, width: 4, offset: 0 }, RegId::from_raw(2)),
+        ];
         entry.debug.defines = vec![7, 8];
         let body = LirBody::new(
             "f",

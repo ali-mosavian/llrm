@@ -751,7 +751,7 @@ mod tests {
     }
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn body(insns: Vec<Arc<Insn>>) -> LirBody {

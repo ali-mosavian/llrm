@@ -3650,7 +3650,7 @@ mod tests {
     #[test]
     fn test_a_string_move_prints_with_rep_where_it_repeats() {
         let regs = crate::backend::registerinfo::test_regs();
-        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
+        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2, offset: 0 });
         // A count is the extra result; the segments, where the target has them,
         // the last two sources.
         let results = |count: usize| (0..count).map(|one| held(10 + one as u32)).collect::<Vec<_>>();

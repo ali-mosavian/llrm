@@ -567,7 +567,7 @@ mod tests {
     /// source's as an fs override), the single one has no count.
     #[test]
     fn test_a_string_move_names_its_registers() {
-        let held = |value: u32| Loc::Held(ir::Held { value, width: 2 });
+        let held = |value: u32| Loc::Held(ir::Held { value, width: 2, offset: 0 });
         let repeated = semantics(
             Operation::Copy,
             "movsw",
@@ -670,7 +670,7 @@ mod tests {
             "premise: a cell with no address, `[si]`, is read through DS and cannot be prefixed"
         );
         assert!(!needs(global.clone()), "a data cell is spelled ss: where DS holds a selector");
-        let far = ir::Mem { selector: Some(llrm_lir::Held { value: 1, width: 2 }), ..global.clone() };
+        let far = ir::Mem { selector: Some(llrm_lir::Held { value: 1, width: 2, offset: 0 }), ..global.clone() };
         assert!(!needs(far), "a cell through a far pointer's selector names its segment");
         let prefixed = ir::Mem::new(Some(Addr { segment: RegId::ES.iced(), ..Addr::new(Space::Segment, 8) }), 4);
         assert!(!needs(prefixed), "and so does an es: prefix");
@@ -752,8 +752,11 @@ mod tests {
         let what = semantics(
             Operation::Move,
             "les",
-            vec![Loc::Held(ir::Held { value: 1, width: 2 }), Loc::Held(ir::Held { value: 2, width: 2 })],
-            vec![Loc::Mem(ir::Mem { base: Some(ir::Held { value: 3, width: 2 }), ..ir::Mem::new(None, 4) })],
+            vec![
+                Loc::Held(ir::Held { value: 1, width: 2, offset: 0 }),
+                Loc::Held(ir::Held { value: 2, width: 2, offset: 0 }),
+            ],
+            vec![Loc::Mem(ir::Mem { base: Some(ir::Held { value: 3, width: 2, offset: 0 }), ..ir::Mem::new(None, 4) })],
         );
         let load = Insn::new(0x10, Some((0x10, 0x13)), Some(what.clone()), vec![1, 2], vec![3]);
         let body = LirBody::new(
@@ -786,7 +789,7 @@ mod tests {
 
         use crate::model::lir::{Insn, LirBlock, LirBody};
 
-        let held = |value| Loc::Held(ir::Held { value, width: 2 });
+        let held = |value| Loc::Held(ir::Held { value, width: 2, offset: 0 });
         let copy = semantics(
             Operation::Copy,
             "movsd",
@@ -882,7 +885,7 @@ mod tests {
     }
 
     fn held(value: u32) -> Loc {
-        Loc::Held(ir::Held { value, width: 2 })
+        Loc::Held(ir::Held { value, width: 2, offset: 0 })
     }
 
     /// `les`, `lds`, `lfs` and `lgs` take the same operands and differ in the

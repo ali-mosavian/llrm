@@ -175,7 +175,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
                     Some((at_flags, at_flags)),
                     Some(Semantics {
                         name: Some("mov".into()),
-                        dests: vec![Loc::Held(Held { value: zero, width: 4 })],
+                        dests: vec![Loc::Held(Held { value: zero, width: 4, offset: 0 })],
                         sources: vec![Loc::Imm(Imm { value: 0, width: 4, address: None })],
                         ..Semantics::new(Operation::Move)
                     }),
@@ -184,7 +184,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
                 ));
                 let mut set = (*one).clone();
                 if let Some(what) = set.what.as_mut() {
-                    what.dests = vec![Loc::Held(Held { value: zero, width: 1 })];
+                    what.dests = vec![Loc::Held(Held { value: zero, width: 1, offset: 0 })];
                 }
                 set.defines = vec![zero];
                 set.uses = vec![zero];
@@ -220,7 +220,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn insn(

@@ -58,7 +58,7 @@ const EXIT: i64 = 0x2000;
 const EXIT_CELL: i64 = 100;
 
 fn held(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 2 })
+    Loc::Held(Held { value, width: 2, offset: 0 })
 }
 
 fn imm(value: i64) -> Loc {
@@ -164,8 +164,8 @@ impl Builder {
             4 => {
                 let (base, index) = (self.role_copy(s, out), self.role_copy(t, out));
                 let cell = Mem {
-                    base: Some(Held { value: base, width: 2 }),
-                    index: Some(Held { value: index, width: 2 }),
+                    base: Some(Held { value: base, width: 2, offset: 0 }),
+                    index: Some(Held { value: index, width: 2, offset: 0 }),
                     ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
                 };
                 out.push(self.insn(Operation::Move, "mov", vec![held(d)], vec![Loc::Mem(cell)], &[d], &[base, index]));
@@ -173,7 +173,7 @@ impl Builder {
             5 => {
                 let base = self.role_copy(s, out);
                 let cell = Mem {
-                    base: Some(Held { value: base, width: 2 }),
+                    base: Some(Held { value: base, width: 2, offset: 0 }),
                     ..Mem::new(Some(Addr::new(Space::Literal, 2)), 2)
                 };
                 out.push(self.insn(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(d)], &[], &[base, d]));
@@ -208,8 +208,8 @@ impl Builder {
             9 => {
                 let result = self.fresh();
                 let mut call = self.insn(Operation::Call, "call", vec![], vec![], &[result], &[s]);
-                call.requires = vec![(Held { value: s, width: 2 }, RegId::AX)];
-                call.delivers = vec![(Held { value: result, width: 2 }, RegId::AX)];
+                call.requires = vec![(Held { value: s, width: 2, offset: 0 }, RegId::AX)];
+                call.delivers = vec![(Held { value: result, width: 2, offset: 0 }, RegId::AX)];
                 call.clobbers = [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ES].into_iter().collect();
                 out.push(call);
                 out.push(self.mov(d, held(result), &[result]));
@@ -218,8 +218,8 @@ impl Builder {
             10 if s != t => {
                 let (base, selector) = (self.role_copy(s, out), self.role_copy(t, out));
                 let cell = Mem {
-                    base: Some(Held { value: base, width: 2 }),
-                    selector: Some(Held { value: selector, width: 2 }),
+                    base: Some(Held { value: base, width: 2, offset: 0 }),
+                    selector: Some(Held { value: selector, width: 2, offset: 0 }),
                     ..Mem::new(Some(Addr::new(Space::Far, 0)), 2)
                 };
                 out.push(self.insn(
@@ -246,8 +246,8 @@ impl Builder {
                     &[],
                 ));
                 let far = Mem {
-                    base: Some(Held { value: offset, width: 2 }),
-                    selector: Some(Held { value: segment, width: 2 }),
+                    base: Some(Held { value: offset, width: 2, offset: 0 }),
+                    selector: Some(Held { value: segment, width: 2, offset: 0 }),
                     ..Mem::new(Some(Addr::new(Space::Far, 0)), 2)
                 };
                 out.push(self.insn(
@@ -1438,8 +1438,8 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
     // A body with a `[base+index]` access of two words: the roles are chosen
     // from the intervals and masks.
     let cell = Mem {
-        base: Some(Held { value: 1, width: 2 }),
-        index: Some(Held { value: 2, width: 2 }),
+        base: Some(Held { value: 1, width: 2, offset: 0 }),
+        index: Some(Held { value: 2, width: 2, offset: 0 }),
         scale: 1,
         ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
     };

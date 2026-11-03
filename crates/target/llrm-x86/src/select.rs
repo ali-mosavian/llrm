@@ -2985,7 +2985,7 @@ mod sweep_support {
         value: u32,
         width: u32,
     ) -> ir::Held {
-        ir::Held { value, width }
+        ir::Held { value, width, offset: 0 }
     }
 
     pub fn hd(

@@ -381,9 +381,9 @@ mod tests {
     }
 
     fn procedure() -> LirBody {
-        let held = Loc::Held(Held { value: 1, width: 2 });
+        let held = Loc::Held(Held { value: 1, width: 2, offset: 0 });
         let mut entry = instruction(1, Operation::Call, "call", vec![], vec![held.clone()]);
-        entry.requires = vec![(Held { value: 1, width: 2 }, RegId::CX)];
+        entry.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::CX)];
         let insns = vec![
             instruction(
                 0,
