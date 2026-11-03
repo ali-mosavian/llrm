@@ -1085,6 +1085,73 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
     assert_eq!(literals, vec![7, 9, 7], "{literals:?}");
 }
 
+/// A symbol and the literal 0 are two literals. The converter wrote both as
+/// `Imm 0`, so a zero made again came back as the symbol's address: a loop
+/// variable that starts at 0 started at `_s` (llrm-z80 on tests/run/c
+/// `copy_runs`: 481909 for 929463).
+#[test]
+fn test_a_zero_made_again_is_not_taken_for_a_symbol() {
+    use llrm_codegen::model::ir::Held;
+    let mut f = MFunction::<()>::new("symbol_and_zero");
+    f.classes = vec![(); 2];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut address = op("ldi", vec![Operand::Def(v(0)), Operand::Symbol("s".into(), 0)]);
+    address.rematerializable = true;
+    let mut zero = op("ldi", vec![Operand::Def(v(1)), Operand::Imm(0)]);
+    zero.rematerializable = true;
+    entry.insts.extend([address, zero]);
+    entry.insts.push(op("store", vec![Operand::Use(v(0))]));
+    entry.insts.push(op("store", vec![Operand::Use(v(1))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    let mut frame = llrm_spike_mf::tolir::SpikeFrame::of(&f);
+    let mut decided = decide_with_split(&inputs, Mode::Inline { frame: &mut frame }, true).expect("allocates");
+    let edited = decided.edited.as_mut().expect("an edited body");
+    edited
+        .blocks[0]
+        .insns
+        .edit(
+            |insns| {
+                let address = insns.iter().position(|one| one.defines == [1]).expect("the symbol");
+                let zero = insns.iter().position(|one| one.defines == [2]).expect("the zero");
+                let mut again = (*insns[zero]).clone();
+                again.at = insns[address].at;
+                again.covers = Some((again.at, again.at));
+                again.defines = vec![3];
+                again.spill_reload = true;
+                again.rematerialized = true;
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                let store = insns.iter().position(|one| one.uses == [2]).expect("the read");
+                insns[store] = insns[store].renamed(&|name| if name == 2 { 3 } else { name });
+                insns.insert(address + 1, std::sync::Arc::new(again));
+            },
+        );
+    let back = from_lir::<Flat>(&f, &converted, &decided, regs()).expect("writes back");
+    let literals: Vec<String> = back
+        .function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.kind == Kind::Op("ldi"))
+        .filter_map(|i| {
+            i.operands
+                .iter()
+                .find_map(
+                    |o| match o {
+                        Operand::Imm(n) => Some(n.to_string()),
+                        Operand::Symbol(name, _) => Some(name.clone()),
+                        _ => None,
+                    },
+                )
+        })
+        .collect();
+    assert_eq!(literals, ["s", "0", "0"], "{literals:?}");
+}
+
 /// A function states no branch odds, so greedy's block frequencies took every
 /// edge as 1 in 2 and a loop body ran 1.0 times per entry: spill weights
 /// treated loop code as cold (6502 `lz4` grew cycles by 545 over the spike
@@ -1678,5 +1745,52 @@ fn test_a_value_that_costs_more_to_spill_keeps_its_register() {
         let kept = f.blocks[0].insts.iter().any(|i| i.operands.first() == Some(&Operand::Def(v(dear))));
         drop(assignment);
         assert!(kept, "v{dear} costs twice to spill and was spilled");
+    }
+}
+
+/// A constant materialised for a call stood under no place, so its row (and
+/// the compare's line before it) covered it: the argument of a call was listed
+/// under the line of the branch before the block (6502 -O0, c.c line 3 for
+/// the `lda #10` of line 5).
+#[test]
+fn an_unlocated_instruction_takes_the_place_of_the_one_it_feeds() {
+    let mut f = MFunction::<()>::new("places");
+    let mut call = op("call", vec![]);
+    call.origin = 5;
+    let mut block = Block { id: 0, ..Block::default() };
+    block.insts = vec![op("const", vec![Operand::Def(v(0))]), call, op("tail", vec![])];
+    f.blocks = vec![block];
+    f.place_unlocated();
+    let origins: Vec<u32> = f.blocks[0].insts.iter().map(|one| one.origin).collect();
+    assert_eq!(origins, vec![5, 5, 5]);
+}
+
+/// A copy the allocator adds (a tied use, a phi's incoming value) stood under
+/// no source place, so the line table put its row under the line before it.
+#[test]
+fn a_copy_added_for_an_instruction_or_a_phi_has_the_origin_of_its_neighbour() {
+    let mut f = MFunction::<()>::new("copies");
+    f.classes = vec![(); 3];
+    let mut add = op("add", vec![Operand::Def(v(1)), Operand::Use(v(0)), Operand::Use(v(0))]);
+    add.ties = vec![(0, 1)];
+    add.origin = 7;
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    entry.insts.push(add);
+    let mut jump = branch(1);
+    jump.origin = 8;
+    entry.insts.push(jump);
+    let mut next = Block { id: 1, ..Block::default() };
+    next.phis.push(llrm_spike_mf::Phi { result: v(2), incoming: vec![(0, v(1))] });
+    next.insts.push(ret());
+    f.blocks = vec![entry, next];
+    let f = lowered(f);
+    for block in &f.blocks {
+        for inst in block.insts.iter().filter(|inst| inst.kind == Kind::Copy) {
+            let beside = block.insts.iter().find(|one| one.origin != 0).map(|one| one.origin);
+            if block.id == 0 {
+                assert_ne!(inst.origin, 0, "copy {:?} has no place beside {beside:?}", inst.operands);
+            }
+        }
     }
 }

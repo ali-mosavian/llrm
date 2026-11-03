@@ -112,7 +112,7 @@ mod tests {
         binding: Binding,
         definition: Definition,
     ) -> Symbol {
-        Symbol { name: name.into(), binding, definition, size: 0, group: None }
+        Symbol { name: name.into(), binding, definition, size: 0, group: None, visibility: Default::default() }
     }
 
     fn object(

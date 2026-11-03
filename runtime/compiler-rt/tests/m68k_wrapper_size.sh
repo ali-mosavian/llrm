@@ -3,7 +3,7 @@
 # Was 46: each wrapper called cmpsf2 and remapped the unordered result. 42 is what llrm-cc makes of a plain call (no tail call, args copied through d0); libgcc is 26.
 set -e
 cd "$(dirname "$0")/.."
-SRC=${1:-lib/fp/sf32.c}; MAX=42
+SRC=${1:-lib/fp/f32/cmp.c}; MAX=42
 D=${LLRM_CC_DIR:-$HOME/scratch/mfbuild/keep}; R=${GCC_M68K:-$HOME/scratch/gcc-m68k/root}
 export LD_LIBRARY_PATH=$R/usr/lib/x86_64-linux-gnu
 T=$(mktemp -d); trap 'rm -r $T' EXIT

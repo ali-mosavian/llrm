@@ -39,12 +39,14 @@ pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
 pub const STSP: ISD = ISD::Target(ids::STSP);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
-use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, TargetCalling};
+use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, Site, TargetCalling};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Refused {
     /// A type other than `i8` or `i16`.
     Type(EVT),
+    /// A result of this many bytes, which the convention has no registers for.
+    ResultWidth(u32),
 }
 
 /// Where an argument is.
@@ -90,11 +92,12 @@ fn locations(
 fn result_registers(
     convention: &Convention,
     vts: &[EVT],
-) -> Vec<llrm_lir::registers::RegId> {
+) -> Result<Vec<llrm_lir::registers::RegId>, Refused> {
     let width: u32 = vts.iter().map(|vt| vt.size_in_bits() / 8).sum();
-    let names = convention.result_registers(i64::from(width)).expect("calling.toml has a result row");
+    let names = convention.result_registers(i64::from(width)).ok_or(Refused::ResultWidth(width))?;
     let mut at = 0;
-    vts.iter()
+    Ok(vts
+        .iter()
         .map(|vt| {
             let register = match *vt {
                 EVT::I16 => abi::pair_of(&names[at]),
@@ -103,7 +106,7 @@ fn result_registers(
             at += vt.size_in_bits() as usize / 8;
             register
         })
-        .collect()
+        .collect())
 }
 
 /// A result part, read from its register.
@@ -177,7 +180,7 @@ pub fn lower_call(
     let mut chain = SDValue { node: end.node, res: 0 };
     let mut glue = SDValue { node: end.node, res: 1 };
     let vts: Vec<EVT> = ins.iter().map(|result| result.vt).collect();
-    let mut registers = result_registers(&convention, &vts).into_iter();
+    let mut registers = result_registers(&convention, &vts)?.into_iter();
     let values = vts.iter().map(|&vt| read_result(dag, vt, &mut registers, &mut chain, &mut glue)).collect();
     Ok((chain, values))
 }
@@ -237,7 +240,7 @@ pub fn lower_return(
     for &vt in &vts {
         kind(vt)?;
     }
-    let mut registers = result_registers(&convention, &vts).into_iter();
+    let mut registers = result_registers(&convention, &vts)?.into_iter();
     for (out, &vt) in outs.iter().zip(&vts) {
         let register = registers.next().expect("a register for every part");
         let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
@@ -256,6 +259,34 @@ pub fn lower_return(
 pub struct Z80Calling;
 
 impl TargetCalling for Z80Calling {
+    /// `CanLowerReturn`: a result of a width the convention names no
+    /// registers for is refused with the reason, where lowering it would
+    /// have no place to leave it.
+    fn accepts(
+        &self,
+        dag: &SelectionDAG,
+        site: Site,
+        outs: &[Out],
+        ins: &[In],
+    ) -> Result<(), &'static str> {
+        // the builder splits integers into bytes and words; a float part has
+        // no registers
+        let parts = outs.iter().map(|out| dag.value_type(out.value)).chain(ins.iter().map(|part| part.vt));
+        if parts.into_iter().any(|vt| kind(vt).is_err()) {
+            return Err("a part that is not a byte or a word");
+        }
+        let bytes: u32 = match site {
+            Site::Arguments => return Ok(()),
+            Site::Return => outs.iter().map(|out| dag.value_type(out.value).size_in_bits() / 8).sum(),
+            Site::Call => ins.iter().map(|result| result.vt.size_in_bits() / 8).sum(),
+        };
+        match bytes {
+            0 => Ok(()),
+            width if abi::z80().result_registers(i64::from(width)).is_some() => Ok(()),
+            _ => Err("a result the convention has no registers for"),
+        }
+    }
+
     fn passes_in_place(
         &self,
         name: &str,

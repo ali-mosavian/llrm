@@ -443,3 +443,97 @@ loop:	ld	b,#32
 6$:	ld	sp,ix
 	pop	ix
 	ret
+
+; ---- the compiler's library calls -----------------------------------------------------------------
+; Reserved `__` names: a program may define its own strlen, memcpy, memmove or memset and none of them clashes.
+; tests/programs/libc/ has the C library entries over these.
+
+; The length of the string at hl -> de. cpir scans from a count of 0 (the 65536 bytes it can take) for the zero byte;
+; the count is then minus the bytes scanned, the zero included, and the length is its complement.
+	.globl __strlen
+__strlen:
+	xor	a
+	ld	b,a
+	ld	c,a
+	cpir
+	ld	a,c
+	cpl
+	ld	e,a
+	ld	a,b
+	cpl
+	ld	d,a
+	ret
+
+; memcpy (dst hl, src de, n bc) -> dst in de; the areas do not overlap.
+	.globl __memcpy
+__memcpy:
+	push	hl
+	ex	de,hl
+	ld	a,b
+	or	a,c
+	jr	z,1$
+	ldir
+1$:
+	pop	de
+	ret
+
+; memmove (dst hl, src de, n bc) -> dst in de: forward when dst is below src, else from the ends.
+	.globl __memmove
+__memmove:
+	push	hl
+	ld	a,b
+	or	a,c
+	jr	z,2$
+	ld	a,l
+	sub	a,e
+	ld	a,h
+	sbc	a,d
+	jr	c,3$
+	ex	de,hl
+	add	hl,bc
+	dec	hl
+	ex	de,hl
+	add	hl,bc
+	dec	hl
+	ex	de,hl
+	lddr
+	jr	2$
+3$:
+	ex	de,hl
+	ldir
+2$:
+	pop	de
+	ret
+
+; memset (dst hl, value a, n de) -> dst in de: the first byte, then ldir copies it forward.
+	.globl __memseta
+__memseta:
+	push	hl
+	ld	b,a
+	ld	a,d
+	or	a,e
+	jr	z,4$
+	ld	a,b
+	ld	(hl),a
+	dec	de
+	ld	a,d
+	or	a,e
+	jr	z,4$
+	ld	c,e
+	ld	b,d
+	ld	e,l
+	ld	d,h
+	inc	de
+	ldir
+4$:
+	pop	de
+	ret
+
+; A call through a pointer: the address is in iy.
+	.globl __call_iy
+__call_iy:
+	jp (iy)
+
+; Ends the last routine: measure.py sizes a routine up to the next symbol.
+	.globl __rt_end
+__rt_end:

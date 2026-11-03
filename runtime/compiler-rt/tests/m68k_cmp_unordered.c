@@ -1,5 +1,5 @@
 /* Every compare entry point against the compiler-rt contract: unordered is 1 for cmp/eq/ne/lt/le/unord-as-1 and -1 for ge/gt,
- * ordered operands give -1/0/1. Run: LLRM_CC_DIR=... m68k-run-c.sh 68020 Os tests/m68k_cmp_unordered.c lib/fp/sf32.c */
+ * ordered operands give -1/0/1. Run: LLRM_CC_DIR=... m68k-run-c.sh 68020 Os tests/m68k_cmp_unordered.c lib/fp/f32/cmp.c */
 #include <stdint.h>
 
 int __cmpsf2(float, float), __eqsf2(float, float), __nesf2(float, float), __ltsf2(float, float), __lesf2(float, float),

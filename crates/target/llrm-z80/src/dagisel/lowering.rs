@@ -16,7 +16,7 @@
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -95,6 +95,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Undef, Poison], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
     set(&[ZeroExtend, AnyExtend, SignExtend], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SetCC, Select], &[MVT::I8, MVT::I16], Action::Custom);
+    // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
+    set(&[Load, Store], &[MVT::I1], Action::Custom);
     for (vt, names) in [
         (MVT::I8, ["__mulqi3", "__divqi3", "__udivqi3", "__modqi3", "__umodqi3"]),
         (MVT::I16, ["__mulhi3", "__divhi3", "__udivhi3", "__modhi3", "__umodhi3"]),
@@ -172,6 +174,8 @@ impl Hooks for Z80Lowering {
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
+            ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,
         }
     }
@@ -227,6 +231,38 @@ impl Hooks for Z80Lowering {
             _ => None,
         }
     }
+}
+
+/// A bit in memory is a byte with the upper bits zero, as the pin's type
+/// legalizer makes it where `i1` is not a register type (`PromoteIntRes_LOAD`,
+/// `LegalizeDAG`'s truncating store of a non-byte width). Left alone, a loaded
+/// bit tested by a branch and widened by a `select` was selected into a
+/// compare of its own conditional move.
+fn lower_bit_load(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    if info.ext.is_some() {
+        return None;
+    }
+    let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
+    let byte = dag.get_load(EVT::I8, chain, ptr, MemInfo { mem_vt: EVT::I8, ..info });
+    let one = dag.get_constant(1, EVT::I8);
+    let masked = dag.get_node(ISD::And, EVT::I8, &[byte, one]);
+    let bit = dag.get_node(ISD::Truncate, EVT::I1, &[masked]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I1, EVT::OTHER], &[bit, SDValue { node: byte.node, res: 1 }]))
+}
+
+/// The store of a bit: the byte of 0 or 1 (`lower_bit_load`).
+fn lower_bit_store(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let byte = condition_byte(dag, value);
+    Some(dag.get_store(chain, byte, ptr, MemInfo { mem_vt: EVT::I8, ..info }))
 }
 
 /// A condition widened to a byte or a word is `select cond, 1, 0`; any other
@@ -480,6 +516,12 @@ fn condition_byte(
                 Some(lowered) => lowered,
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
+            // a multi-result lowering's wrapper (`lower_bit_load`): the bit it
+            // holds
+            ISD::MergeValues => {
+                let bit = dag.operand(value, value.res as usize);
+                condition_byte(dag, bit)
+            }
             ISD::Truncate if matches!(dag.value_type(dag.operand(value, 0)), EVT::I8 | EVT::I16) => {
                 let wide = dag.operand(value, 0);
                 let byte =
