@@ -75,6 +75,15 @@ pub trait CoalescerEnv {
         true
     }
 
+    /// DEVIATE C13: whether a copy between widths (`CP.isPartial()`) is joined.
+    /// The pin always joins it (`TRI->shouldCoalesce` is the only veto,
+    /// RegisterCoalescer.cpp#L2080); a target whose profitability for these
+    /// joins is not yet known says false. Exit: m68k profitability rule
+    /// (11-08).
+    fn joins_sub_registers(&self) -> bool {
+        true
+    }
+
     /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
     /// `dst`, which may now take only the registers both could.
     fn narrow(

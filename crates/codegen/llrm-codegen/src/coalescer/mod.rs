@@ -36,6 +36,13 @@
 //! `removePartialRedundancy`, as `reMaterializeDef` leaves it (C11). Exit:
 //! parallel copies sequenced before the coalescer (D-F).
 //!
+//! DEVIATE C13: `CoalescerEnv::joins_sub_registers`. The pin joins every copy
+//! between widths that `CoalescerPair` accepts, vetoed only by
+//! `TRI->shouldCoalesce` (RegisterCoalescer.cpp#L2080, which M68k does not
+//! override); a target may switch the joins off. m68k does: they raised
+//! `movem` 71 -> 89 in div_constants_short (68020 -O1) and cost 15 of 90
+//! cell-CPU rows. Exit: a profitability rule, 2026-11-08.
+//!
 //! DEVIATE C9 (no number): a parameter's value on entry is defined by no
 //! instruction, so LLVM's phi rule ("any real interference would show up in a
 //! predecessor") does not carry over: the entry block has none. Two parameters

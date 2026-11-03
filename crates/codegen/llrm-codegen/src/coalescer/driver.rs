@@ -32,7 +32,7 @@
 
 use std::cmp::Ordering;
 
-use super::pair::{CoalescerEnv, move_copy};
+use super::pair::{CoalescerEnv, full_copy, move_copy};
 use super::register_coalescer::{JoinResult, State, join_copy};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::InstrKey;
@@ -62,26 +62,37 @@ pub fn compare_mbb_priority(
         .then_with(|| lhs.block.cmp(&rhs.block))
 }
 
+/// The copies the pass looks at: moves between any widths, or with the joins
+/// between widths off (DEVIATE C13) only the moves it saw before they
+/// existed, so the work lists and the terminal rule are as they were.
+type Pick = fn(&crate::model::lir::Insn) -> Option<(crate::model::ir::Held, crate::model::ir::Held)>;
+
+pub(super) fn pick_of(env: &dyn CoalescerEnv) -> Pick {
+    if env.joins_sub_registers() { move_copy } else { full_copy }
+}
+
 /// `isSplitEdge`: a block to vacate to eliminate branches: one predecessor, one
 /// successor, nothing but copies and an unconditional jump.
 fn is_split_edge(
     lis: &LiveIntervals,
     block: usize,
+    pick: Pick,
 ) -> bool {
     if lis.cfg.preds[block].len() != 1 || lis.cfg.succs[block].len() != 1 {
         return false;
     }
     lis.block_insns(block)
         .iter()
-        .all(|one| move_copy(one).is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Jump))
+        .all(|one| pick(one).is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Jump))
 }
 
 /// `isLocalCopy`: the copy defines or uses a value that lives in one block.
 fn is_local_copy(
     lis: &mut LiveIntervals,
     copy: InstrKey,
+    pick: Pick,
 ) -> bool {
-    let Some((dst, src)) = move_copy(lis.instr(copy)) else { return false };
+    let Some((dst, src)) = pick(lis.instr(copy)) else { return false };
     let (src, dst) = (lis.interval_rc(src.value), lis.interval_rc(dst.value));
     lis.interval_is_in_one_mbb(&src).is_some() || lis.interval_is_in_one_mbb(&dst).is_some()
 }
@@ -91,8 +102,9 @@ fn is_terminal_reg(
     lis: &LiveIntervals,
     reg: u32,
     copy: InstrKey,
+    pick: Pick,
 ) -> bool {
-    lis.operands(reg).iter().all(|one| one.instr == copy || move_copy(lis.instr(one.instr)).is_none())
+    lis.operands(reg).iter().all(|one| one.instr == copy || pick(lis.instr(one.instr)).is_none())
 }
 
 /// `applyTerminalRule`.
@@ -100,9 +112,10 @@ fn apply_terminal_rule(
     lis: &mut LiveIntervals,
     copy: InstrKey,
     block: usize,
+    pick: Pick,
 ) -> bool {
-    let Some((dst, src)) = move_copy(lis.instr(copy)) else { return false };
-    if !is_terminal_reg(lis, dst.value, copy) {
+    let Some((dst, src)) = pick(lis.instr(copy)) else { return false };
+    if !is_terminal_reg(lis, dst.value, copy, pick) {
         return false;
     }
     // DstReg is a terminal node: does it interfere with any other copy
@@ -113,14 +126,14 @@ fn apply_terminal_rule(
         if other == copy {
             continue;
         }
-        let Some((other_dst, other_src)) = move_copy(lis.instr(other)) else { continue };
+        let Some((other_dst, other_src)) = pick(lis.instr(other)) else { continue };
         let at = lis.indexes.get_instruction_index(other);
         if lis.indexes.get_mbb_from_index(&at) != block {
             continue;
         }
         let other_reg = if other_dst.value == src.value { other_src.value } else { other_dst.value };
         // Check if OtherReg is a non-terminal.
-        if is_terminal_reg(lis, other_reg, other) {
+        if is_terminal_reg(lis, other_reg, other, pick) {
             continue;
         }
         // Check that OtherReg interferes with DstReg.
@@ -204,6 +217,16 @@ impl Coalescer<'_> {
         progress
     }
 
+    /// A copy the work lists take: any move, or with the joins between widths
+    /// off (DEVIATE C13) only the copies the pass joined before they existed,
+    /// so the lists, and the order the joins see, are unchanged.
+    fn is_listed(
+        &self,
+        one: &crate::model::lir::Insn,
+    ) -> bool {
+        pick_of(self.env)(one).is_some()
+    }
+
     /// `copyCoalesceInMBB`.
     fn copy_coalesce_in_mbb(
         &mut self,
@@ -214,12 +237,12 @@ impl Coalescer<'_> {
         // forward.
         let prev_size = self.work.len();
         let copies: Vec<InstrKey> =
-            self.lis.block_insns(block).iter().filter(|one| move_copy(one).is_some()).map(|one| one.id()).collect();
+            self.lis.block_insns(block).iter().filter(|one| self.is_listed(one)).map(|one| one.id()).collect();
         if self.env.joins_global_copies() {
             let (mut local_terminals, mut global_terminals) = (Vec::new(), Vec::new());
             for copy in copies {
-                let terminal = apply_terminal_rule(self.lis, copy, block);
-                match (is_local_copy(self.lis, copy), terminal) {
+                let terminal = apply_terminal_rule(self.lis, copy, block, pick_of(self.env));
+                match (is_local_copy(self.lis, copy, pick_of(self.env)), terminal) {
                     (true, true) => local_terminals.push(Some(copy)),
                     (true, false) => self.local.push(Some(copy)),
                     (false, true) => global_terminals.push(Some(copy)),
@@ -233,7 +256,7 @@ impl Coalescer<'_> {
         } else {
             let mut terminals = Vec::new();
             for copy in copies {
-                if apply_terminal_rule(self.lis, copy, block) {
+                if apply_terminal_rule(self.lis, copy, block, pick_of(self.env)) {
                     terminals.push(Some(copy));
                 } else {
                     self.work.push(Some(copy));
@@ -277,7 +300,7 @@ pub fn run(
         .map(|block| MbbPriority {
             block,
             depth: depth[block],
-            is_split: is_split_edge(lis, block),
+            is_split: is_split_edge(lis, block, pick_of(env)),
             connectivity: lis.cfg.preds[block].len() + lis.cfg.succs[block].len(),
         })
         .collect();

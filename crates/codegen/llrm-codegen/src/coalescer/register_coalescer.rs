@@ -153,6 +153,11 @@ pub fn join_copy(
     let Some(mut cp) = CoalescerPair::set_registers(&copy_insn, env) else {
         return JoinResult::Rejected;
     };
+    // DEVIATE C13: with the joins between widths off, such a copy is as it
+    // was before they existed: no pair, nothing below touches it.
+    if cp.is_partial() && !env.joins_sub_registers() {
+        return JoinResult::Rejected;
+    }
     if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
         return JoinResult::Rejected;
     }

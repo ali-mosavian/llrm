@@ -645,6 +645,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
     ]);
     let env = TargetEnv {
         joins_global_copies: true,
+        joins_sub_registers: true,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
@@ -959,6 +960,59 @@ fn add_at(
     Arc::new(Insn::new(0, None, Some(what), vec![value], vec![value]))
 }
 
+/// A target that switches the joins between widths off (DEVIATE C13).
+struct NoSubRegisterJoins;
+
+impl CoalescerEnv for NoSubRegisterJoins {
+    fn can_share(
+        &self,
+        a: u32,
+        b: u32,
+    ) -> bool {
+        SubRegisters.can_share(a, b)
+    }
+
+    fn can_share_sub(
+        &self,
+        narrow: u32,
+        wide: u32,
+    ) -> bool {
+        SubRegisters.can_share_sub(narrow, wide)
+    }
+
+    fn joins_sub_registers(&self) -> bool {
+        false
+    }
+}
+
+/// m68k joined 16-bit copies of longs into the long (div_constants_short,
+/// 68020 -O1): `movem` 71 -> 89 and 15 of 90 cell-CPU rows worse. A target
+/// that says `joins_sub_registers() == false` keeps the copy, as before the
+/// join existed.
+#[test]
+fn test_a_target_can_leave_every_copy_between_widths_unjoined() {
+    let (wide, c, r) = (def_at(1, 4), copy_at((2, 2), (1, 4)), read_at(2, 2));
+    let was = body(&[(&[wide, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &NoSubRegisterJoins, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+}
+
+/// With the joins between widths off, the driver sees no copy between widths:
+/// before, such a copy sat in the work lists and the terminal rule counted
+/// it, which moved a register choice in m68k's phi_slot_unknown_arm (-O1)
+/// though no join differed.
+#[test]
+fn test_with_the_joins_between_widths_off_the_driver_sees_no_such_copy() {
+    let (narrow, same) = (copy_at((2, 2), (1, 4)), copy_at((3, 4), (1, 4)));
+    let pick = super::driver::pick_of(&NoSubRegisterJoins);
+    assert!(pick(&narrow).is_none() && pick(&same).is_some());
+    let pick = super::driver::pick_of(&SubRegisters);
+    assert!(pick(&narrow).is_some() && pick(&same).is_some());
+}
+
 /// `v1:4 := def; v2:2 := mov v1:4; read v2:2`, the truncating copy of a
 /// sub-register extract (s67 on m68k: 53 of the 89 copies the join left were
 /// "width differs"): the copy goes and the read names `v1` at two bytes.
@@ -1051,6 +1105,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         size: false,
         keep_pinned: false,
         joins_global_copies: false,
+        joins_sub_registers: true,
         aliases: Default::default(),
         should_join: Box::new(|_| true),
         freq: Vec::new(),
