@@ -1471,6 +1471,16 @@ fn form(text: &str) -> String {
     key
 }
 
+/// The table's cost of a form as `form` writes it. Every byte register is `b`
+/// there, so a copy between two of them is `ld b;b`, which the table spells
+/// `ld b;c`.
+fn table_cost(key: &str) -> Option<crate::timing::Cost> {
+    crate::timing::cost(key)
+        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+        .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
+}
+
 /// Bytes and T-states of the lines, summed over every instruction (a loop body
 /// counts once): what two variants of one function are compared by. A form the
 /// table lacks costs two bytes and eight clocks.
@@ -1496,13 +1506,46 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     (bytes, clocks)
 }
 
+/// [`price`] with the clocks of an instruction counted eight times for each
+/// loop it is in, a loop being the lines from a label to a jump back to it:
+/// what two allocations of a loop are compared by.
+pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
+    let labels: std::collections::HashMap<&str, usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| match line {
+            Line::Label(label) => Some((label.as_str(), at)),
+            _ => None,
+        })
+        .collect();
+    let mut depth = vec![0u32; lines.len()];
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let mut words = text.split([' ', ',']).filter(|word| !word.is_empty());
+        if !matches!(words.next(), Some("jr" | "jp" | "djnz")) {
+            continue;
+        }
+        if let Some(&head) = words.last().and_then(|target| labels.get(target)).filter(|&&head| head <= at) {
+            for one in &mut depth[head..=at] {
+                *one += 1;
+            }
+        }
+    }
+    let (mut bytes, mut clocks) = (0, 0u64);
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(text) = line else { continue };
+        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+        bytes += cost.0;
+        clocks += u64::from(cost.1) * 8u64.pow(depth[at].min(3));
+    }
+    (bytes, clocks)
+}
+
 /// The bytes of one printed line, jumps being the three-byte form.
 fn bytes_of(line: &Line) -> u32 {
     let Line::Inst(text) = line else { return 0 };
     let key = form(text);
-    crate::timing::cost(&key)
-        .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-        .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+    table_cost(&key)
         // a form the table lacks: longer than any estimate
         .map_or(4, |cost| cost.bytes)
 }

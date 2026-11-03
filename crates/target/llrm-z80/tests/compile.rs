@@ -478,6 +478,32 @@ fn a_byte_shifted_in_a_is_doublings_and_a_rotate_with_a_mask() {
     assert!(out.contains("and a, #7") && !out.contains("sla a") && !out.contains("srl a"), "{out}");
 }
 
+/// minmax's `lo`, merged by a branch, was copied in ahead of the compare that
+/// decides the branch, so it lived beside the value it replaces and needed a
+/// register of its own: both extremes spilled to the frame, 66 B / 2675 T
+/// against SDCC's 56 B / 2351 T. Sunk below the compare, `lo` and `hi` stay in
+/// registers.
+#[test]
+fn a_merged_value_is_not_copied_in_ahead_of_the_compare_that_decides_it() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    for level in [Level::O2, Level::Oz] {
+        let out = text(ir, "minmax", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("(ix)"), "{level:?}\n{out}");
+    }
+}
+
+/// fletcher -Oz made its zero in the loop (`ld e, #0; ld c, e`, 11 T a trip)
+/// where the other allocation of the argument copies keeps it in a register
+/// of its own: 1811 T against 1706. The cheaper by the loop's weighted clocks
+/// stays.
+#[test]
+fn the_allocation_of_a_loop_with_the_cheaper_weighted_clocks_is_kept() {
+    let ir = include_str!("kernels/ir/fletcher.ll");
+    let out = text(ir, "fletcher", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    let (zero, head) = (out.find("ld e, #0"), out.find("L0_1:"));
+    assert!(zero.is_some() && zero < head, "{out}");
+}
+
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
 /// the head of the body the head alone enters: `ld a, c` twice, 1 B and 4 T a
 /// trip. A block two blocks enter starts with nothing known.

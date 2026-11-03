@@ -6,6 +6,7 @@ use llrm_spike_mf::cfg::Cfg;
 use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_address};
 use llrm_spike_mf::tolir::allocate_greedy;
 
+use crate::driver::Level;
 use crate::driver::{Request, selections};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
@@ -110,12 +111,12 @@ fn allocated_with(
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
     if !hoist_constants(&mut hoisted) {
-        return allocate(function, name);
+        return allocate(function, name, request.level);
     }
     // the allocator does not see that a byte of a pair is read in place, so a
     // constant kept across a loop can cost more than making it there: the
     // hoisted loop stays only if it is no bigger and no slower
-    let (plain, with) = (allocate(function, name), allocate(hoisted, name));
+    let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
     let price = |one: &Allocated| {
         let (function, assignment, slots, reads) = one;
         finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price(&lines))
@@ -138,15 +139,44 @@ fn allocated_with(
 fn allocate(
     function: MFunction,
     name: &str,
+    level: Level,
 ) -> Result<Allocated, String> {
+    let has_loop = !Cfg::new(&function).loops().is_empty();
+    let with = |unjoined: Option<bool>, function: MFunction| {
+        crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
+        let done = allocate_once(function, name);
+        crate::regalloc::UNJOINED.with(|one| one.set(None));
+        done
+    };
     match allocate_once(function.clone(), name) {
-        Ok(done) => Ok(done),
-        Err(first) => {
-            crate::regalloc::UNJOINED.with(|one| one.set(true));
-            let again = allocate_once(function, name);
-            crate::regalloc::UNJOINED.with(|one| one.set(false));
-            again.map_err(|_| first)
+        Ok(first) if has_loop => {
+            // the other choice for the argument copies can allocate a loop
+            // better (a constant kept in a register of its own, or not);
+            // the cheaper by the loop's weighted clocks stays, bytes first at
+            // the size levels and clocks first otherwise
+            let other = with(Some(!crate::abi::z80().pinned_copies_unjoined), function);
+            let price = |one: &Allocated| {
+                let (function, assignment, slots, reads) = one;
+                finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
+            };
+            match (other, price(&first)) {
+                (Ok(other), Some((bytes, clocks))) => match price(&other) {
+                    Some((other_bytes, other_clocks))
+                        if if matches!(level, Level::Os | Level::Oz) {
+                            (other_bytes, other_clocks) < (bytes, clocks)
+                        } else {
+                            (other_clocks, other_bytes) < (clocks, bytes)
+                        } =>
+                    {
+                        Ok(other)
+                    }
+                    _ => Ok(first),
+                },
+                _ => Ok(first),
+            }
         }
+        Ok(first) => Ok(first),
+        Err(first) => with(Some(true), function).map_err(|_| first),
     }
 }
 
@@ -157,6 +187,7 @@ fn allocate_once(
     two_address(&mut function);
     read_bytes_through_their_pairs(&mut function);
     use_the_shift_carry(&mut function);
+    sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
@@ -613,6 +644,43 @@ pub fn sink_copies_to_the_branch(
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
     };
+    sink_copies(function, |a, b| Z80Registers::overlaps(register(a), register(b)), |_, _| true);
+}
+
+/// The same before allocation, on the copies between virtual registers: a
+/// value merged by a branch was copied in ahead of the compare that decides
+/// the branch, so it lived beside the value it replaces and the two could not
+/// share a register (minmax's `lo`: a register more, spilled).
+pub fn sink_copies_before_allocation(function: &mut MFunction) {
+    let mut defs = std::collections::HashMap::<u32, u32>::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Def(Reg::Virt(v)) = operand {
+                *defs.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    // only a copy into a value several blocks define: what a branch merges
+    sink_copies(
+        function,
+        |a, b| a == b,
+        |dst, src| {
+            matches!(
+                (dst, src),
+                (Reg::Virt(d), Reg::Virt(_)) if defs.get(&d).is_some_and(|n| *n > 1)
+            )
+        },
+    );
+}
+
+/// Moves each copy `movable` accepts down to the block's branches when nothing
+/// after it reads or writes either register (`conflicts` says when two
+/// registers are one).
+fn sink_copies(
+    function: &mut MFunction,
+    conflicts: impl Fn(Reg, Reg) -> bool,
+    movable: impl Fn(Reg, Reg) -> bool,
+) {
     for block in &mut function.blocks {
         let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
         let mut at = 0;
@@ -622,7 +690,7 @@ pub fn sink_copies_to_the_branch(
                 at += 1;
                 continue;
             };
-            let (dst, src) = (register(*dst), register(*src));
+            let (dst, src) = (*dst, *src);
             let blocked = |later: &Inst| {
                 later.call
                     || later.barrier
@@ -630,11 +698,8 @@ pub fn sink_copies_to_the_branch(
                     || later.side_effects
                     || later.operands.iter().any(|operand| match operand {
                         Operand::Def(r) | Operand::Use(r) => {
-                            let r = register(*r);
-                            Z80Registers::overlaps(r, dst)
-                                || (matches!(operand, Operand::Def(_)) && Z80Registers::overlaps(r, src))
+                            conflicts(*r, dst) || (matches!(operand, Operand::Def(_)) && conflicts(*r, src))
                         }
-                        Operand::Frame(_) => false,
                         _ => false,
                     })
             };
@@ -642,7 +707,8 @@ pub fn sink_copies_to_the_branch(
             // touch neither register each other's would trade places for ever),
             // and only all the way: a copy stopped short sits between a reload
             // and the compare it folds into
-            if (at + 1..end).all(|later| block.insts[later].kind == Kind::Copy)
+            if !movable(dst, src)
+                || (at + 1..end).all(|later| block.insts[later].kind == Kind::Copy)
                 || (at + 1..end).any(|later| blocked(&block.insts[later]))
             {
                 at += 1;
