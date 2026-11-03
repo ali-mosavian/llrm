@@ -705,6 +705,10 @@ mod tests {
             assert_eq!(target.operations.float_divide, target.cost("x87_div").unwrap());
             assert_eq!(target.operations.float_load, target.cost("x87_load").unwrap());
             assert_eq!(target.operations.float_store, target.cost("x87_store").unwrap());
+            assert_eq!(
+                target.operations.float_to_int,
+                target.cost("x87_convert_store").unwrap() + 2 * target.cost("x87_control_load").unwrap()
+            );
             assert_eq!(target.max_unroll_iterations, 16);
             assert_eq!(target.max_unrolled_operations, 200);
         }

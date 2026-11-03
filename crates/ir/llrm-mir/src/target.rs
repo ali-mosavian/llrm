@@ -386,6 +386,10 @@ pub struct OperationCosts {
     /// last reader is past (x87 `fstp st(0)`): one held across a loop is
     /// released after it.
     pub float_release: i64,
+    /// A float converted to an integer (`fistp` under the control word that
+    /// truncates, and the word back); 0 where the target converts in one cheap
+    /// instruction.
+    pub float_to_int: i64,
     pub extend: i64,
     /// A comparison held as a value (`setcc`), before it is extended.
     pub set: i64,
@@ -520,6 +524,7 @@ impl Default for OperationCosts {
             folds_loads: false,
             float_store: 1,
             float_release: 0,
+            float_to_int: 0,
             extend: 1,
             set: 1,
             fill: 1,

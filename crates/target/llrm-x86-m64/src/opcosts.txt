@@ -35,6 +35,8 @@ float_load = x87_load
 float_load_folded = x87_add_m - x87_add
 float_store = x87_store
 float_release = x87_release
+# SSE converts in one instruction; the long double that uses x87 never reaches a select of conversions.
+float_to_int = 0
 extend = movzx
 set = setcc
 fill = rep_stos + 2*mov_ri
