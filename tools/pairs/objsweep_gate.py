@@ -76,6 +76,14 @@ def seeded(good: bytes) -> str | None:
     return None if verdict("seeded", line, {}) else "control: a leg with a changed object passed"
 
 
+COMPILER_SOURCES = ("crates", "Cargo.toml", "Cargo.lock")
+
+
+def same_compiler(base_sha: str, head: str = "HEAD") -> bool:
+    """No byte of the compiler's sources differs between the two commits: their builds are one binary, and a sweep of it against itself finds nothing."""
+    return subprocess.run(["git", "diff", "--quiet", base_sha, head, "--", *COMPILER_SOURCES], cwd=ROOT).returncode == 0
+
+
 def main() -> int:
     import llrmbin
     import measure
@@ -87,6 +95,9 @@ def main() -> int:
     if base_sha is None:
         print("objsweep: no ancestor with llrm-cc to compare with")
         return 1
+    if same_compiler(base_sha):
+        print(f"OBJSWEEP SKIPPED: {base_sha[:10]} and HEAD have the same compiler sources, so the objects cannot differ")
+        return 0
     old, new = str(measure.built(base_sha, "objects") / "llrm-cc"), str(Path(head) / "llrm-cc")
     expected = tomllib.loads((HERE / "objsweep_expected.toml").read_text()).get("leg", {})
     failures = [why] if (why := control(new)) else []

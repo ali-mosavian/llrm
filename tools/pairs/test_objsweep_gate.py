@@ -1,4 +1,5 @@
 """The gate's objects leg: a leg passes on the changes it lists and on nothing else."""
+import subprocess
 import sys
 from pathlib import Path
 
@@ -63,3 +64,17 @@ def test_every_target_objsweep_compiles_has_a_gate_leg_or_a_named_reason():
             continue
         assert target in legs and f"{target} debug" in legs, target
         assert target in objsweep.DEBUG_LEGS, target
+
+
+def test_a_head_with_the_compilers_sources_of_its_base_is_not_swept(tmp_path, monkeypatch):
+    """A tools-only branch swept its compiler against itself: every leg died on VOID PAIR (1274 s of builds first, and an earlier PASS read as evidence)."""
+    run = lambda *a: subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+    run("init", "-q"); run("config", "user.email", "a@b"); run("config", "user.name", "a")
+    (tmp_path / "crates").mkdir(); (tmp_path / "crates/a.rs").write_text("1"); (tmp_path / "tools.py").write_text("1")
+    run("add", "."); run("commit", "-qm", "base")
+    base = run("rev-parse", "HEAD").stdout.decode().strip()
+    (tmp_path / "tools.py").write_text("2"); run("commit", "-qam", "tools only")
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    assert gate.same_compiler(base)
+    (tmp_path / "crates/a.rs").write_text("2"); run("commit", "-qam", "compiler")
+    assert not gate.same_compiler(base)
