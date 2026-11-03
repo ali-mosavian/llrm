@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
+use llrm_codegen::backend::selectiondag::DagConfig;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
@@ -60,6 +61,9 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
+        // all addressing is absolute: `&buf[6]` is the symbol and 6, whatever
+        // the symbol's linkage (`isOffsetFoldingLegal`)
+        dag: DagConfig { dso_local_symbols: true, ..BuilderTarget::m16().dag },
         ..BuilderTarget::m16()
     }
 }

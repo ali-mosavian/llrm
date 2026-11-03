@@ -725,6 +725,20 @@ fn a_pair_copy_at_a_blocks_end_is_an_exchange_when_the_source_is_dead_past_it() 
     assert!(out.contains("ex de, hl") && !out.contains("ld l, e"), "{out}");
 }
 
+/// `&str[6]` of an external global was `ld hl, #_str` / `ld bc, #6` / `add hl,
+/// bc`: the offset folds into the symbol only for a symbol that is `dso_local`,
+/// and clang's IR for a static program leaves the flag off an `extern` array
+/// the program only declares. Addressing is absolute here, so every symbol
+/// folds: `ld de, #_str+6`. The scmp driver paid 4 instructions for it.
+#[test]
+fn a_constant_offset_from_an_external_global_is_folded_into_the_symbol() {
+    let out = compiled(
+        "@str = external global i8\ndefine ptr @f() {\n  %p = getelementptr i8, ptr @str, i16 6\n  ret ptr %p\n}",
+        "f",
+    );
+    assert!(out.contains("#_str+6") && !out.contains("add hl"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.
