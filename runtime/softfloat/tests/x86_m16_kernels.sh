@@ -21,7 +21,7 @@ emit() { # name, body-producing function already run into $T/body.c
 for op in add mul div; do
   { echo "$TYPES"; echo '#define UINT32_C(x) x##ul'; echo '#define UINT64_C(x) x##ull'; echo '#define INT32_MAX 2147483647L'; echo '#define INT32_MIN (-2147483647L-1)'; echo '#define UINT32_MAX 4294967295ul'
     for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
-      sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
+      awk -f tests/inline_inc.awk $f | sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g'
     done | awk 'BEGIN{print "#define SF_INTABI 1"; if (ENVIRON["SF_EXTRA"]) print ENVIRON["SF_EXTRA"]} {print}'
     echo "sfu32 __${op}sf3(sfu32, sfu32);"; } > $T/body.c
   sed -i 's/unsigned long/sfu32/' $T/vectors.h 2>/dev/null || true
@@ -39,7 +39,7 @@ for row in 'le|comparesf2|__lesf2(a,b)|__lesf2(u2f(a),u2f(b))' 'ge|comparesf2|__
   IFS='|' read -r op crtsrc ours crtc <<<"$row"
   { echo "$TYPES"; echo '#define UINT32_C(x) x##ul'; echo '#define UINT64_C(x) x##ull'; echo '#define INT32_MAX 2147483647L'; echo '#define INT32_MIN (-2147483647L-1)'; echo '#define UINT32_MAX 4294967295ul'
     for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
-      sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
+      awk -f tests/inline_inc.awk $f | sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g'
     done | awk 'BEGIN{print "#define SF_INTABI 1"; if (ENVIRON["SF_EXTRA"]) print ENVIRON["SF_EXTRA"]} {print}'
     echo "#define NAN_(a) ((((a) >> 23) & 0xFF) >= 158)"; echo "#define CALL1(a, b) ((unsigned long)($ours))"; } > $T/body.c
   sed -i 's/unsigned long/sfu32/' $T/vectors.h 2>/dev/null || true

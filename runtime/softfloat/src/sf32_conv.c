@@ -4,14 +4,20 @@
 
 #define SIGN 0x80000000u
 
+#define SF_N(n) n
+#define SF_T uint32_t
+#define SF_W 32
+#define SF_MB 23
+#define SF_EXPMAX 0xFF
+#define sf_shr_sticky sf_shr_sticky32
+#define SF_ROUND3 sf_round3
+#ifndef SF_CODEC32
+#define SF_CODEC32
+#include "sf_codec.inc"
+#endif
+
 /* Round to nearest even and pack (see softfloat.h). */
-sf32 sf32_pack(uint32_t sign, int e, uint32_t m)
-{
-    if (e >= 255) return sign | 0x7F800000u;
-    if (e <= 0) { m = sf_shr_sticky32(m, 1 - e); e = 1; }
-    m = sf_round3(m);
-    return sign + ((uint32_t)(e - 1) << 23) + m;
-}
+sf32 sf32_pack(uint32_t sign, int e, uint32_t m) { return pack_any(sign, e, m); }
 
 static sf32 from_mag(uint32_t sign, uint32_t x)
 {
@@ -51,3 +57,5 @@ sf_float SF_NAME(floatsisf)(int32_t x) { return b2f(from_i32_bits(x)); }
 sf_float SF_NAME(floatunsisf)(uint32_t x) { return b2f(from_u32_bits(x)); }
 int32_t SF_NAME(fixsfsi)(sf_float a) { return to_i32_bits(f2b(a)); }
 uint32_t SF_NAME(fixunssfsi)(sf_float a) { return to_u32_bits(f2b(a)); }
+
+#include "sf_core_end.inc"

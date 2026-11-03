@@ -13,7 +13,7 @@ for op in add sub mul div; do
     echo '#define UINT32_C(x) x##u'; echo '#define UINT64_C(x) x##ull'; echo '#define INT32_MAX 2147483647'; echo '#define INT32_MIN (-2147483647-1)'; echo '#define UINT32_MAX 4294967295u'
     # flatten: our headers and sf32.c, without libc (the types above stand in for <stdint.h>)
     for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
-      sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
+      awk -f tests/inline_inc.awk $f | sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g'
     done | awk 'BEGIN{print "#define SF_INTABI 1"; if (ENVIRON["SF_CFG"]) print ENVIRON["SF_CFG"]} {print}'
     cat $T/vectors.h | sed 's/uint32_t/sfu32/'
     echo "sfu32 __${op}sf3(sfu32, sfu32);"

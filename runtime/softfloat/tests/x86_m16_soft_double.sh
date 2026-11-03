@@ -14,6 +14,7 @@ import re, sys
 T = sys.argv[1]
 def prep(path, suffix=''):
     s = open(path).read()
+    s = re.sub(r'#include "(sf_[a-z_]+\.inc)"\n', lambda m: open('src/' + m.group(1)).read(), s)
     s = re.sub(r'#include <(stdint|stddef|limits)\.h>\n', '', s)
     s = re.sub(r'#include "(softfloat|sf_helpers|sf_int)\.h"\n', '', s)
     if suffix:

@@ -84,6 +84,15 @@ static inline uint32_t sf_round3(uint32_t m)
 #endif
 }
 
+/* The same for a 56-bit working mantissa (binary64). */
+static inline uint64_t sf_round3_64(uint64_t m)
+{
+    uint64_t r = m & 7;
+    m >>= 3;
+    if (r > 4 || (r == 4 && (m & 1))) m++;
+    return m;
+}
+
 /* Round to nearest even and pack for 1 <= e <= 254 (no overflow, no denormal): sf32_pack without its two range paths. */
 static inline uint32_t pack_round(uint32_t sign, int e, uint32_t m)
 {
