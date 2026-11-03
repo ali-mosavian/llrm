@@ -3,6 +3,22 @@
 #include "softfloat.h"
 #include "sf_helpers.h"
 
+#ifdef SF_PACK_INLINE
+/* sf32_pack for 1 <= e <= 254 (no overflow, no denormal) in the caller: saves a call and the callee's saved registers on the common path. */
+static inline sf32 pack_near(uint32_t sign, int e, uint32_t m)
+{
+    if ((unsigned)(e - 1) < 254u) {
+        uint32_t r = m & 7;
+        m >>= 3;
+        if (r > 4 || (r == 4 && (m & 1))) m++;
+        return sign + ((uint32_t)(e - 1) << 23) + m;
+    }
+    return sf32_pack(sign, e, m);
+}
+#else
+#define pack_near sf32_pack
+#endif
+
 #define SIGN 0x80000000u
 #define INF 0x7F800000u
 
@@ -47,7 +63,7 @@ static sf32 add_bits(sf32 a, sf32 b)
         m = ma + mb;
         if (m & (UINT32_C(1) << 27)) { m = sf_shr_sticky32(m, 1); ea++; }
     }
-    return sf32_pack(sign, ea, m);
+    return pack_near(sign, ea, m);
 }
 
 static sf32 sub_bits(sf32 a, sf32 b) { return add_bits(a, b ^ SIGN); }
@@ -76,7 +92,7 @@ static sf32 mul_bits(sf32 a, sf32 b)
     int e = ea + eb - 127, sh = 20;
     if (hi >> 15) { sh = 21; e++; }
     uint32_t m = (hi << (32 - sh)) | (lo >> sh) | ((lo << (32 - sh)) != 0);
-    return sf32_pack(sign, e, m);
+    return pack_near(sign, e, m);
 }
 
 static sf32 div_bits(sf32 a, sf32 b)
@@ -130,7 +146,7 @@ static sf32 div_bits(sf32 a, sf32 b)
 #endif
     int e = ea - eb + 126;
     if (q >> 27) { q = (q >> 1) | (q & 1); e++; }
-    return sf32_pack(sign, e, q | inexact);
+    return pack_near(sign, e, q | inexact);
 }
 
 static int cmp_bits(sf32 a, sf32 b, int unordered)
