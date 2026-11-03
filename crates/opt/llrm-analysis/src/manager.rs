@@ -336,8 +336,7 @@ impl ModuleAnalysis for Summaries {
                     before
                 } else {
                     let last = crate::attrsummary::Last {
-                        declared: &then.inputs.declared,
-                        declared_now: &inputs.declared,
+                        moved: &|id| analyses.declaration_moved(then.inputs.declared, id),
                         found: &then.inputs.found,
                         tracked: &then.tracked,
                         made: &mut before,
@@ -384,7 +383,8 @@ struct SummariesMade {
 
 /// The results `Summaries::run` read.
 struct SummaryInputs {
-    declared: Rc<Vec<llrm_mir::module::GlobalValue>>,
+    /// The number of the listing of declarations, which nothing here holds.
+    declared: u64,
     globals_held: Option<Rc<<GlobalsAA as ModuleAnalysis>::Result>>,
     found: Rc<<GlobalsModRefAnalysis as ModuleAnalysis>::Result>,
 }
@@ -404,7 +404,8 @@ impl SummaryInputs {
         // The one `GlobalsAAResult` of the module, as the pin has: the held
         // `GlobalsModRef`, not another made for each run.
         let found = analyses.get::<GlobalsModRefAnalysis>(module);
-        let declared = analyses.get::<llrm_mir::passes::Declarations>(module);
+        analyses.get::<llrm_mir::passes::Declarations>(module);
+        let declared = analyses.listing();
         Self { declared, globals_held, found }
     }
 
@@ -425,7 +426,7 @@ impl SummaryInputs {
         &self,
         last: &Self,
     ) -> bool {
-        Rc::ptr_eq(&self.declared, &last.declared)
+        self.declared == last.declared
             && Rc::ptr_eq(&self.found, &last.found)
             && match (&self.globals_held, &last.globals_held) {
                 (Some(a), Some(b)) => Rc::ptr_eq(a, b),

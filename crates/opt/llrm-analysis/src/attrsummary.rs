@@ -35,7 +35,7 @@ use std::rc::Rc;
 use llrm_mir::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{GlobalKind, GlobalValue, Module};
+use llrm_mir::module::{GlobalKind, Module};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 
@@ -58,9 +58,8 @@ pub fn summaries_made() -> usize {
 /// What the last `summaries` made and read: a function whose declaration and
 /// globals' facts stand has the summary it had.
 pub struct Last<'a> {
-    /// The declarations then, and now.
-    pub declared: &'a [GlobalValue],
-    pub declared_now: &'a [GlobalValue],
+    /// Whether a global's declaration differs from what it was then.
+    pub moved: &'a dyn Fn(GlobalId) -> bool,
     pub found: &'a crate::globalsmodref::GlobalsModRef,
     pub tracked: &'a std::collections::BTreeSet<GlobalId>,
     pub made: &'a mut IndexMap<String, Rc<Summary>>,
@@ -109,7 +108,7 @@ pub fn summaries_reusing(
     let mut last = last.filter(|last| {
         last.tracked == tracked
             && listable == tracked.iter().all(|&id| last.found.is_non_address_taken(id))
-            && tracked.iter().all(|id| last.declared.get(id.0 as usize) == last.declared_now.get(id.0 as usize))
+            && tracked.iter().all(|&id| !(last.moved)(id))
     });
     let mut out = IndexMap::default();
     for (id, global, function) in module.functions() {
@@ -119,7 +118,7 @@ pub fn summaries_reusing(
         let kept = last
             .as_mut()
             .filter(
-                |last| last.declared.get(id.0 as usize) == last.declared_now.get(id.0 as usize)
+                |last| !(last.moved)(id)
                     && last.found.function_info(id) == found.function_info(id),
             );
         if let Some(summary) = kept.and_then(|last| last.made.swap_remove(name)) {
