@@ -1048,10 +1048,11 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
 }
 
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
-/// 8 programs of tests/run/c): it is refused by name.
+/// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
+/// passing one through is register moves and a return, no routine.
 #[test]
-fn a_float_argument_is_refused_not_a_panic() {
+fn a_float_argument_passes_as_two_words() {
     let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine float @f(float %x) {{\n  ret float %x\n}}");
-    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses a float");
-    assert!(why.contains("not a byte or a word"), "{why}");
+    let asm = text(&ir, "f", 0, &Request::new(Level::O2)).expect("a float compiles");
+    assert!(asm.trim_end().ends_with("ret") && !asm.contains("call") && !asm.contains("jp "), "{asm}");
 }
