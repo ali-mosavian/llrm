@@ -1023,3 +1023,16 @@ define i64 @f() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(text.matches("jsr g").count(), 2, "{text}");
 }
+
+/// A loop calling `f2` on two `i64` and passing the result on (softfloat's
+/// checker, `main` of the f64 driver) was "greedy refused" at the size level: a
+/// pair read by a call and clobbered by it was merged with the clobber, so the
+/// call's result bytes in the same unit read as a second pinned value, whichever
+/// instruction began the run. The module is the C reduced to the lines that kept
+/// the refusal.
+#[test]
+fn a_call_on_two_longs_whose_result_is_passed_on_allocates_at_the_size_level() {
+    let ir = include_str!("fixtures/pin_live_into_call.ll");
+    let text = assembly(ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("jsr f2"), "the call is made:\n{text}");
+}
