@@ -2390,30 +2390,53 @@ fn a_dense_switch_at_m16_and_m32_jumps_through_its_index_register() {
     }
 }
 
+/// A function whose `{` is on the line after its name: the pin's first row is
+/// `scopeLine` (2), then the first statement (3) where the body starts. Ours
+/// began at the first statement, so the line table had no row for the `{`.
+#[test]
+fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
+    for isel in ["--isel=old", "--isel=dag"] {
+        let info = debug_info(
+            &["-m32", "-O0", "-g", "-fobject-format=elf", isel],
+            include_str!("../tests/data/debug_scope_line_m32.ll"),
+        );
+        let rows: Vec<(usize, u32)> = info.lines.iter().map(|row| (row.offset, row.line)).collect();
+        let body = info.functions[0].body.expect("a body").0;
+        assert_eq!(rows[0], (0, 2), "{isel}: {rows:?}");
+        assert_eq!(rows[1], (body, 3), "{isel}: {rows:?}");
+    }
+}
+
 /// An instruction with no place at the top of a block is line 0 in the pin,
 /// and not a statement; ours left the place of the block before it on every
 /// instruction, so a loop's `-O2` table had no line-0 row at all.
 #[test]
 fn a_block_that_starts_with_no_place_has_a_line_0_row_that_is_not_a_statement() {
     for isel in ["--isel=old", "--isel=dag"] {
-        let (built, _) = compiled(
-            &flags(&["-m32", "-O2", "-g", "-fobject-format=elf", isel]),
+        let info = debug_info(
+            &["-m32", "-O2", "-g", "-fobject-format=elf", isel],
             include_str!("../tests/data/debug_phi_m32_o2.ll"),
-            "f",
-        )
-        .unwrap();
-        let info = llrm_codegen::backend::objbuild::built_for(
-            &built,
-            "phi.c",
-            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
-            llrm_target::object::Format::Elf,
-            llrm_target::Target::objects(&llrm_x86_m32::M32),
-        )
-        .unwrap()
-        .debug
-        .expect("debug information");
+        );
         let zero: Vec<usize> = info.lines.iter().filter(|row| row.line == 0).map(|row| row.offset).collect();
         assert!(!zero.is_empty(), "{isel}: {:?}", info.lines);
         assert!(zero.iter().all(|&at| info.not_stmt.contains(&(0, at))), "{isel}: {:?}", info.not_stmt);
     }
+}
+
+/// The debug information of `text` (function `f`) at m32.
+fn debug_info(
+    arguments: &[&str],
+    text: &str,
+) -> llrm_debug::Info {
+    let (built, _) = compiled(&flags(arguments), text, "f").unwrap();
+    llrm_codegen::backend::objbuild::built_for(
+        &built,
+        "phi.c",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::object::Format::Elf,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+    .debug
+    .expect("debug information")
 }
