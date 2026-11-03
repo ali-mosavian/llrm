@@ -1,4 +1,11 @@
 #define __SOFT_LIB 1
+#define W_ADD 1
+#define W_SUB 1
+#define W_MUL 1
+#define W_DIV 1
+#define W_CMP 1
+#define W_F2I 1
+#define W_I2F 1
 extern void report(long value);
 typedef unsigned char sfu8; typedef signed char sfi8; typedef short sfi16; typedef unsigned short sfu16; typedef long sfi32; typedef unsigned long sfu32; typedef unsigned long long sfu64; typedef long long sfi64;
 #define UINT32_C(x) x##ul
@@ -749,10 +756,10 @@ long bench_sfm16_float(int n)
     unsigned long acc = 0;
     for (i = 0; i < n; ++i) {
         float a = bits(V[i][0]), b = bits(V[i][1]);
-        acc += canon(a + b) + 3 * canon(a - b) + 5 * canon(a * b) + 7 * canon(a / b);
-        acc += (a < b) + 2 * (a == b) + 4 * (a > b) + 8 * (a != b) + 16 * (a <= b) + 32 * (a >= b);
-        if (((V[i][0] >> 23) & 0xFF) < 127 + 30) acc += (long)a;
-        acc += canon((float)(long)V[i][1]);
+        acc += W_ADD * canon(a + b) + 3 * W_SUB * canon(a - b) + 5 * W_MUL * canon(a * b) + 7 * W_DIV * canon(a / b);
+        if (W_CMP) acc += (a < b) + 2 * (a == b) + 4 * (a > b) + 8 * (a != b) + 16 * (a <= b) + 32 * (a >= b);
+        if (W_F2I && ((V[i][0] >> 23) & 0xFF) < 127 + 30) acc += (long)a;
+        if (W_I2F) acc += canon((float)(long)V[i][1]);
     }
     return (long)acc;
 }

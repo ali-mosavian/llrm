@@ -247,3 +247,22 @@ entry:
     assert_eq!(call.delivers.iter().map(|(held, _)| format!("{held:?}")).collect::<Vec<_>>().len(), 1);
     assert!(format!("{:?}", call.delivers).contains("width: 2"), "{:?}", call.delivers);
 }
+
+/// The call places its arguments by the convention the routine was defined
+/// under (the libcall's number), not the target's native one: the C runtime's
+/// `__addsf3` is `_*@3`, regparm3, and the call spelled the Watcom library's
+/// symbol and used the wrong registers (`__addsf3_ is an undefined reference`).
+#[test]
+fn a_soft_float_call_places_arguments_by_the_routines_convention() {
+    let module = crate::testing::module(FLOAT_ADD).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let required = |libcalls: &[(String, u32, String)]| -> usize {
+        let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, libcalls).unwrap_or_else(|e| panic!("{}", e.0));
+        let insns = done.body.insns();
+        insns.iter().find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call"))).expect("a call").requires.len()
+    };
+    let native = required(&[]);
+    let stack = required(&[("__addsf3".to_owned(), 0, "_x".to_owned())]);
+    assert!(native > 0, "the native convention passes the floats in registers");
+    assert_eq!(stack, 0, "convention 0 (cdecl16) passes them on the stack");
+}
