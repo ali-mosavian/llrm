@@ -158,14 +158,22 @@ pub fn c_lib_call(
     let placement = native.place(&kinds);
     let mut places = Vec::new();
     for (&arg, place) in args.iter().zip(&placement.places) {
-        places.push((
-            arg,
-            match place {
-                Where::Stack(offset) => Place::Stack(*offset),
-                Where::Registers(names) if names.len() == 1 => Place::Register(env.arch.register_named(&names[0])),
-                Where::Registers(_) => return None,
-            },
-        ));
+        match place {
+            Where::Stack(offset) => places.push((arg, Place::Stack(*offset))),
+            Where::Registers(names) if names.len() == 1 => {
+                places.push((arg, Place::Register(env.arch.register_named(&names[0]))))
+            }
+            Where::Registers(names) if names.len() == 2 => {
+                // `getCopyToParts`: the low half, then the high, each in its register.
+                let half = EVT::integer(dag.value_type(arg).size_in_bits() / 2);
+                let amount = dag.get_constant(u128::from(half.size_in_bits()), EVT::I8);
+                let high = dag.get_node(ISD::Srl, dag.value_type(arg), &[arg, amount]);
+                let (low, high) = (dag.get_node(ISD::Truncate, half, &[arg]), dag.get_node(ISD::Truncate, half, &[high]));
+                places.push((low, Place::Register(env.arch.register_named(&names[0]))));
+                places.push((high, Place::Register(env.arch.register_named(&names[1]))));
+            }
+            Where::Registers(_) => return None,
+        }
     }
     let result_bytes = i64::from(ret.size_in_bits() / 8);
     let result = native.result_registers(result_bytes)?;

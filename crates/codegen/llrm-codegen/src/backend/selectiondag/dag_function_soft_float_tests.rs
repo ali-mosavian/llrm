@@ -166,3 +166,19 @@ fn a_soft_float_conversion_calls_its_routine_and_the_rest_call_nothing() {
     assert!(calls_of("%r = call float @llvm.fabs.f32(float %a)\nret float %r", "float %a", "float").is_empty());
     assert!(calls_of("%r = select i1 %c, float %a, float %b\nret float %r", "i1 %c, float %a, float %b", "float").is_empty());
 }
+
+/// A `double` is an `i64` of the same bits: it takes two registers in a call,
+/// and arithmetic on it calls the `df3` routines.
+#[test]
+fn a_soft_double_is_two_registers_and_calls_the_df3_routines() {
+    assert_eq!(
+        calls_of("%r = fadd double %a, %b\nret double %r", "double %a, double %b", "double"),
+        ["__adddf3"]
+    );
+    assert_eq!(
+        calls_of("%c = fcmp olt double %a, %b\n%r = zext i1 %c to i32\nret i32 %r", "double %a, double %b", "i32"),
+        ["__ltdf2"]
+    );
+    assert_eq!(calls_of("%r = fpext float %a to double\nret double %r", "float %a", "double"), ["__extendsfdf2"]);
+    assert_eq!(calls_of("%r = fptrunc double %a to float\nret float %r", "double %a", "float"), ["__truncdfsf2"]);
+}
