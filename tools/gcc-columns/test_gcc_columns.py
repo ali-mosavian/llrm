@@ -55,3 +55,20 @@ def test_noivopts_flag_only_at_os():
     assert B.level_flags("Os", True) == ["-Os", "-fno-ivopts"]
     assert B.level_flags("O2", True) == ["-O2"]
     assert B.level_flags("Os", False) == ["-Os"]
+
+
+def test_gcc_leads_takes_the_lower_of_the_two_columns():
+    """The bar is the lower gcc column per metric: a lead by one column only (memmove clk by gcc, B by noivopts) must show both."""
+    import gcc_leads as L
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    def tsv(name, body):
+        f = tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False)
+        f.write(h + body)
+        f.close()
+        return f.name
+    m = tsv("m", "6502\tp\tOs\tours\t100\t1000\t300\t\n")
+    a = tsv("a", "6502\tp\tOs\tgcc\t90\t1200\t310\t\n")
+    b = tsv("b", "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    (r,) = L.leads(m, [a, b])
+    assert r[1] == ("p", "Os") and [d[:3] for d in r[2]] == [("B", 90, 100), ("clk", 900, 1000)]
+    assert [(x[1], [d[:3] for d in x[2]]) for x in L.leads(m, [a])] == [(("p", "Os"), [("B", 90, 100)])]
