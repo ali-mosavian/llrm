@@ -655,6 +655,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: None,
+        is_rematerializable: None,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -1162,6 +1163,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             regs: None,
+            is_rematerializable: None,
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);

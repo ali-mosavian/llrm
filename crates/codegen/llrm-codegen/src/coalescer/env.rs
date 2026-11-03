@@ -64,6 +64,9 @@ pub struct TargetEnv {
     /// the low part of ([`CoalescerEnv::can_share_sub`]); none where the
     /// target builds no copy between values of two widths.
     pub regs: Option<Regs>,
+    /// `TargetInstrInfo::isReMaterializable`: the target's own answer; none:
+    /// the shared one, by instruction name.
+    pub is_rematerializable: Option<Box<dyn Fn(&Insn) -> bool>>,
 }
 
 impl TargetEnv {
@@ -121,6 +124,18 @@ impl CoalescerEnv for TargetEnv {
 
     fn joins_pinned_copies(&self) -> bool {
         self.joins_pinned_copies
+    }
+
+    fn rematerializable(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        insn.spread.is_empty()
+            && insn.call.is_none()
+            && match &self.is_rematerializable {
+                Some(is) => is(insn),
+                None => crate::greedy::remat::is_trivially_re_materializable(insn, false),
+            }
     }
 
     fn joins_sub_registers(&self) -> bool {
@@ -308,6 +323,7 @@ pub fn coalesce(
     joins_sub_registers: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
+    is_rematerializable: Option<Box<dyn Fn(&Insn) -> bool>>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
     let aliases = pins
         .iter()
@@ -338,6 +354,7 @@ pub fn coalesce(
         should_join,
         freq,
         regs: Some(regs),
+        is_rematerializable,
     };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();

@@ -132,6 +132,9 @@ impl<T: Target> Converted<T> {
                     copy_frequency: join.copy_frequency,
                 })
             }),
+            // `TargetInstrInfo::isReMaterializable`: the coalescer asks the
+            // target, not the shared by-name rule.
+            Some(Box::new(remat_shape)),
         );
         for (value, order) in self.orders.iter_mut() {
             if let Some(allowed) = palettes.get(value) {
@@ -1064,20 +1067,7 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         &self,
         one: &Insn,
     ) -> bool {
-        let Some(what) = one.what.as_ref() else { return false };
-        one.defines.len() == 1
-            && one.uses.is_empty()
-            && one.group.is_none()
-            && one.requires.is_empty()
-            && one.delivers.is_empty()
-            && one.clobbers.is_empty()
-            && one.symbol != Some(true)
-            && what.op == Operation::Move
-            && matches!(
-                what.dests.as_slice(),
-                [Loc::Held(held)] if held.value == one.defines[0]
-            )
-            && matches!(what.sources.as_slice(), [Loc::Imm(_)])
+        remat_shape(one)
     }
 
     fn is_trivially_re_materializable(
@@ -1646,4 +1636,22 @@ pub fn allocate_greedy<T: Target>(
     crate::spill::share_slots(&mut back.function, &mut back.slots);
     *function = back.function;
     Ok((back.assignment, back.slots))
+}
+
+/// One register written by a move of a literal.
+fn remat_shape(one: &Insn) -> bool {
+    let Some(what) = one.what.as_ref() else { return false };
+    one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.symbol != Some(true)
+        && what.op == Operation::Move
+        && matches!(
+            what.dests.as_slice(),
+            [Loc::Held(held)] if held.value == one.defines[0]
+        )
+        && matches!(what.sources.as_slice(), [Loc::Imm(_)])
 }

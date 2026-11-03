@@ -1847,3 +1847,41 @@ fn test_the_scheduler_puts_back_each_instruction_not_the_first_with_its_position
     let defined: Vec<u32> = converted.body.blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
     assert!(defined.contains(&1) && defined.contains(&3), "both definitions survive: {defined:?}");
 }
+
+/// One literal copied into two values that a loop redefines. The coalescer
+/// joins the literal into the first and makes it again for the second (the
+/// pin's `reMaterializeTrivialDef`), but asked the shared by-name rule, which
+/// knows `mov` only: a target's own literal (`ldi` here, `Imm` on arm64) was
+/// never made again, and the second value kept a copy of the first.
+#[test]
+fn test_a_literal_copied_into_two_loop_values_is_made_again_by_the_coalescer() {
+    let mut f = MFunction::<()>::new("two_phis");
+    f.classes = vec![(); 5];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut zero = op("ldi", vec![Operand::Def(v(0)), Operand::Imm(0)]);
+    zero.rematerializable = true;
+    entry.insts.push(zero);
+    entry.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(0))]));
+    entry.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(0))]));
+    entry.insts.push(branch(1));
+    let mut body = Block { id: 1, ..Block::default() };
+    body.insts.push(op("add", vec![Operand::Def(v(3)), Operand::Use(v(1)), Operand::Use(v(2))]));
+    body.insts.push(op("mul", vec![Operand::Def(v(4)), Operand::Use(v(2)), Operand::Use(v(2))]));
+    body.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(1)), Operand::Use(v(3))]));
+    body.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(2)), Operand::Use(v(4))]));
+    let mut again = op("br", vec![Operand::Block(1), Operand::Block(2)]);
+    again.terminator = true;
+    body.insts.push(again);
+    let mut exit = Block { id: 2, ..Block::default() };
+    exit.insts.push(op("store", vec![Operand::Use(v(1))]));
+    exit.insts.push(op("store", vec![Operand::Use(v(2))]));
+    exit.insts.push(ret());
+    f.blocks = vec![entry, body, exit];
+    let back = rewritten_with(&lowered(f), true);
+    every_read_is_set(&back.function).unwrap();
+    assert_allocated(&back.function, &back.assignment);
+    let entry_insts = &back.function.blocks[0].insts;
+    let literals = entry_insts.iter().filter(|i| i.kind == Kind::Op("ldi")).count();
+    let copies = entry_insts.iter().filter(|i| i.kind == Kind::Copy).count();
+    assert_eq!((literals, copies), (2, 0), "each loop value starts from its own literal: {entry_insts:?}");
+}
