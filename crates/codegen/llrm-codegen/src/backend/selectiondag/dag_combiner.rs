@@ -103,6 +103,18 @@ pub trait CombineHooks {
         false
     }
 
+    /// `mergeStoresAfterLegalization`: stores of `mem` are also merged once
+    /// types are legal, to catch the stores legalization made (a promoted
+    /// `i16` store is a truncating `i32` one). The pin's default is true and
+    /// x86's is `!mem.is_vector()`. DEVIATE: off by default, as above. Exit:
+    /// x86 judged.
+    fn merge_stores_after_legalization(
+        &self,
+        _mem: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its
     /// load, and puts the freeze back on the narrowed load. Default false
     /// until x86 is judged.
