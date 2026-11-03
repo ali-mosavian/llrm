@@ -3085,6 +3085,11 @@ fn with_lines(
                     out.push(Line::Raw(format!("  .dbg line, \"{file}\", {line}")));
                     shown = Some(line);
                 }
+                // DEVIATE: place 0 (no location) writes no row, so the row
+                // before covers it; the pin gives it line 0.
+                // Reason: ca65 keeps a `.dbg line` of line 0 as
+                // a span-less row (probe 2026-11-05),
+                // so it would cover nothing either. Exit: with ca65's handling.
                 if let Some(place) = (inst.place != 0).then(|| places.get(inst.place as usize - 1)).flatten()
                     && shown != Some(place.line)
                 {

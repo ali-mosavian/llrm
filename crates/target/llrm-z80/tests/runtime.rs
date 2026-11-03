@@ -149,5 +149,12 @@ fn the_programs_of_this_crate_run_and_print_what_c_does() {
         .output()
         .expect("python3 runs");
     let text = String::from_utf8_lossy(&done.stdout);
-    assert!(done.status.success() && text.lines().last().is_some_and(|last| last.starts_with("PASS ")), "{text}");
+    // every program passes: the tally line is `PASS n of n`, with no refusal
+    // beside it
+    let all = text
+        .lines()
+        .last()
+        .and_then(|last| last.strip_prefix("PASS "))
+        .is_some_and(|rest| rest.split_once(" of ").is_some_and(|(passed, total)| passed == total));
+    assert!(done.status.success() && all, "{text}");
 }
