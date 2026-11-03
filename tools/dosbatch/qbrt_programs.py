@@ -30,6 +30,7 @@ SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswi
 # test so the entry goes.
 KNOWN: dict[tuple[str, str], str] = {
     ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
+    ("byref_far_copyout", qbbuild.FLAT): "a flat target passes an element's own address (no copy-in slot), so a write through the array during the call survives; BC's copy-out undoes it",
 }
 
 

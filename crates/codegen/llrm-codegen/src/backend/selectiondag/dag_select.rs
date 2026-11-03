@@ -234,6 +234,18 @@ pub fn do_instruction_selection_with(
         if matches!(adapter.dag.nodes()[node as usize].opcode, ISD::Machine(_)) {
             continue;
         }
+        // `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its
+        // operand, once the users that read what it asserts are selected
+        // (a pattern predicate sees the assertion; `smull` of a value
+        // another block extended). Targets that call `remove_assertions`
+        // first have none left.
+        if matches!(
+            adapter.dag.nodes()[node as usize].opcode,
+            ISD::AssertSext | ISD::AssertZext
+        ) {
+            adapter.drop_assertion(node);
+            continue;
+        }
         let before = adapter.dag.nodes().len();
         // The pin's `Select` keeps these as they are and marks them selected
         // (`SelectionDAGISel.cpp`, "Mark selected").

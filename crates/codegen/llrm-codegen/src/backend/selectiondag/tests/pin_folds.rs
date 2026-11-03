@@ -64,6 +64,12 @@ impl CombineHooks for Asks {
     fn store_fp_constant_as_i64(&self) -> bool {
         true
     }
+    fn rebuild_brcond_condition(&self) -> bool {
+        true
+    }
+    fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -435,6 +441,66 @@ fn a_target_that_does_not_ask_keeps_the_multiply_of_the_add() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
 }
 
+struct Decomposes;
+
+impl CombineHooks for Decomposes {
+    fn decompose_mul_by_constant(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> bool {
+        true
+    }
+}
+
+fn mul_by(
+    dag: &mut SelectionDAG,
+    constant: u128,
+) {
+    let x = dag.get_register(EVT::I16, 5);
+    let c = dag.get_constant(constant, EVT::I16);
+    let root = dag.get_node(ISD::Mul, EVT::I16, &[x, c]);
+    dag.set_root(root);
+}
+
+/// `x * 33` stayed a multiply, a library call where the target has no
+/// multiplier; with `decomposeMulByConstant` it is `(x << 5) + x`, and
+/// `x * 15` is `(x << 4) - x`, `x * -33` its negation, `x * 6` shifted once
+/// more on both terms.
+#[test]
+fn a_multiply_by_one_off_a_power_of_two_is_shifts_and_an_add_where_the_target_asks() {
+    let shift = |dag: &SelectionDAG, v: SDValue| (dag.opcode(v), dag.constant(dag.operand(v, 1)));
+    let mut dag = dag();
+    mul_by(&mut dag, 33);
+    DagCombiner::new(&mut dag, &mut Decomposes, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(shift(&dag, dag.operand(root, 0)), (ISD::Shl, Some(5)));
+
+    let mut dag = self::dag();
+    mul_by(&mut dag, 15);
+    DagCombiner::new(&mut dag, &mut Decomposes, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Sub);
+    assert_eq!(shift(&dag, dag.operand(root, 0)), (ISD::Shl, Some(4)));
+
+    let mut dag = self::dag();
+    mul_by(&mut dag, 6);
+    DagCombiner::new(&mut dag, &mut Decomposes, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(shift(&dag, dag.operand(root, 0)), (ISD::Shl, Some(2)));
+    assert_eq!(shift(&dag, dag.operand(root, 1)), (ISD::Shl, Some(1)));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_multiply_by_one_off_a_power_of_two() {
+    let mut dag = dag();
+    mul_by(&mut dag, 33);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
+}
+
 fn sra_of_truncated_high_half(dag: &mut SelectionDAG) {
     let x = dag.get_register(EVT::I64, 5);
     let (thirty_two, three) = (dag.get_constant(32, EVT::I64), dag.get_constant(3, EVT::I32));
@@ -791,4 +857,92 @@ fn a_target_that_declines_keeps_a_select_of_two_constants() {
     select_of_constants(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Shl, "the default is x86's");
+}
+
+fn branch_on_not_of_asserted_boolean(dag: &mut SelectionDAG) {
+    let x = dag.get_register(EVT::I32, 5);
+    let one_bit = dag.get_value_type_node(EVT::I1);
+    let asserted = dag.get_node(ISD::AssertZext, EVT::I32, &[x, one_bit]);
+    let boolean = dag.get_node(ISD::Truncate, EVT::I1, &[asserted]);
+    let ones = dag.get_constant(1, EVT::I1);
+    let not = dag.get_node(ISD::Xor, EVT::I1, &[boolean, ones]);
+    let (chain, dest) = (dag.entry_node(), dag.get_basic_block(1));
+    let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, not, dest]);
+    dag.set_root(branch);
+}
+
+/// `brcond (xor (trunc (assertzext x, i1)), 1)` stayed an `xor` (wasm:
+/// `i32.const 1; i32.xor; br_if`, jpeg -O1 +6 bytes); the pin's `rebuildSetCC`
+/// makes it `brcond (setcc x, 0, eq)`, an `i32.eqz`.
+#[test]
+fn a_branch_on_the_not_of_an_asserted_boolean_is_a_compare_with_zero() {
+    let mut dag = dag();
+    branch_on_not_of_asserted_boolean(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let cond = dag.operand(dag.get_root(), 1);
+    assert_eq!(dag.opcode(cond), ISD::SetCC);
+    assert_eq!(dag.constant(dag.operand(cond, 1)), Some(0));
+    assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(CondCode::SetEq)));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_xor_of_the_branch_condition() {
+    let mut dag = dag();
+    branch_on_not_of_asserted_boolean(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Xor);
+}
+
+/// `setcc ne (setcc ult x, 32), 1` stayed a compare of a compare (wasm: `x <
+/// 32; i32.const 1; i32.ne`); the pin folds it to the inverse compare.
+#[test]
+fn a_compare_of_a_compare_with_one_is_the_inverse_compare() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let limit = dag.get_constant(32, EVT::I32);
+    let below = dag.get_setcc(EVT::I1, x, limit, CondCode::SetULt);
+    let one = dag.get_constant(1, EVT::I1);
+    let not_below = dag.get_setcc(EVT::I1, below, one, CondCode::SetNe);
+    let (chain, dest) = (dag.entry_node(), dag.get_basic_block(1));
+    let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, not_below, dest]);
+    dag.set_root(branch);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let cond = dag.operand(dag.get_root(), 1);
+    assert_eq!(dag.opcode(cond), ISD::SetCC);
+    assert_eq!(dag.operand(cond, 0), x);
+    assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(CondCode::SetUGe)));
+}
+
+/// `shl (select c, 1, 2), 2` stayed a shift of a select; the pin folds the
+/// constant into the select, `select c, 4, 8` (bintree -O2, 2200 instructions).
+#[test]
+fn a_shift_of_a_select_of_constants_is_a_select_of_shifted_constants() {
+    let mut dag = dag();
+    let c = dag.get_register(EVT::I1, 5);
+    let (one, two) = (dag.get_constant(1, EVT::I32), dag.get_constant(2, EVT::I32));
+    let sel = dag.get_node(ISD::Select, EVT::I32, &[c, one, two]);
+    let root = dag.get_node(ISD::Shl, EVT::I32, &[sel, two]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Select);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(4));
+    assert_eq!(dag.constant(dag.operand(root, 2)), Some(8));
+}
+
+/// `and (select c, 0, -1), x` took no part of x into the select; the pin
+/// makes it `select c, 0, x`.
+#[test]
+fn an_and_of_a_select_of_zero_and_all_ones_takes_the_operand_into_the_select() {
+    let mut dag = dag();
+    let (c, x) = (dag.get_register(EVT::I1, 5), dag.get_register(EVT::I32, 6));
+    let (zero, ones) = (dag.get_constant(0, EVT::I32), dag.get_constant(u64::MAX as u128, EVT::I32));
+    let sel = dag.get_node(ISD::Select, EVT::I32, &[c, zero, ones]);
+    let root = dag.get_node(ISD::And, EVT::I32, &[sel, x]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Select);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(0));
+    assert_eq!(dag.operand(root, 2), x);
 }

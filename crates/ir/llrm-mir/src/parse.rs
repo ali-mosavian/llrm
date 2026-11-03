@@ -1048,8 +1048,11 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value, narrow) => match shape {
+            Token::Float(value, narrow, wide) => match shape {
                 Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, wide))
+                }
                 _ => self.float(&shape, value, line)?,
             },
             Token::FloatBits { bits, digits } => match shape {

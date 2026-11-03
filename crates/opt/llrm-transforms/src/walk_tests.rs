@@ -267,6 +267,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
                     flag: true,
+                    o3: false,
                     inlining: true,
                 };
                 late.apply(program, &mut modules)
@@ -2430,4 +2431,145 @@ b0:
     .and_then(|done| done)
     .expect("the pipeline runs");
     assert!(!llrm_mir::print::module(&module).contains("@demo"), "demo is still a global");
+}
+
+/// Calls of `@fib` after the default pipeline on x86-m32 with `options`.
+fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
+    m32_tree_calls(0, options)
+}
+
+fn m32_tree_calls(
+    extra: usize,
+    options: crate::pipeline::Options,
+) -> usize {
+    let mut module =
+        parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @fib").count()
+}
+
+/// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
+/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
+/// into itself to depth 8 (REC-2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+}
+
+/// gcc rejects the recursive edge of quicksort and bintree at -O2
+/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
+/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+    let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
+    let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
+    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o3 > 8, "not copied at -O3, {o3} calls");
+}
+
+/// gcc's dump sizes fib at 12 (edge growth 6; 13 and 7 here, before the
+/// pipeline merges its returns): the bar of the recursive edge
+/// is read in those units, not in `gcc_insns` (fib 8, quicksort 18 against
+/// gcc's 34, which let quicksort and bintree grow 490 -> 1218 and 449 -> 1464
+/// bytes at m32 -O2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
+    let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
+    let (_, _, fib) =
+        module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+}
+
+/// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
+/// gcc's dump) was peeled into its caller at m32 -O2 (code 257 -> 299 bytes)
+/// where gcc rejects it ("max-inline-insns-auto limit reached"): the call
+/// term of the bar scaled with the parameters, 10 for three, which gave it
+/// growth 12.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_the_edge_growth_of_a_three_parameter_recursion_is_its_size_less_the_call() {
+    let module = parsed(
+        "define void @insert(ptr %t, i32 %at, i32 %node) {
+b0:
+  %n3 = mul i32 %node, 3
+  %p = getelementptr i32, ptr %t, i32 %n3
+  %k = load i32, ptr %p
+  %a3 = mul i32 %at, 3
+  %q = getelementptr i32, ptr %t, i32 %a3
+  %k2 = load i32, ptr %q
+  %lt = icmp slt i32 %k, %k2
+  %side = select i1 %lt, i32 1, i32 2
+  %i = add i32 %a3, %side
+  %s = getelementptr i32, ptr %t, i32 %i
+  %c = load i32, ptr %s
+  %z = icmp eq i32 %c, 0
+  br i1 %z, label %put, label %rec
+
+put:
+  store i32 %node, ptr %s
+  ret void
+
+rec:
+  call void @insert(ptr %t, i32 %c, i32 %node)
+  ret void
+}
+",
+    );
+    let (_, _, insert) = module.functions().next().expect("insert");
+    let size = llrm_gpl_gcc::gcc_size(insert);
+    assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
+    assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
+}
+
+/// Without `gcc-gpl` the edge bar cannot be computed: m32 copies no recursion
+/// and its code equals the pin's (REC-2 is inert).
+#[cfg(not(feature = "gcc-gpl"))]
+#[test]
+fn test_m32_copies_no_recursion_without_the_gcc_feature() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
+}
+
+/// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
+/// default build must link none of it. Reads the manifests: the dependency is
+/// `optional`, no `default` feature set names `gcc-gpl`, and no other crate
+/// depends on the crate.
+#[test]
+fn test_the_default_build_links_no_gcc_derived_crate() {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = here.join("../../..");
+    let transforms = std::fs::read_to_string(here.join("Cargo.toml")).unwrap();
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let dependency =
+        transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
+    assert!(dependency.contains("optional = true"), "llrm-gpl-gcc is a plain dependency: {dependency}");
+    for (name, text) in [("llrm-transforms", &transforms), ("the workspace root", &workspace)] {
+        let default = text.lines().find(|line| line.trim_start().starts_with("default = ")).unwrap_or("");
+        assert!(!default.contains("gcc-gpl"), "{name} enables gcc-gpl by default: {default}");
+    }
+    for entry in std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .flatten()
+        .flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten())
+    {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
+        let owner = entry.file_name();
+        if owner == "llrm-gpl-gcc" || owner == "llrm-transforms" {
+            continue;
+        }
+        assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
 }

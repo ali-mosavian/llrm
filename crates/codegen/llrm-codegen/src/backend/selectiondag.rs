@@ -144,6 +144,7 @@ pub mod libcall;
 pub mod live_out;
 pub mod logic_setcc;
 mod match_rotate;
+pub mod narrow_divrem;
 pub mod opcodes;
 mod reassociate;
 pub mod reduce_load_width;
@@ -187,6 +188,8 @@ mod dag_function_frame_tests;
 mod dag_function_m64_tests;
 #[cfg(test)]
 mod dag_function_odds_tests;
+#[cfg(test)]
+mod dag_function_soft_float_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]

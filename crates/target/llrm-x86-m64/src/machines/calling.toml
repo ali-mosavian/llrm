@@ -57,8 +57,11 @@ variadic_vector_register = "rax"
 # The unnamed argument registers are saved in a register save area and the list names it.
 va_list = "sysv-amd64"
 
+# Mach-O takes C's leading underscore; ELF and COFF x86-64 take the name as written.
 [sysv64.symbol]
 elf = "*"
+coff = "*"
+macho = "_*"
 
 [sysv64.result]
 1 = ["rax"]

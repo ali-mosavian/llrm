@@ -2227,6 +2227,7 @@ fn _affine_address(
         debug: lir::DebugTags {
             defines: result.debug.defines.clone(),
             before: deduped(replaced.iter().flat_map(|one| one.debug.before.iter().copied())),
+            slot: None,
         },
         ..(**owner).clone()
     });

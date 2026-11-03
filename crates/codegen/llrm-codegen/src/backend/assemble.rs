@@ -448,9 +448,24 @@ pub fn assembled_by(
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
         // A 16-byte one is a bitwise SSE instruction's memory operand, which
-        // must be aligned.
-        if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
+        // must be aligned. Every entry is aligned to its size, as the pin's
+        // `emitConstantPool` aligns each to its type
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L3383>):
+        // a dword after a 10-byte extended constant sat at 2 mod 4, 3 clocks a
+        // read.
+        let to = match bytes.len() {
+            16.. => 16,
+            8..16 => 8,
+            4..8 => 4,
+            2..4 => 2,
+            _ => 1,
+        };
+        // A dword or word entry already on its boundary asks for nothing: the
+        // `align` would still raise the segment to dword, and the linker pads
+        // the next module's data up to it (+2 B in the linked exe of nine
+        // programs at m16 -Os).
+        if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
+            data.push(masm::Datum::Align(masm::Align { to }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
@@ -534,12 +549,15 @@ pub fn assembled_by(
         }
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
+    let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        visibility,
+        aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
             .chain(huge_segments)
@@ -1184,6 +1202,7 @@ fn staged(
         module.named(name).and_then(|id| module.global(id).function()).map_or(&[], |function| &function.attrs);
     if crate::backend::framefree::disable_frame_pointer_elim(function_attrs, !calls.is_empty()) {
         registers.optional = false;
+        registers.kept = true;
     }
     // `noredzone`: the function is entered where the zone below the stack
     // pointer is not safe (a kernel, an interrupt).

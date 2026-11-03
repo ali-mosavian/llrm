@@ -171,9 +171,7 @@ fn cheapest(
 ) -> Option<Candidate> {
     candidates(value)
         .into_iter()
-        .filter_map(|one| {
-            price(&one, cpu).map(|(clocks, bytes)| (if size { (bytes, clocks) } else { (clocks, bytes) }, one))
-        })
+        .filter_map(|one| price(&one, cpu).map(|(clocks, bytes)| (crate::timing::order(cpu, size, clocks, bytes), one)))
         .min_by_key(|(key, _)| *key)
         .map(|(_, one)| one)
 }

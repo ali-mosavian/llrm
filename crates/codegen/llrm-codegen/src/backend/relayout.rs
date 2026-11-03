@@ -855,6 +855,8 @@ mod tests {
                 red_zone: 0,
                 slot_scratch: None,
                 free: false,
+                kept: false,
+                exit_cfi: true,
             },
             landing: None,
         }

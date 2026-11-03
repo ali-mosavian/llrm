@@ -13,6 +13,9 @@ convention = "z80"
 
 [z80]
 cc = "cdecl"
+# The pin joins a copy from an argument register only when the register is reserved (`canJoinPhys`): left
+# unjoined, 0 of the 46 corpus cells (23 programs x -O2, -Oz) is worse than joined, and 8 are better.
+pinned_copies_unjoined = true
 slot_bytes = 1
 order = "left-to-right"
 cleanup = "caller"
