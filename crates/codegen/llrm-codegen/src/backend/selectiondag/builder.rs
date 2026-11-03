@@ -1770,11 +1770,15 @@ impl Builder<'_> {
         let mut values = Vec::new();
         for (at, argument) in arguments.iter().enumerate() {
             let value = self.get_value(*argument)?;
-            let in_xmm = matches!(
-                plan.parameters.get(at),
-                Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
-            );
-            let value = if in_xmm { value } else { self.pass_float_bits(*argument, value) };
+            // The dword is for a stack cell or an integer register; a target
+            // that owns the call (`calling`) or an xmm argument takes the
+            // float.
+            let integer = self.calling().is_none()
+                && !matches!(
+                    plan.parameters.get(at),
+                    Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
+                );
+            let value = if integer { self.pass_float_bits(*argument, value) } else { value };
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1913,8 +1917,10 @@ impl Builder<'_> {
     /// (its load has no other user) is passed as the dword it is. The pin
     /// loads it onto the x87 stack and stores it to the argument slot (`fld;
     /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
-    /// `push dword ptr [m]`. Not for an argument the convention passes in an
-    /// xmm register: the dword has no xmm form (`movd xmm0, xmm0`).
+    /// `push dword ptr [m]`. Only for an argument the convention passes in a
+    /// stack cell or an integer register: in a float register (xmm0, s0) the
+    /// bits are the wrong class
+    /// (`movd xmm0, xmm0`; arm64 `fmov w0, s16`; wasm an `i32` for an `f32`).
     fn pass_float_bits(
         &mut self,
         argument: Operand,
