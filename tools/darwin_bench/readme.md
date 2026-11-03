@@ -13,3 +13,10 @@ Head-versus-base bench of `llrm-cc` against the pin, on the Mac: kernel-only byt
 
 Tests: `rerun_test.sh` (a failed build stops the run), `rerun_test2.sh` (the built `llrm-cc` still runs afterwards),
 `test_codebytes.py` (the harness is not counted in a kernel).
+
+Cause-card instruments (static, deterministic; the µs columns are noisy while the Mac runs other work):
+
+- `novec_all.sh HEAD12` runs `novec.py`: pin and gcc-13 with and without vectorization next to llrm-cc, 29 arm64 programs,
+  bytes / insns / SIMD-arithmetic insns / µs; the header holds the compiled-cell count and the compilers' md5.
+- `sameir.py LEVEL prog...`: the pin's `-fno-vectorize` IR through `llrm-arm64-llc`. llc(pinIR) against the pin is the
+  backend gap; llrm-cc against llc(pinIR) is the mid-end gap.
