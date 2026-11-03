@@ -874,6 +874,15 @@ impl<'a> TypeLegalizer<'a> {
                 // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
                 // wider reversal, shifted down by the bits added.
                 let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                // "If the larger BITREVERSE isn't supported by the target, try
+                // to expand now": the narrow type keeps the work small.
+                if op == ISD::BitReverse && !self.tli.is_operation_legal_or_custom_or_promote(op, to) {
+                    if let Some(expanded) = super::legalize_dag::expand_bitreverse(self.dag, value) {
+                        let wide = self.dag.get_node(ISD::AnyExtend, to, &[expanded]);
+                        self.set_promoted_integer(value, wide);
+                        return Ok(());
+                    }
+                }
                 let reversed = self.dag.get_node(op, to, &[promoted]);
                 let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
                 self.dag.get_node(ISD::Srl, to, &[reversed, added])

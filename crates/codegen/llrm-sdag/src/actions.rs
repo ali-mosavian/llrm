@@ -350,6 +350,19 @@ impl TargetLowering {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
     }
 
+    /// `isOperationLegalOrCustomOrPromote`.
+    pub fn is_operation_legal_or_custom_or_promote(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        self.types.is_type_legal(vt)
+            && matches!(
+                self.operation_action(op, vt),
+                Action::Legal | Action::Custom | Action::Promote
+            )
+    }
+
     /// `getTypeToPromoteTo`: the recorded type, else the next wider integer
     /// (or float) type that is legal and handles `op`.
     pub fn type_to_promote_to(
