@@ -43,7 +43,7 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -112,6 +112,15 @@ pub fn target_lowering() -> TargetLowering {
         (MVT::I64, ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__ashldi3", "__lshrdi3", "__ashrdi3"]),
     ] {
         for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
+    }
+    // softened floats: compiler-rt's routines
+    for (vt, names) in [
+        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
+        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
+    ] {
+        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
             tl.set_libcall_name(op, vt, name);
         }
     }

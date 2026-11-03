@@ -131,6 +131,15 @@ pub trait Policy<I: Inst> {
         insns: &[I],
         index: usize,
     ) -> bool;
+
+    /// Whether a moved instruction goes ahead of the preheader's own, not at
+    /// its end: an x87 value defined first lies deepest on the stack.
+    fn leads(
+        &self,
+        _one: &I,
+    ) -> bool {
+        false
+    }
 }
 
 /// `blocks` with what `policy` moved placed at the end of each loop's
@@ -255,6 +264,11 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             }
         }
         let insns = &mut blocks[pre_at].insns;
+        let (leading, moved): (Vec<I>, Vec<I>) = moved.into_iter().partition(|one| policy.leads(one));
+        let start = insns.iter().position(|one| !one.is_meta()).unwrap_or(insns.len());
+        for (offset, one) in leading.into_iter().enumerate() {
+            insns.insert(start + offset, one);
+        }
         let end = insns.iter().rposition(|one| !one.is_meta()).filter(|&last| insns[last].is_jump());
         let at = end.unwrap_or(insns.len());
         for (offset, one) in moved.into_iter().enumerate() {

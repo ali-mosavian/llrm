@@ -1415,3 +1415,51 @@ e:
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
 }
+
+/// switch_table_holes (m32 -O2): `buf[t[i - 7]] += (i8)(i + 1)` made the byte
+/// add one `lea` with the offset in the wide formula, so the i32 counter
+/// plus 25 won and the store paid a zext, an add and a trunc. The pin keeps
+/// the byte counter `{1,+,1}` and adds it as a byte.
+#[test]
+fn a_byte_sum_with_the_counter_keeps_a_byte_counter() {
+    let text = "@buf = internal global [256 x i8] zeroinitializer
+@t = internal constant [14 x i8] [i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8, i8 9, i8 10, i8 11, i8 12, i8 13, i8 14]
+
+define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc2, %latch ]
+  %next = add nuw nsw i32 %i, 1
+  %k = add i32 %i, -7
+  %in = icmp ult i32 %k, 14
+  %k16 = trunc i32 %k to i16
+  %bit = lshr i16 8707, %k16
+  %hit = trunc i16 %bit to i1
+  %go = select i1 %in, i1 %hit, i1 false
+  br i1 %go, label %body, label %latch
+body:
+  %slot = getelementptr inbounds i8, ptr @t, i32 %k
+  %idx8 = load i8, ptr %slot
+  %idx = zext i8 %idx8 to i32
+  %p = getelementptr inbounds i8, ptr @buf, i32 %idx
+  %old = load i8, ptr %p
+  %step = trunc nuw nsw i32 %next to i8
+  %sum = add i8 %old, %step
+  store i8 %sum, ptr %p
+  br label %latch
+latch:
+  %one = phi i32 [ 1, %body ], [ 0, %loop ]
+  %acc2 = add i32 %acc, %one
+  %c = icmp eq i32 %next, 24
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %acc2
+}
+";
+    let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("phi i8"), "{after}");
+    assert!(!after.contains(" to i8"), "{after}");
+}

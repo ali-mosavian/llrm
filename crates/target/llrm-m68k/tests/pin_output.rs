@@ -877,3 +877,41 @@ exit:
     let else_path = text.split(".LBB0_3:").nth(1).and_then(|rest| rest.split(".LBB0_4:").next()).expect("else path");
     assert!(else_path.contains("move.l\t%d"), "no copy on the else path:\n{text}");
 }
+
+/// Euclid's loop by subtraction: its guard and its latch compare the same
+/// pair, so the tail merge shares them, and the latch became a `bra` back to
+/// the shared compare: one executed jump per iteration (kernel gcd, 248 -> 268
+/// clk at 68000). The loop must end in its conditional branch.
+#[test]
+fn a_loop_whose_guard_the_tail_merge_shares_ends_in_its_conditional_branch() {
+    let ir = "define i32 @f(i32 %a, i32 %b) {
+entry:
+  br label %loop
+loop:
+  %x = phi i32 [%a, %entry], [%x2, %next]
+  %y = phi i32 [%b, %entry], [%y2, %next]
+  %eq = icmp eq i32 %x, %y
+  br i1 %eq, label %exit, label %next
+next:
+  %gt = icmp sgt i32 %x, %y
+  %d = sub i32 %x, %y
+  %e = sub i32 %y, %x
+  %x2 = select i1 %gt, i32 %d, i32 %x
+  %y2 = select i1 %gt, i32 %y, i32 %e
+  br label %loop
+exit:
+  ret i32 %x
+}";
+    let text = llrm_m68k::driver::assembly(
+        &format!("target datalayout = \"{DATALAYOUT}\"\n{ir}"),
+        Cpu::M68000,
+        llrm_m68k::driver::Level::O2,
+    )
+    .expect("compiles");
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    for (at, line) in lines.iter().enumerate() {
+        let Some(target) = line.strip_prefix("bra\t") else { continue };
+        let label = lines.iter().position(|one| one.strip_suffix(':') == Some(target));
+        assert!(label.is_none_or(|label| label > at), "a backward `bra {target}` ends the loop:\n{text}");
+    }
+}

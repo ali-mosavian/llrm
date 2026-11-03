@@ -39,6 +39,7 @@ pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
+        soft_float: true,
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
@@ -57,6 +58,7 @@ pub fn builder_target() -> BuilderTarget {
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
         ..BuilderTarget::m16()
     }
+    .with_narrow_divrem(EVT::I16, true)
 }
 
 /// One block, selected and scheduled.
