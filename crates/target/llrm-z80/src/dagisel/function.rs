@@ -91,6 +91,24 @@ pub struct Selection {
     /// input is read on an edge laid out before any block that names it (a
     /// loop's back edge).
     pub widths: HashMap<u32, u32>,
+    /// `-g`: the variables the debug info names and where each is (the `.adb`).
+    pub variables: Vec<VariableSite>,
+}
+
+/// A variable for the debug info: its name, SDCC's size and spelling of its
+/// type, and where it is for the whole function.
+pub struct VariableSite {
+    pub name: String,
+    pub size: i64,
+    pub spelling: String,
+    pub place: Site,
+}
+
+pub enum Site {
+    /// A parameter, in the register it arrives in.
+    Register(RegId),
+    /// A variable in frame object `index`, `offset` bytes into it.
+    Frame { index: u32, offset: i64 },
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -140,7 +158,48 @@ pub fn select_function(
     for (reg, parts) in wide {
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths })
+    let variables = variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+}
+
+/// The variables of `function` (after the debug import): parameters in the
+/// register their position arrives in, declared locals in their frame object.
+/// A parameter that does not arrive in a register, and a variable the debug
+/// info cannot spell, are left out.
+fn variable_sites(
+    module: &Module,
+    function: &Function,
+    name: &str,
+    info: &FunctionLoweringInfo,
+    live_ins: &[(RegId, u32)],
+) -> Vec<VariableSite> {
+    let mut sites = Vec::new();
+    let Some(described) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else {
+        return sites;
+    };
+    for (index, parameter, ty) in &described.parameters {
+        let Some((size, spelling)) = crate::driver::sdcc_type(module, *ty) else { continue };
+        let Some(&(register, _)) = usize::try_from(*index).ok().and_then(|at| live_ins.get(at)) else { continue };
+        sites.push(VariableSite { name: parameter.clone(), size, spelling, place: Site::Register(register) });
+    }
+    for record in function.debug_records() {
+        let (llrm_mir::DebugWhat::Declare(Operand::Value(address)), Some(variable)) =
+            (record.what, llrm_mir::debuginfo::read_variable(module, record.variable))
+        else {
+            continue;
+        };
+        if variable.scope != name || variable.parameter {
+            continue;
+        }
+        let (Some(&index), Some((size, spelling))) =
+            (info.static_allocas.get(&address), crate::driver::sdcc_type(module, variable.r#type))
+        else {
+            continue;
+        };
+        let place = Site::Frame { index: index as u32, offset: variable.offset };
+        sites.push(VariableSite { name: variable.name, size, spelling, place });
+    }
+    sites
 }
 
 /// The size of each static alloca, by the frame index `FunctionLoweringInfo`

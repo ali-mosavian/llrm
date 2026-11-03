@@ -89,6 +89,9 @@ pub fn program(
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not the Z80's `{layout}`")),
         None => return Err(format!("the module states no datalayout; the Z80's is `{layout}`")),
     }
+    if request.debug {
+        llrm_mir::dbgimport::types_and_globals(&mut module);
+    }
     let mut program = Program::new(vec![module], machine())?;
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
@@ -186,31 +189,32 @@ pub fn source_of(
     Some((file, line))
 }
 
-/// SDCC's spelling of a debug type, as the `.adb` writes it (`SI:S`, `UC:S`,
-/// `DG,SC:S`); none for one it has no spelling for.
-fn sdcc_type(
+/// SDCC's size and spelling of a debug type, as the `.adb` writes it: the class
+/// and then the sign (`SI:S` int, `SI:U` unsigned int, `SC:U` char, `DG,SC:U`
+/// pointer to char); none for one it has no spelling for.
+pub(crate) fn sdcc_type(
     module: &llrm_mir::module::Module,
     id: llrm_mir::module::MetadataId,
-) -> Option<String> {
+) -> Option<(i64, String)> {
     use llrm_mir::debuginfo::{Kind, Scalar, read_type};
     let one = read_type(module, id)?;
     match one.kind {
-        Kind::Scalar => Some(
-            match Scalar::from_value(&one.name)? {
-                Scalar::Void => "SV",
-                Scalar::Char | Scalar::Int8 => "SC",
-                Scalar::UInt8 => "UC",
-                Scalar::Int16 => "SI",
-                Scalar::UInt16 => "UI",
-                Scalar::Int32 => "SL",
-                Scalar::UInt32 => "UL",
-                Scalar::Float32 => "SF",
+        Kind::Scalar => {
+            let (size, class, sign) = match Scalar::from_value(&one.name)? {
+                Scalar::Void => (0, "SV", "S"),
+                // DW_ATE_signed_char says signed, whatever SDCC's plain char is
+                Scalar::Char | Scalar::Int8 => (1, "SC", "S"),
+                Scalar::UInt8 => (1, "SC", "U"),
+                Scalar::Int16 => (2, "SI", "S"),
+                Scalar::UInt16 => (2, "SI", "U"),
+                Scalar::Int32 => (4, "SL", "S"),
+                Scalar::UInt32 => (4, "SL", "U"),
+                Scalar::Float32 => (4, "SF", "S"),
                 _ => return None,
-            }
-            .to_owned()
-                + ":S",
-        ),
-        Kind::Pointer => Some(format!("DG,{}", sdcc_type(module, one.target?)?)),
+            };
+            Some((size, format!("{class}:{sign}")))
+        }
+        Kind::Pointer => Some((2, format!("DG,{}", sdcc_type(module, one.target?)?.1))),
         _ => None,
     }
 }
@@ -218,7 +222,17 @@ fn sdcc_type(
 /// The module's `.adb` (ASxxxx debug records, which sdld merges into the
 /// `.cdb`): the module, then each defined function with its result type.
 /// None without debug info. The lines come from the `C$` symbols.
-pub fn adb(text: &str) -> Option<String> {
+pub fn adb(
+    text: &str,
+    request: &Request,
+) -> Option<String> {
+    use crate::dagisel::function::Site;
+    let selected: std::collections::HashMap<String, Selection> =
+        selections(text, request)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(name, one)| Some((name, one.ok()?)))
+            .collect();
     let mut module = llrm_mir::parse::module(&without_triple(text)).ok()?;
     let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
     llrm_mir::dbgimport::types_and_globals(&mut module);
@@ -227,18 +241,41 @@ pub fn adb(text: &str) -> Option<String> {
     for one in llrm_mir::debuginfo::functions(&module) {
         let procedure = llrm_mir::debuginfo::read_type(&module, one.r#type)?;
         let result = match procedure.target {
-            Some(result) => sdcc_type(&module, result)?,
+            Some(result) => sdcc_type(&module, result)?.1,
             None => "SV:S".to_owned(),
         };
         let size = 2;
         out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
         out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
+        let Some(selection) = selected.get(&one.function) else { continue };
+        // Frame objects sit below IX, the locals first (`expand::layout`).
+        let mut below = 0;
+        let ends: Vec<i64> = selection
+            .locals
+            .iter()
+            .map(|&bytes| {
+                below += i64::from(bytes);
+                below
+            })
+            .collect();
+        for (at, variable) in selection.variables.iter().enumerate() {
+            let place = match variable.place {
+                Site::Register(register) => format!("R,0,0,{}", crate::expand::register_list(register)),
+                Site::Frame { index, offset } => {
+                    format!("B,1,{}", offset - ends.get(index as usize).copied().unwrap_or(0))
+                }
+            };
+            out.push_str(&format!(
+                "S:L{stem}.{}${}$1_0${at}({{{}}}{}),{place}\n",
+                one.function, variable.name, variable.size, variable.spelling
+            ));
+        }
     }
     // A function the module calls but does not define: a symbol of its own.
     for one in llrm_mir::debuginfo::declarations(&module) {
         let procedure = llrm_mir::debuginfo::read_type(&module, one.r#type)?;
         let result = match procedure.target {
-            Some(result) => sdcc_type(&module, result)?,
+            Some(result) => sdcc_type(&module, result)?.1,
             None => "SV:S".to_owned(),
         };
         out.push_str(&format!("S:G${}$0_0$0({{2}}DF,{result}),C,0,0\n", one.function));

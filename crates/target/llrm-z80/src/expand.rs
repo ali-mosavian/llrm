@@ -92,6 +92,14 @@ pub(crate) fn lanes(pair: RegId) -> Result<(RegId, RegId), String> {
     }
 }
 
+/// SDCC's register list of a value held in `register`: `[l,h]` for a pair.
+pub(crate) fn register_list(register: RegId) -> String {
+    match lanes(register) {
+        Ok((low, high)) => format!("[{},{}]", name(low), name(high)),
+        Err(_) => format!("[{}]", name(register)),
+    }
+}
+
 /// `hl`, `bc` or `de` as the pointer of an `ld a,(rr)`.
 fn pointer(register: RegId) -> Result<&'static str, String> {
     if is_pair(register) { Ok(name(register)) } else { Err(format!("{} is no pointer pair", name(register))) }

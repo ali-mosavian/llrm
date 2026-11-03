@@ -42,7 +42,7 @@ fn main() {
         }
     }
     if let Some(path) = adb {
-        std::fs::write(path, llrm_z80::driver::adb(&ir).unwrap_or_default()).expect("writes the .adb");
+        std::fs::write(path, llrm_z80::driver::adb(&ir, &request).unwrap_or_default()).expect("writes the .adb");
     }
     print!("{}", inline_sole_uses(&module, llrm_z80::RUNTIME));
 }
