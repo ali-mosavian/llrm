@@ -390,6 +390,9 @@ pub struct Unsupported(pub String);
 
 struct Builder {
     function: MFunction<Class>,
+    /// The source place of the item being built (`MInst::origin`); every
+    /// instruction it makes takes it.
+    origin: u32,
     bytes: HashMap<String, Reg>,
     /// Word cells used as pointers: one pair register, not two bytes.
     pointers: HashSet<String>,
@@ -833,6 +836,9 @@ impl Builder {
         // and a load sets N and Z, so it is not run again where a compare's
         // flags are live
         inst.sets_flags |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
+        if inst.origin == 0 {
+            inst.origin = self.origin;
+        }
         self.function.blocks[self.current].insts.push(inst);
     }
 
@@ -1068,7 +1074,7 @@ fn pointer_cells(
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::new();
     for item in items {
-        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         for (at, operand) in operands.iter().enumerate() {
             let Machine::Reg(cell) = operand else { continue };
             let word = cell.strip_suffix("+1").unwrap_or(cell);
@@ -1090,7 +1096,7 @@ fn pointer_cells(
     loop {
         let before = out.len();
         for item in items {
-            let Item::Inst(MInst { opcode, operands }) = item else { continue };
+            let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
             let (d, a) = match (*opcode, &operands[..]) {
                 (op::COPY16, [Machine::Reg(d), Machine::Reg(a)]) => (d, a),
                 (op::ADD16, [Machine::Reg(d), Machine::Reg(a), Machine::Reg(b)]) if constant(b) => (d, a),
@@ -1114,7 +1120,7 @@ fn pointer_cells(
 fn pointer_bases(items: &[Item]) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
-        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let at = match *opcode {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => 1,
             op::STZP | op::LEASP16 | op::JSRI => 0,
@@ -1134,7 +1140,7 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
     let mut defs: HashMap<String, usize> = HashMap::new();
     let mut values = HashMap::new();
     for item in items {
-        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let Some(Machine::Reg(d)) = operands.first() else { continue };
         *defs.entry(d.clone()).or_default() += 1;
         if *opcode == op::LDI8
@@ -1164,7 +1170,7 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
     // a byte copied once from a constant is that constant (the zero high half
     // of a widened byte)
     for item in items {
-        let Item::Inst(MInst { opcode: op::COPY8, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode: op::COPY8, operands, .. }) = item else { continue };
         if let [Machine::Reg(d), Machine::Reg(source)] = &operands[..]
             && defs[d] == 1
             && (d.starts_with("v_") || d.starts_with("w_"))
@@ -1181,6 +1187,15 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
 pub fn build(
     name_of_function: &str,
     items: &[Item],
+) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
+    build_with_places(name_of_function, items, Vec::new())
+}
+
+/// [`build`], with the source places the items' origins number.
+pub fn build_with_places(
+    name_of_function: &str,
+    items: &[Item],
+    places: Vec<llrm_codegen::model::lir::SrcLoc>,
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
     // A block starts at a label that follows an instruction (or the first).
     let mut labels: Vec<Vec<String>> = vec![Vec::new()];
@@ -1200,7 +1215,8 @@ pub fn build(
         }
     }
     let mut b = Builder {
-        function: MFunction::new(name_of_function),
+        function: MFunction { places, ..MFunction::new(name_of_function) },
+        origin: 0,
         bytes: HashMap::new(),
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
@@ -1231,6 +1247,7 @@ pub fn build(
             Item::Text(_) => return Err(Unsupported("raw text".into())),
             Item::Inst(inst) => inst,
         };
+        b.origin = inst.origin;
         after_inst = true;
         let o = &inst.operands;
         match inst.opcode {

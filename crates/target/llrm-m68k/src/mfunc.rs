@@ -502,6 +502,7 @@ pub fn emit(
         saved: HashMap::new(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
+    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::new();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
@@ -518,13 +519,11 @@ pub fn emit(
                 // instruction's place.
                 let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
                 if let Some(&Some(place)) = one.dag.lines.get(order) {
-                    let number = match emitter.function.places.iter().position(|one| *one == place) {
-                        Some(at) => at + 1,
-                        None => {
-                            emitter.function.places.push(place);
-                            emitter.function.places.len()
-                        }
-                    };
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers.entry(place).or_insert_with(|| {
+                        places.push(place);
+                        places.len()
+                    });
                     for made in &mut insts[before..] {
                         if made.origin == 0 {
                             made.origin = number as u32;

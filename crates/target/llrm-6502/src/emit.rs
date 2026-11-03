@@ -49,18 +49,34 @@ pub mod spill {
     pub const LOAD_FLAGS: u16 = 0xF003;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MInst {
     pub opcode: u16,
     pub operands: Vec<Operand>,
+    /// The source place it came from, numbered from 1 into the function's
+    /// places (`select::function_items_with_places`); 0 for none. Not a part
+    /// of what the instruction is: two that say the same are equal, so `-g`
+    /// changes no comparison a pass makes.
+    pub origin: u32,
 }
+
+impl PartialEq for MInst {
+    fn eq(
+        &self,
+        other: &MInst,
+    ) -> bool {
+        self.opcode == other.opcode && self.operands == other.operands
+    }
+}
+
+impl Eq for MInst {}
 
 impl MInst {
     pub fn new(
         opcode: u16,
         operands: Vec<Operand>,
     ) -> MInst {
-        MInst { opcode, operands }
+        MInst { opcode, operands, origin: 0 }
     }
 }
 
