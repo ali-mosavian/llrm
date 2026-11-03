@@ -10,7 +10,13 @@ fn main() {
     let mut level = Level::O2;
     let mut path = None;
     let mut debug = false;
-    for arg in std::env::args().skip(1) {
+    let mut adb = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--adb" {
+            adb = args.next();
+            continue;
+        }
         if llrm_debug::is_debug_flag(&arg) {
             debug = true;
             continue;
@@ -34,6 +40,9 @@ fn main() {
             Ok(text) => module.push_str(&text),
             Err(why) => eprintln!("REFUSED @{name}: {why}"),
         }
+    }
+    if let Some(path) = adb {
+        std::fs::write(path, llrm_z80::driver::adb(&ir).unwrap_or_default()).expect("writes the .adb");
     }
     print!("{}", inline_sole_uses(&module, llrm_z80::RUNTIME));
 }

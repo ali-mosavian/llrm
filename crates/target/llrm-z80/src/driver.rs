@@ -185,3 +185,54 @@ pub fn source_of(
     let line = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
     Some((file, line))
 }
+
+/// SDCC's spelling of a debug type, as the `.adb` writes it (`SI:S`, `UC:S`,
+/// `DG,SC:S`); none for one it has no spelling for.
+fn sdcc_type(
+    module: &llrm_mir::module::Module,
+    id: llrm_mir::module::MetadataId,
+) -> Option<String> {
+    use llrm_mir::debuginfo::{Kind, Scalar, read_type};
+    let one = read_type(module, id)?;
+    match one.kind {
+        Kind::Scalar => Some(
+            match Scalar::from_value(&one.name)? {
+                Scalar::Void => "SV",
+                Scalar::Char | Scalar::Int8 => "SC",
+                Scalar::UInt8 => "UC",
+                Scalar::Int16 => "SI",
+                Scalar::UInt16 => "UI",
+                Scalar::Int32 => "SL",
+                Scalar::UInt32 => "UL",
+                Scalar::Float32 => "SF",
+                _ => return None,
+            }
+            .to_owned()
+                + ":S",
+        ),
+        Kind::Pointer => Some(format!("DG,{}", sdcc_type(module, one.target?)?)),
+        _ => None,
+    }
+}
+
+/// The module's `.adb` (ASxxxx debug records, which sdld merges into the
+/// `.cdb`): the module, then each defined function with its result type.
+/// None without debug info. The lines come from the `C$` symbols.
+pub fn adb(text: &str) -> Option<String> {
+    let mut module = llrm_mir::parse::module(&without_triple(text)).ok()?;
+    let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
+    llrm_mir::dbgimport::types_and_globals(&mut module);
+    let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
+    let mut out = format!("M:{stem}\n");
+    for one in llrm_mir::debuginfo::functions(&module) {
+        let procedure = llrm_mir::debuginfo::read_type(&module, one.r#type)?;
+        let result = match procedure.target {
+            Some(result) => sdcc_type(&module, result)?,
+            None => "SV:S".to_owned(),
+        };
+        let size = 2;
+        out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
+        out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
+    }
+    Some(out)
+}

@@ -54,3 +54,31 @@ fn g_names_the_function_and_the_line_it_starts_at() {
     assert!(head.contains("G$f$0$0"), "{text}");
     assert!(head.contains("C$f.c$2$"), "{text}");
 }
+
+fn adb_of(
+    ret: &str,
+    encoding: &str,
+    size: u32,
+) -> String {
+    let ir = LOCATED
+        .replace("i16 @f(i16 %a, i16 %b)", &format!("{ret} @f({ret} %a, {ret} %b)"))
+        .replace("i16", ret)
+        .replace(
+            "!6 = !DISubroutineType(types: !{null})",
+            "!6 = !DISubroutineType(types: !{!9})\n!9 = !DIBasicType(name: \"t\", size: SIZE, encoding: ENC)",
+        )
+        .replace("SIZE", &size.to_string())
+        .replace("ENC", encoding);
+    llrm_z80::driver::adb(&ir).expect("an adb")
+}
+
+/// The `.adb` named no result type, or read signed and unsigned alike
+/// (`SI:S` for both): sdld's `.cdb` then types `unsigned` as `int`.
+#[test]
+fn the_adb_types_a_function_by_its_signedness() {
+    assert!(adb_of("i16", "DW_ATE_signed", 16).contains("F:G$f$0_0$0({2}DF,SI:S)"));
+    assert!(adb_of("i16", "DW_ATE_unsigned", 16).contains("F:G$f$0_0$0({2}DF,UI:S)"));
+    assert!(adb_of("i8", "DW_ATE_signed_char", 8).contains("DF,SC:S"));
+    assert!(adb_of("i8", "DW_ATE_unsigned_char", 8).contains("DF,UC:S"));
+    assert!(adb_of("i16", "DW_ATE_signed", 16).starts_with("M:f\n"));
+}
