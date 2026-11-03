@@ -154,7 +154,15 @@ pub fn assembly_with(
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
+        match llrm_mir::image::Export::of(global.linkage) {
+            llrm_mir::image::Export::Public => out.push_str(&format!("\t.globl\t{name}\n")),
+            llrm_mir::image::Export::Weak => out.push_str(&format!("\t.weak\t{name}\n")),
+            llrm_mir::image::Export::Local => {}
+        }
         out.push_str(&text_with(module, &name, cpu, backend).map_err(|why| format!("@{name}: {why}"))?);
     }
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    out.push_str(&crate::data::assembly(module, &layout)?);
     Ok(out)
 }
