@@ -472,7 +472,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         for node in self.dag.node_ids().rev() {
             self.dag.delete_dead(node);
         }
-        // Oldest first, so the newest is taken first.
+        // Oldest first, so the newest is taken first: `Run` without topological
+        // sorting, the default of `useTopologicalSorting`
+        // ([L1853-L1873][run], [L4203][tls]).
+        //
+        // [run]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L1853-L1873
+        // [tls]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/TargetLowering.h#L4203
         for node in self.dag.node_ids() {
             self.add_to_worklist(node);
         }
