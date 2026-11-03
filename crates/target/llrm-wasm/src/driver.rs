@@ -169,6 +169,16 @@ pub fn object(
     width: Width,
     options: Options,
 ) -> Result<Vec<u8>, String> {
+    object_with_debug(text, width, options, &[])
+}
+
+/// [`object`] with custom debug sections and their relocations.
+pub fn object_with_debug(
+    text: &str,
+    width: Width,
+    options: Options,
+    debug: &[crate::object::DebugSection],
+) -> Result<Vec<u8>, String> {
     let module = prepared(text, width, options)?;
     let mut functions = Vec::new();
     // `EmitTargetFeatures` reads the subtarget of the last function compiled.
@@ -185,7 +195,7 @@ pub fn object(
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
         features = features.with("exception-handling", true)?;
     }
-    Ok(crate::object::write(&functions, &data(&module, width)?, features))
+    Ok(crate::object::write_with_debug(&functions, &data(&module, width)?, features, debug))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`

@@ -49,6 +49,9 @@ const OPCODE_END: u8 = 0x0b;
 const SYMBOL_KIND_DATA: u8 = 1;
 const WASM_SEGMENT_INFO: u8 = 5;
 const SECTION_CUSTOM: u8 = 0;
+const SYMBOL_KIND_SECTION: u8 = 3;
+const R_WASM_FUNCTION_OFFSET_I32: u8 = 8;
+const R_WASM_SECTION_OFFSET_I32: u8 = 9;
 const LINKING_VERSION: u8 = 2;
 const WASM_SYMBOL_TABLE: u8 = 8;
 const SYMBOL_KIND_FUNCTION: u8 = 0;
@@ -271,6 +274,34 @@ fn symbol_flags(
         Binding::Local => WASM_SYMBOL_BINDING_LOCAL,
     };
     binding | if hidden { WASM_SYMBOL_VISIBILITY_HIDDEN } else { 0 }
+}
+
+/// What a relocation in a debug section names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugTarget {
+    /// `R_WASM_FUNCTION_OFFSET_I32`: the function of this name, a byte offset
+    /// into its body (the field holds the offset, the addend repeats it).
+    Function(String),
+    /// `R_WASM_SECTION_OFFSET_I32`: the debug section of this index in the
+    /// list given to [`write_with_debug`], a byte offset into it.
+    Section(usize),
+}
+
+/// A four-byte field of a debug section the linker rewrites.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugReloc {
+    pub offset: usize,
+    pub target: DebugTarget,
+    pub addend: i64,
+}
+
+/// A custom `.debug_*` section and the relocations (`reloc..debug_*`) against
+/// it. `WasmObjectWriter::writeCustomSection` and `writeRelocSection`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DebugSection {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub relocs: Vec<DebugReloc>,
 }
 
 /// A function after the passes, encoded: the body is the locals and the code.
@@ -540,6 +571,17 @@ pub fn write(
     functions: &[Encoded],
     data: &Data,
     features: crate::features::Features,
+) -> Vec<u8> {
+    write_with_debug(functions, data, features, &[])
+}
+
+/// [`write`] with custom debug sections after the data: each one, its
+/// section symbol in the `linking` table, and its `reloc.` section.
+pub fn write_with_debug(
+    functions: &[Encoded],
+    data: &Data,
+    features: crate::features::Features,
+    debug: &[DebugSection],
 ) -> Vec<u8> {
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
@@ -840,11 +882,14 @@ pub fn write(
         }
         section(&mut out, SECTION_DATA, &payload);
     }
+    for one in debug {
+        custom(&mut out, &one.name, &one.bytes);
+    }
 
     payload.clear();
     payload.push(LINKING_VERSION);
     let mut table = Vec::new();
-    uleb(&mut table, symbols.len() as u64);
+    uleb(&mut table, (symbols.len() + debug.len()) as u64);
     for (s, symbol) in symbols.iter().enumerate() {
         match symbol {
             Symbol::Function { name: function, defined, binding, hidden, .. } => {
@@ -888,6 +933,16 @@ pub fn write(
                 uleb(&mut table, u64::from(index_of[s]));
             }
         }
+    }
+    // The first section after the data is the first debug section.
+    let first_debug = SECTION_INDEX_CODE
+        + u64::from(!slots.is_empty())
+        + u64::from(!objects.is_empty())
+        + 1
+        + u64::from(!objects.is_empty());
+    for s in 0..debug.len() {
+        table.extend([SYMBOL_KIND_SECTION, WASM_SYMBOL_BINDING_LOCAL]);
+        uleb(&mut table, first_debug + s as u64);
     }
     payload.push(WASM_SYMBOL_TABLE);
     uleb_padded(&mut payload, table.len() as u32);
@@ -945,6 +1000,26 @@ pub fn write(
             }
         }
         custom(&mut out, "reloc.DATA", &payload);
+    }
+
+    for (s, one) in debug.iter().enumerate() {
+        if one.relocs.is_empty() {
+            continue;
+        }
+        payload.clear();
+        uleb(&mut payload, first_debug + s as u64);
+        uleb(&mut payload, one.relocs.len() as u64);
+        for reloc in &one.relocs {
+            let (code, symbol) = match &reloc.target {
+                DebugTarget::Function(function) => (R_WASM_FUNCTION_OFFSET_I32, position(function)),
+                DebugTarget::Section(i) => (R_WASM_SECTION_OFFSET_I32, symbols.len() + i),
+            };
+            payload.push(code);
+            uleb(&mut payload, reloc.offset as u64);
+            uleb(&mut payload, symbol as u64);
+            sleb(&mut payload, reloc.addend);
+        }
+        custom(&mut out, &format!("reloc.{}", one.name), &payload);
     }
 
     payload.clear();
