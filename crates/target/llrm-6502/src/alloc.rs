@@ -2244,20 +2244,28 @@ fn emit_on(
         }
     };
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
+    // a variant is priced on its text before the transfer of known constants,
+    // the pass after the layout; what is kept is the text with it
     let price = |code: &str, slots: &[(String, usize)]| {
         crate::timing::estimate(cpu, code)
             .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
-    let (mut code, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
+    // a change of layout is kept where it wins both before the transfer and
+    // after it: a byte the pass saves must not tip the choice to a slower
+    // layout, nor a layout it would have undone
+    let wins = |kept: (&str, &str, &[(String, usize)]), other: (&str, &str, &[(String, usize)])| {
+        let better = |a: Result<(u32, u64), String>, b: Result<(u32, u64), String>| matches!((a, b), (Ok(a), Ok(b)) if a.0 > b.0 || a.1 > b.1);
+        better(price(kept.1, kept.2), price(other.1, other.2)) && better(price(kept.0, kept.2), price(other.0, other.2))
+    };
+    let (mut code, mut priced, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
     // slower than the order the blocks came in
     let mut place = true;
     if moved
-        && let Ok((other, other_slots, ..)) = run(function.clone(), true, true, false, false)
-        && let (Ok(kept), Ok(candidate)) = (price(&code, &slots), price(&other, &other_slots))
-        && (kept.0 > candidate.0 || kept.1 > candidate.1)
+        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), true, true, false, false)
+        && wins((&code, &priced, &slots), (&other, &other_priced, &other_slots))
     {
-        (code, slots, place) = (other, other_slots, false);
+        (code, priced, slots, place) = (other, other_priced, other_slots, false);
     }
     // a function with calls that spilled may do better with a register kept in
     // a slot across them only
@@ -2267,7 +2275,7 @@ fn emit_on(
     }
     // each change is kept only where it is no larger and no slower than the
     // function without it
-    let mut best = (code, slots);
+    let mut best = (code, priced, slots);
     let mut settings = (true, true);
     let mut variants = vec![(false, false)];
     if sunk && shared {
@@ -2277,24 +2285,24 @@ fn emit_on(
         variants.clear();
     }
     for (sink, share) in variants {
-        let Ok((other, other_slots, ..)) = run(function.clone(), sink, share, false, place) else { continue };
-        if let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots)) {
-            if kept.0 > candidate.0 || kept.1 > candidate.1 {
-                best = (other, other_slots);
-                settings = (sink, share);
-            }
+        let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), sink, share, false, place) else {
+            continue;
+        };
+        if wins((&best.0, &best.1, &best.2), (&other, &other_priced, &other_slots)) {
+            best = (other, other_priced, other_slots);
+            settings = (sink, share);
         }
     }
     if splittable
-        && let Ok((other, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
-        && let (Ok(kept), Ok(candidate)) = (price(&best.0, &best.1), price(&other, &other_slots))
+        && let Ok((other, other_priced, other_slots, ..)) = run(function.clone(), settings.0, settings.1, true, place)
+        && let (Ok(kept), Ok(candidate)) = (price(&best.1, &best.2), price(&other_priced, &other_slots))
         && candidate.0 <= kept.0
         && candidate.1 <= kept.1
         && candidate != kept
     {
-        best = (other, other_slots);
+        best = (other, other_priced, other_slots);
     }
-    Ok(best)
+    Ok((best.0, best.2))
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -2444,7 +2452,7 @@ fn emit_with<const STACK: bool>(
     share: bool,
     _split: bool,
     place: bool,
-) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
+) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
@@ -2977,7 +2985,8 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&finish(out), &function.name), slots, sunk, shared, moved))
+    let priced = own_labels(&finish(out.clone(), false), &function.name);
+    Ok((own_labels(&finish(out, true), &function.name), priced, slots, sunk, shared, moved))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -3017,8 +3026,11 @@ fn own_labels(
 
 /// The function's text: the peepholes, then the branches out of reach made
 /// long.
-fn finish(mut code: Asm) -> String {
-    crate::peephole::run(&mut code);
+fn finish(
+    mut code: Asm,
+    known_loads: bool,
+) -> String {
+    crate::peephole::run_with(&mut code, known_loads);
     crate::relax::relax(&mut code);
     code.text()
 }

@@ -464,6 +464,39 @@ fn exit_code_of(
     code
 }
 
+/// Clocks of `strncpy(dst, src, 30)` on a 20-byte source, as `sim65 -c` counts
+/// them with the program's start: `text` is the compiled function, the rest a
+/// `_main` and a `memset` that fills the tail.
+fn clocks_of_strncpy(text: &str) -> u64 {
+    const MAIN: &str = ".export _main, memset\n.segment \"BSS\"\nsrc: .res 32\ndst: .res 40\n.segment \"CODE\"\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  ldx #0\nfill:\n  lda #65\n  sta src,x\n  inx\n  cpx #20\n  bne fill\n  lda #0\n  sta src,x\n  lda #<dst\n  sta rc2\n  lda #>dst\n  sta rc3\n  lda #<src\n  sta rc4\n  lda #>src\n  sta rc5\n  lda #30\n  sta rc6\n  lda #0\n  sta rc7\n  jsr k_strncpy\n  ldx #0\n  rts\nmemset:\n  lda rc6\n  ora rc7\n  beq @done\n  ldy #0\n@loop:\n  lda rc4\n  sta (rc2),y\n  iny\n  bne @c\n  inc rc3\n@c:\n  lda rc6\n  bne @d\n  dec rc7\n@d:\n  dec rc6\n  lda rc6\n  ora rc7\n  bne @loop\n@done:\n  rts\n";
+    let dir = std::env::temp_dir().join(format!("llrm6502-clocks-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("t.s"), format!("{text}\n{MAIN}")).unwrap();
+    common::pipeline::tool(&dir, "cl65", &["-t", "sim6502", "-o", "t.bin", "t.s"])
+        .unwrap_or_else(|e| panic!("{e}\n{text}"));
+    let out = std::process::Command::new("sim65").arg("-c").arg(dir.join("t.bin")).output().unwrap();
+    std::fs::remove_dir_all(dir).ok();
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let words: Vec<&str> = said.split_whitespace().collect();
+    words
+        .windows(2)
+        .find(|pair| pair[1] == "cycles")
+        .and_then(|pair| pair[0].parse().ok())
+        .unwrap_or_else(|| panic!("no cycle count in {said:?}"))
+}
+
+/// A constant another register holds is loaded by a transfer, one byte
+/// shorter in `strncpy`, and that byte tipped `emit_on` to the layout without
+/// the rotated loop: 3304 clocks for the call at `-O2` where the parent took
+/// 3266. A layout is kept where it wins before the transfer pass and after it.
+#[test]
+fn a_byte_the_transfer_saves_does_not_pick_the_slower_layout() {
+    let text =
+        assembly(include_str!("fixtures/strncpy_o2.ll"), &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let clocks = clocks_of_strncpy(&text);
+    assert!(clocks <= 3266, "strncpy takes {clocks} clocks; the parent's layout takes 3266:\n{text}");
+}
+
 /// A global holding the address of another (`static const char *p = buf + 3`,
 /// a table of pointers) was refused: "a global initializer that is not an
 /// integer, array or struct". function_table, static_pointers, tail_calls and

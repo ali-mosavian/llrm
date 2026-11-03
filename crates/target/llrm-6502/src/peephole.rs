@@ -78,8 +78,19 @@ fn sets_nz_of(
 
 /// The passes, in the order they feed each other.
 pub fn run(asm: &mut Asm) {
+    run_with(asm, true);
+}
+
+/// [`run`], the transfer of a known constant (`drop_known_loads`) left out when
+/// `known_loads` is false: the text a layout choice is priced on.
+pub fn run_with(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     drop_reloads(asm);
-    drop_known_loads(asm);
+    if known_loads {
+        drop_known_loads(asm);
+    }
     drop_zero_compares(asm);
     drop_cancelling_transfers(asm);
     branch_on_shift_carry(asm);
