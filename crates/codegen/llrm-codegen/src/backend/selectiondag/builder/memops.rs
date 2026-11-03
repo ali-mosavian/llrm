@@ -602,17 +602,15 @@ impl Builder<'_> {
         let dwords = length / 4;
         let words = u64::from(length % 4 >= 2);
         let bytes = u64::from(length % 2 == 1);
-        // From two dwords on a register holds the value (`xor ecx, ecx` 3 B,
-        // `mov ecx, imm32` 6) and each store is that register's 4, 3 or 3
-        // bytes; a lone dword is `mov dword ptr [m], imm32`. A 10-byte clear
-        // is 14 bytes of stores against 16 of fill (the object's, measured).
-        let shared = dwords > 1;
-        let (each, setup, word, byte) = match (shared, zero) {
-            (true, true) => (4, 3, 3, 3),
-            (true, false) => (4, 6, 3, 3),
-            (false, _) => (8, 0, 5, 4),
-        };
-        let stored = setup + dwords * each + words * word + bytes * byte;
+        // The value in a register (`xor ecx, ecx` 3 B, `mov ecx, imm32` 6; each
+        // store 4, 3, 3 B) or as immediates (`mov dword ptr [m], imm32` 8, a
+        // word 5, a byte 4): whichever is fewer. A 10-byte clear is 14 bytes
+        // of stores against 16 of fill (the object's, measured), a 7-byte one
+        // 13.
+        let setup = if zero { 3 } else { 6 };
+        let register = setup + dwords * 4 + words * 3 + bytes * 3;
+        let immediates = dwords * 8 + words * 5 + bytes * 4;
+        let stored = register.min(immediates);
         if stored <= FILL_BYTES {
             return false;
         }

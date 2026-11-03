@@ -112,3 +112,17 @@ def test_alignment_padding_in_an_elf_object_is_counted_apart_from_code(tmp_path)
     got = sizes.code_size(obj)
     assert got.align > 0 and got.code + got.align == whole
     assert sizes.code_bytes(obj) == got.code < whole
+
+
+def test_a_32_bit_elf_object_is_read_and_its_padding_counted_apart(tmp_path):
+    """elfsize read ELF64 only, so a gcc -m32 object (the m32 comparison's gcc and clang columns) could not be sized and its padding not left out:
+    `movl; ret; .p2align 4; ret` is 17 bytes of section, 7 of code and 10 of padding (32-bit decoding)."""
+    import sizes
+
+    (tmp_path / "t.s").write_text(".text\nmovl $1,%eax\nret\n.p2align 4\nret\n")
+    obj = tmp_path / "t.o"
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(obj)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert elfsize.code_bytes(obj) == 17
+    got = sizes.code_size(obj)
+    assert (got.code, got.align) == (7, 10)
