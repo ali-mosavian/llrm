@@ -25,7 +25,7 @@ use llrm_spike_mf::{
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
-use crate::emit::{MInst, Operand as Machine, address, spill};
+use crate::emit::{MInst, Operand as Machine, address, indexed_address, spill};
 use crate::reg;
 use crate::select::Item;
 
@@ -274,6 +274,14 @@ impl<const STACK: bool> Target for Mos<STACK> {
         inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
     }
 
+    fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        match inst.kind {
+            Kind::Op("PACK") => Some((0, vec![(1, 0, 1), (2, 1, 1)])),
+            Kind::Op("UNPACK") => Some((2, vec![(0, 0, 1), (1, 1, 1)])),
+            _ => None,
+        }
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
@@ -390,6 +398,9 @@ pub struct Unsupported(pub String);
 
 struct Builder {
     function: MFunction<Class>,
+    /// The source place of the item being built (`MInst::origin`); every
+    /// instruction it makes takes it.
+    origin: u32,
     bytes: HashMap<String, Reg>,
     /// Word cells used as pointers: one pair register, not two bytes.
     pointers: HashSet<String>,
@@ -833,6 +844,9 @@ impl Builder {
         // and a load sets N and Z, so it is not run again where a compare's
         // flags are live
         inst.sets_flags |= matches!(inst.kind, Kind::Op("LDI" | "LDS"));
+        if inst.origin == 0 {
+            inst.origin = self.origin;
+        }
         self.function.blocks[self.current].insts.push(inst);
     }
 
@@ -1068,7 +1082,7 @@ fn pointer_cells(
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::new();
     for item in items {
-        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         for (at, operand) in operands.iter().enumerate() {
             let Machine::Reg(cell) = operand else { continue };
             let word = cell.strip_suffix("+1").unwrap_or(cell);
@@ -1090,7 +1104,7 @@ fn pointer_cells(
     loop {
         let before = out.len();
         for item in items {
-            let Item::Inst(MInst { opcode, operands }) = item else { continue };
+            let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
             let (d, a) = match (*opcode, &operands[..]) {
                 (op::COPY16, [Machine::Reg(d), Machine::Reg(a)]) => (d, a),
                 (op::ADD16, [Machine::Reg(d), Machine::Reg(a), Machine::Reg(b)]) if constant(b) => (d, a),
@@ -1114,7 +1128,7 @@ fn pointer_cells(
 fn pointer_bases(items: &[Item]) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
-        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let at = match *opcode {
             op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => 1,
             op::STZP | op::LEASP16 | op::JSRI => 0,
@@ -1134,7 +1148,7 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
     let mut defs: HashMap<String, usize> = HashMap::new();
     let mut values = HashMap::new();
     for item in items {
-        let Item::Inst(MInst { opcode, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let Some(Machine::Reg(d)) = operands.first() else { continue };
         *defs.entry(d.clone()).or_default() += 1;
         if *opcode == op::LDI8
@@ -1164,7 +1178,7 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
     // a byte copied once from a constant is that constant (the zero high half
     // of a widened byte)
     for item in items {
-        let Item::Inst(MInst { opcode: op::COPY8, operands }) = item else { continue };
+        let Item::Inst(MInst { opcode: op::COPY8, operands, .. }) = item else { continue };
         if let [Machine::Reg(d), Machine::Reg(source)] = &operands[..]
             && defs[d] == 1
             && (d.starts_with("v_") || d.starts_with("w_"))
@@ -1181,6 +1195,15 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
 pub fn build(
     name_of_function: &str,
     items: &[Item],
+) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
+    build_with_places(name_of_function, items, Vec::new())
+}
+
+/// [`build`], with the source places the items' origins number.
+pub fn build_with_places(
+    name_of_function: &str,
+    items: &[Item],
+    places: Vec<llrm_codegen::model::lir::SrcLoc>,
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
     // A block starts at a label that follows an instruction (or the first).
     let mut labels: Vec<Vec<String>> = vec![Vec::new()];
@@ -1200,7 +1223,8 @@ pub fn build(
         }
     }
     let mut b = Builder {
-        function: MFunction::new(name_of_function),
+        function: MFunction { places, ..MFunction::new(name_of_function) },
+        origin: 0,
         bytes: HashMap::new(),
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
@@ -1231,6 +1255,7 @@ pub fn build(
             Item::Text(_) => return Err(Unsupported("raw text".into())),
             Item::Inst(inst) => inst,
         };
+        b.origin = inst.origin;
         after_inst = true;
         let o = &inst.operands;
         match inst.opcode {
@@ -1332,9 +1357,9 @@ pub fn build(
                 }
             }
             op::LDAX | op::STAX => {
-                let Machine::Label(symbol) = &o[1] else { return Err(Unsupported("an indexed access".into())) };
+                let symbol = indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
                 let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
-                let index = b.byte(name(&o[2])?)?;
+                let index = b.byte(name(&o[3])?)?;
                 b.copy(x, index);
                 if inst.opcode == op::LDAX {
                     b.define(name(&o[0])?);
@@ -1842,6 +1867,7 @@ pub fn build(
     }
     remove_dead(&mut b.function);
     narrow_remainder_calls(&mut b.function);
+    b.function.place_unlocated();
     Ok((b.function, labels))
 }
 
@@ -2218,10 +2244,11 @@ pub fn emit(
     cmos: bool,
     zero_page: u8,
     tuning: Tuning,
+    source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
     let level = TUNING.with(|t| t.replace(tuning));
-    let result = emit_on(function, labels, stack, cmos);
+    let result = emit_on(function, labels, stack, cmos, source);
     IMAGINARY.with(|n| n.set(before));
     TUNING.with(|t| t.set(level));
     result
@@ -2235,17 +2262,18 @@ fn emit_on(
     labels: &[Vec<String>],
     stack: bool,
     cmos: bool,
+    source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>), String> {
     let run = |function: MFunction<Class>, sink: bool, share: bool, split: bool, place: bool| {
         if stack {
-            emit_with::<true>(function, labels, cmos, sink, share, split, place)
+            emit_with::<true>(function, labels, cmos, sink, share, split, place, source)
         } else {
-            emit_with::<false>(function, labels, cmos, sink, share, split, place)
+            emit_with::<false>(function, labels, cmos, sink, share, split, place, source)
         }
     };
     let cpu = if cmos { Cpu::W65c02 } else { Cpu::Mos6502 };
     let price = |code: &str, slots: &[(String, usize)]| {
-        crate::timing::estimate(cpu, code)
+        crate::timing::estimate(cpu, &without_lines(code))
             .map(|priced| (priced.bytes + slots.iter().map(|(_, n)| *n as u32).sum::<u32>(), priced.cycles))
     };
     let (mut code, mut slots, sunk, shared, moved) = run(function.clone(), true, true, false, true)?;
@@ -2436,6 +2464,23 @@ fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
     odds
 }
 
+/// `labels` with a label for each block the folding added, numbered past the
+/// source's.
+fn labels_with_new_blocks(
+    labels: &[Vec<String>],
+    function: &MFunction<Class>,
+) -> Vec<Vec<String>> {
+    let mut all = labels.to_vec();
+    for block in &function.blocks {
+        let id = block.id as usize;
+        if id >= all.len() {
+            all.resize(id + 1, Vec::new());
+            all[id].push(format!("{}__tm{id}", function.name));
+        }
+    }
+    all
+}
+
 fn emit_with<const STACK: bool>(
     mut function: MFunction<Class>,
     labels: &[Vec<String>],
@@ -2444,6 +2489,7 @@ fn emit_with<const STACK: bool>(
     share: bool,
     _split: bool,
     place: bool,
+    source: Option<(&str, Option<u32>)>,
 ) -> Result<(String, Vec<(String, usize)>, bool, bool, bool), String> {
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
@@ -2495,6 +2541,8 @@ fn emit_with<const STACK: bool>(
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     branch_fold::<Mos<STACK>>(&mut function);
+    // tail merging splits blocks: a block it makes has no label of the source's
+    let labels = &labels_with_new_blocks(labels, &function);
     let moved = place && {
         let odds = loop_odds(&function);
         llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
@@ -2537,6 +2585,7 @@ fn emit_with<const STACK: bool>(
         }
         let mut repeated = 0;
         for (i, inst) in block.insts.iter().enumerate() {
+            out.place = inst.origin;
             // the rest of a run of one-bit shifts a loop has emitted
             if repeated > 0 {
                 repeated -= 1;
@@ -2634,7 +2683,13 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => {
                     let jump = tail_call(block, i, pending);
-                    writeln!(out, "  {} {callee}", if jump { "jmp" } else { "jsr" }).unwrap()
+                    // the speed variants of the variable long shifts move whole
+                    // bytes first: 45 bytes more each, linked once, for 200
+                    // clocks fewer per 8 bits
+                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
+                        && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
+                        .unwrap()
                 }
                 // return address, then target-1, then rts into the callee; its
                 // own rts lands on the label
@@ -2977,7 +3032,13 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
-    Ok((own_labels(&finish(out), &function.name), slots, sunk, shared, moved))
+    Ok((
+        own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name),
+        slots,
+        sunk,
+        shared,
+        moved,
+    ))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -3017,10 +3078,57 @@ fn own_labels(
 
 /// The function's text: the peepholes, then the branches out of reach made
 /// long.
-fn finish(mut code: Asm) -> String {
+fn finish(
+    mut code: Asm,
+    lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
+) -> String {
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
+    if let Some((file, scope, places)) = lines_of {
+        code.lines = with_lines(code.lines, file, scope, places);
+    }
     code.text()
+}
+
+/// `.dbg line` ahead of each instruction whose line is not the one before it
+/// (ca65 writes them to the debug file); a label starts a line again. They go
+/// in after every pass, so no pass sees them.
+fn with_lines(
+    lines: Vec<Line>,
+    file: &str,
+    scope: Option<u32>,
+    places: &[llrm_codegen::model::lir::SrcLoc],
+) -> Vec<Line> {
+    let mut out = Vec::with_capacity(lines.len() * 2);
+    let mut shown = None;
+    // The function's first row is the line it starts at, before any
+    // instruction's (`DwarfDebug::beginFunctionImpl`).
+    let mut scope = scope;
+    for line in lines {
+        match &line {
+            Line::Label(_) => shown = None,
+            Line::Inst(inst) => {
+                if let Some(line) = scope.take() {
+                    out.push(Line::Raw(format!("  .dbg line, \"{file}\", {line}")));
+                    shown = Some(line);
+                }
+                // DEVIATE: place 0 (no location) writes no row, so the row
+                // before covers it; the pin gives it line 0.
+                // Reason: ca65 keeps a `.dbg line` of line 0 as
+                // a span-less row (probe 2026-11-05),
+                // so it would cover nothing either. Exit: with ca65's handling.
+                if let Some(place) = (inst.place != 0).then(|| places.get(inst.place as usize - 1)).flatten()
+                    && shown != Some(place.line)
+                {
+                    out.push(Line::Raw(format!("  .dbg line, \"{file}\", {}", place.line)));
+                    shown = Some(place.line);
+                }
+            }
+            Line::Raw(_) => {}
+        }
+        out.push(line);
+    }
+    out
 }
 
 /// Whether `LLRM_6502_SPIKE` asks for the spike graph-colouring allocator, to
@@ -3096,4 +3204,9 @@ fn allocate_greedy<T: Target<Class = Class>>(
         llrm_spike_mf::regalloc::GraphColoring::<T>::by_frequency(false).check(function, &assignment)?;
     }
     Ok((assignment, slots))
+}
+
+/// `code` without its `.dbg line` directives, which cost nothing.
+fn without_lines(code: &str) -> String {
+    code.lines().filter(|line| !line.trim_start().starts_with(".dbg")).map(|line| format!("{line}\n")).collect()
 }

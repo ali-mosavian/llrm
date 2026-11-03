@@ -270,6 +270,40 @@ fn set_on_condition(base: &str) -> bool {
     )
 }
 
+/// A byte of code where `timings.times` states no row: one clock is two bytes.
+const INTERIM_MILLICLOCKS_PER_BYTE: i64 = 500;
+
+/// What a byte of code is worth on `cpu`, in thousandths of a clock: the
+/// CPU's `timings.times` row.
+pub fn byte_milliclocks(cpu: SelectCpu) -> i64 {
+    crate::target::cpu_table(cpu.name())
+        .and_then(|table| table.byte_rate())
+        .filter(|rate| *rate > 0)
+        .unwrap_or(INTERIM_MILLICLOCKS_PER_BYTE)
+}
+
+/// Whether `extra_bytes` of code are worth `saved_clocks` on `cpu`: the trade
+/// passes only at N extra bytes per clock saved <= the row's allowance.
+pub fn trade_passes(
+    cpu: SelectCpu,
+    extra_bytes: i64,
+    saved_clocks: i64,
+) -> bool {
+    saved_clocks * 1000 >= extra_bytes * byte_milliclocks(cpu)
+}
+
+/// The order a priced choice minimizes on `cpu`: bytes then clocks for size,
+/// else clocks plus bytes at the CPU's byte price, ties to fewer clocks.
+pub fn order(
+    cpu: SelectCpu,
+    size: bool,
+    clocks: u32,
+    bytes: u32,
+) -> (i64, i64) {
+    let (clocks, bytes) = (i64::from(clocks), i64::from(bytes));
+    if size { (bytes, clocks) } else { (clocks * 1000 + bytes * byte_milliclocks(cpu), clocks) }
+}
+
 /// The clock periods of `text` on `cpu`. `bytes` is its encoded length (a
 /// conditional branch has a byte or a word displacement by it) and `taken`
 /// whether a branch was taken.
@@ -282,7 +316,11 @@ pub fn cost(
     cost_on(
         match cpu {
             SelectCpu::M68000 => Cpu::M68000,
+            SelectCpu::M68010 => Cpu::M68010,
             SelectCpu::M68020 => Cpu::M68020,
+            SelectCpu::M68030 => Cpu::M68030,
+            SelectCpu::M68040 => Cpu::M68040,
+            SelectCpu::M68060 => Cpu::M68060,
         },
         text,
         bytes,
@@ -380,6 +418,14 @@ fn gnu_operand(text: &str) -> String {
             let inner = rest.trim_start_matches('(').trim_end_matches(')');
             let mut parts = inner.split(',');
             let displacement = parts.next().unwrap_or("0");
+            // objdump shows a PC-relative target as its absolute address; the
+            // clocks depend on the mode, taken here as a 16-bit displacement
+            let displacement =
+                if base == "%pc" && displacement.len() == 8 && displacement.chars().all(|c| c.is_ascii_hexdigit()) {
+                    "0".to_owned()
+                } else {
+                    displacement.to_owned()
+                };
             match parts.next() {
                 None => format!("({displacement},{base})"),
                 Some(index) => format!("({displacement},{base},{})", index.split(':').next().unwrap_or(index)),
@@ -393,9 +439,21 @@ fn gnu_operand(text: &str) -> String {
 /// what the pin's own `llvm-objdump` shows as `<unknown>`.
 pub fn from_gnu(text: &str) -> Result<String, String> {
     // a branch target reads `80000074 <k+0x8>`
-    let text = text.split(" <").next().unwrap_or(text).trim();
+    // an operand may be followed by its symbol mid-line: `%pc@(80000062)
+    // <a>,%a0`
+    let mut plain = String::new();
+    let mut rest = text;
+    while let Some((before, after)) = rest.split_once(" <") {
+        plain.push_str(before);
+        rest = after.split_once('>').map_or("", |(_, tail)| tail);
+    }
+    plain.push_str(rest);
+    let text = plain.trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let name = gnu_mnemonic(name);
+    // `divull %d5,%d2,%d3` is the 32 / 32 `divu.l %d5, %d3` with the remainder
+    // register named; the clocks are the long divide's either way
+    let long_divide = ["divul", "divull", "divsl", "divsll"].contains(&name);
+    let name = if long_divide { format!("div{}.l", &name[3..4]) } else { gnu_mnemonic(name) };
     // objdump prints an absolute address bare, as it does a branch target: only
     // a branch or `dbcc` takes it as a target
     let target = name.starts_with('b') || name.starts_with("db");
@@ -410,5 +468,9 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
             }
         })
         .collect();
+    let operands = match operands.as_slice() {
+        [source, _, quotient] if long_divide => vec![source.clone(), quotient.clone()],
+        _ => operands,
+    };
     Ok(if operands.is_empty() { name } else { format!("{name} {}", operands.join(", ")) })
 }

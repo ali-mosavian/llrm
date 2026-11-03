@@ -124,6 +124,7 @@ mod tests {
             definition: Definition::Undefined,
             size: 0,
             group: None,
+            visibility: Default::default(),
         };
         let object = Object {
             name: "a.c".into(),

@@ -4157,6 +4157,37 @@ fn test_noalias_is_stated_only_for_distinct_locals() {
     assert_eq!(count("Add p, q", false), 0, "an exported callee has callers this module does not see");
 }
 
+/// An expression handed by reference is a copy in a slot made for the call:
+/// nothing else names it. A recursive `Place q(), row + 1, n` kept `row` a
+/// pointer reloaded after every call (queens, bq16: 2.0x C clocks) because the
+/// copy was never proven exclusive.
+#[test]
+fn test_noalias_holds_of_a_slot_made_for_the_call() {
+    let counted = |calls: &str, inner: &str| {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!(
+            "DECLARE SUB Add (a AS INTEGER, b AS INTEGER)\nDECLARE SUB Caller ()\nDECLARE SUB Outer (r AS INTEGER)\nDIM SHARED g AS INTEGER\nCaller\nSUB Caller\nDIM p AS INTEGER, q AS INTEGER\n{calls}\nEND SUB\nSUB Outer (r AS INTEGER)\n{inner}\nEND SUB\nSUB Add (a AS INTEGER, b AS INTEGER)\na = a + 1\nb = 2\nEND SUB\n"
+        );
+        let source = written(&directory, "na.bas", basic.as_bytes());
+        let frontend = qb_driver::Frontend { whole_program: true, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&source, &frontend, None).expect("parses");
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        text.lines()
+            .find(|line| line.starts_with("define") && line.contains("ADD"))
+            .unwrap_or_else(|| panic!("{text}"))
+            .matches("noalias")
+            .count()
+    };
+    let count = |calls: &str| counted(calls, "");
+    assert_eq!(count("Add p + 1, q"), 2, "a copy and a local");
+    assert_eq!(count("Add p + 1, p"), 2, "the copy is not the variable");
+    assert_eq!(count("Add p + 1, q\nAdd p, q"), 2, "a call that passes locals too");
+    assert_eq!(count("Add p + 1, q\nAdd p, p"), 0, "one variable passed twice still refuses");
+    assert_eq!(counted("Outer p", "Add r + 1, r"), 2, "a copy beside a parameter only a local reaches");
+    assert_eq!(counted("Outer g", "Add r + 1, r"), 1, "a copy beside a parameter a SHARED variable reaches");
+}
+
 /// The `!invariant.load` marks in `WORK` of `body`, a procedure of a program
 /// that is all here, on the llrm runtime.
 fn invariant_marks(

@@ -187,6 +187,9 @@ pub struct InlineParams {
     /// With `allow_recursive_call`, the largest recursive callee (`gcc_insns`)
     /// priced rather than refused.
     pub recursive_callee_limit: i64,
+    /// With `allow_recursive_call`, the most a recursive callee may grow its
+    /// caller (`recursive_edge_growth`, gcc's `max-inline-insns-auto`).
+    pub recursive_edge_growth: i64,
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
@@ -220,6 +223,7 @@ impl InlineParams {
             compute_full_inline_cost: false,
             allow_recursive_call: false,
             recursive_callee_limit: i64::MAX,
+            recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
             tti: Tti::Generic,
         }
@@ -1478,7 +1482,8 @@ impl<'a> Analyzer<'a> {
         // analysis" unless the params allow a recursive call (:2481).
         if target == self.site.callee_id
             && (!self.params.allow_recursive_call
-                || crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit)
+                || crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit
+                || crate::inline::recursive_edge_growth(self.callee) > self.params.recursive_edge_growth)
         {
             self.is_recursive_call = true;
             return false;

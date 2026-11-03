@@ -360,6 +360,7 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        address_registers: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -375,7 +376,13 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0], &[3]]), results(&before, &[&[0], &[3]]), "{after}");
-    assert!(after.contains("getelementptr i8, ptr %0, i16 2"), "{after}");
+    // A byte offset stepped by 2 off the frame slot (`[bp+si+disp]`) or a
+    // pointer stepped by 2: both are 16-bit addresses; the `shl` is not
+    // formed.
+    assert!(
+        after.contains("getelementptr i8, ptr %0, i16 2") || after.contains("getelementptr i8, ptr %p, i16 %0"),
+        "{after}"
+    );
     assert!(!after.contains(" shl nuw nsw i16 %i, 1"), "{after}");
 }
 
@@ -564,6 +571,7 @@ b3:
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        address_registers: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -627,6 +635,7 @@ b5:
         registers: 6,
         scaled_index_insns: 2,
         huge_space: Some(3),
+        address_registers: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -749,6 +758,40 @@ b4:
     let (_, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[5], &[300]]);
     let body = after.split("b4:").nth(1).unwrap().split("\n}").next().unwrap();
     assert_eq!(body.matches("urem").count() + body.matches("udiv").count(), 1, "{after}");
+}
+
+/// `s += (i * 97) % 211` stays a remainder where the pass expands it: the
+/// pin's `SCEVExpander::visitAddExpr` recognizes the canonical form of an
+/// unsimplified `urem` (`matchURem`) and emits `urem`. Ours expanded `x - (x /
+/// c) * c`: a `div_u`, a `mul` and an `add` where one `rem_u` is (wasm recsum,
+/// 42032 instructions where the pin's llc runs 30030).
+#[test]
+fn a_urem_the_pass_expands_is_a_urem() {
+    let text = "define i32 @f(i32 %n) {
+b1:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %pre, label %b3
+pre:
+  br label %b4
+exit:
+  %last = phi i32 [ %s2, %b4 ]
+  br label %b3
+b3:
+  %r = phi i32 [ 0, %b1 ], [ %last, %exit ]
+  ret i32 %r
+b4:
+  %s = phi i32 [ %s2, %b4 ], [ 0, %pre ]
+  %i = phi i32 [ %i2, %b4 ], [ 0, %pre ]
+  %m = mul nuw nsw i32 %i, 97
+  %q = urem i32 %m, 211
+  %s2 = add nuw nsw i32 %q, %s
+  %i2 = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i2, %n
+  br i1 %done, label %exit, label %b4
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[5], &[300]]);
+    assert!(after.contains("urem") && !after.contains("udiv"), "{after}");
 }
 
 /// The exit value was expanded at the end of the exit block, after the store
@@ -919,6 +962,7 @@ b6:
         registers: 6,
         scaled_index_insns: 0,
         huge_space: None,
+        address_registers: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -964,11 +1008,12 @@ fn lsr_scevs_made(loops: usize) -> usize {
 /// LSR forgot the expressions of every value an edit touched, which LLVM's
 /// never does (it has no `forget` call: only a deleted or replaced value is
 /// told to ScalarEvolution), and analysed them again for the next look: 30
-/// values a loop against 20 (branches1024: `mir lsr` 640 -> 320 Minstr).
+/// values a loop against 20 (branches1024: `mir lsr` 640 -> 320 Minstr). The
+/// end-biased formulae (LG3) make two more for the exit counter's bias: 22.
 #[test]
 fn the_expressions_of_a_value_an_edit_touched_are_kept_through_lsr() {
     let loops = 16;
-    assert!(lsr_scevs_made(loops) <= loops * 21, "{} values made", lsr_scevs_made(loops));
+    assert!(lsr_scevs_made(loops) <= loops * 22, "{} values made", lsr_scevs_made(loops));
 }
 
 /// bench/sieve at m16: the inner loop starts at `i * i`, a quadratic addrec of
@@ -1026,6 +1071,7 @@ fn six_registers() -> llrm_x86::tti::X86 {
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        address_registers: None,
         inline_size_guard: false,
         float_code_size_percent: 100,
         unroll_size_few_trips: (0, 0),
@@ -1064,4 +1110,356 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
     let after = printed(&module);
     assert!(after.contains("[ 5, %b1 ]"), "{after}");
+}
+
+/// A byte index stepping by 2 against a doubled limit kept a second counter
+/// (`{n,+,-1}`, `dec cx`) beside the index, and a spill: examples/dot m16.
+#[test]
+fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
+    let mut module = parsed(&format!("{DOS}{DOT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
+}
+
+/// An `i32` chain xored with a loaded value and an `i32` sum, beside two
+/// strength-reduced `i32` recurrences, left a register short at -Os m16: the
+/// solver spent a third register on a formula to save an instruction and the
+/// allocator spilled the chain (shellsort bas -Os, +6 B, +129 memory operands
+/// against main). The temporaries now count against the registers.
+#[test]
+fn the_temporaries_of_the_body_count_against_the_registers() {
+    let mut module = parsed(&format!("{DOS}{SHELLSORT_INIT}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("7013"), "the exit moved off the i32 recurrence: {after}");
+}
+
+const SHELLSORT_INIT: &str = "
+define i32 @f(ptr %v0, ptr %v5) {
+b1:
+  br label %b5
+b5:
+  %v10 = phi i16 [ 0, %b1 ], [ %v21, %b5 ]
+  %v11 = shl nuw nsw i16 %v10, 2
+  %v12 = getelementptr i8, ptr %v5, i16 %v11
+  %v13 = zext nneg i16 %v10 to i32
+  %v14 = mul nuw nsw i32 %v13, 109
+  %v15 = add nuw nsw i32 %v14, 37
+  %v16 = shl nuw nsw i32 %v13, 7
+  %v17 = xor i32 %v15, %v16
+  %v18 = load i32, ptr %v0
+  %v19 = and i32 %v18, 65535
+  %v20 = xor i32 %v17, %v19
+  store i32 %v20, ptr %v12
+  %v21 = add nuw nsw i16 %v10, 1
+  %exitcond2 = icmp eq i16 %v21, 64
+  br i1 %exitcond2, label %b6, label %b5
+b6:
+  ret i32 0
+}
+";
+
+const DOT: &str = "
+define i32 @dot(ptr %0, ptr %1, i16 %2) {
+  %4 = icmp sgt i16 %2, 0
+  br i1 %4, label %5, label %19
+5:
+  br label %6
+6:
+  %7 = phi i16 [ %17, %6 ], [ 0, %5 ]
+  %8 = phi i32 [ %16, %6 ], [ 0, %5 ]
+  %9 = getelementptr inbounds nuw [2 x i8], ptr %0, i16 %7
+  %10 = load i16, ptr %9, align 2
+  %11 = sext i16 %10 to i32
+  %12 = getelementptr inbounds nuw [2 x i8], ptr %1, i16 %7
+  %13 = load i16, ptr %12, align 2
+  %14 = sext i16 %13 to i32
+  %15 = mul nsw i32 %14, %11
+  %16 = add nsw i32 %15, %8
+  %17 = add nuw nsw i16 %7, 1
+  %exitcond = icmp eq i16 %17, %2
+  br i1 %exitcond, label %18, label %6
+18:
+  br label %19
+19:
+  %20 = phi i32 [ 0, %3 ], [ %16, %18 ]
+  ret i32 %20
+}
+";
+
+/// The even-factor rule must agree with the wrapped product at every width
+/// it is allowed to claim: a nonzero `x` within reach never multiplies to 0.
+#[test]
+fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
+    for bits in [8u32, 16] {
+        let modulus = 1i128 << bits;
+        let span = modulus.min(512) / 2;
+        for factor in (-span..span).chain([1024, 16384]).filter(|&f| f != 0) {
+            let reach = (0..modulus / 2)
+                .take_while(|&r| crate::lsr_generate::zero_test_survives(bits, factor as i64, r as u128))
+                .count() as i128;
+            for x in -reach.max(1) + 1..reach.max(1) {
+                let zero = (x * factor).rem_euclid(modulus) == 0;
+                let claimed = reach > 0 && x.abs() < reach;
+                assert!(!claimed || zero == (x == 0), "bits {bits} factor {factor} x {x}");
+            }
+        }
+    }
+}
+
+/// A counter that is both an address index and a value ended on a compare
+/// against 257 next to a pointer that stepped by 2 (bench/histo's sum loop,
+/// +256 instructions at m16): the first use's formulae hid the counter from
+/// the rest. The byte index ending at zero is one fewer instruction.
+#[test]
+fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero() {
+    let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains(", 0\n") && !after.contains("257"), "{after}");
+}
+
+const SUM_OF_COUNTS: &str = "
+@counts = internal global [256 x i16] zeroinitializer
+define i32 @f() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sum = phi i32 [ 0, %entry ], [ %s1, %loop ]
+  %p = getelementptr i16, ptr @counts, i16 %i
+  %v = load i16, ptr %p
+  %w = sext i16 %v to i32
+  %k = add i16 %i, 1
+  %kw = sext i16 %k to i32
+  %m = mul i32 %w, %kw
+  %s1 = add i32 %sum, %m
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp eq i16 %i1, 256
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %s1
+}
+";
+
+/// The loop that reads a block (bench/stft_fixed: `_re[_rev[i]] = _window[i] *
+/// _block[i] / 4`) took the fewest registers at -Os m16 once the loop's other
+/// values were counted, and the allocator was 16 B larger for it (+11 B against
+/// main). No solution fits beside those values, so the count told them apart
+/// by registers alone; the pointer over `_rev` is the choice without it.
+#[test]
+fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
+    let mut module = parsed(&format!("{DOS}{BLOCK_LOOP}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr"), "{after}");
+}
+
+const BLOCK_LOOP: &str = "
+@_window = internal global [256 x i32] zeroinitializer, align 2
+@_rev = internal global [256 x i8] zeroinitializer, align 1
+@_re = internal global [256 x i32] zeroinitializer, align 2
+@_im = internal global [256 x i32] zeroinitializer, align 2
+@_block = internal global [2 x [128 x i16]] zeroinitializer, align 2
+define void @f(i16 %v60) {
+entry:
+  %v68 = getelementptr inbounds nuw [256 x i8], ptr @_block, i16 %v60
+  %v62 = getelementptr inbounds nuw [256 x i8], ptr @_block, i16 1
+  br label %v69
+v69:
+  %v70 = phi i16 [ 0, %entry ], [ %v96, %v69 ]
+  %v71 = getelementptr inbounds nuw [2 x i8], ptr %v68, i16 %v70
+  %v72 = load i16, ptr %v71, align 2
+  %v73 = sdiv i16 %v72, 4
+  %v74 = sext i16 %v73 to i32
+  %v75 = getelementptr inbounds nuw [4 x i8], ptr @_window, i16 %v70
+  %v76 = load i32, ptr %v75, align 2
+  %v77 = mul nsw i32 %v76, %v74
+  %v78 = getelementptr inbounds nuw i8, ptr @_rev, i16 %v70
+  %v79 = load i8, ptr %v78, align 1
+  %v80 = zext i8 %v79 to i16
+  %v81 = getelementptr inbounds nuw [4 x i8], ptr @_re, i16 %v80
+  store i32 %v77, ptr %v81, align 2
+  %v82 = getelementptr inbounds nuw [2 x i8], ptr %v62, i16 %v70
+  %v83 = load i16, ptr %v82, align 2
+  %v84 = sdiv i16 %v83, 4
+  %v85 = sext i16 %v84 to i32
+  %v86 = or disjoint i16 %v70, 128
+  %v87 = getelementptr inbounds nuw [4 x i8], ptr @_window, i16 %v86
+  %v88 = load i32, ptr %v87, align 2
+  %v89 = mul nsw i32 %v88, %v85
+  %v90 = getelementptr inbounds nuw i8, ptr @_rev, i16 %v86
+  %v91 = load i8, ptr %v90, align 1
+  %v92 = zext i8 %v91 to i16
+  %v93 = getelementptr inbounds nuw [4 x i8], ptr @_re, i16 %v92
+  store i32 %v89, ptr %v93, align 2
+  %v94 = getelementptr inbounds nuw [4 x i8], ptr @_im, i16 %v80
+  store i32 0, ptr %v94, align 2
+  %v95 = getelementptr inbounds nuw [4 x i8], ptr @_im, i16 %v92
+  store i32 0, ptr %v95, align 2
+  %v96 = add nuw nsw i16 %v70, 1
+  %exitcond2 = icmp eq i16 %v96, 128
+  br i1 %exitcond2, label %exit, label %v69
+exit:
+  ret void
+}
+";
+
+/// fpbench nib: two arrays on the frame under three more live values made LSR
+/// price the frame bases as registers and walk two pointers (`lea bx`,
+/// `lea si`, `add bx, 4`) where main addressed `[bp+si-96]` and `[bp+si-72]`
+/// off one index (+4 B at -O2).
+#[test]
+fn frame_arrays_share_one_index_under_pressure() {
+    let mut module = parsed(&format!("{DOS}{FRAME_LOOP}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("phi ptr"), "{after}");
+}
+
+const FRAME_LOOP: &str = "
+declare void @bad()
+define i32 @f() {
+b1:
+  %a = alloca [24 x i8]
+  %b = alloca [24 x i8]
+  br label %b73
+b73:
+  %v70 = phi i16 [ %v85, %b79 ], [ 0, %b1 ]
+  %v71 = phi i32 [ %v93, %b79 ], [ 0, %b1 ]
+  %v72 = getelementptr inbounds nuw [4 x i8], ptr %b, i16 %v70
+  %v73 = load float, ptr %v72
+  %v74 = fmul float %v73, 6.400000e+01
+  %v75 = fcmp oge float %v74, 0xC1E0000000000000
+  %v76 = fcmp olt float %v74, 0x41E0000000000000
+  %v77 = and i1 %v75, %v76
+  br i1 %v77, label %b75, label %b76
+b75:
+  %v78 = getelementptr inbounds nuw [4 x i8], ptr %a, i16 %v70
+  %v79 = load float, ptr %v78
+  %v80 = fmul float %v79, 6.400000e+01
+  %v81 = fcmp oge float %v80, 0xC1E0000000000000
+  %v82 = fcmp olt float %v80, 0x41E0000000000000
+  %v83 = and i1 %v81, %v82
+  br i1 %v83, label %b79, label %b80
+b76:
+  call void @bad()
+  unreachable
+b79:
+  %v84 = fptosi float %v74 to i32
+  %v85 = add nuw nsw i16 %v70, 1
+  %v86 = zext nneg i16 %v85 to i32
+  %v87 = mul i32 %v84, %v86
+  %v88 = fptosi float %v80 to i32
+  %v89 = add nuw nsw i16 %v70, 7
+  %v90 = zext nneg i16 %v89 to i32
+  %v91 = mul i32 %v88, %v90
+  %v92 = add i32 %v87, %v71
+  %v93 = add i32 %v92, %v91
+  %exitcond = icmp eq i16 %v85, 6
+  br i1 %exitcond, label %b72, label %b73
+b72:
+  ret i32 %v93
+b80:
+  call void @bad()
+  unreachable
+}
+";
+
+/// shellsort bq32 -Os: the m32 model budgeted the pin's 8 registers though ebp
+/// and esp are never allocated, so the zero-test index off the array (4 regs,
+/// one instruction fewer) looked affordable beside two other values and the
+/// loop spilled (+13 B, +125 instructions). With the 6 the target allocates the
+/// pointer and the exit compare on the value counter stay.
+#[test]
+fn the_registers_the_m32_target_allocates_bound_the_budget() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define void @f(ptr %p0, ptr %p3, i32 %k) {
+b1:
+  %h = load i32, ptr %p0
+  br label %b5
+b5:
+  %v6 = phi i32 [ 0, %b1 ], [ %v16, %b5 ]
+  %v7 = shl nuw nsw i32 %v6, 2
+  %v8 = getelementptr i8, ptr %p3, i32 %v7
+  %v9 = mul nuw nsw i32 %v6, 109
+  %v10 = add nuw nsw i32 %v9, 37
+  %v11 = shl nuw nsw i32 %v6, 7
+  %v12 = xor i32 %v10, %v11
+  %v13 = load i32, ptr %p0
+  %v14 = and i32 %v13, 65535
+  %v15 = xor i32 %v12, %v14
+  store i32 %v15, ptr %v8
+  %v16 = add nuw nsw i32 %v6, 1
+  %c = icmp eq i32 %v16, 64
+  br i1 %c, label %e, label %b5
+e:
+  ret void
+}
+";
+    let mut module = parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
+}
+
+/// switch_table_holes (m32 -O2): `buf[t[i - 7]] += (i8)(i + 1)` made the byte
+/// add one `lea` with the offset in the wide formula, so the i32 counter
+/// plus 25 won and the store paid a zext, an add and a trunc. The pin keeps
+/// the byte counter `{1,+,1}` and adds it as a byte.
+#[test]
+fn a_byte_sum_with_the_counter_keeps_a_byte_counter() {
+    let text = "@buf = internal global [256 x i8] zeroinitializer
+@t = internal constant [14 x i8] [i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8, i8 9, i8 10, i8 11, i8 12, i8 13, i8 14]
+
+define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc2, %latch ]
+  %next = add nuw nsw i32 %i, 1
+  %k = add i32 %i, -7
+  %in = icmp ult i32 %k, 14
+  %k16 = trunc i32 %k to i16
+  %bit = lshr i16 8707, %k16
+  %hit = trunc i16 %bit to i1
+  %go = select i1 %in, i1 %hit, i1 false
+  br i1 %go, label %body, label %latch
+body:
+  %slot = getelementptr inbounds i8, ptr @t, i32 %k
+  %idx8 = load i8, ptr %slot
+  %idx = zext i8 %idx8 to i32
+  %p = getelementptr inbounds i8, ptr @buf, i32 %idx
+  %old = load i8, ptr %p
+  %step = trunc nuw nsw i32 %next to i8
+  %sum = add i8 %old, %step
+  store i8 %sum, ptr %p
+  br label %latch
+latch:
+  %one = phi i32 [ 1, %body ], [ 0, %loop ]
+  %acc2 = add i32 %acc, %one
+  %c = icmp eq i32 %next, 24
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %acc2
+}
+";
+    let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("phi i8"), "{after}");
+    assert!(!after.contains(" to i8"), "{after}");
 }

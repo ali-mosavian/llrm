@@ -90,7 +90,7 @@ pub fn relax(asm: &mut Asm) {
     let mut far = 0;
     for (line, long) in lines.into_iter().zip(long) {
         match line {
-            Line::Inst(Inst { op, operand: Operand::Direct(target) }) if long && op.is_branch() => {
+            Line::Inst(Inst { op, operand: Operand::Direct(target), .. }) if long && op.is_branch() => {
                 if op == Op::Bra {
                     asm.lines.push(Line::Inst(Inst::new(Op::Jmp, Operand::Direct(target))));
                 } else {

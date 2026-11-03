@@ -951,3 +951,256 @@ attributes #0 = { noinline }"#,
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
 }
+
+/// `x << n` of a 32-bit value by a variable called the bit loop at every level:
+/// 25 clocks a bit, 530 for the shift by 21 that f32 add makes on average (18%
+/// of that routine). At `-O2` the call is the speed variant, whole bytes first;
+/// at `-Os` it stays the 18-byte loop.
+#[test]
+fn a_variable_long_shift_calls_the_speed_variant_at_o2_only() {
+    let ir = module(
+        r#"define i32 @shl(i32 %x, i32 %n) {
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+define i32 @shr(i32 %x, i32 %n) {
+  %r = lshr i32 %x, %n
+  ret i32 %r
+}
+define i32 @sar(i32 %x, i32 %n) {
+  %r = ashr i32 %x, %n
+  ret i32 %r
+}"#,
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3_fast", "__lshrsi3_fast", "__ashrsi3_fast"] {
+        assert!(fast.contains(&format!("{routine}\n")), "no call to {routine} at -O2:\n{fast}");
+    }
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3", "__lshrsi3", "__ashrsi3"] {
+        assert!(small.contains(&format!(" {routine}\n")), "no call to {routine} at -Os:\n{small}");
+    }
+    assert!(!small.contains("_fast"), "a speed variant at -Os:\n{small}");
+}
+
+/// A four-trip loop over a global stayed a loop at `-O2` (22 B, 98 clocks for
+/// `sum4`, against 13 B and 34 clocks unrolled): the driver turned the unroller
+/// off (DEVIATE 6502-5). The pin unrolls it fully at `-O2`; `buf` holds
+/// 1, 2, 3, 4 so the sum is 10.
+#[test]
+fn a_four_trip_loop_is_unrolled_at_o2() {
+    let ir = module(
+        r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
+define i8 @sum4() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %sum, %loop ]
+  %p = getelementptr inbounds i8, ptr @buf, i16 %i
+  %v = load volatile i8, ptr %p
+  %sum = add i8 %s, %v
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+  ret i8 %sum
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("bne") && !text.contains("beq"), "the loop is still a loop:\n{text}");
+    assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
+}
+
+/// `buf[n + 3]` and `buf[n - 1]` with a byte `n` took eleven instructions, a
+/// 16-bit add of the address and an indirect load: the constant had no place in
+/// the indexed form (fill's `buf[n - 1]`: 46 B against llvm-mos's 22). It is
+/// one `lda buf+3,x`.
+#[test]
+fn a_constant_offset_folds_into_the_indexed_load() {
+    let ir = module(
+        r#"@buf = external global [64 x i8]
+define i8 @plus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, 3
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+define i8 @minus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, -1
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("lda buf+3,x"), "no indexed load with the offset:\n{text}");
+    assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
+    assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
+}
+
+/// A float argument, result, load, store, select and negation compiled for a
+/// target with no floating-point registers: the float is the integer of its
+/// width (`TypeSoftenFloat`). `float f(float x, float y) { return x; }`
+/// panicked in the call lowering ("legal parts: F32"), so did every float
+/// parameter.
+#[test]
+fn a_float_is_carried_as_the_integer_of_its_width() {
+    let request = Request::new(Level::O2);
+    let pass = assembly(&module("define float @f(float %x, float %y) {\n  ret float %x\n}"), &request).unwrap();
+    assert!(pass.contains("ldy rc5"), "the high word moved down:\n{pass}");
+    let copy = "define void @g(ptr %p, ptr %q) {\n  %v = load float, ptr %p\n  store float %v, ptr %q\n  ret void\n}";
+    let copied = assembly(&module(copy), &request).unwrap();
+    assert_eq!(copied.matches("sta (").count(), 4, "four bytes stored:\n{copied}");
+    let negate = "define float @n(float %x) {\n  %r = fneg float %x\n  ret float %r\n}";
+    let negated = assembly(&module(negate), &request).unwrap();
+    assert!(negated.contains("eor #128"), "the sign bit flipped:\n{negated}");
+    let choose =
+        "define float @s(i1 %c, float %x, float %y) {\n  %r = select i1 %c, float %x, float %y\n  ret float %r\n}";
+    assembly(&module(choose), &request).unwrap();
+}
+
+/// A double live across a block is four i16 parts, not two: it stopped at
+/// "integer wider than two registers" (five corpus cells, e.g.
+/// float_in_place_update).
+#[test]
+fn a_double_crosses_a_block_as_four_words() {
+    let body = "declare void @g()\ndefine double @f(double %x, i16 %n) {\nentry:\n  br label %l\nl:\n  %v = phi double [ %x, %entry ], [ %w, %l ]\n  %i = phi i16 [ 0, %entry ], [ %j, %l ]\n  call void @g()\n  %w = fneg double %v\n  %j = add i16 %i, 1\n  %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x1\nx1:\n  ret double %w\n}";
+    assembly(&module(body), &Request::new(Level::O2)).unwrap();
+}
+
+/// A float or double global initializer is its bits, little-endian: it stopped
+/// at "a global initializer that is not an integer, pointer, array or struct"
+/// (five corpus cells, e.g. int_compared_with_float).
+#[test]
+fn a_float_global_is_emitted_as_its_bits() {
+    let text = "@d = global double 1.5\n@f = global float 2.0\ndefine ptr @p() {\n  ret ptr @d\n}\ndefine ptr @q() {\n  ret ptr @f\n}";
+    let asm = assembly(&module(text), &Request::new(Level::O2)).unwrap();
+    assert!(
+        asm.contains(".byte 0,0,0,0,0,0,248,63") && asm.contains(".byte 0,0,0,64"),
+        "the bits of 1.5 and 2.0:\n{asm}"
+    );
+}
+
+/// A float add, a multiply, an int-to-float and a compare are calls of the
+/// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
+/// each stopped at "the target names no routine" or, for the compare, at a
+/// `CALL` the selector cannot take (the call was built for x86).
+#[test]
+fn a_float_operation_is_a_call_of_its_softfloat_routine() {
+    let request = Request::new(Level::O2);
+    let call = |body: &str, routine: &str| {
+        let text = assembly(&module(body), &request).unwrap();
+        assert!(
+            text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")),
+            "{routine}:\n{text}"
+        );
+    };
+    call("define float @f(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}", "__addsf3");
+    call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
+    call("define float @f(i32 %n) {\n  %r = sitofp i32 %n to float\n  ret float %r\n}", "__floatsisf");
+    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__ltsf2");
+}
+
+/// The compiled `text` without its `rcN = $..` equates, which `run_with` states
+/// itself.
+fn without_equates(text: &str) -> String {
+    text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect()
+}
+
+/// `srem i32` of two sign-extended words called `__modsi3`, the long routine
+/// (recpow at -O1, +434 B): both operands fit a word, so it is `__modhi3`.
+/// -7 % 3 = -1 (0xFF), and -32768 % -1 is 0.
+#[test]
+fn a_remainder_of_two_sign_extended_words_is_the_word_routine() {
+    let ir = module(
+        r#"define i8 @rem(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %r = srem i32 %x, %y
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let function = without_equates(&text);
+    for (a, b, want) in [(-7i16, 3i16, 0xFF), (-32768, -1, 0), (1000, -7, 6)] {
+        let setup = format!(
+            "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr rem\n",
+            a as u16 & 0xFF,
+            (a as u16) >> 8,
+            b as u16 & 0xFF,
+            (b as u16) >> 8
+        );
+        assert_eq!(common::run_with(&format!("narrow-rem-{a}-{b}"), &setup, &function), want, "{a} % {b}");
+    }
+}
+
+/// -32768 / -1 is 32768 in 32 bits and overflows 16: a divide of two
+/// sign-extended words stays long (its high byte is 0x80).
+#[test]
+fn a_divide_of_sign_extended_words_keeps_the_long_quotient() {
+    let words = module(
+        r#"define i8 @high(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %q = sdiv i32 %x, %y
+  %h = lshr i32 %q, 8
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&words, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__divsi3") && !text.contains("__divhi3"), "narrowed:\n{text}");
+    let setup =
+        "  lda #0\n  sta rc2\n  lda #$80\n  sta rc3\n  lda #$FF\n  sta rc4\n  lda #$FF\n  sta rc5\n  jsr high\n";
+    assert_eq!(common::run_with("narrow-div-min", setup, &without_equates(&text)), 0x80);
+}
+
+/// A call result whose callee returns `range(i32 -30010, 30011)` fits a word
+/// (recpow at -O1, whose `srem` of such results called `__modsi3`): the range
+/// is the sign bits of the result, so the remainder is the word routine. The
+/// callee is opaque (hand-written, returning -12345 in A, X, rc2, rc3) and the
+/// level is -O0, where no correlated-propagation narrows it first;
+/// -12345 % 1000 = -345, low byte 0xA7.
+#[test]
+fn a_remainder_of_a_result_with_a_signed_range_is_the_word_routine() {
+    let ir = module(
+        r#"declare range(i32 -30010, 30011) i32 @source()
+define i8 @rem() {
+  %v = call i32 @source()
+  %r = srem i32 %v, 1000
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let source = "source:\n  ldx #$CF\n  lda #$FF\n  sta rc2\n  sta rc3\n  lda #$C7\n  rts\n";
+    let function = format!("{}{source}", without_equates(&text));
+    assert_eq!(common::run_with("narrow-range-rem", "  jsr rem\n", &function), 0xA7);
+}
+
+/// `x > 65535` and `x < 65536` are one test of the high word. The low word of
+/// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
+/// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
+/// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+#[test]
+fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
+    let branch = |compare: &str, then: &str, other: &str| {
+        module(&format!(
+            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+        ))
+    };
+    let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();
+    let greater = assembly(&branch("ugt i32 %x, 65535", "t", "e"), &Request::new(Level::O1)).unwrap();
+    let less = assembly(&branch("ult i32 %x, 65536", "e", "t"), &Request::new(Level::O1)).unwrap();
+    for text in [&greater, &less] {
+        assert!(!text.contains("ldx #255") && !text.contains("sbc"), "a word compared with its bound:\n{text}");
+    }
+    assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
+}

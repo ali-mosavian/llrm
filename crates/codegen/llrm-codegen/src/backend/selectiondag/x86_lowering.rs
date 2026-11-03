@@ -164,6 +164,12 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
+    /// registers it is returned and passed in.
+    fn split_dword_loads(&self) -> bool {
+        self.i16_mul_chains
+    }
+
     fn pack_word_pairs(&self) -> bool {
         true
     }
