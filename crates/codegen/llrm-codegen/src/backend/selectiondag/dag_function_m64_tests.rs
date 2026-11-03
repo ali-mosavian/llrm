@@ -915,6 +915,30 @@ entry:
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
 
+/// `fptoui double to i64` at m64 compared with 2^63 and selected the offset
+/// (`ucomisd`, `jbe`, a constant kept live across every call; double_to_uint64
+/// x86_64 -O2: 250 insns against the pin's 225, the constant spilled). The
+/// pin's `LowerFP_TO_INT` converts the value and the value less 2^63 with
+/// `cvttsd2si` and takes `small | (big & (small >> 63))`: no compare.
+#[test]
+fn an_m64_unsigned_quadword_from_a_double_has_no_compare() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(double %a) {
+entry:
+  %r = fptoui double %a to i64
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    assert_eq!(names.iter().filter(|n| &***n == "cvttsd2si").count(), 2, "{names:?}");
+    assert!(names.iter().any(|n| &**n == "sar"), "{names:?}");
+    assert!(names.iter().all(|n| !n.contains("comis") && !n.starts_with("cmov") && !n.starts_with("set")), "{names:?}");
+}
+
 /// Two `long double` arguments at m64 were required in XMM0 and XMM1 (the
 /// float argument registers), so the allocator could not place an x87 value in
 /// them: "the greedy allocator could not place every range"

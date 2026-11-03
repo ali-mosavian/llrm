@@ -1597,13 +1597,27 @@ fn lower_fp_to_int(
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
         }
-        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
-        // when it is at least that, converted signed, with the sign bit put
-        // back.
-        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
-            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
-            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
-            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
+        // An unsigned `i64` at m64, or `i32` at m32
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L22424>):
+        // `cvttsd2si` sets the sign bit exactly when the value was out of
+        // range, so `small | (big & (small >> 63))` where `big` converts the
+        // value less 2^63.
+        if !signed && result_vt == pointer && matches!(result_vt, EVT::I32 | EVT::I64) {
+            let bits = result_vt.size_in_bits();
+            let limit = match (float, bits) {
+                (MVT::F32, 64) => 0x5F00_0000u128,
+                (MVT::F32, _) => 0x4F00_0000,
+                (_, 64) => 0x43E0_0000_0000_0000,
+                _ => 0x41E0_0000_0000_0000,
+            };
+            let offset = dag.get_constant_fp(limit, value_vt);
+            let small = dag.get_node(ISD::FpToSInt, result_vt, &[value]);
+            let less = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+            let big = dag.get_node(ISD::FpToSInt, result_vt, &[less]);
+            let top = dag.get_constant(u128::from(bits - 1), EVT::I8);
+            let overflown = dag.get_node(ISD::Sra, result_vt, &[small, top]);
+            let high = dag.get_node(ISD::And, result_vt, &[big, overflown]);
+            return Some(dag.get_node(ISD::Or, result_vt, &[small, high]));
         }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
