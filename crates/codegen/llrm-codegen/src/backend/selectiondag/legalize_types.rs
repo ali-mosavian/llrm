@@ -497,6 +497,48 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: load.node, res: 1 });
                 load
             }
+            op @ (ISD::SIntToFp | ISD::UIntToFp | ISD::FpExtend | ISD::FpRound) => {
+                // `SoftenFloatRes_XINT_TO_FP`, `_FP_EXTEND`, `_FP_ROUND`: the
+                // conversion routine over the operand as the integer that stands for it.
+                let operand = self.dag.operand(value, 0);
+                let from = self.dag.value_type(operand);
+                let (arg, name) = if from.is_floating_point() {
+                    let from_single = from == EVT::Simple(MVT::F32);
+                    (self.softened_float(operand), match (op, from_single) {
+                        (ISD::FpExtend, true) => "__extendsfdf2",
+                        (_, false) => "__truncdfsf2",
+                        _ => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften a conversion between these floats" }),
+                    })
+                } else {
+                    let bits = from.size_in_bits();
+                    let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+                    let arg = if bits < 32 { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
+                    let single = vt == EVT::Simple(MVT::F32);
+                    (arg, match (op == ISD::SIntToFp, bits <= 32, single) {
+                        (true, true, true) => "__floatsisf",
+                        (true, true, false) => "__floatsidf",
+                        (false, true, true) => "__floatunsisf",
+                        (false, true, false) => "__floatunsidf",
+                        _ => return Err(LegalizeError::Unsupported { op, ty: vt, what: "soften an i64 conversion" }),
+                    })
+                };
+                self.soft_c_call(name, &[arg], int, op, vt)?
+            }
+            ISD::FNeg => {
+                // `SoftenFloatRes_FNEG`: the sign bit flipped.
+                let sign = self.dag.get_constant(1u128 << (int.size_in_bits() - 1), int);
+                self.dag.get_node(ISD::Xor, int, &[self.softened_float(self.dag.operand(value, 0)), sign])
+            }
+            ISD::FAbs => {
+                // `SoftenFloatRes_FABS`: the sign bit cleared.
+                let mask = self.dag.get_constant((1u128 << (int.size_in_bits() - 1)) - 1, int);
+                self.dag.get_node(ISD::And, int, &[self.softened_float(self.dag.operand(value, 0)), mask])
+            }
+            ISD::Select => {
+                // `SoftenFloatRes_SELECT`: a select of the integers.
+                let (cond, a, b) = (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                self.dag.get_node(ISD::Select, int, &[cond, self.softened_float(a), self.softened_float(b)])
+            }
             ISD::ConstantFP => {
                 // `SoftenFloatRes_ConstantFP`: the constant's bits.
                 let NodeData::ConstFp { bits } = self.dag.node(value).data else { unreachable!("a float constant has bits") };
@@ -531,6 +573,22 @@ impl<'a> TypeLegalizer<'a> {
             }
             ISD::BitCast => self.softened_float(self.dag.operand(node, 0)),
             ISD::SetCC if at < 2 => self.soften_setcc(node)?,
+            op @ (ISD::FpToSInt | ISD::FpToUInt) => {
+                // `SoftenFloatOp_FP_TO_XINT`: the routine over the integer
+                // that stands for the float.
+                let to = self.dag.value_type(node);
+                let from_single = self.dag.value_type(self.dag.operand(node, 0)) == EVT::Simple(MVT::F32);
+                let arg = self.softened_float(self.dag.operand(node, 0));
+                let name = match (op == ISD::FpToSInt, to.size_in_bits() <= 32, from_single) {
+                    (true, true, true) => "__fixsfsi",
+                    (true, true, false) => "__fixdfsi",
+                    (false, true, true) => "__fixunssfsi",
+                    (false, true, false) => "__fixunsdfsi",
+                    _ => return Err(LegalizeError::Unsupported { op, ty: to, what: "soften an i64 conversion" }),
+                };
+                let call = self.soft_c_call(name, &[arg], EVT::I32, op, to)?;
+                if to.size_in_bits() < 32 { self.dag.get_node(ISD::Truncate, to, &[call]) } else { call }
+            }
             ISD::CopyToReg if at == 2 => {
                 // `SoftenFloatOp_COPY_TO_REG`'s effect: the integer is copied.
                 let mut ops = self.dag.node(node).ops.clone();
@@ -548,6 +606,22 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.replace_value_with(node, result);
         Ok(false)
+    }
+
+    /// `makeLibCall` of the C routine `name` over `args`, its result of type
+    /// `ret`.
+    fn soft_c_call(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        op: ISD,
+        vt: EVT,
+    ) -> Result<SDValue, LegalizeError> {
+        let arch = self.target.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften without a target" })?;
+        let env = super::libcall::CallEnv { arch, pointer: self.dag.config().pointer };
+        super::libcall::c_lib_call(self.dag, &env, name, args, ret)
+            .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "the routine cannot be called" })
     }
 
     /// `SoftenFloatOp_SETCC` over `softenSetCCOperands`: the compare as

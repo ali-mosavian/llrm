@@ -132,3 +132,37 @@ fn a_soft_float_compare_calls_the_routine_that_answers_it() {
     assert_eq!(compare_calls("one"), ["__gtsf2", "__ltsf2"]);
     assert_eq!(compare_calls("ueq"), ["__eqsf2", "__unordsf2"]);
 }
+
+fn calls_of(body: &str, params: &str, ret: &str) -> Vec<String> {
+    let declare = if body.contains("llvm.fabs") { "declare float @llvm.fabs.f32(float)\n" } else { "" };
+    let text = format!(
+        "target datalayout = \"@m16-datalayout@\"
+{declare}define {ret} @f({params}) \"use-soft-float\"=\"true\" {{
+entry:
+{body}
+}}
+"
+    );
+    let module = crate::testing::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{body}: {}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).map(|w| w.name.as_deref().unwrap_or("").to_owned()).collect();
+    assert!(names.iter().all(|name| !name.starts_with('f') || name.is_empty()), "{body}: an x87 op: {names:?}");
+    done.calls.values().cloned().collect()
+}
+
+/// Integer-to-float and float-to-integer conversions are compiler-rt's
+/// routines; negation, absolute value and select are integer operations on the
+/// bits and call nothing.
+#[test]
+fn a_soft_float_conversion_calls_its_routine_and_the_rest_call_nothing() {
+    assert_eq!(calls_of("%r = sitofp i32 %a to float\nret float %r", "i32 %a", "float"), ["__floatsisf"]);
+    assert_eq!(calls_of("%r = uitofp i32 %a to float\nret float %r", "i32 %a", "float"), ["__floatunsisf"]);
+    assert_eq!(calls_of("%r = sitofp i16 %a to float\nret float %r", "i16 %a", "float"), ["__floatsisf"]);
+    assert_eq!(calls_of("%r = fptosi float %a to i32\nret i32 %r", "float %a", "i32"), ["__fixsfsi"]);
+    assert_eq!(calls_of("%r = fptoui float %a to i32\nret i32 %r", "float %a", "i32"), ["__fixunssfsi"]);
+    assert!(calls_of("%r = fneg float %a\nret float %r", "float %a", "float").is_empty());
+    assert!(calls_of("%r = call float @llvm.fabs.f32(float %a)\nret float %r", "float %a", "float").is_empty());
+    assert!(calls_of("%r = select i1 %c, float %a, float %b\nret float %r", "i1 %c, float %a, float %b", "float").is_empty());
+}
