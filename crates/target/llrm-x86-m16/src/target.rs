@@ -101,6 +101,12 @@ impl Default for Dos {
     }
 }
 
+/// The interval of `size_milliclocks_per_byte` the Os judge accepts, bounded by
+/// lru/nib below and jpeg_single/nib above (clocks per byte, thousandths).
+const SIZE_RATE_FLOOR: i64 = 4_800;
+const SIZE_RATE_CEILING: i64 = 151_000;
+const SIZE_RATE: i64 = 10_000;
+
 impl Dos {
     /// On a 486 with the pin's tuning limits.
     pub fn pin_tuned() -> Self {
@@ -275,9 +281,16 @@ impl Machine for Dos {
             max_stores_per_memset_opt_size: 4,
             max_stores_per_memcpy_opt_size: 2,
             max_stores_per_memmove_opt_size: 2,
-            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
-            // derived.
-            size_milliclocks_per_byte: 10_000,
+            // The most clocks a byte may cost at -Os before a smaller form is
+            // refused, in thousandths. The Os judge takes bytes and clocks
+            // both strict against main, so the point must clear both
+            // bounding cells: at least `SIZE_RATE_FLOOR` keeps lru/nib's
+            // 28-byte fill (17 B smaller, +82 clk), under `SIZE_RATE_CEILING`
+            // refuses jpeg_single/nib's (4 B, +605952 clk). Within the
+            // interval the point is the round figure; the interval, not the
+            // point, is what a cell can contradict (2026-11-03 ablation, 171
+            // rows: rate 0 worsens 4 cells, 312 and 500 worsen lru/nib).
+            size_milliclocks_per_byte: SIZE_RATE,
             // The user's rate for m16 at speed (one clock is two bytes): the
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
@@ -611,5 +624,19 @@ mod encoding_tests {
         assert_eq!((register_bytes(2), register_bytes(4)), (2, 3));
         assert_eq!((shift_bytes(1, 4), shift_bytes(3, 4), shift_bytes(1, 2)), (3, 4, 2));
         assert_eq!((imul_immediate_bytes(6, 4), imul_immediate_bytes(446, 4), imul_immediate_bytes(446, 2)), (4, 7, 4));
+    }
+}
+
+#[cfg(test)]
+mod size_rate_tests {
+    use super::*;
+
+    /// The Os rate was a point "fitted" to four programs; the ablation showed
+    /// an interval: below `SIZE_RATE_FLOOR` lru/nib's smaller fill is refused
+    /// (+17 B), above `SIZE_RATE_CEILING` jpeg_single/nib's is taken (+605952
+    /// clk for 4 B).
+    #[test]
+    fn the_size_rate_stays_inside_the_interval_lru_and_jpeg_bound() {
+        assert!((SIZE_RATE_FLOOR..SIZE_RATE_CEILING).contains(&SIZE_RATE));
     }
 }
