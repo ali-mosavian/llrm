@@ -130,6 +130,12 @@ impl CombineHooks for WasmCombines {
     fn fold_and_of_extload(&self) -> bool {
         true
     }
+
+    /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
+    /// target.
+    fn simplify_demanded_add_sub_mul(&self) -> bool {
+        true
+    }
 }
 
 /// `WebAssemblyDAGToDAGISel::Select` for `CALL` and `RET_CALL`.
