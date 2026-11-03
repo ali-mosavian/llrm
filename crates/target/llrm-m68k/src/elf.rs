@@ -158,6 +158,7 @@ fn place(
                 labels.push((label, code.len()));
             }
             Item::Bytes(bytes) => code.extend_from_slice(bytes),
+            Item::Loc(_) => {}
             Item::Inst(one) => {
                 let encoded = encode(one)?;
                 pending.push((code.len(), index, encoded.fixups.clone()));

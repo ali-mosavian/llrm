@@ -43,6 +43,7 @@ fn position_independent(items: &[Item]) -> Vec<Item> {
             Item::Inst(inst) => Item::Inst(inst.clone()),
             Item::Label(name) => Item::Label(name.clone()),
             Item::Bytes(bytes) => Item::Bytes(bytes.clone()),
+            Item::Loc(place) => Item::Loc(*place),
         })
         .collect()
 }

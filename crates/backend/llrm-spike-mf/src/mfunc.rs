@@ -68,7 +68,8 @@ pub struct Inst {
     pub commutable: bool,
     /// The caller's number for the operation it was made from (the `DebugLoc`
     /// a `MachineInstr` carries); 0 for none. A clone keeps it, code the
-    /// allocator adds has none.
+    /// allocator adds has none. A target that lists its source places in
+    /// [`MFunction::places`] numbers them from 1.
     pub origin: u32,
 }
 
@@ -135,6 +136,8 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The source places the instructions' [`Inst::origin`]s number, from 1.
+    pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
 }
 
 impl<C> MFunction<C> {
@@ -145,6 +148,7 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            places: Vec::new(),
         }
     }
 

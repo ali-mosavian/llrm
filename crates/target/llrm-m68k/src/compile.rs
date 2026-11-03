@@ -25,6 +25,9 @@ pub enum Item {
     Inst(mc::Inst),
     /// Bytes placed as they are: code assembled elsewhere, or data.
     Bytes(Vec<u8>),
+    /// The source place of the instructions that follow (`.loc`): printed only
+    /// for `-g`.
+    Loc(llrm_codegen::model::lir::SrcLoc),
 }
 
 /// What the compiler may do beyond the pin's output.
@@ -47,18 +50,36 @@ pub struct Options {
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
+    /// Print the source places (`.loc`) of the instructions (`-g`).
+    pub debug: bool,
 }
 
 impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options =
-        Options { mid_end: false, size: false, source_order: false, indexed: false, push_frame: false, short: false };
+        Options {
+            mid_end: false,
+            size: false,
+            source_order: false,
+            indexed: false,
+            push_frame: false,
+            short: false,
+            debug: false,
+        };
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { mid_end: true, size: false, source_order: false, indexed: true, push_frame: true, short: true }
+        Options {
+            mid_end: true,
+            size: false,
+            source_order: false,
+            indexed: true,
+            push_frame: true,
+            short: true,
+            debug: false,
+        }
     }
 }
 
@@ -128,6 +149,7 @@ pub fn items_with(
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
+            Line::Loc(place) => Item::Loc(place),
         });
     }
     Ok(out)
@@ -188,6 +210,8 @@ pub fn text_with(
             Item::Label(label) => out.push_str(&format!("{label}:\n")),
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
+            Item::Loc(place) if options.debug => out.push_str(&format!("\t.loc\t0 {} {}\n", place.line, place.column)),
+            Item::Loc(_) => {}
         }
     }
     Ok(out)

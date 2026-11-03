@@ -512,7 +512,25 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let number = match emitter.function.places.iter().position(|one| *one == place) {
+                        Some(at) => at + 1,
+                        None => {
+                            emitter.function.places.push(place);
+                            emitter.function.places.len()
+                        }
+                    };
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
