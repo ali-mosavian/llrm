@@ -32,6 +32,15 @@ pub enum Kind {
     Far,
 }
 
+/// One operating system of a target (`[[platform]]` in `datalayout.toml`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Platform {
+    pub triple: String,
+    pub datalayout: String,
+    /// The object format the system links, by its `object.toml` name.
+    pub format: String,
+}
+
 /// A target's data layout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Layout {
@@ -42,6 +51,10 @@ pub struct Layout {
     /// The `target triple` of the LLVM IR this target takes, where it takes
     /// any.
     pub llvm_triple: Option<String>,
+    /// The other operating systems this target takes IR for: the triple a
+    /// module of theirs states, the datalayout clang prints for it, and the
+    /// object format the system links.
+    pub platforms: Vec<Platform>,
     pub spaces: AddressSpaces,
     /// The operations (`select`, `fptoui.i64`) the machine has no instruction
     /// for, which the compiler expands before selection: LLVM's
@@ -227,7 +240,22 @@ impl Layout {
             }
         };
         let llvm_triple = text("llvm_triple")?;
+        let mut platforms = Vec::new();
+        for one in value.get("platform").and_then(|list| list.as_array()).into_iter().flatten() {
+            let field = |name: &str| {
+                one.get(name)
+                    .and_then(|one| one.as_str())
+                    .map(str::to_owned)
+                    .ok_or(format!("a platform has no string `{name}`"))
+            };
+            platforms.push(Platform {
+                triple: field("triple")?,
+                datalayout: field("datalayout")?,
+                format: field("format")?,
+            });
+        }
         Ok(Self {
+            platforms,
             mode,
             datalayout,
             llvm_triple,
@@ -260,6 +288,17 @@ mod tests {
 
     /// A target found by the triple a module states needs the triple read from
     /// its description.
+    #[test]
+    fn a_layout_reads_its_platforms() {
+        let text = format!(
+            "{FLAT}\n[[platform]]\ntriple = \"x86_64-pc-windows-msvc\"\ndatalayout = \"e-m:w\"\nformat = \"coff\"\n"
+        );
+        let platforms = Layout::parse(&text).unwrap().platforms;
+        assert_eq!(platforms.len(), 1);
+        assert_eq!((platforms[0].triple.as_str(), platforms[0].format.as_str()), ("x86_64-pc-windows-msvc", "coff"));
+        assert!(Layout::parse(FLAT).unwrap().platforms.is_empty());
+    }
+
     #[test]
     fn a_layout_reads_its_llvm_triple() {
         let text = format!("llvm_triple = \"x86_64-unknown-linux-gnu\"\n{FLAT}");
