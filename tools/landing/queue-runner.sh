@@ -40,9 +40,14 @@ while true; do
   if [ "${RED_TIP:-1}" = 1 ]; then
     tip=$(git -C "$W" rev-parse "origin/$LAND_BRANCH" 2>/dev/null); G="${LAND_TMP:-/tmp/landing}/tip-green.sha"; S="${LAND_TMP:-/tmp/landing}/tip-stop.txt"
     if [ -n "$tip" ] && [ "$tip" != "$(cat "$G" 2>/dev/null)" ]; then
-      crates=$([ -s "$G" ] && tip_crates "$(cat "$G")" "$tip" 2>/dev/null || true)
-      out=$( (cd "$W" && git checkout -q --detach "$tip" && CARGO_TARGET_DIR="$T" cargo test --release ${crates:---workspace} --lib 2>&1) )
-      if stop=$(red_tip "$HERE/red-allow.txt" <<<"$out"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
+      (cd "$W" && git checkout -q --detach "$tip") 2>/dev/null
+      # the packages changed since the last green tip and everything depending on them; none (only tooling changed) runs nothing
+      crates=--workspace; [ -s "$G" ] && crates=$(cd "$W" && tip_crates "$(cat "$G")" "$tip" 2>/dev/null)
+      out=; rc=0
+      if [ -n "$crates" ]; then
+        out=$( (cd "$W" && CARGO_TARGET_DIR="$T" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
+      fi
+      if stop=$(red_tip "$HERE/red-allow.txt" "$rc" <<<"$out"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
     fi
     [ -f "$S" ] && { cat "$S"; sleep 300; continue; }
   fi
