@@ -1420,7 +1420,21 @@ fn may_address_frame(parts: &[InlinePart]) -> bool {
             0x1E | 0x07 | 0xFD | 0xFC | 0xF3 | 0x66 | 0xA4 | 0xA5 => at += 1,
             // `add r, imm8`, `mov r, r`: register operands only (mod = 11)
             0x83 if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 3,
-            0x89 | 0x8B if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 2,
+            // A register-form ALU op, `test`, `xchg` or `mov` (`add r, r`,
+            // `xor`, `sbb`, `sub`, `cmp`, ...): mod = 11
+            0x01 | 0x03 | 0x09 | 0x0B | 0x11 | 0x13 | 0x19 | 0x1B | 0x21 | 0x23 | 0x29 | 0x2B | 0x31 | 0x33
+            | 0x39 | 0x3B | 0x85 | 0x87 | 0x89 | 0x8B
+                if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) =>
+            {
+                at += 2
+            }
+            // `not`, `neg`, `mul`, `imul`, `div`, `idiv` of a register
+            0xF7 if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3 && (modrm >> 3) & 7 >= 2) => at += 2,
+            // `push r`, `pop r`: the blob saves a register it borrows (the
+            // frame register too) and gives it back
+            0x50..=0x5F => at += 1,
+            // short `jcc`/`jmp` inside the blob
+            0x70..=0x7F | 0xEB => at += 2,
             _ => return true,
         }
     }
@@ -3526,6 +3540,21 @@ mod tests {
     /// The first line of a join is a statement when a predecessor ends on
     /// another line; ours marked no row `ForceStmt`, so a row on the line of
     /// the one before it was never a statement, whichever way control came.
+    /// The i64 `sdiv` expansion (register-form ALU ops, `div`, short jumps,
+    /// `push ebp`/`pop ebp`) has no memory operand; `may_address_frame` read it
+    /// as one and kept `push bp; mov bp, sp` on `main_` (data_int64 -Os +4 B).
+    #[test]
+    fn the_inline_i64_division_does_not_address_the_frame() {
+        let blob = [
+            0x66, 0x55, 0x66, 0x89, 0xd5, 0x66, 0x01, 0xed, 0x66, 0x19, 0xed, 0x66, 0x31, 0xe8, 0x66, 0x31, 0xea, 0x66,
+            0x29, 0xe8, 0x66, 0x19, 0xea, 0x66, 0x31, 0xc9, 0x66, 0x39, 0xda, 0x73, 0x0b, 0x66, 0xf7, 0xf3, 0x66, 0x89,
+            0xd3, 0x66, 0x89, 0xca, 0xeb, 0x1d, 0x66, 0x5d,
+        ];
+        assert!(!may_address_frame(&[InlinePart::Bytes(blob.to_vec())]));
+        // a memory operand (`mov eax, [bp+4]`) still does
+        assert!(may_address_frame(&[InlinePart::Bytes(vec![0x66, 0x8b, 0x46, 0x04])]));
+    }
+
     #[test]
     fn a_block_whose_predecessor_ends_on_another_line_is_forced() {
         // 1 (line 4) -> 3 (line 6) <- 2 (line 5); 2 (line 5) -> 4 (line 5)
