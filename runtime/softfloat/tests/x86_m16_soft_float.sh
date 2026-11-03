@@ -1,0 +1,41 @@
+#!/bin/bash
+# usage: tests/x86_m16_soft_float.sh [NV] [BENCH_DIR] -> bench program sfm16_float: plain float C (+ - * / compares, int<->float) over NV vectors with the
+# soft-float library flattened beside it (SF_INTABI). Build with LLRM_BENCH_FLAGS=-msoft-float; the expected output is the same program on the host FPU (SSE, round to nearest).
+set -e
+cd "$(dirname "$0")/.."
+NV=${1:-400}; B=${2:-$(cd ../.. && pwd)/bench}; T=$(mktemp -d); trap 'rm -r $T' EXIT
+n=sfm16_float; mkdir -p $B/$n
+cc -O2 -ffp-contract=off tests/gen_vectors.c -o $T/gen && $T/gen $NV | sed 's/uint32_t/unsigned long/' > $T/vectors.h
+printf '#include <stdio.h>\nvoid report(long v) { printf("%%ld\\n", v); }\n' > $T/rep.c
+{ echo 'extern void report(long value);'
+  echo 'typedef unsigned char sfu8; typedef signed char sfi8; typedef short sfi16; typedef unsigned short sfu16; typedef long sfi32; typedef unsigned long sfu32; typedef unsigned long long sfu64; typedef long long sfi64;'
+  echo '#define UINT32_C(x) x##ul'; echo '#define UINT64_C(x) x##ull'; echo '#define INT32_MAX 2147483647L'; echo '#define INT32_MIN (-2147483647L-1)'; echo '#define UINT32_MAX 4294967295ul'
+  echo '#ifdef __SOFT_LIB'
+  for f in include/softfloat.h include/sf_helpers.h src/sf32.c src/sf32_conv.c; do
+    sed -E '/#include <(stdint|stddef|limits)\.h>/d; /#include "(softfloat|sf_helpers|sf_int)\.h"/d; s/\buint8_t\b/sfu8/g; s/\bint8_t\b/sfi8/g; s/\buint16_t\b/sfu16/g; s/\bint16_t\b/sfi16/g; s/\buint32_t\b/sfu32/g; s/\bint32_t\b/sfi32/g; s/\buint64_t\b/sfu64/g; s/\bint64_t\b/sfi64/g' $f
+  done | awk 'BEGIN{print "#define SF_INTABI 1"} {print}'
+  echo '#endif'
+  cat $T/vectors.h
+  cat <<'C'
+static float bits(unsigned long u) { union { unsigned long u; float f; } x; x.u = u; return x.f; }
+static unsigned long canon(float f) { union { unsigned long u; float f; } x; if (f != f) return 0x7FC00000ul; x.f = f; return x.u; }
+long bench_sfm16_float(int n)
+{
+    int i;
+    unsigned long acc = 0;
+    for (i = 0; i < n; ++i) {
+        float a = bits(V[i][0]), b = bits(V[i][1]);
+        acc += canon(a + b) + 3 * canon(a - b) + 5 * canon(a * b) + 7 * canon(a / b);
+        acc += (a < b) + 2 * (a == b) + 4 * (a > b) + 8 * (a != b) + 16 * (a <= b) + 32 * (a >= b);
+        if (((V[i][0] >> 23) & 0xFF) < 127 + 30) acc += (long)a;
+        acc += canon((float)(long)V[i][1]);
+    }
+    return (long)acc;
+}
+int main(void) { report(bench_sfm16_float(NV)); return 0; }
+C
+} > $B/$n/$n.c
+printf 'description = "%s: plain float C over %s vectors, soft-float library flattened"\nrepetitions = 1\n\n[region]\nc = "bench_%s"\n' "$n" "$NV" "$n" > $B/$n/bench.toml
+sed -i '1i #define __SOFT_LIB 1' $B/$n/$n.c
+gcc -m32 -msse2 -mfpmath=sse -O0 -w -U__SOFT_LIB $B/$n/$n.c $T/rep.c -o $T/ref && $T/ref > $B/$n/$n.out
+echo "wrote $B/$n expected $(cat $B/$n/$n.out)"
