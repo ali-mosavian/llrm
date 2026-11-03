@@ -385,7 +385,10 @@ fn long_double_constant_width(constant: &str) -> u32 {
 #[test]
 fn a_long_double_constant_is_read_at_the_narrowest_exact_width() {
     assert_eq!(long_double_constant_width("10000.0"), 4);
-    assert_eq!(long_double_constant_width("0.00005"), 8);
+    // 2^24 + 1 is a double and not a float.
+    assert_eq!(long_double_constant_width("16777217.0"), 8);
+    // A decimal x86_fp80 literal is read at 64 bits, not through a double: 0.00005 is no double's value.
+    assert_eq!(long_double_constant_width("0.00005"), 10);
 }
 
 const LONG_DOUBLE_SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
