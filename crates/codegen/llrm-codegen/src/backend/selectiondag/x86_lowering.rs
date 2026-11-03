@@ -1597,13 +1597,27 @@ fn lower_fp_to_int(
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
         }
-        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
-        // when it is at least that, converted signed, with the sign bit put
-        // back.
-        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
-            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
-            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
-            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
+        // An unsigned result as wide as the pointer: `cvttss2si` sets the sign
+        // bit exactly when the value is out of its signed range, so that bit
+        // picks the conversion of the value less 2^(n-1) to put under it
+        // (`LowerFP_TO_INT`).
+        if !signed && result_vt == pointer {
+            let bits = result_vt.size_in_bits();
+            // 2^(n-1) as the float type's bit pattern.
+            let limit = match (float, bits) {
+                (MVT::F32, 32) => 0x4F00_0000u128,
+                (MVT::F32, _) => 0x5F00_0000,
+                (_, 32) => 0x41E0_0000_0000_0000,
+                _ => 0x43E0_0000_0000_0000,
+            };
+            let offset = dag.get_constant_fp(limit, value_vt);
+            let small = dag.get_node(ISD::FpToSInt, result_vt, &[value]);
+            let reduced = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+            let big = dag.get_node(ISD::FpToSInt, result_vt, &[reduced]);
+            let shift = dag.get_constant(u128::from(bits - 1), EVT::I8);
+            let overflown = dag.get_node(ISD::Sra, result_vt, &[small, shift]);
+            let picked = dag.get_node(ISD::And, result_vt, &[big, overflown]);
+            return Some(dag.get_node(ISD::Or, result_vt, &[small, picked]));
         }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
