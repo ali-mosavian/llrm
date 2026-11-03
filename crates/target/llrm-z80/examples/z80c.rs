@@ -35,7 +35,7 @@ fn main() {
         .collect();
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
-        module.push_str(&format!("\t.globl _{name}\n"));
+        module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
         match text(&ir, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => eprintln!("REFUSED @{name}: {why}"),
@@ -45,4 +45,8 @@ fn main() {
         std::fs::write(path, llrm_z80::driver::adb(&ir, &request).unwrap_or_default()).expect("writes the .adb");
     }
     print!("{}", inline_sole_uses(&module, llrm_z80::RUNTIME));
+    match llrm_z80::data::text(&ir, &request) {
+        Ok(data) => print!("{data}"),
+        Err(why) => eprintln!("REFUSED data: {why}"),
+    }
 }
