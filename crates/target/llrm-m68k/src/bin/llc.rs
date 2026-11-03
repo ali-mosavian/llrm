@@ -1,4 +1,4 @@
-//! `llrm-m68k-llc -S [-mcpu=68000|68020] [-O<n>] [--dump DIR] [-o OUT]
+//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-O<n>] [--dump DIR] [-o OUT]
 //! FILE.ll`: LLVM IR from clang's front end alone through the mid-end and the
 //! m68k backend to assembly text. Stops at `-S`: there is no object writer
 //! behind this driver.
@@ -48,7 +48,7 @@ fn run() -> i32 {
     }
     let Some(input) = input.filter(|_| assembly) else {
         eprintln!(
-            "usage: llrm-m68k-llc -S [-g] [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
+            "usage: llrm-m68k-llc -S [-g] [-mcpu=68000|..|68060] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
         );
         return 2;
     };
