@@ -323,6 +323,8 @@ pub struct Segment {
     pub fixups: Vec<Fixup>,
     /// (source line, offset) of each line's first code, in order.
     pub lines: Vec<(SrcLoc, usize)>,
+    /// Where a line row is a statement whatever the row before it says.
+    pub forced: Vec<usize>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The declared call frame information and where it stands.
@@ -349,6 +351,7 @@ impl Segment {
             spans: Vec::new(),
             fixups: Vec::new(),
             lines: Vec::new(),
+            forced: Vec::new(),
             bodies: Vec::new(),
             cfi: Vec::new(),
             seh: Vec::new(),
@@ -364,6 +367,7 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
+            masm::Mark::ForceStmt => self.forced.push(self.image.len()),
             masm::Mark::Declared => self.declared.push(self.image.len()),
             bound => self.bodies.push((bound, self.image.len())),
         }
@@ -512,7 +516,10 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     let mut pending: Vec<usize> = (0..units.len()).filter(|&index| kept[index]).collect();
     while let Some(index) = pending.pop() {
         for item in &units[index].2 {
-            if let masm::Datum::Pointer(masm::Pointer { name, .. }) | masm::Datum::SegmentWord(name) = item {
+            if let masm::Datum::Pointer(masm::Pointer { name, .. })
+            | masm::Datum::SegmentWord(name)
+            | masm::Datum::Difference(masm::Difference { name, .. }) = item
+            {
                 reached.insert(_target(name).to_owned());
             }
         }
@@ -641,6 +648,17 @@ fn stack_probed(
     module
 }
 
+/// [`built`] for the writer of `format`: what that format's object holds.
+pub fn built_for(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, format, objects)
+}
+
 fn built_inner(
     module: &masm::Module,
     source: &str,
@@ -672,7 +690,11 @@ fn built_inner(
         .collect();
     let mut named: IndexMap<String, Segment> =
         IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", Role::Data, true))]);
-    for (name, _items) in &module.data {
+    // The pin keeps a Mach-O x86-64 jump table in `__text`, after the code: the
+    // labels it differences are then in its own section and need no relocation.
+    let in_text =
+        |name: &str| format == Format::MachO && module.object.code_model() == CodeModel::Flat64 && name == "CONST";
+    for (name, _items) in module.data.iter().filter(|(name, _)| !in_text(name)) {
         if !named.contains_key(name) {
             named.insert(
                 name.clone(),
@@ -687,7 +709,7 @@ fn built_inner(
         segments.push(stack);
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
-    for (name, items) in &module.data {
+    for (name, items) in module.data.iter().filter(|(name, _)| !in_text(name)) {
         let index = segments
             .iter()
             .position(|one| &one.name == name)
@@ -705,6 +727,9 @@ fn built_inner(
             &mut sizes,
             asm_info(objects, format).pref_align,
         )?;
+    }
+    for (_, items) in module.data.iter().filter(|(name, _)| in_text(name)) {
+        _data(&mut segments[0], 0, items, &mut symbols, module.object.code_model());
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
@@ -772,6 +797,26 @@ pub fn _data(
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
             masm::Datum::SegmentWord(name) => segment.put(&[0, 0], &[Fixup::new(0, BASE, name.clone())]),
+            // `name - base`: the pc-relative fixup is `name - slot`, so the
+            // field holds `slot - base`.
+            masm::Datum::Difference(masm::Difference { name, base }) => {
+                let slot = segment.image.len();
+                let table = symbols[base].1;
+                match symbols.get(name) {
+                    // Both in this segment: the assembler's answer, no
+                    // relocation (Mach-O keeps the table in `__text`).
+                    Some(&(at, offset)) if at == index => {
+                        segment.put(&[0; 4], &[]);
+                        segment.image[slot..slot + 4]
+                            .copy_from_slice(&((offset as i64 - table as i64) as i32).to_le_bytes());
+                    }
+                    _ => {
+                        segment.put(&[0; 4], &[Fixup::new(0, Fix::pc_rel(4, 0), name.clone())]);
+                        segment.image[slot..slot + 4]
+                            .copy_from_slice(&((slot as i64 - table as i64) as i32).to_le_bytes());
+                    }
+                }
+            }
         }
     }
 }
@@ -1572,6 +1617,71 @@ mod tests {
             (segment.fixups[1].at, segment.fixups[1].kind, segment.fixups[1].name.as_str()),
             (2, BASE, "DGROUP")
         );
+    }
+
+    /// A position-independent jump table's entry is `name - table` in four
+    /// bytes: the slot is a pc-relative fixup to the code label, and its field
+    /// carries `slot - table`, so the linker's `S + A - P` is `name -
+    /// table`. A pointer-wide absolute entry (a PIE refuses) was all there was.
+    #[test]
+    fn test_a_table_entry_is_a_pc_relative_difference_from_the_table() {
+        let mut segment = Segment::new(".rodata", Role::Data, true);
+        let mut symbols = IndexMap::default();
+        let entry = |name: &str| masm::Datum::Difference(masm::Difference { name: name.into(), base: "$J1".into() });
+        let items = [
+            masm::Datum::Bytes(vec![9, 9]),
+            masm::Datum::Align(masm::Align { to: 4 }),
+            label("$J1"),
+            entry("L0"),
+            entry("L1"),
+        ];
+        _data(&mut segment, 0, &items, &mut symbols, CodeModel::Flat64);
+        assert_eq!(symbols["$J1"], (0, 4));
+        assert_eq!(segment.image.len(), 12);
+        let fixups: Vec<_> = segment.fixups.iter().map(|f| (f.at, f.name.as_str())).collect();
+        assert_eq!(fixups, [(4, "L0"), (8, "L1")]);
+        assert_eq!(&segment.image[4..12], &[0, 0, 0, 0, 4, 0, 0, 0]);
+    }
+
+    /// A table jump through a register names its table by the jump's
+    /// `table_id` (no memory cell to take it from) and gets entries that are
+    /// differences from the table: `jump_tables` found none and the symbol was
+    /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
+    #[test]
+    fn test_a_register_table_jump_gets_a_table_of_differences() {
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8 });
+        let jump = Semantics {
+            indirect: true,
+            table: vec![1, 2],
+            table_id: Some(7),
+            ..semantics(Operation::Jump, "jmp", vec![], vec![held])
+        };
+        let procedure = procedure(
+            "_f",
+            false,
+            body(
+                "f",
+                vec![
+                    block(0, vec![insn(0, jump)], vec![1, 2]).into(),
+                    block(1, vec![], vec![]).into(),
+                    block(2, vec![], vec![]).into(),
+                ],
+            ),
+            0,
+            vec![],
+        );
+        let module = llrm_mir::parse::module("target datalayout = \"e-p:64:64\"\n").unwrap();
+        let mut names = IndexMap::default();
+        let data = masm::jump_tables(&[procedure], &mut names, &module);
+        assert_eq!(names[&(Space::Segment, 7)], "$J7");
+        let entries: Vec<_> = data
+            .iter()
+            .filter_map(|datum| match datum {
+                masm::Datum::Difference(masm::Difference { base, .. }) => Some(base.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(entries, ["$J7", "$J7"]);
     }
 
     /// Fresh QB D_SURF retained 83 jumps whose target label was physically
