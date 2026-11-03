@@ -249,14 +249,17 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         st: SDValue,
     ) -> bool {
-        // "Always perform this optimization before types are legal"; no
-        // x86 type asks to merge after (`mergeStoresAfterLegalization`).
-        if self.level >= CombineLevel::AfterLegalizeTypes || self.opt_none {
+        if self.opt_none {
             return false;
         }
         let Some(tli) = self.tli else { return false };
         let NodeData::Mem(info) = self.dag.node(st).data else { return false };
         let mem = info.mem_vt;
+        // "Always perform this optimization before types are legal. If the
+        // target prefers, also try this after legalization".
+        if self.level >= CombineLevel::AfterLegalizeTypes && !self.hooks.merge_stores_after_legalization(mem) {
+            return false;
+        }
         let widest = [8u32, 16, 32, 64]
             .into_iter()
             .filter(|&bits| tli.types.is_type_legal(EVT::integer(bits)))

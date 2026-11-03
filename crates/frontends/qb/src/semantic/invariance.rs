@@ -14,6 +14,10 @@
 //! RESUME could run it again. The words are then final once the entry block
 //! has run, so every descriptor-word load after it is invariant. A load in
 //! the entry block itself is not stated: it may precede a DIM.
+//!
+//! A frame array (a constant-bound local DIM) may be DIM'd in any procedure:
+//! its descriptor is written by the stores at its DIM, which no loop or
+//! recursion repeats and every use follows, and nothing moves it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,7 +75,13 @@ pub(super) fn all_far(compiler: &Compiler) -> bool {
         .iter()
         .flat_map(|function| &function.blocks)
         .flat_map(|block| &block.instructions)
-        .all(|one| !matches!(one.tag, Some(Tag::Allocate(_) | Tag::Reallocate(_))) || super::shapes::far(&one.operands))
+        .all(
+            |one| match &one.tag {
+                Some(Tag::Allocate(shape)) if shape.frame => true,
+                Some(Tag::Allocate(_) | Tag::Reallocate(_)) => super::shapes::far(&one.operands),
+                _ => true,
+            },
+        )
 }
 
 fn proven(compiler: &Compiler) -> bool {
@@ -88,7 +98,10 @@ fn proven(compiler: &Compiler) -> bool {
                     // not seen; every call of one is an `Invoke`.
                     !matches!(one.tag, Some(Tag::Reallocate(_) | Tag::Release { .. }))
                         && !one.callee.as_deref().is_some_and(llrm_codegen::abi::runtime::semantics::moves_far_heap)
-                        && (!matches!(one.tag, Some(Tag::Allocate(_))) || (main && block.id == ENTRY))
+                        && match &one.tag {
+                            Some(Tag::Allocate(shape)) => shape.frame || (main && block.id == ENTRY),
+                            _ => true,
+                        }
                         && !matches!(
                             &one.tag,
                             Some(Tag::Invoke { .. }) if one.callee.is_none() && !defined(compiler, function, one.id)
