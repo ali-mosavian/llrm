@@ -41,9 +41,10 @@ exit:
 
 /// The exit reads the loop-carried value as it was on entry to the last trip,
 /// so the latch's copy into that register would overwrite it (the lost copy):
-/// the pin writes a temporary per phi; here the edge keeps its own block.
+/// the edge copies into a temporary per phi, as the pin does, and the loop's
+/// back edge stays the latch's own branch.
 #[test]
-fn a_loop_carried_value_the_exit_reads_keeps_its_edge_block() {
+fn a_loop_carried_value_the_exit_reads_needs_no_edge_block() {
     let ir = r#"
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
 define double @f(i32 %n) {
@@ -66,5 +67,5 @@ exit:
     let asm = driver::assembly(ir, Platform::Darwin, true).expect("lowers");
     assert!(asm.contains("fmov d"), "{asm}");
     let jumps = asm.lines().filter(|l| l.trim_start().starts_with("b ")).count();
-    assert_eq!(jumps, 1, "{asm}");
+    assert_eq!(jumps, 0, "{asm}");
 }

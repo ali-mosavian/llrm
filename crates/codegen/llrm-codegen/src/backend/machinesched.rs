@@ -571,8 +571,8 @@ pub fn graph(
 }
 
 impl Graph {
-    /// A graph of `preds` (for each instruction, the earlier ones that must stay
-    /// before it, with `succs` their inverse and `latencies` the edge
+    /// A graph of `preds` (for each instruction, the earlier ones that must
+    /// stay before it, with `succs` their inverse and `latencies` the edge
     /// latencies), no edge weak.
     pub fn new(
         preds: Vec<Vec<usize>>,
@@ -624,10 +624,10 @@ struct Occurrences {
 }
 
 impl Occurrences {
-    fn of(insns: &[Arc<Insn>]) -> Occurrences {
+    fn of(nodes: &[Node]) -> Occurrences {
         let mut found = Occurrences::default();
-        for (at, one) in insns.iter().enumerate() {
-            for (list, values) in [(&mut found.reads, &one.uses), (&mut found.defs, &one.defines)] {
+        for (at, one) in nodes.iter().enumerate() {
+            for (list, values) in [(&mut found.reads, one.uses), (&mut found.defs, one.defines)] {
                 for &value in values.iter() {
                     let positions = list.entry(value).or_default();
                     if positions.last() != Some(&at) {
@@ -703,6 +703,14 @@ fn copy_of(one: &Insn) -> Option<(u32, u32)> {
     }
 }
 
+/// What `CopyConstrain` needs of an instruction: the values it reads and
+/// writes, and (dst, src) when it is a copy of one value to another.
+pub struct Node<'a> {
+    pub uses: &'a [u32],
+    pub defines: &'a [u32],
+    pub copy: Option<(u32, u32)>,
+}
+
 /// `CopyConstrain::apply` (MachineScheduler.cpp#L2298): for a copy with a
 /// local end and a global one, weak edges that open a hole in the global
 /// register's range, so the copy's local uses stay beside the copy and it
@@ -712,10 +720,21 @@ pub fn copy_constrain(
     graph: &mut Graph,
     live_out: &dyn Fn(u32) -> bool,
 ) {
-    let occurrences = Occurrences::of(insns);
+    let nodes: Vec<Node> =
+        insns.iter().map(|one| Node { uses: &one.uses, defines: &one.defines, copy: copy_of(one) }).collect();
+    copy_constrain_nodes(&nodes, graph, live_out);
+}
+
+/// [`copy_constrain`] over nodes known by their values alone.
+pub fn copy_constrain_nodes(
+    nodes: &[Node],
+    graph: &mut Graph,
+    live_out: &dyn Fn(u32) -> bool,
+) {
+    let occurrences = Occurrences::of(nodes);
     let mut ranges: HashMap<u32, (Vec<Segment>, Vec<usize>)> = HashMap::default();
-    for (copy, one) in insns.iter().enumerate() {
-        let Some((dst, src)) = copy_of(one) else { continue };
+    for (copy, one) in nodes.iter().enumerate() {
+        let Some((dst, src)) = one.copy else { continue };
         for value in [dst, src] {
             ranges.entry(value).or_insert_with(|| segments_of(&occurrences, value, live_out(value)));
         }
@@ -900,24 +919,21 @@ pub fn bottom_up_region(
     // `RegionPressure` (program order) and `RegionCriticalPSets`.
     let mut region_max: Vec<u32> = Vec::new();
     let mut critical: Vec<PressureChange> = Vec::new();
-    let mut tracker = tracking
-        .map(
-            |(tracking, region)| {
-                let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
-                for node in (0..n).rev() {
-                    program.place(node);
-                }
-                region_max = program.max().to_vec();
-                critical = Tracker::critical_sets(tracking.model, &region_max);
-                Tracker::over(
-                    tracking.model,
-                    region,
-                    tracking.live_out.iter().copied(),
-                    tracking.live_thru.iter().copied(),
-                    true,
-                )
-            },
-        );
+    let mut tracker = tracking.map(|(tracking, region)| {
+        let mut program = Tracker::over(tracking.model, region, tracking.live_out.iter().copied(), [], false);
+        for node in (0..n).rev() {
+            program.place(node);
+        }
+        region_max = program.max().to_vec();
+        critical = Tracker::critical_sets(tracking.model, &region_max);
+        Tracker::over(
+            tracking.model,
+            region,
+            tracking.live_out.iter().copied(),
+            tracking.live_thru.iter().copied(),
+            true,
+        )
+    });
     while placed.len() < n {
         let mut best = 0;
         let mut why = "ONLY1";

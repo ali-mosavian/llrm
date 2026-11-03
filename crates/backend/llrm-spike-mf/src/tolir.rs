@@ -1387,6 +1387,12 @@ pub fn allocate_greedy<T: Target>(
     let mut converted = to_lir::<T>(function, registers)?;
     if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
         converted.coalesce(registers, size);
+        // The pin schedules after the coalescer: the joined copies are gone.
+        let survivor = |value: u32| converted.joined().survivor(value);
+        if T::schedule(function, &survivor) {
+            converted = to_lir::<T>(function, registers)?;
+            converted.coalesce(registers, size);
+        }
     }
     let order = |value: u32| converted.order(value);
     let inputs = ShadowInputs { size, ..converted.inputs(registers, &order) };

@@ -13,21 +13,30 @@
 //! the pressure of the two register files followed in a region of more than
 //! half the general registers.
 //!
-//! DEVIATE A64-MS1: the pin schedules arm64 bidirectionally with the apple-m1
-//! model (`AArch64Subtarget::overrideSchedPolicy`: `OnlyTopDown` and
+//! Copies get the pin's weak edges (`CopyConstrain`), which keep a copy's local
+//! uses beside it so the allocator can coalesce it.
+//!
+//! It runs after the coalescer, as the pin does (`Target::schedule` in
+//! `allocate_greedy`): the function it orders has the joined values renamed and
+//! their copies gone, and the coalescer runs again on the result. The phis
+//! copy through a temporary per phi (`PHIElimination`) so the new value of a
+//! loop-carried register can be made in the old one's.
+//!
+//! DEVIATE A64-MS1: the pin schedules arm64 bidirectionally on the default
+//! cpu's model (`AArch64Subtarget::overrideSchedPolicy`: `OnlyTopDown` and
 //! `OnlyBottomUp` off, latency and resources); this is the bottom-up pass the
-//! x86 targets run, with no latency or resource. Weak copy edges
-//! (`copy_constrain`) are not made either. Exit: bidirectional
-//! `GenericScheduler`, 2026-11-20.
+//! x86 targets run, with no latency or resource. `-misched-prera-direction=
+//! bottomup` gives the pin the same movs on `recmany` (10, bidirectional 10).
+//! Exit: bidirectional `GenericScheduler`, 2026-11-20.
 //!
 //! # See also
-//! `llrm_codegen::backend::machinesched` (the pass), `lir_view` (runs it
-//! before allocation).
+//! `llrm_codegen::backend::machinesched` (the pass), `lir_view` (the
+//! hook), `dag::emit` (the phi copies).
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use llrm_codegen::backend::machinesched::{Graph, Tracking, bottom_up_region};
+use llrm_codegen::backend::machinesched::{Graph, Node, Tracking, bottom_up_region, copy_constrain_nodes};
 use llrm_codegen::backend::regpressure::{Model, Region};
 use llrm_spike_mf::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 
@@ -65,6 +74,59 @@ fn boundary(inst: &Inst) -> bool {
                 Operand::Def(Reg::Phys(id)) | Operand::Use(Reg::Phys(id)) if *id != crate::reg::XZR && *id != crate::reg::SP
             )
         })
+}
+
+/// `function` as the coalescer leaves it: each value is the one that stands
+/// for it (of the class both could take) and a copy of a value to itself is
+/// gone, as the pin has deleted it before it schedules.
+fn joined(
+    function: &MFunction<Class>,
+    survivor: &dyn Fn(u32) -> u32,
+) -> MFunction<Class> {
+    let mut seen = function.clone();
+    let known = function.classes.len() as u32;
+    // A value joined into a register of the machine stays as it is.
+    let stands = |n: u32| match survivor(n + 1) {
+        one if one >= 1 && one <= known => one - 1,
+        _ => n,
+    };
+    for n in 0..known {
+        let to = stands(n);
+        if to != n {
+            let (one, other) = (seen.classes[to as usize], seen.classes[n as usize]);
+            seen.classes[to as usize] = match (one, other) {
+                (Class::Fpr, Class::Quad) | (Class::Quad, Class::Fpr) => Class::Quad,
+                _ => one,
+            };
+        }
+    }
+    for block in seen.blocks.iter_mut() {
+        for inst in block.insts.iter_mut() {
+            for operand in inst.operands.iter_mut() {
+                match operand {
+                    Operand::Def(Reg::Virt(n)) | Operand::Use(Reg::Virt(n)) => *n = stands(*n),
+                    _ => {}
+                }
+            }
+        }
+        block
+            .insts
+            .retain(
+                |inst| !matches!(
+                    (inst.kind, inst.operands.as_slice()),
+                    (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) if dst == src
+                ),
+            );
+    }
+    seen
+}
+
+/// The (destination, source) of a copy of one virtual register to another.
+fn copy_of(inst: &Inst) -> Option<(u32, u32)> {
+    match (inst.kind, inst.operands.as_slice()) {
+        (Kind::Copy, [Operand::Def(Reg::Virt(dst)), Operand::Use(Reg::Virt(src))]) if dst != src => Some((*dst, *src)),
+        _ => None,
+    }
 }
 
 /// The edges of a region, by position in it (`ScheduleDAGInstrs`).
@@ -133,9 +195,7 @@ fn successors<C>(
             _ => None,
         })
         .collect();
-    if !block.insts.last().is_some_and(|last| last.barrier)
-        && at + 1 < function.blocks.len()
-    {
+    if !block.insts.last().is_some_and(|last| last.barrier) && at + 1 < function.blocks.len() {
         out.push(at + 1);
     }
     out.sort_unstable();
@@ -191,14 +251,17 @@ fn model(function: &MFunction<Class>) -> Model {
 }
 
 /// `function` with each region of each block ordered; whether anything moved.
-pub fn schedule(function: &mut MFunction<Class>) -> bool {
+pub fn schedule(
+    function: &mut MFunction<Class>,
+    survivor: &dyn Fn(u32) -> u32,
+) -> bool {
     if function.blocks.iter().all(|block| block.insts.len() < 2) {
         return false;
     }
-    let live = live_out(function);
-    let model = model(function);
-    let mut changed = false;
-    for (at, block) in function.blocks.iter_mut().enumerate() {
+    let mut seen = joined(function, survivor);
+    let live = live_out(&seen);
+    let model = model(&seen);
+    for (at, block) in seen.blocks.iter_mut().enumerate() {
         let mut regions: Vec<std::ops::Range<usize>> = Vec::new();
         let mut start = None;
         for (index, inst) in block.insts.iter().enumerate() {
@@ -239,23 +302,34 @@ pub fn schedule(function: &mut MFunction<Class>) -> bool {
                         (uses, defs)
                     })
                     .collect();
-                let region_model = Region::from_nodes(nodes.iter().map(|(uses, defs)| (uses.as_slice(), defs.as_slice())));
+                let region_model =
+                    Region::from_nodes(nodes.iter().map(|(uses, defs)| (uses.as_slice(), defs.as_slice())));
                 let tracking = (slice.len() > GPR_LIMIT as usize / 2).then(|| {
                     let mut live_out: Vec<u32> = now.iter().copied().collect();
                     live_out.sort_unstable();
                     let tied: HashSet<u32> = slice
                         .iter()
                         .flat_map(|inst| {
-                            inst.ties.iter().filter_map(move |&(def, _)| match inst.operands[def] {
-                                Operand::Def(Reg::Virt(n)) => Some(n),
-                                _ => None,
-                            })
+                            inst.ties
+                                .iter()
+                                .filter_map(
+                                    move |&(def, _)| match inst.operands[def] {
+                                        Operand::Def(Reg::Virt(n)) => Some(n),
+                                        _ => None,
+                                    },
+                                )
                         })
                         .collect();
                     let live_thru = live_out.iter().copied().filter(|value| !tied.contains(value)).collect();
                     Tracking { model: &model, live_out, live_thru }
                 });
-                let deps = graph(slice);
+                let mut deps = graph(slice);
+                let nodes: Vec<Node> = nodes
+                    .iter()
+                    .zip(slice)
+                    .map(|((uses, defs), inst)| Node { uses, defines: defs, copy: copy_of(inst) })
+                    .collect();
+                copy_constrain_nodes(&nodes, &mut deps, &|value| now.contains(&value));
                 let order = bottom_up_region(
                     slice.len(),
                     &deps,
@@ -266,7 +340,6 @@ pub fn schedule(function: &mut MFunction<Class>) -> bool {
                     for (place, &node) in order.iter().enumerate() {
                         out[region.start + place] = slice[node].clone();
                     }
-                    changed = true;
                 }
             }
             for inst in slice.iter().rev() {
@@ -276,5 +349,6 @@ pub fn schedule(function: &mut MFunction<Class>) -> bool {
         }
         block.insts = out;
     }
-    changed
+    *function = seen;
+    true
 }

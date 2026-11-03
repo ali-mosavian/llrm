@@ -92,6 +92,16 @@ pub trait Target {
         true
     }
 
+    /// The pre-RA scheduler (`MachineScheduler`), run on `function` after the
+    /// coalescer: `survivor` maps a value (a virtual register plus one) to the
+    /// one that stands for it once copies joined. Whether it moved anything.
+    fn schedule(
+        _function: &mut MFunction<Self::Class>,
+        _survivor: &dyn Fn(u32) -> u32,
+    ) -> bool {
+        false
+    }
+
     /// Whether `inst` only moves the lanes of one register into those of
     /// another (the 6502's `PACK` and `UNPACK`): its operands may share
     /// storage, a lane at a time.
