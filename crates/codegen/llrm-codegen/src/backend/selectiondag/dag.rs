@@ -478,14 +478,16 @@ impl SelectionDAG {
     }
 
     /// The jump table is position independent (`EK_LabelDifference32`, its
-    /// address a symbol operand folded into the jump's address): 64-bit code.
+    /// address a symbol operand folded into the jump's address): 64-bit code
+    /// with the "PIC Level" flag. Without it the table is the pin's static
+    /// one, a pointer per case.
     /// DEVIATE: the pin folds the table into the address at any width
     /// ([`matchWrapper`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2022),
     /// `jmpl *.LJTI0_0(,%eax,4)` at 32 bits). Reason: that changes the m16
     /// and m32 output, which this change keeps as it was. Exit: the switch
     /// lowering at m32 (x86-m32), 2026-11-20, with its own rows.
     pub fn relative_jump_tables(&self) -> bool {
-        self.config.pointer == EVT::I64
+        self.config.pointer == EVT::I64 && !self.config.absolute_symbols
     }
 
     /// How many results of other nodes read `value`'s node (`use_size`).
