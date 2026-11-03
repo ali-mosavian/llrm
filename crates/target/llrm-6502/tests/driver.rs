@@ -1065,3 +1065,27 @@ fn a_divide_of_sign_extended_words_keeps_the_long_quotient() {
         "  lda #0\n  sta rc2\n  lda #$80\n  sta rc3\n  lda #$FF\n  sta rc4\n  lda #$FF\n  sta rc5\n  jsr high\n";
     assert_eq!(common::run_with("narrow-div-min", setup, &without_equates(&text)), 0x80);
 }
+
+/// A call result whose callee returns `range(i32 -30010, 30011)` fits a word
+/// (recpow at -O1, whose `srem` of such results called `__modsi3`): the range
+/// is the sign bits of the result, so the remainder is the word routine. The
+/// callee is opaque (hand-written, returning -12345 in A, X, rc2, rc3) and the
+/// level is -O0, where no correlated-propagation narrows it first;
+/// -12345 % 1000 = -345, low byte 0xA7.
+#[test]
+fn a_remainder_of_a_result_with_a_signed_range_is_the_word_routine() {
+    let ir = module(
+        r#"declare range(i32 -30010, 30011) i32 @source()
+define i8 @rem() {
+  %v = call i32 @source()
+  %r = srem i32 %v, 1000
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let source = "source:\n  ldx #$CF\n  lda #$FF\n  sta rc2\n  sta rc3\n  lda #$C7\n  rts\n";
+    let function = format!("{}{source}", without_equates(&text));
+    assert_eq!(common::run_with("narrow-range-rem", "  jsr rem\n", &function), 0xA7);
+}

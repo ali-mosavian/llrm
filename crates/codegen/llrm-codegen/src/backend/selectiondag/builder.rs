@@ -645,6 +645,7 @@ impl<'a> Builder<'a> {
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
+            call_result_range_bits: None,
             fixed_args: 0,
             had_tail_call: false,
             volatile_memory: false,
@@ -694,6 +695,10 @@ struct Builder<'a> {
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
+    /// The signed bits a call's `range` return attribute (the call's or the
+    /// callee's, `CallBase::getRange`) leaves its result: `AssertSext` of that
+    /// width.
+    call_result_range_bits: Option<u32>,
     /// The parameters the callee declares: the arguments after them are
     /// variadic.
     fixed_args: usize,
@@ -1707,6 +1712,11 @@ impl Builder<'_> {
         }
         self.variadic_call = variadic;
         self.call_result_assert = extension_assert(&info.return_attrs);
+        self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
+            &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
+            instruction,
+        )
+        .map(|range| range.get_min_signed_bits());
         self.fixed_args = named;
         self.call_sret = info.argument_attrs.iter().map(|attrs| has_sret(attrs)).collect();
         self.call_attrs_move_arguments = match self.calling() {
@@ -2040,6 +2050,20 @@ impl Builder<'_> {
             rest = tail;
         }
         let _ = vt;
+        // Not a pin site: the pin asserts only a range that zero extends
+        // (`lowerRangeToAssertZExt`). A signed range gives the sign bits
+        // `ComputeNumSignBits` reads, so a divide of the result is narrowed
+        // ([`super::narrow_divrem`]).
+        if let Some(bits) = std::mem::take(&mut self.call_result_range_bits)
+            && !aggregate
+            && assert.is_none()
+        {
+            let wide = self.dag.value_type(leaves[0]);
+            if wide.is_integer() && bits > 0 && bits < wide.size_in_bits() {
+                let narrow = self.dag.get_value_type_node(EVT::integer(bits));
+                leaves[0] = self.dag.get_node(ISD::AssertSext, wide, &[leaves[0], narrow]);
+            }
+        }
         Ok(Some(if aggregate { self.merge(&leaves) } else { leaves[0] }))
     }
 
