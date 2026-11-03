@@ -1,4 +1,4 @@
-# z80 gcc matrix, fork spike/backends 07fdd3038 (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 f36bf45d44ac861cbf2a197f9fb49461, ucsim_z80 0.8.15, sdasz80/sdldz80 SDCC 4.5.0; levels are gcc -O1/-O2/-Os as run (no Oz); clocks=T-states, call minus empty run; bytes=linked code minus crt0 and driver, incl. hand-written helpers; bytes also count kernel _DATA tables (crc16 -O2 table, 512 B, was uncounted until 2026-11-03 04:10); CONVENTION: 16-bit results are returned in HL by gcc and DE by ours, so gcc is charged the caller's ex de,hl (+1 B +4 T +1 insn); 8-bit results in A for both; notes mark cells that call hand helpers (hand helper, not codegen)
+# z80 gcc matrix, fork spike/backends 466fc69a8 (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 59a62e3448b1922f75019a3282b08e38, ucsim_z80 0.8.15, sdasz80/sdldz80 SDCC 4.5.0; levels are gcc -O1/-O2/-Os as run (no Oz); clocks=T-states, call minus empty run; bytes=linked code minus crt0 and driver, incl. hand-written helpers; bytes also count kernel _DATA tables (crc16 -O2 table, 512 B, was uncounted until 2026-11-03 04:10); CONVENTION: 16-bit results are returned in HL by gcc and DE by ours, so gcc is charged the caller's ex de,hl (+1 B +4 T +1 insn); 8-bit results in A for both; notes mark cells that call hand helpers (hand helper, not codegen)
 target	prog	level	compiler	code_bytes	clocks	instrs	note
 z80	zero	O1	gcc	2	44	4	8-bit result in A, no move
 z80	zero	O2	gcc	2	44	4	8-bit result in A, no move
@@ -69,3 +69,24 @@ z80	sum16	Os	gcc	42	1588	196	incl. result move +1 B +4 T +1 insn
 z80	schr	O1	gcc	32	369	51	8-bit result in A, no move
 z80	schr	O2	gcc	32	369	51	8-bit result in A, no move
 z80	schr	Os	gcc	23	327	43	8-bit result in A, no move
+z80	lz4	O1	gcc	392	36070	5211	incl. result move +1 B +4 T +1 insn
+z80	lz4	O2	gcc	447	35777	5129	incl. result move +1 B +4 T +1 insn
+z80	lz4	Os	gcc	391	194967	15314	incl. result move +1 B +4 T +1 insn
+z80	lz4c	O1	gcc	468	69778	11634	incl. result move +1 B +4 T +1 insn
+z80	lz4c	O2	gcc	536	103305	12831	incl. result move +1 B +4 T +1 insn
+z80	lz4c	Os	gcc	434	291439	24847	incl. result move +1 B +4 T +1 insn
+z80	xs8	O1	gcc	39	669	121	8-bit result in A, no move
+z80	xs8	O2	gcc	39	669	121	8-bit result in A, no move
+z80	xs8	Os	gcc	38	780	130	8-bit result in A, no move
+z80	minmax	O1	gcc	77	1780	215	8-bit result in A, no move
+z80	minmax	O2	gcc	53	1918	235	8-bit result in A, no move
+z80	minmax	Os	gcc	37	1702	229	8-bit result in A, no move
+z80	fletcher	O1	gcc	75	2268	288	incl. result move +1 B +4 T +1 insn
+z80	fletcher	O2	gcc	123	3188	327	incl. result move +1 B +4 T +1 insn
+z80	fletcher	Os	gcc	80	2428	305	incl. result move +1 B +4 T +1 insn
+z80	hash16	O1	gcc	90	3221	350	incl. result move +1 B +4 T +1 insn
+z80	hash16	O2	gcc	83	3221	350	incl. result move +1 B +4 T +1 insn
+z80	hash16	Os	gcc	78	3331	361	incl. result move +1 B +4 T +1 insn
+z80	dotx	O1	gcc	45	869	132	8-bit result in A, no move
+z80	dotx	O2	gcc	92	2003	205	8-bit result in A, no move
+z80	dotx	Os	gcc	76	2100	217	8-bit result in A, no move
