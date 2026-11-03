@@ -33,6 +33,13 @@ impl CombineHooks for MosCombines {
     ) -> Option<SDValue> {
         decompose_mul(dag, node)
     }
+
+    /// The pin canonicalizes `x >= c` to `x > c - 1` and `x <= c` to `x < c +
+    /// 1`; against a word boundary the high half then folds (`x u<= 65535`
+    /// is `hi == 0`, not a subtract of 1).
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
 }
 
 /// `x * c` as `(x << n) +- x`, shifted by the factors of two in `c` and negated

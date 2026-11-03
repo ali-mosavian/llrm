@@ -772,6 +772,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.signed_truncation_check(vt, n0, c1, cond) {
             return Some(folded);
         }
+        if let Some(folded) = super::setcc_extreme::fold_against_an_extreme(self.dag, vt, n0, c1, cond) {
+            return Some(folded);
+        }
         // `SimplifySetCC`, "Canonicalize GE/LE comparisons to use GT/LT": `x >=
         // c` is `x > c - 1` and `x <= c` is `x < c + 1`, with the
         // always-true extremes folded.

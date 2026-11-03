@@ -6,6 +6,10 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::driver::{Level, Request, assembly};
 
+fn without_equates(text: &str) -> String {
+    text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect()
+}
+
 fn module(function: &str) -> String {
     format!("target datalayout = \"{}\"\n{function}\n", datalayout())
 }
@@ -1039,4 +1043,25 @@ define i8 @minus(i8 %n) {
     assert!(text.contains("lda buf+3,x"), "no indexed load with the offset:\n{text}");
     assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
     assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
+}
+
+/// `x > 65535` and `x < 65536` are one test of the high word. The low word of
+/// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
+/// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
+/// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+#[test]
+fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
+    let branch = |compare: &str, then: &str, other: &str| {
+        module(&format!(
+            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+        ))
+    };
+    let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();
+    let greater = assembly(&branch("ugt i32 %x, 65535", "t", "e"), &Request::new(Level::O1)).unwrap();
+    let less = assembly(&branch("ult i32 %x, 65536", "e", "t"), &Request::new(Level::O1)).unwrap();
+    for text in [&greater, &less] {
+        assert!(!text.contains("ldx #255") && !text.contains("sbc"), "a word compared with its bound:\n{text}");
+    }
+    assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
