@@ -3,7 +3,7 @@ use llrm_mir::module::InstId;
 use llrm_mir::opcode::{CastOp, Opcode};
 
 use crate::combine::{Combiner, Visit, combine_with};
-use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_casts::{visit_fp_to_int, visit_sext, visit_trunc, visit_zext};
 use crate::testing::{parsed, printed};
 
 /// The casts' `visit*` alone, through the driver.
@@ -15,6 +15,7 @@ fn visit(
         Opcode::Cast(CastOp::Trunc) => visit_trunc(c, inst),
         Opcode::Cast(CastOp::ZExt) => visit_zext(c, inst),
         Opcode::Cast(CastOp::SExt) => visit_sext(c, inst),
+        Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => visit_fp_to_int(c, inst),
         _ => Visit::None,
     }
 }
@@ -615,4 +616,29 @@ b0:
     declared.place(&mut module).unwrap();
     let out = printed(&module);
     assert!(out.contains("call i8 @llvm.fshl.i8(i8 %"), "{out}");
+}
+
+/// `fptosi` of a phi stayed after the phi: no visitor for the float-to-int
+/// casts, where the pin's `visitFPToSI` is `commonCastTransforms`, which takes
+/// the cast into the phi's arms. wasm recfloat -Os kept
+/// `phi double [0.5, ..]; fptosi`, 236 B against the pin's 223.
+#[test]
+fn an_fptosi_of_a_phi_is_a_phi_of_the_converted_arms() {
+    let after = combined_under(
+        "",
+        "define i32 @f(i1 %c, double %x) {
+b0:
+  br i1 %c, label %join, label %exit
+exit:
+  br label %join
+join:
+  %p = phi double [ 5.000000e-01, %b0 ], [ %x, %exit ]
+  %r = fptosi double %p to i32
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("phi i32 [ 0, %b0 ]"), "the constant arm is converted: {after}");
+    assert!(after.contains("fptosi double %x to i32"), "the other arm converts in its block: {after}");
+    assert!(!after.contains("fptosi double %p"), "{after}");
 }

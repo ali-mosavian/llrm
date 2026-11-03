@@ -50,7 +50,7 @@ use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
 use crate::combine_and::visit_and;
-use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
+use crate::combine_casts::{visit_fp_to_int, visit_sext, visit_trunc, visit_zext};
 use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
 use crate::combine_or::visit_or;
@@ -454,6 +454,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Cast(CastOp::Trunc) => &[visit_trunc],
         Opcode::Cast(CastOp::ZExt) => &[visit_zext],
         Opcode::Cast(CastOp::SExt) => &[visit_sext],
+        Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => &[visit_fp_to_int],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],

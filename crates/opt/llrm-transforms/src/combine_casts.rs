@@ -854,6 +854,18 @@ pub fn common_cast_transforms(
     None
 }
 
+/// `visitFPToSI` and `visitFPToUI`: `commonCastTransforms` of the cast (a phi
+/// or select operand takes the cast into its arms).
+///
+/// DEVIATE: `foldItoFPtoI` (a float round trip of an integer) is not
+/// translated.
+pub fn visit_fp_to_int(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    common_cast_transforms(c, inst).unwrap_or(Visit::None)
+}
+
 /// `narrowBinOp` (:914): pull a truncate ahead of a math or bitwise logic
 /// instruction.
 fn narrow_bin_op(
