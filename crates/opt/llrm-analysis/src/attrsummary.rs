@@ -115,12 +115,8 @@ pub fn summaries_reusing(
         // A declaration is not described: a call to one is answered from its
         // own attributes (`calls_by_attributes`).
         let Some(name) = global.name.as_ref().filter(|_| !function.is_declaration()) else { continue };
-        let kept = last
-            .as_mut()
-            .filter(
-                |last| !(last.moved)(id)
-                    && last.found.function_info(id) == found.function_info(id),
-            );
+        let kept =
+            last.as_mut().filter(|last| !(last.moved)(id) && last.found.function_info(id) == found.function_info(id));
         if let Some(summary) = kept.and_then(|last| last.made.swap_remove(name)) {
             out.insert(name.clone(), summary);
             continue;

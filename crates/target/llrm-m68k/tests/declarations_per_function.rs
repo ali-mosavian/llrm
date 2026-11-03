@@ -1,4 +1,5 @@
-//! The pipeline lists the module's declarations a few times, not once per function.
+//! The pipeline lists the module's declarations a few times, not once per
+//! function.
 
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly};
@@ -20,8 +21,8 @@ fn module_of(functions: usize) -> String {
 /// `Walk` asked for the module's `Declarations` once per function, and the
 /// attributes inferred for each function changed them each time: every global's
 /// declaration was made again for every function (83, 227, 707 and 2435 made
-/// for 4, 8, 16 and 32 functions). It asks for the names now, which an attribute
-/// does not change.
+/// for 4, 8, 16 and 32 functions). It asks for the names now, which an
+/// attribute does not change.
 #[test]
 fn declarations_are_not_listed_again_for_each_function() {
     let made = |functions: usize| {

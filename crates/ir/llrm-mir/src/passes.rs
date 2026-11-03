@@ -311,11 +311,9 @@ impl Declared {
                     .enumerate()
                     .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
                     .collect(),
-                (None, Some(all)) => all
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(at, one)| Some((one.clone()?, GlobalId(at as u32))))
-                    .collect(),
+                (None, Some(all)) => {
+                    all.iter().enumerate().filter_map(|(at, one)| Some((one.clone()?, GlobalId(at as u32)))).collect()
+                }
                 (None, None) => HashMap::default(),
             }
         })
@@ -774,9 +772,9 @@ pub trait ModuleAnalysis: 'static {
 }
 
 /// The declarations an analysis last worked from, as the number of the listing:
-/// its result stands while `Declarations` is the same listing. A number, not the
-/// listing, so that the analysis holds none (a listing nothing else holds is
-/// brought up to date in place).
+/// its result stands while `Declarations` is the same listing. A number, not
+/// the listing, so that the analysis holds none (a listing nothing else holds
+/// is brought up to date in place).
 struct Seen<A>(Option<u64>, std::marker::PhantomData<A>);
 
 impl<A> Default for Seen<A> {
@@ -1006,7 +1004,9 @@ impl ModuleAnalysis for Declarations {
         // so that each function does not list every global again.
         let mut held = None;
         if let Some(edited) = analyses.declarations_edits().cloned()
-            && analyses.dropped.get(&TypeId::of::<Declarations>()).is_some_and(|last| last.downcast_ref::<Vec<GlobalValue>>().is_some_and(|last| last.len() == module.globals.len()))
+            && analyses.dropped.get(&TypeId::of::<Declarations>()).is_some_and(|last| {
+                last.downcast_ref::<Vec<GlobalValue>>().is_some_and(|last| last.len() == module.globals.len())
+            })
         {
             analyses.release_outer_holders();
             if let Some(last) = analyses.take_dropped::<Declarations>() {
@@ -1029,7 +1029,10 @@ impl ModuleAnalysis for Declarations {
         analyses.declarations_verified();
         let fresh = module.declarations();
         let last = held.or_else(|| {
-            analyses.dropped.get(&TypeId::of::<Declarations>()).and_then(|last| Rc::clone(last).downcast::<Vec<GlobalValue>>().ok())
+            analyses
+                .dropped
+                .get(&TypeId::of::<Declarations>())
+                .and_then(|last| Rc::clone(last).downcast::<Vec<GlobalValue>>().ok())
         });
         match last.filter(|last| last.len() == fresh.len()) {
             Some(last) => {

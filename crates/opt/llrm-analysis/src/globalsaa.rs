@@ -406,9 +406,7 @@ pub fn analysis(
     analyses.get::<Declarations>(module);
     let declarations = analyses.listing();
     let mut memo = std::mem::take(analyses.memo::<Bodies>());
-    if analyses.from_scratch()
-        || memo.declarations != Some(declarations)
-        || memo.elsewhere.as_ref() != Some(&elsewhere)
+    if analyses.from_scratch() || memo.declarations != Some(declarations) || memo.elsewhere.as_ref() != Some(&elsewhere)
     {
         memo.per.clear();
     }

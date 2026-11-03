@@ -639,7 +639,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "none: DEVIATE; TypeBasedAA is the pin's counterpart (not translated)",
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
-    old_analysis("global-names", "GlobalNames", "none", "none: DEVIATE; LLVM reads names off the module, which needs no snapshot"),
+    old_analysis(
+        "global-names",
+        "GlobalNames",
+        "none",
+        "none: DEVIATE; LLVM reads names off the module, which needs no snapshot",
+    ),
     old_analysis(
         "callees",
         "counted(\"callees\")",
