@@ -125,6 +125,36 @@ fn sext_in_reg_of_an_extending_load_is_a_sign_extending_load() {
     assert_eq!(info.ext, Some(LoadExt::SExtLoad));
 }
 
+/// m32 `stft_fixed`: the extending load also read by an add stayed beside the
+/// new `sextload` (a second load of the same word, +18 B); the pin hands the
+/// other users the `sextload` too.
+#[test]
+fn the_other_users_of_an_extending_load_read_the_new_sign_extending_load() {
+    let mut dag = dag();
+    let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
+    let info = MemInfo {
+        mem_vt: EVT::I16,
+        align: 2,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: Some(LoadExt::ExtLoad),
+        space: 0,
+        ordering: None,
+    };
+    let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
+    let narrow = dag.get_value_type_node(EVT::I16);
+    let sext = dag.get_node(ISD::SignExtendInReg, EVT::I32, &[load, narrow]);
+    let five = dag.get_constant(5, EVT::I32);
+    let add = dag.get_node(ISD::Add, EVT::I32, &[load, five]);
+    let root = dag.get_node(ISD::Xor, EVT::I32, &[sext, add]);
+    dag.set_root(root);
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    let root = dag.get_root();
+    let (left, right) = (dag.operand(root, 0), dag.operand(dag.operand(root, 1), 0));
+    assert_eq!(left.node, right.node, "one load");
+}
+
 #[test]
 fn a_target_that_does_not_ask_keeps_the_sign_extension_in_the_register() {
     let mut dag = dag();

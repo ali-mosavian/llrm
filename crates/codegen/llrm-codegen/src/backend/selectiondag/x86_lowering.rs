@@ -146,8 +146,8 @@ pub struct X86Lowering<'a> {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
     pub i16_mul_chains: bool,
     /// `visitSIGN_EXTEND_INREG`'s `(sext_inreg (extload x))` is `(sextload x)`
-    /// (`movsx r, [m]`, not a load, `movsx`, `movsxd`). DEVIATE: on for m64
-    /// only; the 16 and 32-bit x86 targets are judged by their owners.
+    /// (`movsx r, [m]`, not a load, `movsx`, `movsxd`). On for the x86 targets
+    /// (the 2026-11-03 A/B at m16, m32 and m64 has no larger cell from it).
     pub sext_load: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.

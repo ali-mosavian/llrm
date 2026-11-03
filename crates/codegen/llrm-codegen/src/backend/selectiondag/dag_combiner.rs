@@ -2654,9 +2654,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let was_extload = info.ext == Some(LoadExt::ExtLoad);
         let info = super::dag::MemInfo { ext: None, ..info };
         let extended = self.dag.get_ext_load(LoadExt::SExtLoad, vt, chain, ptr, info);
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        // The pin's `CombineTo(N0, ExtLoad)`: the extending load's other users
+        // read the new load (the bits above its memory type are undefined).
+        if was_extload {
+            self.replace_value(load, extended);
+        }
         let _ = node;
         Some(extended)
     }

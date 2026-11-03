@@ -431,6 +431,20 @@ fn a_signed_bit_field_read_is_one_byte_sextload_at_m64() {
     assert!(!listing.contains("movsx eax, al") && !listing.contains("mov eax, dword"), "{listing}");
 }
 
+/// The same bit-field read at m32: one `movsx eax, byte ptr`, not a dword
+/// load and `movsx eax, al` (stft_fixed and bitfield_overhang_init A/B).
+#[test]
+fn a_signed_bit_field_read_is_one_byte_sextload_at_m32() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @g = global i32 0, align 4\n\
+                define i32 @f() {\n  %1 = load i32, ptr @g, align 4\n  %2 = shl i32 %1, 24\n  %3 = ashr exact i32 %2, 24\n  ret i32 %3\n}\n";
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movsx eax, byte ptr"), "{listing}");
+    assert!(!listing.contains("movsx eax, al"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
