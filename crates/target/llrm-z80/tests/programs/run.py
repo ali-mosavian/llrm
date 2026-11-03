@@ -6,7 +6,7 @@
 Each `report(long)` call stores its four bytes in a log the harness reads back and compares with the .out lines.
 Verdicts: PASS, WRONG (output differs), REFUSED (backend), SLOW (llc timed out), CLANG, ASM, LINK (undefined symbols named), HALT.
 """
-import argparse, json, os, re, subprocess, sys, tempfile
+import argparse, json, os, re, shutil, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -149,9 +149,13 @@ def main():
     if args.names:
         sources = [p for p in sources if p.stem in args.names]
     work = tempfile.mkdtemp(prefix="z80prog-")
-    args.libc = libc_library(work)
-    with ThreadPoolExecutor(args.jobs) as pool:
-        results = list(pool.map(one, [(s, args, work) for s in sources]))
+    try:
+        args.libc = libc_library(work)
+        with ThreadPoolExecutor(args.jobs) as pool:
+            results = list(pool.map(one, [(s, args, work) for s in sources]))
+    finally:
+        # /tmp is a tmpfs with a fixed inode count: a tree per run filled it
+        shutil.rmtree(work, ignore_errors=True)
     tally = {}
     for name, verdict, why in results:
         tally[verdict] = tally.get(verdict, 0) + 1

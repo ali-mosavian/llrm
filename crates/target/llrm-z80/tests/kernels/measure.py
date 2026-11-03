@@ -7,7 +7,7 @@ Cost = run with the call minus run without it (argument set-up, call, return and
 bench_sdcc.py. Bytes = the kernel's code, plus the runtime routines it calls. A row counts only if the result equals the
 value worked out by hand. The driver is compiled by this compiler, so both sides' argument set-up is their own.
 """
-import argparse, os, re, subprocess, sys, tempfile
+import argparse, atexit, os, re, shutil, subprocess, sys, tempfile
 
 U8, U16 = "i8", "i16"
 R = 0x8F00
@@ -150,6 +150,7 @@ def main():
     want = args.kernels.split(",") if args.kernels else [k[0] for k in K]
     sdcc = baseline(args.baseline)
     w = tempfile.mkdtemp(prefix="z80ours-")
+    atexit.register(shutil.rmtree, w, True)  # /tmp has a fixed inode count
     open(f"{w}/crt0.s", "w").write(CRT0)
     open(f"{w}/data.s", "w").write(DATA)
     for s in ("crt0", "data"):

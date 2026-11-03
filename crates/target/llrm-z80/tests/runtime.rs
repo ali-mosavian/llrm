@@ -105,3 +105,30 @@ fn the_runtime_exports_no_name_a_program_may_define() {
         .collect();
     assert!(clashing.is_empty(), "{clashing:?} are C library names a program may define");
 }
+
+/// The programs harness left a `z80prog-*` tree in the temporary directory
+/// per run: /tmp is a tmpfs with a fixed inode count, and the trees helped
+/// fill it until the landing runner stopped (PREFLIGHT: /tmp has 7% free).
+#[test]
+fn the_programs_harness_leaves_no_temporary_tree_behind() {
+    if !have("sdasz80") {
+        return;
+    }
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let scratch = std::env::temp_dir().join(format!("z80-harness-tmp-{}", std::process::id()));
+    std::fs::create_dir_all(scratch.join("src")).expect("a scratch directory");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/programs/run.py"), "--src"])
+        .arg(scratch.join("src"))
+        .env("TMPDIR", &scratch)
+        .output()
+        .expect("python3 runs");
+    let left: Vec<_> = std::fs::read_dir(&scratch)
+        .expect("the scratch directory")
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name != "src")
+        .collect();
+    std::fs::remove_dir_all(&scratch).ok();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    assert!(left.is_empty(), "left behind: {left:?}");
+}
